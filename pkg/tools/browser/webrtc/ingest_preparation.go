@@ -18,16 +18,9 @@ type ingestPreparationPool struct {
 	active int
 }
 
-func (p *ingestPreparationPool) run(ctx context.Context, work func() (string, error)) (string, error) {
-	return p.runWithCleanup(ctx, func() (string, error, func()) {
-		answer, err := work()
-		return answer, err, nil
-	})
-}
-
 // runWithCleanup publishes the answer before retiring the previous connection,
 // while retaining this worker's capacity until its native cleanup completes.
-func (p *ingestPreparationPool) runWithCleanup(ctx context.Context, work func() (string, error, func())) (string, error) {
+func (p *ingestPreparationPool) runWithCleanup(ctx context.Context, work func() (string, func(), error)) (string, error) {
 	p.mu.Lock()
 	if err := context.Cause(ctx); err != nil {
 		p.mu.Unlock()
@@ -54,7 +47,7 @@ func (p *ingestPreparationPool) runWithCleanup(ctx context.Context, work func() 
 			completed <- result{err: err}
 			return
 		}
-		answer, err, cleanup := work()
+		answer, cleanup, err := work()
 		completed <- result{answer, err}
 		if cleanup != nil {
 			cleanup()

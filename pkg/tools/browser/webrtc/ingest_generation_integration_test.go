@@ -2,10 +2,11 @@ package webrtc_test
 
 import (
 	"errors"
-	relay "github.com/elicify-ai/omnipus/pkg/tools/browser/webrtc"
 	"strings"
 	"testing"
 	"time"
+
+	relay "github.com/elicify-ai/omnipus/pkg/tools/browser/webrtc"
 )
 
 func TestIngestGenerationBoundaryWaitsForMediaAndKeepsOfferIdentity(t *testing.T) {

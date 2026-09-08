@@ -91,8 +91,8 @@ func (s *Session) handleViewerOfferHandle(ctx, parent context.Context, request *
 	if parent == nil {
 		return "", nil, fmt.Errorf("webrtc: viewer offer: nil attachment context")
 	}
-	if err := parent.Err(); err != nil {
-		return "", nil, fmt.Errorf("webrtc: viewer offer: %w", err)
+	if parentErr := parent.Err(); parentErr != nil {
+		return "", nil, fmt.Errorf("webrtc: viewer offer: %w", parentErr)
 	}
 	if viewerID == "" {
 		return "", nil, fmt.Errorf("webrtc: viewer offer: empty viewerID")
@@ -106,8 +106,8 @@ func (s *Session) handleViewerOfferHandle(ctx, parent context.Context, request *
 	s.logf("%s offer received (%d bytes SDP)", prefix, len(sdpOffer))
 
 	videoTrack, audioTrack, ok := s.waitForTracksContext(ctx, waitForTracksTimeout)
-	if err := context.Cause(ctx); err != nil {
-		return "", nil, fmt.Errorf("webrtc: viewer offer: %w", err)
+	if requestErr := context.Cause(ctx); requestErr != nil {
+		return "", nil, fmt.Errorf("webrtc: viewer offer: %w", requestErr)
 	}
 	if !ok {
 		// %w wraps ErrNoIngestVideoTrack (ingest.go) so the gateway

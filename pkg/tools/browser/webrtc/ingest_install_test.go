@@ -71,8 +71,8 @@ func TestIngestInstallCanceledWriterWaitPreservesInstalledFeed(t *testing.T) {
 			admission := &ingestAdmission{ctx: caller, negotiation: caller, bindingToken: binding, offerID: 1}
 			done := make(chan error, 1)
 			go func() {
-				_, err := s.installIngestCandidate(caller, candidate, admission, 7, "installed-tab")
-				done <- err
+				_, callErr := s.installIngestCandidate(caller, candidate, admission, 7, "installed-tab")
+				done <- callErr
 			}()
 			// The write is already inside its external callback. Give installation
 			// an opportunity to reach that occupied ownership boundary before cancel.
@@ -288,8 +288,8 @@ func TestIngestInstallRevalidatesReservationAfterWriterWait(t *testing.T) {
 	admission := &ingestAdmission{ctx: context.Background(), negotiation: context.Background(), bindingToken: binding, offerID: 1}
 	done := make(chan error, 1)
 	go func() {
-		_, err := s.installIngestCandidate(admission.ctx, candidate, admission, 7, "installed-tab")
-		done <- err
+		_, callErr := s.installIngestCandidate(admission.ctx, candidate, admission, 7, "installed-tab")
+		done <- callErr
 	}()
 	time.Sleep(20 * time.Millisecond)
 	// A regression that nests Session.mu around writer admission must fail

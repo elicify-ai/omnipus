@@ -100,8 +100,8 @@ func TestMediaStatsBindingTokenDescribesInstalledPeer(t *testing.T) {
 	if got := s.Stats().IngestBindingToken; got != 0 {
 		t.Fatalf("unnegotiated token=%d want0", got)
 	}
-	if _, err := s.HandleIngestOfferForBinding(context.Background(), first, 1, sdp, 7, "tab"); err != nil {
-		t.Fatal(err)
+	if _, callErr := s.HandleIngestOfferForBinding(context.Background(), first, 1, sdp, 7, "tab"); callErr != nil {
+		t.Fatal(callErr)
 	}
 	if got := s.Stats().IngestBindingToken; got != first {
 		t.Fatalf("installed token=%d want first%d", got, first)
@@ -113,8 +113,8 @@ func TestMediaStatsBindingTokenDescribesInstalledPeer(t *testing.T) {
 	if got := s.Stats().IngestBindingToken; got != first {
 		t.Fatalf("pending binding relabeled installed peer token=%d want%d", got, first)
 	}
-	if _, err := s.HandleIngestOfferForBinding(context.Background(), second, 1, sdp, 7, "tab"); err != nil {
-		t.Fatal(err)
+	if _, callErr := s.HandleIngestOfferForBinding(context.Background(), second, 1, sdp, 7, "tab"); callErr != nil {
+		t.Fatal(callErr)
 	}
 	if got := s.Stats().IngestBindingToken; got != second {
 		t.Fatalf("replacement installed token=%d want%d", got, second)

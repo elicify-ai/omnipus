@@ -20,8 +20,8 @@ func viewerRequestOffer(t *testing.T, s *Session) (*pion.PeerConnection, string)
 	}
 	t.Cleanup(func() { _ = pc.Close() })
 	for _, kind := range []pion.RTPCodecType{pion.RTPCodecTypeVideo, pion.RTPCodecTypeAudio} {
-		if _, err := pc.AddTransceiverFromKind(kind, pion.RTPTransceiverInit{Direction: pion.RTPTransceiverDirectionRecvonly}); err != nil {
-			t.Fatal(err)
+		if _, callErr := pc.AddTransceiverFromKind(kind, pion.RTPTransceiverInit{Direction: pion.RTPTransceiverDirectionRecvonly}); callErr != nil {
+			t.Fatal(callErr)
 		}
 	}
 	offer, err := pc.CreateOffer(nil)
@@ -29,8 +29,8 @@ func viewerRequestOffer(t *testing.T, s *Session) (*pion.PeerConnection, string)
 		t.Fatal(err)
 	}
 	gathered := pion.GatheringCompletePromise(pc)
-	if err := pc.SetLocalDescription(offer); err != nil {
-		t.Fatal(err)
+	if callErr := pc.SetLocalDescription(offer); callErr != nil {
+		t.Fatal(callErr)
 	}
 	select {
 	case <-gathered:
@@ -78,8 +78,8 @@ func TestViewerRequestLateOldAdmissionPreservesConnectedWinner(t *testing.T) {
 	if err != nil || winnerHandle == nil {
 		t.Fatalf("new request: %v", err)
 	}
-	if err := newClient.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: answer}); err != nil {
-		t.Fatal(err)
+	if callErr := newClient.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: answer}); callErr != nil {
+		t.Fatal(callErr)
 	}
 	s.viewersMu.Lock()
 	winner := s.viewers["viewer"]
@@ -239,8 +239,8 @@ func TestViewerRequestSessionCloseCancelsPendingReservation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("request did not reserve before close")
 	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
+	if callErr := s.Close(); callErr != nil {
+		t.Fatal(callErr)
 	}
 	s.viewersMu.Lock()
 	pending := len(s.viewerRequests)
@@ -279,8 +279,8 @@ func TestViewerRequestCanceledNativeReplacementPreservesConnectedPeer(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: answer}); err != nil {
-		t.Fatal(err)
+	if callErr := client.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: answer}); callErr != nil {
+		t.Fatal(callErr)
 	}
 	s.viewersMu.Lock()
 	original := s.viewers["viewer"]
@@ -351,8 +351,8 @@ func TestViewerRequestRejectsClosedPreparedCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := pc.Close(); err != nil {
-		t.Fatal(err)
+	if callErr := pc.Close(); callErr != nil {
+		t.Fatal(callErr)
 	}
 	source, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -381,8 +381,8 @@ func TestViewerRequestNativeSaturationPreservesHealthyPeerAndReusesReleasedSlot(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: answer}); err != nil {
-		t.Fatal(err)
+	if callErr := client.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: answer}); callErr != nil {
+		t.Fatal(callErr)
 	}
 	s.viewersMu.Lock()
 	original := s.viewers["viewer"]
@@ -472,8 +472,8 @@ func TestViewerRequestNativeSaturationPreservesHealthyPeerAndReusesReleasedSlot(
 	if err != nil || newHandle == nil || !s.IsViewerCurrent(newHandle) {
 		t.Fatalf("released preparation capacity not reusable: %v", err)
 	}
-	if err := newClient.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: answer}); err != nil {
-		t.Fatal(err)
+	if callErr := newClient.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: answer}); callErr != nil {
+		t.Fatal(callErr)
 	}
 	s.viewersMu.Lock()
 	replacement := s.viewers["viewer"]

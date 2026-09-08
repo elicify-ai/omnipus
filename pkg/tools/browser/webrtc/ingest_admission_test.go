@@ -25,16 +25,16 @@ func admissionOffer(t *testing.T, s *Session) (*pion.PeerConnection, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pc.AddTrack(track); err != nil {
-		t.Fatal(err)
+	if _, callErr := pc.AddTrack(track); callErr != nil {
+		t.Fatal(callErr)
 	}
 	offer, err := pc.CreateOffer(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	gathered := pion.GatheringCompletePromise(pc)
-	if err := pc.SetLocalDescription(offer); err != nil {
-		t.Fatal(err)
+	if callErr := pc.SetLocalDescription(offer); callErr != nil {
+		t.Fatal(callErr)
 	}
 	select {
 	case <-gathered:
@@ -68,8 +68,8 @@ func TestIngestAdmissionLateCompletionCannotReplaceNewerOffer(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := basePeer.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: baseAnswer}); err != nil {
-				t.Fatal(err)
+			if callErr := basePeer.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: baseAnswer}); callErr != nil {
+				t.Fatal(callErr)
 			}
 			s.mu.Lock()
 			baseline := s.ingestPC
@@ -91,8 +91,8 @@ func TestIngestAdmissionLateCompletionCannotReplaceNewerOffer(t *testing.T) {
 			oldDone := make(chan error, 1)
 			armed.Store(true)
 			go func() {
-				_, err := s.HandleIngestOfferForBinding(parent, binding, 1, oldSDP, 7, "same-target")
-				oldDone <- err
+				_, callErr := s.HandleIngestOfferForBinding(parent, binding, 1, oldSDP, 7, "same-target")
+				oldDone <- callErr
 			}()
 			select {
 			case <-entered:
@@ -113,8 +113,8 @@ func TestIngestAdmissionLateCompletionCannotReplaceNewerOffer(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := s.HandleIngestOfferForBinding(parent, nextBinding, nextOffer, newSDP, 7, "same-target"); err != nil {
-				t.Fatal(err)
+			if _, callErr := s.HandleIngestOfferForBinding(parent, nextBinding, nextOffer, newSDP, 7, "same-target"); callErr != nil {
+				t.Fatal(callErr)
 			}
 			s.mu.Lock()
 			newest := s.ingestPC
@@ -199,8 +199,8 @@ func TestIngestAdmissionRejectsInvalidAndReplayedOfferIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, sdp := admissionOffer(t, s)
-	if _, err := s.HandleIngestOfferForBinding(context.Background(), binding, 2, sdp, 7, "tab"); err != nil {
-		t.Fatal(err)
+	if _, callErr := s.HandleIngestOfferForBinding(context.Background(), binding, 2, sdp, 7, "tab"); callErr != nil {
+		t.Fatal(callErr)
 	}
 	s.mu.Lock()
 	installed := s.ingestPC
@@ -276,7 +276,7 @@ func TestIngestAdmissionCancellationInterruptsCandidateGathering(t *testing.T) {
 			case <-time.After(3 * time.Second):
 				t.Fatal("candidate enumeration never reached the network boundary")
 			}
-			wanted := error(context.Canceled)
+			wanted := context.Canceled
 			switch which {
 			case "binding_cancel":
 				cancelParent()
@@ -323,8 +323,8 @@ func TestIngestAdmissionBoundSessionRejectsLegacyBypass(t *testing.T) {
 	s.mu.Lock()
 	baseline := s.ingestPC
 	s.mu.Unlock()
-	if _, err := s.BeginIngestBinding(context.Background()); err != nil {
-		t.Fatal(err)
+	if _, callErr := s.BeginIngestBinding(context.Background()); callErr != nil {
+		t.Fatal(callErr)
 	}
 	for _, method := range []string{"legacy", "generation"} {
 		t.Run(method, func(t *testing.T) {
@@ -419,8 +419,8 @@ func TestIngestAdmissionLegacyOfferCannotCrossFirstBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.HandleIngestOfferForBinding(context.Background(), binding, 1, newSDP, 7, "tab"); err != nil {
-		t.Fatal(err)
+	if _, callErr := s.HandleIngestOfferForBinding(context.Background(), binding, 1, newSDP, 7, "tab"); callErr != nil {
+		t.Fatal(callErr)
 	}
 	s.mu.Lock()
 	newest := s.ingestPC

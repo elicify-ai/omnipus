@@ -46,8 +46,8 @@ func TestIngestPreparationBoundsRetiredNativeCandidates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := encoder.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: answer}); err != nil {
-		t.Fatal(err)
+	if callErr := encoder.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: answer}); callErr != nil {
+		t.Fatal(callErr)
 	}
 	s.mu.Lock()
 	original := s.ingestPC
@@ -86,8 +86,8 @@ func TestIngestPreparationBoundsRetiredNativeCandidates(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)
 		go func(id uint64) {
-			_, err := s.HandleIngestOfferForBinding(ctx, binding, id, offer, 2, "replacement")
-			done <- err
+			_, callErr := s.HandleIngestOfferForBinding(ctx, binding, id, offer, 2, "replacement")
+			done <- callErr
 		}(uint64(i + 2))
 		select {
 		case <-entered:
@@ -97,9 +97,9 @@ func TestIngestPreparationBoundsRetiredNativeCandidates(t *testing.T) {
 		}
 		cancel()
 		select {
-		case err := <-done:
-			if !errors.Is(err, context.Canceled) {
-				t.Errorf("canceled native request error=%v", err)
+		case resultErr := <-done:
+			if !errors.Is(resultErr, context.Canceled) {
+				t.Errorf("canceled native request error=%v", resultErr)
 			}
 		case <-time.After(time.Second):
 			t.Fatal("canceled native request retained its caller")

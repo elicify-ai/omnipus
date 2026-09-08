@@ -64,8 +64,8 @@ func TestIngestReplacementRetainsCapacityUntilInstalledCleanupFinishes(t *testin
 		}
 		done := make(chan result, 1)
 		go func() {
-			answer, err := s.HandleIngestOfferForBinding(context.Background(), binding, id, offer, 1, "original")
-			done <- result{answer, err}
+			answer, offerErr := s.HandleIngestOfferForBinding(context.Background(), binding, id, offer, 1, "original")
+			done <- result{answer, offerErr}
 		}()
 		select {
 		case result := <-done:
@@ -77,14 +77,14 @@ func TestIngestReplacementRetainsCapacityUntilInstalledCleanupFinishes(t *testin
 			return "", nil
 		}
 	}
-	if answer, err := request(1); err != nil || answer == "" {
-		t.Fatalf("initial installed connection: answer bytes=%d error=%v", len(answer), err)
+	if answer, offerErr := request(1); offerErr != nil || answer == "" {
+		t.Fatalf("initial installed connection: answer bytes=%d error=%v", len(answer), offerErr)
 	}
 	// The resource contract permits four unfinished cleanup operations; the
 	// current installed connection itself must consume no preparation slot.
 	for id := uint64(2); id <= 5; id++ {
-		if answer, err := request(id); err != nil || answer == "" {
-			t.Fatalf("replacement %d: answer bytes=%d error=%v", id, len(answer), err)
+		if answer, offerErr := request(id); offerErr != nil || answer == "" {
+			t.Fatalf("replacement %d: answer bytes=%d error=%v", id, len(answer), offerErr)
 		}
 		select {
 		case <-entered:

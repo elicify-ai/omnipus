@@ -2,12 +2,13 @@ package webrtc
 
 import (
 	"context"
-	pion "github.com/pion/webrtc/v4"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	pion "github.com/pion/webrtc/v4"
 )
 
 func TestInputContextCancellationStopsRemainingBatch(t *testing.T) {

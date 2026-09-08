@@ -1,13 +1,14 @@
 package webrtc
 
 import (
-	"github.com/pion/rtcp"
-	"github.com/pion/rtp"
-	"github.com/pion/webrtc/v4"
 	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/pion/rtcp"
+	"github.com/pion/rtp"
+	"github.com/pion/webrtc/v4"
 )
 
 func TestReplacementSequenceHasNoArtificialLoss(t *testing.T) {

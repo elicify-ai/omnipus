@@ -2,9 +2,10 @@ package webrtc
 
 import (
 	"errors"
-	"github.com/pion/rtp"
 	"testing"
 	"time"
+
+	"github.com/pion/rtp"
 )
 
 func TestMediaReplacementTimestampStaysSeriallyAheadAfterLongIdle(t *testing.T) {
