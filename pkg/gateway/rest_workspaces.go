@@ -2057,48 +2057,22 @@ var browserProfileExistsFn = func(dir string) bool {
 	return err == nil
 }
 
-// deleteWorkspaceBrowserProfile performs the FR-043a profile delete and then
-// CONFIRMS it, retrying while the directory keeps coming back.
+// deleteWorkspaceBrowserProfile deletes a departed workspace's profile and
+// confirms the filesystem result, with bounded retries.
 //
-// The single-shot version — Close(key) then DeleteProfile(key), warn on error —
-// had two ways to leave a departed client's live logins sitting on disk, and
-// neither of them produced an error to warn about:
-//
-//   - MID-SHUTDOWN. Close(key) returns immediately when the pool's instances
-//     map has no entry for the key. It has no entry when something else is
-//     ALREADY tearing that browser down — the idle reaper's CloseIdle removes
-//     the instance from the map first and only then runs the seconds-long
-//     coordinator Shutdown. So Close returns while Chrome is still alive,
-//     DeleteProfile sees no live instance and RemoveAll's the directory, and
-//     the dying Chrome then recreates it and writes the cookie jar and Local
-//     Storage it flushes on exit. DeleteProfile returned nil. The workspace is
-//     gone and its logins are not.
-//
-//   - RE-ACQUIRED. A turn that started just before the delete can Acquire the
-//     same key after Close returned, putting an instance back in the map;
-//     DeleteProfile then refuses by design ("call Close first") and nothing
-//     ever tried again.
-//
-// The fix is to stop trusting the delete's own return value as evidence and ask
-// the filesystem. This is the whole point: DeleteProfile answering nil is a
-// statement about one RemoveAll call, not about whether the directory is gone,
-// and those two things differ in exactly the case that matters.
-//
-// The residual is named rather than hidden: a Chrome that recreates the
-// directory AFTER the final confirming Stat still wins, and this returns nil.
-// Closing that properly needs the pool to expose a per-key "shutdown finished"
-// latch that Close can wait on — a pool.go change, out of this unit's scope —
-// and is described in the R5 report. What this function guarantees is that the
-// common orderings are handled and that a directory still standing at the end
-// is REPORTED instead of silently accepted.
+// Close now joins local teardown. DeleteProfile retires the key against local
+// reacquisition and holds a sibling launch lock through removal. These pool
+// guarantees prevent the former local shutdown/recreation races. Confirmation
+// still detects filesystem failures and interference from older external
+// processes that do not honor the sibling lock; it cannot guarantee that such
+// a process will never recreate the directory after the final check.
 func deleteWorkspaceBrowserProfile(pool *browser.BrowserPool, key browser.BrowsingKey) error {
 	dir, dirErr := pool.ProfileDirFor(key)
 
 	var lastErr error
 	for attempt := 1; attempt <= browserProfileDeleteAttempts; attempt++ {
-		// Close first, every time. On the retry passes this is what handles
-		// the re-acquired case: the instance that appeared after the previous
-		// pass is torn down before the next DeleteProfile is asked.
+		// Drain any locally owned browser before deletion. Later attempts
+		// recheck lock/filesystem failures without reopening the retired key.
 		pool.Close(key)
 		lastErr = pool.DeleteProfile(key)
 
