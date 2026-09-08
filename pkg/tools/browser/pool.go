@@ -241,6 +241,10 @@ type BrowserPool struct {
 	// the gate is not a no-op (D1.5b).
 	availableMemory func() (uint64, bool)
 
+	// removeProfileDir defaults to os.RemoveAll; tests control the filesystem
+	// boundary to prove launch exclusion while deletion is still in progress.
+	removeProfileDir func(string) error
+
 	now func() time.Time
 
 	// idleCloseTTL is tools.browser.idle_close_ttl, reload-applied.
@@ -821,9 +825,6 @@ func (p *BrowserPool) finishLaunch(id string, flight *startupCohort, err error) 
 // p.mu RELEASED — it can resolve a binary, download Chrome-for-Testing and
 // block on a CDP handshake for seconds (P-2).
 func (p *BrowserPool) launch(ctx context.Context, key BrowsingKey, cfg BrowserConfig) (*chromeInstance, error) {
-	if err := os.MkdirAll(cfg.ProfileDir, 0o700); err != nil {
-		return nil, fmt.Errorf("browser: cannot create profile directory %s: %w", cfg.ProfileDir, err)
-	}
 	build := p.newCoordinator
 	if build == nil {
 		build = newKeyedCoordinator
@@ -1101,7 +1102,19 @@ func (p *BrowserPool) DeleteProfile(key BrowsingKey) error {
 	if retiring != nil {
 		<-retiring.done
 	}
-	if rmErr := os.RemoveAll(dir); rmErr != nil {
+	lock, acquired, lockErr := acquireProfileLaunchLock(dir)
+	if lockErr != nil {
+		return fmt.Errorf("browser: cannot lock workspace %s's profile for deletion: %w", key.WorkspaceID(), lockErr)
+	}
+	if !acquired {
+		return fmt.Errorf("browser: refusing to delete workspace %s's profile while its launch lock is held", key.WorkspaceID())
+	}
+	defer releaseLaunchLock(lock)
+	removeAll := p.removeProfileDir
+	if removeAll == nil {
+		removeAll = os.RemoveAll
+	}
+	if rmErr := removeAll(dir); rmErr != nil {
 		return fmt.Errorf("browser: could not delete workspace %s's browser profile: %w", key.WorkspaceID(), rmErr)
 	}
 	_ = os.Remove(p.markerPathFor(key))
@@ -1243,9 +1256,7 @@ func (p *BrowserPool) reconcileOne(key BrowsingKey) bool {
 	if dirErr != nil {
 		return false
 	}
-	lockPath := filepath.Join(profileDir, launchLockFileName)
-
-	f, acquired, lockErr := acquireLaunchLock(lockPath)
+	f, acquired, lockErr := acquireProfileLaunchLock(profileDir)
 	if lockErr != nil {
 		// We could not even test the lock. The conservative answer is to leave
 		// everything alone: refusing costs this key its browser until the next

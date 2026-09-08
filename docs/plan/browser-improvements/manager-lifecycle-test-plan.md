@@ -131,11 +131,49 @@ CGO_ENABLED=1 go test -race -tags goolm,stdjson -p 1 ./pkg/tools/browser -run '^
 No full suite, real-browser persistence test, UI acceptance run, or independent
 re-review is claimed by this evidence.
 
-## Separate unresolved profile-safety finding
+## Profile-safety finding carried from the initial batch
 
-`DeleteProfile` coordinates only with this pool's processes. A second gateway
-can hold the same workspace's launch lock while this pool sees no live instance
-and accepts deletion. This batch does not provide a cross-process deletion
-protocol. A subsequent bounded fix needs to coordinate deletion with the
-other process's held lock; putting that coordination lock inside the directory
-being removed would itself permit a new process to lock a replacement inode.
+At the end of the initial finite batch, `DeleteProfile` coordinated only with
+this pool's processes. A second gateway could hold the same workspace's launch
+lock while this pool saw no live instance and accepted deletion. That delivery
+explicitly left the cross-process protocol unresolved. Putting its coordination
+lock inside the directory being removed would permit a new process to lock a
+replacement inode.
+
+## Bounded cross-process follow-up design
+
+The accepted follow-up puts each per-profile lock beside the profile, outside
+the removed directory, using its immutable configured profile identity.
+Coordinator launch, cache trimming, boot reconciliation and deletion must all
+use the same helper. Deletion retains the lock through filesystem removal;
+launch creates the profile only after taking that lock. A held legacy
+in-profile lock also causes refusal, preserving an already-running older
+coordinator's profile. Older binaries do not honor the new sibling lock, so
+this is not full serialization against a newly starting legacy gateway.
+
+Five focused cases use real temporary profiles and OS locks: another current
+coordinator's held lock preserves cookie bytes; a held legacy lock blocks
+launch/deletion; a concurrent launch cannot recreate the profile while a
+deletion is finishing; deletion preserves the sibling lock inode and releases
+it; a failed filesystem removal preserves data and releases its lock for retry.
+The removal seam defaults to `os.RemoveAll` and only controls that filesystem
+boundary in tests. These expectations precede the lock-protocol changes.
+
+The five-group baseline ran with race detection and exited 1 (11.605s).
+Four groups failed for their intended behavior: held current/legacy profiles
+were deleted, concurrent launch recreated the directory during deletion, and
+the guard inode was removed. Failed-removal retry passed as a positive control.
+The shared sibling-lock implementation and its held-legacy check were applied
+only after this result. The restored affected race batch passed all 19
+top-level groups (exit 0, 32.776s), with no skip or race report. Its scope was
+the five new groups, current/legacy lock refusal, per-key lock placement and
+reconciliation, Close/drain, and all trim regressions:
+
+```sh
+CGO_ENABLED=1 go test -race -tags goolm,stdjson -p 1 ./pkg/tools/browser -run '^(TestProfileDeletion.*|TestLaunchSecurityMarkerlessHeldLockRemainsExclusive|TestCoordinator_LaunchLock_LiveOwnerRejected|TestPool_(PerKeyLockAndMarker|DeleteProfileOnWorkspaceDeletionOnly|ReconcileMarkersAtBoot|ReconcileRefusesWhenLockHeld)|TestPoolCloseDrainsPendingStartupBeforeProfileDeletion|TestPoolCloseJoinsConcurrentTeardown|TestTrim_.*)$' -count=1 -shuffle=on -v -timeout=120s
+```
+
+The sibling guard is derived from the fixed profile configuration. Existing
+directory/marker filters exclude it from cache sweeps and reconciliation scans.
+Unix locking is exercised here; no cross-platform runtime or full mixed-version
+serialization claim is made.

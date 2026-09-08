@@ -198,8 +198,8 @@ func TestPool_PerKeyLockAndMarker(t *testing.T) {
 		key := browserTestKey(ws)
 		dir, err := f.pool.ProfileDirFor(key)
 		require.NoError(t, err)
-		_, statErr := os.Stat(filepath.Join(dir, launchLockFileName))
-		assert.NoError(t, statErr, "workspace %q must hold its OWN launch lock inside its own profile dir", ws)
+		_, statErr := os.Stat(profileLaunchLockPath(dir))
+		assert.NoError(t, statErr, "workspace %q must hold its OWN launch lock beside its profile dir", ws)
 	}
 	assert.NotEqual(t,
 		f.pool.markerPathFor(browserTestKey("alpha")),
@@ -464,7 +464,7 @@ func TestPool_ReconcileRefusesWhenLockHeld(t *testing.T) {
 	// Our own pid stands in for "another live gateway's Chrome".
 	writeTestMarker(t, f.pool.markerPathFor(key), os.Getpid())
 
-	held, acquired, lockErr := acquireLaunchLock(filepath.Join(dir, launchLockFileName))
+	held, acquired, lockErr := acquireLaunchLock(profileLaunchLockPath(dir))
 	require.NoError(t, lockErr)
 	require.True(t, acquired)
 	t.Cleanup(func() { releaseLaunchLock(held) })

@@ -143,12 +143,11 @@ type TrimResult struct {
 //
 // THE LAUNCHING CHECK IS NOT REDUNDANT WITH EITHER OF THE OTHER TWO, and this
 // is the R5 finding-2 defect. A key is registered in p.launching BEFORE
-// p.launch runs, and p.launch does the profile MkdirAll and only then hands
-// off to the coordinator, which takes the launch lock inside takeLaunchLock.
-// For that whole window — a Chrome-for-Testing download makes it seconds, not
-// microseconds — there is no instance in the map and nobody holds the lock, so
-// the old two-part check called the profile eligible and started deleting
-// directories out from under a browser that was starting.
+// p.launch runs and hands off to the coordinator, which takes the launch lock
+// inside takeLaunchLock before creating the profile directory.
+// Before the coordinator reaches that lock, there is no instance in the map
+// and no lock holder. The pending-launch check protects an already admitted
+// start without depending on how quickly its worker reaches the lock.
 //
 // A held Unix launch lock also excludes a later launcher when the trim wins
 // first: takeLaunchLock must never remove it merely because trimming has no
@@ -182,7 +181,7 @@ func (p *BrowserPool) TrimProfile(key BrowsingKey) TrimResult {
 	// The launch lock. Holding it for the duration of the walk is what stops a
 	// concurrent launch starting Chrome into a directory we are deleting out
 	// from under it.
-	lock, acquired, lockErr := acquireLaunchLock(filepath.Join(dir, launchLockFileName))
+	lock, acquired, lockErr := acquireProfileLaunchLock(dir)
 	if lockErr != nil || !acquired {
 		res.Skipped = true
 		return res

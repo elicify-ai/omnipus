@@ -986,19 +986,15 @@ func (c *BrowserCoordinator) watchForCrash(b *chromedp.Browser, currentManagers 
 	}
 }
 
-// launchLockFileName is the single-launch lockfile's name inside a profile
-// directory. Because each key has its OWN profile directory (FR-037), one
-// filename yields one lock per key with no per-key naming logic — which is
-// also why the reconciliation path in pool.go can compute a key's lock path
-// from its profile directory alone.
+// launchLockFileName is the legacy in-profile filename and the suffix of the
+// current sibling lock. Profile deletion must never remove the active guard.
 const launchLockFileName = "chrome.lock"
 
-// lockPath is the single-launch lockfile (CRIT-001). It lives in the profile
-// dir, so it is per-KEY for exactly as long as the profile dir is.
+// lockPath is the per-profile single-launch guard, outside the removable tree.
 func (c *BrowserCoordinator) lockPath() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return filepath.Join(c.cfg.ProfileDir, launchLockFileName)
+	return profileLaunchLockPath(c.cfg.ProfileDir)
 }
 
 // takeLaunchLock acquires the exclusive shared-Chrome single-launch lock
@@ -1011,12 +1007,11 @@ func (c *BrowserCoordinator) lockPath() string {
 // any Chrome PID marker exists. Only non-Unix O_EXCL files use marker-based
 // stale recovery, because their existence survives the holding process.
 func (c *BrowserCoordinator) takeLaunchLock() (*os.File, error) {
-	path := c.lockPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, fmt.Errorf("browser: coordinator: cannot create lock directory for %s: %w", path, err)
-	}
-
-	f, ok, err := acquireLaunchLock(path)
+	c.mu.Lock()
+	profileDir := c.cfg.ProfileDir
+	c.mu.Unlock()
+	path := profileLaunchLockPath(profileDir)
+	f, ok, err := acquireProfileLaunchLock(profileDir)
 	if err != nil {
 		return nil, fmt.Errorf("browser: coordinator: cannot open shared-Chrome launch lock %s: %w", path, err)
 	}
@@ -1046,7 +1041,7 @@ func (c *BrowserCoordinator) takeLaunchLock() (*os.File, error) {
 	if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
 		return nil, fmt.Errorf("browser: coordinator: cannot clear stale launch lock %s: %w", path, rmErr)
 	}
-	f, ok, err = acquireLaunchLock(path)
+	f, ok, err = acquireProfileLaunchLock(profileDir)
 	if err != nil {
 		return nil, fmt.Errorf("browser: coordinator: cannot re-acquire launch lock %s: %w", path, err)
 	}
