@@ -465,8 +465,8 @@ func groupKeys(q *query, s survivor, property string) (keys []groupKey, unresolv
 		display := renderTyped(v)
 		bucket := records.FoldKey(display)
 		if v.Type == records.TypeRelation || v.Type == records.TypePerson {
-			switch {
-			case q.resolve == nil:
+			switch q.resolve {
+			case nil:
 				// No resolver was wired at all (Deps.Resolve was nil). This
 				// is a degraded mode, not a silent one: every relation
 				// COMPARISON in the same response already reports

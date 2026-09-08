@@ -161,7 +161,12 @@ func Open(ctx context.Context, home, collectionRoot string) (knowledge.PropertyI
 	}
 	if store.NeedsFullIndex() {
 		if cerr := store.Close(); cerr != nil {
-			return nil, fmt.Errorf("%w (and closing it failed: %v)", errIndexNotBuilt(), cerr)
+			// cerr is deliberately flattened with %v, not wrapped: the identity
+			// callers check via errors.Is/As is errIndexNotBuilt() (already
+			// preserved by the %w above), and this close failure is incidental
+			// diagnostic text appended to that same identity, not a second
+			// error condition callers are meant to match on.
+			return nil, fmt.Errorf("%w (and closing it failed: %v)", errIndexNotBuilt(), cerr) //nolint:errorlint // cerr is diagnostic text, not an identity to preserve
 		}
 		return nil, errIndexNotBuilt()
 	}

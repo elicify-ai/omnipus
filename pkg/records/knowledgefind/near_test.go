@@ -403,7 +403,11 @@ func bulkBeds(t *testing.T, store propindex.Store, set *records.SchemaSet, n int
 		if len(batch) == 0 {
 			return
 		}
-		if err := store.(*propindex.Index).UpsertNotes(context.Background(), batch); err != nil {
+		idx, ok := store.(*propindex.Index)
+		if !ok {
+			t.Fatalf("bulkBeds: store is %T, not *propindex.Index", store)
+		}
+		if err := idx.UpsertNotes(context.Background(), batch); err != nil {
 			t.Fatalf("UpsertNotes: %v", err)
 		}
 		batch = batch[:0]

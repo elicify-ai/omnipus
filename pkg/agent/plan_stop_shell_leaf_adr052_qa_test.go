@@ -45,7 +45,6 @@ package agent
 import (
 	"context"
 	"path/filepath"
-	"runtime"
 	"syscall"
 	"testing"
 	"time"
@@ -99,9 +98,6 @@ func (*stillAliveError) Error() string {
 // hard-abort window — verified at the OS level, not merely via the
 // ProcessSession's in-memory status field.
 func TestStopReachesShellLeaf_RealBackgroundProcessGroupDies(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("test uses POSIX process-group SIGKILL semantics (syscall.Kill(-pid, ...))")
-	}
 	// Deliberately NOT t.Parallel(). tools.GetSharedSessionManager() is a
 	// single process-wide singleton shared by every *AgentLoop any pkg/agent
 	// test constructs (see loop.go's AgentLoop.Close doc comment, "LOAD-
