@@ -124,3 +124,24 @@ at 20-click milestones, final p95/count and receiver means. Instrumentation cost
 is visible in the per-click sampling duration; the diagnostic neither tunes
 production settings nor bypasses the UI input route. No runtime measurement of
 this correction is claimed yet.
+
+
+## Decoder overhead correction
+
+Diagnostic 69699 completed all 300 ordered mouse events but failed p95 at 267ms.
+Its retained evidence showed pixel sampling mean 23.81ms, p95 60.9ms and maximum
+139.7ms. Those costs cannot be subtracted to claim a passing physical-display
+latency; the earlier run remains a failed latency result.
+
+The test decoder now locates the authored magenta border only on initial
+sampling or a change in native video width/height. It retains those original
+border coordinates for pointer mapping. Each subsequent sample crops the same
+12-by-8 authored binary grid directly from the decoded video into a fixed 12-by-8
+canvas with image smoothing disabled, then reads all 96 actual RGB pixels.
+The black/white ambiguity thresholds, bit order, run nonce, exact count/order
+latch, held-state checks, callback timing and 200ms acceptance threshold remain
+unchanged. No fixture values are substituted into observed pixels.
+
+The revised decoder passed targeted TypeScript checking; its runtime sampling
+cost and latency are not yet measured. Independent review and the coordinated
+short diagnostic must precede any claim of improved measurement overhead.

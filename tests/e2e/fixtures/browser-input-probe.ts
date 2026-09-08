@@ -197,32 +197,38 @@ async function installVideoProbe(page: Page): Promise<void> {
     const stream = video.srcObject;
     const track = stream.getVideoTracks()[0];
     if (!track || typeof video.requestVideoFrameCallback !== 'function') throw new Error('Decoded video frame callbacks unavailable');
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    if (!ctx) throw new Error('Decoded pixel sampling unavailable');
+    const locatorCanvas = document.createElement('canvas');
+    const locatorContext = locatorCanvas.getContext('2d', { willReadFrequently: true });
+    const gridCanvas = document.createElement('canvas');
+    gridCanvas.width = 12;
+    gridCanvas.height = 8;
+    const gridContext = gridCanvas.getContext('2d', { willReadFrequently: true });
+    if (!locatorContext || !gridContext) throw new Error('Decoded pixel sampling unavailable');
+    gridContext.imageSmoothingEnabled = false;
+    type Geometry = Pick<Decoded, 'left' | 'top' | 'width' | 'height' | 'canvasWidth' | 'canvasHeight'> & { videoWidth: number; videoHeight: number };
+    let geometry: Geometry | null = null;
     let expected: PixelState | null = null;
     let started: number | null = null;
     let latency: number | null = null;
     let error: string | null = null;
     const continuity = () => document.contains(video) && video.srcObject === stream && stream.getVideoTracks()[0] === track && track.readyState === 'live' && !video.paused && video.readyState >= 2;
-    const sample = (): Decoded | null => {
-      if (!continuity() || !video.videoWidth || !video.videoHeight) return null;
-      canvas.width = 384;
-      canvas.height = Math.max(1, Math.round(384 * video.videoHeight / video.videoWidth));
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-      let left = canvas.width, right = -1, top = canvas.height, bottom = -1;
-      // The authored magenta border identifies the CSS viewport INSIDE any
-      // encoder padding. Never assume video dimensions equal page dimensions.
-      for (let y = 0; y < canvas.height; y++) {
+    const locate = (): Geometry | null => {
+      locatorCanvas.width = 384;
+      locatorCanvas.height = Math.max(1, Math.round(384 * video.videoHeight / video.videoWidth));
+      locatorContext.drawImage(video, 0, 0, locatorCanvas.width, locatorCanvas.height);
+      const pixels = locatorContext.getImageData(0, 0, locatorCanvas.width, locatorCanvas.height).data;
+      let left = locatorCanvas.width, right = -1, top = locatorCanvas.height, bottom = -1;
+      // Locate the authored viewport border once per decoded video size. These
+      // coordinates also remain the pointer mapping's source of truth.
+      for (let y = 0; y < locatorCanvas.height; y++) {
         let run = -1;
-        for (let x = 0; x <= canvas.width; x++) {
-          const p = (y * canvas.width + x) * 4;
-          const pink = x < canvas.width && pixels[p] > 175 && pixels[p + 1] < 85 && pixels[p + 2] > 175;
+        for (let x = 0; x <= locatorCanvas.width; x++) {
+          const p = (y * locatorCanvas.width + x) * 4;
+          const pink = x < locatorCanvas.width && pixels[p] > 175 && pixels[p + 1] < 85 && pixels[p + 2] > 175;
           if (pink && run < 0) run = x;
           if (!pink && run >= 0) {
             // Long border runs exclude isolated colored encoder-marker cells.
-            if (x - run >= canvas.width * .2) {
+            if (x - run >= locatorCanvas.width * .2) {
               left = Math.min(left, run); right = Math.max(right, x - 1);
               top = Math.min(top, y); bottom = Math.max(bottom, y);
             }
@@ -231,19 +237,33 @@ async function installVideoProbe(page: Page): Promise<void> {
         }
       }
       if (right <= left || bottom <= top) return null;
-      const width = right - left + 1, height = bottom - top + 1;
+      return { left, top, width: right - left + 1, height: bottom - top + 1,
+        canvasWidth: locatorCanvas.width, canvasHeight: locatorCanvas.height,
+        videoWidth: video.videoWidth, videoHeight: video.videoHeight };
+    };
+    const sample = (): Decoded | null => {
+      if (!continuity() || !video.videoWidth || !video.videoHeight) return null;
+      if (!geometry || geometry.videoWidth !== video.videoWidth || geometry.videoHeight !== video.videoHeight) geometry = locate();
+      if (!geometry) return null;
+      const { left, top, width, height, canvasWidth, canvasHeight } = geometry;
+      // One nearest-neighbor reduction maps each authored cell's center to one
+      // output pixel. Read 96 observed pixels, not an entire rescaled video frame;
+      // preserve the same thresholds and every count/order/hold/nonce bit.
+      const scaleX = video.videoWidth / canvasWidth;
+      const scaleY = video.videoHeight / canvasHeight;
+      gridContext.drawImage(video, (left + width * .1) * scaleX, (top + height * .1) * scaleY,
+        width * .8 * scaleX, height * .55 * scaleY, 0, 0, 12, 8);
+      const pixels = gridContext.getImageData(0, 0, 12, 8).data;
       const bits: number[] = [];
       for (let i = 0; i < 96; i++) {
-        const x = Math.floor(left + width * (.1 + ((i % 12) + .5) * .8 / 12));
-        const y = Math.floor(top + height * (.1 + (Math.floor(i / 12) + .5) * .55 / 8));
-        const p = (y * canvas.width + x) * 4;
+        const p = i * 4;
         const light = (pixels[p] + pixels[p + 1] + pixels[p + 2]) / 3;
         if (light > 70 && light < 185) return null;
         bits.push(light >= 185 ? 1 : 0);
       }
       let offset = 0;
       const read = (size: number) => { let value = 0; for (let i = 0; i < size; i++) value += bits[offset++] * 2 ** i; return value; };
-      return { count: read(16), hash: read(32), last: read(8), held: read(8), firstError: read(16), nonce: read(16), left, top, width, height, canvasWidth: canvas.width, canvasHeight: canvas.height };
+      return { count: read(16), hash: read(32), last: read(8), held: read(8), firstError: read(16), nonce: read(16), left, top, width, height, canvasWidth, canvasHeight };
     };
     surface.addEventListener('pointerdown', event => {
       if (expected && started === null && event.isTrusted) {
