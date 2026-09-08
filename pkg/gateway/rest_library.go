@@ -348,28 +348,100 @@ func (a *restAPI) handleLibraryEntriesList(w http.ResponseWriter, r *http.Reques
 // knowledge base — reproduced with a vault named "UAT Vault" showing the
 // plain-folder icon right after creation).
 //
-// Reuses knowledge.IsKnowledgeBase over the entry's real host path — the SAME
-// detection GET .../knowledge?path=... answers per folder (handleKnowledgeInfo
-// resolves through root.HostPath the identical way), never a second rule that
-// could disagree with it. One directory read per directory entry, no network
-// call, matching this listing's existing "cheap, small list" cost profile.
-//
-// A detection failure (unreadable target, a broken mount) leaves the field
-// absent for that one entry rather than failing the whole listing — the
-// folder still renders, just without the vault fact this request could not
-// establish, mirroring root.List's own per-entry tolerance for a raced
-// concurrent delete.
+// A detection failure (unreadable target, a broken mount, a row that no longer
+// resolves inside the root) leaves the field absent for that one entry rather
+// than failing the whole listing — the folder still renders, just without the
+// vault fact this request could not establish, mirroring root.List's own
+// per-entry tolerance for a raced concurrent delete.
 func annotateKnowledgeBaseEntries(root *library.Root, entries []gen.LibraryEntry) {
 	for i := range entries {
 		if !entries[i].IsDir {
 			continue
 		}
-		isKB, detErr := knowledge.IsKnowledgeBase(root.HostPath(entries[i].Path))
-		if detErr != nil {
+		isKB, established := detectKnowledgeBaseInRoot(root, entries[i].Path)
+		if !established {
 			continue
 		}
 		entries[i].IsKnowledgeBase = &isKB
 	}
+}
+
+// detectKnowledgeBaseInRoot answers knowledge.Detection's question about one
+// workspace-relative directory, through the CONFINED root the listing handler
+// already holds. The second return reports whether the question could be
+// answered at all.
+//
+// # Why not knowledge.IsKnowledgeBase(root.HostPath(rel))
+//
+// That was the first implementation, and it was wrong twice.
+//
+// CONFINEMENT. HostPath is a string join that "grants nothing and opens
+// nothing" (its own doc comment); handing its result to knowledge.Detect ran
+// os.ReadDir on a RAW HOST PATH, outside the os.Root every other operation in
+// this handler goes through. A row reported is_dir that is actually a symlink
+// — which library.Root.List does emit, forcing is_dir true on a mount's own
+// symlink entry, and which any ordinary directory row becomes if it is swapped
+// for a symlink between the listing read and this annotation — was then
+// followed straight out of the Library. Routing through root.StatDir means
+// os.Root re-walks and re-checks the path at the syscall level, so an escaping
+// row is refused ("path escapes from parent") instead of read.
+//
+// COST. Detect reads and sorts the ENTIRE target directory, and this runs once
+// per listed row: 200 subfolders holding 10,000 notes each is ~2,000,000
+// dirents for one interactive GET .../entries, and listing the workspace root
+// re-listed every mount target — walking a slow or network volume on every
+// listing. Detection does not need the listing; it needs to know whether two
+// specific marker entries exist at the folder's root, which is a stat.
+//
+// # One detection rule
+//
+// The marker NAMES and the VERDICT both stay in pkg/knowledge — this supplies
+// only the confined stat that answers "is this marker here?". A folder is a
+// knowledge base when either marker directory is present (FR-020), and
+// knowledge.Detection.IsKnowledgeBase is what decides that, here as in Detect.
+//
+// # Known divergence from knowledge.Detect
+//
+// Detect requires each marker to be a real DIRECTORY and never follows a
+// symlink (FR-044), because a folder must not be able to claim knowledge-base
+// status by pointing at another folder's config. StatDir resolves through
+// os.Root.Stat, which DOES follow a symlink that stays inside the root, so a
+// relative in-root symlink named .obsidian/ or .omnipus-vault/ pointing at a
+// directory is counted here and not by Detect. An escaping symlink is refused
+// either way. Closing this needs a confined LSTAT, which library.Root does not
+// currently expose (its StatDir/StatFile both follow); a one-method
+// (*library.Root).Lstat, or a stat-shaped detection seam in pkg/knowledge
+// alongside DetectUsing, would close it with no change to the rule itself.
+// The divergence over-detects and never under-detects, and it is pinned by a
+// test so it cannot drift further unnoticed.
+func detectKnowledgeBaseInRoot(root *library.Root, rel string) (isKB, established bool) {
+	d := knowledge.Detection{Root: rel}
+	for _, marker := range []struct {
+		name    string
+		present *bool
+	}{
+		{knowledge.MarkerDirName, &d.HasOmnipusMarker},
+		{knowledge.ObsidianMarkerDirName, &d.HasObsidianMarker},
+	} {
+		markerRel := marker.name
+		if rel != "" {
+			markerRel = rel + "/" + marker.name
+		}
+		_, err := root.StatDir(markerRel)
+		switch {
+		case err == nil:
+			*marker.present = true
+		case errors.Is(err, library.ErrNotFound), errors.Is(err, library.ErrNotDir):
+			// Definitively absent, or present but not a directory — which
+			// FR-020 says is not a marker. Either way: no marker, and the
+			// question IS answered.
+		default:
+			// Escapes the root, unreadable, a broken mount: the question could
+			// not be answered for this row, so the listing states nothing.
+			return false, false
+		}
+	}
+	return d.IsKnowledgeBase(), true
 }
 
 func (a *restAPI) handleLibraryEntryDelete(w http.ResponseWriter, r *http.Request, workspaceID string) {

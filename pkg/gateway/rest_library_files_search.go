@@ -8,6 +8,7 @@
 package gateway
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -17,8 +18,10 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/filegrep"
+	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/library"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -405,6 +408,30 @@ func emptyFileSearchResponse(opts filegrep.Options) gen.FileSearchResponse {
 // (symlink-refusing) plain root for a mount with no open root, which os.Root
 // reports as escaping/missing — mapLibraryErr turns that into a visible HTTP
 // error rather than reaching this function at all.
+//
+// # The secret set is subtracted from every root
+//
+// An os.Root confines the walk to one host directory; it says nothing about
+// WHICH files inside it a caller may see. Every root built here is therefore
+// wrapped in tools.GuardCarveOuts — the SAME guard pkg/tools' `grep` applies
+// to its own roots, delegating to the same fspolicy.IsCarveOut predicate
+// ResolvePath consults, so the agent surface and the human search bar cannot
+// disagree about what a secret is.
+//
+// Without it, a mount on an ANCESTOR of $OMNIPUS_HOME — warn-and-allow per
+// workspace.CheckMountTarget, which hard-refuses only a target inside
+// $OMNIPUS_HOME — makes credentials.json, master.key, cli.token, auth.json,
+// the config backups, entities/ and system/audit.jsonl greppable through this
+// endpoint, excerpt lines and all. That shape is a first-class supported
+// installation ($OMNIPUS_HOME is an env var; /srv/omnipus with a mount on
+// /srv is as valid as ~/.omnipus), and CheckMountTarget's warning promises the
+// operator that "the installation's own secrets remain protected independently
+// of this mount".
+//
+// The policy's WorkDir is this workspace's own work tree, so IsCarveOut's
+// own-tree exception keeps the workspace's own files searchable while every
+// OTHER workspace's work tree stays denied — the same posture a re-rooted
+// workspace turn gets from pkg/tools.
 func buildFileSearchRoots(homePath, workspaceID string, libRoot *library.Root, rel string) ([]filegrep.Root, func(), error) {
 	var opened []*os.Root
 	closeAll := func() {
@@ -416,13 +443,32 @@ func buildFileSearchRoots(homePath, workspaceID string, libRoot *library.Root, r
 		}
 	}
 
+	workDirPath, err := workspace.SafeWorkDir(homePath, workspaceID)
+	if err != nil {
+		return nil, closeAll, fmt.Errorf("resolve work dir: %w", err)
+	}
+
+	// Built once, before any root, and shared by every one of them — a policy
+	// that cannot be built is a hard stop, never a search that proceeds
+	// unguarded. The caller renders this as an empty, root-lost answer rather
+	// than as hits.
+	policy, err := fspolicy.EffectiveFSPolicy(
+		context.Background(), workDirPath, "", true, homePath, "", workspaceID)
+	if err != nil {
+		return nil, closeAll, fmt.Errorf("resolve filesystem policy: %w", err)
+	}
+
 	if _, target, _, ok := libRoot.MountAt(rel); ok {
-		mr, err := os.OpenRoot(target)
-		if err != nil {
-			return nil, closeAll, fmt.Errorf("open mount root: %w", err)
+		mr, mErr := os.OpenRoot(target)
+		if mErr != nil {
+			return nil, closeAll, fmt.Errorf("open mount root: %w", mErr)
 		}
 		opened = append(opened, mr)
-		mfs := mr.FS()
+		// Guarded at the mount's own root, then narrowed: fs.Sub prefixes
+		// every name back onto the guard, so the carve-out still judges the
+		// full host path no matter how deep the scope reaches — and the
+		// .gitignore reads LoadAncestorIgnore performs go through it too.
+		mfs := tools.GuardCarveOuts(target, mr.FS(), policy)
 		_, rest, _ := strings.Cut(rel, "/")
 		var ancestor []filegrep.AncestorIgnoreLayer
 		if rest != "" {
@@ -440,16 +486,12 @@ func buildFileSearchRoots(homePath, workspaceID string, libRoot *library.Root, r
 		}}, closeAll, nil
 	}
 
-	workDirPath, err := workspace.SafeWorkDir(homePath, workspaceID)
-	if err != nil {
-		return nil, closeAll, fmt.Errorf("resolve work dir: %w", err)
-	}
 	wr, err := os.OpenRoot(workDirPath)
 	if err != nil {
 		return nil, closeAll, fmt.Errorf("open work root: %w", err)
 	}
 	opened = append(opened, wr)
-	wfs := wr.FS()
+	wfs := tools.GuardCarveOuts(workDirPath, wr.FS(), policy)
 	name := rel
 	var wsAncestor []filegrep.AncestorIgnoreLayer
 	if rel != "" {
@@ -480,7 +522,10 @@ func buildFileSearchRoots(homePath, workspaceID string, libRoot *library.Root, r
 					continue
 				}
 				opened = append(opened, mr)
-				roots = append(roots, filegrep.Root{Name: m.Name, FS: mr.FS()})
+				roots = append(roots, filegrep.Root{
+					Name: m.Name,
+					FS:   tools.GuardCarveOuts(m.HostPath, mr.FS(), policy),
+				})
 			}
 		}
 	}
