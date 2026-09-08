@@ -389,6 +389,9 @@ type CaptureSession struct {
 	// (guarded by relayHandle, via removeViewerByRelayHandle) -- only the
 	// CURRENT registration's own cleanup/eviction may remove the entry.
 	viewers map[string]viewerRegistration
+	// viewerRequests holds only the latest ordered attempt for each original attachment.
+	// Pending attempts are separate from active viewer registrations. Guarded by mu.
+	viewerRequests map[string]*captureViewerRequest
 	// viewerGenSeq is the monotonic counter AddViewer draws each new
 	// generation token from. Guarded by mu, same as viewers itself.
 	viewerGenSeq uint64
@@ -1720,7 +1723,7 @@ func (cs *CaptureSession) AddViewer(viewerID string) uint64 {
 // remain and one isn't already armed or the session already stopped — shared
 // by RemoveViewer and RemoveViewerIfCurrent. Caller must hold cs.mu.
 func (cs *CaptureSession) armGraceStopLocked() {
-	if len(cs.viewers) == 0 && cs.stopTimer == nil && !cs.stopped {
+	if len(cs.viewers) == 0 && !cs.hasPendingViewerRequestsLocked() && cs.stopTimer == nil && !cs.stopped {
 		cs.stopTimer = time.AfterFunc(captureGracePeriod, cs.Stop)
 	}
 }
@@ -1815,6 +1818,7 @@ func (cs *CaptureSession) stopWhen(allowed func() bool) bool {
 		return false
 	}
 	cs.stopped = true
+	cs.stopViewerRequestsLocked()
 	cs.retireIngestRecoveryEpisodeLocked()
 	cs.cancelIngestBindingLocked()
 	if cs.frameCancel != nil {

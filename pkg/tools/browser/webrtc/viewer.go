@@ -3,6 +3,7 @@ package webrtc
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/rtcp"
@@ -83,6 +84,10 @@ func (s *Session) HandleViewerOfferHandle(viewerID string, sdpOffer string) (ans
 // HandleViewerOfferHandleContext retains the original attachment lifetime for
 // this peer. Returning an answer does not end that lifetime.
 func (s *Session) HandleViewerOfferHandleContext(parent context.Context, viewerID string, sdpOffer string) (answer string, handle any, err error) {
+	return s.handleViewerOfferHandle(parent, parent, nil, viewerID, sdpOffer)
+}
+
+func (s *Session) handleViewerOfferHandle(ctx, parent context.Context, request *viewerRequestAdmission, viewerID, sdpOffer string) (answer string, handle any, err error) {
 	if parent == nil {
 		return "", nil, fmt.Errorf("webrtc: viewer offer: nil attachment context")
 	}
@@ -100,8 +105,8 @@ func (s *Session) HandleViewerOfferHandleContext(parent context.Context, viewerI
 	prefix := fmt.Sprintf("[viewer-%d/%s]", id, viewerID)
 	s.logf("%s offer received (%d bytes SDP)", prefix, len(sdpOffer))
 
-	videoTrack, audioTrack, ok := s.waitForTracks(waitForTracksTimeout)
-	if err := parent.Err(); err != nil {
+	videoTrack, audioTrack, ok := s.waitForTracksContext(ctx, waitForTracksTimeout)
+	if err := context.Cause(ctx); err != nil {
 		return "", nil, fmt.Errorf("webrtc: viewer offer: %w", err)
 	}
 	if !ok {
@@ -124,171 +129,45 @@ func (s *Session) HandleViewerOfferHandleContext(parent context.Context, viewerI
 		return "", nil, fmt.Errorf("webrtc: session closed")
 	}
 
-	pc, err := s.buildPeerConnection(s.apiViewer, true) // internet-facing leg: fixed socket + public candidates
-	if err != nil {
-		return "", nil, fmt.Errorf("webrtc: viewer %s: %w", prefix, err)
-	}
-
-	var senders []*webrtc.RTPSender
-	if sender, addErr := pc.AddTrack(videoTrack); addErr != nil {
-		_ = pc.Close()
-		return "", nil, fmt.Errorf("webrtc: viewer %s: add video track: %w", prefix, addErr)
-	} else {
-		senders = append(senders, sender)
-		go s.drainViewerRTCP(prefix, sender)
-	}
-	if audioTrack != nil {
-		if sender, addErr := pc.AddTrack(audioTrack); addErr != nil {
-			_ = pc.Close()
-			return "", nil, fmt.Errorf("webrtc: viewer %s: add audio track: %w", prefix, addErr)
-		} else {
-			senders = append(senders, sender)
-			go s.drainViewerRTCP(prefix, sender)
+	var published atomic.Pointer[ViewerHandle]
+	var prepared *viewerPreparedCandidate
+	err = s.viewerPreparations.run(ctx, func() error {
+		var prepareErr error
+		prepared, prepareErr = s.prepareViewerCandidate(ctx, parent, request, prefix, viewerID, sdpOffer, videoTrack, audioTrack, &published)
+		return prepareErr
+	}, func() {
+		if prepared != nil {
+			s.retireViewerCandidate(prepared.vc)
 		}
-	} else {
-		s.logf("%s no audio track yet, answering video-only", prefix)
-	}
-
-	// pcHandle is minted HERE, before vc is ever published into s.viewers,
-	// and stored on vc itself (viewerConn.handle) as well as returned below
-	// as this call's `handle` -- the SAME pointer instance serves both
-	// purposes so removeViewer's eventual onViewerRemoved notification (GAP 2
-	// fix-wave finding) can hand a caller back the EXACT identity it was
-	// given at registration time, letting it recognize its own registration
-	// with a plain equality check rather than needing a second identity
-	// scheme.
-	pcHandle := &ViewerHandle{viewerID: viewerID, pc: pc}
-	inputCtx, inputCancel := context.WithCancel(parent)
-	vc := &viewerConn{pc: pc, senders: senders, handle: pcHandle, inputCtx: inputCtx, inputCancel: inputCancel}
-	defer func() {
-		if err != nil {
-			inputCancel()
-		}
-	}()
-	// Match Stats' Session -> viewers lock order. Registration cannot race
-	// past Session.Close after its final viewer snapshot.
-	s.mu.Lock()
+	})
+	// A canceled caller synchronizes with the short publication lock: either
+	// no attempt was installed, or its exact cleanup handle is already visible.
 	s.viewersMu.Lock()
-	if s.closed || inputCtx.Err() != nil {
-		s.viewersMu.Unlock()
-		s.mu.Unlock()
-		s.stopViewerConn(vc)
-		_ = pc.Close()
-		if err := parent.Err(); err != nil {
-			return "", nil, fmt.Errorf("webrtc: viewer offer: %w", err)
-		}
-		return "", nil, fmt.Errorf("webrtc: session closed")
+	if h := published.Load(); h != nil {
+		handle = h
 	}
-	old := s.viewers[viewerID]
-	if old != nil {
-		old.cancelInput()
-	}
-	s.viewers[viewerID] = vc
-	viewerCount := len(s.viewers)
 	s.viewersMu.Unlock()
-	s.mu.Unlock()
-	// Cancellation precedes publication; potentially blocking transport
-	// cleanup runs after the registry locks are released.
-	if old != nil {
-		s.logf("%s replacing existing viewer connection for id %q", prefix, viewerID)
-		s.stopViewerConn(old)
-		go func() {
-			if cerr := old.pc.Close(); cerr != nil {
-				s.logf("%s closing previous viewer connection: %v", prefix, cerr)
-			}
-		}()
-	}
-	context.AfterFunc(inputCtx, func() { s.removeViewer(viewerID, pc) })
-	s.logf("%s viewer count now %d", prefix, viewerCount)
-
-	// This attempt is now registered -- from here on, a handle exists for a
-	// caller to protect via CloseViewerIfCurrent, even if a later step below
-	// fails (SetRemoteDescription/CreateAnswer/SetLocalDescription), because
-	// a concurrent newer offer for the SAME viewerID could already have
-	// replaced this registration before this call returns. Reuses pcHandle
-	// (minted above, already stored on vc) rather than constructing a second,
-	// distinct *ViewerHandle for the same registration -- see pcHandle's doc
-	// comment for why the two must be the identical pointer.
-	handle = pcHandle
-
-	// Same candidate/timing/selected-pair instrumentation the ingest leg
-	// carries (icediag.go). The viewer leg is where a hosted install's ICE
-	// actually has work to do -- srflx, TURN, ICE-Lite, a real network
-	// between the peers -- so "-> failed" with no candidate record is, if
-	// anything, LESS diagnosable here than on the loopback leg.
-	diag := newICEDiag(prefix, "viewer", s.logf)
-	pc.OnICECandidate(diag.noteLocalCandidate)
-	pc.OnICEGatheringStateChange(diag.noteGatheringState)
-
-	pc.OnICEConnectionStateChange(func(st webrtc.ICEConnectionState) {
-		s.logf("%s ICE connection state -> %s", prefix, st.String())
-		diag.noteICEState(st, pc)
-	})
-	pc.OnConnectionStateChange(func(st webrtc.PeerConnectionState) {
-		s.logf("%s peer connection state -> %s", prefix, st.String())
-		switch st {
-		case webrtc.PeerConnectionStateClosed, webrtc.PeerConnectionStateFailed:
-			// Terminal, unrecoverable states: evict immediately.
-			s.removeViewer(viewerID, pc)
-		case webrtc.PeerConnectionStateDisconnected:
-			// Disconnected is often transient (a brief Wi-Fi blip Pion's own
-			// ICE agent recovers from without ever reaching Failed) -- evict
-			// only if it hasn't recovered within disconnectGracePeriod. See
-			// scheduleDisconnectEviction's doc comment for the full fix-wave
-			// CRIT rationale (removeViewer previously never closed the PC at
-			// all on ANY of these three states, leaking it).
-			s.scheduleDisconnectEviction(viewerID, pc)
-		}
-	})
-
-	// Q4 pattern: the viewer creates a data channel labeled "input" on this
-	// SAME PeerConnection alongside the recvonly media transceivers, so
-	// input can never contend with media on a separate queue. Since the
-	// viewer is the offering side, the channel arrives here via
-	// OnDataChannel.
-	pc.OnDataChannel(func(dc *webrtc.DataChannel) {
-		if dc.Label() != "input" {
-			s.logf("%s unexpected data channel label %q, ignoring", prefix, dc.Label())
-			return
-		}
-		s.bindViewerInputChannel(prefix, viewerID, pc, dc)
-	})
-
-	offer := webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: sdpOffer}
-	diag.noteRemoteOffer(offer.SDP)
-	if err = pc.SetRemoteDescription(offer); err != nil {
-		return "", handle, fmt.Errorf("webrtc: viewer %s: set remote description: %w", prefix, err)
-	}
-
-	gatherComplete := webrtc.GatheringCompletePromise(pc)
-
-	var ans webrtc.SessionDescription
-	ans, err = pc.CreateAnswer(nil)
 	if err != nil {
-		return "", handle, fmt.Errorf("webrtc: viewer %s: create answer: %w", prefix, err)
+		return "", handle, err
 	}
-	if err = pc.SetLocalDescription(ans); err != nil {
-		return "", handle, fmt.Errorf("webrtc: viewer %s: set local description: %w", prefix, err)
+	if request != nil {
+		if err = s.installViewerCandidate(ctx, request, prefix, prepared.vc, nil); err != nil {
+			s.retireViewerCandidate(prepared.vc)
+			return "", nil, err
+		}
+		handle = prepared.vc.handle
 	}
-
-	select {
-	case <-inputCtx.Done():
-		return "", handle, fmt.Errorf("webrtc: viewer offer: %w", inputCtx.Err())
-	case <-gatherComplete:
-		s.logf("%s server gathering complete, sending answer", prefix)
-	case <-time.After(gatherTimeout):
-		s.logf("%s WARNING: server gathering did not complete within %s, sending partial answer", prefix, gatherTimeout)
+	if err := context.Cause(ctx); err != nil {
+		s.retireViewerCandidate(prepared.vc)
+		return "", handle, err
 	}
-
-	local := pc.LocalDescription()
-	if local == nil {
-		return "", handle, fmt.Errorf("webrtc: viewer %s: no local description after SetLocalDescription", prefix)
+	if request != nil && !s.IsViewerCurrent(handle) {
+		s.retireViewerCandidate(prepared.vc)
+		return "", handle, errStaleViewerRequest
 	}
-
 	s.logf("%s answer sent to viewer", prefix)
 	s.pliBurstForNewViewer(prefix)
-
-	return local.SDP, handle, nil
+	return prepared.answer, handle, nil
 }
 
 // disconnectGracePeriod bounds how long a viewer PeerConnection may sit in

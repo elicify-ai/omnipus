@@ -162,6 +162,10 @@ type Session struct {
 
 	viewersMu sync.Mutex
 	viewers   map[string]*viewerConn
+	// Latest request per original viewer attachment; guarded by viewersMu.
+	viewerRequests map[string]*viewerRequestAdmission
+	// Native preparation owns its own admission mutex.
+	viewerPreparations viewerPreparationPool
 
 	videoPktCount          atomic.Int64
 	audioPktCount          atomic.Int64
@@ -661,6 +665,13 @@ func (s *Session) Close() error {
 	}
 
 	s.viewersMu.Lock()
+	for _, request := range s.viewerRequests {
+		request.cancel(fmt.Errorf("webrtc: session closed"))
+		if request.stopParent != nil {
+			request.stopParent()
+		}
+	}
+	clear(s.viewerRequests)
 	viewers := s.viewers
 	for _, vc := range viewers {
 		vc.cancelInput()

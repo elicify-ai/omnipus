@@ -741,9 +741,18 @@ func (s *Session) attachIngestTrack(prefix string, pc *webrtc.PeerConnection, re
 // BOTH tracks -- relaxing it to video-only-immediately is what introduced
 // the first-viewer no-audio race (UAT 2026-07-18).
 func (s *Session) waitForTracks(timeout time.Duration) (video, audio *webrtc.TrackLocalStaticRTP, ok bool) {
+	return s.waitForTracksContext(context.Background(), timeout)
+}
+
+func (s *Session) waitForTracksContext(ctx context.Context, timeout time.Duration) (video, audio *webrtc.TrackLocalStaticRTP, ok bool) {
 	deadline := time.Now().Add(timeout)
 	var audioDeadline time.Time // armed once video is first observed
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
 	for {
+		if ctx.Err() != nil {
+			return nil, nil, false
+		}
 		s.mu.Lock()
 		v, a := s.videoTrack, s.audioTrack
 		// Issue #674: a track with no live feed is treated exactly as an
@@ -773,7 +782,11 @@ func (s *Session) waitForTracks(timeout time.Duration) (video, audio *webrtc.Tra
 		} else if now.After(deadline) {
 			return v, a, false
 		}
-		time.Sleep(50 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return nil, nil, false
+		case <-tick.C:
+		}
 	}
 }
 
