@@ -108,8 +108,8 @@ embedded SPA files.
 
 Run `99078` exited 1 after 20.7 minutes. The sole failure was the final 100-click
 decoded-video latency assertion: p95 was **247.19999992847443ms**, above the
-unchanged **200ms** target. Short diagnostic run `69699` is now running on
-unchanged source `2259cd81f`; no result or cause attribution is claimed yet.
+unchanged **200ms** target. Subsequent normal diagnostics also failed at p95
+267ms (`69699`) and 306.1ms (`71735`) on unchanged source `2259cd81f`.
 
 Before that assertion, both idle and mixed-input phases met their independent
 600,000ms minimums. Assertions passed for 550 exact ordered trusted native
@@ -131,6 +131,18 @@ artifact persistence and the short diagnostic were subsequently integrated in
 
 This result does not prove audio, remote network/TURN behavior, the native macOS
 app, startup/resize targets or final CI. Those acceptance requirements remain open.
+
+## Subsequent latency diagnostics
+
+Both normal 100-click diagnostics failed the 200ms target, even after a test-only
+pixel-decoder optimization reduced sampling overhead. Explicit video-only run
+`67712` passed at p95 156.2ms with inactive audio negotiation and 300 exact ordered
+events. This is a hypothesis experiment, not a production/audio/soak acceptance
+pass. All three runs used production source `2259cd81f`; detailed JSON was retained.
+The separate dual sender-report clock finding awaits its reproduction/correction;
+causality is not established by one fresh-session audio comparison. Metrics,
+interpretation limits and exact artifact paths are recorded in
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/docs/internal/runtime-latency-validation.md`.
 
 ## Gateway viewport fixture correction
 

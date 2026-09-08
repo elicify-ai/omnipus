@@ -152,8 +152,13 @@ error assertions passed. This is partial acceptance evidence, not a passing soak
 Detailed latency samples, JSON and phase images were not persisted by the line
 reporter; the terminal log and final failure screenshot are retained. Artifact
 persistence correction and a short diagnostic were integrated as `b293c9808`.
-Diagnostic run `69699` is running against unchanged source `2259cd81f`; no
-result is claimed yet. See the closeout ledger for exact paths.
+Normal diagnostics `69699` and `71735` failed at p95 267ms and 306.1ms on
+unchanged source `2259cd81f`; only test decoder overhead was reduced. Explicit
+video-only experiment `67712` passed at 156.2ms with audio inactive, which does
+not close product/audio/soak acceptance. The separate dual sender-report clock
+finding still awaits reproduction/correction; causality remains unproven.
+Detailed evidence is retained in
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/docs/internal/runtime-latency-validation.md`.
 
 Gateway followup: run `99178` passed 33 groups, failed one obsolete viewport
 fixture and skipped 11 Linux-only groups (34.114s, no race warnings). The fixture
