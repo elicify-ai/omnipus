@@ -135,7 +135,7 @@ type BrowserCaptureControlFrame struct {
 	CaptureScale *float64 `json:"capture_scale,omitempty"`
 	// recapture only: expected CSS viewport height. See expected_width.
 	ExpectedHeight *int `json:"expected_height,omitempty"`
-	// recapture only, server → extension: the CDP-verified CSS viewport width the tab was just resized to. chrome.tabs.get lags the OS window reflow, so a recapture racing a resize can pin the stream to a stale size — the encoder polls tabs.get until it converges on this, falling back to it on timeout.
+	// recapture only, server → extension: the measured CSS viewport width for this exact target and capture generation. The encoder uses this verified geometry directly; it does not poll chrome.tabs.get, whose dimensions can lag a resize. The server keeps capture pending until the target's actual viewport has been measured.
 	ExpectedWidth *int `json:"expected_width,omitempty"`
 	// set_bitrate only, server -> extension: the video sender's maximum bitrate in bits per second, derived from the VIEWER leg's own RTCP receiver reports (ADR-062 Finding 2).
 	MaxBitrate *int `json:"max_bitrate,omitempty"`

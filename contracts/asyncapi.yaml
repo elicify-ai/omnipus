@@ -4525,9 +4525,12 @@ components:
           type: integer
           minimum: 1
           maximum: 16384
-          description: 'recapture only, server → extension: the CDP-verified CSS viewport width the tab was just resized
-            to. chrome.tabs.get lags the OS window reflow, so a recapture racing a resize can pin the stream to a stale
-            size — the encoder polls tabs.get until it converges on this, falling back to it on timeout.'
+          description: >-
+            recapture only, server → extension: the measured CSS viewport width
+            for this exact target and capture generation. The encoder uses this
+            verified geometry directly; it does not poll chrome.tabs.get, whose
+            dimensions can lag a resize. The server keeps capture pending until
+            the target's actual viewport has been measured.
         expected_height:
           type: integer
           minimum: 1

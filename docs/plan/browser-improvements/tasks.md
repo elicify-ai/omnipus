@@ -30,42 +30,81 @@ Integration branch: `browser-improvements`. Base: `fbcbc5edc9845f1fbecb01b423f15
 - [ ] Avoid redundant stale tab-API polling when verified current-generation geometry is available; measure recapture against the two-second target.
 - [ ] Integrate all lanes and resolve cross-component failures.
 
-## Current integration checkpoint
+## Current integration checkpoint — 2026-09-08
 
-The unchecked wave-level items above remain open until their complete production
-behavior is verified. The following integrated work narrows those gaps:
+The unchecked wave-level items remain open until their complete production
+behavior is verified. Component tests are not end-to-end acceptance.
 
-- Capture startup measures the selected target and its actual geometry before
-  injection (`563022dfe`). Focused cancellation, target-retirement, mutation, and
-  race checks passed; cold shared-process registration remains a separate limit.
-- Authenticated ingest offers retain socket, frame, and offer ownership through
-  negotiation (`d6556cfb2`). Seven deliberate faults were caught and restored
-  adapter tests passed. The gateway reader integration is committed as
-  `a55f42757`: heartbeats and disconnects remain responsive during negotiation,
-  offers have a bounded queue and receipt-based deadline, and answers preserve
-  exact identity. Eight gateway mutations were caught; restored focused tests
-  passed. Capture-only runtime and reader race verification remain pending.
-- Input requires the committed capture to match the receiving target ID and
-  exact target context (`625146088`), in addition to source lifetime and frame
-  generation checks (`4fbc98bf2`). Four wrong-target deliveries were reproduced;
-  three mutations and restored focused race tests passed. Nil-capture admission
-  and cross-panel capture allocation are still open.
-- Session removal retires pending target operations and prevents delayed
-  completion from reviving or replacing the wrong session (`bc1e33752`). Nine
-  behavioral failures, four caught mutations, and restored focused race/shuffle
-  verification are recorded. Viewport admission is the next startup-worker lane.
-- The complete relay race suite passed 159 tests/subtests with zero skips and
-  zero race warnings (`62ab23e6d`, evidence). This covers connection lifetimes,
-  offer admission, separate ingress/write-failure statistics, and bounded input
-  overflow cleanup together. It does not establish viewer presentation, audible
-  synchronization, remote performance, or exact-branch UI acceptance.
+Integrated on `browser-improvements`:
 
-Current parallel ownership: startup worker handles viewport admission; media
-worker handles context-aware capture constructors and viewer-offer adapters;
-UI worker handles authenticated gateway ingest and its capture fixture. Root
-handles health/binding integration, capture transitions, and final assembly.
-Go test batches remain serial to respect the machine's resource constraints;
-source work proceeds in the isolated worktrees.
+- Cold startup and attachment cancellation, exact panel capture ownership,
+  original input/command lifetimes, bounded outbound queues, and coherent
+  frame/health publication are wired into production paths. Earlier focused
+  evidence is retained in the corresponding validation documents.
+- Typed recapture retains its measured frame, original binding and request
+  through final socket admission (`b960a0883`). Explicit refresh retires queued
+  automatic recovery while preserving its retry budget. The final focused
+  race run passed 46 leaf cases; three deliberate faults were caught/restored.
+- Frame health and stop messages retain their original registered viewer and
+  immutable publication (`6660831fe`). The worker's focused race closeout
+  passed 33 leaf cases and caught three deliberate faults.
+- Capture preparation honors caller cancellation, and focusing an existing
+  target cannot recreate a dead tab or continue after cancellation/Stop
+  (`0c5a8d256`). Seven behavioral failures were reproduced; three faults were
+  caught/restored; 13 focused race cases passed.
+- Long error text has bounded wrapping (`6cfb6cca0`). The SPA build passed.
+  Isolated rendering with built CSS fits 320/560-pixel containers, but did not
+  reproduce the original whole-app clipping; full-app visual verification
+  remains pending.
+
+- Viewer offer/input lifetime and immutable ingest response integration
+  (`f9f019de6`): two browser identity cases and 24 collected gateway cases/
+  subtests passed with race detection; two faults caught/restored. Real
+  authenticated socket cancellation passed.
+- Failed writes retire the original socket even after request cancellation;
+  cancellation before writing preserves it (`84596915f`). Eighteen focused
+  race cases passed; both deliberate faults caught all three negative cases.
+- Measured viewport/refresh and original-context errors, including both
+  same-tab panel routes, are integrated (`2a5c0d02d`). Thirty-one affected race
+  leaves passed; three faults caught. The initial viewport now also waits for
+  its exact original pending attachment (`5db25b399`); its observed regression
+  and replacement control passed the affected race check after correction.
+- Back recovery, shortcut releases, media-loss cleanup, bounded real-session
+  retries and attachment-aware Retry are integrated (`77a6c6fc1`). Fifty
+  affected tests passed after all seven selected old-fault cases failed.
+  Notices no longer change picture geometry in actual compiled-CSS measurement
+  at widths 320/560/900. Independent review confirmed wiring; full-app remains open.
+- Encoder shutdown success paths and adaptation lifetime/overlap guards are
+  integrated (`8c70a0b98`), with 13 focused tests and two caught faults. Review
+  subsequently reproduced a retired capture rejection aborting its queued
+  replacement; media owns that additional negative outcome and documentation.
+
+Current parallel ownership and remaining integration:
+
+- UI: annotation CSS coordinates and stale-enrichment rejection, plus remaining
+  written-only control-reference cleanup.
+- Startup: migrate obsolete gateway integration fixtures to actual scoped
+  production routes, remove dead helpers/requested-scale cache, and bound
+  combined media-degradation notices to the 512-character wire contract.
+- Media: retired capture rejection must not close the current socket or abort
+  a replacement capture; current failures must remain visible.
+- Root: integration, canonical capture-description correction, exact build
+  identity and real browser testing. Independent review covered the frontend/
+  encoder and all 82 changed gateway/contract files; remaining browser manager,
+  relay, startup and other changed-file slices still require independent review.
+
+Runtime evidence so far: the intermediate binary built from `0c5a8d256` booted
+successfully on isolated port 11094; the installed instance on 10994 was
+preserved. Preliminary UAT-13 exited 1 because tab admission reported low
+memory, before video attached. This is not video/input acceptance. Subsequent
+host snapshots moved from near the application's 15% available-memory boundary
+above it; macOS memory-pressure percentage is a different measurement. No
+memory-policy bypass or arithmetic fix was introduced. Repeat actual browser
+testing after compilation work finishes and all implementation changes land.
+
+Go test/build batches remain serial within this team. Source work continues in
+isolated worktrees. Other independent operators' processes are not controlled
+or terminated by this work.
 
 ## Release evidence (all pending)
 
