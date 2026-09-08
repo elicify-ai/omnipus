@@ -16,7 +16,7 @@ const browserCommandCapacity = 512
 
 // browserCommandQueue keeps discrete gestures ordered without making the
 // socket reader wait for Chrome. Only adjacent pointer moves are replaceable.
-type browserCommandQueue struct { // not-wire-format: connection-local execution state.
+type browserCommandQueue struct { // not-wire-format: connection-local mutex, cancellation and job queue; never serialized.
 	mu               sync.Mutex
 	closed           bool
 	running          bool
@@ -25,7 +25,7 @@ type browserCommandQueue struct { // not-wire-format: connection-local execution
 	activeNavigation bool
 }
 
-type browserCommand struct { // not-wire-format: internal command, never marshaled.
+type browserCommand struct { // not-wire-format: queued execution closure with admission timing; never marshaled as a command payload.
 	enqueued   time.Time
 	move       bool
 	navigation bool

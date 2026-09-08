@@ -4,7 +4,7 @@ export type BrowserFrameGateState =
   | { status: 'ready'; generation: number }
   | { status: 'needs-fresh-viewer'; generation: number }
 
-export interface BrowserPresentedFrame {
+export interface BrowserPresentedFrame { // not-wire-format: local browser video-frame callback metadata used only for presentation admission
   rtpTimestamp?: number
   expectedDisplayTime?: number
 }

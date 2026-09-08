@@ -2,7 +2,7 @@ import type { FrameCropRect } from './browserLiveCoords'
 import { mapClientToBrowserCss } from './browserFrameCoords'
 
 /** Local proof for optional annotation enrichment; never sent on the wire. */
-export interface BrowserAnnotationFrame {
+export interface BrowserAnnotationFrame { // not-wire-format: local annotation proof retains stream object identity and crop geometry; never serialized
   captureId: string
   generation: number
   marker: number

@@ -61,11 +61,11 @@ import type { BrowserWebRTCAnswerFrame, BrowserWebRTCOfferFrame } from '@/lib/ap
 export type BrowserViewerOffer = Pick<BrowserWebRTCOfferFrame, 'sdp' | 'offer_id' | 'capture_id' | 'capture_generation'>
 
 /** Local identity of a server capture; never serialized directly. */
-export interface BrowserCaptureIdentity {
+export interface BrowserCaptureIdentity { // not-wire-format: local camelCase capture expectation; outgoing offers separately map into the generated wire type
   captureId: string
   generation: number
 }
-export interface BrowserPeerIdentity extends BrowserCaptureIdentity {
+export interface BrowserPeerIdentity extends BrowserCaptureIdentity { // not-wire-format: local peer callback identity retained with its media stream; never serialized as a payload
   offerId: number
 }
 

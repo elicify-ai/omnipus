@@ -11,7 +11,7 @@ import (
 // the transport write. A nil source is reserved for connection-wide messages.
 // current must perform only a brief check of the originally captured state,
 // without I/O or queue sends.
-type browserOutboundFrame struct { // not-wire-format: internal write admission.
+type browserOutboundFrame struct { // not-wire-format: local envelope of encoded bytes, cancellation and admission callback; only data is written.
 	data    []byte
 	source  context.Context
 	current func() bool

@@ -70,7 +70,7 @@ func captureStageFailure(previous, current browser.CaptureHealthObservation, now
 // captureHealthTracker is scoped to one watchdog goroutine. A finite repaint
 // remains unresolved until its downstream stage progresses; another repaint
 // is not required to keep fresh failure evidence alive.
-type captureHealthTracker struct { // not-wire-format: internal watchdog state.
+type captureHealthTracker struct { // not-wire-format: goroutine-local watchdog history and failure classification; never serialized.
 	previous browser.CaptureHealthObservation
 	failure  string
 }
