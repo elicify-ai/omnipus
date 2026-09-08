@@ -251,316 +251,205 @@ func (h *BrowserWSHandler) dispatchWebRTCOffer(
 	}()
 }
 
-// handleWebRTCOffer processes a browser_webrtc_offer frame (ADR-047 D4). Gate
-// ladder, in order: resolve the agent's BrowserManager -> webrtcUnavailableReason
-// (WebRTCEnabled -> lite build -> capture-capable, ADR-048 condition 3) ->
-// the ADR-048 condition-2 multi-agent capture fence (only when about to
-// start a BRAND NEW session) -> ensure+start the agent's capture session ->
-// HandleViewerOffer. Every rejection sends a browser_webrtc_state frame with
-// available=false and a reason; the connection's session/control-lock
-// attachment (handleAttach, already established independently) is never
-// touched by any branch here.
-//
-// Runs on its own goroutine in production (dispatchWebRTCOffer, above), never
-// on readLoop's own goroutine — epoch is the value state.beginWebRTCOffer()
-// returned at dispatch time, and MUST be threaded through unchanged to the
-// commitWebRTCAttachment call below so a stale/superseded generation is
-// detected before this call ever mutates connection-shared state. Tests that
-// invoke this method directly (bypassing dispatchWebRTCOffer, exercising the
-// gate-ladder logic synchronously) pass 0, matching a fresh browserConnState's
-// zero-value webrtcEpoch.
+// handleWebRTCOffer negotiates only for the original committed attachment
+// captured synchronously by dispatchWebRTCOffer. The server request epoch
+// orders attempts; wire offer IDs are echoed without assuming their order.
 func (h *BrowserWSHandler) handleWebRTCOffer(
-	wc *browserWSConn,
-	state *browserConnState,
-	viewerID, userID string,
-	data []byte,
-	cfg *config.Config,
-	epoch uint64,
+	wc *browserWSConn, state *browserConnState, viewerID, userID string,
+	data []byte, cfg *config.Config, epoch uint64,
 ) {
-	var frame generated.BrowserWebRTCOfferFrame
-	if err := json.Unmarshal(data, &frame); err != nil {
-		wc.sendCriticalGen(errorStatus("browser_webrtc_offer: invalid frame"),
-			dropContext("", viewerID, "webrtc-offer-invalid"))
+	request, ok := state.webRTCOfferRequest(epoch)
+	if !ok {
 		return
 	}
-	if frame.AgentId == "" || frame.Sdp == "" {
-		wc.sendCriticalGen(sessionErrorStatus(frame.SessionId, "browser_webrtc_offer: agent_id and sdp are required"),
-			dropContext(frame.SessionId, viewerID, "webrtc-offer-missing-fields"))
+	defer state.finishWebRTCOffer(epoch)
+	currentOrigin := func() bool { return state.webRTCRequestOriginCurrent(request) }
+	send := func(frame any, sessionID, kind string) bool {
+		return wc.sendCriticalScopedGen(frame, dropContext(sessionID, viewerID, kind), request.attachment.ctx, currentOrigin)
+	}
+	var frame generated.BrowserWebRTCOfferFrame
+	if err := json.Unmarshal(data, &frame); err != nil {
+		send(errorStatus("browser_webrtc_offer: invalid frame"), "", "webrtc-offer-invalid")
 		return
 	}
 	sessID := frame.SessionId
-
-	// FR-017, identical to handleAttach's: the workspace comes off the
-	// attaching chat session's own meta, server-side. The panel and the video
-	// it carries MUST resolve to the same browser — an offer that resolved
-	// differently from the attach would stream one workspace's screen into
-	// another workspace's panel.
-	mgr, outcome := h.agentLoop.BrowserManagerForAgent(
-		context.Background(), frame.AgentId, h.sessionWorkspaceID(sessID))
+	if frame.AgentId == "" || frame.Sdp == "" {
+		send(sessionErrorStatus(sessID, "browser_webrtc_offer: agent_id and sdp are required"), sessID, "webrtc-offer-missing-fields")
+		return
+	}
+	const maxSafeInteger = uint64(1<<53 - 1)
+	validID := func(value *int) bool { return value != nil && *value > 0 && uint64(*value) <= maxSafeInteger }
+	if !validID(frame.OfferId) || (frame.CaptureId == nil) != (frame.CaptureGeneration == nil) ||
+		(frame.CaptureId != nil && (*frame.CaptureId == "" || !validID(frame.CaptureGeneration))) {
+		send(operationErrorStatus(sessID, "browser_webrtc_offer: valid offer_id and paired capture claims are required"), sessID, "webrtc-offer-invalid-claims")
+		return
+	}
+	sendState := func(available, active, audio bool, reason string, cause error) {
+		status := generated.BrowserWebRTCStateFrame{Type: string(generated.WsFrameTypeBrowserWebrtcState), SessionId: &sessID, Available: available}
+		if active {
+			status.Active = boolPtr(true)
+		}
+		if audio {
+			status.HasAudio = boolPtr(true)
+		}
+		if reason != "" {
+			status.Reason = &reason
+		}
+		if detail := webrtcReasonDetail(cause); detail != "" {
+			status.ReasonDetail = &detail
+		}
+		send(status, sessID, "webrtc-state:"+reason)
+	}
+	// Resolve the exact attachment captured before dispatch. A later attach is
+	// never a route fallback for work that arrived on the previous attachment.
+	snapshot, err := state.awaitAttachment(request.ctx, request.attachment)
+	if err != nil {
+		return
+	}
+	mgr, outcome := h.agentLoop.BrowserManagerForAgent(request.ctx, frame.AgentId, h.sessionWorkspaceID(sessID))
 	if outcome != agent.BrowserResolveOK {
-		wc.sendCriticalGen(
-			sessionErrorStatus(sessID, browserResolveReason(outcome, frame.AgentId)),
-			dropContext(sessID, viewerID, "webrtc-offer-no-manager"))
+		send(sessionErrorStatus(sessID, browserResolveReason(outcome, frame.AgentId)), sessID, "webrtc-offer-no-manager")
 		return
 	}
-
+	if snapshot.mgr != mgr || snapshot.sessionID != sessID {
+		send(operationErrorStatus(sessID, "browser_webrtc_offer: attachment does not match this browser session"), sessID, "webrtc-offer-route")
+		return
+	}
 	if reason := webrtcUnavailableReason(cfg, mgr); reason != "" {
-		h.sendWebRTCState(wc, sessID, viewerID, false, false, false, reason)
+		sendState(false, false, false, reason, nil)
 		return
 	}
-
-	// ADR-048 condition 2, re-scoped a second time by ADR-075 FR-016a: the
-	// cross-BROWSER capture conflict. It used to be the "multi-AGENT" fence,
-	// and under FR-001 that framing has stopped meaning anything — agents on
-	// one workspace share one Chrome and therefore one capture session, so
-	// there is nothing between them to fence. Two agents on one workspace now
-	// simply JOIN the same capture, which is why the loop below can no longer
-	// see the caller's own session as somebody else's: the registry is keyed
-	// by browsing key, and the key is excluded.
-	//
-	// Left as-is, the fence did the opposite of its job here. Keyed by agent
-	// id, the second agent on a workspace found the FIRST agent's entry —
-	// pointing at the very CaptureSession it was about to join, with viewers
-	// on it — and denied itself. Collapsing the fence and re-keying the
-	// registry are therefore one change, not two: a registry keyed by browser
-	// with a fence still reasoning about agents either denies every second
-	// agent on a workspace or fences nothing at all.
-	//
-	// What survives is the conflict that is still real: one HOST cannot
-	// usefully serve two simultaneously-viewed tab captures whose focus
-	// demands fight, and those captures now live in different Chromes (one per
-	// workspace). So: deny only when a DIFFERENT workspace's capture is still
-	// actively viewed; silently supersede (Stop) viewerless leftovers
-	// (grace-period sessions whose panel already detached). Only checked when
-	// about to start a BRAND NEW capture for this browser
-	// (mgr.CaptureSession() == nil); a second viewer offer against a running
-	// session just joins it.
-	//
-	// Fix-wave HIGH (fix 3a/3b) is unchanged: the fence-check-then-ensure
-	// sequence is made atomic by h.captureFenceMu (see its doc comment on
-	// BrowserWSHandler for the TOCTOU this closes), and a session still inside
-	// its own Start() call is skipped rather than superseded (fix 3b:
-	// Stop()-ing it mid-startup is SAFE — Start's own "stopped while starting"
-	// branch tears down cleanly — but not FAIR: it would let an unrelated
-	// workspace's later offer abort an already-in-flight capture before its
-	// own first viewer even had a chance to register, since AddViewer only
-	// happens once Start AND HandleViewerOffer both succeed, so a starting
-	// session always LOOKS viewerless to ViewerCount()).
-	// Issue #671: the capture must bind to the SAME tab set the control plane
-	// resolved, or the panel's video shows a different tab from the one its
-	// clicks and its tab strip drive. Prefer the id this connection pinned at
-	// attach; an offer that somehow arrives before an attach has committed
-	// re-runs the identical resolution against the same chat session id.
-	//
-	// Resolved BEFORE the fence: it takes the connection's attachMu and the
-	// manager's own mutex, and h.captureFenceMu is process-wide — every
-	// agent's offer queues behind it, so nothing avoidable belongs inside it.
-	panelSessionID := resolvePanelTabSet(state, mgr, sessID)
-
-	browsingKey := mgr.BrowsingKey().String()
+	if request.ctx.Err() != nil {
+		return
+	}
+	panelSessionID, browsingKey := snapshot.panelSessionID, mgr.BrowsingKey().String()
 	h.captureFenceMu.Lock()
-	if mgr.CaptureSession() == nil {
+	if mgr.CaptureSessionForPanel(panelSessionID) == nil {
 		for otherCS, other := range h.captures.otherSessions(browsingKey) {
 			if otherCS.IsStarting() {
-				slog.Info("browser-webrtc: skipping supersede of another workspace's still-starting capture session",
-					"agent_id", frame.AgentId, "browsing_key", browsingKey, "starting_browsing_key", other)
 				continue
 			}
 			if otherCS.ViewerCount() > 0 {
 				h.captureFenceMu.Unlock()
-				slog.Warn(
-					"browser-webrtc: capture denied — another workspace's browser has an actively-viewed capture session (ADR-048 condition 2; one host serves one live tab capture at a time)",
-					"agent_id",
-					frame.AgentId,
-					"browsing_key",
-					browsingKey,
-					"other_live_browsing_key",
-					other,
-				)
-				h.sendWebRTCState(wc, sessID, viewerID, false, false, false, "multi_agent_capture_denied")
-				h.auditStream(
-					userID,
-					frame.AgentId,
-					audit.SeverityWarn,
-					audit.EventBrowserWebRTCStreamStartFailed,
-					map[string]any{
-						"session_id":         sessID,
-						"reason":             "multi_agent_capture_denied",
-						"browsing_key":       browsingKey,
-						"other_browsing_key": other,
-					},
-				)
+				sendState(false, false, false, "multi_agent_capture_denied", nil)
+				h.auditStream(userID, frame.AgentId, audit.SeverityWarn, audit.EventBrowserWebRTCStreamStartFailed,
+					map[string]any{"session_id": sessID, "reason": "multi_agent_capture_denied", "browsing_key": browsingKey, "other_browsing_key": other})
 				return
 			}
-			slog.Info("browser-webrtc: superseding another workspace's viewerless capture session",
-				"agent_id", frame.AgentId, "browsing_key", browsingKey, "superseded_browsing_key", other)
-			// FIX WAVE A finding 3: Stop() is synchronous and includes a
-			// loopback ingest write bounded at up to captureIngestWriteTimeout
-			// (5s, capture_session.go) — calling it INLINE here would hold
-			// h.captureFenceMu (a single, process-wide mutex every agent's
-			// offer must acquire) for that entire duration, letting one
-			// agent's stale/viewerless-session teardown block a brand-new,
-			// wholly UNRELATED agent's connect for up to 5s per superseded
-			// session. Stop() is documented idempotent and operates on a
-			// completely separate CaptureSession (its own encoder tab, its
-			// own relay) from the one this offer is about to start — nothing
-			// about the fence's single-capture invariant requires WAITING for
-			// this teardown to finish before proceeding; it only requires
-			// deciding to supersede it, which already happened above under
-			// the lock. Firing it off-lock lets it complete in its own time
-			// without gating anyone else's fence acquisition.
 			go otherCS.Stop()
 		}
 	}
-
+	if request.ctx.Err() != nil {
+		h.captureFenceMu.Unlock()
+		return
+	}
 	cs, err := h.ensureCaptureSession(mgr, frame.AgentId, panelSessionID, cfg)
 	h.captureFenceMu.Unlock()
 	if err != nil {
-		slog.Error("browser-webrtc: ensure capture session failed", "error", err, "agent_id", frame.AgentId)
-		// UAT case 16: the cause travels WITH the classification. Before this,
-		// `err` reached slog and stopped there, and the panel could only say
-		// "the live browser reported an error starting video".
-		h.sendWebRTCStateFailure(wc, sessID, viewerID, false, "error", err)
+		sendState(false, false, false, "error", err)
 		return
 	}
-
+	// Stop closes Done before its bounded shutdown-control send and relay close.
+	// End this attempt immediately, while the peer's parent remains the original
+	// attachment rather than this temporary negotiation context.
+	negotiation, cancel := context.WithCancel(request.ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-cs.Done():
+			cancel()
+		case <-negotiation.Done():
+		}
+	}()
 	ingestURL := fmt.Sprintf("ws://127.0.0.1:%d/api/v1/browser/capture-ingest", cfg.Gateway.Port)
-	justStarted, startErr := cs.Start(context.Background(), ingestURL)
+	justStarted, startErr := cs.Start(negotiation, ingestURL)
 	if startErr != nil {
-		slog.Error("browser-webrtc: capture session start failed", "error", startErr, "agent_id", frame.AgentId)
-		// UAT case 16, the branch the reported incident actually came down:
-		// "capture session: create encoder target: browser: timed out after
-		// 20s waiting for the browser to attach the tab (target may be
-		// unresponsive)" sat in gateway.log while the operator was told only
-		// that something had gone wrong. It rides the frame now.
-		h.sendWebRTCStateFailure(wc, sessID, viewerID, false, "error", startErr)
+		if negotiation.Err() == nil {
+			sendState(false, false, false, "error", startErr)
+		}
 		h.auditStream(userID, frame.AgentId, audit.SeverityWarn, audit.EventBrowserWebRTCStreamStartFailed,
 			map[string]any{"session_id": sessID, "error": startErr.Error()})
-		// Fix 1 (sticky failed capture Start): Stop() is idempotent and its
-		// onStopped hook (ensureCaptureSession, below) clears BOTH the
-		// manager's CaptureSession reference and h.captures' token-lookup
-		// entry, so the NEXT offer for this agent builds a fresh session
-		// instead of reusing this permanently-broken one forever.
 		cs.Stop()
 		return
 	}
 	if justStarted {
-		h.auditStream(userID, frame.AgentId, audit.SeverityInfo, audit.EventBrowserWebRTCStreamStarted,
-			map[string]any{"session_id": sessID})
+		h.auditStream(userID, frame.AgentId, audit.SeverityInfo, audit.EventBrowserWebRTCStreamStarted, map[string]any{"session_id": sessID})
 	}
-
-	// gen/viewerHandle make this offer's cleanup IDENTITY-AWARE. Both
-	// CaptureSession.viewers and the relay's own registry are keyed by
-	// viewerID alone, and ensureCaptureSession memoizes, so two offers on
-	// this connection for the same agent share one CaptureSession and one
-	// registry key. A viewerID-only cleanup from a SUPERSEDED offer would
-	// therefore close whatever PeerConnection currently sits at that key —
-	// i.e. the NEWER, already-committed offer's live connection — and delete
-	// the viewers entry it depends on, dropping ViewerCount() to 0 and arming
-	// the 60s captureGracePeriod stop timer while that viewer is actively
-	// watching. Symptom: WebRTC connects, then spontaneously drops to picture
-	// mode seconds-to-a-minute later, with logs showing only an unrelated
-	// supersede/grace-timer trail. CleanupViewerOffer no-ops unless the
-	// registered entry is the one THIS offer created — the same identity
-	// discipline removeViewer already applies on the ICE-eviction path.
-	gen := cs.AddViewer(viewerID)
-	answer, viewerHandle, offerErr := cs.HandleViewerOffer(viewerID, frame.Sdp, gen)
+	h.applyColdStartRecapture(state, cs)
+	captureID, generation := "", uint64(0)
+	if frame.CaptureId != nil {
+		captureID, generation = *frame.CaptureId, uint64(*frame.CaptureGeneration)
+	}
+	confirmed, err := cs.WaitConfirmedFrame(negotiation, captureID, generation)
+	if err != nil {
+		if negotiation.Err() == nil {
+			sendState(true, false, false, "error", err)
+		}
+		return
+	}
+	parent, err := withWebRTCInputRoute(snapshot.ctx, mgr, panelSessionID, func(source context.Context, kind string, dispatchErr error) {
+		message := fmt.Sprintf("browser input failed: %s", dispatchErr)
+		if !state.shouldSendInputFailure(snapshot, kind, message, time.Now()) {
+			return
+		}
+		wc.sendCriticalScopedGen(operationErrorStatus(sessID, message), dropContext(sessID, viewerID, "webrtc-input-error"), source, nil)
+	})
+	if err != nil {
+		return
+	}
+	answer, viewerHandle, offerErr := cs.HandleViewerOfferRequest(negotiation, parent, epoch, viewerID, frame.Sdp)
 	if offerErr != nil {
-		// Fix 8: a broken/aborted viewer PeerConnection must not stay
-		// registered on the relay — CleanupViewerOffer is idempotent-safe (a
-		// no-op if HandleViewerOffer never got far enough to register one).
 		cs.CleanupViewerOffer(viewerHandle)
-		// 2026-07-28 incident fix: classify this SPECIFIC failure mode
-		// (errors.Is against webrtc.ErrNoIngestVideoTrack — waitForTracks
-		// gave up before the encoder's video track ever arrived) separately
-		// from every other HandleViewerOffer error, so an operator reading
-		// logs/audit doesn't have to parse the nested error string to tell
-		// "the capture pipeline just hadn't produced a frame in time" (often
-		// transient, see waitForTracksTimeout's doc comment in
-		// pkg/tools/browser/webrtc/ingest.go) apart from a real defect.
+		if negotiation.Err() != nil {
+			return
+		}
 		reason := "error"
 		if errors.Is(offerErr, webrtc.ErrNoIngestVideoTrack) {
 			reason = "ingest_timeout"
 		}
-		slog.Warn(
-			"browser-webrtc: viewer offer failed",
-			"error",
-			offerErr,
-			"agent_id",
-			frame.AgentId,
-			"viewer_id",
-			viewerID,
-			"reason",
-			reason,
-		)
+		slog.Warn("browser-webrtc: viewer offer failed", "error", offerErr, "agent_id", frame.AgentId, "viewer_id", viewerID, "reason", reason)
 		h.auditStream(userID, frame.AgentId, audit.SeverityWarn, audit.EventBrowserWebRTCViewerOfferFailed,
 			map[string]any{"session_id": sessID, "viewer_id": viewerID, "reason": reason, "error": offerErr.Error()})
-		// Send the CLASSIFIED reason, not the literal "error". This line used
-		// to hardcode "error" while the reason computed six lines above went
-		// only to the log and the audit event — so the one surface a human
-		// actually reads (the UI, and any E2E assertion quoting it) was
-		// strictly LESS informative than the log line beside it. That cost a
-		// full investigation: an ingest timeout, which has a specific and
-		// actionable cause, presented as the generic "reported an error
-		// starting video". ADR-061 deleted the silent JPEG fallback so a
-		// WebRTC failure would be visible; a visible failure that names the
-		// wrong cause is the same defect one level down.
-		// UAT case 16: `reason` classifies, `reason_detail` explains. The
-		// classification alone was already a step up from hardcoding "error"
-		// here, but "ingest_timeout" still does not tell an operator WHICH
-		// wait expired or how long it waited — offerErr does.
-		h.sendWebRTCStateFailure(wc, sessID, viewerID, true, reason, offerErr)
+		sendState(true, false, false, reason, offerErr)
 		return
 	}
-
-	// FIX WAVE A finding 1: commit only if nothing invalidated this offer's
-	// epoch while HandleViewerOffer was negotiating above (a newer offer on
-	// this same connection, an explicit browser_detach, or the connection
-	// itself closing). A stale commit here would attach a viewer state that
-	// nothing will ever tear down through the normal detach path (readLoop's
-	// cleanup already ran, or is about to run against a DIFFERENT, newer
-	// attachment) — tear down what THIS offer just built instead, mirroring
-	// detachWebRTCViewer's own teardown exactly.
-	if !state.commitWebRTCAttachment(
-		epoch,
-		&webrtcAttachment{agentID: frame.AgentId, capture: cs, handle: viewerHandle},
-	) {
-		slog.Info(
-			"browser-webrtc: offer superseded before commit (a newer offer, a detach, or the connection closing "+
-				"arrived first) — tearing down the viewer this offer just registered",
-			"agent_id", frame.AgentId,
-			"viewer_id", viewerID,
-			"session_id", sessID,
-		)
-		// Identity-aware, for the same reason as the offer-failure path above:
-		// if the newer offer that superseded us has ALREADY registered its own
-		// PeerConnection under this viewerID, a viewerID-keyed teardown here
-		// would kill that live connection instead of ours.
+	frameCurrent := func() bool {
+		select {
+		case <-cs.Done():
+			return false
+		default:
+		}
+		current := cs.FrameState()
+		return current.CaptureID == confirmed.CaptureID && current.Generation == confirmed.Generation && current.Width > 0 && current.Height > 0
+	}
+	att := &webrtcAttachment{agentID: frame.AgentId, capture: cs, handle: viewerHandle}
+	if negotiation.Err() != nil || !frameCurrent() || !state.commitWebRTCAttachmentForRequest(request, att) ||
+		!h.registerWebRTCViewerConnForCapture(state, epoch, snapshot.ctx, viewerID, wc, sessID, cs) {
 		cs.CleanupViewerOffer(viewerHandle)
 		return
 	}
-	h.registerWebRTCViewerConn(viewerID, wc, sessID)
-
-	// Cold-start ordering fix (live UAT 2026-07-31, extended by F2, external
-	// review 2026-08-13): see applyColdStartRecapture's doc comment for the
-	// full mechanism — geometry AND scale.
-	h.applyColdStartRecapture(state, cs)
-
+	if !h.publishCurrentVideoHealth(viewerID, cs, snapshot.ctx) {
+		cs.CleanupViewerOffer(viewerHandle)
+		return
+	}
+	answerCurrent := func() bool { return frameCurrent() && state.webRTCAttachmentCurrent(request, att) }
+	id, gen, offerID := confirmed.CaptureID, int(confirmed.Generation), *frame.OfferId
+	if !wc.sendCriticalScopedGen(generated.BrowserWebRTCAnswerFrame{
+		Type: string(generated.WsFrameTypeBrowserWebrtcAnswer), Sdp: answer, SessionId: &sessID,
+		CaptureId: &id, CaptureGeneration: &gen, OfferId: &offerID,
+	}, dropContext(sessID, viewerID, "webrtc-answer"), snapshot.ctx, answerCurrent) {
+		cs.CleanupViewerOffer(viewerHandle)
+		return
+	}
 	stats := cs.Stats()
-	wc.sendCriticalGen(generated.BrowserWebRTCAnswerFrame{
-		Type:      string(generated.WsFrameTypeBrowserWebrtcAnswer),
-		Sdp:       answer,
-		SessionId: &sessID,
-	}, dropContext(sessID, viewerID, "webrtc-answer"))
-	h.sendWebRTCState(wc, sessID, viewerID, true, true, stats.HasAudio, "")
-	// ADR-061 / round-2 F6: if the shared media socket fell back off the
-	// operator's declared UDP port, say so IN THE PANEL. The answer above is
-	// honest — media really is being offered — but on a hosted install it can
-	// never reach a remote viewer, and only the panel reaches the person who
-	// can fix that. See notifyMediaPortDegraded for why it rides
-	// browser_status rather than browser_webrtc_state, and why it is here
-	// rather than at attach.
-	h.notifyMediaPortDegraded(wc, sessID, viewerID)
+	active := generated.BrowserWebRTCStateFrame{Type: string(generated.WsFrameTypeBrowserWebrtcState), SessionId: &sessID, Available: true, Active: boolPtr(true)}
+	if stats.HasAudio {
+		active.HasAudio = boolPtr(true)
+	}
+	wc.sendCriticalScopedGen(active, dropContext(sessID, viewerID, "webrtc-state"), snapshot.ctx, answerCurrent)
+	if notice := strings.TrimSpace(h.mediaPortFallbackNotice() + " " + h.iceTCPUnavailableNotice() + " " + h.turnUnavailableNotice()); notice != "" {
+		wc.sendCriticalScopedGen(sessionErrorStatus(sessID, notice), dropContext(sessID, viewerID, "media-port-fallback"), snapshot.ctx, answerCurrent)
+	}
 }
 
 // applyColdStartRecapture corrects a just-committed WebRTC attachment's
@@ -982,9 +871,9 @@ func (h *BrowserWSHandler) ensureCaptureSession(
 			MediaTCP:   h.sharedMediaTCP(cfg),
 			PublicIPs:  resolveWebRTCPublicIPs(cfg),
 		}
-		sink := h.webrtcInputSink(mgr, panelSessionID, cfg)
+		sink := newWebRTCContextInputSink(cfg.Gateway.ValidateInbound)
 		logf := webrtcRelayLogf(agentID)
-		cs, err := browser.NewCaptureSession(mgr, agentID, panelSessionID, webrtcCfg, sink, logf)
+		cs, err := browser.NewCaptureSessionWithContextInput(mgr, agentID, panelSessionID, webrtcCfg, sink, logf)
 		if err != nil {
 			return nil, err
 		}

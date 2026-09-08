@@ -302,7 +302,7 @@ func TestHandleWebRTCOffer_MediaPortFallback_TellsTheViewerInThePanel(t *testing
 	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
 	require.Equal(t, agent.BrowserResolveOK, outcome)
 	var encoderCalls int32
-	cs, err := browser.NewCaptureSessionWithDeps(nil, defaultAgent.ID, &fakeRelay{},
+	cs, err := browser.NewCaptureSessionWithDeps(nil, defaultAgent.ID, newRequestFixtureRelay(&fakeRelay{}),
 		fakeEncoderStarter(&encoderCalls, nil), nil)
 	require.NoError(t, err)
 	_, err = mgr.EnsureCaptureSession(func() (*browser.CaptureSession, error) { return cs, nil })
@@ -319,7 +319,9 @@ func TestHandleWebRTCOffer_MediaPortFallback_TellsTheViewerInThePanel(t *testing
 	})
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-media-port", "user-1", data, al.GetConfig(), 0)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
+
+	handler.handleWebRTCOffer(wc, &state, "viewer-media-port", "user-1", data, al.GetConfig(), offerEpoch)
 	t.Cleanup(func() { handler.detachWebRTCViewer(&state, "viewer-media-port") })
 
 	var status *generated.BrowserStatusFrame

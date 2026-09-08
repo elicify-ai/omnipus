@@ -99,7 +99,9 @@ func newHandleWebRTCOfferWithFailingStart(
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-start-detail", "user-1", data, al.GetConfig(), 0)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
+
+	handler.handleWebRTCOffer(wc, &state, "viewer-start-detail", "user-1", data, al.GetConfig(), offerEpoch)
 	require.Equal(t, int32(1), atomic.LoadInt32(&calls), "the encoder starter must actually have been invoked")
 	return decodeWebRTCState(t, drainOneFrame(t, wc))
 }

@@ -195,7 +195,9 @@ func TestHandleWebRTCOffer_GateLadder_DisabledByConfig(t *testing.T) {
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
+
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), offerEpoch)
 
 	got := decodeWebRTCState(t, drainOneFrame(t, wc))
 	require.False(t, got.Available, "webrtc_enabled=false must report available=false")
@@ -209,7 +211,8 @@ func TestHandleWebRTCOffer_GateLadder_InvalidFrame(t *testing.T) {
 
 	wc := newTestBrowserWSConn()
 	var state browserConnState
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", []byte("not json"), al.GetConfig(), 0)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, []byte("not json"))
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), offerEpoch)
 
 	raw := drainOneFrame(t, wc)
 	var f struct {
@@ -235,7 +238,9 @@ func TestHandleWebRTCOffer_GateLadder_MissingFields(t *testing.T) {
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
+
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), offerEpoch)
 
 	raw := drainOneFrame(t, wc)
 	var f struct {
@@ -264,7 +269,9 @@ func TestHandleWebRTCOffer_GateLadder_UnknownAgent(t *testing.T) {
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
+
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), offerEpoch)
 
 	raw := drainOneFrame(t, wc)
 	var f struct {
@@ -317,7 +324,9 @@ func TestHandleWebRTCOffer_GateLadder_NotCapable(t *testing.T) {
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
+
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), offerEpoch)
 
 	got := decodeWebRTCState(t, drainOneFrame(t, wc))
 	require.False(t, got.Available)
@@ -397,7 +406,9 @@ func TestHandleWebRTCOffer_CapableButLaunchFails(t *testing.T) {
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
+
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), offerEpoch)
 
 	got := decodeWebRTCState(t, drainOneFrame(t, wc))
 	require.False(t, got.Available, "a launch failure must degrade to available=false, never break the JPEG fallback")
@@ -896,7 +907,9 @@ func TestHandleWebRTCOffer_OtherAgentViewedCapture_Denied(t *testing.T) {
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
+
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), offerEpoch)
 
 	got := decodeWebRTCState(t, drainOneFrame(t, wc))
 	require.False(t, got.Available, "an actively-viewed conflicting capture must deny the offer")
@@ -976,7 +989,9 @@ func TestHandleWebRTCOffer_OtherAgentViewerlessCapture_Superseded(t *testing.T) 
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
+
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), offerEpoch)
 
 	// FIX WAVE A finding 3: otherCS.Stop() now runs off h.captureFenceMu
 	// (fired via `go otherCS.Stop()` so one agent's teardown can't block a

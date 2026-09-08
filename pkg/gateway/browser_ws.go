@@ -265,7 +265,8 @@ type browserConnState struct { // not-wire-format: internal connection bookkeepi
 	// detach, or a close) has superseded it in the meantime. A stale commit
 	// attempt tears down what it built instead of silently attaching a
 	// viewer state this connection no longer wants.
-	webrtcEpoch uint64
+	webrtcEpoch   uint64
+	webrtcRequest *browserWebRTCOfferRequest
 
 	// pendingCaptureScale remembers the device_scale_factor the most recent
 	// browser_viewport frame carried, even when no WebRTC attachment yet
@@ -603,9 +604,27 @@ func (q *browserConnWorkQueue) close() {
 // observes (and invalidates) whatever the first offer's goroutine captured,
 // regardless of which goroutine the Go scheduler happens to run first.
 func (s *browserConnState) beginWebRTCOffer() uint64 {
+	attachment := s.attachmentRequest()
+	parent := attachment.ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parent)
+	if attachment.ctx == nil {
+		cancel()
+	}
 	s.webrtcMu.Lock()
 	defer s.webrtcMu.Unlock()
+	if s.webrtcRequest != nil {
+		s.webrtcRequest.cancel()
+		s.webrtcRequest = nil
+	}
+	if s.webrtcEpoch == ^uint64(0) {
+		cancel()
+		return 0
+	}
 	s.webrtcEpoch++
+	s.webrtcRequest = &browserWebRTCOfferRequest{epoch: s.webrtcEpoch, attachment: attachment, ctx: ctx, cancel: cancel}
 	return s.webrtcEpoch
 }
 
@@ -617,8 +636,14 @@ func (s *browserConnState) beginWebRTCOffer() uint64 {
 // result.
 func (s *browserConnState) invalidateWebRTCOffer() {
 	s.webrtcMu.Lock()
-	s.webrtcEpoch++
-	s.webrtcMu.Unlock()
+	defer s.webrtcMu.Unlock()
+	if s.webrtcRequest != nil {
+		s.webrtcRequest.cancel()
+		s.webrtcRequest = nil
+	}
+	if s.webrtcEpoch != ^uint64(0) {
+		s.webrtcEpoch++
+	}
 }
 
 // commitWebRTCAttachment installs att as this connection's WebRTC attachment

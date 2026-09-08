@@ -132,7 +132,9 @@ func TestHandleWebRTCOffer_StartFailure_ClearsStickySessionAndAuditsDistinctEven
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-start-fail", "user-1", data, al.GetConfig(), 0)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
+
+	handler.handleWebRTCOffer(wc, &state, "viewer-start-fail", "user-1", data, al.GetConfig(), offerEpoch)
 
 	got := decodeWebRTCState(t, drainOneFrame(t, wc))
 	require.False(t, got.Available)
@@ -265,7 +267,7 @@ func newHandleWebRTCOfferWithFakeCapture(
 	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	var calls int32
-	cs, err := browser.NewCaptureSessionWithDeps(nil, agentID, relay, fakeEncoderStarter(&calls, nil), nil)
+	cs, err := browser.NewCaptureSessionWithDeps(nil, agentID, newRequestFixtureRelay(relay), fakeEncoderStarter(&calls, nil), nil)
 	require.NoError(t, err)
 	_, err = mgr.EnsureCaptureSession(func() (*browser.CaptureSession, error) { return cs, nil })
 	require.NoError(t, err)
@@ -282,7 +284,9 @@ func newHandleWebRTCOfferWithFakeCapture(
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-offer-fail", "user-1", data, al.GetConfig(), 0)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
+
+	handler.handleWebRTCOffer(wc, &state, "viewer-offer-fail", "user-1", data, al.GetConfig(), offerEpoch)
 	return decodeWebRTCState(t, drainOneFrame(t, wc))
 }
 

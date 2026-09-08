@@ -108,8 +108,9 @@ func TestHandleWebRTCOffer_CaptureFenceMu_SerializesFenceCheckAndEnsure(t *testi
 	require.NoError(t, err)
 
 	done := make(chan struct{})
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
 	go func() {
-		handler.handleWebRTCOffer(wc, &state, "viewer-fence-mutex", "user-1", data, al.GetConfig(), 0)
+		handler.handleWebRTCOffer(wc, &state, "viewer-fence-mutex", "user-1", data, al.GetConfig(), offerEpoch)
 		close(done)
 	}()
 
@@ -223,7 +224,9 @@ func TestHandleWebRTCOffer_OtherAgentStartingCapture_SkippedNotSuperseded(t *tes
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-skip-starting", "user-1", data, al.GetConfig(), 0)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
+
+	handler.handleWebRTCOffer(wc, &state, "viewer-skip-starting", "user-1", data, al.GetConfig(), offerEpoch)
 
 	// otherCS must NOT have been superseded/stopped.
 	select {

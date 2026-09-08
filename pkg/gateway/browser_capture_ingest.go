@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -100,20 +99,13 @@ func (h *captureIngestWSHandler) serveBoundIngest(conn *websocket.Conn, cs *brow
 				sendError(errors.New("capture ingest offer requires capture generation, target and offer ID"))
 				return
 			}
-			request, cancel := context.WithDeadline(socketCtx, offer.deadline)
-			answer, err := cs.HandleIngestOfferForBinding(request, epoch, uint64(*frame.OfferId), frame.Sdp, uint64(*frame.CaptureGeneration), *frame.TargetId)
-			cancel()
-			if socketCtx.Err() != nil {
-				continue
-			}
-			if errors.Is(err, webrtc.ErrStaleIngestOffer) {
+			err := ic.answerCaptureOffer(socketCtx, cs, epoch, offer)
+			if socketCtx.Err() != nil || errors.Is(err, webrtc.ErrStaleIngestOffer) {
+				// The loop retains the connection-wide terminal notice, while an
+				// ordinary response never revives its retired request context.
 				continue
 			}
 			if err != nil {
-				sendError(fmt.Errorf("capture ingest offer failed: %w", err))
-				return
-			}
-			if err := ic.sendJSON(generated.BrowserCaptureAnswerFrame{Type: string(generated.WsFrameTypeBrowserCaptureAnswer), Sdp: answer, CaptureGeneration: frame.CaptureGeneration, TargetId: frame.TargetId, OfferId: frame.OfferId}); err != nil {
 				return
 			}
 		}

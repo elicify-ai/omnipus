@@ -13,10 +13,12 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -35,117 +37,108 @@ import (
 // Finding 1: a slow browser_webrtc_offer must not block readLoop.
 // ---------------------------------------------------------------------------
 
-// TestBrowserWS_SlowWebRTCOffer_DoesNotBlockReadLoop is the FIX WAVE A
-// finding 1 regression: before this fix, browser_ws.go's readLoop dispatched
-// browser_webrtc_offer SYNCHRONOUSLY, inline, in the connection's single
-// ReadMessage goroutine. Since gorilla/websocket only services the
-// registered PongHandler (which refreshes the connection's read deadline)
-// from INSIDE a ReadMessage call, a slow offer (real HandleViewerOffer can
-// legitimately wait up to waitForTracksTimeout) starved every subsequent
-// Pong from ever being processed — and, more immediately observable here,
-// starved every OTHER frame the client sent on the SAME connection from ever
-// being read at all, no matter how quickly the server could otherwise have
-// answered it.
-//
-// This test proves readLoop keeps dispatching OTHER frames while a
-// browser_webrtc_offer is deliberately held open on a controlled channel: it
-// sends the offer, then IMMEDIATELY sends a second, unrelated
-// browser_attach frame (targeting an agent with no registered manager — a
-// fast, synchronous, purely in-memory rejection) on the SAME connection, and
-// asserts the attach's browser_status(error) response arrives promptly.
-// Without dispatchWebRTCOffer's async dispatch, this read blocks until the
-// offer's own HandleViewerOffer call returns — which this test deliberately
-// never releases until AFTER the short read deadline below would already
-// have elapsed, so the old (buggy) synchronous dispatch would fail this
-// assertion with a read timeout.
+// TestBrowserWS_SlowWebRTCOffer_DoesNotBlockReadLoop holds a real CDP
+// command while the authenticated socket dispatches an offer for the pending
+// attachment. The same socket must still service Ping/Pong and detach. An
+// inline offer handler would block on awaitAttachment and prevent both.
 func TestBrowserWS_SlowWebRTCOffer_DoesNotBlockReadLoop(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("ClassifyVideoCapabilityWithExec only ever reports Capable=true on linux")
-	}
-	tmpDir := t.TempDir()
-	bogusExec := filepath.Join(tmpDir, "no-such-chrome-binary")
+	t.Setenv("OMNIPUS_HOME", t.TempDir())
+	// Hold the real browser protocol endpoint while an attachment is pending.
+	// The subsequent offer must await that exact attachment without blocking
+	// Ping/Pong or detach on the same authenticated application socket.
+	connections := make(chan *websocket.Conn, 1)
+	requested, drained := make(chan struct{}), make(chan struct{})
+	cdp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		remote, err := (&websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer remote.Close()
+		defer close(drained)
+		connections <- remote
+		if _, _, err = remote.ReadMessage(); err != nil {
+			return
+		}
+		close(requested)
+		for {
+			if _, _, err = remote.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	t.Cleanup(cdp.Close)
 	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
-		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
-		cfg.Tools.Browser.ExecPath = bogusExec
+		cfg.Tools.Browser.CDPURL = "ws" + strings.TrimPrefix(cdp.URL, "http") + "/devtools/browser/pending-offer"
 	})
 	t.Cleanup(handler.Wait)
-
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
-	require.NotNil(t, defaultAgent)
-	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
-	require.Equal(t, agent.BrowserResolveOK, outcome)
-	require.True(t, mgr.CaptureVideoCapability().Capable,
-		"capability gate must report Capable=true via the exec_path filename heuristic, so the ladder reaches "+
-			"Start()/HandleViewerOffer instead of stopping earlier at not_capable")
-
-	// Pre-seed a fake CaptureSession whose Start() completes instantly (a
-	// fake, non-CDP EncoderStarter) but whose HandleViewerOffer blocks on
-	// offerBlock until released — simulating the real relay's waitForTracks
-	// wait without needing real ingest/CDP machinery.
-	offerBlock := make(chan struct{})
-	var releaseOnce sync.Once
-	releaseOffer := func() { releaseOnce.Do(func() { close(offerBlock) }) }
-	t.Cleanup(releaseOffer) // always release, even on failure — never leak the goroutine
-
-	relay := &fakeRelay{viewerOfferBlock: offerBlock}
-	var calls int32
-	cs, err := browser.NewCaptureSessionWithDeps(mgr, defaultAgent.ID, relay, fakeEncoderStarter(&calls, nil), nil)
-	require.NoError(t, err)
-	_, err = mgr.EnsureCaptureSession(func() (*browser.CaptureSession, error) { return cs, nil })
-	require.NoError(t, err)
-	handler.captures.set(defaultAgent.ID, cs)
-
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
-
 	conn := dialBrowserTestWS(t, srv)
-	t.Cleanup(func() { _ = conn.Close() })
+	pongs := make(chan string, 2)
+	conn.SetPongHandler(func(value string) error { pongs <- value; return nil })
+	var frames [][]byte
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			frames = append(frames, data)
+		}
+	}()
+	t.Cleanup(func() { conn.Close(); <-readerDone })
 	writeBrowserAuthFrame(t, conn, "dev-token")
-
-	offerFrame := generated.BrowserWebRTCOfferFrame{
-		Type:      string(generated.WsFrameTypeBrowserWebrtcOffer),
-		AgentId:   defaultAgent.ID,
-		Sdp:       "v=0\r\n",
-		SessionId: "sess-slow-offer",
+	agentID := al.GetRegistry().GetDefaultAgent().ID
+	require.NoError(t, conn.WriteJSON(generated.BrowserAttachFrame{
+		Type: string(generated.WsFrameTypeBrowserAttach), AgentId: agentID, SessionId: "pending-offer",
+	}))
+	select {
+	case remote := <-connections:
+		t.Cleanup(func() { remote.Close() })
+	case <-time.After(5 * time.Second):
+		t.Fatal("attachment did not reach controlled browser endpoint")
 	}
-	offerData, err := json.Marshal(offerFrame)
-	require.NoError(t, err)
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage, offerData))
-
-	// Immediately (the offer is still blocked, and stays blocked until well
-	// after the read deadline below) send an UNRELATED frame on the SAME
-	// connection — it must be answered promptly if, and only if, readLoop is
-	// not stuck inside the offer's synchronous handler.
-	attachFrame := generated.BrowserAttachFrame{
-		Type:      string(generated.WsFrameTypeBrowserAttach),
-		AgentId:   "no-such-agent-fixwavea-probe",
-		SessionId: "probe-session",
+	select {
+	case <-requested:
+	case <-time.After(5 * time.Second):
+		t.Fatal("attachment sent no real browser protocol command")
 	}
-	attachData, err := json.Marshal(attachFrame)
-	require.NoError(t, err)
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage, attachData))
-
-	resp := readBrowserFrame(t, conn, 3*time.Second)
-	require.Equal(t, "browser_status", resp.Type,
-		"readLoop must still process the unrelated browser_attach frame promptly while the webrtc offer is "+
-			"blocked — a read timeout here means the old synchronous offer-dispatch bug has regressed")
-	require.Equal(t, "error", resp.State, "probe agent has no registered manager, so attach must fail cleanly")
-
-	// Release the blocked offer and let it run to completion — proves the
-	// offer eventually DOES get processed once its slow step completes (no
-	// goroutine/session leak), and that the async path still delivers a
-	// normal success response.
-	releaseOffer()
-
-	answerResp := readBrowserFrame(t, conn, 3*time.Second)
-	require.Equal(t, string(generated.WsFrameTypeBrowserWebrtcAnswer), answerResp.Type,
-		"once released, the offer must still complete normally and answer the viewer")
-
-	stateResp := readBrowserWebRTCStateFrame(t, conn, 3*time.Second)
-	require.True(t, stateResp.Available)
-	require.NotNil(t, stateResp.Active)
-	require.True(t, *stateResp.Active)
+	offerID := 1
+	require.NoError(t, conn.WriteJSON(generated.BrowserWebRTCOfferFrame{
+		Type: string(generated.WsFrameTypeBrowserWebrtcOffer), AgentId: agentID, SessionId: "pending-offer", Sdp: "v=0\r\n", OfferId: &offerID,
+	}))
+	require.NoError(t, conn.WriteControl(websocket.PingMessage, []byte("offer-pending"), time.Now().Add(time.Second)))
+	select {
+	case pong := <-pongs:
+		require.Equal(t, "offer-pending", pong)
+	case <-time.After(time.Second):
+		t.Fatal("pending offer blocked Ping/Pong on the same application socket")
+	}
+	require.NoError(t, conn.WriteJSON(map[string]string{"type": string(generated.WsFrameTypeBrowserDetach)}))
+	require.NoError(t, conn.WriteControl(websocket.PingMessage, []byte("detached"), time.Now().Add(time.Second)))
+	select {
+	case pong := <-pongs:
+		require.Equal(t, "detached", pong)
+	case <-time.After(time.Second):
+		t.Fatal("detach blocked the application socket")
+	}
+	select {
+	case <-drained:
+	case <-time.After(time.Second):
+		t.Fatal("detach did not cancel the stalled original browser request")
+	}
+	conn.Close()
+	<-readerDone
+	for _, frame := range frames {
+		var header struct {
+			Type string `json:"type"`
+		}
+		require.NoError(t, json.Unmarshal(frame, &header))
+		require.NotEqual(t, string(generated.WsFrameTypeBrowserWebrtcAnswer), header.Type, "uncommitted detached attachment must not receive an answer")
+	}
 }
 
 // TestHandleWebRTCOffer_SupersededByDetachDuringNegotiation_TearsDownCleanly
@@ -184,7 +177,8 @@ func TestHandleWebRTCOffer_SupersededByDetachDuringNegotiation_TearsDownCleanly(
 
 	relay := &fakeRelay{viewerOfferBlock: offerBlock}
 	var calls int32
-	cs, err := browser.NewCaptureSessionWithDeps(mgr, defaultAgent.ID, relay, fakeEncoderStarter(&calls, nil), nil)
+	requestRelay := newRequestFixtureRelay(relay)
+	cs, err := browser.NewCaptureSessionWithDeps(mgr, defaultAgent.ID, requestRelay, fakeEncoderStarter(&calls, nil), nil)
 	require.NoError(t, err)
 	_, err = mgr.EnsureCaptureSession(func() (*browser.CaptureSession, error) { return cs, nil })
 	require.NoError(t, err)
@@ -205,17 +199,18 @@ func TestHandleWebRTCOffer_SupersededByDetachDuringNegotiation_TearsDownCleanly(
 
 	// Mirrors dispatchWebRTCOffer's own sequence: bump the epoch synchronously,
 	// THEN hand the negotiation off to a goroutine.
-	epoch := state.beginWebRTCOffer()
+	data, epoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		handler.handleWebRTCOffer(wc, &state, viewerID, "user-1", data, al.GetConfig(), epoch)
 	}()
 
-	// Wait until AddViewer has definitely run (we're now blocked inside
-	// HandleViewerOffer) before superseding.
-	require.Eventually(t, func() bool { return cs.ViewerCount() == 1 }, 2*time.Second, 5*time.Millisecond,
-		"handleWebRTCOffer must have called AddViewer before HandleViewerOffer blocks")
+	// Wait for the external candidate, while pending negotiation remains
+	// separate from active viewer accounting.
+	require.Eventually(t, func() bool { return requestRelay.pendingCount() == 1 }, 2*time.Second, 5*time.Millisecond,
+		"handleWebRTCOffer must reach the blocked relay request")
+	require.Zero(t, cs.ViewerCount(), "a pending offer must not count as an active viewer")
 
 	// A browser_detach (or the connection closing) arrives while the offer
 	// is still negotiating — this is exactly what readLoop's detach case and
@@ -377,9 +372,10 @@ func TestHandleWebRTCOffer_SupersedeDoesNotBlockFenceOnSlowStop(t *testing.T) {
 	// budget — so widening does not weaken what this test discriminates.
 	const fenceBudget = 10 * time.Second
 	done := make(chan struct{})
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
 	go func() {
 		defer close(done)
-		handler.handleWebRTCOffer(wc, &state, "viewer-slow-stop", "user-1", data, al.GetConfig(), 0)
+		handler.handleWebRTCOffer(wc, &state, "viewer-slow-stop", "user-1", data, al.GetConfig(), offerEpoch)
 	}()
 
 	select {
