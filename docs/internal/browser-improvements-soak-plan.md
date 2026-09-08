@@ -145,3 +145,33 @@ unchanged. No fixture values are substituted into observed pixels.
 The revised decoder passed targeted TypeScript checking; its runtime sampling
 cost and latency are not yet measured. Independent review and the coordinated
 short diagnostic must precede any claim of improved measurement overhead.
+
+## Explicit video-only A/B experiment
+
+The optimized-decoder diagnostic 71735 still failed latency at p95 306.1ms,
+while observed sampling cost fell to mean 2.48ms/p95 4ms/maximum 4.6ms. Receiver
+buffering was substantially above the reported network-minimum delay. Audio/
+video synchronization is a hypothesis to test, not an established cause.
+
+The separate spec
+`/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-worktrees/startup/tests/e2e/browser-improvements-video-only-latency.spec.ts`
+selects only the explicit `latency-video-only` mode. Its harness-owned peer
+constructor overrides an actual `addTransceiver('audio', ...)` request to use
+`direction: 'inactive'`. Video negotiation, input routing, the exact 300-event
+oracle, 100 clicks, at least 50-second pacing and 200ms p95 check are unchanged.
+The ordinary diagnostic passes the original transceiver arguments unchanged;
+the full soak installs no such observer or override.
+
+The experiment persists its mode in `latency-video-only-evidence.json`, records
+the override count and each audio transceiver's requested/current direction,
+and asserts that audio is inactive or unnegotiated and that any audio receiver
+report has zero packets. The existing 100 decoded-click and real video receiver
+statistics assertions remain mandatory. An experiment whose override never ran
+or whose audio remained active fails instead of being classified as video-only.
+
+Both short diagnostics now retain audio receiver statistics alongside video,
+including buffer/sample/concealment/energy counters where supported. Derived
+video means explicitly filter video reports, so audio cannot dilute the video
+summary. Missing fields remain null. This is test-only instrumentation; a faster
+video-only result would not be a product fix, an audio acceptance result, or a
+passing 20-minute soak. Runtime execution is still coordinated by root.

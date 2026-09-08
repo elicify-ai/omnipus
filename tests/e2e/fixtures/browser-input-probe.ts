@@ -23,13 +23,13 @@ type Probe = {
   error(): string | null;
 };
 type StatsRow = { pc: number; id: string; type: string; [key: string]: unknown };
-type StatsSnapshot = { label: string; at: number; rows: StatsRow[]; errors: string[]; receivers: Array<Record<string, unknown>> };
+type StatsSnapshot = { label: string; at: number; rows: StatsRow[]; errors: string[]; receivers: Array<Record<string, unknown>>; transceivers: Array<{ pc: number; kind: string; direction: RTCRtpTransceiverDirection; currentDirection: RTCRtpTransceiverDirection | null }> };
 type ClickStages = {
   count: number; armedAt: number; pointerAt?: number;
   sends: Array<{ route: string; kind: string; attemptedAt: number; returnedAt?: number; succeeded?: boolean }>;
   presentation?: Record<string, number>;
 };
-type LatencyEvidence = { clicks: ClickStages[]; stats: StatsSnapshot[] };
+type LatencyEvidence = { clicks: ClickStages[]; stats: StatsSnapshot[]; audioOverrides: number };
 type Diagnostics = {
   begin(count: number): void;
   pointer(at: number): void;
@@ -39,15 +39,24 @@ type Diagnostics = {
 };
 type ProbeWindow = Window & { __omnipusSoak?: Probe; __omnipusLatency?: Diagnostics };
 
-async function installLatencyDiagnostics(page: Page): Promise<void> {
-  await page.addInitScript(() => {
+async function installLatencyDiagnostics(page: Page, videoOnly = false): Promise<void> {
+  await page.addInitScript(disableAudio => {
     const peers: RTCPeerConnection[] = [];
     const clicks: ClickStages[] = [];
     const stats: StatsSnapshot[] = [];
     let current: ClickStages | undefined;
+    let audioOverrides = 0;
     const NativePeer = window.RTCPeerConnection;
     window.RTCPeerConnection = class extends NativePeer {
       constructor(...args: ConstructorParameters<typeof NativePeer>) { super(...args); peers.push(this); }
+      addTransceiver(trackOrKind: MediaStreamTrack | string, init?: RTCRtpTransceiverInit): RTCRtpTransceiver {
+        const kind = typeof trackOrKind === 'string' ? trackOrKind : trackOrKind.kind;
+        if (disableAudio && kind === 'audio') {
+          audioOverrides++;
+          return super.addTransceiver(trackOrKind, { ...init, direction: 'inactive' });
+        }
+        return super.addTransceiver(trackOrKind, init);
+      }
     };
     const observeSend = (route: string, payload: unknown, send: () => void) => {
       let entry: ClickStages['sends'][number] | undefined;
@@ -67,15 +76,18 @@ async function installLatencyDiagnostics(page: Page): Promise<void> {
     WebSocket.prototype.send = function (data: unknown) { observeSend('websocket', data, () => Reflect.apply(wsSend, this, [data])); };
     const dcSend = RTCDataChannel.prototype.send;
     RTCDataChannel.prototype.send = function (data: unknown) { observeSend('datachannel', data, () => Reflect.apply(dcSend, this, [data])); };
-    const fields = ['timestamp', 'kind', 'mediaType', 'transportId', 'codecId', 'packetsReceived', 'packetsLost', 'bytesReceived', 'jitter', 'jitterBufferDelay', 'jitterBufferTargetDelay', 'jitterBufferMinimumDelay', 'jitterBufferEmittedCount', 'totalDecodeTime', 'framesDecoded', 'framesDropped', 'framesPerSecond', 'totalProcessingDelay', 'nackCount', 'pliCount', 'currentRoundTripTime', 'totalRoundTripTime', 'roundTripTime', 'roundTripTimeMeasurements', 'responsesReceived', 'availableIncomingBitrate', 'state', 'nominated', 'selectedCandidatePairId'];
+    const fields = ['timestamp', 'kind', 'mediaType', 'transportId', 'codecId', 'packetsReceived', 'packetsLost', 'bytesReceived', 'jitter', 'jitterBufferDelay', 'jitterBufferTargetDelay', 'jitterBufferMinimumDelay', 'jitterBufferEmittedCount', 'totalDecodeTime', 'framesDecoded', 'framesDropped', 'framesPerSecond', 'totalProcessingDelay', 'nackCount', 'pliCount', 'currentRoundTripTime', 'totalRoundTripTime', 'roundTripTime', 'roundTripTimeMeasurements', 'responsesReceived', 'availableIncomingBitrate', 'state', 'nominated', 'selectedCandidatePairId', 'totalSamplesReceived', 'totalSamplesDuration', 'totalAudioEnergy', 'audioLevel', 'concealedSamples', 'silentConcealedSamples', 'concealmentEvents', 'insertedSamplesForDeceleration', 'removedSamplesForAcceleration'];
     (window as ProbeWindow).__omnipusLatency = {
       begin(count) { current = { count, armedAt: performance.now(), sends: [] }; clicks.push(current); },
       pointer(at) { if (current) current.pointerAt = at; },
       presented(metadata) { if (current) current.presentation = metadata; },
       async snapshot(label) {
-        const snapshot: StatsSnapshot = { label, at: performance.now(), rows: [], errors: [], receivers: [] };
+        const snapshot: StatsSnapshot = { label, at: performance.now(), rows: [], errors: [], receivers: [], transceivers: [] };
         for (const [index, pc] of peers.entries()) {
           if (pc.connectionState === 'closed') continue;
+          for (const transceiver of pc.getTransceivers()) {
+            snapshot.transceivers.push({ pc: index, kind: transceiver.receiver.track.kind, direction: transceiver.direction, currentDirection: transceiver.currentDirection });
+          }
           for (const receiver of pc.getReceivers()) {
             const settings = receiver as unknown as Record<string, unknown>;
             snapshot.receivers.push({ pc: index, kind: receiver.track.kind, jitterBufferTarget: settings.jitterBufferTarget ?? null, playoutDelayHint: settings.playoutDelayHint ?? null });
@@ -85,7 +97,6 @@ async function installLatencyDiagnostics(page: Page): Promise<void> {
             report.forEach(raw => {
               const row = raw as Record<string, unknown>;
               if (!['inbound-rtp', 'remote-inbound-rtp', 'candidate-pair', 'transport'].includes(String(row.type))) return;
-              if (row.type === 'inbound-rtp' && row.kind !== 'video' && row.mediaType !== 'video') return;
               const selected: StatsRow = { pc: index, id: String(row.id), type: String(row.type) };
               for (const field of fields) selected[field] = row[field] ?? null;
               snapshot.rows.push(selected);
@@ -94,9 +105,9 @@ async function installLatencyDiagnostics(page: Page): Promise<void> {
         }
         stats.push(snapshot);
       },
-      evidence: () => ({ clicks, stats }),
+      evidence: () => ({ clicks, stats, audioOverrides }),
     };
-  });
+  }, videoOnly);
 }
 
 async function captureRTCStats(page: Page, label: string): Promise<void> {
@@ -106,7 +117,7 @@ async function captureRTCStats(page: Page, label: string): Promise<void> {
 function receiverDeltas(evidence: LatencyEvidence | null) {
   const first = evidence?.stats[0], last = evidence?.stats.at(-1);
   if (!first || !last) return [];
-  return last.rows.filter(row => row.type === 'inbound-rtp').map(row => {
+  return last.rows.filter(row => row.type === 'inbound-rtp' && (row.kind === 'video' || row.mediaType === 'video')).map(row => {
     const before = first.rows.find(value => value.pc === row.pc && value.id === row.id);
     const delta = (key: string) => {
       const a = before?.[key], b = row[key];
@@ -336,10 +347,12 @@ async function waitUntil(page: Page, deadline: number) {
   while (performance.now() < deadline) await page.waitForTimeout(Math.min(1_000, Math.max(0, deadline - performance.now())));
 }
 
-export async function runBrowserInputProbe(page: Page, testInfo: TestInfo, mode: 'soak' | 'latency'): Promise<void> {
+export async function runBrowserInputProbe(page: Page, testInfo: TestInfo, mode: 'soak' | 'latency' | 'latency-video-only'): Promise<void> {
   testInfo.setTimeout(mode === 'soak' ? 32 * 60_000 : 8 * 60_000);
   const mixedDuration = mode === 'soak' ? PHASE_MS : CLICK_COUNT * 500;
-  const label = mode === 'soak' ? 'browser-soak' : 'browser-latency';
+  const diagnostic = mode !== 'soak';
+  const videoOnly = mode === 'latency-video-only';
+  const label = mode === 'soak' ? 'browser-soak' : videoOnly ? 'browser-latency-video-only' : 'browser-latency';
   const origin = new URL(process.env.OMNIPUS_URL || '');
   if (!['localhost', '127.0.0.1'].includes(origin.hostname) || origin.port !== '11094') throw new Error('This acceptance test requires the isolated gateway on port11094');
   const runtimeHome = fs.realpathSync(process.env.SOAK_RUNTIME_HOME || '');
@@ -372,7 +385,7 @@ export async function runBrowserInputProbe(page: Page, testInfo: TestInfo, mode:
     socket.on('close', () => wire.push({ at: Date.now(), direction: 'closed', type: 'socket_closed' }));
   });
   let state: PixelState = { count: 0, hash: 0, last: 0, held: 0, firstError: 0, nonce };
-  if (mode === 'latency') await installLatencyDiagnostics(page);
+  if (diagnostic) await installLatencyDiagnostics(page, videoOnly);
   try {
     await page.goto(origin.href);
     const response = await page.request.get(new URL('/api/v1/workspaces', origin).href);
@@ -507,21 +520,21 @@ export async function runBrowserInputProbe(page: Page, testInfo: TestInfo, mode:
     const p95Ms = ordered.length ? ordered[Math.ceil(.95 * ordered.length) - 1] : null;
     let diagnostics: LatencyEvidence | null = null;
     let diagnosticsError: string | null = null;
-    if (mode === 'latency') {
+    if (diagnostic) {
       try {
         await captureRTCStats(page, 'final');
         diagnostics = await page.evaluate(() => (window as ProbeWindow).__omnipusLatency!.evidence());
       } catch (error) { diagnosticsError = String(error); }
     }
     const rtcDeltas = receiverDeltas(diagnostics);
-    const evidenceName = mode === 'soak' ? 'soak-evidence.json' : 'latency-evidence.json';
+    const evidenceName = mode === 'soak' ? 'soak-evidence.json' : videoOnly ? 'latency-video-only-evidence.json' : 'latency-evidence.json';
     const file = testInfo.outputPath(evidenceName);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify({ mode, nonce, expectedEventCount: expectedEvents.length, finalExpected: state, timing, clicks, latenciesMs: latencies, p95Ms, thresholdMs: MAX_P95_MS, diagnostics, diagnosticsError, rtcDeltas, idleSamples, wire, pageErrors, unsupported: ['audio content', 'native macOS app', 'remote network/TURN path'] }, null, 2));
     console.log(`[${label}] evidence persisted: ${file}; clicks=${latencies.length}, p95=${p95Ms === null ? 'unavailable' : p95Ms.toFixed(3)}ms`);
-    if (mode === 'latency') console.log(`[${label}] receiver deltas: ${JSON.stringify(rtcDeltas)}; statsError=${diagnosticsError ?? 'none'}`);
+    if (diagnostic) console.log(`[${label}] receiver deltas: ${JSON.stringify(rtcDeltas)}; statsError=${diagnosticsError ?? 'none'}`);
     await testInfo.attach(evidenceName, { path: file, contentType: 'application/json' });
-    if (mode === 'latency' && latencies.length === CLICK_COUNT) {
+    if (diagnostic && latencies.length === CLICK_COUNT) {
       expect(diagnosticsError, 'latency instrumentation must remain readable').toBeNull();
       expect(diagnostics?.clicks, 'one outbound/presentation trace per click').toHaveLength(CLICK_COUNT);
       for (const click of diagnostics!.clicks) {
@@ -531,6 +544,19 @@ export async function runBrowserInputProbe(page: Page, testInfo: TestInfo, mode:
         expect(click.presentation?.sampleFinished, 'matching decoded frame timestamp').toBeGreaterThan(0);
       }
       expect(rtcDeltas.length, 'real video receiver statistics must be available').toBeGreaterThan(0);
+      if (videoOnly) {
+        expect(diagnostics!.audioOverrides, 'experiment must intercept actual audio negotiation').toBeGreaterThan(0);
+        const audioTransceivers = diagnostics!.stats.flatMap(snapshot => snapshot.transceivers).filter(value => value.kind === 'audio');
+        expect(audioTransceivers.length, 'observe the disabled audio transceiver').toBeGreaterThan(0);
+        for (const transceiver of audioTransceivers) {
+          expect(transceiver.direction, 'audio must remain explicitly inactive').toBe('inactive');
+          expect(['inactive', null], 'no negotiated sending or receiving audio').toContain(transceiver.currentDirection);
+        }
+        const audioReports = diagnostics!.stats.flatMap(snapshot => snapshot.rows).filter(row => row.type === 'inbound-rtp' && (row.kind === 'audio' || row.mediaType === 'audio'));
+        for (const report of audioReports) expect(report.packetsReceived, 'video-only experiment received audio packets').toBe(0);
+      } else {
+        expect(diagnostics!.audioOverrides, 'normal diagnostic must not alter audio negotiation').toBe(0);
+      }
     }
   }
 }
