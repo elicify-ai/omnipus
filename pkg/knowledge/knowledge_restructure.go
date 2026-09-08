@@ -544,7 +544,7 @@ func RenderRestructureTrash(r TrashResult, indexWarning string) string {
 		fmt.Fprintf(&b, "CASCADE: %d inbound link(s) now unrepairable across %d note(s)",
 			r.DanglingLinkCount, len(r.DanglingNotes))
 		if r.DanglingNotesTruncated {
-			b.WriteString(fmt.Sprintf(" (showing first %d)", len(r.DanglingNotes)))
+			fmt.Fprintf(&b, " (showing first %d)", len(r.DanglingNotes))
 		}
 		b.WriteString(":\n")
 		for _, n := range r.DanglingNotes {

@@ -31,6 +31,7 @@ package knowledge
 // ResolveContainedNoSymlink always does.
 
 import (
+	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -158,7 +159,7 @@ func TestRename_RefusesEveryPathOnlyReachableThroughASymlink(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir, root := g4Fixture(t)
 			named := tc.from
-			if tc.side == ErrRenameDestinationNotAddressable {
+			if errors.Is(tc.side, ErrRenameDestinationNotAddressable) {
 				named = tc.to
 			}
 			g4RequireOnlySymlinkCanRefuse(t, root, named)

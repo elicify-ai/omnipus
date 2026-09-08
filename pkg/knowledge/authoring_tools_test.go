@@ -273,7 +273,9 @@ func TestTasksTool_CrossWorkspaceReturnsEmptyNotAnError(t *testing.T) {
 	own := a4Payload(t, tool.Execute(a4Ctx("agent-a", wsA), map[string]any{"collection": "PrivateKB"}))
 	list, _ := own["tasks"].([]any)
 	require.Len(t, list, 1)
-	assert.Contains(t, res.ForLLM+own["collection"].(string), "PrivateKB")
+	ownCollection, ok := own["collection"].(string)
+	require.True(t, ok, "payload collection field must be a string")
+	assert.Contains(t, res.ForLLM+ownCollection, "PrivateKB")
 }
 
 // ---------------------------------------------------------------------------
@@ -791,5 +793,7 @@ func TestTasksTool_UnreadableNoteIsReportedNotSilentlySkipped(t *testing.T) {
 		"a partial answer must say it is partial")
 	problems, _ := payload["problems"].([]any)
 	require.NotEmpty(t, problems, "the unreadable note must be NAMED, not dropped in silence")
-	assert.Contains(t, problems[0].(string), "blocked.md")
+	firstProblem, ok := problems[0].(string)
+	require.True(t, ok, "problems[0] must be a string")
+	assert.Contains(t, firstProblem, "blocked.md")
 }

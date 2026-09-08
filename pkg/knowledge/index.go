@@ -54,7 +54,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -777,10 +776,10 @@ func (ix *Index) formatStaleReason() string {
 	if err != nil {
 		return fmt.Sprintf("its format record could not be read (%v)", err)
 	}
-	switch {
-	case got == indexFormatVersion:
+	switch got {
+	case indexFormatVersion:
 		return ""
-	case got == 0:
+	case 0:
 		return fmt.Sprintf(
 			"it carries no format record, so it was written before the index format was tracked and may hold "+
 				"segments from a writer that corrupts them at scale (current format is %d)", indexFormatVersion)
@@ -2159,7 +2158,7 @@ func (ix *Index) indexNote(batch *batchState, entry ScanEntry) (ManifestEntry, e
 			// entries, never sees a path it never held.
 			if rbErr := rollbackPartialSegments(batch, entry.RelPath, ordinal); rbErr != nil {
 				return ManifestEntry{}, fmt.Errorf(
-					"read note %s: %w (additionally failed to roll back %d already-committed segment(s): %v)",
+					"read note %s: %w (additionally failed to roll back %d already-committed segment(s): %w)",
 					entry.RelPath, readErr, ordinal, rbErr)
 			}
 			return ManifestEntry{}, fmt.Errorf("read note %s: %w", entry.RelPath, readErr)
@@ -2227,7 +2226,7 @@ func (ix *Index) indexNote(batch *batchState, entry ScanEntry) (ManifestEntry, e
 			// this loop, and this one failed before joining them.
 			if rbErr := rollbackPartialSegments(batch, entry.RelPath, ordinal); rbErr != nil {
 				return ManifestEntry{}, fmt.Errorf(
-					"%w (additionally failed to roll back %d already-committed segment(s): %v)", err, ordinal, rbErr)
+					"%w (additionally failed to roll back %d already-committed segment(s): %w)", err, ordinal, rbErr)
 			}
 			return ManifestEntry{}, err
 		}
@@ -2303,7 +2302,7 @@ func (ix *Index) hashFile(relPath string) (string, error) {
 	}
 	defer func() { _ = f.Close() }()
 
-	var h hash.Hash = sha256.New()
+	h := sha256.New()
 	buf := make([]byte, 1<<20)
 	if _, err := io.CopyBuffer(h, f, buf); err != nil {
 		return "", err

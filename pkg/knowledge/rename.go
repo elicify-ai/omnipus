@@ -473,10 +473,10 @@ func (r *Renamer) Plan(req RenameRequest) (*RenamePlan, error) {
 
 	// FR-043 on both ends, on the real path, before anything else is decided.
 	if _, fromErr := r.Root.ResolveContained(fsys, from); fromErr != nil {
-		return nil, fmt.Errorf("%w: from: %v", ErrRenameInvalidPath, fromErr)
+		return nil, fmt.Errorf("%w: from: %w", ErrRenameInvalidPath, fromErr)
 	}
 	if _, toErr := r.Root.ResolveContained(fsys, to); toErr != nil {
-		return nil, fmt.Errorf("%w: to: %v", ErrRenameInvalidPath, toErr)
+		return nil, fmt.Errorf("%w: to: %w", ErrRenameInvalidPath, toErr)
 	}
 
 	// FR-044 on both ends, asked as a SEPARATE question from FR-043 above and
@@ -525,7 +525,7 @@ func (r *Renamer) Plan(req RenameRequest) (*RenamePlan, error) {
 
 	fromInfo, err := fsys.Lstat(fromReal)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %q: %v", ErrRenameSourceMissing, from, err)
+		return nil, fmt.Errorf("%w: %q: %w", ErrRenameSourceMissing, from, err)
 	}
 	if !fromInfo.Mode().IsRegular() {
 		// A directory, device, fifo or socket. NOT a symlink — FR-044 is
@@ -713,7 +713,13 @@ func (r *Renamer) buildStep(fsys LinkFS, note string, subject bool, edits []Link
 	before := hashBytes(src)
 	after := hashBytes(updated)
 	if before == after {
-		return nil, nil
+		// No content change: the edits computed for this note are a no-op
+		// (e.g. a link rewrite that reproduces the existing spelling). This
+		// is not a failure — buildStep's caller treats a nil step as "skip
+		// this note", not as an interruption of the plan, so introducing a
+		// sentinel error here would force the caller to switch from a plain
+		// nil check to errors.Is for a condition that was never an error.
+		return nil, nil //nolint:nilnil // deliberate no-op signal, not a failure; see comment above
 	}
 	return &JournalStep{
 		RelPath:    note,

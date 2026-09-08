@@ -863,7 +863,7 @@ func TestIndex_SegmentedNoteCollapsesToOneHit(t *testing.T) {
 			t.Errorf("Search(%q): hit offset %d is more than one segment before the term at %d — the offset is not absolute",
 				marker, got.Offset, want)
 		}
-		if got.Offset%1 != 0 || got.Offset < 0 {
+		if got.Offset < 0 {
 			t.Errorf("Search(%q): nonsensical offset %d", marker, got.Offset)
 		}
 	}

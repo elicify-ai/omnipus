@@ -401,7 +401,7 @@ func (s *JournalStore) Load(id string) (*Journal, error) {
 	}
 	var j Journal
 	if err := json.Unmarshal(data, &j); err != nil {
-		return nil, fmt.Errorf("%w: %q: %v", ErrJournalInvalid, id, err)
+		return nil, fmt.Errorf("%w: %q: %w", ErrJournalInvalid, id, err)
 	}
 	if err := j.Validate(); err != nil {
 		return nil, err

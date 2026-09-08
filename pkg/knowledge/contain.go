@@ -127,12 +127,12 @@ func NewCollectionRoot(fsys LinkFS, path string) (CollectionRoot, error) {
 	}
 	resolved, err := fsys.EvalSymlinks(filepath.Clean(path))
 	if err != nil {
-		return CollectionRoot{}, fmt.Errorf("%w: %q: %v", ErrCollectionRootInvalid, path, err)
+		return CollectionRoot{}, fmt.Errorf("%w: %q: %w", ErrCollectionRootInvalid, path, err)
 	}
 	resolved = filepath.Clean(resolved)
 	fi, err := fsys.Lstat(resolved)
 	if err != nil {
-		return CollectionRoot{}, fmt.Errorf("%w: %q: %v", ErrCollectionRootInvalid, path, err)
+		return CollectionRoot{}, fmt.Errorf("%w: %q: %w", ErrCollectionRootInvalid, path, err)
 	}
 	if !fi.IsDir() {
 		return CollectionRoot{}, fmt.Errorf("%w: %q is not a directory", ErrCollectionRootInvalid, path)

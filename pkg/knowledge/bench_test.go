@@ -66,9 +66,9 @@ func benchDatasetNotes(b *testing.B) int {
 // MV budgets, restated from the spec's success criteria so a change to one is a
 // visible change to the other.
 const (
-	mv1SearchP95Budget      = 500 * time.Millisecond // SC-001
-	mv2InitialIndexPeakRSS  = 512 << 20              // SC-002, bytes
-	mv4ReconcileUnchangedMs = 2 * time.Second        // SC-004
+	mv1SearchP95Budget          = 500 * time.Millisecond // SC-001
+	mv2InitialIndexPeakRSS      = 512 << 20              // SC-002, bytes
+	mv4ReconcileUnchangedBudget = 2 * time.Second        // SC-004
 )
 
 // benchVocabulary is the query set. Fixed, so two runs measure the same work.
@@ -279,8 +279,8 @@ func BenchmarkReconcileUnchanged(b *testing.B) {
 
 	b.ReportMetric(float64(slowest.Nanoseconds())/1e6, "slowest_ms")
 	b.ReportMetric(float64(notes), "files")
-	if slowest > mv4ReconcileUnchangedMs {
+	if slowest > mv4ReconcileUnchangedBudget {
 		b.Errorf("MV-4/SC-004: the slowest unchanged freshness check over %d files took %v, budget %v",
-			notes, slowest, mv4ReconcileUnchangedMs)
+			notes, slowest, mv4ReconcileUnchangedBudget)
 	}
 }

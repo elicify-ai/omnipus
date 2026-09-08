@@ -383,10 +383,10 @@ func (s *noteScanner) scanLinks(seg []byte, base int64) {
 				j++
 			}
 			run := j - i
-			switch {
-			case s.codeRun == 0:
+			switch s.codeRun {
+			case 0:
 				s.codeRun = run
-			case s.codeRun == run:
+			case run:
 				s.codeRun = 0
 			}
 			i = j
@@ -634,7 +634,7 @@ func isExternalTarget(dest string) bool {
 		if c == ':' {
 			return i > 0 && strings.HasPrefix(lower[i:], "://")
 		}
-		if !(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') && c != '+' && c != '.' && c != '-' {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '+' && c != '.' && c != '-' {
 			return false
 		}
 	}
