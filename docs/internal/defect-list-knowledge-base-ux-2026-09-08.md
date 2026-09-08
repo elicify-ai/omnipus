@@ -316,6 +316,53 @@ this bad hit self-evidently weak.
 score) would make the knowledge base result set smaller but still unordered to
 the eye. The two belong in one piece of work.
 
+---
+
+### KB-8 — records in a base are not clickable, and relation fields render raw `[[wikilinks]]`
+**Severity:** medium · **Area:** Library SPA (base/view rendering) · **Reported by:** founder (UAT run)
+
+Two problems in the same surface, and the inconsistency is what makes it jarring:
+clicking a record hit in SEARCH opens the note (correct), but clicking the same
+record inside an opened base does nothing at all.
+
+**(a) No view part has a row click handler.** Checked every part in
+`src/components/library/preview/viewparts/` — `TablePart`, `ListPart`,
+`TilesPart`, `ColumnsPart`, `CrosstabPart`, `FiguresPart`, `ChartPart`. The only
+`onClick` in the whole directory is `CalendarPart.tsx:119,131`, and that steps
+the month. Rows are inert markup; a record is not navigable from the view it
+lives in. Search, by contrast, wires `onOpenNote` through `LibrarySearchBar`, so
+the same object is clickable in one surface and dead in the other.
+
+**(b) Relation cells display the raw wikilink.** `cellValue`
+(`viewparts/viewResultData.ts:26-30`) returns `cell?.value ?? ''` — the stored
+string, verbatim. A relation property therefore renders as literal
+`[[Korn Ferry]]` / `[[Korn Ferry Pte Ltd (SG)]]` — brackets included — instead of
+the display name **Korn Ferry** as a clickable link to that record. There is no
+wikilink parsing anywhere in the viewparts directory (grepped: zero hits).
+
+**Cost note — the wire does not carry a resolved target.**
+`contracts/components/schemas/VaultFindCell.yaml` has exactly two fields,
+`property` and `value`. There is no target path, no display label, no link type.
+So (b) can be solved two ways, and the choice matters:
+- **Client-side parse** — strip `[[ ]]`, take the text after `|` if present as the
+  display label, and resolve the target by title against the rows already loaded.
+  Cheap, no contract change, but a link to a record NOT present in the current
+  result set cannot be resolved, so it either renders as plain text or as a link
+  that may fail.
+- **Server-side resolution** — add the resolved path (and display label) to
+  `VaultFindCell`, contract-first per Constraint #8. Exact, works for targets
+  outside the result set, costs a schema change plus regeneration.
+
+**Worth deciding together with (a):** once relation cells are links, "clicking a
+record" has two distinct meanings — open the ROW's own note, versus follow a
+LINK in one of its cells. Both should work, and they must not fight each other
+(a click on a link cell must not also trigger the row's open). Specify the
+precedence before implementing.
+
+**Related:** the same raw-wikilink question applies anywhere a property value is
+rendered outside a base — check the note preview and the record detail surfaces
+before assuming this is view-only.
+
 ## `grep` tool — agent field test
 
 ### DEFECT-G1 — a path pointing at a file produces a false "not found" error
@@ -415,6 +462,7 @@ test that did not reproduce the documented condition.
 | KB-5 | Active workspace collapsed in the sidebar | Low | Open |
 | KB-6 | Search results: no relevance signal, too little context, no source marker | Medium | Open |
 | KB-7 | Multi-word queries broken in opposite ways per engine; no fuzziness | High | Open |
+| KB-8 | Records in a base not clickable; relation fields show raw `[[wikilinks]]` | Medium | Open |
 | DEFECT-G1 | `path` at a file gives a false "not found" | Medium | **Fixed** |
 | OBS-G1 | Glob matching nothing fails silently | Medium | **Fixed** |
 | DOC-1 | Concurrency doc claim | — | Closed — not a defect |
