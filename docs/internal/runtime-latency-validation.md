@@ -49,10 +49,24 @@ with zero skips/races. Actual negative-acknowledgment packet replay, receiver
 reports and picture-loss feedback controls remained covered. Both deliberate
 faults were caught and production restored. Detailed evidence is in
 `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/docs/internal/browser-relay-clock-test-plan.md`.
-Independent startup-lane review and isolated build `42762` are running. No
-post-fix runtime result exists at this checkpoint. The three earlier latency
-runs remain measurements of `2259cd81f`; neither focused correctness tests nor
-the video-only comparison establishes improved product latency or audio sync.
+Independent startup-lane review found no high-confidence residual defect.
+Build `42762` exited 0. The isolated corrected runtime uses source `d9352ceea`,
+process 17589 on port 11094 (tool session 34973); production port 10994 remains
+unchanged. Binary SHA-256 and build provenance are retained in
+`/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-runtime/evidence/clock-review-binary.json`.
+
+Corrected normal audio/video diagnostic `99970` exited 1 during setup, before
+any clicks: navigation encountered low-memory refusals at 17:36:55, 17:36:58 and
+17:37:00, then the preview-address assertion timed out after 30 seconds. The
+retained JSON has zero latency samples and null p95. This is not a measured
+clock-correction latency failure. The memory mechanism remains under read-only
+investigation. No speed or audio gain is established. The three earlier measured
+runs remain results for `2259cd81f`.
+
+Corrected-run setup evidence:
+
+- `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-runtime/evidence/latency-clock-review-1.log`
+- `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-runtime/evidence/latency-clock-review-1/browser-improvements-laten-f8442-d-and-receiver-video-timing/latency-evidence.json`
 
 ## Retained raw evidence
 

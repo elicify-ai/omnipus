@@ -142,8 +142,13 @@ pass. All three runs used production source `2259cd81f`; detailed JSON was retai
 Both actual sender-clock baselines were reproduced and corrected by `d9352ceea`
 (worker `5ff70a549`). Final focused race verification passed seven groups/nine
 records in 15.118s, zero skips/races, with actual packet replay, receiver-report
-and picture-loss feedback controls. Independent review and isolated build
-`42762` are running; no post-fix runtime result is claimed. Latency causality
+and picture-loss feedback controls. Independent startup review is clear and
+build `42762` passed. Corrected runtime `d9352ceea` is isolated on port 11094
+(process 17589, tool session 34973). Diagnostic `99970` failed during setup after
+low-memory navigation refusals and a 30-second preview-address assertion;
+zero clicks were measured and p95 is null. This does not establish a corrected
+latency failure or speed/audio gain. Memory behavior remains under read-only
+investigation; installed port 10994 remains unchanged. Latency causality
 is not established by one fresh-session audio comparison. Metrics,
 interpretation limits and exact artifact paths are recorded in
 `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/docs/internal/runtime-latency-validation.md`.

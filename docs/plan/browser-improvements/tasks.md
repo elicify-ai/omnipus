@@ -158,8 +158,13 @@ video-only experiment `67712` passed at 156.2ms with audio inactive, which does
 not close product/audio/soak acceptance. Clock correction `d9352ceea` integrates
 `5ff70a549` after both actual baselines reproduced. Its final focused race run
 passed seven groups/nine records in 15.118s with zero skips/races, retaining actual
-packet replay and receiver/picture-loss feedback controls. Independent review
-and isolated build `42762` are running; no post-fix runtime result exists yet.
+packet replay and receiver/picture-loss feedback controls. Independent startup
+review is clear and build `42762` passed. Corrected runtime source `d9352ceea`
+is on isolated port 11094 (process 17589, tool session 34973); installed port
+10994 remains unchanged. Diagnostic `99970` exited 1 before clicks after
+low-memory navigation refusals and a 30-second preview-address timeout. Its
+zero samples/null p95 are a setup failure, not a measured clock-latency result.
+Memory behavior is under read-only investigation; no speed/audio gain is claimed.
 Causality for the earlier latency failure remains unproven.
 Detailed evidence is retained in
 `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/docs/internal/runtime-latency-validation.md`.
