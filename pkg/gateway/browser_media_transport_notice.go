@@ -13,9 +13,9 @@ func (h *BrowserWSHandler) mediaTransportNotice() string {
 	var causes []string
 	if fallback := h.mediaPortFallback; fallback != nil {
 		if fallback.bound > 0 {
-			causes = append(causes, fmt.Sprintf("UDP port %d is unavailable; using port %d", fallback.configured, fallback.bound))
+			causes = append(causes, fmt.Sprintf("UDP port %d is unavailable; using port %d, which remote viewers may not reach", fallback.configured, fallback.bound))
 		} else {
-			causes = append(causes, fmt.Sprintf("UDP ports %d–%d are unavailable; using a random port that may be unreachable remotely", fallback.configured, fallback.lastProbed))
+			causes = append(causes, fmt.Sprintf("UDP ports %d–%d are unavailable; using a random UDP port that remote viewers may not reach", fallback.configured, fallback.lastProbed))
 		}
 	}
 	if h.mediaTCPBindErr != nil {

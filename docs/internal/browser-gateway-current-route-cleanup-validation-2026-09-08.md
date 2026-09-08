@@ -20,8 +20,16 @@ Closeout evidence:
 - Both deliberate notice faults failed at their intended assertions: omitting TURN failed the required-cause check; retaining all causes but adding 513 bytes failed the contract check (804 > 512). Both temporary source edits were restored immediately. The corrected combined message is 291 bytes for this simultaneous-failure fixture, versus the observed pre-fix 830.
 - The final Linux-only response reader distinguishes the positively identified answer from subsequent active state, which has no offer_id field. It tolerates initial attachment availability/health without weakening current-offer error detection. This change still requires Linux execution.
 
-Residual scope: old single-cause notice rendering helpers remain with direct unit-test callers only. They are no longer used by the successful production offer path. Their removal was recorded separately rather than expanding the final approved closeout. This component correction does not certify the full release-base diff or final application runtime.
+Initial handoff scope at b2f52e361: old single-cause notice rendering helpers remained with direct unit-test callers only. They are no longer used by the successful production offer path. Their removal was recorded separately rather than expanding the final approved closeout. This component correction does not certify the full release-base diff or final application runtime.
 
 Final local result: retained driver 25309 terminated with exit 0. Both faults were caught; the restored selected gateway race/shuffle run passed 44 test/subtest entries, zero failures, skips or race warnings, in 36.792s. No broader suite was run. The final Linux response-reader correction was made after this race run; those files are excluded by its CGO=1 build and must be compiled/executed by final CGO=0/Linux verification.
 
 Pre-commit detect_changes was attempted against this isolated worktree (90761, exit 1), but GitNexus has no registered index for its path. Manual staged scope and whitespace checks passed: 22 assigned gateway/test/evidence files. The parent must perform the indexed integrated-branch scope check.
+
+## Finite formatter followup
+
+The four unused single-cause formatter methods are now removed. Their existing tests call the production combined formatter instead. This exposed and preserved two existing requirements: a changed bound port must name the consequence for remote viewers, and exhausted fallback ports must explicitly identify the random UDP port. The concise combined message still satisfies the wire limit with all three causes present.
+
+The two migrated old oracles reproduced those exact copy omissions in 2752 (exit 1, 5.879s), before the formatter change. The affected notice selection, including actual UDP/TCP handling, healthy/off controls, contract/translator checks and the actual all-causes offer/schema regression, then passed in 33580 (gateway selection 11.594s). No additional faults or broader suite were needed for this small followup. The same serial driver subsequently rejected a new live-switch fixture prerequisite in the separate browser package; that uncommitted later-lane test is excluded from this formatter commit and is not claimed as a product failure.
+
+Impact: the four removed helpers resolved LOW; the new combined formatter is absent from the index and was manually traced to the real offer route and its tests. The stale requested-scale setter comment was also corrected after the constant's LOW/zero-caller impact check.

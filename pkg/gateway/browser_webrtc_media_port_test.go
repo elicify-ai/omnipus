@@ -68,7 +68,7 @@ func TestSharedMediaConn_TakenPort_RecordsOperatorVisibleDegradation(t *testing.
 	t.Cleanup(func() { _ = conn.Close() })
 	bound := mediaConnPort(t, conn)
 
-	notice := h.mediaPortFallbackNotice()
+	notice := h.mediaTransportNotice()
 	require.NotEmpty(t, notice,
 		"a fallback off the operator's declared port MUST produce a user-visible notice — a log line alone "+
 			"is invisible to the person who has to free the port or fix the config")
@@ -96,7 +96,7 @@ func TestSharedMediaConn_ConfiguredPortFree_NoDegradationNotice(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 	require.Equal(t, free, mediaConnPort(t, conn))
 
-	assert.Empty(t, h.mediaPortFallbackNotice(),
+	assert.Empty(t, h.mediaTransportNotice(),
 		"nothing degraded, so nothing may be reported — a warning on a healthy install trains operators to "+
 			"ignore the one that matters")
 }
@@ -107,7 +107,7 @@ func TestSharedMediaConn_ConfiguredPortFree_NoDegradationNotice(t *testing.T) {
 func TestSharedMediaConn_Unconfigured_NoDegradationNotice(t *testing.T) {
 	h := &BrowserWSHandler{}
 	require.Nil(t, h.sharedMediaConn(&config.Config{}))
-	assert.Empty(t, h.mediaPortFallbackNotice(),
+	assert.Empty(t, h.mediaTransportNotice(),
 		"fixed-port media is opt-in; the untouched default must not raise an operator alarm")
 }
 
@@ -170,7 +170,7 @@ func TestNotifyMediaPortDegraded_SilentWhenHealthy(t *testing.T) {
 // worse branch: not even the probe range could be bound, so every Session is
 // on an ephemeral port and a hosted install has no chance whatsoever.
 func TestMediaPortFallbackNotice_TotalFailureNamesEphemeralConsequence(t *testing.T) {
-	notice := mediaPortFallbackState{configured: 50000, bound: 0, lastProbed: 50016}.notice()
+	notice := (&BrowserWSHandler{mediaPortFallback: &mediaPortFallbackState{configured: 50000, bound: 0, lastProbed: 50016}}).mediaTransportNotice()
 
 	require.NotEmpty(t, notice, "the total-failure branch is the WORST case and must not be the silent one")
 	assert.Contains(t, notice, "50000")
@@ -198,7 +198,7 @@ func TestMediaPortFallbackNotice_FitsContractMaxLength(t *testing.T) {
 	}
 	for name, state := range cases {
 		t.Run(name, func(t *testing.T) {
-			notice := state.notice()
+			notice := (&BrowserWSHandler{mediaPortFallback: &state}).mediaTransportNotice()
 			assert.LessOrEqual(t, len(notice), limit,
 				"an over-length message is dropped by the SPA's zod edge validation, which would make this "+
 					"degradation invisible again — the whole point of the fix")
@@ -242,8 +242,8 @@ func TestMediaPortFallbackNotice_StaysOutOfTheSPATranslator(t *testing.T) {
 		"unknown frame type", "invalid frame: not json",
 	}
 	notices := []string{
-		mediaPortFallbackState{configured: 50000, bound: 50001, lastProbed: 50001}.notice(),
-		mediaPortFallbackState{configured: 50000, bound: 0, lastProbed: 50016}.notice(),
+		(&BrowserWSHandler{mediaPortFallback: &mediaPortFallbackState{configured: 50000, bound: 50001, lastProbed: 50001}}).mediaTransportNotice(),
+		(&BrowserWSHandler{mediaPortFallback: &mediaPortFallbackState{configured: 50000, bound: 0, lastProbed: 50016}}).mediaTransportNotice(),
 	}
 	for _, notice := range notices {
 		lower := strings.ToLower(notice)
@@ -403,9 +403,9 @@ func TestSharedMediaTCP_BindFailure_IsUserVisible(t *testing.T) {
 		_ = ln.Close()
 		t.Skip("port could not be made unavailable on this machine; nothing to assert")
 	}
-	notice := h.iceTCPUnavailableNotice()
+	notice := h.mediaTransportNotice()
 	require.NotEmpty(t, notice, "a failed ICE-TCP bind must produce an operator-facing notice")
-	require.Contains(t, notice, "webrtc_media_tcp_port")
+	require.Contains(t, notice, "TCP media port")
 	require.LessOrEqual(t, len(notice), 512, "BrowserStatusFrame.message is capped at 512")
 }
 
@@ -414,7 +414,7 @@ func TestSharedMediaTCP_BindFailure_IsUserVisible(t *testing.T) {
 func TestSharedMediaTCP_Unconfigured_SaysNothing(t *testing.T) {
 	h := &BrowserWSHandler{}
 	require.Nil(t, h.sharedMediaTCP(&config.Config{}))
-	require.Empty(t, h.iceTCPUnavailableNotice())
+	require.Empty(t, h.mediaTransportNotice())
 }
 
 // TestTURNUnavailableNotice_SilentWhenOff keeps the tier-3 notice from
@@ -422,7 +422,7 @@ func TestSharedMediaTCP_Unconfigured_SaysNothing(t *testing.T) {
 func TestTURNUnavailableNotice_SilentWhenOff(t *testing.T) {
 	h := &BrowserWSHandler{}
 	require.Nil(t, h.sharedTURN(&config.Config{}))
-	require.Empty(t, h.turnUnavailableNotice())
+	require.Empty(t, h.mediaTransportNotice())
 }
 
 // TestTURNUnavailableNotice_ReportsAConfiguredButFailedRelay is the ADR-061
@@ -435,8 +435,8 @@ func TestTURNUnavailableNotice_ReportsAConfiguredButFailedRelay(t *testing.T) {
 	// advertises a private address is useless to every remote viewer.
 	h := &BrowserWSHandler{}
 	require.Nil(t, h.sharedTURN(cfg))
-	notice := h.turnUnavailableNotice()
+	notice := h.mediaTransportNotice()
 	require.NotEmpty(t, notice)
-	require.Contains(t, notice, "webrtc_turn_udp_port")
+	require.Contains(t, notice, "TURN relay")
 	require.LessOrEqual(t, len(notice), 512)
 }

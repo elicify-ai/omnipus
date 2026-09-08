@@ -1057,72 +1057,6 @@ type mediaPortFallbackState struct {
 	lastProbed int
 }
 
-// notice renders the operator-facing sentence sent to the live-browser panel
-// as a browser_status(error) message.
-//
-// Constraints it must respect, both load-bearing:
-//   - BrowserStatusFrame.message is maxLength 512 in
-//     contracts/components/schemas/BrowserStatusFrame.yaml. An over-length
-//     message is dropped outright by the SPA's zod edge validation, which
-//     would turn this fix back into the silence it exists to remove —
-//     TestMediaPortFallbackNotice_FitsContractMaxLength pins it.
-//   - It must not collide with any pattern in the SPA's
-//     translateBrowserErrorMessage (src/lib/browserLiveWs.ts), which rewrites
-//     recognised Go-internal strings into plain language and passes
-//     everything else through verbatim. This copy is already plain language,
-//     so it must stay OUT of those patterns — notably no "blocked", no
-//     "could not resolve", no "browser_attach:"-style prefix.
-func (s mediaPortFallbackState) notice() string {
-	if s.bound > 0 {
-		return fmt.Sprintf(
-			"Live video is running on UDP port %d, not port %d from your configuration, because port %d could "+
-				"not be bound. Video works for a viewer on this machine or your LAN, but a remote viewer "+
-				"will get no picture: a hosted install only routes the port you declared. Free port %d (a "+
-				"second Omnipus on this host is the usual cause), or set "+
-				"tools.browser.webrtc_media_udp_port to a port your provider routes, then restart.",
-			s.bound, s.configured, s.configured, s.configured,
-		)
-	}
-	return fmt.Sprintf(
-		"Live video is running on a random UDP port: port %d from your configuration, and every port up to "+
-			"%d, was unavailable. Video works for a viewer on this machine or your LAN, but a remote viewer "+
-			"will get no picture, because a hosted install only routes the port you declared. Free port %d, "+
-			"or set tools.browser.webrtc_media_udp_port to a port your provider routes, then restart.",
-		s.configured, s.lastProbed, s.configured,
-	)
-}
-
-// mediaPortFallbackNotice returns the operator-facing degradation sentence,
-// or "" when the configured media port was bound exactly (or fixed-port
-// media is not configured at all — the laptop default, where there is
-// nothing to warn about).
-func (h *BrowserWSHandler) mediaPortFallbackNotice() string {
-	h.mediaConnMu.Lock()
-	defer h.mediaConnMu.Unlock()
-	if h.mediaPortFallback == nil {
-		return ""
-	}
-	return h.mediaPortFallback.notice()
-}
-
-// iceTCPUnavailableNotice is the operator-facing sentence for a configured
-// ICE-TCP port that could not be bound. Same reasoning as
-// mediaPortFallbackState.notice: the person who has to free the port or pick
-// another one is the operator, and a log line is not a surface they watch.
-// Empty when ICE-TCP is not configured or bound fine, so an ordinary install
-// says nothing. Deliberately short: BrowserStatusFrame.message is capped at
-// 512 and this may be appended to the UDP notice.
-func (h *BrowserWSHandler) iceTCPUnavailableNotice() string {
-	h.mediaConnMu.Lock()
-	defer h.mediaConnMu.Unlock()
-	if h.mediaTCPBindErr == nil {
-		return ""
-	}
-	return "Live video could not open the TCP media port you configured " +
-		"(tools.browser.webrtc_media_tcp_port), so viewers whose network blocks UDP have no fallback. " +
-		"Free that port or choose one your provider routes, then restart."
-}
-
 // sharedMediaConn returns the process-wide fixed media socket, binding it on
 // first use (ADR-062 tier 1). Returns nil when fixed-port media is not
 // configured, or when no port in the fallback range could be bound.
@@ -1280,19 +1214,6 @@ func (h *BrowserWSHandler) sharedTURN(cfg *config.Config) *webrtc.TURNServer {
 	slog.Info("browser-webrtc: embedded TURN relay started (ADR-062 tier 3)",
 		"udp_port", port, "tcp_port", cfg.Tools.Browser.WebRTCTurnTCPPort, "relay_address", public)
 	return srv
-}
-
-// turnUnavailableNotice reports a configured-but-failed relay to the operator,
-// same discipline as the media sockets: a log line is not a surface.
-func (h *BrowserWSHandler) turnUnavailableNotice() string {
-	h.mediaConnMu.Lock()
-	defer h.mediaConnMu.Unlock()
-	if h.turnStartErr == nil {
-		return ""
-	}
-	return "Live video could not start the TURN relay you configured " +
-		"(tools.browser.webrtc_turn_udp_port), so viewers that cannot reach the media port directly have no path. " +
-		"Free that port or choose one your provider routes, then restart."
 }
 
 // iceServersForViewer mints this viewer's ICE servers. Credentials are

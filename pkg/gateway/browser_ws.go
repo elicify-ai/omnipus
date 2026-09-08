@@ -635,22 +635,11 @@ const minInputErrorInterval = 2 * time.Second
 // hostile or buggy client can force. See browserConnState.lastViewportAt.
 const minViewportInterval = 300 * time.Millisecond
 
-// maxDeviceScaleFactor is the range-check ceiling handleViewport applies to
-// an inbound device_scale_factor BEFORE recording it anywhere (F10 fix,
-// external review 2026-08-13). It mirrors two independent values that must
-// stay in lockstep: BrowserViewportFrame.device_scale_factor's contract
-// maximum (contracts/components/schemas/BrowserViewportFrame.yaml) and
-// pkg/tools/browser/live.go's unexported maxViewportScaleFactor, which
-// SetViewport uses for its OWN range check. Both exist already — this const
-// does not relax or duplicate either, it just makes the same bound apply
-// BEFORE the value reaches CaptureSession.SetCaptureScale, which today has
-// no upper clamp of its own (CaptureScale() only floors values below 1).
-// gateway.validate_inbound defaults to false, so on a default install this
-// local check is the ONLY thing enforcing the schema maximum: without it, a
-// malformed client sending device_scale_factor:50 could persist an
-// out-of-contract value on the capture session, which the
-// browser_capture_control frame's capture_scale field (max 4) would then
-// ship downstream in violation of its own contract.
+// maxDeviceScaleFactor clamps an incoming viewport request before CDP applies
+// it, including when inbound schema validation is disabled. Keep it aligned
+// with BrowserViewportFrame.device_scale_factor and the live-view bound.
+// Capture scale is subsequently measured from the browser; it is not copied
+// into a pending capture setting from this request.
 const maxDeviceScaleFactor = 3.0
 
 // BrowserWSHandler implements the /api/v1/browser/ws endpoint (ADR-038):
