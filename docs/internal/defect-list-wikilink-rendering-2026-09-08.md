@@ -1,4 +1,6 @@
-# Defect list — wikilink rendering (2026-09-08, round 2)
+# Defect list — retest round 2 (2026-09-08)
+
+Wikilink rendering (WL-1, WL-2) and knowledge-base creation (WL-3, WL-4).
 
 Founder findings from retesting build `94bb13e61`. Companion to
 `defect-list-knowledge-base-ux-2026-09-08.md`. **This file documents; it does
@@ -91,12 +93,75 @@ in the body text or in a properties/metadata area?
 
 ---
 
+---
+
+### WL-3 — the New knowledge base dialog still shows a Location field
+**Severity:** low · **Area:** Library SPA · **Reported by:** founder
+**Status:** Open · **Confirmed in code**
+
+KB-3 removed the workspace picker and the free-text path box, but left a
+read-only **Location** line showing the destination. The founder's instruction
+is that the dialog should be **identical to New folder**: a name, and nothing
+else.
+
+**Verified.** `LibraryNewVaultDialog.tsx:152` renders `<Label>Location</Label>`
+plus a destination line (`destinationLabel()`, :54). `LibraryNewFolderDialog.tsx`
+renders only `Folder name` (:83) and its validation messages — no location
+display of any kind.
+
+**Note on the reasoning being overridden, so it is a decision and not an
+oversight:** the read-only line was added deliberately, on the argument that
+removing the picker should not make the destination invisible. The founder has
+overruled that — New folder already creates silently where you are and is
+understood, so the knowledge base dialog should behave the same. Remove the
+Location block and its helper, and update the two tests that assert the
+destination text.
+
+---
+
+### WL-4 — a knowledge base can be created INSIDE another knowledge base
+**Severity:** high · **Area:** pkg/knowledge (both UI and agent paths) · **Reported by:** founder
+**Status:** Open · **Confirmed in code**
+
+Nothing prevents creating a knowledge base nested inside an existing one. This
+must be blocked, and blocked in ONE place so both callers inherit it.
+
+**Verified.** `pkg/knowledge/detect.go:326` `CreateInWorkspace` returns
+`ErrAlreadyKnowledgeBase` only when the TARGET PATH ITSELF is already a
+knowledge base. There is no ancestor check — no walk up the parent chain looking
+for a `.omnipus-vault` / `.obsidian` marker above the target. Both callers
+inherit the gap:
+- the SPA path, `handleLibraryCreateVault` (`pkg/gateway/rest_library.go`), and
+- the new agent tool, `knowledge_base_create`
+  (`pkg/knowledge/knowledge_base_create.go`), which deliberately reuses
+  `CreateInWorkspace` rather than duplicating creation logic.
+
+**That shared reuse is what makes this cheap to fix correctly:** add the ancestor
+check inside `CreateInWorkspace` and BOTH surfaces are covered at once. Adding it
+in the handler or the tool instead would leave the other open and create the
+second rule that can drift — the failure mode this diff has already been bitten
+by more than once.
+
+**Why it matters beyond tidiness:** a nested knowledge base has ambiguous
+ownership of the notes beneath it — two collections would each claim the same
+files, two indexes would scan them, and `knowledge_list` would report a
+containment relationship the rest of the system has no model for. The detection
+rule (`Detect`) resolves a folder to at most one collection, so the nested case
+is undefined behaviour, not merely untidy.
+
+**Also worth deciding while fixing:** what should happen to a knowledge base that
+is nested TODAY, on an existing install, because nothing stopped it? Refusing new
+nesting is straightforward; the migration question for existing data is a
+separate decision and should be stated rather than discovered later.
+
 ## Summary
 
 | ID | Title | Severity | Status |
 |---|---|---|---|
 | WL-1 | Base links render white; note links render gold | Medium | Open — cause confirmed |
 | WL-2 | Raw `[[wikilink]]` text in some notes | Medium | Open — mechanism confirmed, surface unreproduced |
+| WL-3 | New KB dialog still shows a Location field | Low | Open — confirmed |
+| WL-4 | A knowledge base can be created inside another | High | Open — confirmed, both paths |
 
 **Both trace to the same root theme** as the KB-8 work: wikilink rendering is
 correct on the note surface and partial everywhere else. WL-1 is a resolver
