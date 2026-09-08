@@ -44,8 +44,16 @@ var knowledgeSeedMatrix = map[string]struct {
 // TestCoreAgentSeed_KnowledgeFamilyIsExactlyTheADRList below rather than
 // silently inheriting a posture nobody chose.
 var (
-	knowledgeReadTools  = []string{"knowledge_describe", "knowledge_find", "knowledge_read"}
-	knowledgeWriteTools = []string{"knowledge_edit", "knowledge_restructure", "knowledge_configure"}
+	// knowledge_list joins the READ set: it names the knowledge bases in
+	// scope and reads nothing inside them (KB-2).
+	knowledgeReadTools = []string{
+		"knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list",
+	}
+	// knowledge_base_create joins the WRITE set: it creates a collection on
+	// disk, the widest blast radius in the family (KB-1).
+	knowledgeWriteTools = []string{
+		"knowledge_edit", "knowledge_restructure", "knowledge_configure", "knowledge_base_create",
+	}
 )
 
 // catalogKnowledgeNames returns every knowledge_* name the real static
