@@ -479,3 +479,22 @@ search runs, so the human search bar cannot do what the agent tool now can.
 
 That is a feature-parity gap, not a bug. Recorded for a product decision rather
 than fixed silently.
+
+---
+
+## Ratified fix plan (founder decisions, 2026-09-08)
+
+| Defect | Decision |
+|---|---|
+| KB-1 | `knowledge_create` -> **`knowledge_create_note`**; new **`knowledge_base_create`**. "base" alone was REJECTED as ambiguous with Obsidian Bases (the record types/views INSIDE a knowledge base) — `knowledge_base` reads as one noun and cannot be mistaken for a Base. `kb` rejected too (ADR-082: reads as kilobyte). |
+| KB-2 | **Both** — a `knowledge_list` tool AND type marking in `list_directory` output. Reuse the existing `is_knowledge_base` detection; mounts must be covered. |
+| KB-3 | Create the knowledge base **where the user is**: drop the workspace picker and the free-text path, take workspace + parent from context like the New folder dialog. `LibraryNewVaultDialog` currently accepts NO context prop — that is the gap. |
+| KB-4 | Remove "New workspace" from the Library create menu. NOTE: `LibraryCreateMenu.tsx`'s own header calls it a deliberate "global action" — this decision overrides that documented choice; update the comment rather than leaving it contradicting the code. |
+| KB-5 | Expand the active workspace in the sidebar. Do NOT collapse the previously-active one, and do not fight a deliberate manual collapse. |
+| KB-6 | Ratified design already recorded above: AND-first, coverage chips, rarity weighting, field indicator, NO raw score. Highlight colour = Forge Gold accent (the founder said yellow; yellow reads as "warning" in this palette — flagged, using the brand accent unless overridden). |
+| KB-7 | Knowledge base: AND-first with OR-ranked fallback + `SetFuzziness(1)`, fuzzy ranked BELOW exact. File search: **multi-term AND across the file** (all terms present somewhere, not on one line). This redefines a hit from line to document, so it ships WITH KB-6a per-document collapse. |
+| KB-8 | **Reuse the existing wikilink mechanism — do not reinvent it.** `parseWikilink()` is already exported from `preview/knowledgeMarkdown.tsx`, with a `resolveWikilink?: (target, heading) => KbLinkResolution` injection point and an honest three-state `KbLinkState` (`resolved` / `unresolved` / `unknown`). `KnowledgeNoteView` supplies the resolver from the link graph. NO contract change to `VaultFindCell` is required — the earlier client-vs-server framing is superseded. Separately: give view rows an open handler. |
+
+**Precedence rule for KB-8:** once relation cells are links, a click on a link
+cell follows the LINK; a click anywhere else on the row opens the ROW's note.
+They must not both fire.
