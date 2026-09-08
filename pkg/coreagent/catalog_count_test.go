@@ -119,14 +119,51 @@ import (
 // file already documents). This is a POST-MERGE addition, independent of the
 // feat->release merge arithmetic TestCatalog_MergeArithmetic states — see
 // that test's postMergeAdditions term for how the two numbers now reconcile.
-const catalogSizeToday = 102
+//
+// Bumped 102 -> 104 adding knowledge_list and knowledge_base_create (KB-1/
+// KB-2, defect-list-knowledge-base-ux-2026-09-08.md, founder-ratified
+// 2026-09-08): knowledge_list answers "which knowledge bases can this agent
+// reach" without already knowing a collection name; knowledge_base_create
+// makes a NEW knowledge base — a verb the ADR-068 six did not have, since
+// knowledge_edit's own "create" op only ever adds a NOTE inside a
+// collection that already exists. Both are POST-MERGE additions, exactly
+// like grep above — see TestCatalog_MergeArithmetic's postMergeAdditions.
+const catalogSizeToday = 104
 
-// currentKnowledgeToolNames is the exact six ADR-068 D15.3 seeds — the
-// replacement for ADR-067's nine, superseded (Stage 4, Wave 2). Split by
-// blast radius: three read (describe/find/read), knowledge_edit (one named
-// file), knowledge_restructure (cascading rename/move/trash/restore),
-// knowledge_configure (the schema/view control plane).
+// currentKnowledgeToolNames is every knowledge_* tool presently in the
+// catalog: ADR-068 D15.3's original six (the replacement for ADR-067's
+// nine, superseded Stage 4, Wave 2) plus KB-1/KB-2's two additions above.
+// Split by blast radius: three read (describe/find/read), knowledge_list
+// (also read — KB-2a), knowledge_edit (one named file),
+// knowledge_restructure (cascading rename/move/trash/restore),
+// knowledge_configure (the schema/view control plane), knowledge_base_create
+// (makes a new collection — KB-1).
+//
+// THIS VAR GROWS as the catalog grows — do not use it to check a FROZEN
+// historical count (adr068OriginalSixKnowledgeToolNames below is that;
+// TestCatalog_Stage4Arithmetic and TestCatalog_MergeArithmetic's own
+// newKnowledgeToolCount consts are checked against IT, not this one, for
+// exactly that reason).
 var currentKnowledgeToolNames = map[string]bool{
+	"knowledge_describe":    true,
+	"knowledge_find":        true,
+	"knowledge_read":        true,
+	"knowledge_list":        true,
+	"knowledge_edit":        true,
+	"knowledge_restructure": true,
+	"knowledge_configure":   true,
+	"knowledge_base_create": true,
+}
+
+// adr068OriginalSixKnowledgeToolNames is ADR-068 D15.3's ORIGINAL six names,
+// frozen as history. TestCatalog_Stage4Arithmetic and
+// TestCatalog_MergeArithmetic check their own arithmetic against THIS var,
+// not currentKnowledgeToolNames — those two tests are snapshots of
+// arithmetic that was true at specific points in this project's history
+// (Stage 4's exit, and the feat->release merge), and must not silently
+// drift every time a LATER knowledge tool (knowledge_list,
+// knowledge_base_create, …) is added to the live catalog.
+var adr068OriginalSixKnowledgeToolNames = map[string]bool{
 	"knowledge_describe":    true,
 	"knowledge_find":        true,
 	"knowledge_read":        true,
@@ -177,10 +214,10 @@ func TestCatalog_HasNoDuplicates(t *testing.T) {
 	}
 }
 
-// TestCatalog_KnowledgeToolCount pins the exact six ADR-068 names present in
-// the catalog — the other half of the arithmetic: without it, a change could
-// retire eight of the nine and add seven of the six and still satisfy a bare
-// count that had been adjusted to match.
+// TestCatalog_KnowledgeToolCount pins the exact current knowledge_* names
+// present in the catalog — the other half of the arithmetic: without it, a
+// change could retire eight of the nine and add seven of the eight and
+// still satisfy a bare count that had been adjusted to match.
 func TestCatalog_KnowledgeToolCount(t *testing.T) {
 	want := make(map[string]bool, len(currentKnowledgeToolNames))
 	for n := range currentKnowledgeToolNames {
@@ -194,15 +231,15 @@ func TestCatalog_KnowledgeToolCount(t *testing.T) {
 		}
 		found++
 		if !want[n] {
-			t.Errorf("unexpected knowledge_* tool %q in the catalog — ADR-068 D15.3 "+
-				"names exactly six, and this is not one of them", n)
+			t.Errorf("unexpected knowledge_* tool %q in the catalog — "+
+				"currentKnowledgeToolNames does not name it", n)
 			continue
 		}
 		delete(want, n)
 	}
 	for n := range want {
-		t.Errorf("ADR-068 D15.3 names %q as one of the six current knowledge tools, "+
-			"but it is not in the catalog", n)
+		t.Errorf("currentKnowledgeToolNames names %q as one of the current knowledge "+
+			"tools, but it is not in the catalog", n)
 	}
 	if found != len(currentKnowledgeToolNames) {
 		t.Errorf("catalog holds %d knowledge_* tools, expected %d",
@@ -247,9 +284,14 @@ func TestCatalog_Stage4Arithmetic(t *testing.T) {
 		t.Fatalf("retiredCount const says %d but retiredKnowledgeToolNames holds %d names",
 			retiredCount, len(retiredKnowledgeToolNames))
 	}
-	if newKnowledgeToolCount != len(currentKnowledgeToolNames) {
-		t.Fatalf("newKnowledgeToolCount const says %d but currentKnowledgeToolNames holds %d names",
-			newKnowledgeToolCount, len(currentKnowledgeToolNames))
+	// Checked against the FROZEN adr068OriginalSixKnowledgeToolNames, not
+	// currentKnowledgeToolNames — this is a fact about Stage 4's exit state,
+	// which must stay 6 regardless of how many knowledge tools the LIVE
+	// catalog holds today (see adr068OriginalSixKnowledgeToolNames' own doc
+	// comment).
+	if newKnowledgeToolCount != len(adr068OriginalSixKnowledgeToolNames) {
+		t.Fatalf("newKnowledgeToolCount const says %d but adr068OriginalSixKnowledgeToolNames holds %d names",
+			newKnowledgeToolCount, len(adr068OriginalSixKnowledgeToolNames))
 	}
 	got := preStage4Size - retiredCount + newKnowledgeToolCount
 	if got != featBranchSizeAfterD15 {
@@ -290,15 +332,24 @@ func TestCatalog_MergeArithmetic(t *testing.T) {
 	const (
 		releaseV011BaselineSize = 95
 		newKnowledgeToolCount   = 6
-		// postMergeAdditions: one so far — "grep" (ADR-081 D11, FR-009),
-		// added to allStaticToolNames ahead of its own implementation
-		// package landing. Bump this alongside catalogSizeToday, in the
-		// same commit, whenever a tool is added post-merge.
-		postMergeAdditions = 1
+		// postMergeAdditions: three so far — "grep" (ADR-081 D11, FR-009),
+		// then knowledge_list and knowledge_base_create (KB-1/KB-2,
+		// defect-list-knowledge-base-ux-2026-09-08.md, founder-ratified
+		// 2026-09-08) — all added to allStaticToolNames ahead of (grep) or
+		// alongside (the two knowledge names) their own implementation.
+		// Bump this alongside catalogSizeToday, in the same commit,
+		// whenever a tool is added post-merge.
+		postMergeAdditions = 3
 	)
-	if newKnowledgeToolCount != len(currentKnowledgeToolNames) {
-		t.Fatalf("newKnowledgeToolCount const says %d but currentKnowledgeToolNames holds %d names",
-			newKnowledgeToolCount, len(currentKnowledgeToolNames))
+	// Checked against the FROZEN adr068OriginalSixKnowledgeToolNames, not
+	// currentKnowledgeToolNames — this arithmetic is a fact about what the
+	// feat->release merge itself contributed, which must stay 6 regardless
+	// of how many knowledge tools the LIVE catalog holds today (knowledge_list
+	// and knowledge_base_create are counted in postMergeAdditions above
+	// instead).
+	if newKnowledgeToolCount != len(adr068OriginalSixKnowledgeToolNames) {
+		t.Fatalf("newKnowledgeToolCount const says %d but adr068OriginalSixKnowledgeToolNames holds %d names",
+			newKnowledgeToolCount, len(adr068OriginalSixKnowledgeToolNames))
 	}
 	got := releaseV011BaselineSize + newKnowledgeToolCount + postMergeAdditions
 	realCount := len(allStaticToolNames)

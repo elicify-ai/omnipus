@@ -887,7 +887,9 @@ func (t *ListDirTool) Name() string {
 func (t *ListDirTool) Description() string {
 	return "List files and directories in a path. Large directories page with offset/limit " +
 		"(entries), the same way read_file pages a file with offset/length (bytes). `path` " +
-		"defaults to \".\" (the workspace root) when omitted."
+		"defaults to \".\" (the workspace root) when omitted. A directory that is a knowledge " +
+		"base is marked KB: instead of DIR: — use knowledge_list or knowledge_describe on it " +
+		"rather than reading its files directly."
 }
 
 func (t *ListDirTool) Scope() ToolScope       { return ScopeGeneral }
@@ -958,7 +960,7 @@ func (t *ListDirTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
-	return formatDirEntries(entries, int(offset), int(limit))
+	return formatDirEntries(handle, entries, int(offset), int(limit))
 }
 
 // maxListDirEntries bounds one list_directory page (ADR-066 §15 task 1,
@@ -967,21 +969,80 @@ func (t *ListDirTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 // result the D4 cap would have to truncate blindly mid-name.
 const maxListDirEntries = 1000
 
+// KnowledgeBaseMarkerNames are the two directory names that mark a folder as
+// a knowledge base (KB-2b, defect-list-knowledge-base-ux-2026-09-08.md,
+// founder-ratified 2026-09-08) — the SAME rule
+// pkg/gateway/rest_library.go's detectKnowledgeBaseInRoot applies for the
+// REST Library listing's own is_knowledge_base field, reused here rather
+// than invented a second time: a folder is a knowledge base when EITHER
+// marker directory is present at its root (knowledge.Detection.
+// IsKnowledgeBase's OR rule).
+//
+// The two names are duplicated as LITERALS rather than imported from
+// pkg/knowledge (knowledge.MarkerDirName / knowledge.ObsidianMarkerDirName):
+// pkg/knowledge imports pkg/tools (for the knowledge_* agent tools), so the
+// reverse import here would cycle — confirmed empirically, not assumed: an
+// internal (package tools) test file importing pkg/knowledge fails go test
+// with "import cycle not allowed in test", because the test-augmented
+// package is still "tools" for cycle-detection purposes. Exported (rather
+// than left package-private) specifically so an EXTERNAL test package can
+// pin it: TestListDirectory_KnowledgeBaseMarkerNamesMatchPkgKnowledge
+// (filesystem_knowledge_marker_test.go, package tools_test) imports BOTH
+// pkg/tools and pkg/knowledge — which is not a cycle, since neither of this
+// var's two sources imports tools_test — and asserts they still agree, so a
+// rename on either side fails a test here rather than silently drifting.
+var KnowledgeBaseMarkerNames = []string{".omnipus-vault", ".obsidian"}
+
+// isKnowledgeBaseEntry reports whether entry — a child of the directory
+// handle was resolved for — is itself a knowledge base, by checking for
+// either marker directory through the SAME confined handle list_directory
+// already holds (PathHandle.hasSubdir), so a mount is covered exactly as it
+// is for every other read through that handle: ResolvePath already anchored
+// handle at the mount's own root when the listed path resolved into one
+// (resolvepath.go's newMountRootHandle), and hasSubdir's stat runs against
+// that same confinement.
+//
+// Only entries that IsDir() are worth checking; a regular file or symlink
+// can never be a knowledge base root.
+func isKnowledgeBaseEntry(handle *PathHandle, entry os.DirEntry) bool {
+	if !entry.IsDir() {
+		return false
+	}
+	for _, marker := range KnowledgeBaseMarkerNames {
+		if handle.hasSubdir(entry.Name() + "/" + marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // formatDirEntries renders one page of a directory listing. offset/limit are
 // already validated by the caller (offset >= 0, 1 <= limit <= maxListDirEntries).
 // A page that does not cover the whole directory carries a framing line
 // stating the total and the next offset, so the model can page deliberately
 // rather than guess whether it saw everything.
-func formatDirEntries(entries []os.DirEntry, offset, limit int) *ToolResult {
+//
+// handle is the ALREADY-RESOLVED, already-confined directory the entries
+// came from (list_directory's own ResolvePath call) — reused here, not
+// re-resolved, to mark a knowledge-base subdirectory (KB: rather than DIR:)
+// at the cost of one targeted stat per rendered directory entry rather than
+// a second path resolution pass. Only entries in the rendered PAGE are
+// checked, matching the cost discipline
+// pkg/gateway/rest_library.go's own detectKnowledgeBaseInRoot documents for
+// the identical question over the REST listing.
+func formatDirEntries(handle *PathHandle, entries []os.DirEntry, offset, limit int) *ToolResult {
 	total := len(entries)
 	start := min(offset, total)
 	end := min(start+limit, total)
 
 	var result strings.Builder
 	for _, entry := range entries[start:end] {
-		if entry.IsDir() {
+		switch {
+		case isKnowledgeBaseEntry(handle, entry):
+			result.WriteString("KB:   " + entry.Name() + "\n")
+		case entry.IsDir():
 			result.WriteString("DIR:  " + entry.Name() + "\n")
-		} else {
+		default:
 			result.WriteString("FILE: " + entry.Name() + "\n")
 		}
 	}

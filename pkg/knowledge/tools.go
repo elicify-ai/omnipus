@@ -1453,8 +1453,19 @@ func (t *DescribeTool) openPropertyIndex(ctx context.Context, collectionRoot str
 }
 
 func (t *DescribeTool) progress(collectionRoot string) IndexProgress {
-	if t.deps.Progress != nil {
-		if tr := t.deps.Progress(collectionRoot); tr != nil {
+	return resolveIndexProgress(t.deps, collectionRoot)
+}
+
+// resolveIndexProgress is DescribeTool.progress's body, factored out so
+// knowledge_list (knowledge_list.go) resolves the SAME live index-progress
+// tracker for its own per-collection freshness line rather than a second,
+// possibly-idle one — an idle tracker reports "complete", so two trackers for
+// one collection root is the US-6 (P0) failure DescribeTool.progress's own
+// wiring-obligation doc comment (SharedProgressTracker, above) already warns
+// about.
+func resolveIndexProgress(deps ToolDeps, collectionRoot string) IndexProgress {
+	if deps.Progress != nil {
+		if tr := deps.Progress(collectionRoot); tr != nil {
 			return tr.Progress()
 		}
 	}

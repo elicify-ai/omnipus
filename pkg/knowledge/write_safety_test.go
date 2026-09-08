@@ -332,7 +332,7 @@ func TestAuthoringTools_EveryMutationIsRefusedWithoutAnAuditSink(t *testing.T) {
 		tool string
 		args map[string]any
 	}{
-		{"knowledge_create", map[string]any{"collection": "KB", "path": "new.md", "body": "x"}},
+		{"knowledge_create_note", map[string]any{"collection": "KB", "path": "new.md", "body": "x"}},
 		{"knowledge_link", map[string]any{"collection": "KB", "path": "note.md", "target": "Target"}},
 		{"knowledge_set_property", map[string]any{"collection": "KB", "path": "note.md", "name": "s", "value": "v"}},
 		{"knowledge_append_section", map[string]any{"collection": "KB", "path": "note.md", "heading": "H", "content": "c"}},
@@ -354,7 +354,7 @@ func TestAuthoringTools_EveryMutationIsRefusedWithoutAnAuditSink(t *testing.T) {
 		t.Errorf("an unaudited refusal still changed the note:\n%q", got)
 	}
 	if _, err := os.Stat(filepath.Join(root, "new.md")); err == nil {
-		t.Error("knowledge_create wrote a note with no audit sink")
+		t.Error("knowledge_create_note wrote a note with no audit sink")
 	}
 	if _, err := os.Stat(filepath.Join(root, "renamed.md")); err == nil {
 		t.Error("knowledge_rename moved a note with no audit sink")

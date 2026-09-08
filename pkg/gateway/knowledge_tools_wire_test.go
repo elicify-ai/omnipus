@@ -290,13 +290,15 @@ func TestCentralBuiltinRegistry_CarriesTheKnowledgeTools(t *testing.T) {
 // 2. Registered, for every agent (FR-050/FR-051).
 // ---------------------------------------------------------------------------
 
-// TestKnowledgeTools_AllSixRegisteredForEveryAgent is the direct answer to
+// TestKnowledgeTools_AllEightRegisteredForEveryAgent is the direct answer to
 // the gap this unit was created for: before ADR-067's tools were registered,
 // no agent's execution registry contained any of them and nothing anywhere
-// reported that. ADR-068 D15.3 supersedes that family with six tools, and
-// this asserts the same reachability guarantee for the six that now ship.
+// reported that. ADR-068 D15.3 superseded that family with six tools, and
+// KB-1/KB-2 (defect-list-knowledge-base-ux-2026-09-08.md, founder-ratified
+// 2026-09-08) added knowledge_list and knowledge_base_create on top; this
+// asserts the same reachability guarantee for the eight that now ship.
 //
-// ALL SIX, not a subset. A test that asserts registration of a NAMED SUBSET
+// ALL EIGHT, not a subset. A test that asserts registration of a NAMED SUBSET
 // cannot notice the rest going missing, which is the same shape as a
 // wildcard policy: it looks like coverage and it is a hole — exactly how
 // ADR-067's seven authoring tools shipped fully implemented, fully
@@ -310,7 +312,7 @@ func TestCentralBuiltinRegistry_CarriesTheKnowledgeTools(t *testing.T) {
 // tool was registered at all. A conditionally-registered tool cannot be
 // granted by an operator afterwards, because GET /agents/{id}/tools lists
 // this very registry.
-func TestKnowledgeTools_AllSixRegisteredForEveryAgent(t *testing.T) {
+func TestKnowledgeTools_AllEightRegisteredForEveryAgent(t *testing.T) {
 	al, _, _ := kwLoop(t)
 
 	agentIDs := al.GetRegistry().ListAgentIDs()
@@ -335,12 +337,15 @@ func TestKnowledgeTools_AllSixRegisteredForEveryAgent(t *testing.T) {
 // 3. Reachable at runtime, not merely present in a map (D17).
 // ---------------------------------------------------------------------------
 
-// knowledgeReadToolNames / knowledgeWriteToolNames split ADR-068 D15.3's six
-// by blast radius, matching pkg/coreagent/core.go's actual seed axis —
-// superseding this file's old retrieval/authoring split.
+// knowledgeReadToolNames / knowledgeWriteToolNames split the knowledge
+// family by blast radius, matching pkg/coreagent/core.go's actual seed axis
+// — superseding this file's old retrieval/authoring split. Widened by KB-1/
+// KB-2 (defect-list-knowledge-base-ux-2026-09-08.md, founder-ratified
+// 2026-09-08): knowledge_list joins the read tier (reports only),
+// knowledge_base_create joins the write tier (makes a new collection).
 var (
-	knowledgeReadToolNames  = []string{"knowledge_describe", "knowledge_find", "knowledge_read"}
-	knowledgeWriteToolNames = []string{"knowledge_edit", "knowledge_restructure", "knowledge_configure"}
+	knowledgeReadToolNames  = []string{"knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list"}
+	knowledgeWriteToolNames = []string{"knowledge_edit", "knowledge_restructure", "knowledge_configure", "knowledge_base_create"}
 )
 
 // d15AllBaseAgents is every base agent — the read tier is "allow" for all
@@ -363,11 +368,12 @@ var d15AllBaseAgents = []string{
 // Three halves:
 //
 //   - POSITIVE (read): D15.3 seeds the read tier "allow" for all four base
-//     agents, so all three read tools must come through for each of them.
+//     agents, so all four read tools (including KB-2a's knowledge_list) must
+//     come through for each of them.
 //   - POSITIVE (write, Jim only): Jim is the one agent seeded "allow" on the
-//     three write tools — his deliberate exception (see
-//     pkg/coreagent/core.go's IDJim case).
-//   - NEGATIVE CONTROL: the Worker is seeded an explicit deny on all six, so
+//     four write tools (including KB-1's knowledge_base_create) — his
+//     deliberate exception (see pkg/coreagent/core.go's IDJim case).
+//   - NEGATIVE CONTROL: the Worker is seeded an explicit deny on all eight, so
 //     every one of them must be REGISTERED for it and FILTERED OUT. Without
 //     this half the positive halves would still pass against a filter that
 //     returns its input unchanged — i.e. against no filtering at all.

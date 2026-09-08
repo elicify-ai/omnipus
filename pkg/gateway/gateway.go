@@ -1285,10 +1285,13 @@ func buildKnownBuiltinToolNames() map[string]struct{} {
 		for _, name := range []string{"create_plan", "execute_plan", "run_task", "inspect_session"} {
 			out[name] = struct{}{}
 		}
-		// ADR-068 D15.3 (FR-070/FR-071) — the six knowledge-base tool names are
-		// unioned in explicitly here for the same reason, and under the same
-		// rule, as the ADR-052 four directly above: independent of their
-		// pkg/knowledge/pkg/vaultprops implementation landing, so the
+		// ADR-068 D15.3 (FR-070/FR-071) — the knowledge-base tool names (six
+		// under ADR-068, plus KB-1/KB-2's knowledge_list and
+		// knowledge_base_create — defect-list-knowledge-base-ux-2026-09-08.md,
+		// founder-ratified 2026-09-08) are unioned in explicitly here for the
+		// same reason, and under the same rule, as the ADR-052 four directly
+		// above: independent of their pkg/knowledge/pkg/vaultprops
+		// implementation landing, so the
 		// tool-policy coverage universe (config.ValidateToolPolicyCoverage /
 		// RepairIncompleteToolPolicyCoverage) recognizes them from the
 		// config-seeding side immediately. Mirrors pkg/coreagent/core.go's
@@ -1319,12 +1322,17 @@ func buildKnownBuiltinToolNames() map[string]struct{} {
 		for _, name := range []string{
 			// READ tier — touch nothing outside what the caller asked for.
 			"knowledge_describe", "knowledge_find", "knowledge_read",
+			// knowledge_list (KB-2a) — also read tier: which knowledge bases
+			// this agent can reach.
+			"knowledge_list",
 			// EDIT — one named file.
 			"knowledge_edit",
 			// RESTRUCTURE — cascades: rewrites files the caller never named.
 			"knowledge_restructure",
 			// CONFIGURE — control plane: changes what existing notes MEAN.
 			"knowledge_configure",
+			// knowledge_base_create (KB-1) — makes a NEW knowledge base.
+			"knowledge_base_create",
 		} {
 			out[name] = struct{}{}
 		}
