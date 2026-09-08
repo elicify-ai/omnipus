@@ -206,6 +206,50 @@ highlight, (e) source marker, (a) collapse per document, (b) order by the score
 that already exists. Together they address both halves of the complaint — too
 many results, and no signal about which matter.
 
+---
+
+### KB-7 — multi-word queries behave badly, in OPPOSITE ways per engine; no fuzziness anywhere
+**Severity:** high · **Area:** knowledge index + filegrep engine · **Reported by:** founder (UAT run)
+
+A single word searches fine. Multiple words do not — and the reason differs by
+which engine answers, so the surface feels inconsistent for reasons a user
+cannot see.
+
+**Knowledge base search is too LOOSE (OR).** `pkg/knowledge/rank.go:377` builds
+`bleveQuery.NewMatchQuery(q)` with the DEFAULT operator and wraps the
+field-weighted variants in a `DisjunctionQuery`. Default MatchQuery operator is
+OR, so `quarterly review` matches every document containing *quarterly* OR
+*review*. BM25 orders them sensibly — but the score never reaches the UI
+(see KB-6b), so the user sees a long flat list with the good hits unmarked.
+Note the codebase already knows the other mode: `pkg/knowledge/index.go:2591`
+sets `MatchQueryOperatorAnd` for a different (field-term) query.
+
+**File search is too STRICT (literal phrase, single line).** filegrep matches the
+query as a literal substring, so `quarterly review` matches only where those
+exact characters appear ON ONE LINE. A file containing both words in different
+paragraphs does not match at all.
+
+**No fuzziness exists.** `SetFuzziness` appears nowhere in `pkg/knowledge` or
+`pkg/records` (grepped, zero hits). A typo returns a silent zero-result.
+
+**Direction (not a decision):**
+- Knowledge base — switch the fusion query to AND so all terms must appear, with
+  a fallback to OR-ranked when AND yields nothing, so a too-narrow query degrades
+  rather than dead-ends. Add `SetFuzziness(1)` for typo tolerance, and rank fuzzy
+  matches BELOW exact ones or precision collapses. Consider honouring
+  `"quoted text"` as an explicit phrase query so the strict behaviour stays
+  reachable on purpose.
+- File search — fuzziness is NOT realistically available: there is no index, so
+  edit-distance scanning would destroy the performance characteristics the engine
+  was built for (FR-022 literal fast paths, alloc gates). The achievable win is
+  multi-term AND ACROSS THE FILE (all terms present somewhere) rather than on one
+  line. That changes what a "hit" means — today one hit is one matching line —
+  so it interacts with KB-6a's per-document collapse and should be designed with it.
+
+**Interaction worth stating:** fixing this WITHOUT fixing KB-6b (surface the
+score) would make the knowledge base result set smaller but still unordered to
+the eye. The two belong in one piece of work.
+
 ## `grep` tool — agent field test
 
 ### DEFECT-G1 — a path pointing at a file produces a false "not found" error
@@ -304,6 +348,7 @@ test that did not reproduce the documented condition.
 | KB-4 | "New workspace" shown in Library create menu | Low | Open |
 | KB-5 | Active workspace collapsed in the sidebar | Low | Open |
 | KB-6 | Search results: no relevance signal, too little context, no source marker | Medium | Open |
+| KB-7 | Multi-word queries broken in opposite ways per engine; no fuzziness | High | Open |
 | DEFECT-G1 | `path` at a file gives a false "not found" | Medium | **Fixed** |
 | OBS-G1 | Glob matching nothing fails silently | Medium | **Fixed** |
 | DOC-1 | Concurrency doc claim | — | Closed — not a defect |
