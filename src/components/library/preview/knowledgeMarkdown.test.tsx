@@ -31,6 +31,7 @@ import {
   KnowledgeBaseMarkdown,
   KB_BASE_REMARK_PLUGINS,
   KB_REHYPE_PLUGINS,
+  classifyEmbedKind,
   knowledgeMarkdownComponents,
   parseWikilink,
   remarkKbCallouts,
@@ -474,18 +475,160 @@ describe('wikilinks and embeds (FR-060, US-7 AS-1/AS-2)', () => {
     render(
       <KnowledgeBaseMarkdown
         content={'![[diagram.png]]'}
-        resolveEmbedUrl={(target) => `https://example.test/${target}`}
+        resolveEmbedUrl={() => ({ state: 'resolved', url: 'https://example.test/diagram.png' })}
       />,
     )
     expect(screen.getByTestId('chat-image').getAttribute('src')).toBe('https://example.test/diagram.png')
   })
 
-  it('reports an embed it cannot resolve instead of rendering a broken image', () => {
+  it('renders ![[diagram.svg]] as an image, never as an inline <svg> (EMB-031)', () => {
+    // A scripted SVG injected inline would execute; drawn inside <img> (chat's
+    // image slot, secure static mode) it never does. DIES ON: routing `.svg`
+    // through a different node type than other image extensions.
+    render(
+      <KnowledgeBaseMarkdown
+        content={'![[logo.svg]]'}
+        resolveEmbedUrl={() => ({ state: 'resolved', url: 'https://example.test/logo.svg' })}
+      />,
+    )
+    expect(screen.getByTestId('chat-image').getAttribute('src')).toBe('https://example.test/logo.svg')
+    expect(document.querySelector('svg')).toBeNull()
+  })
+
+  it('reports an embed it cannot resolve instead of rendering a broken image (no resolver at all)', () => {
+    // No `resolveEmbedUrl` prop — the caller has no resolution to offer
+    // (e.g. outside a knowledge base). DIES ON: defaulting to a confident
+    // verdict instead of `indeterminate` when the callback is absent.
     render(<KnowledgeBaseMarkdown content={'![[diagram.png]]'} />)
     expect(document.querySelector('img')).toBeNull()
     const link = screen.getByTestId('markdown-link')
     expect(link.getAttribute('data-kb-embed')).not.toBeNull()
+    expect(link.getAttribute('data-kb-embed-state')).toBe('indeterminate')
     expect(link.textContent).toContain('embed shown as a link')
+  })
+
+  it('reserves space and renders NO marker while the graph is loading (EMB-015)', () => {
+    // DIES ON: showing "embed shown as a link" or any unresolved styling
+    // before the evidence has arrived.
+    render(
+      <KnowledgeBaseMarkdown content={'![[diagram.png]]'} resolveEmbedUrl={() => ({ state: 'loading' })} />,
+    )
+    expect(document.querySelector('img')).toBeNull()
+    const placeholder = screen.getByTestId('markdown-link')
+    expect(placeholder.getAttribute('data-kb-embed-state')).toBe('loading')
+    expect(placeholder.textContent ?? '').toBe('')
+    expect(bodyText()).not.toContain('embed shown as a link')
+  })
+
+  it('renders no marker and no badge when the whole link graph is unavailable (EMB-014)', () => {
+    // Per-embed silence is the point here — the ONE statement lives at the
+    // page level (KnowledgeNoteView), not per embed. DIES ON: showing the
+    // "embed shown as a link" badge or a could-not-be-checked marker here.
+    render(
+      <KnowledgeBaseMarkdown
+        content={'![[diagram.png]]'}
+        resolveEmbedUrl={() => ({ state: 'graph_unavailable', reason: 'the graph request failed' })}
+      />,
+    )
+    const el = screen.getByTestId('markdown-link')
+    expect(el.getAttribute('data-kb-embed-state')).toBe('graph_unavailable')
+    expect(el.textContent).not.toContain('embed shown as a link')
+    expect(el.textContent).not.toMatch(/could not be checked/i)
+  })
+
+  it('marks an embed "could not be checked" — distinct from missing-file — when the graph has no matching edge (EMB-013)', () => {
+    // DIES ON: reusing the missing-file marker (`data-kb-unresolved`) for a
+    // state the graph never confirmed absence for.
+    render(
+      <KnowledgeBaseMarkdown
+        content={'![[diagram.png]]'}
+        resolveEmbedUrl={() => ({ state: 'indeterminate', reason: 'no reason available' })}
+      />,
+    )
+    const el = screen.getByTestId('markdown-link')
+    expect(el.getAttribute('data-kb-embed-state')).toBe('indeterminate')
+    expect(el.getAttribute('data-kb-unresolved')).toBeNull()
+    expect(el.textContent).toContain('embed shown as a link')
+    expect(el.textContent ?? '').toMatch(/could not be checked/i)
+    expect(el.textContent ?? '').not.toMatch(/nothing.*named|does not exist/i)
+  })
+
+  it('names the target on a confirmed-missing embed (EMB-016) — no badge, matching the plain-link treatment', () => {
+    render(
+      <KnowledgeBaseMarkdown
+        content={'![[ghost.pdf]]'}
+        resolveEmbedUrl={() => ({ state: 'unresolved', reason: 'no file in this collection matches "ghost.pdf"' })}
+      />,
+    )
+    const el = screen.getByTestId('markdown-link')
+    expect(el.getAttribute('data-kb-unresolved')).toBe('true')
+    expect(el.textContent ?? '').toContain('ghost.pdf')
+    expect(el.textContent).not.toContain('embed shown as a link')
+  })
+
+  it('renders a DIFFERENT marker for a containment refusal than for a missing file, and redacts the path (EMB-017/EMB-023/EMB-024)', () => {
+    render(
+      <KnowledgeBaseMarkdown
+        content={'![[../../etc/passwd]]'}
+        resolveEmbedUrl={() => ({
+          state: 'unresolved',
+          outsideRoot: true,
+          reason: 'this target is outside the collection root',
+        })}
+      />,
+    )
+    const el = screen.getByTestId('markdown-link')
+    expect(el.getAttribute('data-kb-embed-outside-root')).toBe('true')
+    // Distinct from the ordinary missing-file marker's own attribute.
+    expect(el.getAttribute('data-kb-unresolved')).toBeNull()
+    // The note's own written link text is not censored (the author already
+    // wrote it, and it is on the page regardless) — what EMB-017 forbids is
+    // the MARKER'S OWN reason repeating the escaping path, unlike the
+    // ordinary missing-file marker, whose detail interpolates the target.
+    expect(el.getAttribute('title') ?? '').not.toContain('etc/passwd')
+    const srOnly = el.querySelector('.sr-only')?.textContent ?? ''
+    expect(srOnly).not.toContain('etc/passwd')
+  })
+
+  it('renders a resolved non-image embed as a VERIFIED link, not the unverified/unknown styling (kind dispatch, EMB-025)', () => {
+    // A .pdf has no inline renderer yet (Step 1 scope: image only) — it MUST
+    // fall back to the link treatment even when resolved (EMB-025), but the
+    // fallback must still say "verified", because the embed resolver — not
+    // the unrelated plain-wikilink resolver — answered it. DIES ON: routing
+    // a resolved embed's fallback through `ctx.resolveWikilink` (which is
+    // never supplied here and would default to `unknown`).
+    render(
+      <KnowledgeBaseMarkdown
+        content={'![[report.pdf]]'}
+        resolveEmbedUrl={() => ({ state: 'resolved', path: 'files/report.pdf', url: 'https://example.test/x' })}
+        linkHref={(p) => `/#/library?path=${p}`}
+      />,
+    )
+    expect(document.querySelector('img')).toBeNull()
+    const el = screen.getByTestId('markdown-link')
+    expect(el.getAttribute('data-kb-state')).toBe('resolved')
+    expect(el.getAttribute('data-kb-embed')).not.toBeNull()
+    expect(el.tagName).toBe('A')
+    expect(el.getAttribute('href')).toBe('/#/library?path=files/report.pdf')
+    expect(el.textContent).toContain('embed shown as a link')
+  })
+
+  it('reports ambiguity and the alternatives instead of silently picking one (EMB-018)', () => {
+    render(
+      <KnowledgeBaseMarkdown
+        content={'![[report.pdf]]'}
+        resolveEmbedUrl={() => ({
+          state: 'resolved',
+          path: 'files/report.pdf',
+          url: 'https://example.test/x',
+          ambiguous: true,
+          candidates: ['archive/report.pdf'],
+        })}
+      />,
+    )
+    const el = screen.getByTestId('markdown-link')
+    expect(el.getAttribute('data-kb-embed-ambiguous')).toBe('')
+    expect((el.textContent ?? '').toLowerCase()).toContain('archive/report.pdf'.toLowerCase())
   })
 
   it('leaves [[…]] inside a code fence literal', () => {
@@ -668,5 +811,42 @@ describe('parseWikilink (unit)', () => {
     expect(parseWikilink('#H')?.target).toBe('')
     expect(parseWikilink('   ')).toBeNull()
     expect(parseWikilink('')).toBeNull()
+  })
+
+  it('splits a block anchor from a heading (ADR-083 EMB-011/EMB-036)', () => {
+    // DIES ON: treating "^abc123" as heading text (the pre-CW-2 shape).
+    const block = parseWikilink('Note#^abc123')
+    expect(block?.block).toBe('abc123')
+    expect(block?.heading).toBeUndefined()
+
+    const heading = parseWikilink('Note#Section')
+    expect(heading?.heading).toBe('Section')
+    expect(heading?.block).toBeUndefined()
+
+    // A same-note block reference, `[[#^abc]]`.
+    expect(parseWikilink('#^abc')?.block).toBe('abc')
+    expect(parseWikilink('#^abc')?.target).toBe('')
+  })
+})
+
+describe('classifyEmbedKind (unit, ADR-083 EMB-034)', () => {
+  it('classifies every recognised extension, extension-only', () => {
+    expect(classifyEmbedKind('diagram.png')).toBe('image')
+    expect(classifyEmbedKind('logo.SVG')).toBe('image')
+    expect(classifyEmbedKind('clip.mp4')).toBe('video')
+    expect(classifyEmbedKind('page.html')).toBe('html')
+    expect(classifyEmbedKind('report.pdf')).toBe('pdf')
+    expect(classifyEmbedKind('track.mp3')).toBe('audio')
+    expect(classifyEmbedKind('Tasks.base')).toBe('base')
+    expect(classifyEmbedKind('Note.md')).toBe('markdown')
+    expect(classifyEmbedKind('diagram.mmd')).toBe('mermaid')
+  })
+
+  it('falls back to "other" for an unrecognised or missing extension — never a guessed "text" (EMB-034)', () => {
+    // DIES ON: fabricating `is_text_editable` (which no embed target
+    // carries) to answer 'text' the way `classifyLibraryEntry` would.
+    expect(classifyEmbedKind('README')).toBe('other')
+    expect(classifyEmbedKind('archive.zip')).toBe('other')
+    expect(classifyEmbedKind('notes.txt')).toBe('other')
   })
 })

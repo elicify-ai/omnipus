@@ -39,6 +39,7 @@ import type { ReactNode, RefObject } from 'react'
 import { cn } from '@/lib/utils'
 import {
   KnowledgeBaseMarkdown,
+  type EmbedResolution,
   type KbLinkResolution,
 } from '../preview/knowledgeMarkdown'
 import type { KnowledgeOutlineHeading } from '@/lib/api/generated/openapi-types'
@@ -84,8 +85,9 @@ export interface KnowledgeReaderProps {
    *  still loading: every wikilink is then `unknown` and none is marked
    *  unresolved (see `knowledgeMarkdown.tsx`). */
   resolveWikilink?: (target: string, heading?: string) => KbLinkResolution
-  /** Resolves `![[image.png]]` to a loadable URL. */
-  resolveEmbedUrl?: (target: string) => string | undefined
+  /** Resolves an embedded target (`![[image.png]]`, `![[report.pdf]]`, …) —
+   *  see `knowledgeMarkdown.tsx`'s `EmbedResolution` for the five states. */
+  resolveEmbedUrl?: (target: string, heading?: string, block?: string) => EmbedResolution
   /** Real address for a resolved in-collection link, so it can be copied,
    *  middle-clicked and opened in a new tab (FR-012). See knowledgeMarkdown. */
   linkHref?: (collectionPath: string, heading?: string) => string | undefined

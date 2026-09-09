@@ -57,6 +57,7 @@ import ReactMarkdown from 'react-markdown'
 // be a cycle — and `kbMarkdownComponents` is read at module scope below, which
 // is where a cycle crashes instead of merely warning.
 import { kbMarkdownComponents, KB_REHYPE_PLUGINS, KB_REMARK_PLUGINS } from './kbMarkdownBase'
+import { libraryEntryExt, type LibraryPreviewKind } from './libraryPreviewKind'
 
 type RemarkPlugins = ComponentProps<typeof ReactMarkdown>['remarkPlugins']
 
@@ -306,8 +307,14 @@ const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'b
 export interface ParsedWikilink {
   /** Path or basename before `#` and `|`. Empty for a same-note heading link. */
   target: string
-  /** Heading after `#`, if any. */
+  /** Heading after `#`, if any. Mutually exclusive with `block` — a block
+   *  reference never populates this (ADR-083 EMB-036). */
   heading?: string
+  /** Block anchor with the leading `^` removed, for a `[[Note#^abc123]]` block
+   *  reference — a distinct addressing form from a heading, kept separate so a
+   *  block id is never matched against heading text (ADR-083 EMB-011, EMB-036,
+   *  mirroring `pkg/knowledge/links.go`'s `Link.BlockID`/`Link.Heading` split). */
+  block?: string
   /** Display text: the alias when one was given, else the raw inner text. */
   text: string
   /** True for the `![[…]]` embed form. */
@@ -325,45 +332,147 @@ export function parseWikilink(inner: string, embed = false): ParsedWikilink | nu
 
   const hash = head.indexOf('#')
   const target = (hash === -1 ? head : head.slice(0, hash)).trim()
-  const heading = hash === -1 ? undefined : head.slice(hash + 1).trim() || undefined
-  if (target === '' && !heading) return null
+  const fragment = hash === -1 ? undefined : head.slice(hash + 1).trim() || undefined
+  if (target === '' && !fragment) return null
+
+  // `^` prefixes a block anchor, not a heading (Obsidian's own distinction —
+  // see the `block` field's doc comment above).
+  const isBlock = fragment !== undefined && fragment.startsWith('^')
+  const heading = isBlock ? undefined : fragment
+  const block = isBlock ? fragment.slice(1) || undefined : undefined
 
   return {
     target,
     heading,
+    block,
     text: alias && alias !== '' ? alias : head,
     embed,
   }
 }
 
-function extensionOf(target: string): string {
-  const dot = target.lastIndexOf('.')
-  return dot === -1 ? '' : target.slice(dot + 1).toLowerCase()
+// ── Inline kind classification (ADR-083 EMB-034) ─────────────────────────────
+//
+// A DELIBERATE, EXTENSION-ONLY sibling of `libraryPreviewKind.ts`'s
+// `classifyLibraryEntry` — not a call to it. That function's parameter type
+// requires `mime` and `is_text_editable`; a link-graph edge carries neither
+// (there is no single-entry GET an embed could use to fetch them), so
+// fabricating them to satisfy the type would be exactly the invented evidence
+// this feature refuses everywhere else. The two are therefore SEPARATE
+// implementations sharing the same extension tables, and their answers are
+// allowed to diverge for a file whose extension does not name its kind — an
+// image, a video or a text file served with no recognisable extension all
+// classify as `other` here, where the pane's classifier would have used the
+// server's mime hint or its `is_text_editable` flag to do better.
+const EMBED_VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'mkv', 'avi', 'm4v', 'ogv'])
+const EMBED_HTML_EXTENSIONS = new Set(['html', 'htm'])
+const EMBED_AUDIO_EXTENSIONS = new Set(['mp3', 'm4a', 'aac', 'ogg', 'opus', 'wav', 'flac'])
+
+/** Classifies an embed's WRITTEN target by extension alone. See the header
+ *  note above — this is not `classifyLibraryEntry` and must not become a call
+ *  to it. `'text'` is never returned: distinguishing an editable text file
+ *  from an opaque one needs the server's `is_text_editable` hint, which an
+ *  embed target does not carry, so an extensionless or unrecognised target is
+ *  honestly `'other'` rather than a guessed `'text'`. */
+export function classifyEmbedKind(target: string): LibraryPreviewKind {
+  const e = libraryEntryExt(target)
+  if (IMAGE_EXTENSIONS.has(e)) return 'image'
+  if (EMBED_VIDEO_EXTENSIONS.has(e)) return 'video'
+  if (EMBED_HTML_EXTENSIONS.has(e)) return 'html'
+  if (e === 'pdf') return 'pdf'
+  if (EMBED_AUDIO_EXTENSIONS.has(e)) return 'audio'
+  if (e === 'base') return 'base'
+  if (e === 'md' || e === 'markdown') return 'markdown'
+  if (e === 'mmd' || e === 'mermaid') return 'mermaid'
+  return 'other'
+}
+
+/** The kinds Step 1 mounts an inline renderer for. Every other kind — `pdf`,
+ *  `base` and `markdown` included — MUST fall back to the link treatment
+ *  today (ADR-083 EMB-025): their renderers (the PDF pool, the saved-view
+ *  renderer, one-level transclusion) are separate, not-yet-landed phases of
+ *  the same ADR, and an embed must never claim to render a kind it cannot
+ *  actually mount. `html`, `other` and `text` never gain one — that part of
+ *  EMB-025 is permanent, not a "not yet". */
+const KINDS_WITH_INLINE_RENDERER: ReadonlySet<LibraryPreviewKind> = new Set(['image'])
+
+/** What the reader knows about an embed's target — the resolver's answer.
+ *
+ *  Five states, none collapsible into another (ADR-083 EMB-012):
+ *   - `loading`    — the link graph request is in flight. No evidence either
+ *                    way; render a reserved placeholder, no marker.
+ *   - `graph_unavailable` — the request failed, OR it succeeded with no edges
+ *                    and no skips for a note that plainly has links to check.
+ *                    Handled ONE page-level statement, never per embed.
+ *   - `resolved`   — a matching edge exists, its resolution succeeded, and
+ *                    the graph's node list does not contradict it.
+ *   - `unresolved` — a matching edge exists and confirms the target does not
+ *                    exist (and the walk did not merely skip it — see
+ *                    `indeterminate`).
+ *   - `indeterminate` — the graph loaded and answered, but the evidence does
+ *                    not support either verdict: no matching edge at all, a
+ *                    skipped target, a truncated answer, or the edge and node
+ *                    lists disagreeing with each other. MUST NOT be rendered
+ *                    as "nothing in this knowledge base is named X". */
+export type EmbedResolutionState = 'resolved' | 'unresolved' | 'loading' | 'graph_unavailable' | 'indeterminate'
+
+export interface EmbedResolution {
+  state: EmbedResolutionState
+  /** Workspace-relative URL the browser can load. Present only when resolved. */
+  url?: string
+  /** Collection-relative path of the resolved target. Present only when resolved. */
+  path?: string
+  /** True when the unresolved target lay outside the collection root rather
+   *  than simply not matching anything (ADR-083 EMB-017, EMB-023). The
+   *  reason text for this case MUST NOT contain the escaping path. */
+  outsideRoot?: boolean
+  /** Human-readable explanation. Always set for `indeterminate` and
+   *  `unresolved` — "no reason available" when nothing more specific is
+   *  known, per EMB-013, rather than the field being omitted. */
+  reason?: string
+  /** True when more than one graph edge matched this embed's key (EMB-018). */
+  ambiguous?: boolean
+  /** The alternative targets not chosen. Present only when ambiguous. */
+  candidates?: string[]
 }
 
 export interface KbWikilinkOptions {
   /**
-   * Resolves an embedded attachment (`![[diagram.png]]`) to a URL the browser
-   * can load. Returning undefined is the HONEST answer when the collection has
-   * not been resolved yet: the embed then renders as a visibly-marked reference
-   * instead of a broken image icon.
+   * Resolves an embedded target (`![[diagram.png]]`, `![[report.pdf]]`, …) to
+   * a URL and a state honestly reflecting what the link graph currently
+   * knows. Omitting this altogether (as opposed to it returning a definite
+   * state) is itself honest — it means the caller has no resolution to offer
+   * at all, e.g. outside a knowledge base — and every embed then renders the
+   * visibly-marked reference treatment.
    */
-  resolveEmbedUrl?: (target: string) => string | undefined
+  resolveEmbedUrl?: (target: string, heading?: string, block?: string) => EmbedResolution
+}
+
+/** Default resolution when the caller offers no resolver at all (e.g. outside
+ *  a knowledge base) — genuinely unknown, never a confident verdict. */
+const NO_RESOLVER_EMBED_RESOLUTION: EmbedResolution = {
+  state: 'indeterminate',
+  reason: 'no reason available',
 }
 
 /**
  * remark plugin: `[[Note]]`, `[[Note|alias]]`, `[[Note#Heading]]`,
  * `[[folder/Note]]` and `![[image.png]]`.
  *
- * A wikilink becomes an ordinary `link` node carrying its parts as data
+ * A plain wikilink becomes an ordinary `link` node carrying its parts as data
  * attributes, so it lands on the `a` slot — the one slot this composition is
  * permitted to replace. Resolution (does that note exist?) happens THERE, from
  * React context, because it is per-note data and a remark plugin cannot read
- * context. The plugin itself makes no claim about whether a target exists.
+ * context.
  *
- * An image embed becomes an `image` node and renders through CHAT's `img`
- * renderer, untouched — resolving the URL here is what keeps that slot
- * inherited rather than replaced.
+ * An EMBED is different: its resolution is looked up HERE, eagerly, because
+ * the answer decides which kind of node to emit, not just how to style one —
+ * `classifyEmbedKind` (extension-only, EMB-034) plus the resolver's state
+ * decide between an `image` node (rendered through CHAT's inherited `img`
+ * slot, untouched) and a link-fallback node carrying the full resolution
+ * serialised as data attributes, read back by `KnowledgeMarkdownLink`'s embed
+ * branch below. The plugin itself makes no claim beyond what the resolver
+ * told it — an embed whose kind has no inline renderer yet (pdf, base,
+ * markdown — EMB-025) always falls back, even when `resolved`.
  */
 export function remarkKbWikilinks(options: KbWikilinkOptions = {}) {
   return (tree: unknown) => {
@@ -372,14 +481,35 @@ export function remarkKbWikilinks(options: KbWikilinkOptions = {}) {
         const parsed = parseWikilink(match[2], match[1] === '!')
         if (!parsed) return null
 
-        if (parsed.embed && IMAGE_EXTENSIONS.has(extensionOf(parsed.target))) {
-          const url = options.resolveEmbedUrl?.(parsed.target)
-          if (url) {
-            return { type: 'image', url, alt: parsed.text, children: [] }
+        if (!parsed.embed) {
+          return {
+            type: 'link',
+            url: '',
+            data: {
+              hProperties: {
+                'data-kb-wikilink': '',
+                'data-kb-target': parsed.target,
+                ...(parsed.heading ? { 'data-kb-heading': parsed.heading } : {}),
+              },
+            },
+            children: [{ type: 'text', value: parsed.text }],
           }
-          // Fall through: an unresolvable embed is reported, never faked.
         }
 
+        const kind = classifyEmbedKind(parsed.target)
+        const resolution =
+          options.resolveEmbedUrl?.(parsed.target, parsed.heading, parsed.block) ??
+          NO_RESOLVER_EMBED_RESOLUTION
+
+        if (KINDS_WITH_INLINE_RENDERER.has(kind) && resolution.state === 'resolved' && resolution.url) {
+          return { type: 'image', url: resolution.url, alt: parsed.text, children: [] }
+        }
+        // Every other combination is reported, never faked: a resolved
+        // non-image embed (no inline renderer for its kind yet), an
+        // unresolved/indeterminate/loading/graph_unavailable target, or an
+        // image whose resolver returned no URL despite `resolved` state.
+
+        const candidates = resolution.candidates ?? []
         return {
           type: 'link',
           url: '',
@@ -388,7 +518,14 @@ export function remarkKbWikilinks(options: KbWikilinkOptions = {}) {
               'data-kb-wikilink': '',
               'data-kb-target': parsed.target,
               ...(parsed.heading ? { 'data-kb-heading': parsed.heading } : {}),
-              ...(parsed.embed ? { 'data-kb-embed': '' } : {}),
+              'data-kb-embed': '',
+              'data-kb-embed-kind': kind,
+              'data-kb-embed-state': resolution.state,
+              ...(resolution.path ? { 'data-kb-embed-path': resolution.path } : {}),
+              ...(resolution.reason ? { 'data-kb-embed-reason': resolution.reason } : {}),
+              ...(resolution.outsideRoot ? { 'data-kb-embed-outside-root': '' } : {}),
+              ...(resolution.ambiguous ? { 'data-kb-embed-ambiguous': '' } : {}),
+              ...(candidates.length > 0 ? { 'data-kb-embed-candidates': candidates.join(', ') } : {}),
             },
           },
           children: [{ type: 'text', value: parsed.text }],
@@ -553,6 +690,7 @@ function CollectionLink({
   target,
   verified,
   isEmbed,
+  ambiguousDetail,
   children,
 }: {
   /** Collection-relative path this link points at. */
@@ -566,6 +704,10 @@ function CollectionLink({
    *  unverified treatment — see UNVERIFIED_LINK_CLASS. */
   verified: boolean
   isEmbed?: boolean
+  /** Set when more than one graph edge matched (ADR-083 EMB-018): the first
+   *  in response order is shown, and this names the alternatives instead of
+   *  staying quiet about the tie-break. */
+  ambiguousDetail?: string
   children?: ReactNode
 }) {
   const ctx = useContext(KnowledgeLinkContext)
@@ -578,6 +720,7 @@ function CollectionLink({
     'data-kb-path': path,
     'data-kb-state': verified ? 'resolved' : 'unknown',
     ...(isEmbed ? { 'data-kb-embed': '' } : {}),
+    ...(ambiguousDetail ? { 'data-kb-embed-ambiguous': '' } : {}),
   } as const
 
   const body = (
@@ -590,11 +733,8 @@ function CollectionLink({
           cannot say whether this note exists)
         </span>
       ) : null}
-      {isEmbed ? (
-        <span className="ml-1 text-[10px] uppercase tracking-wide text-[var(--color-muted)]">
-          embed shown as a link
-        </span>
-      ) : null}
+      {ambiguousDetail ? <span className="sr-only"> ({ambiguousDetail})</span> : null}
+      {isEmbed ? <EmbedBadge /> : null}
     </>
   )
 
@@ -636,6 +776,163 @@ function CollectionLink({
   )
 }
 
+/** The badge marking a fallback rendering as standing in for an embed —
+ *  shared by every embed treatment that still is, in some sense, a link
+ *  (resolved-but-no-renderer-kind, indeterminate, confirmed missing). */
+function EmbedBadge() {
+  return (
+    <span className="ml-1 text-[10px] uppercase tracking-wide text-[var(--color-muted)]">
+      embed shown as a link
+    </span>
+  )
+}
+
+/** Sized reserved space for an embed while the link graph request is still in
+ *  flight (ADR-083 EMB-015). No text, no link, no marker of any kind — a
+ *  placeholder claims nothing about whether the target exists. */
+function LoadingEmbedPlaceholder() {
+  return (
+    <span
+      data-testid="markdown-link"
+      data-kb-embed=""
+      data-kb-embed-state="loading"
+      aria-hidden="true"
+      className="inline-block h-5 w-24 align-middle rounded bg-[var(--color-muted)]/20 animate-pulse"
+    />
+  )
+}
+
+/** An embed the reader cannot say anything about because the note's WHOLE
+ *  link graph is unavailable — the request failed, or it answered with
+ *  nothing for a note that plainly has links to check (ADR-083 EMB-014). That
+ *  condition gets exactly ONE page-level statement, rendered once by the
+ *  caller (`KnowledgeNoteView`) — this per-embed spot renders neither a
+ *  marker nor a persistent placeholder, only the note's own written text,
+ *  inert. */
+function GraphUnavailableEmbed({ children }: { children?: ReactNode }) {
+  return (
+    <span
+      data-testid="markdown-link"
+      data-kb-embed=""
+      data-kb-embed-state="graph_unavailable"
+      className="text-[var(--color-secondary)]"
+    >
+      {children}
+      <span className="sr-only">
+        {' '}
+        (this note&rsquo;s link graph is unavailable right now — see the notice above)
+      </span>
+    </span>
+  )
+}
+
+/** The "could not be checked" marker (ADR-083 EMB-013) — visually and
+ *  textually DISTINCT from `UnresolvedLink`'s missing-file marker.
+ *  Rendering the missing-file marker for this state would assert absence
+ *  from evidence the graph has already said is incomplete — a skipped
+ *  directory, a truncated answer, or simply no matching edge — which is the
+ *  exact false statement this state exists to prevent. */
+function IndeterminateEmbedLink({ children, reason }: { children?: ReactNode; reason: string }) {
+  return (
+    <span
+      data-testid="markdown-link"
+      data-kb-embed=""
+      data-kb-embed-state="indeterminate"
+      title={reason}
+      className="text-[var(--color-muted)] border-b border-dotted border-[var(--color-warning)] cursor-not-allowed"
+    >
+      {children}
+      <span className="sr-only"> (could not be checked: {reason})</span>
+      <EmbedBadge />
+    </span>
+  )
+}
+
+/** A refusal distinguished from "this file does not exist" (ADR-083 EMB-017,
+ *  EMB-023, EMB-024): the written target tried to leave the collection root.
+ *  The escaping path is deliberately NOT shown here — EMB-017 requires the
+ *  reader's marker to contain no path segment (unlike the agent surface,
+ *  EMB-024, which does show it). */
+function ContainmentRefusedEmbed({ children }: { children?: ReactNode }) {
+  return (
+    <span
+      data-testid="markdown-link"
+      data-kb-embed=""
+      data-kb-embed-state="unresolved"
+      data-kb-embed-outside-root="true"
+      title="this embed points outside the knowledge base and was refused"
+      className="text-[var(--color-muted)] border-b border-dotted border-[var(--color-error)] cursor-not-allowed"
+    >
+      {children}
+      <span className="sr-only"> (embed refused: it points outside this knowledge base)</span>
+      <EmbedBadge />
+    </span>
+  )
+}
+
+/**
+ * Dispatches an embed's FALLBACK rendering (the mdast `image` short-circuit
+ * in `remarkKbWikilinks` already handled the one case that renders inline)
+ * on the resolver's own state — never on `ctx.resolveWikilink`, which is a
+ * different resolver with a different match key (ADR-083 EMB-011's `embed`
+ * flag). This is what keeps an embed's verdict from being read off the
+ * wrong edge when a plain `[[Note]]` and an embed `![[Note]]` of the same
+ * target coexist in one document.
+ */
+function EmbedFallback({
+  target,
+  state,
+  path,
+  reason,
+  outsideRoot,
+  ambiguous,
+  candidates,
+  children,
+}: {
+  target: string
+  state: string
+  path?: string
+  reason?: string
+  outsideRoot: boolean
+  ambiguous: boolean
+  candidates?: string
+  children?: ReactNode
+}) {
+  if (state === 'loading') return <LoadingEmbedPlaceholder />
+  if (state === 'graph_unavailable') return <GraphUnavailableEmbed>{children}</GraphUnavailableEmbed>
+  if (state === 'indeterminate') {
+    return <IndeterminateEmbedLink reason={reason ?? 'no reason available'}>{children}</IndeterminateEmbedLink>
+  }
+  if (state === 'unresolved') {
+    if (outsideRoot) return <ContainmentRefusedEmbed>{children}</ContainmentRefusedEmbed>
+    return (
+      <UnresolvedLink detail={reason ?? `no file in this collection matches "${target}"`}>
+        {children}
+      </UnresolvedLink>
+    )
+  }
+  // 'resolved' — the target exists, but this embed's kind has no inline
+  // renderer yet (or the image branch's own URL check failed despite a
+  // resolved edge): a real, working link to the file, styled and badged
+  // exactly like any other confirmed embed shown as a link.
+  return (
+    <CollectionLink
+      path={path ?? target}
+      kind="wikilink"
+      target={target}
+      verified
+      isEmbed
+      ambiguousDetail={
+        ambiguous
+          ? `more than one file matched this embed's target; showing the first — also matches: ${candidates ?? 'no other candidates were reported'}`
+          : undefined
+      }
+    >
+      {children}
+    </CollectionLink>
+  )
+}
+
 /**
  * The KB `a` slot — the only replaced entry in the components map.
  *
@@ -655,6 +952,13 @@ function KnowledgeMarkdownLink(
     'data-kb-target'?: string
     'data-kb-heading'?: string
     'data-kb-embed'?: string
+    'data-kb-embed-kind'?: string
+    'data-kb-embed-state'?: string
+    'data-kb-embed-path'?: string
+    'data-kb-embed-reason'?: string
+    'data-kb-embed-outside-root'?: string
+    'data-kb-embed-ambiguous'?: string
+    'data-kb-embed-candidates'?: string
   },
 ) {
   const { href, children } = props
@@ -666,7 +970,10 @@ function KnowledgeMarkdownLink(
     const heading = props['data-kb-heading']
     const isEmbed = props['data-kb-embed'] !== undefined
 
-    // `[[#Heading]]` — same note.
+    // `[[#Heading]]` — same note. An embed of the same form (`![[#Heading]]`)
+    // is self-referential transclusion, out of scope (ADR-083 US-7) — it
+    // shares this branch harmlessly, since there is nothing more useful to
+    // do with an empty target than scroll to the heading.
     if (target === '' && heading) {
       return (
         <a
@@ -682,6 +989,24 @@ function KnowledgeMarkdownLink(
         >
           {children}
         </a>
+      )
+    }
+
+    if (isEmbed) {
+      return (
+        <EmbedFallback
+          target={target}
+          state={props['data-kb-embed-state'] ?? 'indeterminate'}
+          {...(props['data-kb-embed-path'] !== undefined ? { path: props['data-kb-embed-path'] } : {})}
+          {...(props['data-kb-embed-reason'] !== undefined ? { reason: props['data-kb-embed-reason'] } : {})}
+          outsideRoot={props['data-kb-embed-outside-root'] !== undefined}
+          ambiguous={props['data-kb-embed-ambiguous'] !== undefined}
+          {...(props['data-kb-embed-candidates'] !== undefined
+            ? { candidates: props['data-kb-embed-candidates'] }
+            : {})}
+        >
+          {children}
+        </EmbedFallback>
       )
     }
 
@@ -705,7 +1030,6 @@ function KnowledgeMarkdownLink(
         // `unknown` is drawn differently from `resolved` — the graph has not
         // loaded, so nobody has checked this target either way.
         verified={resolution.state === 'resolved'}
-        isEmbed={isEmbed}
       >
         {children}
       </CollectionLink>

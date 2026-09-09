@@ -16,15 +16,17 @@
 //     wikilink is never marked broken — or verified — on no evidence.
 
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-import { KnowledgeNoteView, noteAncestorDirs } from './KnowledgeNoteView'
+import { KnowledgeNoteView, findSkipForTarget, noteAncestorDirs } from './KnowledgeNoteView'
 import type { KnowledgeGraphLoader } from './KnowledgeBacklinks'
 import type { KnowledgeOutlineLoader } from './KnowledgeOutline'
 import type {
   KnowledgeBaseInfo,
+  KnowledgeGraphEdge,
   KnowledgeGraphResponse,
+  KnowledgeGraphSkip,
   KnowledgeOutline,
 } from '@/lib/api/generated/openapi-types'
 
@@ -77,6 +79,26 @@ function graph(over: Partial<KnowledgeGraphResponse> = {}): KnowledgeGraphRespon
   }
 }
 
+function embedEdge(over: Partial<KnowledgeGraphEdge> = {}): KnowledgeGraphEdge {
+  return {
+    from_path: 'architecture/sandboxing.md',
+    to_path: 'diagram.png',
+    link_text: 'diagram.png',
+    resolution: 'exact_path',
+    ambiguous: false,
+    embed: true,
+    ...over,
+  }
+}
+
+function skip(over: Partial<KnowledgeGraphSkip> = {}): KnowledgeGraphSkip {
+  return { path: 'notes/private', reason: 'unreadable', ...over }
+}
+
+function bodyText(): string {
+  return document.body.textContent ?? ''
+}
+
 /** Detection answers keyed by the folder asked about. Anything not listed is an
  *  ordinary folder, which is what the real endpoint says too. */
 function detectionOf(map: Record<string, KnowledgeBaseInfo>) {
@@ -124,6 +146,49 @@ describe('noteAncestorDirs', () => {
 
   it('ignores empty segments rather than producing duplicate folders', () => {
     expect(noteAncestorDirs('a//b/n.md')).toEqual(['a/b', 'a', ''])
+  })
+})
+
+describe('findSkipForTarget (unit, ADR-083 EMB-021)', () => {
+  it('matches on path equality (clause 1)', () => {
+    expect(findSkipForTarget([skip({ path: 'notes/private/plan.md' })], 'notes/private/plan.md')?.reason).toBe(
+      'unreadable',
+    )
+  })
+
+  it('matches on basename equality, with and without a markdown extension (clause 2)', () => {
+    // A bare wikilink target naming no folder at all — the skip's own path
+    // still has one, so only the final segment can line up.
+    expect(findSkipForTarget([skip({ path: 'notes/private/plan.md' })], 'plan')).toBeDefined()
+    expect(findSkipForTarget([skip({ path: 'notes/private/plan' })], 'plan.md')).toBeDefined()
+  })
+
+  it('matches an unreadable DIRECTORY against every file beneath it (clause 3 — the dominant walk-level shape)', () => {
+    // This is the shape EMB-021's own rationale names: `WalkContained`
+    // records an unreadable directory under ITS OWN path, and every file
+    // beneath it never enters the walk at all, so clauses 1 and 2 both miss.
+    const found = findSkipForTarget([skip({ path: 'notes/private', reason: 'unreadable' })], 'notes/private/plan.md')
+    expect(found?.reason).toBe('unreadable')
+  })
+
+  it('does NOT suppress a sibling directory whose name is a near-miss prefix (B5c/B5e near-misses)', () => {
+    // `notes/priv` is a STRING prefix of `notes/private/plan.md` but not a
+    // path-SEGMENT prefix — clause 3 must require the boundary.
+    expect(findSkipForTarget([skip({ path: 'notes/priv' })], 'notes/private/plan.md')).toBeUndefined()
+    // A skip naming the sibling directory must not suppress an unrelated one.
+    expect(findSkipForTarget([skip({ path: 'notes/public' })], 'notes/private/plan.md')).toBeUndefined()
+  })
+
+  it('clause 2 is basename EQUALITY, not a basename prefix (guards a substring-match bug)', () => {
+    // If clause 2 were implemented as a prefix/substring check instead of an
+    // equality check, a skip named "plan.md" would wrongly suppress an
+    // unrelated file whose name merely starts the same way.
+    expect(findSkipForTarget([skip({ path: 'notes/plan.md' })], 'notes/plan-extended.md')).toBeUndefined()
+  })
+
+  it('reports no match when nothing in the skip list corresponds (the ordinary case)', () => {
+    expect(findSkipForTarget([skip({ path: 'unrelated/dir' })], 'notes/plan.md')).toBeUndefined()
+    expect(findSkipForTarget([], 'notes/plan.md')).toBeUndefined()
   })
 })
 
@@ -298,5 +363,312 @@ describe('KnowledgeNoteView — wikilinks are resolved only on evidence (FR-065)
       expect(link.getAttribute('data-kb-unresolved')).toBeNull()
       expect(link.textContent ?? '').toMatch(/not verified/i)
     }
+  })
+})
+
+describe('KnowledgeNoteView — the embed resolver (ADR-083 EMB-011 through EMB-024)', () => {
+  const KB_INFO = {
+    'notes/vault': info({ root_path: 'notes/vault', is_knowledge_base: true, collection_id: COLLECTION }),
+  }
+
+  function renderEmbedNote(opts: { content: string; loadGraph: KnowledgeGraphLoader }) {
+    const loadOutline = vi.fn().mockResolvedValue(outline())
+    const loadInfo = detectionOf(KB_INFO)
+    return renderView({ loadOutline, loadInfo, loadGraph: opts.loadGraph, content: opts.content })
+  }
+
+  it('mounts the image for a RESOLVED embed — proving the embed resolver, not the plain-wikilink resolver, drove it', async () => {
+    // DIES ON: routing the embed through `resolveWikilink`'s match key (no
+    // `embed` flag), which this fixture's edge would also satisfy.
+    const loadGraph = vi.fn(async (req: { kind: string }) =>
+      req.kind === 'links'
+        ? graph({
+            kind: 'links',
+            nodes: [{ path: 'diagram.png', title: 'diagram.png', exists: true }],
+            edges: [embedEdge({ to_path: 'diagram.png', link_text: 'diagram.png' })],
+          })
+        : graph(),
+    ) as unknown as KnowledgeGraphLoader
+
+    renderEmbedNote({ content: '![[diagram.png]]', loadGraph })
+
+    const img = await screen.findByTestId('chat-image')
+    expect(img.getAttribute('src') ?? '').toContain('diagram.png')
+  })
+
+  it('reserves space with NO marker while the graph is loading (EMB-015)', async () => {
+    // `findByTestId` alone would be satisfied by the FIRST paint's transient
+    // `indeterminate` default (no resolveEmbedUrl until collectionId
+    // resolves) — `waitFor` re-asserts until the state genuinely SETTLES.
+    const loadGraph = (() => new Promise<KnowledgeGraphResponse>(() => {})) as KnowledgeGraphLoader
+    renderEmbedNote({ content: '![[report.pdf]]', loadGraph })
+
+    await waitFor(() =>
+      expect(screen.getByTestId('markdown-link').getAttribute('data-kb-embed-state')).toBe('loading'),
+    )
+    expect(bodyText()).not.toMatch(/embed shown as a link/i)
+  })
+
+  it('renders ONE page-level banner (with the real failure and a retry) and marks the embed graph_unavailable — never a per-embed marker (EMB-014)', async () => {
+    const loadGraph = vi.fn(async (req: { kind: string }) => {
+      if (req.kind === 'links') throw new Error('network down')
+      return graph()
+    }) as unknown as KnowledgeGraphLoader
+
+    renderEmbedNote({ content: '![[report.pdf]]', loadGraph })
+
+    const banner = await screen.findByTestId('knowledge-graph-unavailable')
+    expect(banner.textContent ?? '').toMatch(/network down/i)
+    const el = screen.getByTestId('markdown-link')
+    expect(el.getAttribute('data-kb-embed-state')).toBe('graph_unavailable')
+    expect(el.textContent ?? '').not.toMatch(/embed shown as a link/i)
+    expect(el.textContent ?? '').not.toMatch(/could not be checked/i)
+  })
+
+  it('refetches the link graph when the banner’s Retry button is pressed', async () => {
+    let attempt = 0
+    const loadGraph = vi.fn(async (req: { kind: string }) => {
+      if (req.kind !== 'links') return graph()
+      attempt += 1
+      if (attempt === 1) throw new Error('first attempt fails')
+      return graph({
+        kind: 'links',
+        nodes: [{ path: 'report.pdf', title: 'report.pdf', exists: true }],
+        edges: [embedEdge({ to_path: 'report.pdf', link_text: 'report.pdf' })],
+      })
+    }) as unknown as KnowledgeGraphLoader
+
+    renderEmbedNote({ content: '![[report.pdf]]', loadGraph })
+
+    await screen.findByTestId('knowledge-graph-unavailable')
+    fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+
+    await waitFor(() => expect(screen.getByTestId('markdown-link').getAttribute('data-kb-state')).toBe('resolved'))
+    expect(screen.queryByTestId('knowledge-graph-unavailable')).not.toBeInTheDocument()
+  })
+
+  it('shows the one page-level banner when the graph answers EMPTY for a note that plainly has links (EMB-014’s second clause)', async () => {
+    const loadGraph = vi.fn(async (req: { kind: string }) =>
+      req.kind === 'links' ? graph({ kind: 'links' }) : graph(),
+    ) as unknown as KnowledgeGraphLoader
+
+    renderEmbedNote({ content: '![[report.pdf]]', loadGraph })
+
+    const banner = await screen.findByTestId('knowledge-graph-unavailable')
+    expect(banner.textContent ?? '').toMatch(/returned no link information/i)
+  })
+
+  it('does NOT show the empty-answer banner for an ordinary note with no wikilink notation at all', async () => {
+    // The empty shape is the ORDINARY case for a linkless note — showing a
+    // warning here would be false-positive noise on the common case.
+    const loadGraph = vi.fn().mockResolvedValue(graph()) as unknown as KnowledgeGraphLoader
+    renderEmbedNote({ content: 'just prose, no links here', loadGraph })
+
+    await waitFor(() => expect(loadGraph).toHaveBeenCalled())
+    expect(screen.queryByTestId('knowledge-graph-unavailable')).not.toBeInTheDocument()
+  })
+
+  it('renders "could not be checked" (not the missing-file marker) when the skip list explains an unresolved edge (EMB-021)', async () => {
+    const loadGraph = vi.fn(async (req: { kind: string }) =>
+      req.kind === 'links'
+        ? graph({
+            kind: 'links',
+            nodes: [{ path: 'private/plan.md', exists: false }],
+            edges: [
+              embedEdge({
+                to_path: 'private/plan.md',
+                link_text: 'private/plan',
+                resolution: 'unresolved',
+              }),
+            ],
+            // The skip names the DIRECTORY, not the file — the dominant
+            // walk-level shape EMB-021 clause 3 exists for.
+            skipped: [skip({ path: 'private', reason: 'unreadable' })],
+          })
+        : graph(),
+    ) as unknown as KnowledgeGraphLoader
+
+    renderEmbedNote({ content: '![[private/plan]]', loadGraph })
+
+    // The FIRST paint's transient default is ALSO `indeterminate` (no
+    // resolver until collectionId resolves), so a bare `findByTestId` would
+    // pass here even with the skip-list cross-check deleted — `waitFor`
+    // re-asserts the PAIRED negative until the mount has genuinely settled,
+    // which the transient default cannot satisfy by construction (it never
+    // sets `data-kb-embed-reason`).
+    await waitFor(() => {
+      const el = screen.getByTestId('markdown-link')
+      expect(el.getAttribute('data-kb-embed-state')).toBe('indeterminate')
+      expect(el.getAttribute('data-kb-unresolved')).toBeNull()
+      expect(el.getAttribute('title') ?? '').toMatch(/could not read/i)
+    })
+  })
+
+  it('still renders the ordinary missing-file marker when NO skip explains the absence (EMB-021’s pairing)', async () => {
+    const loadGraph = vi.fn(async (req: { kind: string }) =>
+      req.kind === 'links'
+        ? graph({
+            kind: 'links',
+            nodes: [{ path: 'ghost.pdf', exists: false }],
+            edges: [embedEdge({ to_path: 'ghost.pdf', link_text: 'ghost.pdf', resolution: 'unresolved' })],
+          })
+        : graph(),
+    ) as unknown as KnowledgeGraphLoader
+
+    renderEmbedNote({ content: '![[ghost.pdf]]', loadGraph })
+
+    // `data-kb-unresolved="true"` is produced ONLY by `UnresolvedLink`, never
+    // by the transient first-paint `indeterminate` default — so this settles
+    // on the terminal state without racing it.
+    await waitFor(() => {
+      const el = screen.getByTestId('markdown-link')
+      expect(el.getAttribute('data-kb-unresolved')).toBe('true')
+      expect(el.getAttribute('data-kb-embed-state')).toBeNull()
+      expect(el.textContent ?? '').toContain('ghost.pdf')
+    })
+  })
+
+  it('does not suppress absence for a near-miss skip naming a SIBLING directory (EMB-021, B5e)', async () => {
+    const loadGraph = vi.fn(async (req: { kind: string }) =>
+      req.kind === 'links'
+        ? graph({
+            kind: 'links',
+            nodes: [{ path: 'private/plan.md', exists: false }],
+            edges: [
+              embedEdge({ to_path: 'private/plan.md', link_text: 'private/plan', resolution: 'unresolved' }),
+            ],
+            skipped: [skip({ path: 'public', reason: 'unreadable' })],
+          })
+        : graph(),
+    ) as unknown as KnowledgeGraphLoader
+
+    renderEmbedNote({ content: '![[private/plan]]', loadGraph })
+
+    await waitFor(() => {
+      const el = screen.getByTestId('markdown-link')
+      expect(el.getAttribute('data-kb-unresolved')).toBe('true')
+      expect(el.textContent ?? '').toContain('private/plan')
+    })
+  })
+
+  it('distinguishes a containment refusal from a missing file via unresolved_reason, and does not show the escaping path (EMB-017/023/024)', async () => {
+    const loadGraph = vi.fn(async (req: { kind: string }) =>
+      req.kind === 'links'
+        ? graph({
+            kind: 'links',
+            nodes: [],
+            edges: [
+              embedEdge({
+                to_path: '../../etc/passwd',
+                link_text: '../../etc/passwd',
+                resolution: 'unresolved',
+                unresolved_reason: 'outside_root',
+              }),
+            ],
+          })
+        : graph(),
+    ) as unknown as KnowledgeGraphLoader
+
+    renderEmbedNote({ content: '![[../../etc/passwd]]', loadGraph })
+
+    // `data-kb-embed-outside-root` is produced only by `ContainmentRefusedEmbed`
+    // (the terminal state), never by the transient first-paint default.
+    await waitFor(() => {
+      const el = screen.getByTestId('markdown-link')
+      expect(el.getAttribute('data-kb-embed-outside-root')).toBe('true')
+      expect(el.getAttribute('data-kb-unresolved')).toBeNull()
+      expect(el.getAttribute('title') ?? '').not.toContain('etc/passwd')
+    })
+  })
+
+  it('treats a node/edge disagreement as indeterminate rather than believing either (EMB-022)', async () => {
+    const loadGraph = vi.fn(async (req: { kind: string }) =>
+      req.kind === 'links'
+        ? graph({
+            kind: 'links',
+            // The edge resolved via exact_path, but the node list says the
+            // target does not exist — the two disagree.
+            nodes: [{ path: 'diagram.png', exists: false }],
+            edges: [embedEdge({ to_path: 'diagram.png', link_text: 'diagram.png', resolution: 'exact_path' })],
+          })
+        : graph(),
+    ) as unknown as KnowledgeGraphLoader
+
+    renderEmbedNote({ content: '![[diagram.png]]', loadGraph })
+
+    // DIES ON: dropping the guard and mounting the image anyway (the reason
+    // text is checked too — the transient first-paint default is ALSO
+    // `indeterminate`, but its reason is "no reason available", never a
+    // sentence naming the disagreement).
+    await waitFor(() => {
+      const el = screen.getByTestId('markdown-link')
+      expect(el.getAttribute('data-kb-embed-state')).toBe('indeterminate')
+      expect(el.getAttribute('title') ?? '').toMatch(/disagreed with itself/i)
+    })
+    expect(document.querySelector('img')).toBeNull()
+  })
+
+  it('resolves two embeds of the same file under DIFFERENT headings INDEPENDENTLY — the live bug this work fixes', async () => {
+    // Before this change, `resolveEmbedUrl`'s match key ignored the heading
+    // fragment entirely, so both embeds below would have resolved off
+    // whichever edge `.find()` happened to hit first.
+    //
+    // The two edges are made to disagree in outcome (A resolves, B does not)
+    // — not just in `to_path` — so a match key that ignores `heading` is
+    // CAUGHT: it would match BOTH embeds to the first edge in array order and
+    // both would read as resolved, which a same-outcome fixture cannot show.
+    const loadGraph = vi.fn(async (req: { kind: string }) =>
+      req.kind === 'links'
+        ? graph({
+            kind: 'links',
+            nodes: [{ path: 'Tasks.base', exists: true }],
+            edges: [
+              embedEdge({ to_path: 'Tasks.base', link_text: 'Tasks.base', heading: 'A', resolution: 'exact_path' }),
+              embedEdge({ to_path: 'Tasks.base', link_text: 'Tasks.base', heading: 'B', resolution: 'unresolved' }),
+            ],
+          })
+        : graph(),
+    ) as unknown as KnowledgeGraphLoader
+
+    renderEmbedNote({ content: '![[Tasks.base#A]] and ![[Tasks.base#B]]', loadGraph })
+
+    // `data-kb-state="resolved"` / `data-kb-unresolved="true"` are each
+    // produced only by their own terminal render, never by the shared
+    // transient default (`indeterminate`) — this settles once both embeds
+    // have independently reached their correct, DIFFERENT verdicts.
+    await waitFor(() => {
+      const links = screen.getAllByTestId('markdown-link')
+      expect(links).toHaveLength(2)
+      expect(links[0]?.getAttribute('data-kb-state')).toBe('resolved')
+      expect(links[1]?.getAttribute('data-kb-unresolved')).toBe('true')
+    })
+  })
+
+  it('reports an ambiguous resolution and names the alternatives instead of staying quiet (EMB-018)', async () => {
+    const loadGraph = vi.fn(async (req: { kind: string }) =>
+      req.kind === 'links'
+        ? graph({
+            kind: 'links',
+            nodes: [{ path: 'archive/report.pdf', exists: true }],
+            edges: [
+              embedEdge({
+                to_path: 'archive/report.pdf',
+                link_text: 'report.pdf',
+                resolution: 'unique_basename',
+                ambiguous: true,
+                candidates: ['archive/report.pdf', 'notes/report.pdf'],
+              }),
+            ],
+          })
+        : graph(),
+    ) as unknown as KnowledgeGraphLoader
+
+    renderEmbedNote({ content: '![[report.pdf]]', loadGraph })
+
+    await waitFor(() => {
+      const el = screen.getByTestId('markdown-link')
+      expect(el.getAttribute('data-kb-embed-ambiguous')).toBe('')
+      expect(el.textContent ?? '').toContain('notes/report.pdf')
+    })
   })
 })

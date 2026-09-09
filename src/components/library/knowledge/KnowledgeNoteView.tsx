@@ -61,7 +61,10 @@ import {
 } from '@/lib/api'
 import type {
   KnowledgeBaseInfo,
+  KnowledgeGraphEdge,
+  KnowledgeGraphNode,
   KnowledgeGraphResponse,
+  KnowledgeGraphSkip,
   KnowledgeOutline as KnowledgeOutlineResponse,
 } from '@/lib/api/generated/openapi-types'
 
@@ -73,7 +76,7 @@ import {
   libraryNoteHref,
   type KnowledgeGraphLoader,
 } from './KnowledgeBacklinks'
-import type { KbLinkResolution } from '../preview/knowledgeMarkdown'
+import { WIKILINK_RE, type EmbedResolution, type KbLinkResolution } from '../preview/knowledgeMarkdown'
 
 /**
  * The note's ancestor folders, DEEPEST FIRST, ending with the work-tree root
@@ -94,6 +97,212 @@ export function noteAncestorDirs(notePath: string): string[] {
  *  — the walk finished and nothing matched — and is rendered as "linked
  *  mentions are not available for this note", never as an empty list. */
 export type CollectionRootStatus = 'idle' | 'pending' | 'ready' | 'unavailable'
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The embed resolver (ADR-083 EMB-011, EMB-012, EMB-013, EMB-014, EMB-016
+// through EMB-024, EMB-029) — the honesty guarantee for `![[…]]` embeds.
+//
+// Extends the graph-backed `resolveEmbedUrl` memo below rather than adding a
+// second resolver: `resolveWikilink`, the sibling memo just above it, answers
+// the SAME question for plain `[[…]]` links and must not diverge from this
+// one's verdicts, but it is out of this file's task scope today and is left
+// exactly as it was.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Collection-relative path, forward-slash separated, no leading/trailing
+ *  slash and no `./` segments — the same normalisation the graph itself uses
+ *  for `to_path`/`skipped[].path`, applied defensively on the client so a
+ *  stray backslash or double slash never breaks a comparison. */
+function normalizeCollectionPath(p: string): string {
+  return p
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter((seg) => seg !== '' && seg !== '.')
+    .join('/')
+}
+
+/**
+ * `libraryDownloadUrl` returns a path relative to the SPA's own origin
+ * (`BASE_URL` is `''` on a normal install — `src/lib/api.ts`), but the image
+ * this embed resolves to is handed to CHAT'S inherited `img` slot
+ * (`MarkdownImage`/`isSafeHref`, `src/components/chat/`), which calls
+ * `new URL(href)` with NO base — a relative URL throws there and is judged
+ * unsafe, degrading a working embed to a muted "[image: alt]" placeholder.
+ * That gate belongs to chat, not to this file, so the fix here is on OUR
+ * side of the boundary: hand it an absolute URL, the same
+ * `BASE_URL || window.location.origin` fallback `src/lib/ws.ts` already uses
+ * for the identical empty-`BASE_URL` case. */
+function toAbsoluteEmbedUrl(relativeOrAbsolute: string): string {
+  if (typeof window === 'undefined') return relativeOrAbsolute
+  try {
+    return new URL(relativeOrAbsolute, window.location.origin).toString()
+  } catch {
+    return relativeOrAbsolute
+  }
+}
+
+function withoutMarkdownExt(basename: string): string {
+  return basename.replace(/\.mdx?$/i, '')
+}
+
+function basenamesMatch(a: string, b: string): boolean {
+  return a === b || withoutMarkdownExt(a) === withoutMarkdownExt(b)
+}
+
+const SKIP_REASON_TEXT: Record<KnowledgeGraphSkip['reason'], string> = {
+  symlink: 'a symbolic link Omnipus did not follow',
+  outside_root: 'a target outside the collection root',
+  unreadable: 'a file or folder Omnipus could not read',
+  not_addressable: 'a name Omnipus cannot address on this platform',
+  node_limit: 'the neighbourhood node limit was reached before reaching it',
+  hop_limit: 'the neighbourhood hop limit was reached before reaching it',
+}
+
+function describeSkip(skip: KnowledgeGraphSkip): string {
+  const base = SKIP_REASON_TEXT[skip.reason] ?? skip.reason
+  return skip.detail ? `${base} (${skip.detail})` : base
+}
+
+/**
+ * EMB-021: before a missing edge or an unresolved edge is read as confident
+ * absence, check whether the walk itself skipped this target — a directory
+ * it could not list takes every file beneath it with it (its own §"EMB-021
+ * rationale"), so a plain path/basename comparison against the skip's own
+ * path misses the dominant real-world shape. Three clauses, in order, ANY of
+ * which is a match; the first one found is returned (there is at most one in
+ * practice — the skip list does not contain overlapping directory skips).
+ *
+ * Clause 3 (ancestor prefix) matches ONLY on a full path-segment boundary —
+ * `notes/priv` must never suppress a target under `notes/private/` — and
+ * MUST NOT be satisfied by a bare basename match, which is clause 2's job
+ * and covers a different case (a bare wikilink naming no folder at all).
+ */
+export function findSkipForTarget(
+  skipped: readonly KnowledgeGraphSkip[],
+  targetPath: string,
+): KnowledgeGraphSkip | undefined {
+  const target = normalizeCollectionPath(targetPath)
+  const targetBase = basenameOf(target)
+  for (const skip of skipped) {
+    const skipPath = normalizeCollectionPath(skip.path)
+    if (skipPath === target) return skip // 1. path equality
+    if (basenamesMatch(basenameOf(skipPath), targetBase)) return skip // 2. basename equality
+    if (target.startsWith(`${skipPath}/`)) return skip // 3. ancestor prefix, segment-bounded
+  }
+  return undefined
+}
+
+/** EMB-011's match key: an embed edge and a plain-link edge to the identical
+ *  target are different facts, so `embed` is checked first, then the written
+ *  target (link_text, the resolved to_path, or its basename — the same
+ *  fallback ladder `resolveWikilink` already used), then the heading
+ *  fragment, then the block anchor. `heading` and `block` are mutually
+ *  exclusive on the wire (CW-2, ADR-083 EMB-036) so comparing both is
+ *  never redundant: a `[[Tasks.base#A]]` and a `[[Tasks.base#B]]` embed of
+ *  one file now resolve independently, which they could not before this
+ *  key existed. */
+function edgeMatchesEmbedKey(
+  edge: KnowledgeGraphEdge,
+  target: string,
+  heading: string | undefined,
+  block: string | undefined,
+): boolean {
+  if (edge.embed !== true) return false
+  const targetMatches =
+    edge.link_text === target || edge.to_path === target || basenameOf(edge.to_path) === target
+  if (!targetMatches) return false
+  if ((edge.heading ?? undefined) !== (heading ?? undefined)) return false
+  if ((edge.block ?? undefined) !== (block ?? undefined)) return false
+  return true
+}
+
+function findMatchingEmbedEdges(
+  graph: KnowledgeGraphResponse,
+  target: string,
+  heading: string | undefined,
+  block: string | undefined,
+): KnowledgeGraphEdge[] {
+  return graph.edges.filter((e) => edgeMatchesEmbedKey(e, target, heading, block))
+}
+
+/**
+ * The core of the embed resolver: given a graph answer already known to have
+ * loaded (loading/graph_unavailable are handled by the caller, one level up,
+ * because they are facts about the REQUEST, not about any one embed), decide
+ * what this specific embed's evidence supports.
+ */
+function resolveEmbedAgainstGraph(
+  graph: KnowledgeGraphResponse,
+  target: string,
+  heading: string | undefined,
+  block: string | undefined,
+  toWorkspacePath: (p: string) => string,
+  downloadUrl: (workspacePath: string) => string,
+): EmbedResolution {
+  const matches = findMatchingEmbedEdges(graph, target, heading, block)
+
+  const truncatedCaveat = graph.truncated
+    ? 'this answer was truncated before the walk finished, so absence is not proven'
+    : undefined
+
+  if (matches.length === 0) {
+    // EMB-013 / EMB-021: no matching edge is NOT the same fact as "this file
+    // does not exist" — check the skip list and the truncation flag before
+    // saying anything.
+    const skip = findSkipForTarget(graph.skipped, target)
+    if (skip) return { state: 'indeterminate', reason: describeSkip(skip) }
+    if (truncatedCaveat) return { state: 'indeterminate', reason: truncatedCaveat }
+    return { state: 'indeterminate', reason: 'no reason available' }
+  }
+
+  const edge = matches[0]
+  const matchAmbiguous = matches.length > 1
+  const matchAlternates = matches.slice(1).map((e) => e.to_path)
+
+  if (edge.resolution === 'unresolved') {
+    // EMB-021 again, against the RESOLVED edge's own target this time — a
+    // walk-level skip still produces a matching unresolved edge, it does not
+    // produce zero edges (measured; see the requirement's own rationale).
+    const skip = findSkipForTarget(graph.skipped, edge.to_path)
+    if (skip) return { state: 'indeterminate', reason: describeSkip(skip) }
+    if (truncatedCaveat) return { state: 'indeterminate', reason: truncatedCaveat }
+    // EMB-017 / EMB-023 / EMB-024: a containment refusal is a different fact
+    // from an ordinary missing file, and CW-2's `unresolved_reason` is the
+    // only thing that can tell them apart — absent (a handler not yet
+    // updated, or truly `no_match`), this reads as an ordinary miss, which
+    // is the conservative, non-regressing default.
+    if (edge.unresolved_reason === 'outside_root') {
+      return { state: 'unresolved', outsideRoot: true, reason: 'this target is outside the collection root' }
+    }
+    return { state: 'unresolved', reason: `no file in this collection matches "${target}"` }
+  }
+
+  // EMB-022: the edge and the node list disagreeing means neither is to be
+  // believed. This guard already existed for the plain URL check this
+  // function replaces; it now also catches the reverse disagreement (an
+  // edge reporting unresolved is handled above, so what remains here is a
+  // RESOLVED edge whose node says it does not exist).
+  const node = graph.nodes.find((n): n is KnowledgeGraphNode => n.path === edge.to_path)
+  if (node && node.exists === false) {
+    return {
+      state: 'indeterminate',
+      reason: `the link graph disagreed with itself about "${edge.to_path}" — treated as unverified`,
+    }
+  }
+
+  const backendCandidates = edge.candidates ?? []
+  const backendAmbiguous = edge.ambiguous === true && backendCandidates.length > 0
+  const ambiguous = matchAmbiguous || backendAmbiguous
+
+  return {
+    state: 'resolved',
+    path: edge.to_path,
+    url: downloadUrl(toWorkspacePath(edge.to_path)),
+    ...(ambiguous
+      ? { ambiguous: true, candidates: backendAmbiguous ? backendCandidates : matchAlternates }
+      : {}),
+  }
+}
 
 export interface KnowledgeNoteViewProps {
   workspaceId: string
@@ -237,22 +446,116 @@ export function KnowledgeNoteView({
     }
   }, [linksQuery.data])
 
-  const resolveEmbedUrl = useMemo(() => {
-    const graph = linksQuery.data
-    if (!graph) return undefined
-    return (target: string): string | undefined => {
-      const edge = graph.edges.find(
-        (e) => e.embed === true && (e.link_text === target || basenameOf(e.to_path) === target),
-      )
-      if (!edge) return undefined
-      const node = graph.nodes.find((n) => n.path === edge.to_path)
-      if (node && node.exists === false) return undefined
-      return libraryDownloadUrl(workspaceId, toWorkspacePath(edge.to_path))
+  // Does this note contain wikilink/embed NOTATION at all? Needed only for
+  // EMB-014's second clause: an empty graph answer (no edges, no skips) is
+  // the ordinary, unremarkable shape for a note with no links — it must trip
+  // the page-level "no link information" statement ONLY when the note
+  // plainly has notation the graph should have had something to say about.
+  // A fresh, non-global RegExp avoids `WIKILINK_RE`'s own shared `lastIndex`.
+  const contentHasWikilinkNotation = useMemo(
+    () => new RegExp(WIKILINK_RE.source, 'g').test(content),
+    [content],
+  )
+
+  // EMB-014: exactly one page-level statement — never one could-not-be-checked
+  // marker per embed — when the graph request failed, or when it succeeded
+  // with nothing to say about a note that plainly has links to check. Gated
+  // to `rootStatus === 'ready'`: the separate "linked mentions unavailable"
+  // notice above already covers the "root could not be identified" case, and
+  // this must not restate it as a second, differently-worded banner.
+  const graphAnswerIssue = useMemo<{ message: string } | undefined>(() => {
+    if (collectionId === undefined || rootStatus !== 'ready') return undefined
+    if (linksQuery.isError) {
+      const detail = linksQuery.error instanceof Error ? linksQuery.error.message : String(linksQuery.error)
+      return { message: `Omnipus could not check this note's links and embeds: ${detail}` }
     }
-  }, [linksQuery.data, workspaceId, toWorkspacePath])
+    const graph = linksQuery.data
+    if (
+      linksQuery.isSuccess &&
+      graph &&
+      graph.edges.length === 0 &&
+      graph.skipped.length === 0 &&
+      contentHasWikilinkNotation
+    ) {
+      // EMB-014's own wording, verbatim — and deliberately not a diagnosis of
+      // WHY the answer was empty (m8): the identical shape is also what a
+      // perfectly valid, simply-not-yet-indexed note produces.
+      return { message: 'the knowledge base returned no link information for this note' }
+    }
+    return undefined
+  }, [
+    collectionId,
+    rootStatus,
+    linksQuery.isError,
+    linksQuery.error,
+    linksQuery.isSuccess,
+    linksQuery.data,
+    contentHasWikilinkNotation,
+  ])
+
+  // The embed resolver (ADR-083 EMB-011 through EMB-024). Offered whenever
+  // this note IS in a detected collection — unlike `resolveWikilink` above,
+  // it is not withheld while the graph is in flight, because the reader
+  // needs to tell `loading` apart from `graph_unavailable` from
+  // `indeterminate`, and an absent function cannot report which.
+  const resolveEmbedUrl = useMemo(() => {
+    if (collectionId === undefined) return undefined
+    return (target: string, heading?: string, block?: string): EmbedResolution => {
+      if (rootStatus === 'unavailable') {
+        return {
+          state: 'graph_unavailable',
+          reason: 'Omnipus could not identify which folder this collection starts at',
+        }
+      }
+      if (rootStatus !== 'ready' || linksQuery.isPending) return { state: 'loading' }
+      if (linksQuery.isError) {
+        return {
+          state: 'graph_unavailable',
+          reason:
+            linksQuery.error instanceof Error ? linksQuery.error.message : 'the link graph request failed',
+        }
+      }
+      const graph = linksQuery.data
+      if (!graph) return { state: 'loading' }
+      if (graph.edges.length === 0 && graph.skipped.length === 0 && contentHasWikilinkNotation) {
+        return {
+          state: 'graph_unavailable',
+          reason: 'the knowledge base returned no link information for this note',
+        }
+      }
+      return resolveEmbedAgainstGraph(graph, target, heading, block, toWorkspacePath, (p) =>
+        toAbsoluteEmbedUrl(libraryDownloadUrl(workspaceId, p)),
+      )
+    }
+  }, [
+    collectionId,
+    rootStatus,
+    linksQuery.isPending,
+    linksQuery.isError,
+    linksQuery.error,
+    linksQuery.data,
+    contentHasWikilinkNotation,
+    toWorkspacePath,
+    workspaceId,
+  ])
 
   return (
     <div data-testid="knowledge-note-view" className="w-full">
+      {graphAnswerIssue ? (
+        <div
+          data-testid="knowledge-graph-unavailable"
+          className="mb-3 flex items-center justify-between gap-3 rounded border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-2 text-xs leading-snug text-[var(--color-warning)]"
+        >
+          <span>{graphAnswerIssue.message}</span>
+          <button
+            type="button"
+            onClick={() => void linksQuery.refetch()}
+            className="shrink-0 rounded border border-current px-2 py-1 text-[10px] uppercase tracking-wide hover:opacity-80"
+          >
+            Retry
+          </button>
+        </div>
+      ) : null}
       <KnowledgeReader
         content={content}
         path={collectionNotePath}
