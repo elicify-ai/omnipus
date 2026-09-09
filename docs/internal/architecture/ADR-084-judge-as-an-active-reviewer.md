@@ -1,12 +1,12 @@
 # ADR-084 — The Judge is an active reviewer, not a passive one
 
-- **Status:** Proposed (revision 7 — claim-triggered, off the critical path, evidence-tiered for all task kinds; see §8. Earlier: revision 6 — D4's residual-risk acceptance narrowed, D10's confinement scope widened; no decision withdrawn) — 2026-09-09
+- **Status:** Proposed (revision 8 — five of §8's claims about the code corrected and the three open items resolved, see §9; no decision withdrawn. Revision 7 — claim-triggered, off the critical path, evidence-tiered for all task kinds; see §8. Revision 6 — D4's residual-risk acceptance narrowed, D10's confinement scope widened) — 2026-09-09
   - *Revision 5 — four claims about the code corrected; decisions unchanged.*
   - *Revision 4 — greenfield, migration removed by operator directive.*
 - **Amends:** the un-ADR'd judge fix-wave in commit `02214f5c` (2026-09-09, "fix GX-E") — `planArtifactCheck`, the rung-1.5 dispatch, and the working-tree diff feed. *(Revision 1 wrongly attributed this to ADR-082, which is about UI-independent turns and session-bound streaming and says nothing about the Judge.)*
 - **Relates to:** ADR-052 (verifier adjudication, FR-039 reproducibility), ADR-055 (PlanSupervisor, the skills-allowlist gap), ADR-057 FR-011 (delegated children own their sessions), ADR-074 D7 (`evidence_quote`), ADR-077 / Constraint #6 (tool policy), Constraint #8 (contract-first wire formats)
 - **Prerequisites:** issue #688 (configurable judge timeout) **and** D9's investigation bounds, **and** D10's capability closures. None of D1 ships before all three.
-- **Spec:** `docs/internal/specs/judge-active-reviewer-spec.md` *(to be written)*
+- **Spec:** `docs/internal/specs/judge-active-reviewer-spec.md` — written, and implementing revision 7 as corrected by §9. **Read §9 before D12/D13/D14**: three of the symbols §8 names for removal must be kept, and "after delivery" is a reordering §8 does not locate.
 
 ## 1. Operator direction (verbatim, 2026-09-09)
 
@@ -404,3 +404,154 @@ Hermes's ordering principle is kept and generalised: cheap, certain evidence is 
 1. Whether a claim also runs the cheap deterministic gates first (D14) or whether gates run continuously as evidence accrues.
 2. What the operator sees when a background adjudication overturns a claim — the verdict must be visible without being intrusive.
 3. Whether a second claim arriving while an adjudication is in flight supersedes it or is refused.
+
+---
+
+## 9. Revision 8 — five corrections to §8's claims about the code, and the three open items resolved (2026-09-09)
+
+Spec authoring for revision 7 re-verified every claim §8 makes about this codebase against
+`3664137c`. **Five are wrong**, and one of them would delete nine behaviours to remove one. As with
+revisions 5 and 6, **no decision is withdrawn** — D12, D13 and D14 all stand exactly as written.
+What changes is what the ADR asserts the system currently does, and therefore where each decision
+has to be built. `docs/internal/specs/judge-active-reviewer-spec.md` implements the corrected form
+and carries the code evidence in its §0 (C22 – C28).
+
+### R8-a — D13's removal, taken literally, deletes the Ralph loop D13 itself depends on (BLOCKER)
+
+D13 says the claimless adjudication "is **removed**" and identifies it as
+*"`goal_triggers.go`'s 'goal idle settle: firing claimless adjudication after quiet window'"*, with
+`goalQuietWindowSettle` and `goalIdleQuietWindow` named alongside it. **Only the log line names the
+adjudication.** The other two are the shared driver and its pacing constant for **nine** keeper
+behaviours: `goalQuietWindowSettle` → `maybeSettleGoalIdle` is the single periodic pass over every
+goal-bearing session, and the adjudication is one of four terminal branches at the end of it.
+
+Removing the function or the constant also removes: the parked-`AskUserQuestion` suppression
+(`goalHasParkedCard`), the `waiting_on_user` suppression (`goalIsWaitingOnUser`), the
+fire-once-per-quiet-spell re-arm (`goalIsIdleSettling` / `markGoalIdleFired`), the in-flight
+self-race guard (`goalAdjudicationInFlight` — **the guard open item 3 resolves onto**), the
+live-turn suppression (`goalHasLiveTurn`), the token-budget brake
+(`TokenBudget().Exhausted()` → `clearGoal(FailedReasonBudgetExhausted)`, the only idle-path
+termination for a goal past its budget), the ADR-081 D6c recordless nudge ladder and its
+`dispatchGoalFallbackCompile` backstop (without which ADR-081 FR-017's "every active goal ends up
+judgeable" breaks) — and `settleZeroOutputRecordedGoal` →
+`dispatchGoalAsyncFollowUp(goalContinuePushPrompt(…))`, **which is the Ralph-loop re-post D13 says
+the keeper "already implements" and instructs us to keep**. It is inside the function D13 names for
+removal.
+
+**Corrected form.** The removal is one call: `settleGoalNormally`'s
+`runGoalAdjudication(…, claimText: "")`. It is replaced by the re-post the keeper already performs
+two branches above it. `goalQuietWindowSettle`, `goalIdleQuietWindow` and `maybeSettleGoalIdle`
+stay. Spec FR-095 (the removal), FR-096 (the eight survivors, one test per row), FR-097 (the
+re-post). D13's decision is unchanged; its symbol list was wrong.
+
+*(One genuine consequence the spec draws out: FR-014b's zero-output branch and the normal branch now
+have identical bodies, so `goalZeroOutputTripleHolds` and `sessionHasTranscriptOutputSince` become
+dead and the two branches collapse into one push ladder — spec FR-097.)*
+
+### R8-b — "after delivery" is a reordering in `runAgentLoop`, and today the claim path runs *before* delivery
+
+D13 requires the adjudication to run after the answer reaches the operator and cites Hermes. The
+seam is exact and worth naming, because the current order is the opposite:
+`pkg/agent/loop.go::runAgentLoop` calls `al.checkGoalLoopAfterTurn(ctx, agent, opts, &result)`,
+**then** publishes `result.followUps`, **then** publishes `result.finalContent` via
+`bus.PublishOutbound`. The claim-path `runGoalAdjudication` is inside the first of those. So the
+Judge already runs on the operator's critical path *and before their answer is published* — a
+slightly worse position than §8 assumes.
+
+Two mechanical consequences §8 does not state, both of which make the move more than a line swap:
+
+1. **The claim path's `deliverSteer` closure stops working.** It appends to `result.followUps`,
+   which `runAgentLoop` publishes immediately after `checkGoalLoopAfterTurn` returns — before a
+   deferred adjudication has produced anything. The deferred path must use the tick-path deliverer,
+   `idleSteerDeliverer` → `dispatchGoalAsyncFollowUp` → `asyncNotifier.Notify`, which already stamps
+   `SenderCanonicalID: goalLoopFollowUpSenderID`. That sentinel is load-bearing, not cosmetic:
+   `checkGoalLoopAfterTurn`'s origin gate accepts only a `UserInitiated` turn or exactly it, and a
+   notify stamped with the default `"async:<kind>"` is **silently dropped** — a failure this project
+   has already shipped once (ADR-081 D6b, recorded in `dispatchGoalAsyncFollowUp`'s own comment).
+2. **The turn `ctx` is the wrong context.** `runGoalAdjudication` derives its timeout from the turn
+   ctx, which is finished once the work is deferred. The idle path already builds
+   `context.WithTimeout(context.Background(), goalJudgeRoundTimeout)`; the deferred claim path must
+   do the same.
+
+Spec FR-098 (the seam and the ordering, with an observed-order oracle rather than a source-order
+one), FR-099 (the delivery path), FR-103 (cancellation, which must move to the verifier registry
+because there is no longer a chat turn to interrupt).
+
+### R8-c — "the loop loses its clock" is false; it acquires a slower one
+
+§8's Consequences say the FR-020a withholding loop "loses its clock" because adjudications now fire
+on claims rather than quiet windows. Traced: a withheld adjudication returns
+`JudgeCriteriaResult{Unavailable: true}`; `runGoalAdjudication`'s `Unavailable` branch emits the
+`judge_unavailable` pill and returns **without calling `deliverSteer`**, so nothing re-dispatches
+from the adjudication. The goal is then quiet with an active goal and an unconsumed round — exactly
+the state R8-a's re-post handles. The cycle becomes claim → withheld → quiet window → re-post →
+work → claim → withheld, paced by the worker's own turn length rather than by 60 s, with each
+iteration still costing a full tool-using Judge turn.
+
+**FR-020a is therefore retained**, with this trace as its rationale. Revision 7's real gain is that
+the cost is background rather than latency: the *urgency* drops, the necessity does not. Spec FR-020a
+and C25.
+
+### R8-d — D14 tier 1 is partially shipped, and the shipped part cannot answer D14's own examples
+
+D14 tier 1 rests on the tool-call record being *"already persisted with its arguments, its result and
+its success"*, and gives three examples turning on a **parameter** or a **result** value: the mail
+tool returning success *with that recipient*, the calendar tool's returned *event id*, the publish
+call's *response*. Verified:
+
+- The record is real and richer than credited:
+  `session.ToolCall{ID, Tool, Status, DurationMS, Parameters, Result, ParentToolCallID, Error, ContentState}`,
+  `Status ∈ success|error|pending|denied`.
+- **The shipped evaluator over it is count-only.** Rung 2 (`pkg/agent/behavior_scan.go`,
+  `task.CriterionBehavior{Tool, MinCount, MaxCount, Scope}`) counts successful calls of a named tool
+  and reads neither `Parameters` nor `Result`. It can answer "`send_email` was called at least once"
+  and **none** of D14's three examples.
+- **The feed into the Judge is worse.** `renderTranscriptEntriesForWindow` renders every call as
+  `fmt.Sprintf("[tool_call] %s -> %s", tc.Tool, tc.Status)` — name and status, no parameters, no
+  result, no error. That is §2 E3's original defect, still live in the one place tier 1 needs it not
+  to be.
+
+**Corrected form, deliberately conservative.** Closing the gap by building an engine that decides
+whether `send_email(to: supplier@…)` satisfies "the supplier was emailed" is a
+natural-language-to-tool-call matcher — **D14 rule 2's retired inference, relocated one tier down**,
+with the same failure mode (a criterion's wording silently deciding what gets checked). The spec
+does not build one. It (a) widens the feed to `{tool, parameters, status, error}`, bounded and
+redacted, so the Judge reads facts rather than a name and a colour (FR-105); (b) keeps tier 1's
+*deciding* power exactly where it already is, a **declared** `KindBehavior` payload (FR-107); and
+(c) gives tier 1 a narrow, closed **contradiction veto** — the one direction D14's second binding
+constraint names and the only one where a false positive is safe (FR-108). Widening
+`CriterionBehavior` to match parameters is named as a separate decision so it is not smuggled in.
+
+### R8-e — tier-1 evidence is erasable, and the erasure looks exactly like absence
+
+§7 R5-c established that `session.ToolCall.Result` is overwritten in place by
+`empty_in_place.go::recordEmptiedOnTranscript` (ADR-066 D5). Under revision 6 that governed only the
+Judge's own grounding. Under D14 it governs **tier 1**, and the failure is worse there: a rewritten
+`Result` read as "the tool returned nothing" would **contradict** a true claim and veto it — E1's
+failure reintroduced through the newest control, on precisely the long turns most likely to have
+done real work.
+
+Two facts make it fixable: the update written is
+`session.ToolCallProjectionUpdate{ToolCallID, ContentState, Result}`, so **`Tool`, `Parameters`,
+`Status` and `Error` are never touched**; and `ContentState == "emptied"` is self-declaring. Spec
+FR-106: build tier-1 facts from the durable quadruple, use `Result` only when `ContentState` is
+empty, and treat `emptied`/`capped` as **inconclusive, never a contradiction**.
+
+**A related note, because a plausible shortcut is wrong.** Tier 1 must **not** be sourced from the
+spec's FR-030 in-memory capture. That capture holds the **Judge's own** results during the verifier
+turn; tier 1 needs the **worker's** calls, in a different session, in a turn that under D13 ended
+before the adjudication was scheduled. There is no capture spanning that boundary and, under the
+spec's no-stateful-change deployment rule, there must not be one. Tier 1 reads the persisted
+transcript, and R8-e is what makes that re-read safe. Spec C28, FR-105.
+
+### The three open items, resolved
+
+| # | Open item | Resolution | Why |
+|---|---|---|---|
+| 1 | gates on the claim, or continuously as evidence accrues | **Once, on the claim** (spec FR-104) | Under D13 there is exactly one moment at which anything is being decided, so facts gathered at any other moment have no consumer. A continuously-running gate is a timer, which D13 forbids on this path — and a red gate firing between claims would be a claimless verdict under another name. Tier-1 evidence is a by-product of work already done: reading it early costs the same and can only be less complete. |
+| 2 | how an overturning verdict is visible without being intrusive | **A distinct `claim_overturned` `GoalStatusFrame.state`, plus the existing `judge_verdict` transcript entry and the ordinary async steer. No modal, toast, notification or navigation** (spec FR-102) | Every surface needed already ships; none of them interrupts. The one case needing more than the ordinary unmet pill is exactly this one — the operator read "done" and the system disagrees — so it gets its own state rather than being folded into an unmet round. The deliberate cost, recorded in the spec as A-23: a card state does not reach an operator who has closed the tab, and a notification is not taken. |
+| 3 | a second claim during an in-flight adjudication — supersede or refuse | **Refused** (spec FR-101), reusing the two shipped layers `goalAdjudicationInFlight` and `verifier_registry.Register`'s `ErrVerifierSessionHeld`; **what changes is the reporting** — under D12 a claim is a tool call, so the refusal is returned *in the tool result* rather than logged and the claim dropped silently | Superseding means cancelling a Judge turn that has already spent tool calls and tokens, on the say-so of the party being judged — a worker could cancel a pending verdict by re-claiming. Refusal costs one redundant tool call and preserves the "exactly once" invariant the CAS was written for. The spec also resolves the item's unasked half: a **new operator message** during an in-flight adjudication is never blocked, and a verdict for a criterion id a concurrent `set_goal mode:update` removed is discarded with a WARN (FR-100). |
+
+**Unchanged by revision 8:** D1 – D11 in full, and D12, D13 and D14 including D14's three rules and
+its two binding constraints. Revision 8 corrects five factual premises, relocates two mechanisms,
+and records the three resolutions. It withdraws nothing.

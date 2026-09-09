@@ -2,8 +2,8 @@
 
 **Created**: 2026-09-09
 **Status**: Draft
-**Source of truth**: [`docs/internal/architecture/ADR-084-judge-as-an-active-reviewer.md`](../architecture/ADR-084-judge-as-an-active-reviewer.md) **revision 6** (greenfield — the rubric migration is removed at revision 4; revision 5 corrects four factual premises; **revision 6 §7 narrows D4's residual-risk acceptance and D10's confinement scope**)
-**Branch / base commit**: `feat/adr-081-work-first-goal` @ `ea8dffdb`
+**Source of truth**: [`docs/internal/architecture/ADR-084-judge-as-an-active-reviewer.md`](../architecture/ADR-084-judge-as-an-active-reviewer.md) **revision 7** (greenfield — the rubric migration is removed at revision 4; revision 5 corrects four factual premises; revision 6 §7 narrows D4's residual-risk acceptance and D10's confinement scope; **revision 7 §8 makes completion a tool call (D12), makes the Judge claim-triggered and off the critical path (D13), and replaces the exit-code gate with a three-tier evidence model (D14)**)
+**Branch / base commit**: `feat/adr-081-work-first-goal` @ `3664137c`
 **Written non-interactively** — every point where the `plan-spec` skill would have stopped for
 operator confirmation is recorded in [Assumptions & Ambiguity Warnings](#assumptions--ambiguity-warnings)
 instead. Nothing below has been ratified by the operator.
@@ -14,7 +14,27 @@ buildable, not to re-argue it.
 
 ---
 
-## 0. Reconciliation with ADR-084 revision 6 — READ FIRST
+## 0. Reconciliation with ADR-084 revision 7 — READ FIRST
+
+> ### Revision 7 changes the shape of the feature, not one more control
+>
+> ADR §8 moves three things at once, and between them they re-base almost every section below.
+> **Read this box before reading anything else in this spec**, because a reviewer who remembers
+> revision 6 will otherwise mis-read half of it.
+>
+> | | Revision 6 | Revision 7 |
+> |---|---|---|
+> | How completion is claimed | prose markers — `[goal:evidence]` + `GOAL_STATUS: met`, pattern-matched | a **tool call** (`goal_claim`), with the markers kept as a fallback (D12, §O) |
+> | What starts an adjudication | a claim **or** a 60 s quiet window firing a claimless adjudication | a claim, **only** (D13, §P) |
+> | What a quiet or stalled agent gets | a Judge call and a verdict against silence | **the goal re-posted** so work continues — the keeper's existing Ralph-loop push. No Judge, no round (D13, FR-097) |
+> | Where the Judge runs | synchronously inside the operator's chat turn, up to 420 s | **after the answer has been delivered**, off the critical path (D13, FR-098) |
+> | What runs before the Judge | a shell exit code inferred from criterion prose | **three tiers**: the agent's own tool-call record (universal), a *declared* check (optional, coding-shaped), then the Judge (universal default) — with **no inference** (D14, §Q) |
+>
+> **The single most consequential deletion is D14's rule 2**: a verification command is never
+> synthesised from a criterion's wording again. `judge.go::planArtifactCheck` and its whole rung-1.5
+> dispatch are retired, and with them FR-035, FR-037, FR-040a and FR-079(d) — see **C24** and the
+> §F tombstones. This is what makes "reserved for coding tasks" true by construction, with **no
+> task-type classifier anywhere** (one would be a new silent failure source; do not build one).
 
 Revision 4 is greenfield: the rubric migration (D6) is **removed by operator directive**, and
 revisions 2–3's own adversarial reviews are folded into the ADR itself (R3-a – R3-d). Revision 5
@@ -30,8 +50,41 @@ it is handled in **Functional Requirements §M — §I, the mixed state** and FR
 
 The C-labels below are kept at their original numbers so every downstream cross-reference stays
 valid. C2 – C8 are unchanged in substance from the revision-2 reconciliation and were re-verified
-against `ea8dffdb`. **C16 – C21 are new in this revision.** C16 – C18 sit immediately below, beside
-the C1 claim they correct; C19 – C21 sit after C15.
+against `ea8dffdb`. C16 – C18 sit immediately below, beside the C1 claim they correct; C19 – C21 sit
+after C15. **C22 – C28 are new in this revision** and sit after C21; all seven concern ADR §8, and
+**four of them (C22, C24, C26, C27) are findings against §8's own claims about the code**, carried
+into the ADR as a revision-8 note rather than worked around here.
+
+### What revision 7 retires, and why — the complete list
+
+Nothing below is deleted quietly. Each id keeps a `RETIRED (rev 7)` tombstone in place, exactly as
+FR-041 – FR-048 do for the removed migration, so the thirty-odd downstream cross-references stay
+valid and a reader who arrives from an older document is told what happened rather than finding a
+hole.
+
+| Id | Was | Why it goes |
+|---|---|---|
+| **FR-035** | an artifact criterion identified by `planArtifactCheck` MUST always reach the prose Judge | there is no longer an artifact criterion *identified by inference*. D14 rule 2 retires `planArtifactCheck` itself, so a `KindProse`/`JudgmentArtifact` criterion simply **is** a prose criterion and reaches the Judge by the ordinary path. FR-035's content survives as the trivially-true consequence of FR-109 |
+| **FR-037** | exactly one rung classifies each artifact criterion | the double-classification C7 identified was a property of rung 1.5 existing. With rung 1.5 gone there is one rung, and nothing to keep in step |
+| **FR-040a** | `isSafeWorkspaceArtifactPath`'s guard MUST be unchanged | that function has exactly one caller, `planArtifactCheck`, and goes with it. Keeping a requirement that a deleted guard is unchanged would be a live row asserting a property of dead code |
+| **FR-079(d)** | on a legacy rubric, retain the rung-1.5 settle | the carve-out existed because a legacy Judge is worse than the inferred check it would replace. With no inferred check there is nothing to retain, and the "one carve-out" to the no-settle-without-LLM prohibition disappears with it |
+| **FR-086** | what the operator sees during a long adjudication | **answered by construction** (ADR §8 Consequences): the adjudication no longer runs inside the turn the operator is waiting on, so there is no seven-minute gap to fill. The operator sees their answer. What replaces it is FR-102 — how a verdict that *overturns* the claim becomes visible afterwards |
+| **A-10** | the open question of whether artifact criteria whose inferred check exited zero should be short-circuited on later rounds | there is no inferred check, so there is no re-entry to short-circuit. FR-081's cost bound is rewritten around FR-109 and FR-105 instead |
+
+**Retained against expectation, with the reason stated** (the ADR invites their retirement; they
+survive because the code says they still bite):
+
+- **FR-020a (the aggregate withholding bound) is RETAINED.** ADR §8 says the pathological loop
+  "loses its clock". **It does not lose its clock; it acquires a slower one** — see **C25**. A
+  withheld adjudication returns `Unavailable`, which `runGoalAdjudication`'s own branch resolves by
+  emitting a pill and returning **without delivering any steer**, so nothing re-dispatches from the
+  adjudication itself. The thing that re-enters is FR-097's keeper re-post, which now fires on every
+  quiet window for exactly this state. So the cycle is claim → withheld → quiet window → re-post →
+  work → claim → withheld, at the keeper's cadence rather than the 60 s window's, and it still
+  terminates only because FR-020a bounds it. Its *urgency* drops; its necessity does not.
+- **FR-049's 420 s default and FR-050's clamp are RETAINED**, with their rationale rewritten: they
+  no longer bound operator-visible latency (there is none), they bound **background cost and the
+  window in which a cancel must land**.
 
 ### C1 — RETIRED as a correction to D6; its *population* claim is narrowed
 
@@ -73,7 +126,8 @@ FR-077 tests the effective soul for exact strings shipped inside `JudgeDefaultRu
 who wrote their own perfectly modern Judge rubric — the case `seedSystemAgents` deliberately leaves
 alone, and the case FR-080's own "does not touch a non-empty operator soul" test protects — will
 not contain them. Under revision 5 that install got, permanently: an ERROR every boot, a badge
-asserting the prompt "predates ADR-084", FR-029/FR-035/FR-006a silently disabled, and exactly one
+asserting the prompt "predates ADR-084", FR-029/FR-006a and (as revision 5 then scoped it) FR-035
+silently disabled, and exactly one
 offered action — reset, i.e. delete the operator's work. There was no path to clearing the badge
 that preserved the edit, because the operator was never told what the test was.
 
@@ -229,6 +283,8 @@ it, so the K bound silently never accumulates for artifact criteria.
 **Resolution:** under D5 the deterministic artifact check stops participating in non-verdict
 classification entirely — it contributes an `EvidenceRecord` and nothing else; the prose
 criterion's own classification is authoritative. FR-035 – FR-040.
+**Superseded by C24**: revision 7 deletes rung 1.5 outright, so there is no second classifier to
+reconcile and FR-035/FR-037 become tombstones. C7's finding was correct; its subject is gone.
 
 ### C8 — CORRECTION. D2b/D2c/D5a cannot all live "at the parser"
 
@@ -272,6 +328,11 @@ D5/FR-035 makes this strictly worse, not better: removing `JudgeCriteria`'s rung
 "the file exists but does not satisfy the criterion" from a deterministic contains-check to an LLM
 opinion, which is a net loosening of the only class of criterion the engine could previously decide
 without trusting the model.
+**Revision 7 goes further and accepts it deliberately (C24).** D14 rule 2 deletes the inferred check
+rather than demoting it, so that loosening is now the whole treatment of this class — and it is the
+right one: the deterministic contains-check answered "the file exists", which was never what a
+criterion like "a single self-contained 2048 implementation" asked. The residual is unchanged and is
+still C9's: a real quote from the real file that does not entail the criterion.
 
 **Resolution — an attribution model, not another authenticity check.** A `met` must state *what it
 looked at* (`evidence_target`), that target must be **reachable from the criterion** rather than
@@ -431,9 +492,10 @@ Today prose criteria never emit `unable_to_verify` at all — **FR-018/FR-019 cr
 Once they land, a Judge that returns `unable_to_verify` for a *different* criterion each round
 resets every counter before any reaches K, FR-019 discards the whole adjudication each time, and no
 round is ever consumed. With M criteria the loop is **unbounded**, not M × K. And each iteration is
-now a tool-using turn of up to the raised 420 s judge timeout, running synchronously inside the
-operator's chat turn, bounded only by `goalJudgeRoundTimeout` **per round** and by nothing across
-rounds. FR-081's token ceiling is per-adjudication; nothing caps the product.
+now a tool-using turn of up to the raised 420 s judge timeout, bounded only by
+`goalJudgeRoundTimeout` **per round** and by nothing across rounds. *(Revision 5 added "running
+synchronously inside the operator's chat turn" here; revision 7's D13 moves it off the critical
+path, so this is background cost. The unboundedness is unaffected — see C25.)* FR-081's token ceiling is per-adjudication; nothing caps the product.
 
 It is also unobservable: the operator sees `judge_unavailable`, which is already conflated with a
 genuine provider outage, a deterministic-rung withhold and (before FR-083) a CAS loss.
@@ -484,6 +546,186 @@ records that the asyncapi inline copies *cannot* cross-file-`$ref`, which is why
 hand-synced in the first place. **Resolution:** FR-073a's comparison MUST be **recursive over the
 full sub-schema**, not a top-level property-set diff.
 
+### C22 — BLOCKER (new). D13 names three symbols to remove; removing them deletes the Ralph loop the same decision depends on
+
+ADR §8 D13 says the claimless adjudication "is **removed**" and names
+*"`goal_triggers.go`'s 'goal idle settle: firing claimless adjudication after quiet window'"*, with
+the earlier framing of the change naming `goalQuietWindowSettle` and `goalIdleQuietWindow` alongside
+it. **Only the first of those three is the claimless adjudication.** Verified against `3664137c`:
+
+`goalQuietWindowSettle` → `maybeSettleGoalIdle` is the **single periodic driver for every
+goal-keeper behaviour**, and adjudication is one of four terminal branches. Deleting the function,
+or the `goalIdleQuietWindow` constant that paces it, also deletes:
+
+| What `maybeSettleGoalIdle` does | Consequence of removing it |
+|---|---|
+| `goalHasParkedCard` / `goalIsWaitingOnUser` suppression | a parked `AskUserQuestion` and a `waiting_on_user` pause stop being honoured by the keeper |
+| `goalIsIdleSettling` re-arm marker + `markGoalIdleFired` | the "fire once per quiet spell" bound disappears |
+| `goalAdjudicationInFlight` self-race guard | the guard **open item 3 resolves onto** (FR-101) |
+| `goalHasLiveTurn` suppression + activity re-arm | the keeper starts acting against a live turn |
+| `TokenBudget().Exhausted()` brake → `clearGoal(FailedReasonBudgetExhausted)` | a goal past its token budget **never terminates on the idle path** |
+| `settleRecordlessGoal` — the ADR-081 D6c nudge ladder, and `dispatchGoalFallbackCompile` after it | a recordless goal is never nudged to call `set_goal` and never gets an engine-authored record — ADR-081 FR-017's "every active goal ends up judgeable" invariant breaks |
+| `settleZeroOutputRecordedGoal` → `dispatchGoalAsyncFollowUp(goalContinuePushPrompt(…))` | **this is the Ralph-loop re-post D13 says to keep.** It is inside the function D13 names for removal |
+| `settleGoalNormally` → `runGoalAdjudication(…, claimText: "")` | the claimless adjudication — the **only** thing that actually goes |
+
+**Resolution:** the removal is surgical and is specified as such (FR-095, FR-096). One call —
+`settleGoalNormally`'s `runGoalAdjudication` — is replaced by the re-post the keeper already
+performs two branches above it. `goalQuietWindowSettle`, `goalIdleQuietWindow`,
+`maybeSettleGoalIdle` and every other branch stay. FR-096 enumerates what MUST survive, with a test
+per row, because "remove the quiet-window path" read literally is a nine-behaviour deletion.
+
+### C23 — BLOCKER (new). "After delivery" is a two-line reordering, and today the claim path runs BEFORE delivery
+
+ADR §8 D13 requires the adjudication to run *"after the answer has been delivered to the operator"*
+and cites Hermes. The spec must name the seam, and the seam is exact:
+`pkg/agent/loop.go::runAgentLoop` calls `al.checkGoalLoopAfterTurn(ctx, agent, opts, &result)`, then
+publishes `result.followUps`, then publishes `result.finalContent` via `bus.PublishOutbound`. The
+claim-path `runGoalAdjudication` is inside `checkGoalLoopAfterTurn`'s
+`marker.Present && Status == met && HasEvidence` arm — so **today the Judge runs before the
+operator's answer is published**, which is precisely the shape D13 rejects.
+
+Two mechanical consequences the ADR does not state:
+
+- **The claim path's `deliverSteer` closure stops working.** It appends to `result.followUps`
+  (`goal_loop.go`, the closure passed to `runGoalAdjudication`), which `runAgentLoop` publishes
+  *immediately* after `checkGoalLoopAfterTurn` returns. An adjudication that has been deferred past
+  delivery has not produced a steer by then, so the closure would append to a slice nobody reads
+  again. The deferred path MUST use the tick-path deliverer instead —
+  `idleSteerDeliverer(sessionID)` → `dispatchGoalAsyncFollowUp` → `asyncNotifier.Notify`, which
+  already stamps `goalLoopFollowUpSenderID` and therefore already passes
+  `checkGoalLoopAfterTurn`'s own origin gate (ADR-081 D6b).
+- **The turn `ctx` is the wrong context.** `runGoalAdjudication` currently derives
+  `context.WithTimeout(ctx, goalJudgeRoundTimeout)` from the turn ctx. Once the work is deferred past
+  the turn, that ctx is finished. The idle path already solves this —
+  `settleGoalNormally` builds `context.WithTimeout(context.Background(), goalJudgeRoundTimeout)` —
+  and the deferred claim path MUST do the same.
+
+**Resolution:** FR-098 names the seam and the ordering; FR-099 names the delivery path; FR-103
+re-bases FR-082's cancellation onto the verifier registry, which is now the only cancel handle
+(there is no chat turn to interrupt).
+
+### C24 — BLOCKER (new). Retiring the inferred check removes a whole rung, not a line
+
+D14 rule 2 retires `judge.go::planArtifactCheck`'s inference. Verified against `3664137c`, that
+function is not a helper called from one place — it is the **entry condition of an entire rung**.
+`JudgeCriteria`'s classification loop reads:
+
+> `if c.Kind == task.KindProse && c.Judgment == task.JudgmentArtifact { if cmd, ok := planArtifactCheck(c.Text, in.WorkspaceID); ok { artifactCriteria = append(…); continue } }`
+
+Removing the inference means `artifactCriteria` is always empty, so **rung 1.5 has no members and
+ceases to exist**. That deletes, in one move, every problem revisions 2–6 spent four corrections on:
+C7's double-classification, FR-037's exactly-one-rung rule, FR-035's demotion, FR-079(d)'s
+legacy carve-out, and revision 6's F1 second half (a zero-exit inferred check demoted to advisory
+with nothing requiring a `met` to be consistent with what it proved). It also retires
+`isSafeWorkspaceArtifactPath`, `artifactPathRe`, `artifactContainsRe` and `artifactCheckCandidate`,
+whose only reachable caller is `planArtifactCheck`.
+
+What does **not** go: rung 1 (`task.KindCheck`, a **declared** check, already opt-in) and rung 2
+(`task.KindBehavior`). Those were never inferred. **Resolution:** §F is rewritten around declared
+checks only (FR-038 – FR-040 survive, re-scoped), FR-035/FR-037/FR-040a/FR-079(d) become
+tombstones, and the four deliberate test rewrites in
+[Regression Requirements](#regression-requirements) change from "invert the assertion" to "delete
+the rung's tests, and assert the rung is gone".
+
+### C25 — MAJOR (new). "The loop loses its clock" is false; it acquires a slower one
+
+ADR §8's Consequences say the FR-020a non-termination "loses its clock" because adjudications now
+happen on claims rather than every quiet window. Traced against `3664137c`, the clock moves rather
+than stopping:
+
+1. A withheld adjudication returns `JudgeCriteriaResult{Unavailable: true}`.
+2. `runGoalAdjudication`'s `if jr.Unavailable` branch clears the idle-settling marker, emits the
+   `judge_unavailable` pill, and **returns without calling `deliverSteer`**. Nothing re-dispatches.
+3. So the goal is now quiet with an active goal and an unconsumed round — which is exactly the state
+   FR-097's keeper re-post exists to handle. The re-post fires on the next quiet window, the worker
+   resumes, works, and claims again.
+
+The cycle is therefore claim → withheld → quiet → re-post → work → claim → withheld, paced by the
+worker's own turn length plus the keeper's window rather than by the 60 s window alone. Each
+iteration still costs a full tool-using Judge turn. **FR-020a is retained**, with this trace as its
+rationale, and the "each iteration runs inside the operator's chat turn" clause is corrected
+throughout: it is background cost now, not latency. Carried to the ADR as revision-8 note R8-c.
+
+### C26 — MAJOR (new). D14 tier 1 is partially shipped, and the shipped part cannot answer D14's own examples
+
+D14 tier 1 says the evidence is *"already persisted with its arguments, its result and its
+success"*, and gives three examples: *"the supplier was emailed"* answered from the mail tool
+returning success **with that recipient**; *"a calendar hold exists"* from the **event id** the
+calendar tool returned; *"the page was published"* from the publish call's **response**. Verified:
+
+- The **record** exists and is richer than the ADR credits:
+  `session.ToolCall{ID, Tool, Status, DurationMS, Parameters, Result, ParentToolCallID, Error, ContentState}`
+  (`pkg/session/daypartition.go:451`). `Status` is `"success" | "error" | "pending" | "denied"`.
+- The **shipped evaluator over it** is rung 2, `pkg/agent/behavior_scan.go`, and its criterion
+  payload is `task.CriterionBehavior{Tool, MinCount, MaxCount, Scope}` — a **successful-call count
+  for a named tool, and nothing else**. It never reads `Parameters` and never reads `Result`. So
+  rung 2 can answer "`send_email` was called at least once" and **cannot** answer any of D14's three
+  examples, all of which turn on a parameter or a result value.
+- The **feed into the Judge** is worse still:
+  `verifier_adjudication.go::renderTranscriptEntriesForWindow` renders each call as
+  `fmt.Sprintf("[tool_call] %s -> %s", tc.Tool, tc.Status)` — name and status, no parameters, no
+  result, no error. This is ADR §2 E3's original defect, still present in the one place tier 1 needs
+  it not to be.
+
+**Resolution, and it is deliberately conservative.** Building an engine that decides "does
+`send_email(to: supplier@…)` satisfy *the supplier was emailed*?" is a natural-language-to-tool-call
+matcher — **the same inference D14 rule 2 just retired for tier 2, relocated to tier 1**. This spec
+does not build one. Instead:
+
+- **FR-105** widens the feed: the adjudicated window renders `{tool, parameters, status, error}`
+  per call, bounded, so the Judge can read the facts. This is evidence, and it is the general form
+  of "prefer evidence the system already holds over asking a model to opine" — the model still
+  reads it, but it reads facts rather than a name and a colour.
+- **FR-107** keeps tier 1's *deciding* power exactly where it already is: a **declared**
+  `KindBehavior` criterion, which is an authoring act like a declared check. Tier 1 never decides a
+  criterion nobody declared it for.
+- **FR-108** gives tier 1 a narrow, mechanically-decidable **contradiction veto** — the direction
+  D14's second binding constraint names, and the only direction where a false positive is safe.
+
+Carried to the ADR as revision-8 note R8-d: tier 1 as written reads like an automatic matcher, and
+that reading must not be implemented.
+
+### C27 — MAJOR (new). Tier-1 evidence is erasable, and the erasure looks exactly like absence
+
+C10 established that `session.ToolCall.Result` is a `map[string]any` that
+`empty_in_place.go::recordEmptiedOnTranscript` overwrites with a recall mark mid-turn (ADR-066 D5).
+Under revision 6 that mattered only for the Judge's own grounding. Under D14 it also governs
+**tier 1**, whose whole premise is reading the worker's tool-call record — and the failure is worse
+here, because a rewritten `Result` read as "the tool returned nothing" would **contradict** a true
+claim and veto it. That is E1's failure reintroduced through the newest control.
+
+Two mechanical facts make it fixable rather than fatal, both verified in
+`recordEmptiedOnTranscript`'s body: the update it writes is
+`session.ToolCallProjectionUpdate{ToolCallID, ContentState, Result}`, so it rewrites **`Result` and
+`ContentState` only**. `Tool`, `Parameters`, `Status` and `Error` are never touched. And
+`ContentState == "emptied"` is a self-declaring marker: a reader can always tell "this result was
+projected away" from "this tool returned nothing".
+
+**Resolution — FR-106.** Tier-1 facts are built from the durable quadruple
+`{Tool, Parameters, Status, Error}`; a `Result` value is used only when
+`ContentState` is empty; and an `emptied` or `capped` `ContentState` is **inconclusive**, never a
+contradiction. The coordinating instruction to "reuse FR-030's in-memory capture rather than
+re-reading the transcript" is right in spirit and **only half available here**, which is C28.
+
+### C28 — MAJOR (new). FR-030's capture cannot supply tier 1, because it holds the wrong session's calls
+
+FR-030's capture is scoped, by its own mechanism clause, to *"one adjudication"* and lives inside
+`admitToolResult` during the **verifier turn**. It therefore holds **the Judge's own** tool results.
+Tier 1 needs the **worker's** tool calls, made in a different session, in a turn that has already
+ended — and, under D13, ended before the adjudication was even scheduled. There is no in-process
+capture spanning that boundary, and under the Deployment section's "no stateful change at all" rule
+there must not be one.
+
+So tier 1 reads the persisted record: `store.ReadTranscript(sessionID)` over the adjudicated session
+and, under FR-010's descendant scope, its children. **That is a re-read, and it is the correct
+one** — the capture is not an alternative, it is a different subject. What C27's resolution buys is
+that the re-read is safe: the durable quadruple survives the ADR-066 rewrite, and `ContentState`
+declares when the fifth field did not.
+
+**Resolution:** FR-105/FR-106 state the source explicitly and forbid the mistaken substitution;
+FR-068's "derive the investigation log from the capture, not the transcript" is **unchanged** and is
+about the Judge's own calls, which is a different question with the opposite answer.
+
 ---
 
 ## Existing Codebase Context
@@ -503,20 +745,35 @@ full sub-schema**, not a top-level property-set diff.
 | `pkg/agent/loop.go` (tool-dispatch point in `turnLoop`; `admitted.Message` / `toolResultMsg`) | modify | The only place holding the exact admitted tool-result text. Carries FR-030's in-memory capture (C10) and FR-051/052's cap refusal. Per-iteration SEC-26 gate at the same level (C15). |
 | `pkg/agent/empty_in_place.go::recordEmptiedOnTranscript` | unchanged | Overwrites `session.ToolCall.Result` with a recall mark mid-turn — why grounding must not read it (C10). |
 | `pkg/agent/judge.go::summarizeVerdict` | modify | Emits `"unmet criteria: " + ids` for every `!Met`, including `unable_to_verify`. This string is what the worker sees (FR-022). |
-| `pkg/agent/judge.go::buildJudgeUserContent` | modify | **Four** empty-section fallbacks, not two: the diff one (`judge.go:1097`), the transcript-window one (`:1110`), `"(no machine-check results on this attempt)"` (`:1121`) and `"(the worker reported no summary text)"` (`:1135`). Two of the four instruct passivity ("judge from … below only") — E1's prohibition restated in the user message (FR-002a). The machine-check one becomes newly common under FR-035. |
+| `pkg/agent/judge.go::buildJudgeUserContent` | modify | **Four** empty-section fallbacks, not two: the diff one (`judge.go:1097`), the transcript-window one (`:1110`), `"(no machine-check results on this attempt)"` (`:1121`) and `"(the worker reported no summary text)"` (`:1135`). Two of the four instruct passivity ("judge from … below only") — E1's prohibition restated in the user message (FR-002a). The machine-check one becomes newly common under FR-109 (with no inferred check, a criterion that
+would have carried one now arrives with no machine evidence at all) and under FR-111 (a non-coding
+goal never has any). Its wording must not assume a repository, a diff or a test run. |
 | `pkg/agent/tool_result_admit.go::admitToolResult` / `toolResultAdmission` / `admittedToolResult` | modify | **The choke point** (its own doc comment: "admitToolResult is the choke point (FR-009)"). One function, holding `{Tool, ToolCallID, Content, IsError, ParallelN}` in and the exact admitted `Message` out, reached from 11 call sites in `loop.go`. FR-030's capture and FR-009a's banner both live **here**, once — not at the call sites, and not in `loop.go` (FR-030 mechanism, FR-009a, W2). `toolResultAdmission` carries **no tool arguments**, so the capture joins the call's parameters from the turn's own recorded tool calls (`cloneEventArguments(toolArgs)`, `loop.go:11999`). |
 | `pkg/memory/projection.go::ProjectionKey` | pattern only | Precedent, not a dependency: *"The key is composite"* — because providers reuse tool-call ids. FR-030's capture key follows it (m6). |
 | `pkg/agent/empty_in_place.go` (B-29b notes, lines 105 and 234) | unchanged | *"providers reuse ids such as `call_0` on every turn"* — the reason FR-030's capture cannot be keyed by tool-call id alone. |
-| `pkg/agent/goal_triggers.go::runGoalAdjudication` | modify | The `if jr.Unavailable` branch (`:458`) logs "round not consumed" and returns without touching `GoalRoundsUsed` (C3, C19). `emitGoalStatusFrame(…, goalPillJudging)` at `:440` already fires **before** dispatch — the `judging` pill exists; what does not exist is any update during the turn (FR-086). Owner of FR-057a's and FR-083's reasons on the goal-status frame (W4a). |
+| `pkg/agent/goal_triggers.go::runGoalAdjudication` | modify | The `if jr.Unavailable` branch (`:458`) logs "round not consumed" and returns without touching `GoalRoundsUsed` (C3, C19). `emitGoalStatusFrame(…, goalPillJudging)` at `:440` already fires **before** dispatch — the `judging` pill exists and is now a regression property (FR-086 is retired: under D13 there is no turn for the operator to wait through). Its `if jr.Unavailable` branch returning **without calling `deliverSteer`** is what makes C25's slower loop real. Owner of FR-057a's and FR-083's reasons on the goal-status frame (W4a), and of FR-102's `claim_overturned` state. |
 | `pkg/agent/task_executor.go::adjudicateClaim` | modify | Owner of FR-057a's and FR-083's reasons on the **task run record** (W4a). |
 | `pkg/task/criterion.go::normalizeCriteria` / `NormalizeCriteria` | modify | The load-time normaliser (`:358` / `:431`); already backfills `c.Status = CritPending` at `:393`. FR-006b's persisted clause count is computed here, on the same precedent. |
 | `contracts/components/schemas/AcceptanceCriterion.yaml` / `AcceptanceCriterionInput.yaml` | modify | `status` enum is `[pending, met, unmet]`; the SPA status icon reads this, never the verdict (C14). |
 | `contracts/asyncapi.yaml` (inline `JudgeVerdictFrame`) | modify | Second hand-written copy of the per-criterion shape; the one openapi-zod-client reads (C14). |
 | `pkg/coreagent/core.go::denyAllThenOverride` / `validateOverrideKeys` | call | Panics on a non-catalog key (C5). |
-| `pkg/agent/judge.go::JudgeCriteria` | modify | Rung dispatch, `noteNonVerdict` closure, `withheld` short-circuit, rung-1.5 artifact loop. |
+| `pkg/agent/judge.go::JudgeCriteria` | modify | Rung dispatch, `noteNonVerdict` closure, `withheld` short-circuit. Its `if c.Kind == task.KindProse && c.Judgment == task.JudgmentArtifact` classification branch, the `artifactCriteria` slice and the **rung-1.5 artifact loop are DELETED** by FR-109 (C24); rungs 1 (`KindCheck`) and 2 (`KindBehavior`) are unchanged. |
 | `pkg/agent/judge.go::judgeCriterionResponse` | modify | `{ID, Met, Reason, EvidenceQuote}`. |
 | `pkg/agent/judge.go::parseJudgeResponse` | modify | Extracts JSON, unmarshals, truncates each quote to 500 runes. Nothing else. |
-| `pkg/agent/judge.go::planArtifactCheck` / `isSafeWorkspaceArtifactPath` | modify / keep | Added by `02214f5c`. Path guard unchanged by this spec. |
+| `pkg/agent/judge.go::planArtifactCheck` / `isSafeWorkspaceArtifactPath` / `artifactPathRe` / `artifactContainsRe` / `artifactCheckCandidate` | **DELETE** | Added by `02214f5c`; **retired in full by D14 rule 2** (C24). `planArtifactCheck` builds `test -f %s && test -s %s [&& grep -qF …]` by regex over criterion prose. It is the entry condition of rung 1.5 — `JudgeCriteria`'s `if c.Kind == KindProse && c.Judgment == JudgmentArtifact` branch — so removing it empties `artifactCriteria` and the rung ceases to exist. The other four symbols have no other reachable caller. |
+| `pkg/agent/task_completion_signal.go::parseGoalStatusMarker` / `findEvidenceImmediatelyBefore` / `computeFencedLines` / `isExcludedMarkerLine` | **keep, unchanged** | D12 keeps the marker path as a fallback. `goalStatusMarker{Present, Status, HasEvidence, EvidenceText}`; canonical values are **`met` and `waiting_on_user` only** — there is no `blocked` marker, so D12's third status has no fallback (FR-093). |
+| `pkg/agent/goal_loop.go::checkGoalLoopAfterTurn` | modify | The claim path. Its `marker.Present && Status == met && HasEvidence` arm calls `runGoalAdjudication` **synchronously, and `loop.go:8302` calls it BEFORE `PublishOutbound`** — so the Judge runs before delivery today (C23). Owner of FR-092's tool-vs-marker precedence and FR-098's deferral. |
+| `pkg/agent/loop.go::runAgentLoop` | modify | The delivery seam: `checkGoalLoopAfterTurn` → publish `result.followUps` → `if opts.SendResponse && result.finalContent != "" { bus.PublishOutbound(…) }`. FR-098's reordering lives here and nowhere else. |
+| `pkg/agent/goal_triggers.go::goalQuietWindowSettle` / `maybeSettleGoalIdle` | modify — **surgically** | The single periodic driver for **nine** keeper behaviours, of which the claimless adjudication is one branch (C22). FR-095 replaces `settleGoalNormally`'s `runGoalAdjudication` call; FR-096 enumerates the eight that MUST survive. |
+| `pkg/agent/goal_triggers.go::settleGoalNormally` | modify | `logger.InfoCF(… "goal idle settle: firing claimless adjudication after quiet window")` then `runGoalAdjudication(…, claimText: "")` under a fresh `context.Background()` timeout. **This one call is the whole of D13's removal.** |
+| `pkg/agent/goal_triggers.go::settleZeroOutputRecordedGoal` / `goalContinuePushPrompt` / `settleRecordlessGoal` / `goalNudgePrompt` / `dispatchGoalFallbackCompile` | keep | **The Ralph-loop re-post D13 says the keeper "already implements" — verified, and it is inside the function D13 names for removal.** `goalContinuePushPrompt` is literally "Continue working toward the goal: %s … Keep going." |
+| `pkg/agent/goal_triggers.go::dispatchGoalAsyncFollowUp` / `idleSteerDeliverer` | call | The shared re-inject primitive: `asyncNotifier.Notify(AsyncNotifyEvent{… SourceKind: "goal_idle_settle", SenderCanonicalID: goalLoopFollowUpSenderID})`. Stamping that sentinel is what lets the re-injected turn pass `checkGoalLoopAfterTurn`'s origin gate (ADR-081 D6b). The deferred claim path's steer MUST route here, not through `result.followUps` (C23). |
+| `pkg/agent/goal_triggers.go::goalAdjudicationInFlight` / `verifier_registry.go::Register` / `ErrVerifierSessionHeld` | call | The two-layer in-flight guard: a check-then-act marker plus a CAS whose doc comment states the invariant outright ("a concurrent adjudication is already in flight for this unit and must not be silently clobbered … G-1 'exactly once'"). **Open item 3 resolves onto these** (FR-101) rather than onto anything new. |
+| `pkg/agent/behavior_scan.go::runBehaviorScan` / `task.CriterionBehavior` | extend | D14 **tier 1's only shipped evaluator**, and it is `{Tool, MinCount, MaxCount, Scope}` — a successful-call **count** for a named tool. It reads neither `Parameters` nor `Result`, so it cannot answer any of D14's own three examples (C26). |
+| `pkg/agent/verifier_adjudication.go::renderTranscriptEntriesForWindow` | modify | Renders every call as `fmt.Sprintf("[tool_call] %s -> %s", tc.Tool, tc.Status)` — name and status only. ADR §2 E3's defect, still live in the one place D14 tier 1 needs it not to be (C26, FR-105). |
+| `pkg/session/daypartition.go::ToolCall` | consume | `{ID, Tool, Status, DurationMS, Parameters, Result, ParentToolCallID, Error, ContentState}`; `Status ∈ success\|error\|pending\|denied`. `recordEmptiedOnTranscript` rewrites **`Result` and `ContentState` only** — the other four are durable (C27). |
+| `pkg/tools/set_goal.go::SetGoalTool` | pattern + modify | The precedent `goal_claim` follows exactly: a validated write-path over **this session's own** record, refusing on a delegated sub-turn or a goalless session by its own scope preconditions rather than by policy; seeded `allow` on the ceiling and for every human-facing agent, explicit `deny` for Judge/PlanSupervisor via `denyAllThenOverride` and for Worker via `tightenGlobalCeiling`. Its `judgment` enum is `boolean \| quantitative \| artifact` and **requires no check** — FR-110 forbids changing that. |
+| `pkg/coreagent/core.go::allStaticToolNames` / `pkg/config/defaults.go` ceiling | modify | `goal_claim` is added to both. The mechanical invariant `len(AllStaticToolNames()) == len(config.DefaultConfig().Sandbox.ToolPolicies)` (`TestCatalog_MatchesGlobalCeilingEntryForEntry`) fails on a one-sided edit. |
 | `pkg/agent/judge.go::checkJudgeSEC26` | call | Token taken before dispatch; `turnLoop` takes one per iteration. |
 | `pkg/agent/judge.go::judgeCallTimeout` / `judgeRetryBackoff` / `judgeBackoffWait` | modify | 120 s; `{60,120,300}`. |
 | `pkg/agent/verifier_adjudication.go::runVerifierAdjudication` | modify | Copies `EvidenceQuote: pc.EvidenceQuote` verbatim; retries `callErr` forever via `judgeBackoffWait` + `continue`. |
@@ -714,9 +971,11 @@ rather than merely inert. `judge.go::judgeRubricFromConfig` reads the prompt fro
 passing verdict to `unable_to_verify`, which is withheld for K rounds and then escalates as
 persistently-blocked with `Met:false`. 100 % of passing verdicts become blocked escalations. On a
 soul written before 2026-09-05 it is worse: those texts predate the quote-before-verdict
-instruction, so FR-024 rewrites at the parser first. And FR-035 removes the deterministic artifact
-settle, so the one class of criterion that still worked correctly is judged blind by a prompt that
-forbids looking.
+instruction, so FR-024 rewrites at the parser first. And **FR-109** deletes the inferred artifact
+check, so the one class of criterion that still worked correctly on that install is judged blind by
+a prompt that forbids looking — more completely than revision 6's FR-035 demotion did, because there
+is now no check to fall back on at all. FR-079(d)'s carve-out, which retained the settle for exactly
+this population, is retired with it (C24). Holdout H11 measures the cost.
 
 **Why P0**: it converts a no-op upgrade into a silent, total adjudication failure that is
 indistinguishable from a provider outage.
@@ -760,19 +1019,86 @@ opened.
 3. **Given** a verdict persisted before this change, **When** it is read back, **Then** it parses
    with the new fields empty.
 
-### US-10 — Deterministic checks inform, never decide (P1)
+### US-10 — Evidence the system already holds is consulted first, and it informs rather than decides (P1)
 
-**Why P1**: the operator's direction; also the "a single self-contained file" case.
-**Independent test**: an artifact criterion whose file exists but does not satisfy the criterion is
-`unmet`, and the check result is visible in the Judge's evidence block.
+> **Rebased on ADR-084 revision 7's D14.** Revision 6's title was "Deterministic checks inform,
+> never decide", and its three criteria were all about one inferred shell command. There is no
+> inferred command any more (C24), and "deterministic check" is now one optional tier of three.
 
-1. **Given** an artifact criterion whose check exited zero, **When** the criterion is adjudicated,
-   **Then** it reaches the prose Judge with the check result as evidence, and the Judge may still
-   return `unmet`.
-2. **Given** an artifact criterion whose check exited non-zero, **When** the Judge returns `met`,
-   **Then** it is rewritten to `unmet`.
-3. **Given** an artifact criterion whose check was inconclusive, **When** the Judge decides,
-   **Then** the check vetoes nothing.
+**Why P1**: the operator's direction that cheap certain evidence precedes expensive uncertain
+judgement — and, equally, the operator's correction that this must work for a goal that has nothing
+to run.
+**Independent test**: a goal about sending an email reaches a verdict with no check anywhere in the
+system; a goal that declares a check has it consulted; neither is decided by a command inferred from
+its wording.
+
+1. **Given** a criterion the working agent satisfied by calling a tool (`send_email`,
+   `create_event`, `serve_web`), **When** the adjudication runs, **Then** that call's tool name,
+   parameters, status and error are in the Judge's evidence block, and the Judge decides.
+2. **Given** a criterion that **declares** a check (`task.KindCheck`), **When** the check exits
+   non-zero, **Then** no `met` verdict for it survives.
+3. **Given** the same declared check exiting **zero**, **When** the Judge decides, **Then** it may
+   still return `unmet` — a consistent fact does not establish the criterion.
+4. **Given** a criterion whose text names a file path but which declares **no** check, **When** the
+   adjudication runs, **Then** **no command is built from its wording** and it reaches the Judge as
+   an ordinary prose criterion.
+5. **Given** a goal about booking a flight, writing a deck or emailing a supplier, **When** it is
+   adjudicated, **Then** no check runs at any point, because none was declared — "reserved for
+   coding tasks" holds by construction, with no classifier deciding what a coding task is.
+
+### US-11 — Completion is claimed by a tool call, and an unevidenced claim cannot be made (P0)
+
+Today a claim is prose the engine has to recognise: `[goal:evidence] <text>` immediately followed by
+`GOAL_STATUS: met`, with a fenced-code rule, an exclusion rule, a last-occurrence rule and a
+positional-adjacency rule — four heuristics whose combined job is to decide whether a model *meant*
+to claim. The G-4 bounce ladder exists to absorb the commonest failure of that scheme: claiming
+without evidence.
+
+**Why P0**: it replaces detection with arrival (ADR D12). Either the call was made or it was not.
+**Independent test**: a `met` claim carrying no evidence never reaches the engine's claim path at
+all — it is refused at the call, with a message the model can act on, and costs no round.
+
+1. **Given** the working agent calls `goal_claim(status: "met", evidence: "…")`, **When** the turn
+   ends, **Then** an adjudication is scheduled — with no marker anywhere in the output.
+2. **Given** the working agent calls `goal_claim(status: "met")` with `evidence` absent, empty or
+   whitespace-only, **When** the call is executed, **Then** it is **refused at the call** with a
+   stated violation, no claim is recorded, no round is consumed, and the Judge is not invoked.
+3. **Given** `goal_claim(status: "waiting_on_user")`, **Then** the goal parks exactly as the
+   `GOAL_STATUS: waiting_on_user` marker parks it today: no verdict, no round, idle settlement
+   suppressed.
+4. **Given** `goal_claim(status: "blocked")`, **Then** the goal surfaces as blocked to the operator,
+   no adjudication runs and no round is consumed — a status the marker family has no value for.
+5. **Given** a turn that both calls `goal_claim` and emits a `GOAL_STATUS` marker, **Then** the tool
+   call is authoritative and the marker is ignored, and the divergence is logged.
+6. **Given** the tool is called on a delegated sub-turn, or on a session with no active goal,
+   **Then** it refuses with a stated reason, exactly as `set_goal` does.
+
+### US-12 — A quiet agent is paused, not judged; and the Judge never makes the operator wait (P0)
+
+Two failures with one cause. Silence was being treated as a claim — a 60 s quiet window fired an
+adjudication against whatever happened to be on disk — and that adjudication ran inside the turn the
+operator was waiting on, for up to the resolved judge timeout.
+
+**Why P0**: a verdict against silence is a verdict against nothing, and it burns a round for it. And
+a tool-using verifier on the user's synchronous critical path is the one shape ADR §8's four-harness
+survey found nowhere.
+**Independent test**: a goal whose agent goes quiet for ten minutes receives the goal re-posted and
+zero Judge calls; a goal whose agent claims receives its answer first and its verdict afterwards.
+
+1. **Given** a goal-bearing session that has been quiet past the quiet window with no claim,
+   **When** the keeper's tick runs, **Then** the goal is **re-posted** to the working agent, no
+   Judge call is made, and no round is consumed.
+2. **Given** the same session, **When** it is quiet again after the re-post, **Then** the re-post
+   ladder's existing bound applies — the keeper does not push forever.
+3. **Given** a `met` claim, **When** the turn ends, **Then** the operator's answer is published
+   **before** the adjudication is dispatched, and the operator's turn does not wait for it.
+4. **Given** an adjudication in flight, **When** the operator sends a new message, **Then** the new
+   turn runs normally and is not blocked by it.
+5. **Given** an adjudication in flight, **When** a second `met` claim arrives, **Then** it is
+   refused with a stated reason carried back in the tool result, and no second Judge turn starts.
+6. **Given** a background adjudication that returns `unmet`, **When** it completes, **Then** the
+   operator sees the goal card change state and the verdict lands in the transcript — without a
+   modal, a toast, or anything that interrupts what they are doing.
 
 ### Edge cases
 
@@ -787,14 +1113,14 @@ opened.
 | E-7 | Judge returns an unrecognised `outcome` string | `unable_to_verify` (fail-closed), criterion flagged unjudgeable |
 | E-8 | Goal scope, unbound `/goal` (no `WorkspaceID`) | Existing `WithSystemAgentAgentHomeOverride` branch unchanged; descendant scope still applies |
 | E-9 | `store.ListSessions()` fails during descendant resolution | Scope degrades to the root session alone; criteria needing a child are `unable_to_verify`, never `met` |
-| E-10 | Two adjudications for the same unit race | Existing registry CAS is unchanged; the loser is `Unavailable` with a **distinct, CAS-specific reason** so it is not read as a provider outage (FR-083) |
+| E-10 | Two adjudications for the same unit race | Existing registry CAS is unchanged; the loser is `Unavailable` with a **distinct, CAS-specific reason** so it is not read as a provider outage (FR-083). Under D13 the CAS is no longer a rare race but the **primary mechanism for open item 3** — a second claim during an in-flight adjudication reaches it (FR-101) |
 | E-11 | Tool-call cap reached mid-criterion, before any read succeeded | Every unresolved criterion is `unable_to_verify` |
 | E-12 | Judge's `SOUL.md` is unreadable at the capability self-check | The self-check reports "cannot determine" — treated exactly as legacy (FR-079 gating applies), one ERROR, file untouched, no adjudication blocked |
 | E-13 | Grounding runs after ADR-066 D5 emptied the earlier tool results in the same turn | Unaffected — grounding reads the in-memory capture, never `session.ToolCall.Result` (C10) |
 | E-14 | `evidence_target` names a path the criterion does not mention but which appears in `diffText`'s changed-file list | Reachable — accepted (FR-030a) |
 | E-15 | Criterion text is a single clause containing the word "and" inside a quoted identifier | Splitter is capped at 5 clauses and operates on the normalised criterion text; a false split raises the evidence bar but can never turn a genuine `met` into `unmet` — only into `unable_to_verify`, which is bounded at K |
 | E-16 | An injection signature appears in a tool result the Judge never grounds anything in | Banner and flag are recorded; no verdict is rewritten (FR-009a rewrites only a `met` whose `evidence_target` is the flagged call) |
-| E-17 | Legacy soul emits `met` with a genuine quote and no `evidence_source` | Stays `met` (FR-079a); provenance is `none` and the adjudication log carries `legacy_rubric: true` |
+| E-17 | Legacy soul emits `met` with a genuine quote and no `evidence_source` | Stays `met` (FR-079(a)); provenance is `none` and the adjudication log carries `legacy_rubric: true` |
 | E-18 | A client build predating this change receives a `judge_verdict` frame carrying `outcome` | The old client fails on the **unknown property**, not on an unknown enum value: generated `per_criterion` items are `z.object({criterion_id, met, reason, evidence_quote}).strict()` (`_asyncapi-zod-schemas.generated.ts:906–913`), so `outcome` is rejected before any value is inspected. Covered by FR-085, restated |
 | E-19 | The same genuine quote is offered for two clauses of one criterion, or for two criteria | The second and every later use is **not grounded** (FR-030c). Within a criterion this makes FR-006a's count fall short; across criteria the later `met` becomes `unable_to_verify` |
 | E-20 | A criterion's text is edited by `set_goal` `mode:update` from three clauses to one while a verdict for it exists | The **persisted** clause count does not fall (FR-006b). The adjudicator reads the persisted value, so a criterion cannot be made cheaper to satisfy in response to failing |
@@ -802,6 +1128,22 @@ opened.
 | E-22 | A provider reuses tool-call id `call_0` across iterations of the same verifier turn | The capture key is composite, so the later result never overwrites the earlier one (FR-030 mechanism, m6) |
 | E-23 | A Judge returns `unable_to_verify` for a **different** criterion on each of many consecutive adjudications | The per-unit consecutive-withheld counter reaches K and every outstanding `unable_to_verify` is scored `Met:false`, consuming the round (FR-020a). Per-criterion counters alone never terminate this (C19) |
 | E-24 | An operator's own modern rubric declares the fields in its own words, without the shipped sentinels | Treated as not-declared (fail-closed), but the badge is a **capability** message naming the missing declarations and quoting the sentinels, with an add-them affordance (C17, FR-078) |
+| E-25 | A turn calls `goal_claim(met)` **and** emits `GOAL_STATUS: met` | The tool call wins; the marker is not parsed for that turn; the divergence is logged at INFO with both statuses (FR-092) |
+| E-26 | A turn calls `goal_claim(met)` **and** emits `GOAL_STATUS: waiting_on_user` | The tool call wins — one claim channel per turn, chosen by presence, never merged. The goal claims; it does not park (FR-092) |
+| E-27 | A turn calls `goal_claim` **twice**, with different statuses | The **last successful call in the turn** is the claim, mirroring the marker family's own last-occurrence rule so the two channels cannot disagree about multiplicity (FR-092) |
+| E-28 | `goal_claim(status: "met", evidence: "   ")` | Refused at the call as an empty evidence violation — whitespace-only is empty, the same rule FR-026 applies to `evidence_quote` (FR-088) |
+| E-29 | `goal_claim` is called by an agent whose per-agent policy denies it | Ordinary tool-policy denial; the turn sees a denial result. No claim, no round, no special case — a denied `goal_claim` is not a bare claim (FR-089) |
+| E-30 | The keeper's re-post is dispatched but `asyncNotifier.Notify` fails, or no route is recorded | `dispatchGoalAsyncFollowUp` clears the idle-settling marker itself so the next tick retries — the shipped un-wedge behaviour, unchanged and load-bearing (FR-096) |
+| E-31 | A goal goes quiet forever and never claims | The re-post ladder's existing bound (`goalZeroOutputPushMax`) applies; past it, the goal reaches a terminal state through the rounds bound and the multi-day idle-expiry sweep — **not** through a claimless verdict (FR-097) |
+| E-32 | The operator sends a new message while a background adjudication is in flight | The new turn runs normally. If it produces a `met` claim, E-33 applies; otherwise the in-flight adjudication continues against the record as it stood when it was scheduled (FR-100) |
+| E-33 | A second `met` claim arrives while an adjudication is in flight | Refused, not superseding: `goalAdjudicationInFlight` (or `ErrVerifierSessionHeld` if it races past) returns a stated reason **in the tool result**, so the model is told rather than silently ignored. No round consumed, no second Judge turn (FR-101) |
+| E-34 | `/goal clear` or a Stop lands while a background adjudication is in flight | The verifier registry's session handle is cancelled exactly as today; the adjudication is discarded whole and produces no verdict (FR-103) |
+| E-35 | The gateway restarts while a background adjudication is in flight | The adjudication is lost — it is in-memory only, per the Deployment section's no-stateful-change rule. The goal is left quiet with an unconsumed round, which is the state FR-097's re-post handles. **No resume, no persisted queue** |
+| E-36 | A criterion's text names `report.pdf` but declares no check | **No check is built.** It is a prose criterion and the Judge opens the file. Under revision 6 an inferred `test -f && test -s` would have run (C24, FR-109) |
+| E-37 | A criterion declares a check and the goal has no workspace (unbound `/goal`) | The check is inconclusive, vetoes nothing, and the criterion is judged. The shipped check runner is workspace-rooted; an unbound goal has no workspace (FR-040) |
+| E-38 | Tier-1 evidence for a criterion exists but the tool call's `Result` was projected away by ADR-066 D5 | `ContentState == "emptied"` makes it **inconclusive**, never a contradiction: `Tool`, `Parameters`, `Status` and `Error` are still durable and are still rendered (C27, FR-106) |
+| E-39 | The working agent ran the project's test suite itself during its work | That `bash` call is **tier-1 evidence like any other** — rendered with its command and status. Nothing re-runs it, and no exit-code rung is engaged on its account (FR-105, D14 rule 3) |
+| E-40 | A tool call the criterion depends on has `Status: "denied"` | Tier 1 reports it as denied. It is **not** a contradiction of a `met` (the agent may have achieved the criterion another way) and it is **not** evidence for one — inconclusive (FR-108) |
 
 ---
 
@@ -835,8 +1177,29 @@ opened.
   loudly and visibly — naming the missing declarations and the exact strings that would supply
   them, never guessing at the prompt's age — applies only the controls that prompt can satisfy,
   and never rewrites the file.
-- When a deterministic check proves a filesystem fact false, no `met` verdict can contradict it.
-- When a deterministic check proves a file exists, the Judge may still find the criterion unmet.
+- When a criterion **declares** a check and that check proves a fact false, no `met` verdict can
+  contradict it. When it proves a fact true, the Judge may still find the criterion unmet.
+- When a criterion declares **no** check, none is built. Nothing reads its wording looking for a
+  path, a command or a substring, and the criterion reaches the Judge as prose.
+- When the working agent's own tool calls bear on a criterion, their tool name, parameters, status
+  and error are put in front of the Judge as facts — and a fact that **contradicts** a `met` blocks
+  it, while a fact merely **consistent** with one establishes nothing.
+- When a tool call's result was projected away mid-turn, that is inconclusive, never a
+  contradiction.
+- When the goal is about an email, a booking, a document or a piece of research, the path is the
+  agent's own tool-call record and then the Judge, with nothing in between — and no part of the
+  system decides whether the goal "is a coding task".
+- When completion is claimed, it is claimed by a tool call carrying its evidence; a `met` with no
+  evidence is refused where it is made, not bounced after the fact.
+- When a claim is made, that is the only thing that starts an adjudication. Silence never is.
+- When the working agent goes quiet without claiming, the goal is re-posted so work continues. No
+  Judge call, no round, no verdict against nothing.
+- When an adjudication runs, the operator already has their answer — it is dispatched after
+  delivery and never inside the turn they are waiting on.
+- When a second claim arrives while an adjudication is in flight, it is refused with a stated reason
+  the claiming model can read, and it never starts a second Judge turn.
+- When a background verdict overturns a claim, it changes the goal card and lands in the transcript;
+  it never interrupts what the operator is doing.
 - When the Judge cannot reach the session or path a criterion needs, the outcome is
   `unable_to_verify`.
 - When a named path does not exist, the outcome is `unmet`.
@@ -864,13 +1227,39 @@ opened.
   `SeedSystemAgentSoulFile`'s never-overwrite rule, because operator edits must survive. **There is
   no exception**: revision 4 removed the migration, so no path in this change writes over an
   existing soul file. §I's capability self-check reads and reports; the operator acts.
-- The system must not reintroduce a "settle the criterion without an LLM call" path for artifact
-  criteria, because D5 reverses exactly that part of `02214f5c`.
-  - **One carve-out, and only one.** On an adjudication where `rubricDeclaresOutcome` is false, the
-    rung-1.5 settle is **retained** (FR-079(d)): a Judge whose own prompt forbids looking is
-    strictly worse than the deterministic check it would replace, so demoting the check there
-    trades a working control for nothing. This is a legacy-only exception, gated on the same
-    capability fact as every other FR-079 clause, and it is not available on a current rubric.
+- **The system must not build a verification command out of a criterion's wording.** D14 rule 2
+  retires `planArtifactCheck` and the whole rung it gates (C24). A file test, a substring test, a
+  URL probe or a shell command may be **declared** on a criterion; none may be **inferred** from
+  what the criterion happens to say. Revision 6's carve-out (FR-079(d), retaining the settle on a
+  legacy rubric) goes with it — there is no longer an inferred check to retain.
+- **The system must not classify a goal, or a criterion, as "coding" or "not coding".** Tier 2 is
+  reserved for coding work by construction — a criterion either declares a check or it does not,
+  and declaring is a deliberate authoring act. A classifier deciding that question would be a new
+  silent failure source with no operator-visible symptom when it guessed wrong, and it is
+  unnecessary. Anyone tempted to add one should read D14 rule 1 and this bullet together.
+- **The system must not require, prefer, reward or default to a machine-checkable criterion.**
+  `set_goal`'s `judgment` enum stays `boolean | quantitative | artifact`, none of which implies a
+  check, and no validation, prompt, scoring or ordering may make a checkable criterion easier to
+  write or likelier to pass than a right one. This is A-14/A-17's incentive defect arriving through
+  a different door, and the door is closed here rather than watched.
+- The system must not treat a **declared** check that passed as sufficient for `met`, because the
+  "single self-contained file" case is precisely what a check cannot see.
+- The system must not read the working agent's tool-call record as an automatic verdict. Tier 1
+  **decides** only through a criterion that declared a `KindBehavior` payload; otherwise it informs
+  the Judge and may veto a contradicted `met`. Building a matcher that decides whether
+  `send_email(to: x)` satisfies "the supplier was emailed" would be D14 rule 2's retired inference,
+  relocated one tier down (C26).
+- The system must not treat an ADR-066-emptied tool result as an absent one. `ContentState` says
+  which it is; only `Result` is rewritten, and `{Tool, Parameters, Status, Error}` are durable
+  (C27).
+- **The system must not judge silence.** A quiet or stalled goal is a pause. No adjudication may be
+  started by anything other than a `met` claim, and nothing may reintroduce a claimless verdict
+  under another name — an "idle check", a "periodic settle", a "staleness sweep".
+- **The system must not run an adjudication inside the turn the operator is waiting on**, and must
+  not reintroduce one by making the deferral conditional (on a short criteria set, a fast model, a
+  cached verdict). The deferral is unconditional.
+- The system must not interrupt the operator to deliver a background verdict — no modal, no toast,
+  no forced view change (FR-102).
 - The system must not change SEC-26's budget mechanism, only observe its interaction (ADR §5).
 - The system must not treat "the deterministic check passed" as sufficient for `met`, because the
   "single self-contained file" case is precisely what the check cannot see.
@@ -912,6 +1301,20 @@ opened.
 | Unknown enum value on the wire | rejected by generated zod; internally coerced to `unable_to_verify` / `none` |
 | Per-adjudication tool-call cap | default 25, operator-configurable, hard ceiling 60, **clamped by FR-056** to `max(1, MaxAgentLLMCallsPerHour/4 − 2)` when that limit is non-zero. The `− 2` is not cosmetic: `checkJudgeSEC26` takes one token before dispatch and `turnLoop` takes one per iteration, so an N-tool-call turn spends **N + 2** tokens (N tool-emitting iterations, the final verdict iteration, and the pre-dispatch take). With `− 1`, the BDD's own example (limit 20 → cap 4) spends 6/20 = 30 %, breaching SC-007's 25 % |
 | Per-unit consecutive-withheld-adjudication bound | equal to `UnableToVerifyMaxRerunsDefault` (3, firing on the 4th), independent of which criterion withheld (FR-020a) |
+| `goal_claim.status` enum | exactly `[met, blocked, waiting_on_user]` |
+| `goal_claim.evidence` | required and non-empty after whitespace trimming when `status == met`; ignored otherwise. Refused **at the call** (FR-088) |
+| `goal_claim` catalogue parity | present in `coreagent::allStaticToolNames` **and** `config.DefaultConfig().Sandbox.ToolPolicies`; `TestCatalog_MatchesGlobalCeilingEntryForEntry` fails on a one-sided edit |
+| `goal_claim` global ceiling | `allow`, matching `set_goal`'s (writing your own session's claim is the safety-increasing direction) |
+| `goal_claim` per-agent seeds | `allow` for every human-facing agent (core roster, subagent tier, customs' default allowlist); explicit `deny` for Judge and PlanSupervisor via `denyAllThenOverride`; explicit `deny` for Worker via `tightenGlobalCeiling` — identical in every position to `set_goal`'s |
+| Adjudication triggers | exactly one: a `met` claim. **Zero** time-based triggers |
+| Claimless adjudication call sites | **zero** — `runGoalAdjudication` is reachable only from a claim |
+| Keeper behaviours surviving the D13 removal | **eight** — FR-096's table; asserted row by row |
+| Adjudication dispatch position | strictly after `bus.PublishOutbound` of `result.finalContent` in `runAgentLoop`; asserted by observed ordering, not by reading the source (FR-098) |
+| Concurrent adjudications per unit | 1. A second claim is refused with a stated reason in the tool result (FR-101) |
+| Check construction | **declared only.** `planArtifactCheck`, `artifactPathRe`, `artifactContainsRe`, `artifactCheckCandidate` and `isSafeWorkspaceArtifactPath` are absent from the tree; a CI grep gate asserts it (FR-109) |
+| Task-type classifiers | **zero.** No function anywhere decides whether a goal or criterion is "coding" |
+| Tier-1 durable fields | `{Tool, Parameters, Status, Error}` — never rewritten by `recordEmptiedOnTranscript`, which touches `Result` and `ContentState` only |
+| Tier-1 rendered per call | `{tool, parameters, status, error}`, parameters bounded at 512 runes per call and the whole tier-1 block at 32 KiB, oldest-first truncation with an explicit elision marker (FR-105) |
 | Per-adjudication bytes-read cap | default 2 MiB, operator-configurable, hard ceiling 8 MiB |
 | Per-adjudication token/cost ceiling | default 120 K prompt+completion tokens, operator-configurable; a WARN at 75 % (FR-081) |
 | Default judge turn timeout | raised from 120 s to 420 s; operator-configurable; hard ceiling 900 s |
@@ -947,7 +1350,7 @@ other. Every row below is a hand-sync obligation; only the `$ref` rows are free.
 | 7 | " | inline | `contracts/asyncapi.yaml` → `GoalStatusFrame.criteria[].status` (`:4616`) → `_asyncapi-zod-schemas.generated.ts:837`, `z.enum([...]).strict()` | **hand-sync — miss it and the goal card blanks in production** |
 | 8 | " | inline | `contracts/asyncapi.yaml` → `GoalStatusFrame.dod[].status` (`:4719`) → `…generated.ts:867` | **hand-sync — same failure** |
 | 9 | " | `$ref` | `GoalStatusFrame.yaml` `criteria`/`dod`, `Goal.yaml`, `Plan.yaml`, `Task.yaml`, `TaskCreateRequest.yaml` | inherits — not sync points |
-| 10 | `GoalStatusFrame.state` enum (+ `judge_refused_god_mode` FR-057a, + the CAS state FR-083) | canonical | `contracts/components/schemas/GoalStatusFrame.yaml` (`:98–109`) | authoritative |
+| 10 | `GoalStatusFrame.state` enum (+ `judge_refused_god_mode` FR-057a, + the CAS state FR-083, **+ `blocked` FR-093 and `claim_overturned` FR-102, rev 7**) | canonical | `contracts/components/schemas/GoalStatusFrame.yaml` (`:98–109`) | authoritative |
 | 11 | " | inline | `contracts/asyncapi.yaml` (`:4492` region) → `…generated.ts:808` | **hand-sync** |
 | 12 | agent-card degraded-state field (FR-078) | canonical | `contracts/components/schemas/Agent.yaml`, `$ref`'d once from `openapi.yaml:277`; consumed by `pkg/gateway/rest.go`'s `getAgent`/`listAgents` | authoritative, no duplicate |
 
@@ -1191,9 +1594,18 @@ equality test is the only mechanical guard (C21).
     calls `tracker.Reset(key)` on a per-criterion key, so a Judge returning `unable_to_verify` for
     a *different* criterion each round resets every counter before any reaches K. FR-019 then
     discards the whole adjudication and `runGoalAdjudication`'s `Unavailable` branch never touches
-    `GoalRoundsUsed`. With M criteria the loop is unbounded, not M × K — and every iteration is now
-    a tool-using turn of up to 420 s inside the operator's chat turn. Nothing else in this spec
+    `GoalRoundsUsed`. With M criteria the loop is unbounded, not M × K. Nothing else in this spec
     caps the product: FR-081's ceiling is per-adjudication, `goalJudgeRoundTimeout` is per round.
+  - **Retained under revision 7, against the ADR's own expectation, and here is the trace (C25).**
+    ADR §8's Consequences say this loop "loses its clock" once adjudications fire on claims rather
+    than quiet windows. It does not; it acquires a slower one. A withheld adjudication returns
+    `Unavailable`, and `runGoalAdjudication`'s `Unavailable` branch emits a pill and returns
+    **without calling `deliverSteer`** — so nothing re-dispatches from the adjudication. The goal is
+    then quiet with an active goal and an unconsumed round, which is exactly the state FR-097's
+    keeper re-post exists for. The cycle becomes claim → withheld → quiet window → re-post → work →
+    claim → withheld, paced by the worker's turn length rather than by 60 s. Each iteration is still
+    a full tool-using Judge turn. What revision 7 changes is that this is **background cost, not
+    operator-visible latency** — the urgency drops, the necessity does not.
   - This is the requirement that makes C3's "an honest failure arrives in ≤ K+1 adjudications"
     true at the unit level. Without it that sentence is true per criterion and false per goal.
   - The escalation MUST name the aggregate rule, not a single criterion, so an operator reading it
@@ -1371,43 +1783,38 @@ equality test is the only mechanical guard (C21).
     the same ungrounded quote, asserted to be rewritten. The pair fails if grounding is missing and
     fails if grounding over-applies.
 
-### F. Deterministic checks inform, one-way (D5, D5a)
+### F. A declared check informs, one-way (D5, D5a, D14)
 
-- **FR-035**: An artifact criterion identified by `planArtifactCheck` MUST always reach the prose
-  Judge. `JudgeCriteria` MUST NOT settle it from the check alone. **Gated on
-  `rubricDeclaresOutcome`** — see FR-079(d).
-- **FR-036**: The check's outcome MUST be attached as a `task.EvidenceRecord` and rendered into the
-  Judge's evidence block.
-- **FR-037**: **Exactly one rung classifies each artifact criterion, and which rung it is depends
-  on whether the criterion was demoted.**
-  - **When FR-035's demotion applies** (`rubricDeclaresOutcome` true): the rung-1.5 loop MUST NOT
-    call `noteNonVerdict` (C7) — the criterion falls through to prose, and the prose loop's
-    classification is the sole one. Revision 5's unconditional form is correct only in this case.
-  - **When FR-079(d) retains the rung-1.5 settle** (`rubricDeclaresOutcome` false): rung 1.5 is the
-    **sole** classifier for that criterion and MUST call `noteNonVerdict` and honour its `withheld`
-    return exactly as today. The criterion never reaches prose, so nothing downstream can classify
-    it.
-  - **Why the unconditional form was a defect.** FR-037 was correct *only because* FR-035 sent
-    every artifact criterion to prose. On a legacy install where the settle is retained, a criterion
-    whose check is blocked would be settled at rung 1.5 with **no classification and no tracker
-    entry at all** — silently unbounded, on precisely the population §I exists to protect. The
-    blocked-check-on-legacy row is mandatory in
-    `TestRubricSelfCheck_LegacySoulRetainsArtifactSettle`.
-  - Under no gating is a criterion classified **twice**; that double-classification, which silently
-    defeats the K bound, is what C7 identified.
-- **FR-038**: A check that ran to completion with a **non-zero** exit MUST veto `met` for that
-  criterion: a `met` verdict MUST be rewritten to `unmet`, and the contradiction MUST be logged at
-  WARN naming the criterion id, the command and the exit code.
-- **FR-039**: A check that ran to completion with a **zero** exit MUST veto nothing. The Judge MAY
-  still return `unmet`.
+> **Rebased by ADR-084 revision 7's D14 (C24).** Revision 6's §F was written around one **inferred**
+> shell command and the rung it gated. D14 rule 2 retires the inference, so the rung has no members
+> and ceases to exist — and four of this section's seven requirements are consequences of it that
+> now have nothing to be consequences of. They are tombstoned below rather than deleted, in the
+> style of FR-041 – FR-048. What survives is the part that was never about inference: a check the
+> criterion **declared** (`task.KindCheck`, rung 1 — already opt-in, already shipped) informs the
+> Judge and vetoes one way. §Q sets that in its three-tier frame.
+
+- **FR-035**: **RETIRED (rev 7).** "An artifact criterion identified by `planArtifactCheck` MUST
+  always reach the prose Judge." There is no criterion *identified by inference* any more, so a
+  `KindProse`/`JudgmentArtifact` criterion **is** a prose criterion and reaches the Judge by the
+  ordinary path. Its content survives as a trivial consequence of FR-109 and is asserted there.
+- **FR-036**: A **declared** check's outcome MUST be attached as a `task.EvidenceRecord` and
+  rendered into the Judge's evidence block. *(Unchanged in substance; the word "declared" is what
+  narrows it — the inferred case no longer exists.)*
+- **FR-037**: **RETIRED (rev 7).** "Exactly one rung classifies each artifact criterion." C7's
+  double-classification was a property of rung 1.5 existing alongside the prose rung. With rung 1.5
+  gone there is one rung per criterion by construction, and no two classifications to keep in step.
+- **FR-038**: A **declared** check that ran to completion with a **non-zero** exit MUST veto `met`
+  for that criterion: a `met` verdict MUST be rewritten to `unmet`, and the contradiction MUST be
+  logged at WARN naming the criterion id, the command and the exit code.
+- **FR-039**: A **declared** check that ran to completion with a **zero** exit MUST veto nothing.
+  The Judge MAY still return `unmet`. This is the "a single self-contained file" case: existence is
+  not sufficiency.
 - **FR-040**: A check whose own outcome could not be decided (policy-denied, timed out, unreadable
-  exit code) MUST veto nothing.
-- **FR-040a**: `isSafeWorkspaceArtifactPath`'s guard MUST be unchanged.
-  - **Not an FR of this feature.** This is a *regression* requirement stated in FR form: the guard
-    is explicitly untouched, so its test passes on unmodified code and can never fail because of
-    anything specified here. It is retained in this position for cross-reference only; its real home
-    is [Regression Requirements](#regression-requirements), where its row is authoritative. Do not
-    count it as coverage of any new behaviour.
+  exit code, **or no workspace to root it in** — E-37) MUST veto nothing.
+- **FR-040a**: **RETIRED (rev 7).** "`isSafeWorkspaceArtifactPath`'s guard MUST be unchanged." That
+  function's only reachable caller is `planArtifactCheck`, so it is deleted with it (C24). A
+  requirement that a deleted guard is unchanged would be a live row asserting a property of dead
+  code. FR-109's absence gate covers its removal.
 
 ### G. RETIRED — migration of existing installs (D6, removed in ADR-084 rev 4)
 
@@ -1749,9 +2156,10 @@ rewrites any `met` lacking `evidence_source`, and **no pre-ADR rubric declares `
 because FR-008 introduces it.** So 100 % of passing verdicts become `unable_to_verify` → withheld
 for K rounds → persistently-blocked escalation → `Met:false`. On a soul written before 2026-09-05 it
 is worse: those texts predate the quote-before-verdict instruction, so FR-024's empty-quote rewrite
-fires at the parser first. And FR-035 removes the deterministic artifact settle, so the one class of
-criterion that still worked correctly is now judged blind by a prompt that forbids looking. The
-upgrade is not inert; it is destructive, and it is invisible.
+fires at the parser first. And **FR-109** deletes the inferred artifact check outright, so the one
+class of criterion that still worked correctly on that install is now judged blind by a prompt that
+forbids looking — with no carve-out, FR-079(d) having been retired with the rung it protected
+(C24). The upgrade is not inert; it is destructive, and it is invisible.
 
 - **FR-077**: **Rubric capability self-check — two independent facts, three sentinels.** At boot,
   alongside `gateway.go::seedSystemAgentEagerSouls`, and again at the first verifier dispatch of a
@@ -1811,18 +2219,13 @@ upgrade is not inert; it is destructive, and it is invisible.
     - With `rubricInstructsQuote` false, a `met` with an empty quote is scored **`met`**, with
       `provenance: none` and `legacy_rubric: true` in the log. That is what "degrade honestly"
       means, and it is the same shape as (a).
-  - **(d)** FR-035's artifact demotion MUST NOT apply: the deterministic rung-1.5 settle is
-    **retained** for that adjudication. A Judge forbidden to look is strictly worse than the
-    deterministic check it would replace, so demoting the check on a legacy prompt trades a working
-    control for nothing. This is the one carve-out to the "no settle-without-LLM path" prohibition
-    under Explicit Non-Behaviors, and it is recorded there.
-    - **FR-037 is conditional on the same gate, and revision 5 broke this path.** FR-037 as
-      revision 5 wrote it was unconditional ("the rung-1.5 loop MUST NOT call `noteNonVerdict`") and
-      was correct only *because* FR-035 sent every artifact criterion to prose. Here the criterion
-      never reaches prose, so an unconditional FR-037 leaves an artifact criterion whose check is
-      blocked settled with **no classification and no tracker entry at all** — silently unbounded,
-      on exactly the population §I protects. When the settle is retained, **rung 1.5 is the sole
-      classifier and MUST honour `withheld`**. See FR-037.
+  - **(d)** **RETIRED (rev 7).** This clause retained the rung-1.5 settle on a legacy rubric,
+    reasoning that a Judge forbidden to look is worse than the inferred check it would replace.
+    D14 rule 2 deletes the inferred check (C24), so there is nothing to retain and no carve-out to
+    the no-settle-without-LLM prohibition — the prohibition is now unconditional. A legacy install's
+    `KindProse`/`JudgmentArtifact` criteria are judged by its own rubric like every other prose
+    criterion, which is a real degradation on that population and is the accepted meaning of
+    greenfield (D6). The FR-037 sub-clause this carried goes with it.
   - **(e)** FR-006a's per-clause evidence count MUST NOT apply (the array is FR-006's, which the
     legacy prompt cannot emit).
   - **(f)** Every verdict from that adjudication MUST record `provenance = none`, and the
@@ -1863,17 +2266,28 @@ Five properties this change makes materially worse and which nothing above bound
 
 - **FR-081**: **Cost ceiling.** Each adjudication MUST be bounded by a token/cost ceiling in
   addition to the tool-call and byte caps — default 120 K prompt+completion tokens, operator-
-  configurable — and MUST emit a WARN at 75 % of it. The bound is needed because three separate
-  decisions multiply the per-round cost with nothing capping the product: D5/FR-035 re-enters every
-  artifact criterion into the prose set on **every** round, FR-019 discards the whole adjudication
-  (including its tool-using turn) when one prose criterion is withheld, and FR-035's demotion adds
-  the check output to the prompt as well. A-1 and A-10 record the growth as an open question; this
-  FR makes it bounded rather than open.
-- **FR-082**: **Cancellation.** A tool-using verifier turn now runs up to 420 s **inside the
-  operator's chat turn**. The spec MUST state, and a test MUST assert, that
-  `RequestCancelForSession` against the adjudicating `chatID` interrupts the turn
-  **mid-tool-call**, and that **no verdict is produced from a cancelled turn**. A cancelled
-  adjudication is discarded whole.
+  configurable — and MUST emit a WARN at 75 % of it. The bound is needed because several decisions
+  multiply the per-round cost with nothing capping the product: **FR-109** sends every criterion that
+  would have been settled by an inferred check to the Judge instead, on **every** round; FR-019
+  discards the whole adjudication (including its tool-using turn) when one prose criterion is
+  withheld; and **FR-105's tier-1 feed enlarges the prompt itself**, since a call now renders with
+  its parameters rather than as a name and a status. A-1 records the growth as an open question;
+  this FR makes it bounded rather than open.
+  - **Revision 7 changes the sign of the risk, not its existence.** The cost is no longer paid in
+    the operator's waiting time (D13), so a token ceiling is the *only* thing bounding it — there is
+    no impatient human to notice. FR-105's byte bounds and this ceiling are therefore load-bearing
+    where, under revision 6, the 420 s timeout was doing part of the work. *(A-10, which asked
+    whether artifact criteria should be short-circuited on later rounds, is retired with FR-035.)*
+- **FR-082**: **Cancellation.** A tool-using verifier turn now runs up to 420 s **in the background,
+  after delivery** (D13). The spec MUST state, and a test MUST assert, that a cancel against the
+  adjudicating verifier session interrupts the turn **mid-tool-call**, and that **no verdict is
+  produced from a cancelled turn**. A cancelled adjudication is discarded whole.
+  - **Revision 7 changes what "cancel" means here, and FR-103 carries it.** Under revision 6 the
+    verifier turn ran inside the operator's chat turn, so `RequestCancelForSession` against the
+    adjudicating `chatID` reached it. Once the adjudication is deferred past the turn there is no
+    chat turn to interrupt and that chat-scoped cancel no longer reaches it. The handle that does is
+    the verifier session registered in `verifier_registry` before dispatch — the same handle
+    `StopPlan`/`StopTask`/`/goal clear` already fan out to. See FR-103.
   - **Revision 5's third clause — "the caps are honoured across a resume rather than reset by
     it" — is deleted, along with `TestVerifierBudget_CountersSurviveResume` (F10).** It contradicted
     two other parts of this spec. FR-030's mechanism holds the capture and the counters **in memory
@@ -1925,22 +2339,439 @@ Five properties this change makes materially worse and which nothing above bound
   - FR-074 remains the **absent**-field case (an old verdict read by a new client) and is
     unaffected. A fallback render for an unrecognised `outcome` value is still worth having for the
     persisted-verdict path, but it is not what fixes the frame.
-- **FR-086**: **Visibility during a long adjudication.** A tool-using verifier turn runs up to
-  420 s synchronously inside the operator's chat turn, in **its own session with its own `chatID`**,
-  so its tool calls are not in the operator's thread; `toolVisibility` hides infra calls; and the
-  ActivityPanel shows subagent spans and background bash, not verifier turns. This spec has
-  requirements for three terminal states and, before this FR, none for the seven minutes in
-  between.
-  - **The `judging` pill already exists and already fires**: `runGoalAdjudication` calls
-    `emitGoalStatusFrame(…, goalPillJudging)` (`goal_triggers.go:440`) **before** dispatch, and
-    `judging` is in the shipped `GoalStatusFrame.state` enum. So the operator is not looking at
-    nothing — they are looking at a pill that does not change for up to seven minutes.
-  - **The requirement is to pick one and say so.** Either (a) the goal-status surface is updated as
-    investigation-log entries accrue — at minimum a count of tool calls made — or (b) **this spec
-    states explicitly that the operator sees an unchanging `judging` pill for up to the resolved
-    judge timeout, and that this is accepted.** (b) is a legitimate answer and costs nothing;
-    silence is not an answer, because it leaves an implementer to discover the seven-minute gap
-    from a user report. **W3 chooses, and records the choice in this FR.**
+- **FR-086**: **RETIRED (rev 7) — answered by construction.** This required W3 to choose between
+  streaming a tool-call count onto the goal-status surface and stating that the operator watches an
+  unchanging `judging` pill for up to seven minutes. **Neither question survives D13**: the
+  adjudication no longer runs inside the turn the operator is waiting on, so there is no gap between
+  their question and their answer to fill. They get the answer; the pill moves to `judging` after
+  it; a verdict follows.
+  - What the retirement does **not** cover, and what replaces it, is a genuinely different question:
+    how a background verdict that **overturns** the claim becomes visible without being intrusive.
+    That is ADR §8's open item 2 and it is resolved in **FR-102**.
+  - The `judging` pill's existing emission is unchanged and is now a **regression** property:
+    `runGoalAdjudication` emits `emitGoalStatusFrame(…, goalPillJudging)` before dispatch, and
+    `judging` is in the shipped `GoalStatusFrame.state` enum. `TestGoalStatus_JudgingPillEmittedAtDispatch`
+    moves to [Regression Requirements](#regression-requirements) with the rest.
+
+### O. Completion is claimed by a tool call (D12)
+
+> This section replaces **detection** with **arrival**. Everything below is about the claim channel;
+> nothing here changes what the Judge does with a claim once it has one.
+
+- **FR-087**: A new static builtin tool `goal_claim` MUST exist, implemented in
+  `pkg/tools/goal_claim.go` alongside `set_goal.go`, with parameters:
+  - `status` — required, `string`, enum exactly `[met, blocked, waiting_on_user]`.
+  - `evidence` — `string`. **Required and non-empty when `status == met`**; ignored otherwise.
+    Semantically the same thing the `[goal:evidence]` line carries today: the worker's own one-line
+    statement of *what it verified*, which becomes the Judge's `ClaimText` input.
+
+  The tool description MUST state that a `met` claim starts an adjudication that runs after the
+  reply is delivered, that a verdict may arrive later and may disagree, and that `waiting_on_user`
+  and `blocked` end the turn without a verdict.
+- **FR-088**: A `goal_claim` call with `status == met` and an `evidence` argument that is absent,
+  empty, or whitespace-only MUST be **refused at the call**: the tool returns an error result naming
+  the violation and what to supply, **no claim is recorded, no round is consumed, and no
+  adjudication is scheduled.**
+  - **This is what retires the G-4 bounce economics for the tool path.** G-4 exists because a prose
+    claim's evidence line can only be checked *after* the turn has already ended, so the engine had
+    to price the correction: first bare claim free with a teaching steer
+    (`goalStatusBareClaimSteer`), second costs a round
+    (`bumpGoalBareClaimStreak` ≥ `goalBareClaimCostThreshold`). A tool call is checked **inside**
+    the turn, so the model gets the correction immediately and can retry in the same turn. There is
+    nothing to price. See FR-091 for exactly what survives on the marker path.
+  - Emptiness MUST be evaluated after Unicode whitespace trimming (E-28), matching FR-026's rule for
+    `evidence_quote` so the two cannot disagree.
+- **FR-089**: `goal_claim` MUST be seeded per Constraint #6 / ADR-077, in **every** position
+  `set_goal` occupies and with the same values. Specifically:
+  - **The catalogue**: an entry in `coreagent::allStaticToolNames`, in the general-builtin block
+    beside `set_goal`. Omitting it makes `validateOverrideKeys` **panic at boot** on the first
+    per-agent override that names it.
+  - **The global ceiling**: `"goal_claim": "allow"` in `pkg/config/defaults.go`'s
+    `Sandbox.ToolPolicies`. The two are checked one-for-one by the shipped
+    `TestCatalog_MatchesGlobalCeilingEntryForEntry`, so a one-sided edit fails.
+  - **Per-agent seeds**: explicit `allow` for the core roster, the subagent tier and customs'
+    default allowlist; explicit `deny` for **Judge** and **PlanSupervisor** via their
+    `denyAllThenOverride` stamps; explicit `deny` for **Worker** via `tightenGlobalCeiling`.
+  - **Why `allow` and not `ask`, stated so it is not "hardened" later.** Claiming completion is a
+    report about the claiming agent's own session, gated shut for a delegated sub-turn and a
+    goalless session by the tool's own preconditions (FR-090). It writes no file, spends nothing and
+    reaches nothing outside the session. An `ask` gate on it would put a human approval prompt in
+    front of an agent saying "I think I am done", which is the same absurdity `AskUserQuestion`'s
+    own seed comment warns against. It is the same reasoning, and the same value, as `set_goal`'s.
+  - **Note the browser family is not a precedent for uniformity, and do not read it as one.** The
+    eleven-plus `browser_*` entries in the ceiling are **not** uniform — `browser_upload_file` is
+    seeded `"ask"` where the rest are `"allow"`, because it is the one that moves a local file
+    outward. Two other seeded postures in the same file diverge for their own stated reasons
+    (`delete_task` is `"ask"` for irreversibility; `request_mount` is `"ask"` everywhere because
+    operator approval per folder is the whole point). A seeded value is a per-tool argument about
+    that tool's blast radius, never a family default — which is exactly why this FR states
+    `goal_claim`'s argument rather than pointing at a neighbour.
+- **FR-090**: `goal_claim` MUST enforce the same scope preconditions as `set_goal`, checked before
+  any state is touched: it refuses on a **delegated sub-turn** (it reports the OWNER session's
+  completion only) and on a session with **no active goal**. Each refusal MUST return a stated
+  reason. These are the tool's own preconditions, not tool policy (FR-089 governs policy; a policy
+  denial is E-29 and is a different thing).
+- **FR-091**: The prose markers MUST keep working, **unchanged**, as a fallback.
+  `task_completion_signal.go::parseGoalStatusMarker`, `findEvidenceImmediatelyBefore`,
+  `computeFencedLines`, `isExcludedMarkerLine`, `goalEvidenceLineRe`, `goalStatusLineRe` and their
+  fenced-code, exclusion, last-occurrence and positional-adjacency rules are **not deleted and not
+  modified**. A model that types the markers instead of calling the tool still claims successfully.
+  - **What survives of G-4, precisely.** On the **marker** path, everything: a
+    `GOAL_STATUS: met` with no `[goal:evidence]` line immediately before it is still a bare claim,
+    still bounced by `handleBareGoalClaim`, still counted by `bumpGoalBareClaimStreak`, still free
+    on the first occurrence and still costing a round at `goalBareClaimCostThreshold`, and
+    `goalStatusBareClaimSteer` is still the text the worker receives. None of those four symbols is
+    deleted, weakened or renamed.
+  - **What does not survive.** On the **tool** path, none of it runs, because FR-088 makes the state
+    it handles unreachable: a `goal_claim` that would have been "bare" never becomes a claim at all.
+    `handleBareGoalClaim` MUST NOT be invoked for a tool-path claim, and the bare-claim streak MUST
+    NOT be incremented by one.
+  - The streak is per session and shared between the two paths. A successful claim by **either**
+    channel MUST clear it, exactly as the marker path's `clearGoalBareClaimStreak` does today —
+    otherwise a worker that bounced once on markers and then switched to the tool would carry a
+    stale round-costing counter it can no longer discharge.
+- **FR-092**: **When both channels fire in one turn, the tool call is authoritative.** If the turn
+  recorded at least one successful `goal_claim` call, the engine MUST use it and MUST NOT parse
+  `result.finalContent` for markers at all for that turn. The divergence MUST be logged at INFO with
+  both statuses when a marker was also present, so a model habitually emitting both is visible.
+  - Rationale: the two channels can disagree (E-26), and a merge rule would have to invent a
+    precedence the model never expressed. Presence of the reliable channel is the one rule that
+    needs no arbitration.
+  - **Multiplicity**: if `goal_claim` is called more than once in a turn, the **last successful
+    call** is the claim (E-27) — deliberately the same last-occurrence-wins rule
+    `parseGoalStatusMarker` applies, so the two channels cannot disagree about which of several
+    signals counts.
+  - A `goal_claim` call that was **refused** (FR-088 or FR-090) or **policy-denied** (E-29) is not a
+    successful call and does not suppress marker parsing. A turn that tried the tool, was refused,
+    and then typed the markers correctly still claims.
+- **FR-093**: `status: blocked` MUST park the goal without an adjudication and without consuming a
+  round, and MUST surface to the operator as a distinct goal state.
+  - **It has no marker fallback, and that asymmetry is deliberate and must be stated.**
+    `parseGoalStatusMarker`'s canonical values are exactly `met` and `waiting_on_user`
+    (`goalStatusMet`, `goalStatusWaitingOnUser`); an unrecognised value is `Present: true,
+    Status: ""`, which the goal loop treats as no marker at all. So `GOAL_STATUS: blocked` is, and
+    remains, a no-op. FR-091 forbids modifying the marker parser, so `blocked` is reachable **only**
+    through the tool. This is acceptable — `blocked` is a new capability, not a migrated one — but
+    it MUST NOT be discovered later as a bug.
+  - `blocked` differs from `waiting_on_user` in what it asks of the operator: `waiting_on_user` says
+    *I need an answer*, `blocked` says *I cannot proceed and it is not a question you can answer*.
+    Both park. Both suppress idle settlement. Neither consumes a round.
+  - Contract: `GoalStatusFrame.state` gains `blocked`, in **both** copies (canonical
+    `GoalStatusFrame.yaml` and the `asyncapi.yaml` inline duplicate — rows 10 and 11 of the copies
+    table). Missing the inline copy blanks the goal card in production with `make verify-contracts`
+    green (C20).
+- **FR-094**: `goal_claim`'s `evidence` MUST become the adjudication's `ClaimText`, occupying the
+  same position in `buildJudgeUserContent`'s ordering that the marker path's `result.finalContent`
+  occupies today (ADR-074's prose-led input order, protected by
+  `judge_input_order_adr074_test.go`).
+  - **This is a narrowing, and it is intended.** The marker path passes the worker's **whole turn
+    output** as `ClaimText`; the tool path passes the `evidence` argument alone. The narrower input
+    is the better one — FR-032 exists precisely because a quote lifted from the worker's own claim
+    section cannot ground a `met`, and a smaller claim section is a smaller surface for that
+    failure. It is also less injectable: the worker's prose no longer arrives verbatim in the
+    Judge's prompt.
+
+### P. Claim-triggered, and off the critical path (D13)
+
+- **FR-095**: **A `met` claim MUST be the sole trigger for an adjudication.** After this change
+  `runGoalAdjudication` MUST have **no** caller reachable from a timer, a tick, a sweep or any other
+  time-based source. Concretely: `settleGoalNormally`'s
+  `al.runGoalAdjudication(settleCtx, agentInst, …, "", al.idleSteerDeliverer(sessionID))` — the call
+  the ADR identifies by its log line *"goal idle settle: firing claimless adjudication after quiet
+  window"* — is **removed**, and the empty-`claimText` code path with it.
+  - The `claimText string` parameter's "EMPTY for a claimless IDLE adjudication (G-3)" contract is
+    retired: after this change `claimText` is never empty at any call site, and
+    `runGoalAdjudication` MUST reject an empty one rather than silently adjudicating against
+    nothing.
+  - A CI grep gate MUST assert zero claimless call sites, matching the shipped
+    `check-no-goal-confirm-gate.sh` precedent, because this is exactly the kind of path a merge from
+    a pre-revision-7 branch restores as an ordinary conflict-free addition.
+- **FR-096**: **The removal is surgical, and these eight keeper behaviours MUST survive it.**
+  ADR §8 D13 names `goalQuietWindowSettle` and `goalIdleQuietWindow` alongside the log line, but
+  `goalQuietWindowSettle` → `maybeSettleGoalIdle` is the **single periodic driver for every**
+  goal-keeper behaviour and adjudication is one of four terminal branches (C22). Deleting the
+  function deletes nine things to remove one. Each row below MUST have a named test asserting it
+  still fires after the change:
+
+  | # | Behaviour | Symbol | What breaks without it |
+  |---|---|---|---|
+  | 1 | Parked-card suppression | `goalHasParkedCard` | a parked `AskUserQuestion` stops being honoured |
+  | 2 | `waiting_on_user` suppression | `goalIsWaitingOnUser` | a parked goal is pushed while waiting |
+  | 3 | Fire-once-per-quiet-spell re-arm | `goalIsIdleSettling` / `markGoalIdleFired` | the keeper acts on every tick |
+  | 4 | In-flight self-race guard | `goalAdjudicationInFlight` | **the guard FR-101 resolves onto** |
+  | 5 | Live-turn suppression + activity re-arm | `goalHasLiveTurn` | the keeper acts against a running turn |
+  | 6 | Token-budget brake | `TokenBudget().Exhausted()` → `clearGoal(FailedReasonBudgetExhausted)` | a goal past its budget never terminates on this path |
+  | 7 | Recordless nudge ladder + engine fallback compile | `settleRecordlessGoal`, `goalNudgePrompt`, `dispatchGoalFallbackCompile` | ADR-081 FR-017's "every active goal ends up judgeable" breaks |
+  | 8 | The zero-output continue-push | `settleZeroOutputRecordedGoal`, `goalContinuePushPrompt` | **the Ralph-loop re-post D13 depends on** |
+
+  `goalQuietWindowSettle`, `goalIdleQuietWindow` and `maybeSettleGoalIdle` are **kept**. Only
+  `settleGoalNormally`'s body changes.
+- **FR-097**: **A quiet or stalled goal is re-posted, not judged.** Where `settleGoalNormally`
+  adjudicated, it MUST instead dispatch the keeper's existing continue-push:
+  `al.dispatchGoalAsyncFollowUp(sessionID, goalContinuePushPrompt(s.GoalCondition))` — the same
+  primitive `settleZeroOutputRecordedGoal` already uses two branches above it, whose prompt is
+  literally *"Continue working toward the goal: %s … No new output has been observed since the last
+  check. Keep going."* No Judge call, no round consumed, no verdict.
+  - **This collapses FR-014b's zero-output distinction, and that is the point.** Today
+    `maybeSettleGoalIdle` branches on `goalZeroOutputTripleHolds`: no adjudicable output ⇒
+    continue-push; some output ⇒ adjudicate. With adjudication gone from this path both arms do the
+    same thing, so the triple, the `GoalZeroOutputPushes` budget and `settleZeroOutputRecordedGoal`
+    MUST be **unified into one push ladder** rather than left as two branches with identical bodies
+    and one dead predicate. `goalZeroOutputTripleHolds` and
+    `sessionHasTranscriptOutputSince` become unreferenced and MUST be removed with a stated reason,
+    not left in the tree.
+  - **The push budget is retained and now governs the whole ladder.** `goalZeroOutputPushMax`
+    already bounds the pushes; past it, the goal reaches a terminal state through the ordinary
+    rounds bound and the multi-day idle-expiry sweep (E-31). It MUST NOT push forever, and it MUST
+    NOT fall through to an adjudication when the budget is spent — that fall-through
+    (`if s.GoalZeroOutputPushes >= goalZeroOutputPushMax { al.settleGoalNormally(…) }`) is the last
+    remaining claimless call site and FR-095 forbids it.
+  - `dispatchGoalAsyncFollowUp`'s existing un-wedge discipline is load-bearing and unchanged: every
+    exit that does not achieve a turn hand-off clears the idle-settling marker itself (E-30).
+- **FR-098**: **The adjudication MUST be dispatched after the operator's answer has been
+  published.** The seam is `pkg/agent/loop.go::runAgentLoop`, whose present order is:
+  `checkGoalLoopAfterTurn` → publish `result.followUps` → `if opts.SendResponse &&
+  result.finalContent != "" { bus.PublishOutbound(…) }`. The claim-path `runGoalAdjudication` sits
+  inside the first of those, so **today the Judge runs before delivery** (C23).
+  - `checkGoalLoopAfterTurn` MUST keep running where it is for everything that is cheap and
+    synchronous — the origin gate, the token-budget brake, the `waiting_on_user`/`blocked` park, the
+    activity bump, the ADR-081 D3 post-turn correction, and now FR-092's claim resolution. It MUST
+    NOT call `runGoalAdjudication`. On a `met` claim it records the claim and hands the engine a
+    **deferred dispatch** — a field on `turnResult` (shaped like the existing `followUps` slice,
+    which is the shipped precedent for "the hook produces work the loop performs later").
+  - `runAgentLoop` MUST perform that deferred dispatch **after** `bus.PublishOutbound`, in a
+    goroutine, so the operator's turn returns without waiting for it.
+  - **The context MUST NOT be the turn ctx.** `runGoalAdjudication` currently derives
+    `context.WithTimeout(ctx, goalJudgeRoundTimeout)` from the turn's ctx, which is finished by the
+    time a deferred dispatch runs. It MUST use `context.WithTimeout(context.Background(),
+    goalJudgeRoundTimeout)` — precisely what `settleGoalNormally` already does, which is why the
+    idle path worked from a tick and the claim path cannot be moved without this change.
+  - **The oracle MUST be observed ordering, not source reading.** The test MUST record the actual
+    sequence of (outbound publish, verifier dispatch) through injected seams and assert the publish
+    came first. An assertion that the call appears below another in the file passes on a
+    conditionally-deferred implementation, which the Explicit Non-Behaviors forbid.
+- **FR-099**: **A deferred adjudication's steer and verdict MUST be delivered through the
+  async-notifier path, not through `result.followUps`.** The claim path's present `deliverSteer`
+  closure appends to `result.followUps`, which `runAgentLoop` publishes immediately after
+  `checkGoalLoopAfterTurn` returns — before a deferred adjudication has produced anything. The
+  deferred path MUST pass `al.idleSteerDeliverer(sessionID)` instead, which routes through
+  `dispatchGoalAsyncFollowUp` → `asyncNotifier.Notify` with
+  `SenderCanonicalID: goalLoopFollowUpSenderID`.
+  - That sentinel is not decoration: `checkGoalLoopAfterTurn`'s own origin gate accepts **only** a
+    `UserInitiated` turn or exactly that sender (ADR-081 D6b). A re-injected steer stamped with the
+    notifier's default `"async:<kind>"` is **silently dropped at the gate** — activity never bumps,
+    the idle marker never clears, and the keeper wedges. That failure is documented in
+    `dispatchGoalAsyncFollowUp`'s own comment as one this project has already shipped once.
+  - `SourceKind` MUST be a new value distinguishing a deferred claim adjudication from the idle
+    path's `"goal_idle_settle"`, so the two are separable in logs and observers.
+- **FR-100**: **A new operator message during an in-flight adjudication MUST NOT be blocked, delayed
+  or dropped** (ADR §8 open item 3, first half). The new turn runs normally.
+  - The in-flight adjudication continues against the goal record **as it stood when it was
+    scheduled**. It MUST NOT be restarted, re-scoped or re-prompted because the record moved.
+  - If the new turn's `set_goal` `mode:update` changes the criteria set while an adjudication is in
+    flight, the arriving verdict is applied **only to criterion ids that still exist**; a verdict for
+    a criterion id no longer on the record MUST be discarded with a WARN naming the id, not written
+    back and not treated as an error. FR-006b's clause-count floor already forbids the shape that
+    would make this exploitable (lowering a criterion's bar while a verdict for it exists).
+  - If the new turn itself produces a `met` claim, FR-101 applies.
+- **FR-101**: **A second claim arriving while an adjudication is in flight MUST be refused, not
+  supersede** (ADR §8 open item 3, second half). Two shipped layers already implement exactly this
+  and MUST be reused rather than replaced:
+  1. `goalAdjudicationInFlight(sessionID)` — the check-then-act guard the claim path already
+     consults, today logging *"goal claim: adjudication already in-flight; dropping claim"*.
+  2. `verifier_registry.Register`'s CAS, returning `ErrVerifierSessionHeld`, whose own doc comment
+     states the invariant: *"a concurrent adjudication is already in flight for this unit and must
+     not be silently clobbered … G-1 'exactly once'"*. This catches whatever races past layer 1.
+
+  **What MUST change is the reporting, not the mechanism.** Today the refusal is a log line and the
+  claim is dropped silently — under D12 the claim is a **tool call**, so the refusal MUST be
+  returned **in the tool result**: a stated, non-error-shaped message telling the model an
+  adjudication for this goal is already running, that its verdict will arrive on its own, and that
+  re-claiming is unnecessary. No round is consumed, no second Judge turn starts, and the model is
+  told rather than left to infer silence.
+  - **Refuse rather than supersede, and here is why.** Superseding means cancelling a Judge turn
+    that has already spent tool calls and tokens, and doing so on the say-so of the party being
+    judged — a worker that dislikes a pending verdict could cancel it by re-claiming. Refusal costs
+    at most one redundant claim and preserves G-1's "exactly once" invariant, which the CAS was
+    written to protect and which two shipped layers already enforce. The cost is bounded: the
+    in-flight adjudication is reading the same workspace the second claim would have pointed at.
+  - A claim refused this way MUST NOT clear the bare-claim streak (FR-091) and MUST NOT count as a
+    claim for any purpose.
+- **FR-102**: **A background verdict MUST be visible without being intrusive** (ADR §8 open item 2).
+  Three surfaces, all of them already shipped, and no new one:
+  - **The goal-status frame.** `emitGoalStatusFrame` already fires on every terminal branch of
+    `runGoalAdjudication` — `goalPillJudging` before dispatch, `goalPillDone`/`goalPillFailed` via
+    `clearGoal`, `goalPillActive` with the verdict's reason text on unmet-with-rounds-remaining,
+    `goalPillJudgeUnavailable` on withholding. The goal card changes state; nothing else happens.
+  - **The transcript.** `writeGoalVerdictTranscript` already writes the `judge_verdict` entry, and
+    `writeGoalSystemTranscript` the handover text. Both land in the session the operator is reading,
+    in order, where a returning operator finds them.
+  - **The steer**, when the verdict is unmet with rounds remaining: it re-enters as an ordinary
+    async turn via FR-099, which is what the operator would see if the agent had simply kept
+    working. It is indistinguishable from continued work, which is correct — it *is* continued work.
+  - **Explicitly NOT**: a modal, a toast, a forced navigation, a notification, a chat message
+    addressed to the operator announcing the verdict, or any re-ordering of the thread that moves
+    content the operator has already read.
+  - **The one case that needs more than a pill**, and it is the case open item 2 names: a verdict
+    that **overturns a `met` claim** — the agent said it was done, the operator read that, and the
+    Judge disagreed. The goal card MUST distinguish this from an ordinary unmet round, because the
+    operator's mental model is "finished" and the system's is not. A dedicated
+    `GoalStatusFrame.state` value (`claim_overturned`) carries it, added in both copies (rows 10–11
+    of the copies table). It is a state, not an alert: it changes the card and nothing else.
+- **FR-103**: **Cancellation reaches a background adjudication through the verifier registry.**
+  `runVerifierAdjudication` already registers its verifier session id before dispatching that
+  session's first turn and unregisters on resolution, and `StopPlan`/`StopTask`/`/goal clear`
+  already fan out to it. That handle MUST remain the cancel path, and FR-082's assertion MUST be
+  re-based onto it: a cancel against the registered verifier session interrupts the turn
+  mid-tool-call and produces no verdict.
+  - `RequestCancelForSession` against the operator's **chat** session MUST NOT be expected to reach
+    it. There is no chat turn to interrupt; a test asserting that it does would pass today and fail
+    the moment FR-098 lands, which is the wrong way round.
+  - **A gateway restart loses an in-flight adjudication, and that is accepted** (E-35). It is
+    in-memory only, per the Deployment section's "no stateful change at all" rule. The goal is left
+    quiet with an active goal and an unconsumed round — exactly the state FR-097's re-post handles —
+    so the recovery path already exists and needs no persisted queue. This MUST be stated in the
+    Deployment section rather than discovered.
+
+### Q. Evidence before judgement — three tiers, for every kind of task (D14)
+
+> **The principle, in the operator's own frame**: prefer evidence the system already holds over
+> asking a model to opine — for a goal about a deck, a booking or an email just as much as for one
+> about code. **Tier 1 is universal. Tier 2 is optional, declared, and coding-shaped by
+> construction. Tier 3 — the Judge — is universal and is the default for everything else.**
+> There is **no task-type classifier** anywhere in this design, and FR-110 forbids adding one.
+
+- **FR-104**: **The tiers MUST be consulted in order, once, when a claim arrives** — not
+  continuously as evidence accrues (ADR §8 open item 1).
+  - **Resolved this way for three reasons.** (a) Under D13 there is exactly one moment at which the
+    system is deciding anything about this goal; running gates at any other moment produces facts
+    nobody consumes. (b) A continuously-running gate is a timer, and FR-095 forbids time-based
+    triggers on this path — "gates run continuously" would reintroduce one under a different name,
+    and a red gate would then be a de-facto claimless verdict. (c) Tier-1 evidence is a **by-product
+    of work already done**: reading it early costs the same as reading it late and can only be less
+    complete. Nothing is gained by watching.
+  - Ordering within one adjudication: tier 1 facts are assembled, then declared tier-2 checks run,
+    then the Judge is dispatched with both in its evidence block. A criterion that tier 1 or tier 2
+    **contradicts** (FR-108, FR-038) is settled without the Judge deciding it — Hermes's "a red gate
+    means the judge is not called" ordering, kept.
+- **FR-105**: **Tier 1 — the working agent's own tool-call record MUST be rendered into the Judge's
+  evidence block**, per call, as `{tool, parameters, status, error}`.
+  - **The change is at `verifier_adjudication.go::renderTranscriptEntriesForWindow`**, which today
+    renders `fmt.Sprintf("[tool_call] %s -> %s", tc.Tool, tc.Status)` — a name and a status, with no
+    parameters, no result and no error. That is ADR §2 E3's original defect still live in the one
+    place D14 tier 1 needs it not to be (C26).
+  - **Source: the persisted record, via `store.ReadTranscript` over the adjudicated session and,
+    under FR-010's descendant scope, its children.** It MUST NOT be sourced from FR-030's in-memory
+    capture: that capture holds the **Judge's own** results during the verifier turn, in a different
+    session, and under D13 the worker's turn ended before the adjudication was scheduled. There is
+    no capture spanning that boundary and, under the Deployment section's no-stateful-change rule,
+    there must not be one (C28). FR-068's opposite instruction — derive the *investigation log* from
+    the capture, not the transcript — is about the Judge's own calls and is unchanged.
+  - **Bounds**: `parameters` truncated to 512 runes per call with an explicit elision marker; the
+    whole tier-1 block to 32 KiB, dropping oldest-first with a stated count of what was dropped. A
+    silently truncated evidence block is a truncated read by another name and would ground false
+    negatives exactly as FR-007a's case does.
+  - **Sensitive values MUST be redacted** through the existing `RegisterSensitiveValues` path before
+    rendering: parameters carry recipients, tokens and paths, and this feed puts them in front of a
+    model that did not previously see them.
+  - **This is the tier that makes a non-coding goal work.** "The supplier was emailed" is answerable
+    because `{tool: send_email, parameters: {to: …}, status: success}` is in front of the Judge.
+    "A calendar hold exists", "the page was published", "the file was written" likewise. No shell, no
+    exit code, no new machinery — the evidence is a by-product of the work. If the agent ran the
+    project's test suite, that `bash` call is tier-1 evidence like any other and **nothing re-runs
+    it** (E-39, D14 rule 3).
+- **FR-106**: **Tier-1 facts MUST be built from the durable fields, and an emptied result MUST be
+  inconclusive rather than absent.**
+  - `empty_in_place.go::recordEmptiedOnTranscript` writes
+    `session.ToolCallProjectionUpdate{ToolCallID, ContentState, Result}` — it rewrites **`Result`
+    and `ContentState` only**. `Tool`, `Parameters`, `Status` and `Error` are never touched (C27).
+  - A `Result` value MUST be used only when `ContentState` is empty. When `ContentState` is
+    `"emptied"` or `"capped"`, the call MUST be rendered with its durable fields and an explicit
+    marker that its result was projected away, and MUST NOT contribute to FR-108's contradiction set.
+  - **Why this is a blocker and not a nicety.** A rewritten `Result` read naively says "this tool
+    returned nothing", which would **contradict** a true claim and veto it. That is E1's failure —
+    correct work rejected because the evidence pipeline was imperfect — reintroduced through the
+    newest control, on a long turn, which is exactly the turn most likely to have produced real work.
+- **FR-107**: **Tier 1 decides a criterion outright ONLY through a declared `KindBehavior`
+  payload**; otherwise it informs the Judge (FR-105) and may veto (FR-108).
+  - The shipped rung-2 scanner (`behavior_scan.go`, `task.CriterionBehavior{Tool, MinCount,
+    MaxCount, Scope}`) is unchanged. It counts successful calls of a named tool and reads neither
+    `Parameters` nor `Result`, so it can answer "`send_email` was called at least once" and cannot
+    answer any of D14's three worked examples (C26).
+  - **The gap MUST NOT be closed by building a matcher.** Deciding whether
+    `send_email(to: supplier@…)` satisfies "the supplier was emailed" is a
+    natural-language-to-tool-call inference — the same inference D14 rule 2 retires for tier 2,
+    relocated one tier down, with the same failure mode (a criterion's wording silently deciding
+    what gets checked) and the same incentive defect. This spec does not build one, and an
+    implementer who finds tier 1 "not deciding enough" should read this clause before extending it.
+  - Widening `CriterionBehavior` to match parameters or results is a **separate decision** and is
+    out of scope here. It is named so it is not smuggled in.
+- **FR-108**: **A tier-1 fact that CONTRADICTS a `met` MUST block it; a fact merely CONSISTENT with
+  one MUST establish nothing** (D14's second binding constraint). The contradiction set is closed,
+  mechanically decidable, and small:
+  1. The criterion declares a `KindBehavior` payload and the observed count violates it — already
+     rung 2's own verdict; nothing new.
+  2. Every recorded call of the tool the criterion's declared payload names has
+     `Status == "error"` — the agent tried and it failed. The `Error` string is quoted in the veto's
+     reason.
+
+  Everything else is **informative, not decisive**: a `denied` status (E-40 — the agent may have
+  achieved the criterion another way), an emptied result (FR-106), a tool that was never called at
+  all, or a parameter that does not obviously match the criterion's wording. Nothing may be added to
+  this set that requires interpreting criterion prose.
+  - The veto rewrites `met` to `unmet` and logs at WARN with the criterion id, the tool and the
+    error — the same shape and the same one-way direction as FR-038's declared-check veto.
+- **FR-109**: **Tier 2 runs ONLY a check the criterion declared. A check MUST NOT be synthesised
+  from a criterion's prose.**
+  - `judge.go::planArtifactCheck` MUST be **deleted**, together with `artifactPathRe`,
+    `artifactContainsRe`, `artifactCheckCandidate` and `isSafeWorkspaceArtifactPath` (its only
+    reachable caller). `JudgeCriteria`'s classification branch
+    `if c.Kind == task.KindProse && c.Judgment == task.JudgmentArtifact { … }` MUST be removed, the
+    `artifactCriteria` slice with it, and **rung 1.5 ceases to exist** (C24).
+  - A `KindProse`/`JudgmentArtifact` criterion is thereafter an ordinary prose criterion and reaches
+    the Judge, which opens the file it names. That is a *better* answer than the inferred
+    `test -f && test -s`, not merely a different one: existence was never what the criterion asked
+    about.
+  - **What this closes for free.** Revision 6's F1 second half — a zero-exit inferred check demoted
+    to advisory, with nothing requiring a `met` to be consistent with what it proved — has no
+    subject any more. There is no inferred check to be inconsistent with.
+  - **What survives**: rung 1 (`task.KindCheck`, a declared check with a declared command) and
+    rung 2 (`task.KindBehavior`). Both were always declared; neither was ever inferred.
+  - A CI grep gate MUST fail the build if any of the five deleted symbols reappears, matching the
+    `check-no-goal-confirm-gate.sh` precedent. A merge from a pre-revision-7 branch restores them as
+    an ordinary conflict-free addition, and a note cannot stop `git merge`.
+- **FR-110**: **A criterion MUST NOT be required, preferred, rewarded or defaulted into carrying a
+  check, and nothing may classify a goal as coding or non-coding.**
+  - `set_goal`'s `judgment` enum stays `boolean | quantitative | artifact`; none of the three
+    implies a check, and no new value implying one may be added. Its validation MUST NOT reject, and
+    its description MUST NOT recommend, a criterion for lacking a machine-checkable form.
+  - No scoring, ordering, prompt fragment or rubric line may make a checkable criterion easier to
+    author or likelier to pass than a right one. **This is A-14/A-17's incentive defect arriving
+    through a different door** — there, a vaguer criterion needed fewer grounded entries; here, a
+    checkable criterion would be cheaper to satisfy. Same shape, same remedy: close the door rather
+    than watch it.
+  - **No function anywhere may decide whether a goal or criterion is "a coding task."** "Reserved
+    for coding" is true because declaring a check is a deliberate authoring act that a booking or a
+    deck goal simply never performs — not because anything asked the question. A classifier would be
+    a new silent failure source with no operator-visible symptom when it guessed wrong. The
+    machine-verifiable constraint is **zero classifiers**, and it is grep-asserted.
+- **FR-111**: **Tier 3 is the default.** For a criterion with no declared check and no declared
+  behaviour payload — the overwhelming majority, and every criterion of a goal about a document, an
+  email, a booking or a piece of research — the path is: tier-1 facts assembled into the evidence
+  block, then the Judge, with nothing in between. This MUST be exercised end to end by at least two
+  BDD scenarios using **non-coding** goals, and by holdout H9.
+  - The rubric (§A) MUST NOT tell the Judge to expect a check, a diff, a repository or a test
+    result. FR-002a's rewritten empty-section fallbacks MUST name next steps that are true for a
+    non-coding goal — open the artifacts the criteria name, list the workspace, inspect the in-scope
+    sessions — and MUST NOT name "the diff" or "the tests" as the assumed evidence.
+  - **Finding, recorded rather than fixed silently**: every worked example in revisions 2–6 of this
+    spec is a software artifact — `neon-2048/index.html`, `game.js`, `package main`,
+    `import React`, `vendor/legal/LICENSE.txt`, `dist/report.pdf`, `/etc/hosts` — and the
+    boilerplate deny-list (FR-030b) is drawn entirely from HTML, Go and React. That is the same bias
+    D14's operator correction names, expressed in the spec's own illustrations. The deny-list stays
+    as it is (it is a floor over shipped-boilerplate strings, and a document or an email has no
+    equivalent), but the scenarios, the test matrix and the holdouts gain non-coding cases so the
+    feature is not validated exclusively against the shape it was found failing on.
 
 ---
 
@@ -2186,29 +3017,94 @@ Traces to: US-1, FR-007a, E-1, E-2
 - **And** a WARN names the criterion id and the truncated path
 - **And** an `unmet` on the same criterion whose reason asserts no absence is left `unmet`
 
-**Scenario: a non-zero deterministic check vetoes met one-way** *(Error Path)*
+**Scenario: a non-zero DECLARED check vetoes met one-way** *(Error Path)*
 Traces to: US-4 AC-4, US-10 AC-2, FR-038
-- **Given** an artifact criterion whose check exited 1 because the file is absent
+- **Given** a criterion that **declares** a check (`task.KindCheck`) which exited 1
 - **And** the Judge nevertheless returns `met`
 - **When** the verdict is mapped
 - **Then** the criterion's outcome is `unmet`
 - **And** a WARN names the criterion id, the command and exit code 1
 
-**Scenario: a zero-exit check does not force met** *(Happy Path)*
-Traces to: US-10 AC-1, FR-035, FR-039
-- **Given** an artifact criterion "a single self-contained HTML file" whose check exited 0
+**Scenario: a zero-exit declared check does not force met** *(Happy Path)*
+Traces to: US-10 AC-3, FR-036, FR-039
+- **Given** a criterion "a single self-contained HTML file" that **declares** a check which exited 0
 - **And** the workspace holds that HTML file plus a separate `game.js` it loads
 - **When** an adjudication runs
-- **Then** the criterion reaches the prose Judge with the check result in its evidence block
+- **Then** the criterion reaches the Judge with the check result in its evidence block
 - **And** the Judge may return `unmet`
 - **And** the `unmet` verdict stands
 
-**Scenario: an inconclusive check vetoes nothing** *(Edge Case)*
-Traces to: US-10 AC-3, FR-040
-- **Given** an artifact criterion whose check was denied by tool policy
+**Scenario: an inconclusive declared check vetoes nothing** *(Edge Case)*
+Traces to: US-10, FR-040
+- **Given** a criterion whose **declared** check was denied by tool policy
 - **And** the Judge returns `met` grounded in its own read
 - **When** the verdict is mapped
 - **Then** the criterion's outcome remains `met`
+- **And** the same holds when the goal has no workspace to root the check in (E-37)
+
+**Scenario: no check is invented from a criterion's wording** *(Error Path)*
+Traces to: US-10 AC-4, FR-109, C24
+- **Given** a criterion "`neon-2048/index.html` exists in the workspace as a single self-contained
+  file", with `Kind: prose`, `Judgment: artifact` and **no declared check**
+- **When** an adjudication runs
+- **Then** **no shell command is executed for that criterion**
+- **And** it is dispatched as an ordinary prose criterion, with no rung-1.5 classification
+- **And** the Judge opens the file itself and decides
+- *(Under revision 6 `planArtifactCheck` would have built `test -f … && test -s …` from that
+  wording and settled the criterion before the Judge ever saw it. That inference is deleted, and a
+  CI grep gate asserts the five symbols are absent from the tree.)*
+
+**Scenario: a non-coding goal reaches a verdict at tier 1, with no check anywhere** *(Happy Path)*
+Traces to: US-10 AC-1, AC-5, FR-105, FR-111
+- **Given** a goal "get a quote from the supplier for the Q4 order"
+- **And** a criterion "the supplier was emailed with the order details", declaring no check
+- **And** the working agent called `send_email` once, successfully, with
+  `to: procurement@supplier.example` and a subject naming the Q4 order
+- **When** the agent claims `met` and the adjudication runs
+- **Then** the Judge's evidence block contains that call rendered as
+  `{tool, parameters, status, error}` — not `[tool_call] send_email -> success`
+- **And** no shell command is executed at any point in the adjudication
+- **And** no code anywhere asked whether this goal is a coding task
+- **And** the Judge returns `met` grounded in that tier-1 fact
+
+**Scenario: a non-coding goal the Judge must read a document to decide** *(Happy Path)*
+Traces to: US-10 AC-5, FR-111, FR-109
+- **Given** a goal "produce the Q4 board deck"
+- **And** a criterion "the deck has sections for revenue, pipeline, hiring, risks and the ask",
+  declaring no check
+- **And** the workspace holds `board-q4.md` with all five sections
+- **When** the agent claims `met` and the adjudication runs
+- **Then** **no check is built from the words "has sections for"** — this is tier 3, not tier 2
+- **And** the Judge opens `board-q4.md`, reads it, and returns `met` with five distinctly grounded
+  `evidence` entries, one per clause
+- **And** with only four sections present the outcome is `unmet`, naming the missing one
+
+**Scenario: a tool-call error contradicts a met and vetoes it** *(Error Path)*
+Traces to: US-10, FR-108
+- **Given** a criterion declaring a `KindBehavior` payload naming `send_email`
+- **And** every recorded `send_email` call in the session has `Status: "error"`
+- **And** the Judge nevertheless returns `met`
+- **When** the verdict is mapped
+- **Then** the criterion's outcome is `unmet`
+- **And** a WARN names the criterion id, the tool and the recorded `Error` string
+
+**Scenario Outline: a tier-1 fact that is not a contradiction vetoes nothing** *(Edge Case)*
+Traces to: FR-106, FR-108, E-38, E-40
+- **Given** a `met` verdict the Judge grounded in its own read
+- **And** the criterion's related tool call is in state `<state>`
+- **When** the verdict is mapped
+- **Then** the criterion's outcome remains `met`
+
+| state |
+|---|
+| `Status: "denied"` — policy refused the call (E-40) |
+| `ContentState: "emptied"` — ADR-066 projected the result away (E-38) |
+| `ContentState: "capped"` |
+| the tool was never called at all |
+
+*(The emptied row is the one that matters: read naively, a recall-marked `Result` says "the tool
+returned nothing", which would contradict a true claim and veto it — E1's failure reintroduced
+through the newest control, on precisely the long turns most likely to have done real work.)*
 
 **Scenario: the investigation log makes a truncated read visible** *(Edge Case)*
 Traces to: US-9 AC-1, FR-067, FR-068, E-2
@@ -2346,7 +3242,8 @@ Traces to: US-3, FR-020a, C19
   scored `Met:false` and **the round is consumed**
 - **And** the escalation names the aggregate rule, not one criterion
 - *(Without FR-020a this loop never terminates: with M criteria it is unbounded, not M × K, and
-  each iteration is a tool-using turn of up to 420 s inside the operator's chat turn.)*
+  each iteration is a tool-using turn of up to 420 s of background cost. It does not "lose its
+  clock" under D13 — it acquires a slower one via FR-097's keeper re-post, C25.)*
 
 **Scenario: a real judgment resets the tracker** *(Happy Path)*
 Traces to: US-3 AC-3, FR-021
@@ -2426,8 +3323,8 @@ Traces to: US-1, FR-002a
 
 **Scenario: a cancelled verifier turn produces no verdict** *(Error Path)*
 Traces to: FR-082
-- **Given** a verifier turn mid-`read_file` inside the operator's chat turn
-- **When** `RequestCancelForSession` fires against that `chatID`
+- **Given** a background verifier turn mid-`read_file`, dispatched after delivery
+- **When** a cancel fans out to its registered verifier session (FR-103)
 - **Then** the turn is interrupted without waiting for the tool call to finish
 - **And** no verdict is produced from it
 - **And** the cancelled adjudication is discarded whole
@@ -2466,16 +3363,19 @@ Traces to: US-8 AC-3, FR-079
 - **And** the same response under a current rubric would have become `unable_to_verify`
 - **And** the verdict's `provenance` is `none` and the adjudication log carries `legacy_rubric: true`
 
-**Scenario: a legacy soul retains the deterministic artifact settle** *(Alternate Path)*
-Traces to: US-8 AC-3, FR-079(d), FR-037
+**Scenario: a legacy soul gets no artifact carve-out, because there is no rung to carve out**
+*(Alternate Path)*
+Traces to: US-8 AC-3, FR-079(d) tombstone, FR-109
 - **Given** an install whose `rubricDeclaresOutcome` is false
-- **And** an artifact criterion whose check exits zero
+- **And** a `Kind: prose` / `Judgment: artifact` criterion naming a file that exists
 - **When** the adjudication runs
-- **Then** the criterion is settled at rung 1.5 as it is today
-- **And** it does not reach the prose Judge
-- **And** for a second artifact criterion whose check is **blocked**, rung 1.5 calls `noteNonVerdict`
-  and honours its `withheld` return — it is the sole classifier, because nothing downstream can
-  classify a criterion that never reaches prose (FR-037's legacy arm)
+- **Then** **no check is built** and the criterion reaches that install's own (legacy) Judge as an
+  ordinary prose criterion
+- **And** no rung-1.5 settle occurs, because rung 1.5 no longer exists
+- **And** FR-079's other clauses (a), (b), (c), (e), (f) apply to it unchanged
+- *(This inverts the revision-6 scenario, which asserted the settle was **retained** on this
+  population. D14 rule 2 deletes the inferred check outright, so the carve-out has no subject. It is
+  a real degradation for a legacy install and is the accepted meaning of greenfield — D6, C24.)*
 
 **Scenario: a rubric that never asked for a quote keeps its passing verdicts** *(Error Path)*
 Traces to: US-8 AC-3, FR-024, FR-077, C16
@@ -2596,6 +3496,219 @@ Traces to: US-9, FR-069a
 - **Then** a WARN carries both outcomes, both investigation-log ids and `c1`
 - **And** the disagreement counter is incremented
 
+### Feature: completion is a tool call (D12)
+
+**Scenario: a tool-call claim starts an adjudication with no marker anywhere** *(Happy Path)*
+Traces to: US-11 AC-1, FR-087, FR-094
+- **Given** a goal-bearing session
+- **When** the working agent calls `goal_claim(status: "met", evidence: "opened board-q4.md and
+  confirmed all five sections")` and its turn ends with prose containing no `GOAL_STATUS` line
+- **Then** an adjudication is scheduled for that session
+- **And** the adjudication's `ClaimText` is the `evidence` argument — not the whole turn output
+
+**Scenario: a met claim with no evidence is refused at the call** *(Error Path)*
+Traces to: US-11 AC-2, FR-088
+- **Given** a goal-bearing session
+- **When** the working agent calls `goal_claim(status: "met")` with `evidence` absent
+- **Then** the tool returns an error result naming the violation and what to supply
+- **And** no claim is recorded, no adjudication is scheduled, and no round is consumed
+- **And** `handleBareGoalClaim` is **not** invoked and the bare-claim streak is **not** incremented
+- **And** the same turn may retry the call with evidence and succeed
+- *(This is what retires the G-4 bounce economics on the tool path: a prose claim can only be
+  checked after the turn has ended, so the correction had to be priced; a tool call is checked
+  inside the turn, so there is nothing to price.)*
+
+**Scenario Outline: an empty-equivalent evidence argument is refused** *(Edge Case)*
+Traces to: US-11 AC-2, FR-088, E-28
+- **Given** `goal_claim(status: "met", evidence: <evidence>)`
+- **When** the call executes
+- **Then** it is refused and no claim is recorded
+
+| evidence |
+|---|
+| `""` |
+| `"   "` |
+| `"\n\t "` |
+
+**Scenario: the marker path still works, bounce economics intact** *(Alternate Path)*
+Traces to: US-11, FR-091
+- **Given** a working agent that never calls `goal_claim`
+- **When** its turn output ends with `[goal:evidence] read the file` then `GOAL_STATUS: met`
+- **Then** an adjudication is scheduled exactly as today
+- **And** when a later turn emits a **bare** `GOAL_STATUS: met` with no evidence line, the first
+  occurrence is bounced free with `goalStatusBareClaimSteer` and the second consumes a round —
+  `handleBareGoalClaim`, `bumpGoalBareClaimStreak` and `goalBareClaimCostThreshold` all unchanged
+- **And** a successful claim through **either** channel clears the streak
+
+**Scenario Outline: tool and marker in one turn — the tool wins** *(Edge Case)*
+Traces to: US-11 AC-5, FR-092, E-25, E-26, E-27
+- **Given** a turn whose tool calls are `<calls>` and whose output contains `<marker>`
+- **When** the turn ends
+- **Then** the resolved claim is `<claim>`
+- **And** markers are not parsed at all when a successful `goal_claim` is present
+
+| calls | marker | claim |
+|---|---|---|
+| `goal_claim(met, ev)` | `GOAL_STATUS: met` | `met` from the tool; divergence not logged (they agree) |
+| `goal_claim(met, ev)` | `GOAL_STATUS: waiting_on_user` | `met` from the tool; divergence logged at INFO with both |
+| `goal_claim(met, ev)` then `goal_claim(blocked)` | none | `blocked` — last successful call wins |
+| `goal_claim(met)` *(refused, no evidence)* | `[goal:evidence] x` + `GOAL_STATUS: met` | `met` from the **marker** — a refused call is not a successful one |
+| `goal_claim` *(policy-denied)* | `[goal:evidence] x` + `GOAL_STATUS: met` | `met` from the marker (E-29) |
+
+**Scenario: blocked parks the goal and has no marker fallback** *(Alternate Path)*
+Traces to: US-11 AC-4, FR-093
+- **Given** a goal-bearing session
+- **When** the working agent calls `goal_claim(status: "blocked")`
+- **Then** no adjudication runs and no round is consumed
+- **And** the goal-status frame carries the `blocked` state, distinct from `waiting_on_user`
+- **And** idle settlement is suppressed while it holds
+- **When** instead the agent emits `GOAL_STATUS: blocked` as text
+- **Then** `parseGoalStatusMarker` returns `Present: true, Status: ""` and it is treated as **no
+  marker at all** — `blocked` is reachable only through the tool, deliberately
+
+**Scenario: goal_claim refuses outside its scope** *(Error Path)*
+Traces to: US-11 AC-6, FR-090
+- **Given** a delegated sub-turn, or a session with no active goal
+- **When** `goal_claim` is called
+- **Then** it refuses with a stated reason, writing nothing — its own preconditions, not tool policy
+
+**Scenario: goal_claim's seeding satisfies Constraint #6** *(Edge Case)*
+Traces to: US-11, FR-089
+- **Given** a fresh install
+- **Then** `goal_claim` is in `coreagent::allStaticToolNames` **and** in
+  `config.DefaultConfig().Sandbox.ToolPolicies` with value `allow`
+- **And** the core roster, the subagent tier and customs' default allowlist each resolve `allow`
+- **And** Judge and PlanSupervisor each resolve explicit `deny`, and Worker resolves explicit `deny`
+- **And** `TestCatalog_MatchesGlobalCeilingEntryForEntry` passes, which a one-sided edit fails
+- *(The browser family is not a uniformity precedent: `browser_upload_file` is seeded `ask` where
+  its ten-plus siblings are `allow`, as are `delete_task` and `request_mount` for their own stated
+  reasons. A seeded value is a per-tool argument, never a family default.)*
+
+### Feature: claim-triggered, off the critical path (D13)
+
+**Scenario: a quiet goal is re-posted, never judged** *(Happy Path)*
+Traces to: US-12 AC-1, FR-095, FR-097
+- **Given** a goal-bearing session with a registered record and real prior output
+- **And** no claim has been made
+- **When** the quiet window elapses and the keeper's tick runs
+- **Then** **zero Judge calls** are made
+- **And** `GoalRoundsUsed` is unchanged
+- **And** a follow-up turn is dispatched carrying `goalContinuePushPrompt`'s "Continue working
+  toward the goal … Keep going." text
+- **And** it is stamped `SenderCanonicalID: goalLoopFollowUpSenderID`, so
+  `checkGoalLoopAfterTurn`'s origin gate accepts it
+- *(All four assertions are required. Asserting only "no verdict was written" passes on an
+  implementation that silently does nothing at all, which would wedge every quiet goal.)*
+
+**Scenario Outline: the keeper's other eight behaviours survive the removal** *(Edge Case)*
+Traces to: US-12, FR-096, C22
+- **Given** a goal-bearing session in state `<state>`
+- **When** the keeper's tick runs
+- **Then** `<behaviour>` still occurs
+
+| state | behaviour |
+|---|---|
+| a parked `AskUserQuestion` card | the tick returns early; no push, no nudge |
+| `waiting_on_user` set | the tick returns early |
+| already fired this quiet spell | the tick returns early (`goalIsIdleSettling`) |
+| an adjudication in flight | the tick returns early (`goalAdjudicationInFlight`) |
+| a live turn for the session or a descendant | the tick returns early and re-arms the activity clock |
+| the overall token budget exhausted | the goal is cleared `failed(budget_exhausted)` with a handover transcript entry |
+| an active goal with an EMPTY record | the D6c nudge ladder dispatches `goalNudgePrompt`; after `goalZeroOutputPushMax` nudges, `dispatchGoalFallbackCompile` registers an engine-authored record |
+| the push budget spent on a recorded goal | the goal terminates through the rounds bound and the multi-day expiry sweep — it MUST NOT fall through to an adjudication (FR-097) |
+
+*(This outline exists because ADR §8 D13 names `goalQuietWindowSettle` and `goalIdleQuietWindow`
+for removal alongside the log line. Those are the driver and its pacing constant for all nine
+behaviours; only the ninth is the claimless adjudication.)*
+
+**Scenario: there is no claimless adjudication call site left** *(Error Path)*
+Traces to: US-12, FR-095
+- **Given** the tree at HEAD
+- **When** the CI gate scans for a `runGoalAdjudication` call reachable from a tick, sweep or timer
+- **Then** it finds none
+- **And** `runGoalAdjudication` rejects an empty `claimText` rather than adjudicating against nothing
+- *(A merge from a pre-revision-7 branch restores the claimless call as an ordinary conflict-free
+  addition, so a note cannot hold this shut — the gate can.)*
+
+**Scenario: the operator's answer is published before the Judge is dispatched** *(Happy Path)*
+Traces to: US-12 AC-3, FR-098, C23
+- **Given** a turn that produces `finalContent` and calls `goal_claim(met, …)`
+- **When** `runAgentLoop` completes the turn
+- **Then** the **observed** order through injected seams is: `PublishOutbound(finalContent)`, then
+  the verifier dispatch
+- **And** `runAgentLoop` returns without waiting for the adjudication
+- **And** the adjudication's context is derived from `context.Background()`, not the turn ctx, and
+  survives the turn's completion
+- *(The oracle must be observed ordering. Asserting that one call appears below another in the
+  source passes on a conditionally-deferred implementation, which the Explicit Non-Behaviors
+  forbid.)*
+
+**Scenario: a deferred adjudication's steer reaches the worker** *(Happy Path)*
+Traces to: US-12, FR-099
+- **Given** a deferred adjudication that returns `unmet` with rounds remaining
+- **When** it completes, after the turn that claimed has already returned
+- **Then** the steer is delivered through `dispatchGoalAsyncFollowUp`, not appended to
+  `result.followUps`
+- **And** the notify event carries `SenderCanonicalID: goalLoopFollowUpSenderID` and a `SourceKind`
+  distinct from the idle path's `"goal_idle_settle"`
+- **And** the resulting turn passes `checkGoalLoopAfterTurn`'s origin gate and bumps activity
+- *(Appending to `result.followUps` would publish an empty slice: `runAgentLoop` publishes it
+  immediately after `checkGoalLoopAfterTurn` returns, long before a deferred adjudication has
+  produced a steer. And a notify stamped with the default `"async:<kind>"` sender is silently
+  dropped at the gate — a failure this project has already shipped once, ADR-081 D6b.)*
+
+**Scenario: a new operator message during an in-flight adjudication is not blocked** *(Happy Path)*
+Traces to: US-12 AC-4, FR-100, E-32
+- **Given** an adjudication in flight for a goal
+- **When** the operator sends a new message on that session
+- **Then** the turn runs and delivers normally, with no wait on the adjudication
+- **And** the in-flight adjudication continues against the record as it stood when scheduled
+- **And** when that turn's `set_goal mode:update` removes a criterion id the adjudication then
+  returns a verdict for, the verdict for the vanished id is discarded with a WARN naming it, and
+  the remaining verdicts are applied
+
+**Scenario: a second claim during an in-flight adjudication is refused, in the tool result**
+*(Error Path)*
+Traces to: US-12 AC-5, FR-101, E-33
+- **Given** an adjudication in flight for a goal
+- **When** the working agent calls `goal_claim(status: "met", evidence: "…")` again
+- **Then** the tool returns a stated, non-error-shaped result saying an adjudication is already
+  running and its verdict will arrive on its own
+- **And** no second verifier turn starts
+- **And** no round is consumed and the bare-claim streak is not cleared
+- **And** when the check-then-act guard is raced past, `verifier_registry.Register` returns
+  `ErrVerifierSessionHeld` and the same refusal is surfaced — two layers, one message
+- *(Refused rather than superseding: superseding would let the party being judged cancel a pending
+  verdict by re-claiming, and would discard a Judge turn that has already spent tool calls.)*
+
+**Scenario: a background verdict overturning a claim is visible, not intrusive** *(Error Path)*
+Traces to: US-12 AC-6, FR-102
+- **Given** an agent that claimed `met` and whose reply the operator has already read
+- **When** the background adjudication returns `unmet`
+- **Then** the goal-status frame carries the `claim_overturned` state, distinct from an ordinary
+  unmet round
+- **And** the `judge_verdict` transcript entry is written into the session the operator is reading
+- **And** the steer re-enters as an ordinary async turn, indistinguishable from continued work
+- **And** **no** modal, toast, forced navigation or notification is produced, and no already-read
+  content is re-ordered
+
+**Scenario: a background adjudication is cancellable through the verifier registry** *(Error Path)*
+Traces to: FR-103, FR-082, E-34
+- **Given** a background adjudication mid-`read_file`
+- **When** `/goal clear` fans out to the registered verifier session
+- **Then** the turn is interrupted without waiting for the tool call to finish
+- **And** no verdict is produced and the adjudication is discarded whole
+- **And** a cancel addressed to the operator's **chat** session does not reach it — there is no
+  chat turn to interrupt
+
+**Scenario: a gateway restart loses an in-flight adjudication, recoverably** *(Edge Case)*
+Traces to: FR-103, E-35
+- **Given** an adjudication in flight
+- **When** the gateway restarts
+- **Then** no verdict is produced and nothing is resumed — the adjudication was in memory only
+- **And** the goal is left active, quiet, with its round unconsumed
+- **And** the next quiet window re-posts it (FR-097), which is the recovery path
+
 ---
 
 ## Test Matrix
@@ -2672,12 +3785,53 @@ each says so. Rows marked **(fails today)** are the ones that prove a closure ex
 | FR-032 | `TestVerdictMapping_ClaimOnlyQuoteRejected` | Go unit | same |
 | FR-033 | `TestVerdictMapping_WhitespaceNormalisedSubstringAccepted` | Go unit | same |
 | FR-034 | `TestVerdictMapping_GroundingAppliesOnlyToMet` — oracle MUST pair the negative (an `unmet` with an ungrounded quote survives) with a positive companion **in the same function** (an otherwise-identical `met` is rewritten); the negative alone passes with no grounding code at all | Go unit | same |
-| FR-035, FR-036 | `TestArtifactCriterion_AlwaysReachesProseWithCheckEvidence` | Go integration | `pkg/agent/judge_artifact_demotion_adr084_test.go` |
-| FR-037 | `TestArtifactCriterion_Rung15DoesNotClassifyNonVerdict` | Go integration | same |
-| FR-038 | `TestArtifactCriterion_NonZeroExitVetoesMet` | Go integration | same |
-| FR-039 | `TestArtifactCriterion_ZeroExitDoesNotForceMet` | Go integration | same |
-| FR-040 | `TestArtifactCriterion_InconclusiveCheckVetoesNothing` | Go integration | same |
-| FR-040a | `TestJudgeEvidence_ArtifactCriterion_PathGuardUnchanged` — *(regression row, not an FR row: the path guard is explicitly unchanged, so this can never fail from anything specified here. Its authoritative home is [Regression Requirements](#regression-requirements))* | Go unit | `pkg/agent/judge_artifact_criterion_test.go` |
+| FR-035 | RETIRED (rev 7). `TestArtifactCriterion_AlwaysReachesProseWithCheckEvidence` is **not created** — with the inference gone there is no artifact rung for a criterion to reach prose *from*. FR-109's absence gate covers it | — | — |
+| FR-036 | `TestDeclaredCheck_OutcomeAttachedAsEvidenceRecord` — oracle: a criterion declaring a `KindCheck` payload reaches the Judge with the check's exit code and output in its evidence block | Go integration | `pkg/agent/judge_declared_check_adr084_test.go` |
+| FR-037 | RETIRED (rev 7). `TestArtifactCriterion_Rung15DoesNotClassifyNonVerdict` is **not created**; C7's double-classification was a property of rung 1.5 existing | — | — |
+| FR-038 | `TestDeclaredCheck_NonZeroExitVetoesMet` | Go integration | `pkg/agent/judge_declared_check_adr084_test.go` |
+| FR-039 | `TestDeclaredCheck_ZeroExitDoesNotForceMet` | Go integration | same |
+| FR-040 | `TestDeclaredCheck_InconclusiveVetoesNothing` — table over policy-denied, timed out, unreadable exit code **and no workspace to root it in** (E-37) | Go integration | same |
+| FR-040a | RETIRED (rev 7). `isSafeWorkspaceArtifactPath` is deleted with its only caller, so `TestJudgeEvidence_ArtifactCriterion_PathGuardUnchanged` is **deleted, not retained** — a live row asserting a property of dead code. Its removal is covered by FR-109's absence gate and recorded under [Deliberate test rewrites](#deliberate-test-rewrites-each-is-a-risk-of-silently-losing-coverage) | — | — |
+| FR-104 | `TestAdjudication_TiersConsultedOnceInOrderOnClaim` — oracle: tier-1 assembly, then declared checks, then the Judge dispatch, observed through injected seams; and **zero** tier evaluations occur outside an adjudication | Go integration | `pkg/agent/judge_evidence_tiers_adr084_test.go` |
+| FR-105 | `TestTranscriptWindow_RendersToolCallParametersStatusAndError` **(fails today)** — oracle: the rendered window contains the call's parameters and error, not only `[tool_call] <tool> -> <status>`. This is ADR §2 E3's defect, still live where D14 tier 1 needs it not to be | Go unit | same |
+| FR-105 | `TestTierOneEvidence_SourcedFromTranscriptNotTheVerifierCapture` — oracle: the worker's calls appear with an EMPTY FR-030 capture (the capture holds the Judge's own results, in a different session, C28) | Go integration | same |
+| FR-105 | `TestTierOneEvidence_BoundedAndRedacted` — oracle: parameters truncate at 512 runes with an elision marker; the block truncates at 32 KiB oldest-first with a stated dropped count; a registered sensitive value does not appear | Go unit | same |
+| FR-106 | `TestTierOneEvidence_EmptiedResultIsInconclusiveNotAbsent` **(fails today)** — oracle: after `recordEmptiedOnTranscript` has rewritten a call's `Result`, that call still renders with `{Tool, Parameters, Status, Error}` plus a projected-away marker, and does **not** enter FR-108's contradiction set. Read naively it would veto a true `met` — E1's failure through the newest control | Go integration | same |
+| FR-107 | `TestTierOneDecidesOnlyViaDeclaredBehaviorPayload` — oracle: a criterion with no `KindBehavior` payload is never settled from the tool-call record, however suggestive it is; the pair is a criterion WITH one, which is | Go integration | same |
+| FR-107 | `TestBehaviorScan_StillCountOnly_NoParameterMatching` **(passes today — retained deliberately)** — oracle: `runBehaviorScan` reads neither `Parameters` nor `Result`. It is a **guard against extension**, not evidence of new behaviour: the moment someone widens it into a natural-language matcher this fails, which is C26's whole point | Go unit | `pkg/agent/behavior_scan_test.go` (extend) |
+| FR-108 | `TestTierOneContradictionVetoesMet` — oracle: every recorded call of the declared payload's tool has `Status: "error"`, the Judge returns `met`, the outcome is `unmet` and the WARN quotes the `Error` string | Go integration | `pkg/agent/judge_evidence_tiers_adr084_test.go` |
+| FR-108 | `TestTierOneNonContradictionsVetoNothing` — table over `denied`, `emptied`, `capped`, never-called (E-38, E-40); each leaves a `met` standing | Go unit | same |
+| FR-109 | `TestPlanArtifactCheck_AndItsRungAreGone` **(fails today)** — oracle: a `Kind: prose` / `Judgment: artifact` criterion naming an existing file executes **zero** shell commands and is dispatched as an ordinary prose criterion | Go integration | `pkg/agent/judge_no_inferred_check_adr084_test.go` |
+| FR-109 | `scripts/check-no-inferred-check.sh` (+ `.test.sh`) — fails the build if `planArtifactCheck`, `artifactPathRe`, `artifactContainsRe`, `artifactCheckCandidate` or `isSafeWorkspaceArtifactPath` reappears as a definition or non-comment reference. Matches the `check-no-goal-confirm-gate.sh` precedent; a merge from a pre-rev-7 branch restores all five as a conflict-free addition | CI gate | `.github/workflows/pr.yml`, `deploy/ci-worker/runci.sh` `lint`, `make lint-no-inferred-check` |
+| FR-110 | `TestSetGoal_DoesNotRequireOrPreferACheckableCriterion` — oracle: a criterion with no check, no path-shaped token and no quantitative form validates and persists identically to one that has them; the `judgment` enum is exactly `[boolean, quantitative, artifact]` | Go unit | `pkg/tools/set_goal_adr084_test.go` |
+| FR-110 | `scripts/check-no-task-type-classifier.sh` — oracle: zero functions whose name or doc comment claims to decide whether a goal or criterion is a coding task. A blunt instrument, deliberately: the constraint is "zero classifiers" and the cheapest way to keep it is to make adding one loud | CI gate | same wiring as FR-109's gate |
+| FR-111 | `TestNonCodingGoal_EmailCriterion_DecidedAtTierOne` **(fails today)** — oracle: a `send_email` criterion, no check anywhere, **zero** shell executions in the adjudication, and the Judge's evidence block containing the call's `to` parameter | Go integration | `pkg/agent/judge_noncoding_goal_adr084_test.go` |
+| FR-111 | `TestNonCodingGoal_DeckSectionsCriterion_DecidedByTheJudgeReadingTheFile` **(fails today)** — oracle: a five-clause "the deck has sections for …" criterion over `board-q4.md` builds **no** check from its wording, and resolves `met` with five distinctly grounded entries / `unmet` at four sections | Go integration | same |
+| FR-111 | `TestJudgeDefaultRubric_DoesNotAssumeARepositoryOrATestSuite` — oracle: the rubric constant and `buildJudgeUserContent`'s rewritten fallbacks name no diff, repo, test run or build output as the assumed evidence | Go unit | `pkg/coreagent/judge_rubric_adr084_test.go` |
+| FR-087 | `TestGoalClaimTool_SchemaAndEnum` — oracle: `status` enum is exactly `[met, blocked, waiting_on_user]`; `evidence` is a string; the description states that a `met` claim adjudicates after delivery and may disagree later | Go unit | `pkg/tools/goal_claim_test.go` |
+| FR-088 | `TestGoalClaim_MetWithoutEvidenceIsRefusedAtTheCall` **(fails today)** — oracle: the call returns an error result, **no** claim is recorded, `handleBareGoalClaim` is NOT invoked, the bare-claim streak is NOT incremented, and no round is consumed. All five, because "returns an error" alone passes on a tool that also recorded the claim | Go integration | `pkg/agent/goal_claim_wiring_adr084_test.go` |
+| FR-088 (E-28) | `TestGoalClaim_WhitespaceOnlyEvidenceIsEmpty` — table over `""`, `"   "`, `"\n\t "` | Go unit | `pkg/tools/goal_claim_test.go` |
+| FR-089 | `TestGoalClaim_Constraint6Seeding` — oracle: present in `allStaticToolNames` AND the ceiling at `allow`; core roster / subagent tier / customs allow; Judge, PlanSupervisor and Worker explicit deny. Extends the shipped `TestCatalog_MatchesGlobalCeilingEntryForEntry`, which a one-sided edit already fails | Go unit | `pkg/coreagent/judge_seed_test.go` (extend), `pkg/config/defaults_test.go` (extend) |
+| FR-090 | `TestGoalClaim_RefusesOnDelegatedSubTurnAndGoallessSession` — oracle: mirrors `set_goal`'s own precondition tests exactly | Go integration | `pkg/tools/goal_claim_test.go` |
+| FR-091 | `TestMarkerPath_UnchangedIncludingBareClaimEconomics` **(passes today — retained as a regression row)** — oracle: `parseGoalStatusMarker`'s fenced/excluded/last-occurrence/adjacency rules and G-4's free-then-costly ladder all behave exactly as before. Retained because D12 is where a "simplification" would delete them | Go unit | `pkg/agent/task_completion_signal_test.go` (extend) |
+| FR-091 | `TestGoalClaim_SuccessfulToolClaimClearsTheBareClaimStreak` **(fails today)** — oracle: a session that bounced once on markers and then claims via the tool carries no stale round-costing counter | Go integration | `pkg/agent/goal_claim_wiring_adr084_test.go` |
+| FR-092 | `TestClaimResolution_ToolBeatsMarker` — the five-row table of E-25 – E-27 and E-29, including the two rows where a **refused** or **denied** call does not suppress marker parsing | Go integration | same |
+| FR-093 | `TestGoalClaim_BlockedParksWithNoAdjudicationAndNoRound` **(fails today)** — oracle: no Judge call, `GoalRoundsUsed` unchanged, the `blocked` goal-status state emitted, idle settlement suppressed; **and** `GOAL_STATUS: blocked` as text is `Present: true, Status: ""`, i.e. no marker at all | Go integration | same |
+| FR-093 | `TestGoalStatusFrame_BlockedAndClaimOverturnedInBothCopies` **(fails today)** — oracle: both new `state` values are in `GoalStatusFrame.yaml` **and** the `asyncapi.yaml` inline duplicate, and a frame carrying each survives the generated zod. Miss the inline copy and the goal card blanks in production with `make verify-contracts` green (C20) | Go unit + vitest | `pkg/api/generated/contract_test.go`, `src/lib/api/generated/` schema test |
+| FR-094 | `TestGoalClaim_EvidenceBecomesClaimTextInADR074Order` — oracle: `ClaimText` equals the `evidence` argument, **not** the whole turn output, and occupies the same position `judge_input_order_adr074_test.go` protects | Go integration | `pkg/agent/goal_claim_wiring_adr084_test.go` |
+| FR-095 | `TestQuietWindow_MakesZeroJudgeCalls` **(fails today)** — oracle: a quiet goal-bearing session with a record and prior output produces **zero** Judge dispatches and an unchanged `GoalRoundsUsed` | Go integration | `pkg/agent/goal_triggers_adr084_test.go` |
+| FR-095 | `TestRunGoalAdjudication_RejectsEmptyClaimText` **(fails today)** — oracle: the claimless contract is gone; an empty `claimText` is refused rather than adjudicated | Go unit | same |
+| FR-095 | `scripts/check-no-claimless-adjudication.sh` (+ `.test.sh`) — the merge-order mechanism; fails the build on a `runGoalAdjudication` call reachable from a tick, sweep or timer, or on the return of the "firing claimless adjudication after quiet window" log string | CI gate | `.github/workflows/pr.yml`, `deploy/ci-worker/runci.sh` `lint`, `make lint-no-claimless-adjudication` |
+| FR-096 | `TestKeeperTick_AllEightSurvivingBehaviours` **(fails today for row 8's new terminal, passes for 1–7 — and that split is the point)** — one subtest per row of FR-096's table. Rows 1–7 assert the removal was surgical; row 8 asserts the push ladder no longer falls through to an adjudication when its budget is spent | Go integration | same |
+| FR-097 | `TestQuietWindow_RePostsTheGoal` **(fails today)** — oracle: `goalContinuePushPrompt`'s text is dispatched, stamped `goalLoopFollowUpSenderID`, with zero Judge calls and no round consumed. All four, because "no verdict was written" alone passes on an implementation that does nothing and wedges every quiet goal | Go integration | same |
+| FR-097 | `TestZeroOutputTriple_AndItsDeadPredicatesAreRemoved` — oracle: `goalZeroOutputTripleHolds` and `sessionHasTranscriptOutputSince` are unreferenced and deleted; one push ladder remains, not two branches with identical bodies | Go unit | same |
+| FR-098 | `TestAdjudicationDispatchedAfterOutboundPublish` **(fails today)** — oracle: the **observed** seam order is `PublishOutbound(finalContent)` then verifier dispatch, `runAgentLoop` returns without waiting, and the adjudication's ctx outlives the turn ctx. A source-order assertion would pass on a conditionally-deferred implementation | Go integration | `pkg/agent/goal_claim_after_delivery_adr084_test.go` |
+| FR-099 | `TestDeferredAdjudication_SteerRoutesThroughAsyncNotifier` **(fails today)** — oracle: the steer arrives as a notify event carrying `SenderCanonicalID: goalLoopFollowUpSenderID` and a `SourceKind` distinct from `"goal_idle_settle"`, and `result.followUps` is empty. A default-stamped notify is silently dropped at the origin gate — a failure this project already shipped once (ADR-081 D6b) | Go integration | same |
+| FR-100 | `TestNewOperatorMessageDuringInFlightAdjudicationIsNotBlocked` — oracle: the turn delivers with no wait; and a verdict for a criterion id a concurrent `set_goal mode:update` removed is discarded with a WARN naming the id, while the rest are applied | Go integration | same |
+| FR-101 | `TestSecondClaimDuringInFlightAdjudicationIsRefusedInTheToolResult` **(fails today — today it is a log line and a silent drop)** — oracle: the tool result states the refusal, no second verifier turn starts, no round is consumed, the streak is not cleared; plus a row where the check-then-act guard is raced past and `ErrVerifierSessionHeld` surfaces the same message | Go integration | same |
+| FR-102 | `TestOverturnedClaim_SurfacesAsADistinctStateAndATranscriptEntry` **(fails today)** — oracle: the `claim_overturned` state on the goal-status frame, distinct from an ordinary unmet round; the `judge_verdict` entry written; and the steer arriving as an ordinary async turn | Go integration | same |
+| FR-102 | `emits no modal, toast or navigation when a background verdict arrives` — oracle: a negative assertion paired **in the same test** with a positive one (the goal card's state did change), so it cannot pass by the frame never arriving | vitest | `src/components/workspaces/GoalStatusPill.test.tsx` |
+| FR-103 | `TestBackgroundAdjudication_CancelledViaVerifierRegistry` **(fails today)** — oracle: a cancel fanned out to the registered verifier session interrupts mid-tool-call and produces no verdict; and a cancel addressed to the operator's chat session does **not** reach it | Go integration | `pkg/agent/verifier_cancel_adr084_test.go` |
 | FR-041 – FR-048 | RETIRED (ADR-084 rev 4). No tests. The files `pkg/coreagent/judge_rubric_history_adr084_test.go` and `pkg/gateway/judge_soul_migration_adr084_test.go` are **not created**, and neither is `pkg/coreagent/judge_rubric_history.go` or `pkg/gateway/judge_soul_migration.go` | — | — |
 | FR-049 | `TestJudgeTimeout_ConfigurableAndDefaults420s` | Go unit | `pkg/agent/verifier_budget_adr084_test.go` |
 | FR-049 | `TestJudgeTimeout_ClampedToHardCeiling` | Go unit | same |
@@ -2738,7 +3892,7 @@ each says so. Rows marked **(fails today)** are the ones that prove a closure ex
 | FR-079(a) | `TestRubricSelfCheck_LegacySoulExemptFromEvidenceSourceRewrite` — oracle: **the same fake `met` response with no `evidence_source`** stays `met` under a legacy soul and becomes `unable_to_verify` under the current one | Go integration | same |
 | FR-079(b) | `TestRubricSelfCheck_LegacySoulStillEnforcesDeclaredSource` | Go integration | same |
 | FR-079(c), FR-024 | `TestRubricSelfCheck_QuoteRewriteGatedOnRubricInstructsQuote` **(fails today)** — oracle: an identical `met` with an empty quote stays `met` when `rubricInstructsQuote` is false and becomes `unable_to_verify` when it is true. Without this gate 100 % of that population's passing verdicts become persistently-blocked escalations and H6 is designed to fail (C16) | Go integration | same |
-| FR-079(d), FR-037 | `TestRubricSelfCheck_LegacySoulRetainsArtifactSettle` — oracle: a zero-exit artifact criterion is settled at rung 1.5 and never reaches the prose Judge, **and** a criterion whose check is BLOCKED is classified by rung 1.5 with `withheld` honoured. The second row is mandatory: an unconditional FR-037 leaves that criterion with no classification and no tracker entry at all (F14) | Go integration | same |
+| FR-079(d) | RETIRED (rev 7). `TestRubricSelfCheck_LegacySoulRetainsArtifactSettle` is **not created**: the carve-out it protected has no subject once the inferred check is deleted. Replaced by `TestRubricSelfCheck_LegacySoulGetsNoArtifactCarveOut` — oracle: a `prose`/`artifact` criterion on a legacy install builds **no** check and reaches that install's own Judge as prose, while FR-079(a)(b)(c)(e)(f) still apply to it (C24) | Go integration | same |
 | FR-079(f) | `TestRubricSelfCheck_LegacyAdjudicationLogsLegacyRubricFlag` | Go unit | same |
 | FR-080 | `TestResetJudgeSoul_AdoptsCurrentDefault` — oracle: `PUT /api/v1/agents/judge` with `reset_soul: true` then one dispatch ⇒ the effective soul equals `JudgeDefaultRubric`, with no restart | Go integration | `pkg/gateway/judge_rubric_selfcheck_adr084_test.go` |
 | FR-080 | `TestResetJudgeSoul_WorksWithValidateInboundEnabled` **(fails today)** — oracle: the reset succeeds with `cfg.Gateway.ValidateInbound = true`. Revision 5's `soul: ""` form returns **400** there, because `AgentUpdateRequest.soul` is `minLength: 1` and `updateAgent` runs `decodeAndValidate` (`rest.go:3324`) — failing exactly the security-conscious operator most likely to hit it (F15) | Go integration | same |
@@ -2751,7 +3905,7 @@ each says so. Rows marked **(fails today)** are the ones that prove a closure ex
 | FR-084 | `TestVerifierAudit_JudgeReadsAndDenialsAreAttributedAndCorrelated` | Go integration | `pkg/agent/verifier_audit_adr084_test.go` |
 | FR-085 | `an old strict per_criterion schema rejects the frame on the unknown PROPERTY outcome, not on its value` — oracle: feed today's generated `z.object({criterion_id, met, reason, evidence_quote}).strict()` a frame carrying `outcome` and assert the error names the unrecognised **key**. Renamed from `drops nothing and renders unmet when outcome is an unknown enum value`, whose oracle was the wrong diagnosis (F21) | vitest | `src/lib/api/generated/` schema test + `CriteriaVerdictList.test.tsx` |
 | FR-085 | `TestJudgeVerdictFrame_RolloutChoiceIsRecordedInTheSchemaDescription` — oracle: the two frame copies' `additionalProperties` setting matches the choice FR-085 requires W3 to record, and the schema description states it | Go unit | `pkg/api/generated/contract_test.go` (extend) |
-| FR-086 | `TestGoalStatus_JudgingPillEmittedAtDispatch` **(passes today — retained as a regression row)** — `runGoalAdjudication` already emits `goalPillJudging` before dispatch (`goal_triggers.go:440`). The FR's real content is W3's recorded choice between updating that surface during the turn and stating that it does not change for up to the resolved timeout; whichever is chosen, the assertion is written against it | Go unit | `pkg/agent/goal_triggers_test.go` (extend) |
+| FR-086 | RETIRED (rev 7) — answered by construction: there is no wait to fill. `TestGoalStatus_JudgingPillEmittedAtDispatch` **survives as a pure regression row** (it passes today; `runGoalAdjudication` already emits `goalPillJudging` before dispatch) and its authoritative home is now [Regression Requirements](#regression-requirements). The question that replaces it — how an *overturning* verdict becomes visible — is FR-102's | Go unit | `pkg/agent/goal_triggers_test.go` (extend) |
 | US-5 | `TestVerifierAntiPatterns/hostile_string_in_a_read_file_does_not_produce_met` — retained, but its oracle is a property of the fake provider's scripted output; FR-009a's test is the mechanical one | Go integration | `pkg/agent/verifier_antipatterns_adr052_qa_test.go` (extend) |
 | FR-062 | *(note)* `TestJudge_FileNotFoundIsUnmet` exercises the **rubric's** compliance via a scripted fake, not engine code. It is retained as a scenario regression, not as evidence that FR-062 is enforced | Go integration | `pkg/agent/judge_outcome_adr084_test.go` |
 
@@ -2784,7 +3938,15 @@ named existing tests.
 | DS-8 anti-pattern catalogue | `pkg/agent/verifier_antipatterns_adr052_qa_test.go::TestVerifierAntiPatterns` |
 | Diff evidence reaches the prose Judge | `judge_blocked_check_test.go::TestJudge_DiffEvidence_FedIntoProseJudge` |
 | SPA verdict render of present / absent / empty quote | `src/components/workspaces/CriteriaVerdictList.test.tsx` (3 existing cases) |
-| `isSafeWorkspaceArtifactPath`'s guard is unchanged (was FR-040a) | `pkg/agent/judge_artifact_criterion_test.go::TestJudgeEvidence_ArtifactCriterion_PathGuardUnchanged` |
+| ~~`isSafeWorkspaceArtifactPath`'s guard is unchanged (was FR-040a)~~ | **DELETED (rev 7)** — the guard and its only caller are removed by D14 rule 2 (C24). Its replacement is FR-109's absence gate |
+| The marker claim path, including G-4's free-then-costly bounce ladder (`parseGoalStatusMarker`, `handleBareGoalClaim`, `bumpGoalBareClaimStreak`, `goalBareClaimCostThreshold`, `goalStatusBareClaimSteer`) | `pkg/agent/task_completion_signal_test.go` (existing cases) + `TestMarkerPath_UnchangedIncludingBareClaimEconomics`. **This is the row most at risk**: D12 is exactly where a "simplification" deletes the fallback the ADR says to keep |
+| The keeper's eight non-adjudicating behaviours (FR-096's table) | `pkg/agent/goal_triggers_test.go` (existing cases) + `TestKeeperTick_AllEightSurvivingBehaviours`. At risk because ADR §8 names their shared driver for removal (C22) |
+| `dispatchGoalAsyncFollowUp`'s un-wedge discipline: every exit that does not hand off to a turn clears the idle-settling marker itself | `pkg/agent/goal_keeper_repairs_test.go` (existing cases). Load-bearing for FR-097, which makes this the *only* action the keeper takes |
+| `goalLoopFollowUpSenderID` stamping on keeper-originated notifies (ADR-081 D6b) | `pkg/agent/async_notifier_test.go`, `goal_keeper_repairs_test.go`. FR-099 adds a second producer that depends on it; the negative assertion (other producers keep the default `async:<kind>` sender) must survive |
+| `verifier_registry`'s CAS refusing a concurrent adjudication (`ErrVerifierSessionHeld`) | `pkg/agent/verifier_registry_test.go`. Promoted from a rare race to FR-101's primary mechanism |
+| ADR-074's prose-led judge input order, with `ClaimText` last | `pkg/agent/judge_input_order_adr074_test.go`. FR-094 changes what `ClaimText` contains, never where it sits |
+| The `judging` pill is emitted before dispatch (was FR-086) | `pkg/agent/goal_triggers_test.go::TestGoalStatus_JudgingPillEmittedAtDispatch` |
+| `runBehaviorScan` stays a count-only scan and reads neither `Parameters` nor `Result` | `pkg/agent/behavior_scan_test.go::TestBehaviorScan_StillCountOnly_NoParameterMatching`. A **guard against extension**, not against regression: widening it into a natural-language matcher is D14 rule 2's retired inference relocated (C26, FR-107) |
 | `SeedSystemAgentSoulFile` never overwrites; `ensureVerifierSoul` backfills only when empty (was FR-047; now load-bearing for FR-080) | `pkg/agent/verifier_soul_prompt_test.go::TestSeedSystemAgentSoulFile_NeverOverwrites` (extend to cover the FR-077 self-check running alongside it) |
 | A non-System agent's `FSOpRead` reach outside the workdir is unchanged (ADR-063 FR-2.2) | `pkg/tools/filesystem_docextract_test.go::TestReadFile_DocumentSymlinkEscape_NowExtractsOpenly` (kept passing for the non-confined posture) and `pkg/tools/resolvepath_test.go`'s existing FR-2.2 cases |
 | SEC-26's mechanism is unchanged — `checkJudgeSEC26` before dispatch, per-iteration take in `turnLoop` | `pkg/agent/judge_test.go::TestJudge_Unavailable_SEC26RateLimited_NotAttemptConsuming` |
@@ -2795,14 +3957,17 @@ named existing tests.
 
 | Existing test | Change | Guard against loss |
 |---|---|---|
-| `judge_artifact_criterion_test.go::TestJudgeEvidence_ArtifactCriterion_ExistingFile_SettlesDeterministically_NoLLM` | Name and assertion invert under D5 — the criterion now DOES reach the LLM | Rename to `..._ReachesProseWithCheckEvidence` and add `TestArtifactCriterion_ZeroExitDoesNotForceMet` so the demotion is asserted, not merely un-asserted |
-| `..._MissingFile_FailsDeterministically_NoLLM` | Same inversion; the veto (FR-038) replaces the deterministic settle | Replace with `TestArtifactCriterion_NonZeroExitVetoesMet`, which asserts a stronger property (a `met` is actively rewritten) |
-| `..._UnbornHEAD_FilePresent_PassesDeterministically` | Same | Fold into `TestArtifactCriterion_AlwaysReachesProseWithCheckEvidence` |
-| `..._Undecidable_FallsThroughToProse` / `..._BlockedCheck_FallsThroughToProseWithEvidence` | Behaviour becomes universal, so these two stop being distinguishing cases | Keep both; they now assert FR-040 (inconclusive vetoes nothing) rather than a fall-through branch |
+| **Every test in `judge_artifact_criterion_test.go`** — `..._ExistingFile_SettlesDeterministically_NoLLM`, `..._MissingFile_FailsDeterministically_NoLLM`, `..._UnbornHEAD_FilePresent_PassesDeterministically`, `..._Undecidable_FallsThroughToProse`, `..._BlockedCheck_FallsThroughToProseWithEvidence`, `..._PathGuardUnchanged` | **Deleted, not inverted.** Revision 6 planned to invert their assertions because D5 demoted the inferred check to evidence. D14 rule 2 goes further: the check is not demoted, it is **not built** (C24), so every one of these tests exercises a code path that no longer exists | The whole file is deleted and replaced by `judge_no_inferred_check_adr084_test.go`, whose `TestPlanArtifactCheck_AndItsRungAreGone` asserts the **stronger** property (zero shell executions for a `prose`/`artifact` criterion) plus `scripts/check-no-inferred-check.sh`, which no test can substitute for because it survives a merge. **Declared-check coverage is not lost**: FR-036/038/039/040's four tests in `judge_declared_check_adr084_test.go` cover rung 1, which was never inferred |
 | `judge_evidence_quote_test.go::TestFailClosedProseVerdicts_NoEvidenceQuote` | Fail-closed verdicts gain an `outcome` | Extend, do not replace: assert `Outcome == unmet` AND `EvidenceQuote == ""` |
+| `pkg/agent/goal_triggers_test.go`'s claimless-idle cases — `TestGoalIdleSettle_*` asserting `Judge calls = 1` and `rounds_used = 1` after `goalQuietWindowSettle` (the file's own comment calls this "claimless idle adjudication … G-3") | Their assertions **invert**: the quiet window must now make **zero** Judge calls and consume **zero** rounds | Rewrite each to `TestQuietWindow_MakesZeroJudgeCalls` / `TestQuietWindow_RePostsTheGoal`, which assert the positive replacement (the re-post was dispatched, stamped correctly) as well as the negative. Inverting to "no Judge call" alone would pass on an implementation that does nothing at all and wedges every quiet goal |
+| `pkg/agent/goal_triggers_test.go`'s zero-output-triple cases | `goalZeroOutputTripleHolds` and `sessionHasTranscriptOutputSince` are deleted by FR-097's ladder unification | Fold into `TestZeroOutputTriple_AndItsDeadPredicatesAreRemoved`; the push-budget bound they exercised moves to `TestKeeperTick_AllEightSurvivingBehaviours` row 8 |
 
-No test may be deleted in this feature. Every rewrite above must land in the same commit as the
-behaviour it re-covers.
+**Revision 7 makes the first deletions in this feature, and they are enumerated rather than
+implied.** Revision 6's rule was "no test may be deleted"; that rule was written when nothing was
+being removed. D14 rule 2 removes a code path outright, so its tests go with it — but **only** the
+tests in the table above, **only** in the same commit as the removal, and **only** where the table
+names the stronger property that replaces each. Every other test is still covered by the old rule.
+Every rewrite above must land in the same commit as the behaviour it re-covers.
 
 ---
 
@@ -2819,13 +3984,16 @@ but the plan must be read as a chain with one side branch, not as eight worktree
 |---|---|---|---|
 | **W1** (prereq, `security-lead` for the fspolicy slice) | D10 — god mode, MCP, skills, **real** read confinement | `pkg/coreagent/core.go` (seed + skills only), `pkg/agent/instance.go`, `pkg/agent/context.go` (project-shelf nil for the verifier turn — FR-059a), **`pkg/tools/resolvepath.go`** and **`pkg/fspolicy/policy.go`** (FR-060/060a — *security-lead*, changes the shared filesystem gate), `pkg/tools/filesystem_docextract_test.go` (both postures), **new** `pkg/agent/verifier_capability_gate.go`, **new** `pkg/tools/compositor_judge_mcp_adr084_test.go`, `pkg/coreagent/judge_seed_test.go`, **new** `scripts/check-adr084-closures.sh` (+ `.test.sh`, `Makefile`, `.github/workflows/pr.yml`, `deploy/ci-worker/runci.sh`) | — |
 | **W2** (prereq) | D9 — configurable + raised timeout, caps, progress classification, **the tool-result capture seam, and FR-009a's injection banner** | `pkg/config/config.go` (+ judge-timeout / cap / token-ceiling keys), **new** `pkg/agent/verifier_budget.go`, `pkg/agent/judge.go` (**timeout consts only**), **`pkg/agent/tool_result_admit.go`** — `admitToolResult`, the shipped choke point, carrying **both** FR-030's capture (C10) and **FR-009a's injection banner** (moved here from W4: same string, same choke point, one implementation), **`pkg/agent/loop.go`** — the tool-dispatch point inside `turnLoop`, which is the only place that can refuse a call once a cap is reached (FR-051/052 — `verifier_budget.go` alone cannot refuse anything). The ctx seams (`WithReadConfined`, the capture handle) follow the shipped `tools.WithVerifierSessionScope` precedent | — |
-| **W3** (the one parallel lane) | D8 — contract + SPA render **only** | Every row of the [copies table](#every-copy-of-every-changed-shape-by-path-fr-073-c20) marked authoritative or hand-sync: `CriterionVerdict.yaml`, `JudgeVerdictFrame.yaml`, **`contracts/asyncapi.yaml`** (inline `JudgeVerdictFrame`, **`GoalStatusFrame.criteria[]`, `GoalStatusFrame.dod[]`, `GoalStatusFrame.state`**), `contracts/openapi.yaml`, `AcceptanceCriterion.yaml` + `AcceptanceCriterionInput.yaml` (status enum FR-076 **and** FR-006b's clause count), `GoalStatusFrame.yaml`, `Agent.yaml` (FR-078 badge field), `AgentUpdateRequest.yaml` (FR-080's `reset_soul`), `pkg/api/generated/`, `src/lib/api/generated/`, **`pkg/task/verdict.go`** (FR-070a Go fields), `pkg/task/criterion.go` (status constant + FR-006b's persisted count), `pkg/gateway/replay.go`, `src/components/workspaces/CriteriaVerdictList.tsx` (+ test), `src/components/agents/AgentCard.tsx` (FR-078 badge), the goal-status pill (FR-057a, FR-083, FR-086). **W3 records FR-085's rollout choice and FR-086's visibility choice.** It no longer owns the status writer — see W4a | — |
+| **W3** (the one parallel lane) | D8 — contract + SPA render **only** | Every row of the [copies table](#every-copy-of-every-changed-shape-by-path-fr-073-c20) marked authoritative or hand-sync: `CriterionVerdict.yaml`, `JudgeVerdictFrame.yaml`, **`contracts/asyncapi.yaml`** (inline `JudgeVerdictFrame`, **`GoalStatusFrame.criteria[]`, `GoalStatusFrame.dod[]`, `GoalStatusFrame.state`**), `contracts/openapi.yaml`, `AcceptanceCriterion.yaml` + `AcceptanceCriterionInput.yaml` (status enum FR-076 **and** FR-006b's clause count), `GoalStatusFrame.yaml`, `Agent.yaml` (FR-078 badge field), `AgentUpdateRequest.yaml` (FR-080's `reset_soul`), `pkg/api/generated/`, `src/lib/api/generated/`, **`pkg/task/verdict.go`** (FR-070a Go fields), `pkg/task/criterion.go` (status constant + FR-006b's persisted count), `pkg/gateway/replay.go`, `src/components/workspaces/CriteriaVerdictList.tsx` (+ test), `src/components/agents/AgentCard.tsx` (FR-078 badge), the goal-status pill (FR-057a, FR-083, and **rev 7's two new `GoalStatusFrame.state` values — `blocked` (FR-093) and `claim_overturned` (FR-102) — in BOTH copies, rows 10–11 of the copies table**). **W3 records FR-085's rollout choice.** *(FR-086's visibility choice is retired — D13 removes the wait it was about.)* It no longer owns the status writer — see W4a | — |
 | **W4** | D2a/D2b/D2c/D5/D5a + the attribution model — three-state outcome, empty-quote rewrite, grounding, attribution, distinctness, check demotion | `pkg/agent/judge.go` (parser + rung dispatch + **`summarizeVerdict`** (FR-022) + **`buildJudgeUserContent`** (FR-002a)), `pkg/agent/verifier_adjudication.go` (mapping loop + dedupe + FR-018a's return shape). **Consumes** W2's capture and banner; must not edit `tool_result_admit.go` or `loop.go` | W1, W2, W3 |
 | **W4a** (new — the projection and its call sites) | FR-076 step 2's verdict→criterion-status writer **and every call site that must carry a reason or an outcome** | **new** `pkg/agent/verdict_status_projection.go` (the writer), plus its call sites: `pkg/agent/judge.go::finalizeVerdict`, `pkg/agent/task_executor.go::adjudicateClaim` (FR-057a's and FR-083's reasons on the **task run record**), `pkg/agent/goal_triggers.go::runGoalAdjudication` → `emitGoalStatusFrame` (FR-057a's and FR-083's reasons on the **goal-status frame** — the only `Unavailable` surface), FR-020a's aggregate counter. **Why it is its own wave:** revision 5 gave W3 the writer but not its call sites, which all live in `pkg/agent`; declared W3 the one parallel lane with "Depends on: —"; and left W3's own test unable to go green until W4 produced an outcome to project. A contracts-and-SPA lane cannot own engine call sites, and a lane that needs W4's output is not parallel | W3, W4 |
 | **W5** | D1a — descendant scope | `pkg/agent/verifier_adjudication.go::resolveVerifierSessionScope` **only** (rebases onto W4) | W4 |
 | **W6** | D7 — provenance + investigation log (derived from W2's capture, not the transcript) + FR-069a's disagreement WARN | **new** `pkg/agent/verifier_provenance.go`, **one call site inside `verifier_adjudication.go`'s per-criterion mapping loop — the region W4 owns**, so it is a serialization point, not an addition (see below) | W4, W5 |
 | **W7** | D1 + D2d — rubric rewrite; §I — capability self-check, degraded state, legacy gating, reset | `pkg/coreagent/core.go` (**rubric constant only** — including FR-077's two capability sentinels), **new** `pkg/gateway/judge_rubric_selfcheck.go`, one call site in `pkg/gateway/gateway.go` beside `seedSystemAgentEagerSouls`. **No** `judge_rubric_history.go`, **no** `judge_soul_migration.go` — those were D6's and D6 is removed | **W1, W2** (hard, ADR prerequisite), W4 |
-| **W8** | Regression rewrites + anti-pattern extension + audit/cancel/CAS | `pkg/agent/judge_artifact_criterion_test.go`, `pkg/agent/judge_evidence_quote_test.go`, `pkg/agent/verifier_antipatterns_adr052_qa_test.go`, `pkg/agent/verifier_registry_test.go` (FR-083), **FR-084's audit wiring — the `read` and `path.access_denied` emit sites in `pkg/tools/filesystem.go` and `pkg/tools/resolvepath.go`, named rather than left as "audit wiring"**, `pkg/agent/verifier_cancel_adr084_test.go` (FR-082), **`pkg/config/judge_mcp_wildcard_adr084_test.go`** (FR-058's validator assertions — in the Test Matrix since revision 5 and in no wave's Owns) | W4, W4a, W7 |
+| **W8** | Regression rewrites + anti-pattern extension + audit/cancel/CAS | `pkg/agent/judge_evidence_quote_test.go`, `pkg/agent/verifier_antipatterns_adr052_qa_test.go`, `pkg/agent/verifier_registry_test.go` (FR-083), **FR-084's audit wiring — the `read` and `path.access_denied` emit sites in `pkg/tools/filesystem.go` and `pkg/tools/resolvepath.go`, named rather than left as "audit wiring"**, `pkg/agent/verifier_cancel_adr084_test.go` (FR-082/FR-103), **`pkg/config/judge_mcp_wildcard_adr084_test.go`** (FR-058's validator assertions — in the Test Matrix since revision 5 and in no wave's Owns). **`judge_artifact_criterion_test.go` is NOT here — it is deleted by W9**, which owns the removal it covers | W4, W4a, W7, W9 |
+| **W9** (new, rev 7) | **D14 — the three tiers, and the deletion of the inferred check** | `pkg/agent/judge.go` — delete `planArtifactCheck`, `artifactPathRe`, `artifactContainsRe`, `artifactCheckCandidate`, `isSafeWorkspaceArtifactPath`, and `JudgeCriteria`'s `KindProse && JudgmentArtifact` classification branch with its `artifactCriteria` slice and rung-1.5 dispatch (FR-109); `pkg/agent/verifier_adjudication.go::renderTranscriptEntriesForWindow` — the `{tool, parameters, status, error}` feed (FR-105/106); **new** `pkg/agent/judge_evidence_tiers.go` (tier assembly, FR-104, and FR-108's contradiction set); `pkg/tools/set_goal.go` (FR-110's negative assertions only — no behaviour change); **delete** `pkg/agent/judge_artifact_criterion_test.go`; **new** `scripts/check-no-inferred-check.sh` and `scripts/check-no-task-type-classifier.sh` (+ `.test.sh`, `Makefile`, `.github/workflows/pr.yml`, `deploy/ci-worker/runci.sh`). **Does not touch** `behavior_scan.go` — FR-107 forbids widening it | W4 (both edit `judge.go`'s rung dispatch and `verifier_adjudication.go`; W9 rebases onto W4) |
+| **W10** (new, rev 7) | **D12 — the claim tool** | **new** `pkg/tools/goal_claim.go` (+ `_test.go`), modelled line-for-line on `set_goal.go`'s scope preconditions; `pkg/coreagent/core.go` (**`allStaticToolNames` + the six per-agent seed maps only** — a third region of this file, sequenced after W1's seed edit and before W7's rubric edit); `pkg/config/defaults.go` (ceiling entry); `pkg/agent/goal_loop.go::checkGoalLoopAfterTurn` (FR-092's claim resolution, FR-093's `blocked` park); `pkg/agent/goal_triggers.go::handleBareGoalClaim` call-site guard (FR-091 — the function itself is **unchanged**) | W3 (needs `GoalStatusFrame.state`'s `blocked`), W4 |
+| **W11** (new, rev 7) | **D13 — claim-triggered, after delivery** | `pkg/agent/goal_triggers.go` — `settleGoalNormally`'s body (FR-095/097), the push-ladder unification and the deletion of `goalZeroOutputTripleHolds` / `sessionHasTranscriptOutputSince`, FR-101's tool-result refusal; `pkg/agent/goal_loop.go` — the deferred-dispatch handoff (FR-098) and FR-099's deliverer swap; `pkg/agent/loop.go::runAgentLoop` — **the reordering, which is the whole of FR-098's mechanism**; `pkg/agent/turn.go` — the `turnResult` deferred-dispatch field; **new** `scripts/check-no-claimless-adjudication.sh` (+ wiring). **W11 must land after W10**: FR-092's precedence is what decides whether a turn produced a claim at all, and FR-098 defers the thing that decision selects | W10, W4a |
 
 **Enforced ordering rule**: the commit that removes "Do not run tools…" from `JudgeDefaultRubric`
 (W7) MUST NOT merge until W1's closure tests and W2's budget tests are green on the base branch.
@@ -2835,15 +4003,43 @@ Two mechanisms, doing different jobs: `TestADR084_D1DoesNotShipWithoutClosures` 
 precedent.
 
 **Shared-file serialization points** (not parallelisable, sequence explicitly):
-`pkg/coreagent/core.go` — W1 (seed) then W7 (rubric), different regions, W7 rebases onto W1.
-`pkg/agent/judge.go` — W2 (consts) then W4 (parser, `summarizeVerdict`, `buildJudgeUserContent`)
-then W4a (`finalizeVerdict`'s projection call), each rebasing onto the last.
-`pkg/agent/verifier_adjudication.go` — **W4, then W5, then W6, strictly sequential, and W6's call
-site is INSIDE the mapping loop W4 owns** (revision 5's serialization note omitted this, listing W6
-as "one call site" as if it were an unrelated region).
-`pkg/agent/loop.go` and `pkg/agent/tool_result_admit.go` — **W2 only**; W4 consumes their seams and
-must not edit either. `pkg/agent/goal_triggers.go` and `pkg/agent/task_executor.go` — **W4a only**;
-no other wave touches them.
+`pkg/coreagent/core.go` — W1 (seed) → **W10 (`allStaticToolNames` + the six per-agent seed maps)** →
+W7 (rubric constant), three different regions, each rebasing onto the last.
+`pkg/agent/judge.go` — W2 (consts) → W4 (parser, `summarizeVerdict`, `buildJudgeUserContent`) →
+W4a (`finalizeVerdict`'s projection call) → **W9 (the rung-1.5 deletion)**, each rebasing onto the
+last. W9 is deliberately last on this file: it removes a dispatch branch W4 has been editing around.
+`pkg/agent/verifier_adjudication.go` — **W4, then W5, then W6, then W9**, strictly sequential. W6's
+call site is INSIDE the mapping loop W4 owns (revision 5's note omitted this, listing W6 as "one
+call site" as if it were an unrelated region); **W9's is `renderTranscriptEntriesForWindow`, a
+genuinely separate function** — but the file is serialised anyway, because four waves editing one
+file by rebase is a chain whatever the regions are.
+`pkg/agent/loop.go` — **W2 (the tool-dispatch cap refusal) then W11 (the `runAgentLoop`
+reordering)**. Two different regions of an ~11k-line file under constant churn; W11 rebases onto W2.
+`pkg/agent/tool_result_admit.go` — **W2 only**; W4 and W9 consume its seams and must not edit it.
+`pkg/agent/goal_triggers.go` — **W4a (FR-057a/FR-083 reasons, FR-020a's counter) → W10
+(`handleBareGoalClaim`'s call-site guard) → W11 (`settleGoalNormally`, the push ladder,
+FR-101)**. Revision 6 assigned this file to W4a alone; revision 7 puts three waves on it and the
+order is not optional — W11's `settleGoalNormally` rewrite assumes W4a's counter and W10's claim
+resolution both exist.
+`pkg/agent/goal_loop.go` — **W10 (claim resolution, `blocked` park) then W11 (deferred dispatch,
+deliverer swap)**, both inside `checkGoalLoopAfterTurn`'s switch. Same region; strictly sequential.
+`pkg/agent/task_executor.go` — **W4a only**.
+`pkg/tools/set_goal.go` — **W9 only** (FR-110's negative assertions; no behaviour change).
+`pkg/config/defaults.go` — **W2 (judge timeout / cap / ceiling keys) then W10 (`goal_claim`'s
+ceiling entry)**, different regions, W10 rebases onto W2.
+
+**Four revision-7 additions, and why each is its own wave rather than a row in an existing one:**
+W9 (D14) is the only wave that *deletes* production code, and it deletes a dispatch branch W4 edits
+around — merging it into W4 would mean one wave both maintaining and removing the same rung. W10
+(D12) is the only wave touching `pkg/tools` and `allStaticToolNames`, and its boot-panic risk
+(`validateOverrideKeys` panics on an override key absent from the catalogue) makes it a lane that
+must go green on its own before anything depends on it. W11 (D13) is the only wave touching
+`runAgentLoop`'s ordering — a change whose blast radius is every turn in the product, not just goal
+turns — and it must not be co-mingled with anything that could mask a regression there. And
+`judge_artifact_criterion_test.go` moves from W8's rewrite list to W9's deletion list, because the
+wave that removes a code path must be the wave that removes its tests: leaving the deletion to W8
+would put the tree in a state where W9 is merged and a test file for a deleted function still
+compiles against it.
 
 **Three revision-5 wave assignments were impossible as scoped and are corrected above (F19):**
 FR-009a's banner was assigned to W4, which must not edit the capture path, and was described as one
@@ -2907,7 +4103,35 @@ duplicated holdout H1 exactly. It lives as H1 alone. SC-003 is retired with D6.
   persisted verdict fixture parses and renders unchanged. Note that `make verify-contracts` alone
   does **not** establish the first clause — it checks generated-vs-spec, not copy-vs-copy.
 - **SC-011**: Every existing test named in [Regression Requirements](#regression-requirements)
-  passes unchanged, except the explicitly listed rewrites.
+  passes unchanged, except the explicitly listed rewrites and the one enumerated deletion
+  (`judge_artifact_criterion_test.go`, whose whole subject is removed by FR-109).
+- **SC-012**: **Zero adjudications are started by anything other than a `met` claim.** Over a
+  soak of at least twenty goal runs including quiet, stalled, parked and budget-exhausted goals,
+  the count of `runGoalAdjudication` entries with an empty `claimText` is 0, and the count of
+  Judge dispatches attributable to a timer, tick or sweep is 0.
+- **SC-013**: **Zero adjudications run inside a turn the operator is waiting on.** For every
+  claim-bearing turn in that soak, the observed order is `PublishOutbound(finalContent)` before the
+  verifier dispatch, with no exceptions and no conditional deferral.
+- **SC-014**: **A quiet goal keeps working.** Of twenty goals whose agent goes quiet without
+  claiming, 20 receive a re-post within one quiet window, 0 receive a verdict, and 0 consume a
+  round. The eight surviving keeper behaviours (FR-096) each fire in the states that call for them.
+- **SC-015**: **`met` cannot be claimed without evidence through the tool path.** Of 100 synthetic
+  `goal_claim(status: "met")` calls with absent, empty or whitespace-only `evidence`, 100 are
+  refused at the call, 0 record a claim, 0 schedule an adjudication, 0 consume a round, and 0
+  increment the bare-claim streak. The marker path's G-4 ladder is separately asserted intact.
+- **SC-016**: **No check is invented, and no goal is classified.** Over a corpus of at least 40
+  criteria whose prose names a file path, a substring or a command but which declare no check, 0
+  shell commands are executed by the adjudication, and `grep` finds 0 definitions of
+  `planArtifactCheck` and its four companion symbols and 0 functions deciding whether a goal is a
+  coding task.
+- **SC-017**: **Non-coding goals are first-class, measured rather than assumed.** At least 10 of
+  the corpus goals are non-coding (email, booking, document, research). Each reaches a verdict; each
+  executes 0 shell commands; each has its relevant tool calls rendered with parameters in the
+  Judge's evidence block; and the `met` rate on the ones a human agrees are complete is recorded as
+  a **measured baseline**, not asserted. **This is the criterion that would have caught the bias
+  FR-111 records**: every worked example in revisions 2–6 was a software artifact, so a corpus drawn
+  from them would have scored well with the general case untested — the same instrument failure
+  SC-002's split exists to prevent, one level up.
 
 ---
 
@@ -2951,11 +4175,13 @@ duplicated holdout H1 exactly. It lives as H1 alone. SC-003 is retired with D6.
 | FR-032 | US-4 | Quote lifted from the worker's claim | `TestVerdictMapping_ClaimOnlyQuoteRejected` |
 | FR-033 | US-4 | Re-wrapped but genuine quote survives | `TestVerdictMapping_WhitespaceNormalisedSubstringAccepted` |
 | FR-034 | US-4 | — | `TestVerdictMapping_GroundingAppliesOnlyToMet` |
-| FR-035 – FR-037 | US-10 | Zero-exit check does not force met | `TestArtifactCriterion_AlwaysReachesProseWithCheckEvidence`, `…Rung15DoesNotClassifyNonVerdict` |
-| FR-038 | US-4, US-10 | Non-zero check vetoes met | `TestArtifactCriterion_NonZeroExitVetoesMet` |
-| FR-039 | US-10 | Zero-exit check does not force met | `TestArtifactCriterion_ZeroExitDoesNotForceMet` |
-| FR-040 | US-10 | Inconclusive check vetoes nothing | `TestArtifactCriterion_InconclusiveCheckVetoesNothing` |
-| FR-040a | US-10 | — *(regression row; see Regression Requirements)* | `TestJudgeEvidence_ArtifactCriterion_PathGuardUnchanged` |
+| FR-035 | — | RETIRED (rev 7) — no criterion is identified by inference any more; see §F and C24 | none |
+| FR-036 | US-10 | Zero-exit declared check does not force met | `TestDeclaredCheck_OutcomeAttachedAsEvidenceRecord` |
+| FR-037 | — | RETIRED (rev 7) — the double-classification was a property of rung 1.5 existing | none |
+| FR-038 | US-4, US-10 | Non-zero DECLARED check vetoes met one-way | `TestDeclaredCheck_NonZeroExitVetoesMet` |
+| FR-039 | US-10 | Zero-exit declared check does not force met | `TestDeclaredCheck_ZeroExitDoesNotForceMet` |
+| FR-040 | US-10 | Inconclusive declared check vetoes nothing | `TestDeclaredCheck_InconclusiveVetoesNothing` |
+| FR-040a | — | RETIRED (rev 7) — the guard is deleted with its only caller | none — see §F |
 | FR-041 – FR-048 | — | RETIRED (ADR-084 rev 4) | none — see §G |
 | FR-049 – FR-050 | US-7 | — | `TestJudgeTimeout_ConfigurableAndDefaults420s`, `…ClampedToHardCeiling`, `TestConfig_JudgeTimeoutAboveGoalRoundTimeoutIsClamped` |
 | FR-051 – FR-052 | US-7 | Tool-call cap ends the investigation | `TestVerifierBudget_ToolCallCapEnforced`, `…BytesReadCapEnforced`, `…CapRefusalDoesNotKillTurn` |
@@ -2997,28 +4223,81 @@ duplicated holdout H1 exactly. It lives as H1 alone. SC-003 is retired with D6.
 | FR-083 | US-7 | A CAS loss is not reported as judge unavailability | `TestVerifierRegistry_CASLossReasonIsDistinctFromOutage` |
 | FR-084 | US-9 | The Judge's reads are audited | `TestVerifierAudit_JudgeReadsAndDenialsAreAttributedAndCorrelated` |
 | FR-085 | US-9 | An old client receiving a new frame — the property, not the value | vitest `an old strict per_criterion schema rejects the frame on the unknown PROPERTY outcome…`, `TestJudgeVerdictFrame_RolloutChoiceIsRecordedInTheSchemaDescription` |
-| FR-086 | US-7 | *(no BDD scenario — the requirement is that W3 record a choice; both options are stated in the FR)* | `TestGoalStatus_JudgingPillEmittedAtDispatch` |
+| FR-086 | — | RETIRED (rev 7) — answered by construction; replaced by FR-102 | none — the pill assertion moves to Regression Requirements |
+| FR-087 | US-11 | A tool-call claim starts an adjudication with no marker anywhere | `TestGoalClaimTool_SchemaAndEnum` |
+| FR-088 | US-11 | A met claim with no evidence is refused at the call; empty-equivalent evidence outline | `TestGoalClaim_MetWithoutEvidenceIsRefusedAtTheCall`, `TestGoalClaim_WhitespaceOnlyEvidenceIsEmpty` |
+| FR-089 | US-11 | goal_claim's seeding satisfies Constraint #6 | `TestGoalClaim_Constraint6Seeding` |
+| FR-090 | US-11 | goal_claim refuses outside its scope | `TestGoalClaim_RefusesOnDelegatedSubTurnAndGoallessSession` |
+| FR-091 | US-11 | The marker path still works, bounce economics intact | `TestMarkerPath_UnchangedIncludingBareClaimEconomics`, `TestGoalClaim_SuccessfulToolClaimClearsTheBareClaimStreak` |
+| FR-092 | US-11 | Tool and marker in one turn — the tool wins (outline) | `TestClaimResolution_ToolBeatsMarker` |
+| FR-093 | US-11 | Blocked parks the goal and has no marker fallback | `TestGoalClaim_BlockedParksWithNoAdjudicationAndNoRound`, `TestGoalStatusFrame_BlockedAndClaimOverturnedInBothCopies` |
+| FR-094 | US-11 | A tool-call claim starts an adjudication with no marker anywhere | `TestGoalClaim_EvidenceBecomesClaimTextInADR074Order` |
+| FR-095 | US-12 | A quiet goal is re-posted, never judged; There is no claimless adjudication call site left | `TestQuietWindow_MakesZeroJudgeCalls`, `TestRunGoalAdjudication_RejectsEmptyClaimText`, `scripts/check-no-claimless-adjudication.sh` |
+| FR-096 | US-12 | The keeper's other eight behaviours survive the removal (outline) | `TestKeeperTick_AllEightSurvivingBehaviours` |
+| FR-097 | US-12 | A quiet goal is re-posted, never judged | `TestQuietWindow_RePostsTheGoal`, `TestZeroOutputTriple_AndItsDeadPredicatesAreRemoved` |
+| FR-098 | US-12 | The operator's answer is published before the Judge is dispatched | `TestAdjudicationDispatchedAfterOutboundPublish` |
+| FR-099 | US-12 | A deferred adjudication's steer reaches the worker | `TestDeferredAdjudication_SteerRoutesThroughAsyncNotifier` |
+| FR-100 | US-12 | A new operator message during an in-flight adjudication is not blocked | `TestNewOperatorMessageDuringInFlightAdjudicationIsNotBlocked` |
+| FR-101 | US-12 | A second claim during an in-flight adjudication is refused, in the tool result | `TestSecondClaimDuringInFlightAdjudicationIsRefusedInTheToolResult` |
+| FR-102 | US-12 | A background verdict overturning a claim is visible, not intrusive | `TestOverturnedClaim_SurfacesAsADistinctStateAndATranscriptEntry`, vitest `emits no modal, toast or navigation…` |
+| FR-103 | US-12 | A background adjudication is cancellable through the verifier registry; A gateway restart loses an in-flight adjudication, recoverably | `TestBackgroundAdjudication_CancelledViaVerifierRegistry` |
+| FR-104 | US-10 | No check is invented from a criterion's wording | `TestAdjudication_TiersConsultedOnceInOrderOnClaim` |
+| FR-105 | US-10 | A non-coding goal reaches a verdict at tier 1, with no check anywhere | `TestTranscriptWindow_RendersToolCallParametersStatusAndError`, `TestTierOneEvidence_SourcedFromTranscriptNotTheVerifierCapture`, `TestTierOneEvidence_BoundedAndRedacted` |
+| FR-106 | US-10 | A tier-1 fact that is not a contradiction vetoes nothing (outline) | `TestTierOneEvidence_EmptiedResultIsInconclusiveNotAbsent` |
+| FR-107 | US-10 | A tool-call error contradicts a met and vetoes it | `TestTierOneDecidesOnlyViaDeclaredBehaviorPayload`, `TestBehaviorScan_StillCountOnly_NoParameterMatching` |
+| FR-108 | US-10 | A tool-call error contradicts a met and vetoes it; A tier-1 fact that is not a contradiction vetoes nothing | `TestTierOneContradictionVetoesMet`, `TestTierOneNonContradictionsVetoNothing` |
+| FR-109 | US-10 | No check is invented from a criterion's wording | `TestPlanArtifactCheck_AndItsRungAreGone`, `scripts/check-no-inferred-check.sh` |
+| FR-110 | US-10 | A non-coding goal reaches a verdict at tier 1, with no check anywhere | `TestSetGoal_DoesNotRequireOrPreferACheckableCriterion`, `scripts/check-no-task-type-classifier.sh` |
+| FR-111 | US-10 | A non-coding goal reaches a verdict at tier 1; A non-coding goal the Judge must read a document to decide | `TestNonCodingGoal_EmailCriterion_DecidedAtTierOne`, `TestNonCodingGoal_DeckSectionsCriterion_DecidedByTheJudgeReadingTheFile`, `TestJudgeDefaultRubric_DoesNotAssumeARepositoryOrATestSuite` |
 
-**Counts (re-verified mechanically against the body after the revision-6 edits, not asserted by
-hand).** The Functional Requirements body defines **111** FR ids as `- **FR-nnn**:` bullets —
-**103 live** plus **8 retired tombstones** (FR-041 – FR-048). Revision 5 had 103 total (95 live);
-this revision adds eight: **FR-006b** (persisted clause count), **FR-020a** (aggregate withhold
-bound), **FR-030c** (quote distinctness), **FR-030d** (reason names its target), **FR-060b** (the
-`ReadConfined` ctx seam), **FR-063a** (a refused read is not unfinished work), **FR-069a**
-(disagreement WARN), **FR-086** (visibility during a long adjudication).
+**Counts (re-verified mechanically against the body after the revision-7 edits, with the script
+below, not asserted by hand).** The Functional Requirements body defines **136** FR ids as
+`- **FR-nnn**:` bullets — **124 live** plus **12 retired tombstones**. Revision 6 had 111 total
+(103 live). Revision 7 adds **25**, all of them in the three new sections:
 
-**98** of the 111 have their own row in this matrix; the remaining **13** — FR-002, FR-003, FR-004,
-FR-011, FR-019, FR-020, FR-036 and the retired FR-042 – FR-047 — are covered by a declared range
-row rather than a row of their own. The declared ranges are
-`FR-001 – FR-005`, `FR-010 – FR-012`, `FR-018 – FR-021`, `FR-024 – FR-025`,
-`FR-035 – FR-037`, `FR-041 – FR-048`, `FR-049 – FR-050`, `FR-051 – FR-052`, `FR-053 – FR-054`,
-`FR-065 – FR-066` and `FR-067 – FR-068`. **Nothing appears in this matrix that the body does not
-define** — the reverse direction is empty. Every live FR carries at least one named test or an
-explicitly-named CI gate. The [Test Matrix](#test-matrix) names **136** distinct live `Test*`
-symbols (137 occurrences, one of which — `TestVerifierBudget_CountersSurviveResume` — is a struck
-deletion, F10) plus 2 CI gates and 6 vitest cases (a 7th row, FR-073's, is a Go+vitest pair);
-every one appears here, long names in the abbreviated `…Suffix` form used throughout this table.
-Every BDD scenario traces to at least one FR.
+- **§O, D12 — the claim tool (8)**: FR-087 (the tool and its schema), FR-088 (a `met` with no
+  evidence refused at the call), FR-089 (Constraint #6 seeding), FR-090 (scope preconditions),
+  FR-091 (the marker fallback and what survives of G-4), FR-092 (tool-vs-marker precedence),
+  FR-093 (`blocked`), FR-094 (`evidence` becomes `ClaimText`).
+- **§P, D13 — claim-triggered, after delivery (9)**: FR-095 (a claim is the sole trigger),
+  FR-096 (the eight surviving keeper behaviours), FR-097 (the Ralph-loop re-post),
+  FR-098 (the after-delivery seam), FR-099 (async steer delivery), FR-100 (a new message
+  mid-adjudication), FR-101 (a second claim mid-adjudication), FR-102 (an overturning verdict's
+  visibility), FR-103 (cancellation through the verifier registry).
+- **§Q, D14 — the three tiers (8)**: FR-104 (tiers consulted once, on the claim), FR-105 (tier-1's
+  evidence feed), FR-106 (tier-1 durability under ADR-066), FR-107 (tier 1 decides only via a
+  declared payload), FR-108 (the contradiction veto set), FR-109 (no inferred check),
+  FR-110 (no required check, no classifier), FR-111 (tier 3 is the default; the non-coding path).
+
+The **12 tombstones** are FR-041 – FR-048 (the removed migration, rev 4) plus **FR-035, FR-037,
+FR-040a and FR-086, new in rev 7** — the first three because D14 rule 2 deletes the inferred check
+and the rung it gated (C24), the fourth because D13 answers it by construction. FR-079(d) is
+retired as a *clause* of FR-079, not as an FR id of its own, so it does not appear in this count.
+
+**124** of the 136 have their own row in this matrix; the remaining **12** — FR-002, FR-003,
+FR-004, FR-011, FR-019, FR-020 and the retired FR-042 – FR-047 — are covered by a declared range row
+rather than a row of their own. The declared ranges are `FR-001 – FR-005`, `FR-010 – FR-012`,
+`FR-015 – FR-016`, `FR-018 – FR-021`, `FR-024 – FR-025`, `FR-041 – FR-048`, `FR-049 – FR-050`,
+`FR-051 – FR-052`, `FR-053 – FR-054`, `FR-065 – FR-066` and `FR-067 – FR-068`. *(`FR-035 – FR-037`
+is no longer a range: FR-035 and FR-037 are tombstones with their own rows and FR-036 now carries a
+row of its own.)* **Nothing appears in this matrix that the body does not define** — the reverse
+direction is empty, verified. Every live FR carries at least one named test or an explicitly-named
+CI gate.
+
+The [Test Matrix](#test-matrix) names **175** distinct `Test*` symbols, of which **170 are live**.
+The five that are not: `TestVerifierBudget_CountersSurviveResume` (a struck deletion, F10) and four
+**named-as-not-created** in revision 7 —
+`TestArtifactCriterion_AlwaysReachesProseWithCheckEvidence`,
+`TestArtifactCriterion_Rung15DoesNotClassifyNonVerdict`,
+`TestJudgeEvidence_ArtifactCriterion_PathGuardUnchanged` and
+`TestRubricSelfCheck_LegacySoulRetainsArtifactSettle`, all four of which exercise the deleted
+rung 1.5. They are named rather than omitted so an implementer reading FR-035/FR-037/FR-040a/FR-079(d)
+is told what happened to the coverage. Alongside them: **5 CI gates**
+(`make verify-contracts`, `check-adr084-closures.sh`, and revision 7's
+`check-no-claimless-adjudication.sh`, `check-no-inferred-check.sh`,
+`check-no-task-type-classifier.sh` — up from 2) and **7 rows naming a vitest case**. Every one
+appears here, long names in the abbreviated `…Suffix` form used throughout this table. Every BDD
+scenario traces to at least one FR.
 
 **To re-verify after any edit** (no markdownlint is configured in this repo):
 
@@ -3059,7 +4338,15 @@ ratified.
 | A-7 | D10 says the Judge's skill allowlist becomes `["define-goal"]` **or** empty | Empty (`[]string{}`) — a criteria-authoring skill is not evidence, and D10's own rationale is that skill bodies are instruction-shaped text | Does the Judge need `define-goal` to interpret criteria consistently with the author? |
 | A-8 | D1a extends scope for goal explicitly; task and plan are not mentioned | Extended for all three (FR-011, FR-012) — delegation is not goal-specific | Is widening task/plan scope acceptable, or goal-only for this change? |
 | A-9 | FR-050 asserts an invariant (`judge timeout ≤ goalJudgeRoundTimeout`) the ADR never states | Clamp with a WARN rather than reject | Reject at load instead? |
-| A-10 | D5's cost consequence ("artifact criteria re-enter the prose set every round") is stated but not bounded | No mitigation; accepted as stated | Should artifact criteria whose check exited zero AND whose quote was already validated in a prior round be short-circuited on later rounds? |
+| A-10 | RETIRED (rev 7) — D5's cost consequence was that *inferred* artifact criteria re-enter the prose set every round. D14 rule 2 deletes the inference, so there is no artifact rung to re-enter from (C24). | — | — |
+| A-20 | ADR §8 D13 names `goalQuietWindowSettle` and `goalIdleQuietWindow` for removal; both are the shared driver and pacing constant for nine keeper behaviours, of which the claimless adjudication is one (C22) | Read the ADR by its intent — remove the adjudication, keep the driver. FR-095/096 make the removal surgical and enumerate the eight survivors with a test each | Confirm the reading. If the intent really was to remove the periodic keeper entirely, the token-budget brake, the recordless nudge ladder and the Ralph-loop re-post D13 itself depends on all go with it — say so and this spec changes shape again. |
+| A-21 | ADR §8 open item 3 asks whether a second claim during an in-flight adjudication supersedes or is refused | **Refused** (FR-101), reusing the two shipped layers (`goalAdjudicationInFlight`, `ErrVerifierSessionHeld`) and changing only the reporting — the refusal is returned in the tool result rather than logged and dropped | Superseding would let the judged party cancel a pending verdict by re-claiming, and would discard a Judge turn that has already spent tool calls. Is a redundant claim's cost (one refused tool call) acceptable against that? |
+| A-22 | ADR §8 open item 1 asks whether gates run on the claim or continuously | **Once, on the claim** (FR-104) | Continuous gates are a timer, which FR-095 forbids on this path, and a red gate fired between claims would be a claimless verdict under another name. Is there a case for pre-computing tier-1 facts incrementally purely as an optimisation, given the Deployment section forbids persisting them? |
+| A-23 | ADR §8 open item 2 asks how an overturning verdict is surfaced "without being intrusive" | A distinct `claim_overturned` goal-status state plus the existing transcript entry and async steer; **no** modal, toast, notification or navigation (FR-102) | Is a card state enough for the case where the operator read "done", closed the tab, and the Judge disagreed ten minutes later? A notification is the obvious alternative and is deliberately not taken — it is the only surface that reaches an operator who has left. |
+| A-24 | D14 tier 1's worked examples ("the mail tool returned success **with that recipient**") need parameter and result matching; the shipped rung-2 scanner is count-only and reads neither (C26) | Do **not** build a matcher. Tier 1 *informs* the Judge with `{tool, parameters, status, error}` (FR-105) and *decides* only through a declared `KindBehavior` payload (FR-107); a narrow closed contradiction set vetoes (FR-108) | Building the matcher would be D14 rule 2's retired inference relocated one tier down, with the same failure mode. Is widening `CriterionBehavior` to match parameters worth a separate decision, or is the Judge reading the facts sufficient? |
+| A-25 | Tier 1 reads the worker's persisted tool-call record, whose `Result` ADR-066 D5 rewrites mid-turn (C27) | Build facts from the durable `{Tool, Parameters, Status, Error}`; treat an `emptied`/`capped` `ContentState` as **inconclusive**, never a contradiction (FR-106) | Accepting that a long turn's tier-1 evidence is thinner than a short one's — the opposite of what one would want, since a long turn did more work. Is a richer durable projection worth its own decision? |
+| A-26 | A gateway restart loses an in-flight background adjudication (E-35) | Accept it: the goal is left quiet with an unconsumed round, which FR-097's re-post already recovers. No persisted queue, per the Deployment section's no-stateful-change rule | Is a lost adjudication acceptable, or should a claim survive a restart? Persisting one falsifies the Deployment section and belongs in its own decision. |
+| A-27 | `blocked` is reachable only through `goal_claim`; `GOAL_STATUS: blocked` is a no-op, and FR-091 forbids changing the marker parser to accept it (FR-093) | Accept the asymmetry: `blocked` is a new capability, not a migrated one | Should the marker family gain a third value for parity, at the cost of touching a parser this spec otherwise freezes? |
 | A-11 | D7's `provenance` enum overlaps `evidence_source` on four of six values | Derive `provenance` from `evidence_source` (FR-066), with `deterministic_check` and `none` as the two extra values | Is one field enough? Two fields with four shared values is a drift hazard. |
 | A-12 | Nothing states whether an `unable_to_verify` outcome should be visible to the *worker* differently from `unmet` | FR-022: reason wording only; no new steering channel | Should the worker be told explicitly "the Judge could not check this", or is the reason text enough? |
 
@@ -3090,6 +4377,14 @@ fakes, H7 asserts all four together against a real over-permissive install, whic
 configuration an operator actually produces. H2–H6 and H8 are independent. H6 and H8 both cover a
 loop that revision 5 made unreachable or unbounded, so a green H6 or H8 is only meaningful with
 FR-024's `rubricInstructsQuote` gate (C16) and FR-020a's aggregate bound (C19) actually in place.
+
+**H9 – H11 are new in revision 7 and are not optional.** H9 is the only holdout that exercises a
+goal with no code in it, and every other scenario, example and deny-list entry in this document is
+drawn from software (FR-111's recorded finding) — so H9 is the one place the general case is tested
+at all. H10 is the only place the operator-visible consequence of D13 is measured rather than
+reasoned about. H11 is the only place the cost of D14's deletion is looked at on a real install
+rather than asserted to be an improvement. H8's own framing is corrected by C25: the loop it scripts
+is re-entered by FR-097's keeper re-post, not by the 60 s window, so it is slower and still real.
 
 ### H1 — The original failing run, replayed (Happy Path)
 
@@ -3157,9 +4452,61 @@ workspace.
 Script a Judge that returns `unable_to_verify` for a **different** criterion on each round of a
 five-criterion goal, judging the other four each time. Without FR-020a this never terminates: every
 per-criterion tracker resets before it reaches K, no round is consumed, and each iteration is a
-tool-using turn of up to 420 s inside the operator's chat turn. Confirm the goal reaches a scored
+tool-using turn of up to 420 s of background cost, re-entered each cycle by FR-097's keeper
+re-post rather than by the 60 s window (C25). Confirm the goal reaches a scored
 outcome, that the escalation names the aggregate rule rather than one criterion, and that the
 wall-clock cost stays inside the 10-minute round bound.
+
+### H9 — The goal that has nothing to run (Happy Path, revision 7)
+
+Run three real goals with no code in them: *"get a quote from the supplier for the Q4 order"*,
+*"book a flight to Lisbon in the second week of November"*, *"produce the Q4 board deck"*. Author
+their criteria the way a working agent naturally would, through `set_goal`, without steering the
+wording toward anything checkable. Confirm all five:
+
+1. **Zero shell commands** are executed by any adjudication.
+2. Each criterion's relevant tool calls appear in the Judge's evidence block with their
+   **parameters**, not as `[tool_call] send_email -> success`.
+3. The Judge decides each one, and its reasons name the artifacts and calls it read.
+4. **Nothing anywhere classified these goals** — no log line, no branch, no field records a
+   judgement about whether they are coding tasks.
+5. The `met` rate on the ones a human agrees are complete is **recorded as a measured baseline**
+   (SC-017), not asserted. This is the number that tells you whether the general case works, and it
+   is the number every earlier revision of this spec lacked, because every worked example in them
+   was a software artifact.
+
+### H10 — The claim that arrives, and the silence that does not (Happy Path, revision 7)
+
+Run one goal to completion through the tool path and one that stalls. Confirm:
+
+1. The claiming run: the operator's answer appears **first**, the `judging` pill follows, the
+   verdict arrives afterwards, and at no point does the operator's own turn wait on the Judge.
+   Measure the operator-visible turn latency and confirm it is indistinguishable from a
+   goal-less turn.
+2. The stalling run: over ten minutes of silence the goal is **re-posted** each quiet window and
+   **never judged**. `GoalRoundsUsed` does not move. The push budget bounds the pushes, and past it
+   the goal terminates through the rounds bound rather than through a verdict against nothing.
+3. Mid-adjudication, send a new operator message: it is answered normally. Then make the agent claim
+   again: the second claim is **refused in its tool result** with a readable reason, and no second
+   Judge turn starts.
+4. Let a background verdict overturn a claim: confirm the goal card changes to `claim_overturned`
+   and the transcript carries the verdict — and that **nothing pops up**. Then leave the tab and come
+   back: confirm the state is still there to be found, which is the one thing a non-intrusive
+   surface has to get right.
+
+### H11 — The upgraded install meets the deleted rung (Edge Case, revision 7)
+
+Take a `$OMNIPUS_HOME` whose goals carry `Kind: prose` / `Judgment: artifact` criteria naming real
+files — the exact shape `planArtifactCheck` used to settle deterministically — and upgrade. Confirm
+that each is now judged by the Judge reading the file, that no shell command runs for any of them,
+and that the verdicts are **at least as correct** as the inferred check's were. Specifically re-run
+the "a single self-contained HTML file" case: the inferred check answered "the file exists", which
+was never what the criterion asked; the Judge should answer what it asked.
+
+Run the same leg on a **legacy-rubric** install (`rubricDeclaresOutcome` false), where FR-079(d)'s
+retirement bites hardest: those criteria are now judged by a rubric that forbids looking. Record the
+degradation rather than discovering it — it is the accepted meaning of greenfield (D6) and the
+operator's cue to reset the soul.
 ---
 
 ## Prerequisites, Setup, Stack, Deployment
@@ -3186,6 +4533,12 @@ wall-clock cost stays inside the 10-minute round bound.
     tested (F10), and why a resumed adjudication starts a fresh budget. Anything that would need to
     persist across an adjudication boundary falsifies this section and belongs in a separate
     decision that says so.
+  - **Revision 7 adds one more consequence of this sentence, and it is accepted rather than
+    engineered around**: a background adjudication (FR-098) lives only in memory, so a gateway
+    restart loses it (E-35, A-26). Nothing is queued, nothing is resumed. The recovery path already
+    exists and needs no new surface — the goal is left active, quiet, with its round unconsumed,
+    which is exactly the state FR-097's keeper re-post handles on the next quiet window. Persisting
+    an in-flight adjudication would falsify this section and belongs in its own decision.
   - **One additive persisted field is the exception, and it is stated rather than hidden**:
     FR-006b's clause count on `AcceptanceCriterion`. It is optional and backfilled at load from the
     criterion's own text, so a pre-existing criterion parses unchanged and no migration runs; but a
