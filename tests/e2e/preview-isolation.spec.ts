@@ -836,7 +836,32 @@ test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', 
   async function driveMutant(page: Page, policy: MutantPolicyName): Promise<void> {
     const origin = await ensureMutantOrigin(page);
     ext.reset();
-    await page.goto(origin.documentURL(policy));
+    // waitUntil: 'commit' — NOT a relaxation, a race fix. Read this before
+    // "simplifying" it back to the default ('load').
+    //
+    // Under the `none` mutant (no CSP at all) the fixture document's OWN
+    // inline script performs a REAL top-level navigation of THIS SAME page:
+    // the unblocked form submit ~600ms after load (index.html's `fireAll`,
+    // "LAST, AND ON A DELAY"). window.open's load-time popup call runs even
+    // earlier. If `page.goto` here is still waiting for the full 'load'
+    // milestone when that self-triggered navigation fires, Firefox tears down
+    // the still-in-flight navigation and reports it as `NS_BINDING_ABORTED` —
+    // and Playwright attributes that abort to THIS `goto`, not to the
+    // in-page navigation that actually caused it (observed in CI, not
+    // reproduced locally; see docs/internal/defect-list-html-preview-2026-09-08.md
+    // CI-2). Chromium/WebKit tolerate the same race; Firefox does not.
+    //
+    // 'commit' resolves this promise as soon as the navigation's response
+    // starts arriving — before the document's inline script has even run,
+    // let alone reached the 600 ms form timer — so there is no window in
+    // which a later self-navigation can supersede an outstanding `goto`
+    // promise. This does not weaken what the test proves: every step after
+    // this one already waits on its own oracle rather than on `goto`'s
+    // resolution — `clickInsidePreview` locator-auto-waits for `#gesture`
+    // (with its own timeout), `waitForVectors`/`readPreviewReport` poll with
+    // multi-second timeouts, and the fixed `EGRESS_SETTLE_MS` settle below
+    // still runs in full. The seven-vector assertion itself is unchanged.
+    await page.goto(origin.documentURL(policy), { waitUntil: 'commit' });
     await clickInsidePreview(page);
     await page.waitForTimeout(EGRESS_SETTLE_MS);
   }
