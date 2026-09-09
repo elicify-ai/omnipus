@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -29,7 +30,7 @@ func TestLibraryContentBinary_RoundTrip(t *testing.T) {
 	encoded := base64.StdEncoding.EncodeToString(raw)
 
 	w := libPutJSON(t, api, "/api/v1/library/"+id+"/content-binary",
-		`{"path":"report.pdf","content_base64":"`+encoded+`"}`)
+		`{"path":"report.pdf","content_base64":"`+encoded+`","expect_version":"v1:absent"}`)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
 	entry := decodeEntry(t, w.Body.Bytes())
@@ -50,12 +51,17 @@ func TestLibraryContentBinary_OverwritesExistingFile(t *testing.T) {
 
 	first := base64.StdEncoding.EncodeToString([]byte{0x01, 0x02, 0x03})
 	w1 := libPutJSON(t, api, "/api/v1/library/"+id+"/content-binary",
-		`{"path":"blob.bin","content_base64":"`+first+`"}`)
+		`{"path":"blob.bin","content_base64":"`+first+`","expect_version":"v1:absent"}`)
 	require.Equal(t, http.StatusOK, w1.Code, "body: %s", w1.Body.String())
+	// A second write to the SAME path must send the token the FIRST write's
+	// own response returned (EMB-007b), not "v1:absent" — the file now
+	// exists, so that would be a genuine conflict, not a shortcut.
+	firstToken := strings.Trim(w1.Header().Get("ETag"), `"`)
+	require.NotEmpty(t, firstToken, "PUT .../content-binary must return an ETag (EMB-007)")
 
 	second := base64.StdEncoding.EncodeToString([]byte{0xAA, 0xBB})
 	w2 := libPutJSON(t, api, "/api/v1/library/"+id+"/content-binary",
-		`{"path":"blob.bin","content_base64":"`+second+`"}`)
+		`{"path":"blob.bin","content_base64":"`+second+`","expect_version":"`+firstToken+`"}`)
 	require.Equal(t, http.StatusOK, w2.Code, "body: %s", w2.Body.String())
 
 	got, err := os.ReadFile(filepath.Join(workDir(api, id), "blob.bin"))
@@ -85,7 +91,7 @@ func TestLibraryContentBinary_MissingParentDir_404(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	encoded := base64.StdEncoding.EncodeToString([]byte("x"))
 	w := libPutJSON(t, api, "/api/v1/library/"+id+"/content-binary",
-		`{"path":"nope/report.pdf","content_base64":"`+encoded+`"}`)
+		`{"path":"nope/report.pdf","content_base64":"`+encoded+`","expect_version":"v1:absent"}`)
 	assert.Equal(t, http.StatusNotFound, w.Code, "body: %s", w.Body.String())
 }
 

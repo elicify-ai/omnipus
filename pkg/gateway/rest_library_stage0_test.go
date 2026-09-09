@@ -79,7 +79,7 @@ func TestLibraryCreate_NameShapeRefusedInWorkspaceStorage(t *testing.T) {
 	t.Run("content-put", func(t *testing.T) {
 		api, id := stage0Workspace(t)
 		w := libPutJSON(t, api, "/api/v1/library/"+id+"/content",
-			`{"path":"`+overlongName+`","content":"x"}`)
+			`{"path":"`+overlongName+`","content":"x","expect_version":"v1:absent"}`)
 		assert.Equal(t, http.StatusBadRequest, w.Code,
 			"a 300-byte name Omnipus is CREATING must be refused by name-shape validation, "+
 				"not by the kernel; body=%s", w.Body.String())
@@ -106,7 +106,7 @@ func TestLibraryCreate_NameShapeRefusedInWorkspaceStorage(t *testing.T) {
 	t.Run("rename", func(t *testing.T) {
 		api, id := stage0Workspace(t)
 		require.Equal(t, http.StatusOK,
-			libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"src.txt","content":"x"}`).Code)
+			libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"src.txt","content":"x","expect_version":"v1:absent"}`).Code)
 
 		w := libPostJSON(t, api, "/api/v1/library/"+id+"/rename",
 			`{"from":"src.txt","to":"`+overlongName+`"}`)
@@ -116,7 +116,7 @@ func TestLibraryCreate_NameShapeRefusedInWorkspaceStorage(t *testing.T) {
 	t.Run("move", func(t *testing.T) {
 		api, id := stage0Workspace(t)
 		require.Equal(t, http.StatusOK,
-			libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"src.txt","content":"x"}`).Code)
+			libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"src.txt","content":"x","expect_version":"v1:absent"}`).Code)
 
 		body := `{"from_workspace_id":"` + id + `","from_path":"src.txt",` +
 			`"to_workspace_id":"` + id + `","to_path":"` + overlongName + `"}`
@@ -130,7 +130,7 @@ func TestLibraryCreate_NameShapeRefusedInWorkspaceStorage(t *testing.T) {
 		api, from := stage0Workspace(t)
 		to := seedLibraryWorkspace(t, api, "Destination WS")
 		require.Equal(t, http.StatusOK,
-			libPutJSON(t, api, "/api/v1/library/"+from+"/content", `{"path":"src.txt","content":"x"}`).Code)
+			libPutJSON(t, api, "/api/v1/library/"+from+"/content", `{"path":"src.txt","content":"x","expect_version":"v1:absent"}`).Code)
 
 		body := `{"from_workspace_id":"` + from + `","from_path":"src.txt",` +
 			`"to_workspace_id":"` + to + `","to_path":"` + overlongName + `"}`
@@ -172,7 +172,7 @@ func TestLibraryCreate_NameShapeSkippedInsideAMount(t *testing.T) {
 		stage0Mount(t, api, id)
 
 		w := libPutJSON(t, api, "/api/v1/library/"+id+"/content",
-			`{"path":"vault/`+overlongName+`","content":"x"}`)
+			`{"path":"vault/`+overlongName+`","content":"x","expect_version":"v1:absent"}`)
 		assert.NotEqual(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
 		assert.Equal(t, http.StatusInternalServerError, w.Code, "body=%s", w.Body.String())
 	})
@@ -198,7 +198,7 @@ func TestLibraryMountedCreate_WindowsIllegalNameAccepted(t *testing.T) {
 	host := stage0Mount(t, api, id)
 
 	w := libPutJSON(t, api, "/api/v1/library/"+id+"/content",
-		`{"path":"vault/Meeting: 2026-01-01.md","content":"notes"}`)
+		`{"path":"vault/Meeting: 2026-01-01.md","content":"notes","expect_version":"v1:absent"}`)
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 
 	written, err := os.ReadFile(filepath.Join(host, "Meeting: 2026-01-01.md"))

@@ -460,6 +460,218 @@ func detectKnowledgeBaseInRoot(root *library.Root, rel string) (isKB, establishe
 	return d.IsKnowledgeBase(), true
 }
 
+// --- ADR-083 Step 0: version tokens, compare-and-swap, the shared write lock ---
+
+// libraryWriteRaceHook is a TEST SEAM: nil in production. When set, it runs
+// once inside handleLibraryContentPut/handleLibraryContentBinaryPut's locked
+// closure, between a whole-file write's version comparison SUCCEEDING and
+// the write itself landing — the exact gap EMB-006 exists to close ("a
+// comparison followed by an unheld write is not a compare-and-swap"). A
+// concurrency test that does not widen this gap passes just as happily
+// against an implementation that never took a lock at all. Mirrors
+// pkg/knowledge/version.go's hookBeforeApplyWrite (same reasoning, same
+// shape); that one is unexported to its package and specific to
+// Writer.WriteNote, so it cannot be reused from here.
+//
+//nolint:gochecknoglobals // a test seam, nil in production.
+var libraryWriteRaceHook func()
+
+// requireLibraryExpectVersion validates and returns the bare token from a
+// whole-file save request's expect_version (EMB-001, founder ruling N2: no
+// caller is exempt). Absent or empty is refused with 400. A value carrying
+// the wire's RFC-quoted-strong ETag shape — a leading and trailing double
+// quote — is a SHAPE error and is ALSO refused with 400, never 409
+// (EMB-007b/EMB-007c): a client that forgot to strip the quotes off the
+// header it read gets an actionable error it can fix, not a conflict that
+// looks genuine and can never be cleared.
+func requireLibraryExpectVersion(w http.ResponseWriter, expectVersion *string) (bare string, ok bool) {
+	if expectVersion == nil {
+		jsonErr(w, http.StatusBadRequest, "expect_version is required")
+		return "", false
+	}
+	v := strings.TrimSpace(*expectVersion)
+	if v == "" {
+		jsonErr(w, http.StatusBadRequest, "expect_version is required")
+		return "", false
+	}
+	if len(v) >= 2 && v[0] == '"' && v[len(v)-1] == '"' {
+		jsonErr(w, http.StatusBadRequest,
+			"expect_version must be the bare token from the ETag response header, not its quoted wire form")
+		return "", false
+	}
+	return v, true
+}
+
+// libraryETagValue renders a knowledge version token as the RFC 7232
+// quoted-strong ETag EMB-007b requires: `ETag: "v1:…"`. A weak (W/) form is
+// never emitted — it is also the only form Go's http.ServeContent
+// (scanETag) and every conforming client actually parses.
+func libraryETagValue(token knowledge.VersionToken) string {
+	return `"` + string(token) + `"`
+}
+
+// libraryConflictErr wraps a typed LibraryConflictError so it can travel out
+// of a knowledge.WithNoteWriteLock closure as an error and be told apart, by
+// errors.As, from a *knowledge.LockTimeoutError or a library.Err* the same
+// closure's own write can still produce.
+type libraryConflictErr struct {
+	body *gen.LibraryConflictError
+}
+
+func (e *libraryConflictErr) Error() string { return e.body.Error }
+
+// checkLibraryVersion is the Library door's compare half of EMB-006's
+// compare-and-swap — the same four-branch decision as pkg/knowledge/
+// version.go's unexported checkVersion (missing token is refused upstream by
+// requireLibraryExpectVersion; a token that disagrees with an existing
+// file's is a conflict; TokenAbsent racing an existing file is a conflict —
+// see the CAS-safety note below; a token racing a since-deleted file is a
+// conflict) — reimplemented here because the Library write returns a
+// LibraryConflictError, not a KnowledgeConflictError, so the two bodies
+// cannot share one Wire() method. expectedBare is already validated
+// non-empty and unquoted by requireLibraryExpectVersion.
+//
+// TokenAbsent is NOT a bypass: it asserts "I believe this file does not
+// exist yet" (knowledge.TokenAbsent's own doc comment), so when current.
+// Exists is true the comparison below falls straight into the ordinary
+// stale-token branch and refuses with 409 — never treated as "skip the
+// check". A comparison that let TokenAbsent through unconditionally would
+// make every accepted write on an existing file a silent last-writer-wins,
+// exactly the door EMB-006 exists to close.
+func checkLibraryVersion(relPath, expectedBare string, current knowledge.NoteVersion) *libraryConflictErr {
+	if current.Exists {
+		if expectedBare == string(current.Token) {
+			return nil
+		}
+		return newLibraryConflictErr(relPath, expectedBare, string(current.Token))
+	}
+	if expectedBare == string(knowledge.TokenAbsent) {
+		return nil
+	}
+	return newLibraryConflictErr(relPath, expectedBare, "")
+}
+
+func newLibraryConflictErr(relPath, expected, actual string) *libraryConflictErr {
+	body := &gen.LibraryConflictError{
+		Path: relPath,
+		Code: gen.LibraryVersionConflict,
+	}
+	if expected != "" {
+		e := expected
+		body.ExpectedVersion = &e
+	}
+	if actual == "" {
+		body.Error = fmt.Sprintf("library: %s changed on disk since you opened it: it has been deleted", relPath)
+	} else {
+		act := actual
+		body.ActualVersion = &act
+		body.Error = fmt.Sprintf("library: %s changed on disk since you opened it", relPath)
+	}
+	return &libraryConflictErr{body: body}
+}
+
+// handleLibraryWriteLockErr resolves the outcome of a compare-and-swap write
+// performed inside knowledge.WithNoteWriteLock (EMB-006) and writes the
+// matching HTTP response. nil is success — the caller continues and writes
+// its own 200 body. A *libraryConflictErr is written as 409 with the typed
+// LibraryConflictError body (EMB-002). A *knowledge.LockTimeoutError
+// (FR-108's bound) is written as 503, so a lock hang becomes an actionable
+// retry rather than looking like the request hung. Anything else — most
+// commonly a library.Err* from root.WriteContent (a case-insensitive
+// collision, a raced directory removal) discovered inside the very same
+// locked closure — falls back to mapLibraryErr, unchanged from before this
+// write took a lock at all. Returns false after writing a response, ok=true
+// otherwise, matching this file's existing ok-bool convention.
+func handleLibraryWriteLockErr(w http.ResponseWriter, op, workspaceID string, err error) bool {
+	if err == nil {
+		return true
+	}
+	var conflict *libraryConflictErr
+	if errors.As(err, &conflict) {
+		writeJSON(w, http.StatusConflict, conflict.body)
+		return false
+	}
+	var timeout *knowledge.LockTimeoutError
+	if errors.As(err, &timeout) {
+		jsonErr(w, http.StatusServiceUnavailable,
+			"timed out waiting for this file's write lock — another write is in progress; try again")
+		return false
+	}
+	mapLibraryErr(w, op, workspaceID, err)
+	return false
+}
+
+// enclosingCollectionRel returns the workspace-relative directory of the
+// INNERMOST knowledge base enclosing rel — a workspace-relative FILE path
+// (EMB-006a). It walks rel's ancestors, starting at its immediate parent
+// directory and ending at the work-tree root itself (""), applying the SAME
+// marker rule knowledge.Detect uses via detectKnowledgeBaseInRoot — the
+// confined stat this file already uses for annotateKnowledgeBaseEntries —
+// rather than a second, hand-rolled marker test (EMB-006a clause 1).
+// Stopping at the FIRST match walking upward is what clause 2 (innermost
+// wins) requires. found is false when no ancestor, the work-tree root
+// included, is a knowledge base.
+func enclosingCollectionRel(root *library.Root, rel string) (collRel string, found bool) {
+	dir := path.Dir(rel)
+	if dir == "." {
+		dir = ""
+	}
+	for {
+		if isKB, established := detectKnowledgeBaseInRoot(root, dir); established && isKB {
+			return dir, true
+		}
+		if dir == "" {
+			return "", false
+		}
+		dir = path.Dir(dir)
+		if dir == "." {
+			dir = ""
+		}
+	}
+}
+
+// resolveLibraryLock derives the D14 tier-1 lock a whole-file Library write
+// must take before its compare-and-swap (EMB-006), so a Library save and an
+// agent's EditNote over the SAME note can never believe they hold different
+// locks: same collection root, same lock directory, same collection-relative
+// path (SC-001b). The Library handler is given a workspace-relative path
+// against the workspace root; the lock the agent write path takes is keyed
+// on a collection root and a collection-relative path, and nothing in this
+// package derived that mapping before EMB-006a. enclosingCollectionRel does
+// the ancestor walk; this resolves the result into a knowledge.
+// NoteLockConfig using knowledge.OpenCollection — the SAME call the agent
+// path takes (AuthoringDeps.begin, pkg/knowledge/authoring_tools.go) — so
+// the CollectionRoot string produced here is byte-identical to col.Root
+// there, and so is the LockDir knowledge.LockDirFor derives from it.
+//
+// Where no ancestor is a knowledge base, EMB-006's degraded mode applies:
+// CollectionRoot and LockDir are both empty — in-process serialisation
+// only, no cross-process advisory lock (G7c). lockRel is workspaceID-
+// qualified in that case purely so two DIFFERENT workspaces' degraded
+// writes never share one striped-mutex key by coincidence; EMB-006a has no
+// equivalent unenclosed-file case on the agent side to match.
+func resolveLibraryLock(root *library.Root, home, workspaceID, rel string) (knowledge.NoteLockConfig, string, error) {
+	collRel, found := enclosingCollectionRel(root, rel)
+	if !found {
+		return knowledge.NoteLockConfig{}, workspaceID + "/" + rel, nil
+	}
+
+	collection, err := knowledge.OpenCollection(root.HostPath(collRel))
+	if err != nil {
+		return knowledge.NoteLockConfig{}, "", fmt.Errorf("open enclosing knowledge base %q: %w", collRel, err)
+	}
+	lockDir, err := knowledge.LockDirFor(home, collection.Root())
+	if err != nil {
+		return knowledge.NoteLockConfig{}, "", fmt.Errorf("resolve write lock directory for %q: %w", collRel, err)
+	}
+
+	relInCollection := rel
+	if collRel != "" {
+		relInCollection = strings.TrimPrefix(rel, collRel+"/")
+	}
+	return knowledge.NoteLockConfig{CollectionRoot: collection.Root(), LockDir: lockDir}, relInCollection, nil
+}
+
 func (a *restAPI) handleLibraryEntryDelete(w http.ResponseWriter, r *http.Request, workspaceID string) {
 	if !workspace.Exists(a.homePath, workspaceID) {
 		jsonErr(w, http.StatusNotFound, "workspace not found")
@@ -525,6 +737,24 @@ func (a *restAPI) handleLibraryContentGet(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// ADR-083 EMB-007/EMB-007a: the version token is ALWAYS derived from the
+	// file's raw bytes, read independently of ContentResult here — which
+	// omits Content by design for a binary file and for a too_large text
+	// file (library.ContentResult's doc comment) — so hashing the response
+	// body would collapse every such file onto the hash of an empty string,
+	// identical for all of them. ReadFileVersion streams the same bytes
+	// ReadContent just read a moment ago, through the SAME digest
+	// (knowledge.version.go's readNoteVersionAbs) the agent write path and
+	// GET .../download use, so the token is byte-identical across doors
+	// (test 121).
+	version, verErr := knowledge.ReadFileVersion(root.HostPath(rel))
+	if verErr != nil {
+		logger.ErrorCF("rest", "library: read version failed",
+			map[string]any{"workspace_id": workspaceID, "path": rel, "error": verErr.Error()})
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
 	resp := gen.LibraryContentResponse{
 		Path:     rel,
 		IsText:   result.IsText,
@@ -539,6 +769,9 @@ func (a *restAPI) handleLibraryContentGet(w http.ResponseWriter, r *http.Request
 		c := result.Content
 		resp.Content = &c
 	}
+	// Set BEFORE jsonOK/writeJSON: once WriteHeader is called the header map
+	// is flushed and a later Set is silently ignored.
+	w.Header().Set("ETag", libraryETagValue(version.Token))
 	jsonOK(w, resp)
 }
 
@@ -562,6 +795,13 @@ func (a *restAPI) handleLibraryContentPut(w http.ResponseWriter, r *http.Request
 		jsonErr(w, http.StatusBadRequest, "invalid path")
 		return
 	}
+	// ADR-083 EMB-001, founder ruling N2: no caller is exempt. Validated
+	// here in the handler, not in the schema — expect_version stays
+	// contract-optional until a follow-up flips it (owned elsewhere).
+	expectedBare, ok := requireLibraryExpectVersion(w, req.ExpectVersion)
+	if !ok {
+		return
+	}
 
 	root, ok := a.openLibraryRoot(w, workspaceID, "root")
 	if !ok {
@@ -573,11 +813,50 @@ func (a *restAPI) handleLibraryContentPut(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	fi, err := root.WriteContent(rel, []byte(req.Content))
-	if err != nil {
-		mapLibraryErr(w, "put content", workspaceID, err)
+	lockCfg, lockRel, lockErr := resolveLibraryLock(root, a.homePath, workspaceID, rel)
+	if lockErr != nil {
+		logger.ErrorCF("rest", "library: resolve write lock failed",
+			map[string]any{"workspace_id": workspaceID, "path": rel, "error": lockErr.Error()})
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
+
+	content := []byte(req.Content)
+	var (
+		fi       os.FileInfo
+		newToken knowledge.VersionToken
+	)
+	// EMB-006: the version comparison and the write happen inside a SINGLE
+	// acquisition of the same lock the agent write path takes — a compare
+	// followed by an unheld write is not a compare-and-swap. See
+	// resolveLibraryLock for how the lock key (collection root, lock dir,
+	// collection-relative path) is derived so it matches the agent path's.
+	writeErr := knowledge.WithNoteWriteLock(lockCfg, lockRel, func() error {
+		current, verErr := knowledge.ReadFileVersion(root.HostPath(rel))
+		if verErr != nil {
+			return verErr
+		}
+		if conflict := checkLibraryVersion(rel, expectedBare, current); conflict != nil {
+			return conflict
+		}
+		if libraryWriteRaceHook != nil {
+			libraryWriteRaceHook()
+		}
+		var writeErr error
+		fi, writeErr = root.WriteContent(rel, content)
+		if writeErr != nil {
+			return writeErr
+		}
+		newToken = knowledge.ComputeVersionToken(content)
+		return nil
+	})
+	if !handleLibraryWriteLockErr(w, "put content", workspaceID, writeErr) {
+		return
+	}
+
+	w.Header().Set("ETag", libraryETagValue(newToken))
+	a.logLibraryAudit(r, "library.write", workspaceID,
+		map[string]any{"path": rel, "bytes": len(content), "binary": false})
 	jsonOK(w, library.EntryFromInfo(rel, fi))
 }
 
@@ -662,6 +941,13 @@ func (a *restAPI) handleLibraryContentBinaryPut(w http.ResponseWriter, r *http.R
 		jsonErr(w, http.StatusBadRequest, "content exceeds the 25 MB limit")
 		return
 	}
+	// ADR-083 EMB-001, founder ruling N2: no caller is exempt — including
+	// the annotated-PDF editor, the only production caller of this route
+	// (EMB-007 is what gives it a read that can return a token to send).
+	expectedBare, ok := requireLibraryExpectVersion(w, req.ExpectVersion)
+	if !ok {
+		return
+	}
 
 	root, ok := a.openLibraryRoot(w, workspaceID, "root")
 	if !ok {
@@ -673,11 +959,44 @@ func (a *restAPI) handleLibraryContentBinaryPut(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	fi, err := root.WriteContent(rel, decoded)
-	if err != nil {
-		mapLibraryErr(w, "put content", workspaceID, err)
+	lockCfg, lockRel, lockErr := resolveLibraryLock(root, a.homePath, workspaceID, rel)
+	if lockErr != nil {
+		logger.ErrorCF("rest", "library: resolve write lock failed",
+			map[string]any{"workspace_id": workspaceID, "path": rel, "error": lockErr.Error()})
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
+
+	var (
+		fi       os.FileInfo
+		newToken knowledge.VersionToken
+	)
+	writeErr := knowledge.WithNoteWriteLock(lockCfg, lockRel, func() error {
+		current, verErr := knowledge.ReadFileVersion(root.HostPath(rel))
+		if verErr != nil {
+			return verErr
+		}
+		if conflict := checkLibraryVersion(rel, expectedBare, current); conflict != nil {
+			return conflict
+		}
+		if libraryWriteRaceHook != nil {
+			libraryWriteRaceHook()
+		}
+		var writeErr error
+		fi, writeErr = root.WriteContent(rel, decoded)
+		if writeErr != nil {
+			return writeErr
+		}
+		newToken = knowledge.ComputeVersionToken(decoded)
+		return nil
+	})
+	if !handleLibraryWriteLockErr(w, "put content", workspaceID, writeErr) {
+		return
+	}
+
+	w.Header().Set("ETag", libraryETagValue(newToken))
+	a.logLibraryAudit(r, "library.write", workspaceID,
+		map[string]any{"path": rel, "bytes": len(decoded), "binary": true})
 	jsonOK(w, library.EntryFromInfo(rel, fi))
 }
 
@@ -1167,6 +1486,29 @@ func (a *restAPI) handleLibraryDownload(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	defer f.Close()
+
+	// ADR-083 EMB-007/EMB-007a/EMB-007b. This is the ONLY read on the
+	// annotated-PDF save path (LibraryPdfPreview's loader uses a raw fetch
+	// of this endpoint, never GET .../content), so it must carry a version
+	// token too — byte-identical to GET .../content's for the same path
+	// (test 121), via the SAME knowledge.ReadFileVersion digest.
+	//
+	// Set HERE, in handleLibraryDownload, and NEVER inside
+	// serveLibraryContent/applyLibraryByteHeaders: those are shared by
+	// serveLibraryPath too, and http.ServeContent's conditional-GET /
+	// If-Range handling keys off a response's ETag — setting one in the
+	// shared helper would turn on 304s and change If-Range's validator for
+	// every caller, including the audio/video Range-request path. See the
+	// header comment on serveLibraryContent (inline_serving.go), which this
+	// file must not become a second copy of.
+	version, verErr := knowledge.ReadFileVersion(root.HostPath(rel))
+	if verErr != nil {
+		logger.ErrorCF("rest", "library: read version failed",
+			map[string]any{"workspace_id": workspaceID, "path": rel, "error": verErr.Error()})
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	w.Header().Set("ETag", libraryETagValue(version.Token))
 
 	// ADR-067 FR-015a/FR-003g. This used to call http.ServeContent with the
 	// filename and no Content-Type, so the type came from the HOST MIME

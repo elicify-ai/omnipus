@@ -78,7 +78,7 @@ func TestLibraryCreateVault_AlreadyExistsAsPlainFolder_409(t *testing.T) {
 func TestLibraryCreateVault_AlreadyExistsAsFile_409(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"Research","content":"x"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"Research","content":"x","expect_version":"v1:absent"}`).Code)
 
 	w := libPostJSON(t, api, "/api/v1/library/"+id+"/vaults", `{"name":"Research"}`)
 	assert.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())

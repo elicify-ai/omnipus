@@ -177,7 +177,7 @@ func TestLibraryWorkspaces_ListsWithEntryCounts(t *testing.T) {
 
 	// Write a file via PUT content, then list again — count must reflect it.
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"a.txt","content":"hi"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"a.txt","content":"hi","expect_version":"v1:absent"}`).Code)
 	w2 := libGet(t, api, "/api/v1/library/workspaces")
 	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &nodes))
 	require.Len(t, nodes, 1)
@@ -194,7 +194,7 @@ func TestLibraryEntries_ListRoot_EmptyThenPopulated(t *testing.T) {
 	assert.Equal(t, []gen.LibraryEntry{}, decodeEntries(t, w.Body.Bytes()))
 
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"report.md","content":"# hi"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"report.md","content":"# hi","expect_version":"v1:absent"}`).Code)
 
 	w2 := libGet(t, api, "/api/v1/library/"+id+"/entries")
 	entries := decodeEntries(t, w2.Body.Bytes())
@@ -287,7 +287,7 @@ func TestLibraryEntries_WorkspaceIDWithSlashes_404NotFound(t *testing.T) {
 func TestLibraryEntryDelete_RoundTrip(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"a.txt","content":"x"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"a.txt","content":"x","expect_version":"v1:absent"}`).Code)
 
 	dw := libDelete(t, api, "/api/v1/library/"+id+"/entries?path=a.txt")
 	require.Equal(t, http.StatusNoContent, dw.Code, "body: %s", dw.Body.String())
@@ -355,7 +355,7 @@ func TestLibrary_DeeplyNestedValidPath_Accepted(t *testing.T) {
 	nested := "a/b/c/d/e/f"
 	require.NoError(t, os.MkdirAll(filepath.Join(workDir(api, id), filepath.FromSlash(nested)), 0o700))
 
-	body := `{"path":"` + nested + `/g.txt","content":"deep"}`
+	body := `{"path":"` + nested + `/g.txt","content":"deep","expect_version":"v1:absent"}`
 	w := libPutJSON(t, api, "/api/v1/library/"+id+"/content", body)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
@@ -399,7 +399,7 @@ func TestLibrary_SymlinkEscape_ToSiblingWorkspace_Rejected(t *testing.T) {
 func TestLibraryContent_RoundTrip(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 
-	pw := libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"notes.md","content":"# Notes\nhello"}`)
+	pw := libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"notes.md","content":"# Notes\nhello","expect_version":"v1:absent"}`)
 	require.Equal(t, http.StatusOK, pw.Code, "body: %s", pw.Body.String())
 	entry := decodeEntry(t, pw.Body.Bytes())
 	assert.Equal(t, "notes.md", entry.Path)
@@ -437,7 +437,7 @@ func TestLibraryContent_GetOnDirectory_404(t *testing.T) {
 
 func TestLibraryContent_MissingParentDir_404(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
-	w := libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"nope/report.md","content":"x"}`)
+	w := libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"nope/report.md","content":"x","expect_version":"v1:absent"}`)
 	assert.Equal(t, http.StatusNotFound, w.Code, "body: %s", w.Body.String())
 }
 
@@ -489,9 +489,9 @@ func TestLibraryContent_InboundSchemaValidation_MissingField(t *testing.T) {
 func TestLibraryContent_ReservedDeviceNameFollowsActiveRules(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	for _, tc := range []struct{ path, body string }{
-		{"CON.txt", `{"path":"CON.txt","content":"x"}`},
-		{"bad|name.txt", `{"path":"bad|name.txt","content":"x"}`},
-		{"trailing.space ", `{"path":"trailing.space ","content":"x"}`},
+		{"CON.txt", `{"path":"CON.txt","content":"x","expect_version":"v1:absent"}`},
+		{"bad|name.txt", `{"path":"bad|name.txt","content":"x","expect_version":"v1:absent"}`},
+		{"trailing.space ", `{"path":"trailing.space ","content":"x","expect_version":"v1:absent"}`},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			w := libPutJSON(t, api, "/api/v1/library/"+id+"/content", tc.body)
@@ -524,9 +524,9 @@ func TestLibraryContent_WindowsRulesStillRejectThoseNames(t *testing.T) {
 func TestLibraryContent_CaseInsensitiveCollision_409(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"Report.txt","content":"original"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"Report.txt","content":"original","expect_version":"v1:absent"}`).Code)
 
-	w := libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"report.txt","content":"new"}`)
+	w := libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"report.txt","content":"new","expect_version":"v1:absent"}`)
 	assert.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
 }
 
@@ -633,7 +633,7 @@ func TestLibraryMkdir_Idempotent_ReturnsOK(t *testing.T) {
 func TestLibraryMkdir_AlreadyExistsAsFile_409(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"taken.txt","content":"x"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"taken.txt","content":"x","expect_version":"v1:absent"}`).Code)
 
 	w := libPostJSON(t, api, "/api/v1/library/"+id+"/mkdir", `{"path":"taken.txt"}`)
 	assert.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
@@ -705,7 +705,7 @@ func TestLibraryMkdir_CaseInsensitiveExistingDirectory_Idempotent(t *testing.T) 
 func TestLibraryMkdirThenMove_NestedDestination_ClosesUAT4Gap(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"test.txt","content":"x"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"test.txt","content":"x","expect_version":"v1:absent"}`).Code)
 
 	body := `{"from_workspace_id":"` + id + `","from_path":"test.txt","to_workspace_id":"` + id + `","to_path":"subfolder/test.txt"}`
 	failW := libPostJSON(t, api, "/api/v1/library/move", body)
@@ -728,7 +728,7 @@ func TestLibraryMkdirThenMove_NestedDestination_ClosesUAT4Gap(t *testing.T) {
 func TestLibraryDownload_RoundTrip(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"file.txt","content":"downloadme"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"file.txt","content":"downloadme","expect_version":"v1:absent"}`).Code)
 
 	w := libGet(t, api, "/api/v1/library/"+id+"/download?path=file.txt")
 	require.Equal(t, http.StatusOK, w.Code)
@@ -749,7 +749,7 @@ func TestLibraryDownload_Directory_404(t *testing.T) {
 func TestLibraryRename_RoundTrip(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"old.txt","content":"x"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"old.txt","content":"x","expect_version":"v1:absent"}`).Code)
 
 	w := libPostJSON(t, api, "/api/v1/library/"+id+"/rename", `{"from":"old.txt","to":"new.txt"}`)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
@@ -765,9 +765,9 @@ func TestLibraryRename_RoundTrip(t *testing.T) {
 func TestLibraryRename_DestinationExists_409(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"a.txt","content":"a"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"a.txt","content":"a","expect_version":"v1:absent"}`).Code)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"b.txt","content":"b"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"b.txt","content":"b","expect_version":"v1:absent"}`).Code)
 
 	w := libPostJSON(t, api, "/api/v1/library/"+id+"/rename", `{"from":"a.txt","to":"b.txt"}`)
 	assert.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
@@ -785,7 +785,7 @@ func TestLibraryRename_MissingFrom_404(t *testing.T) {
 func TestLibraryRename_MissingDestinationParent_NamesDirectory(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"a.txt","content":"a"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"a.txt","content":"a","expect_version":"v1:absent"}`).Code)
 
 	w := libPostJSON(t, api, "/api/v1/library/"+id+"/rename", `{"from":"a.txt","to":"newfolder/a.txt"}`)
 	require.Equal(t, http.StatusNotFound, w.Code)
@@ -801,7 +801,7 @@ func TestLibraryRename_MissingDestinationParent_NamesDirectory(t *testing.T) {
 func TestLibraryRename_DotDotPrefixedDestination_400(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"a.txt","content":"a"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"a.txt","content":"a","expect_version":"v1:absent"}`).Code)
 
 	for _, to := range []string{
 		"..dana-pwned-encoded.txt",
@@ -827,9 +827,9 @@ func TestLibraryRename_DotDotPrefixedDestination_400(t *testing.T) {
 func TestLibraryRename_CaseInsensitiveCollision_409(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"Report.txt","content":"original"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"Report.txt","content":"original","expect_version":"v1:absent"}`).Code)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"draft.txt","content":"draft"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"draft.txt","content":"draft","expect_version":"v1:absent"}`).Code)
 
 	w := libPostJSON(t, api, "/api/v1/library/"+id+"/rename", `{"from":"draft.txt","to":"report.txt"}`)
 	assert.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
@@ -849,7 +849,7 @@ func TestLibraryRename_CaseInsensitiveCollision_409(t *testing.T) {
 func TestLibraryRename_CaseOnlyRelabel_Allowed(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"Report.txt","content":"hello"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"Report.txt","content":"hello","expect_version":"v1:absent"}`).Code)
 
 	w := libPostJSON(t, api, "/api/v1/library/"+id+"/rename", `{"from":"Report.txt","to":"report.txt"}`)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
@@ -864,7 +864,7 @@ func TestLibraryCopy_CrossWorkspace_RoundTrip(t *testing.T) {
 	api, fromID := buildLibraryTestAPI(t)
 	toID := seedLibraryWorkspace(t, api, "Dest WS")
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+fromID+"/content", `{"path":"shared.txt","content":"shared"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+fromID+"/content", `{"path":"shared.txt","content":"shared","expect_version":"v1:absent"}`).Code)
 
 	body := `{"from_workspace_id":"` + fromID + `","from_path":"shared.txt","to_workspace_id":"` + toID + `","to_path":"copied.txt"}`
 	w := libPostJSON(t, api, "/api/v1/library/copy", body)
@@ -884,7 +884,7 @@ func TestLibraryMove_CrossWorkspace_RemovesSource(t *testing.T) {
 	api, fromID := buildLibraryTestAPI(t)
 	toID := seedLibraryWorkspace(t, api, "Dest WS 2")
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+fromID+"/content", `{"path":"movable.txt","content":"m"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+fromID+"/content", `{"path":"movable.txt","content":"m","expect_version":"v1:absent"}`).Code)
 
 	body := `{"from_workspace_id":"` + fromID + `","from_path":"movable.txt","to_workspace_id":"` + toID + `","to_path":"moved.txt"}`
 	w := libPostJSON(t, api, "/api/v1/library/move", body)
@@ -899,7 +899,7 @@ func TestLibraryMove_CrossWorkspace_RemovesSource(t *testing.T) {
 func TestLibraryMove_SameWorkspace_Sugar(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"x.txt","content":"x"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"x.txt","content":"x","expect_version":"v1:absent"}`).Code)
 
 	body := `{"from_workspace_id":"` + id + `","from_path":"x.txt","to_workspace_id":"` + id + `","to_path":"y.txt"}`
 	w := libPostJSON(t, api, "/api/v1/library/move", body)
@@ -921,7 +921,7 @@ func TestLibraryCopy_MissingDestinationParent_NamesDirectory(t *testing.T) {
 	api, fromID := buildLibraryTestAPI(t)
 	toID := seedLibraryWorkspace(t, api, "Dest WS 4")
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+fromID+"/content", `{"path":"shared.txt","content":"shared"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+fromID+"/content", `{"path":"shared.txt","content":"shared","expect_version":"v1:absent"}`).Code)
 
 	body := `{"from_workspace_id":"` + fromID + `","from_path":"shared.txt","to_workspace_id":"` + toID + `","to_path":"deep/nested/copied.txt"}`
 	w := libPostJSON(t, api, "/api/v1/library/copy", body)
@@ -933,9 +933,9 @@ func TestLibraryTransfer_DestinationExists_409(t *testing.T) {
 	api, fromID := buildLibraryTestAPI(t)
 	toID := seedLibraryWorkspace(t, api, "Dest WS 3")
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+fromID+"/content", `{"path":"a.txt","content":"a"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+fromID+"/content", `{"path":"a.txt","content":"a","expect_version":"v1:absent"}`).Code)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+toID+"/content", `{"path":"b.txt","content":"b"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+toID+"/content", `{"path":"b.txt","content":"b","expect_version":"v1:absent"}`).Code)
 
 	body := `{"from_workspace_id":"` + fromID + `","from_path":"a.txt","to_workspace_id":"` + toID + `","to_path":"b.txt"}`
 	w := libPostJSON(t, api, "/api/v1/library/copy", body)
@@ -984,7 +984,7 @@ func TestLibrary_CurlSmokeTest(t *testing.T) {
 
 	putOut := runCurl("-sS", "-X", "PUT", srv.URL+"/api/v1/library/"+id+"/content",
 		"-H", "Content-Type: application/json",
-		"-d", `{"path":"curl-proof.md","content":"# hello from curl"}`)
+		"-d", `{"path":"curl-proof.md","content":"# hello from curl","expect_version":"v1:absent"}`)
 	t.Logf("curl PUT content -> %s", putOut)
 	assert.Contains(t, putOut, `"path":"curl-proof.md"`)
 
