@@ -53,8 +53,8 @@ func TestFreshLiveAttachmentFirstSwitchRecapturesMeasuredTarget(t *testing.T) {
 				}
 				*measured.width, *measured.height, *measured.scale = 913, 617, 1.25
 			case documentPaintAction, chromedp.ActionFunc:
-				if err := action.Do(cdp.WithExecutor(ctx, executor)); err != nil {
-					return err
+				if runErr := action.Do(cdp.WithExecutor(ctx, executor)); runErr != nil {
+					return runErr
 				}
 			default:
 				return fmt.Errorf("unexpected browser action %T", action)
@@ -64,7 +64,7 @@ func TestFreshLiveAttachmentFirstSwitchRecapturesMeasuredTarget(t *testing.T) {
 	}
 	_, err = m.live.AttachContext(context.Background(), testSessionID, "fresh-viewer", nil, nil, nil)
 	require.NoError(t, err)
-	lv, exists = m.live.lookup(testSessionID)
+	_, exists = m.live.lookup(testSessionID)
 	require.True(t, exists)
 	cs, err := NewCaptureSessionWithDeps(m, "fresh-view", &adapterRelay{nextToken: 40}, fakeEncoderStarter(new(int32), nil), nil)
 	require.NoError(t, err)

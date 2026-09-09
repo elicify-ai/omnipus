@@ -115,6 +115,8 @@ Controller terminal0 means all experiment measurements were valid, NOT all accep
 
 ### Remaining delay localized; bounded observer limitation
 
+Subsequent controlled-page and server measurements refine this finding: input delivery is fast, while both pre-receive media delay and receiver buffering contribute. See [the input timing report](https://github.com/elicify-ai/omnipus/blob/browser-improvements/docs/internal/browser-input-timing-2026-09-09.md) for the two later runs, clock limitations, and separately identified test measurement overhead. The observations below describe the earlier cadence experiment.
+
 Cadence per-click decomposition puts the main extra delay before the reported frame arrives at the viewer. Independent stage p95 values (do not add percentiles): input WebSocket send return to frame receive96.7/403.2/292.6ms for baseline15/candidate30/restored; receive to presentation58.6/86.1/93.7ms; pixel sampling4.7/4.4/4.6ms. The first interval includes server input handling, CDP, rendering, capture, encoding and delivery; it does not distinguish those internal stages.
 
 An unchanged AV run with a passive75-second header observer reproduced p95 377.9ms with100clicks and300exactevents. Kernel timestamps were available, but only354RTP-like header records matched the loopback/fixed-UDP-port filter and43socketdrops were reported. The observation covered the entire62.9-second test but not the complete network path, so no claim of timely relay forwarding or a located packet stall is justified. No video/audio payload was persisted. Evidence: `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/fly-uat-browser/linux-packet-av1-evidence/`.
