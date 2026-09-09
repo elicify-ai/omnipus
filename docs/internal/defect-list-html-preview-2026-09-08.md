@@ -107,3 +107,71 @@ loosening it re-opens the exposure ADR-067 was written to close.
 |---|---|---|---|
 | HP-1 | HTML preview dead in production; minter hardcoded `null` | High | Open — reproduced, root cause is one line |
 | HP-2 | CSP emits an invalid `[::1]` source; 6 console errors per preview | Low-med | Open — reproduced |
+
+---
+
+### CI-2 — Firefox `mutation control` in preview-isolation fails intermittently, blocking CI
+**Severity:** high (blocks a green CI) · **Area:** e2e harness · **Status:** Open · **OBSERVED**
+
+Full CI on `1bd993220` (2026-09-09): **12 gates exit 0**, e2e 16 shards, one hard
+failure with `retries: 0`:
+
+```
+[isolation-firefox] preview-isolation.spec.ts:854
+  mutation control — with NO policy, all seven vectors reach the second origin
+  Error: page.goto: NS_BINDING_ABORTED
+  navigating to "http://127.0.0.1:42359/m/none/index.html"
+```
+
+**Not caused by this branch — verified.** `git diff --stat main...HEAD` for
+`tests/e2e/preview-isolation.spec.ts`, `tests/e2e/preview-svg.spec.ts` and
+`pkg/gateway/library_isolation_policy.go` is EMPTY. The branch does not touch the
+failing test, its harness, or the policy under test.
+
+**Not a product failure.** The aborted navigation targets the test's OWN mutant
+origin (an ephemeral harness server on port 42359), not the gateway. The identical
+test passes on **chromium** and the shard's other 12 firefox mutation cases all
+pass, including every case that DOES apply a policy.
+
+**Most likely mechanism, stated as a hypothesis rather than a conclusion.** This is
+the no-policy control, where all seven egress vectors are supposed to fire —
+including `window.open` and a top-level navigation. A vector firing while
+`page.goto` is still settling would abort that navigation, and `NS_BINDING_ABORTED`
+is precisely Firefox's error for "navigation superseded". The control is therefore
+racing the very behaviour it exists to provoke. Chromium tolerates the same race;
+Firefox does not. **This has not been proven** — the trace.zip on the worker would
+settle it and has not been opened.
+
+**Why it still must be fixed, and must NOT be silenced with a retry.** The previous
+run on `94bb13e61` passed this test (87 passed), so it is intermittent, and
+`retries: 0` is a deliberate choice recorded in `playwright.config.ts`: *"the
+top-level `.pdf` case is a type-confusion security assertion, and 'the script did
+not run' is not a property a retry establishes."* The same logic applies here — a
+mutation control is the evidence that the seven-vector oracle can SEE egress at
+all. Adding a retry would convert a loud, honest failure into an absorbed flake
+and quietly weaken the proof behind the whole isolation suite.
+
+**Fix direction:** make the control deterministic rather than tolerant — settle the
+navigation before the vectors are allowed to fire (or drive the mutant page without
+a racing top-level `goto`), so the control proves the oracle works without
+depending on browser-specific navigation timing.
+
+### Full CI verdict for `1bd993220`
+
+| Gate | Result |
+|---|---|
+| cli-verb-guard, npm-ci, gofmt, go-build, go-vet | exit 0 |
+| golangci-lint, verify-contracts, typecheck, vitest | exit 0 |
+| go-test, go-race, records-no-sqlite | exit 0 |
+| e2e — 14 of 16 shards | all passed (~330 tests) |
+| e2e — `preview-isolation` | **1 FAILED** (CI-2 above) |
+| e2e — `llm-conformance` | 1 flaky (CI-1, the known t3 re-plan case) |
+| e2e — `preview-headed` | 2 skipped — both declared PLACEHOLDERs for ADR-067 Wave 3 |
+
+Skip accounting is clean: all 16 shards report `unauthorized skip count (0)`.
+
+**`preview-headed` is worth naming plainly:** the shard exists, is wired into the
+plan, and runs — but both its tests are placeholders, so the browser's own PDF
+type-confusion handling is currently asserted by nothing. That is declared in the
+test names rather than hidden, and it is the SAME ADR-067 Wave 3 that HP-1's
+missing mint client belongs to.
