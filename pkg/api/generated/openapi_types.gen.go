@@ -2573,6 +2573,24 @@ func (e KnowledgeGraphEdgeResolution) Valid() bool {
 	}
 }
 
+// Defines values for KnowledgeGraphEdgeUnresolvedReason.
+const (
+	KnowledgeGraphEdgeUnresolvedReasonNoMatch     KnowledgeGraphEdgeUnresolvedReason = "no_match"
+	KnowledgeGraphEdgeUnresolvedReasonOutsideRoot KnowledgeGraphEdgeUnresolvedReason = "outside_root"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeGraphEdgeUnresolvedReason enum.
+func (e KnowledgeGraphEdgeUnresolvedReason) Valid() bool {
+	switch e {
+	case KnowledgeGraphEdgeUnresolvedReasonNoMatch:
+		return true
+	case KnowledgeGraphEdgeUnresolvedReasonOutsideRoot:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for KnowledgeGraphResponseEdgesResolution.
 const (
 	KnowledgeGraphResponseEdgesResolutionExactPath      KnowledgeGraphResponseEdgesResolution = "exact_path"
@@ -2594,6 +2612,24 @@ func (e KnowledgeGraphResponseEdgesResolution) Valid() bool {
 	case KnowledgeGraphResponseEdgesResolutionUniqueBasename:
 		return true
 	case KnowledgeGraphResponseEdgesResolutionUnresolved:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KnowledgeGraphResponseEdgesUnresolvedReason.
+const (
+	KnowledgeGraphResponseEdgesUnresolvedReasonNoMatch     KnowledgeGraphResponseEdgesUnresolvedReason = "no_match"
+	KnowledgeGraphResponseEdgesUnresolvedReasonOutsideRoot KnowledgeGraphResponseEdgesUnresolvedReason = "outside_root"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeGraphResponseEdgesUnresolvedReason enum.
+func (e KnowledgeGraphResponseEdgesUnresolvedReason) Valid() bool {
+	switch e {
+	case KnowledgeGraphResponseEdgesUnresolvedReasonNoMatch:
+		return true
+	case KnowledgeGraphResponseEdgesUnresolvedReasonOutsideRoot:
 		return true
 	default:
 		return false
@@ -2696,6 +2732,21 @@ const (
 func (e KnowledgeMountConflictErrorCode) Valid() bool {
 	switch e {
 	case KnowledgeMountConflict:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LibraryConflictErrorCode.
+const (
+	LibraryVersionConflict LibraryConflictErrorCode = "library_version_conflict"
+)
+
+// Valid indicates whether the value is a known member of the LibraryConflictErrorCode enum.
+func (e LibraryConflictErrorCode) Valid() bool {
+	switch e {
+	case LibraryVersionConflict:
 		return true
 	default:
 		return false
@@ -9778,6 +9829,9 @@ type AppState struct {
 
 	// OnboardingComplete Whether the first-run onboarding wizard has been completed.
 	OnboardingComplete bool `json:"onboarding_complete"`
+
+	// VideoEmbedHosts Allow-listed video-embed hostnames (ADR-083 D-C/D9, EMB-075/EMB-081). A note's markdown-link video embed is drawn as a locally-rendered, click-to-play frame only when its URL's host EXACTLY matches an entry here — never a prefix or suffix match, so a look-alike domain is never framed. This is the same allow-list the served Content-Security-Policy's frame-src directive carries (EMB-079); a test asserts the two are equal (EMB-080). The shipped default contains exactly one entry. An operator who empties this list turns video framing off entirely: no external host reaches the served policy, and every video embed falls back to a plain link. Read-only — this reflects an operator configuration key, not settable via this endpoint.
+	VideoEmbedHosts *[]string `json:"video_embed_hosts,omitempty"`
 }
 
 // AppStatePatchRequest Request body for PATCH /api/v1/state. Partial update to application state. Currently only supports marking onboarding as complete (onboarding_complete must be true — setting it to false is rejected 400).
@@ -12083,6 +12137,9 @@ type KnowledgeGraphEdge struct {
 	// Ambiguous True when more than one file matched and the tie-break decided it. The alternatives are listed in candidates.
 	Ambiguous bool `json:"ambiguous"`
 
+	// Block Block anchor with the leading "#^" removed, for a link to an anchored block such as [[note#^abc123]] (ADR-083 EMB-036). Its own property, separate from "heading" — a block reference never populates "heading", and "heading_found" is meaningless when this field is set. Present only for a block link.
+	Block *string `json:"block,omitempty"`
+
 	// Candidates Every path that matched, in tie-break order, when ambiguous is true. Present only then.
 	Candidates *[]string `json:"candidates,omitempty"`
 
@@ -12095,6 +12152,10 @@ type KnowledgeGraphEdge struct {
 	// Heading Heading fragment, for a heading link such as [[note#Section]].
 	Heading *string `json:"heading,omitempty"`
 
+	// HeadingFound Whether the text in "heading" matched an actual heading in the resolved target (ADR-083 EMB-035/EMB-039). Meaningful ONLY when the target is a markdown file AND "heading" is non-empty — the graph builder records headings for markdown files alone, so this MUST be set FALSE BY CONSTRUCTION for a ".base" target (heading is then a view label, not a heading) and for a link carrying "block" instead of "heading". A reader MUST NOT render a "no such heading" refusal from this flag in either of those two cases.
+	// NOT YET in this schema's "required" list — deliberately, and temporarily. The handler that would always emit it (pkg/gateway/rest_knowledge.go::knowledgeEdge) has not been updated yet, and several existing SPA test fixtures construct a KnowledgeGraphEdge literal without this field; marking it required now breaks their TypeScript compilation ahead of that handler and fixture work, which is out of scope for the contract-only change that introduced this field. The next wave MUST add heading_found to this schema's "required" array in the SAME commit that updates knowledgeEdge() to always set it and migrates the fixtures that construct edges by hand (Test 110's Go pairing, Test 122's reader pairing) — see EMB-039.
+	HeadingFound *bool `json:"heading_found,omitempty"`
+
 	// LinkText The link target exactly as written in the source note.
 	LinkText *string `json:"link_text,omitempty"`
 
@@ -12103,10 +12164,16 @@ type KnowledgeGraphEdge struct {
 
 	// ToPath Collection-relative path of the resolved target, or the normalised link text when resolution is "unresolved".
 	ToPath string `json:"to_path"`
+
+	// UnresolvedReason Why resolution is "unresolved" (ADR-083 EMB-006's containment case, US-4). "no_match" is an ordinary broken link — nothing in the collection carries that path or name, and an operator can fix it. "outside_root" is a link that tried to leave the collection root entirely, reported on its own terms rather than lumped in with "no_match" so the reader's refusal text can distinguish "this note does not exist" from "this note is outside what I can show you". Present only when resolution is "unresolved"; absent when it resolved.
+	UnresolvedReason *KnowledgeGraphEdgeUnresolvedReason `json:"unresolved_reason,omitempty"`
 }
 
 // KnowledgeGraphEdgeResolution Which rule in the FR-040 ladder produced to_path. "unresolved" means no target matched, or the target lay outside the collection root — in which case the target was NOT read (FR-043).
 type KnowledgeGraphEdgeResolution string
+
+// KnowledgeGraphEdgeUnresolvedReason Why resolution is "unresolved" (ADR-083 EMB-006's containment case, US-4). "no_match" is an ordinary broken link — nothing in the collection carries that path or name, and an operator can fix it. "outside_root" is a link that tried to leave the collection root entirely, reported on its own terms rather than lumped in with "no_match" so the reader's refusal text can distinguish "this note does not exist" from "this note is outside what I can show you". Present only when resolution is "unresolved"; absent when it resolved.
+type KnowledgeGraphEdgeUnresolvedReason string
 
 // KnowledgeGraphNode One note or attachment appearing in a KnowledgeGraphResponse. A node may describe a target that does not exist on disk — that is how an unresolved wikilink is represented (FR-042).
 type KnowledgeGraphNode struct {
@@ -12153,6 +12220,9 @@ type KnowledgeGraphResponse struct {
 
 // KnowledgeGraphResponseEdgesResolution Which rule in the FR-040 ladder produced to_path. "unresolved" means no target matched, or the target lay outside the collection root — in which case the target was NOT read (FR-043).
 type KnowledgeGraphResponseEdgesResolution string
+
+// KnowledgeGraphResponseEdgesUnresolvedReason Why resolution is "unresolved" (ADR-083 EMB-006's containment case, US-4). "no_match" is an ordinary broken link — nothing in the collection carries that path or name, and an operator can fix it. "outside_root" is a link that tried to leave the collection root entirely, reported on its own terms rather than lumped in with "no_match" so the reader's refusal text can distinguish "this note does not exist" from "this note is outside what I can show you". Present only when resolution is "unresolved"; absent when it resolved.
+type KnowledgeGraphResponseEdgesUnresolvedReason string
 
 // KnowledgeGraphResponseKind Which query produced this graph. "links" and "backlinks" are outbound and inbound edges of source_path; "unresolved" lists edges whose target does not exist; "orphans" lists nodes with no inbound edge; "neighbourhood" is the bounded subgraph around source_path.
 type KnowledgeGraphResponseKind string
@@ -12239,14 +12309,45 @@ type LibraryBinaryContentRequest struct {
 	// ContentBase64 Full replacement content for the file, as standard (RFC 4648 §4) base64 of the raw bytes — no URL-safe alphabet, no line wrapping. The DECODED byte length is capped at 26214400 bytes (25 MB); a base64 string decoding to more than that is rejected with 400 before any bytes are written.
 	ContentBase64 string `json:"content_base64"`
 
+	// ExpectVersion Same contract as LibraryContentRequest.expect_version (ADR-083 EMB-001/EMB-007, founder ruling N2) — MANDATORY BY SERVER POLICY on every binary save, no exemption. This is the door the annotated-PDF editor saves through: it has no JSON read on its own path, so it captures the bare token from the ETag header of the GET .../download response its raw fetch already holds, and replaces it from this write's own response before a second save in the same session. Absent or empty is refused with 400; a stale token is refused with 409 (LibraryConflictError); the RFC-quoted wire form is a shape error, refused with 400 and never 409.
+	// NOT YET in this schema's "required" list — deliberately, and temporarily, for the same reason as LibraryContentRequest's expect_version: the PDF annotation editor's save call (LibraryPdfPreview.tsx) does not send this field today, and flipping it to required here breaks that caller's TypeScript compilation before EMB-007c's loader/header plumbing lands. The next wave MUST add expect_version to this schema's "required" array in the SAME commit that migrates that caller.
+	ExpectVersion *string `json:"expect_version,omitempty"`
+
 	// Path Workspace-relative path of the file to write, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints). Same validation as LibraryContentRequest.path.
 	Path string `json:"path"`
 }
+
+// LibraryConflictError Typed 409 body for a refused Library whole-file save — PUT /api/v1/library/{workspace_id}/content or PUT .../content-binary (ADR-083 EMB-001/EMB-007, founder ruling N2). Returned when the request's expect_version does not match the file's current version — the file changed since the caller last read it (by another Omnipus writer, an agent, or an external editor), and applying the write would silently discard whatever changed.
+// Uses the SAME version token as the knowledge base's own write guard (KnowledgeConflictError) — one token, produced by pkg/knowledge/version.go's ComputeVersionToken / ReadNoteVersion (founder ruling closing ADR-083 Ambiguity A-11), never a second definition of "changed" invented for the Library door.
+// Shares the "error" and "code" fields of the standard ErrorResponse envelope so a generic error handler still works on it unchanged; the extra fields are what a conflict-aware handler uses to offer a reload-and-retry.
+type LibraryConflictError struct {
+	// ActualVersion The opaque version token of the file as it now stands. A caller that re-reads, merges and retries sends this one back. Absent when the file has been deleted since.
+	ActualVersion *string `json:"actual_version,omitempty"`
+
+	// Code Machine-readable discriminator. A single value, so a client can branch on it without string matching on the message.
+	Code LibraryConflictErrorCode `json:"code"`
+
+	// Error Human-readable message, safe to display.
+	Error string `json:"error"`
+
+	// ExpectedVersion The opaque version token the caller sent in expect_version — what it believed the file was.
+	ExpectedVersion *string `json:"expected_version,omitempty"`
+
+	// Path Workspace-relative path of the file that was NOT written.
+	Path string `json:"path"`
+}
+
+// LibraryConflictErrorCode Machine-readable discriminator. A single value, so a client can branch on it without string matching on the message.
+type LibraryConflictErrorCode string
 
 // LibraryContentRequest Request body for PUT /api/v1/library/{workspace_id}/content. Writes text content to a file at the given workspace-relative path (library-spec.md D-5 editing scope), creating the file if it does not already exist and overwriting any existing content entirely. The path's parent directory must already exist within the workspace's work tree.
 type LibraryContentRequest struct {
 	// Content Full replacement text content for the file, UTF-8. Maximum 10485760 bytes (10 MB) — matches the threshold GET .../content uses to set too_large=true, so a file this endpoint can write is always one the read endpoint can subsequently render inline.
 	Content string `json:"content"`
+
+	// ExpectVersion The version token the caller last read for this file (ADR-083 EMB-001/EMB-007, founder ruling N2) — the bare, UNQUOTED value of the ETag response header GET .../content or GET .../download most recently returned for this path, or the token echoed back by a previous PUT to this same endpoint. MANDATORY BY SERVER POLICY, with no exemption: a request with no expect_version, or an empty one, is refused with 400 rather than treated as "overwrite unconditionally". The write is refused with 409 (LibraryConflictError) when the file's current token no longer matches, so a change made by another writer since the caller's last read is never silently discarded. Sending the RFC-quoted wire form (with surrounding quotes) instead of the bare token is a shape error and is refused with 400, never 409, so it can never be mistaken for a genuine conflict. The comparison and the write happen inside one acquisition of the same lock the agent write path takes.
+	// NOT YET in this schema's "required" list — deliberately, and temporarily. Flipping it to required breaks TypeScript compilation for every existing caller in the same change (the PDF annotation editor's save call, the plain-text editor's save call, and their test fixtures), because none of them sends this field today (EMB-007c names the callers). That migration is out of scope for the contract-only change that introduced this field. The next wave MUST add expect_version to this schema's "required" array in the SAME commit that updates every caller to send it — see EMB-007c for the exact call sites — so the schema and its callers never disagree about whether the field is optional.
+	ExpectVersion *string `json:"expect_version,omitempty"`
 
 	// Path Workspace-relative path of the file to write, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints).
 	Path string `json:"path"`

@@ -245,6 +245,9 @@ type KnowledgeGraphEdge = {
   link_text?: string | undefined;
   alias?: string | undefined;
   heading?: string | undefined;
+  heading_found?: boolean | undefined;
+  block?: string | undefined;
+  unresolved_reason?: ("no_match" | "outside_root") | undefined;
   resolution:
     | "exact_path"
     | "unique_basename"
@@ -3735,6 +3738,7 @@ export const AppState = z.object({
   god_mode_available: z.boolean().optional(),
   god_mode_opted_in: z.boolean().optional(),
   dev_mode_bypass: z.boolean().optional(),
+  video_embed_hosts: z.array(z.string().min(1).max(253)).max(16).optional(),
 });
 export const AppStatePatchRequest = z
   .object({ onboarding_complete: z.boolean() })
@@ -4293,10 +4297,19 @@ export const LibraryContentResponse = z.object({
 export const LibraryContentRequest = z.object({
   path: z.string().min(1),
   content: z.string().max(10485760),
+  expect_version: z.string().min(1).optional(),
+});
+export const LibraryConflictError = z.object({
+  error: z.string().min(1),
+  code: z.literal("library_version_conflict"),
+  path: z.string().min(1),
+  expected_version: z.string().optional(),
+  actual_version: z.string().optional(),
 });
 export const LibraryBinaryContentRequest = z.object({
   path: z.string().min(1),
   content_base64: z.string().min(1),
+  expect_version: z.string().min(1).optional(),
 });
 export const uploadLibraryFiles_Body = z
   .object({ files: z.array(z.instanceof(File)) })
@@ -4499,6 +4512,9 @@ export const KnowledgeGraphEdge: z.ZodType<KnowledgeGraphEdge> = z.object({
   link_text: z.string().optional(),
   alias: z.string().optional(),
   heading: z.string().optional(),
+  heading_found: z.boolean().optional(),
+  block: z.string().optional(),
+  unresolved_reason: z.enum(["no_match", "outside_root"]).optional(),
   resolution: z.enum([
     "exact_path",
     "unique_basename",
@@ -7483,7 +7499,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/library/:workspace_id/content",
     alias: "getLibraryContent",
-    description: `Returns the text content of the file at path for the SPA editor (library-spec.md D-5), with explicit is_text / too_large fields so the SPA falls back to GET .../download rather than guessing from the content field. Returns 403 if path resolves outside the workspace&#x27;s work tree; 404 if path does not exist or names a directory.
+    description: `Returns the text content of the file at path for the SPA editor (library-spec.md D-5), with explicit is_text / too_large fields so the SPA falls back to GET .../download rather than guessing from the content field. Returns 403 if path resolves outside the workspace&#x27;s work tree; 404 if path does not exist or names a directory. The 200 response&#x27;s ETag header carries the file&#x27;s current version token (ADR-083 EMB-007/EMB-007a) even when the body omits content (binary or too_large) — read the file&#x27;s own bytes to compute it rather than hashing the response body, which would collide for every binary/too_large file. Send the bare (unquoted) value back as expect_version on a subsequent PUT .../content or PUT .../content-binary.
 `,
     requestFormat: "json",
     parameters: [
@@ -7531,7 +7547,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/library/:workspace_id/content",
     alias: "putLibraryContent",
-    description: `Writes text content to the file at the given workspace-relative path (library-spec.md D-5), creating the file if it does not already exist and overwriting any existing content entirely. Returns 403 if path resolves outside the workspace&#x27;s work tree; 404 if the path&#x27;s parent directory does not exist.
+    description: `Writes text content to the file at the given workspace-relative path (library-spec.md D-5), creating the file if it does not already exist and overwriting any existing content entirely. Returns 403 if path resolves outside the workspace&#x27;s work tree; 404 if the path&#x27;s parent directory does not exist. Requires expect_version (ADR-083 EMB-001/EMB-007, founder ruling N2): 400 if absent, empty, or sent in the quoted wire form; 409 with a LibraryConflictError body if the file&#x27;s current token no longer matches. The comparison and the write occur inside one acquisition of the same lock the agent write path takes.
 `,
     requestFormat: "json",
     parameters: [
@@ -7569,6 +7585,12 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 409,
+        description: `expect_version no longer matches the file&#x27;s current version — it changed since the caller last read it.
+`,
+        schema: LibraryConflictError,
+      },
+      {
         status: 500,
         description: `Internal server error.`,
         schema: ErrorResponse,
@@ -7579,7 +7601,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/library/:workspace_id/content-binary",
     alias: "putLibraryContentBinary",
-    description: `Sibling of PUT .../content for content that is not valid UTF-8 text (a filled PDF, an image, any other binary attachment) — see LibraryBinaryContentRequest&#x27;s description for why the text route cannot carry it. Writes the base64-decoded bytes to the file at the given workspace-relative path, creating the file if it does not already exist and overwriting any existing content entirely. Returns 400 if content_base64 is not valid base64 or decodes to more than 25 MB. Returns 403 if path resolves outside the workspace&#x27;s work tree; 404 if the path&#x27;s parent directory does not exist.
+    description: `Sibling of PUT .../content for content that is not valid UTF-8 text (a filled PDF, an image, any other binary attachment) — see LibraryBinaryContentRequest&#x27;s description for why the text route cannot carry it. Writes the base64-decoded bytes to the file at the given workspace-relative path, creating the file if it does not already exist and overwriting any existing content entirely. Returns 400 if content_base64 is not valid base64 or decodes to more than 25 MB, or if expect_version is absent, empty, or sent in the quoted wire form (ADR-083 EMB-001/EMB-007, founder ruling N2). Returns 403 if path resolves outside the workspace&#x27;s work tree; 404 if the path&#x27;s parent directory does not exist; 409 with a LibraryConflictError body if the file&#x27;s current token no longer matches expect_version. The comparison and the write occur inside one acquisition of the same lock the agent write path takes.
 `,
     requestFormat: "json",
     parameters: [
@@ -7617,6 +7639,12 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 409,
+        description: `expect_version no longer matches the file&#x27;s current version — it changed since the caller last read it.
+`,
+        schema: LibraryConflictError,
+      },
+      {
         status: 500,
         description: `Internal server error.`,
         schema: ErrorResponse,
@@ -7627,7 +7655,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/library/:workspace_id/download",
     alias: "downloadLibraryFile",
-    description: `Streams the raw bytes of the file at path with a best-effort Content-Type and a Content-Disposition attachment filename. The binary counterpart to GET .../content — used for non-text files and for text files GET .../content reports as too_large. Returns 403 if path resolves outside the workspace&#x27;s work tree; 404 if path does not exist or names a directory.
+    description: `Streams the raw bytes of the file at path with a best-effort Content-Type and a Content-Disposition attachment filename. The binary counterpart to GET .../content — used for non-text files and for text files GET .../content reports as too_large. Returns 403 if path resolves outside the workspace&#x27;s work tree; 404 if path does not exist or names a directory. The 200 response&#x27;s ETag header carries the same version token GET .../content would return for this path (ADR-083 EMB-007/EMB-007a — byte-identical between the two doors), read directly off the streamed bytes so the annotated-PDF editor — whose only read on its save path is this endpoint — can capture it and send it back as expect_version on PUT .../content-binary. Set on this operation ONLY, never inside the shared byte-stream helper other Library routes reuse, so Range requests and conditional GETs on those other routes are unaffected (ADR-083 EMB-007b).
 `,
     requestFormat: "json",
     parameters: [

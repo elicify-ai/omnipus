@@ -28,3 +28,35 @@ properties:
       too_large=true, so a file this endpoint can write is always one the
       read endpoint can subsequently render inline.
     example: "# Report\n\nStatus: green.\n"
+  expect_version:
+    type: string
+    minLength: 1
+    description: >
+      The version token the caller last read for this file (ADR-083
+      EMB-001/EMB-007, founder ruling N2) — the bare, UNQUOTED value of
+      the ETag response header GET .../content or GET .../download most
+      recently returned for this path, or the token echoed back by a
+      previous PUT to this same endpoint. MANDATORY BY SERVER POLICY, with
+      no exemption: a request with no expect_version, or an empty one, is
+      refused with 400 rather than treated as "overwrite unconditionally".
+      The write is refused with 409 (LibraryConflictError) when the
+      file's current token no longer matches, so a change made by another
+      writer since the caller's last read is never silently discarded.
+      Sending the RFC-quoted wire form (with surrounding quotes) instead
+      of the bare token is a shape error and is refused with 400, never
+      409, so it can never be mistaken for a genuine conflict. The
+      comparison and the write happen inside one acquisition of the same
+      lock the agent write path takes.
+
+      NOT YET in this schema's "required" list — deliberately, and
+      temporarily. Flipping it to required breaks TypeScript compilation
+      for every existing caller in the same change (the PDF annotation
+      editor's save call, the plain-text editor's save call, and their
+      test fixtures), because none of them sends this field today
+      (EMB-007c names the callers). That migration is out of scope for
+      the contract-only change that introduced this field. The next wave
+      MUST add expect_version to this schema's "required" array in the
+      SAME commit that updates every caller to send it — see EMB-007c for
+      the exact call sites — so the schema and its callers never disagree
+      about whether the field is optional.
+    example: "v1:9f2a7c40"

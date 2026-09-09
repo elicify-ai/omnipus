@@ -2746,12 +2746,12 @@ export interface paths {
         };
         /**
          * Read a file's text content for the Library editor/viewer
-         * @description Returns the text content of the file at path for the SPA editor (library-spec.md D-5), with explicit is_text / too_large fields so the SPA falls back to GET .../download rather than guessing from the content field. Returns 403 if path resolves outside the workspace's work tree; 404 if path does not exist or names a directory.
+         * @description Returns the text content of the file at path for the SPA editor (library-spec.md D-5), with explicit is_text / too_large fields so the SPA falls back to GET .../download rather than guessing from the content field. Returns 403 if path resolves outside the workspace's work tree; 404 if path does not exist or names a directory. The 200 response's ETag header carries the file's current version token (ADR-083 EMB-007/EMB-007a) even when the body omits content (binary or too_large) — read the file's own bytes to compute it rather than hashing the response body, which would collide for every binary/too_large file. Send the bare (unquoted) value back as expect_version on a subsequent PUT .../content or PUT .../content-binary.
          */
         get: operations["getLibraryContent"];
         /**
          * Write a file's text content from the Library editor
-         * @description Writes text content to the file at the given workspace-relative path (library-spec.md D-5), creating the file if it does not already exist and overwriting any existing content entirely. Returns 403 if path resolves outside the workspace's work tree; 404 if the path's parent directory does not exist.
+         * @description Writes text content to the file at the given workspace-relative path (library-spec.md D-5), creating the file if it does not already exist and overwriting any existing content entirely. Returns 403 if path resolves outside the workspace's work tree; 404 if the path's parent directory does not exist. Requires expect_version (ADR-083 EMB-001/EMB-007, founder ruling N2): 400 if absent, empty, or sent in the quoted wire form; 409 with a LibraryConflictError body if the file's current token no longer matches. The comparison and the write occur inside one acquisition of the same lock the agent write path takes.
          */
         put: operations["putLibraryContent"];
         post?: never;
@@ -2771,7 +2771,7 @@ export interface paths {
         get?: never;
         /**
          * Write a file's BINARY content from the Library editor
-         * @description Sibling of PUT .../content for content that is not valid UTF-8 text (a filled PDF, an image, any other binary attachment) — see LibraryBinaryContentRequest's description for why the text route cannot carry it. Writes the base64-decoded bytes to the file at the given workspace-relative path, creating the file if it does not already exist and overwriting any existing content entirely. Returns 400 if content_base64 is not valid base64 or decodes to more than 25 MB. Returns 403 if path resolves outside the workspace's work tree; 404 if the path's parent directory does not exist.
+         * @description Sibling of PUT .../content for content that is not valid UTF-8 text (a filled PDF, an image, any other binary attachment) — see LibraryBinaryContentRequest's description for why the text route cannot carry it. Writes the base64-decoded bytes to the file at the given workspace-relative path, creating the file if it does not already exist and overwriting any existing content entirely. Returns 400 if content_base64 is not valid base64 or decodes to more than 25 MB, or if expect_version is absent, empty, or sent in the quoted wire form (ADR-083 EMB-001/EMB-007, founder ruling N2). Returns 403 if path resolves outside the workspace's work tree; 404 if the path's parent directory does not exist; 409 with a LibraryConflictError body if the file's current token no longer matches expect_version. The comparison and the write occur inside one acquisition of the same lock the agent write path takes.
          */
         put: operations["putLibraryContentBinary"];
         post?: never;
@@ -2870,7 +2870,7 @@ export interface paths {
         };
         /**
          * Download the raw bytes of a file in a workspace's work tree
-         * @description Streams the raw bytes of the file at path with a best-effort Content-Type and a Content-Disposition attachment filename. The binary counterpart to GET .../content — used for non-text files and for text files GET .../content reports as too_large. Returns 403 if path resolves outside the workspace's work tree; 404 if path does not exist or names a directory.
+         * @description Streams the raw bytes of the file at path with a best-effort Content-Type and a Content-Disposition attachment filename. The binary counterpart to GET .../content — used for non-text files and for text files GET .../content reports as too_large. Returns 403 if path resolves outside the workspace's work tree; 404 if path does not exist or names a directory. The 200 response's ETag header carries the same version token GET .../content would return for this path (ADR-083 EMB-007/EMB-007a — byte-identical between the two doors), read directly off the streamed bytes so the annotated-PDF editor — whose only read on its save path is this endpoint — can capture it and send it back as expect_version on PUT .../content-binary. Set on this operation ONLY, never inside the shared byte-stream helper other Library routes reuse, so Range requests and conditional GETs on those other routes are unaffected (ADR-083 EMB-007b).
          */
         get: operations["downloadLibraryFile"];
         put?: never;
@@ -4390,6 +4390,12 @@ export interface components {
              *     Status: green.
              */
             content: string;
+            /**
+             * @description The version token the caller last read for this file (ADR-083 EMB-001/EMB-007, founder ruling N2) — the bare, UNQUOTED value of the ETag response header GET .../content or GET .../download most recently returned for this path, or the token echoed back by a previous PUT to this same endpoint. MANDATORY BY SERVER POLICY, with no exemption: a request with no expect_version, or an empty one, is refused with 400 rather than treated as "overwrite unconditionally". The write is refused with 409 (LibraryConflictError) when the file's current token no longer matches, so a change made by another writer since the caller's last read is never silently discarded. Sending the RFC-quoted wire form (with surrounding quotes) instead of the bare token is a shape error and is refused with 400, never 409, so it can never be mistaken for a genuine conflict. The comparison and the write happen inside one acquisition of the same lock the agent write path takes.
+             *     NOT YET in this schema's "required" list — deliberately, and temporarily. Flipping it to required breaks TypeScript compilation for every existing caller in the same change (the PDF annotation editor's save call, the plain-text editor's save call, and their test fixtures), because none of them sends this field today (EMB-007c names the callers). That migration is out of scope for the contract-only change that introduced this field. The next wave MUST add expect_version to this schema's "required" array in the SAME commit that updates every caller to send it — see EMB-007c for the exact call sites — so the schema and its callers never disagree about whether the field is optional.
+             * @example v1:9f2a7c40
+             */
+            expect_version?: string;
         };
         /**
          * LibraryBinaryContentRequest
@@ -4406,6 +4412,46 @@ export interface components {
              * @example JVBERi0xLjQKJcOkw7zDtsO...
              */
             content_base64: string;
+            /**
+             * @description Same contract as LibraryContentRequest.expect_version (ADR-083 EMB-001/EMB-007, founder ruling N2) — MANDATORY BY SERVER POLICY on every binary save, no exemption. This is the door the annotated-PDF editor saves through: it has no JSON read on its own path, so it captures the bare token from the ETag header of the GET .../download response its raw fetch already holds, and replaces it from this write's own response before a second save in the same session. Absent or empty is refused with 400; a stale token is refused with 409 (LibraryConflictError); the RFC-quoted wire form is a shape error, refused with 400 and never 409.
+             *     NOT YET in this schema's "required" list — deliberately, and temporarily, for the same reason as LibraryContentRequest's expect_version: the PDF annotation editor's save call (LibraryPdfPreview.tsx) does not send this field today, and flipping it to required here breaks that caller's TypeScript compilation before EMB-007c's loader/header plumbing lands. The next wave MUST add expect_version to this schema's "required" array in the SAME commit that migrates that caller.
+             * @example v1:9f2a7c40
+             */
+            expect_version?: string;
+        };
+        /**
+         * LibraryConflictError
+         * @description Typed 409 body for a refused Library whole-file save — PUT /api/v1/library/{workspace_id}/content or PUT .../content-binary (ADR-083 EMB-001/EMB-007, founder ruling N2). Returned when the request's expect_version does not match the file's current version — the file changed since the caller last read it (by another Omnipus writer, an agent, or an external editor), and applying the write would silently discard whatever changed.
+         *     Uses the SAME version token as the knowledge base's own write guard (KnowledgeConflictError) — one token, produced by pkg/knowledge/version.go's ComputeVersionToken / ReadNoteVersion (founder ruling closing ADR-083 Ambiguity A-11), never a second definition of "changed" invented for the Library door.
+         *     Shares the "error" and "code" fields of the standard ErrorResponse envelope so a generic error handler still works on it unchanged; the extra fields are what a conflict-aware handler uses to offer a reload-and-retry.
+         */
+        LibraryConflictError: {
+            /**
+             * @description Human-readable message, safe to display.
+             * @example uploads/report.md changed on disk since you opened it
+             */
+            error: string;
+            /**
+             * @description Machine-readable discriminator. A single value, so a client can branch on it without string matching on the message.
+             * @example library_version_conflict
+             * @enum {string}
+             */
+            code: "library_version_conflict";
+            /**
+             * @description Workspace-relative path of the file that was NOT written.
+             * @example uploads/report.md
+             */
+            path: string;
+            /**
+             * @description The opaque version token the caller sent in expect_version — what it believed the file was.
+             * @example v1:9f2a7c40
+             */
+            expected_version?: string;
+            /**
+             * @description The opaque version token of the file as it now stands. A caller that re-reads, merges and retries sends this one back. Absent when the file has been deleted since.
+             * @example v1:1b8e330d
+             */
+            actual_version?: string;
         };
         /**
          * CreateVaultRequest
@@ -4758,6 +4804,23 @@ export interface components {
              * @example Section
              */
             heading?: string;
+            /**
+             * @description Whether the text in "heading" matched an actual heading in the resolved target (ADR-083 EMB-035/EMB-039). Meaningful ONLY when the target is a markdown file AND "heading" is non-empty — the graph builder records headings for markdown files alone, so this MUST be set FALSE BY CONSTRUCTION for a ".base" target (heading is then a view label, not a heading) and for a link carrying "block" instead of "heading". A reader MUST NOT render a "no such heading" refusal from this flag in either of those two cases.
+             *     NOT YET in this schema's "required" list — deliberately, and temporarily. The handler that would always emit it (pkg/gateway/rest_knowledge.go::knowledgeEdge) has not been updated yet, and several existing SPA test fixtures construct a KnowledgeGraphEdge literal without this field; marking it required now breaks their TypeScript compilation ahead of that handler and fixture work, which is out of scope for the contract-only change that introduced this field. The next wave MUST add heading_found to this schema's "required" array in the SAME commit that updates knowledgeEdge() to always set it and migrates the fixtures that construct edges by hand (Test 110's Go pairing, Test 122's reader pairing) — see EMB-039.
+             * @example true
+             */
+            heading_found?: boolean;
+            /**
+             * @description Block anchor with the leading "#^" removed, for a link to an anchored block such as [[note#^abc123]] (ADR-083 EMB-036). Its own property, separate from "heading" — a block reference never populates "heading", and "heading_found" is meaningless when this field is set. Present only for a block link.
+             * @example abc123
+             */
+            block?: string;
+            /**
+             * @description Why resolution is "unresolved" (ADR-083 EMB-006's containment case, US-4). "no_match" is an ordinary broken link — nothing in the collection carries that path or name, and an operator can fix it. "outside_root" is a link that tried to leave the collection root entirely, reported on its own terms rather than lumped in with "no_match" so the reader's refusal text can distinguish "this note does not exist" from "this note is outside what I can show you". Present only when resolution is "unresolved"; absent when it resolved.
+             * @example no_match
+             * @enum {string}
+             */
+            unresolved_reason?: "no_match" | "outside_root";
             /**
              * @description Which rule in the FR-040 ladder produced to_path. "unresolved" means no target matched, or the target lay outside the collection root — in which case the target was NOT read (FR-043).
              * @example unique_basename
@@ -10544,6 +10607,13 @@ export interface components {
              * @example false
              */
             dev_mode_bypass?: boolean;
+            /**
+             * @description Allow-listed video-embed hostnames (ADR-083 D-C/D9, EMB-075/EMB-081). A note's markdown-link video embed is drawn as a locally-rendered, click-to-play frame only when its URL's host EXACTLY matches an entry here — never a prefix or suffix match, so a look-alike domain is never framed. This is the same allow-list the served Content-Security-Policy's frame-src directive carries (EMB-079); a test asserts the two are equal (EMB-080). The shipped default contains exactly one entry. An operator who empties this list turns video framing off entirely: no external host reaches the served policy, and every video embed falls back to a plain link. Read-only — this reflects an operator configuration key, not settable via this endpoint.
+             * @example [
+             *       "www.youtube-nocookie.com"
+             *     ]
+             */
+            video_embed_hosts?: string[];
         };
         /**
          * ValidateTokenResponse
@@ -20920,6 +20990,8 @@ export interface operations {
             /** @description File text content (or the is_text/too_large signal that it cannot be inlined). */
             200: {
                 headers: {
+                    /** @description Quoted strong version token (pkg/knowledge/version.go) of the file's current raw bytes, e.g. "v1:9f2a7c40". Present on every 200, including binary and too_large responses. */
+                    ETag?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -20952,6 +21024,8 @@ export interface operations {
             /** @description The written file's updated entry. */
             200: {
                 headers: {
+                    /** @description Quoted strong version token of the file's NEW content after this write, e.g. "v1:1b8e330d". A second save in the same session MUST send this value back as expect_version, not the token the original load returned. */
+                    ETag?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -20962,6 +21036,15 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
+            /** @description expect_version no longer matches the file's current version — it changed since the caller last read it. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryConflictError"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
         };
     };
@@ -20984,6 +21067,8 @@ export interface operations {
             /** @description The written file's updated entry. */
             200: {
                 headers: {
+                    /** @description Quoted strong version token of the file's NEW content after this write, e.g. "v1:1b8e330d". The annotated-PDF editor MUST replace its held token with this value so a second save in the same session compares against it, not the token its original download returned. */
+                    ETag?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -20994,6 +21079,15 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
+            /** @description expect_version no longer matches the file's current version — it changed since the caller last read it. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryConflictError"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
         };
     };
@@ -21167,6 +21261,8 @@ export interface operations {
             /** @description File content streamed with a best-effort Content-Type. */
             200: {
                 headers: {
+                    /** @description Quoted strong version token (pkg/knowledge/version.go) of the streamed file's current raw bytes, e.g. "v1:9f2a7c40". Byte-identical to the ETag GET .../content returns for the same path. Send the bare (unquoted) value back as expect_version on PUT .../content-binary. */
+                    ETag?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -22084,6 +22180,7 @@ export type LibraryEntryMount = components["schemas"]["LibraryEntryMount"];
 export type LibraryContentResponse = components["schemas"]["LibraryContentResponse"];
 export type LibraryContentRequest = components["schemas"]["LibraryContentRequest"];
 export type LibraryBinaryContentRequest = components["schemas"]["LibraryBinaryContentRequest"];
+export type LibraryConflictError = components["schemas"]["LibraryConflictError"];
 export type CreateVaultRequest = components["schemas"]["CreateVaultRequest"];
 export type LibraryRenameRequest = components["schemas"]["LibraryRenameRequest"];
 export type LibraryUploadResponse = components["schemas"]["LibraryUploadResponse"];

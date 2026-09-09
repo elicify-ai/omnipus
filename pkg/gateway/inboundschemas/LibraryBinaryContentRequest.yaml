@@ -35,3 +35,27 @@ properties:
       base64 string decoding to more than that is rejected with 400
       before any bytes are written.
     example: "JVBERi0xLjQKJcOkw7zDtsO..."
+  expect_version:
+    type: string
+    minLength: 1
+    description: >
+      Same contract as LibraryContentRequest.expect_version (ADR-083
+      EMB-001/EMB-007, founder ruling N2) — MANDATORY BY SERVER POLICY on
+      every binary save, no exemption. This is the door the annotated-PDF
+      editor saves through: it has no JSON read on its own path, so it
+      captures the bare token from the ETag header of the
+      GET .../download response its raw fetch already holds, and
+      replaces it from this write's own response before a second save in
+      the same session. Absent or empty is refused with 400; a stale
+      token is refused with 409 (LibraryConflictError); the RFC-quoted
+      wire form is a shape error, refused with 400 and never 409.
+
+      NOT YET in this schema's "required" list — deliberately, and
+      temporarily, for the same reason as LibraryContentRequest's
+      expect_version: the PDF annotation editor's save call
+      (LibraryPdfPreview.tsx) does not send this field today, and
+      flipping it to required here breaks that caller's TypeScript
+      compilation before EMB-007c's loader/header plumbing lands. The
+      next wave MUST add expect_version to this schema's "required" array
+      in the SAME commit that migrates that caller.
+    example: "v1:9f2a7c40"

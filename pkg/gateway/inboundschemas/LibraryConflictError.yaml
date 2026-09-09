@@ -1,0 +1,58 @@
+title: LibraryConflictError
+description: >
+  Typed 409 body for a refused Library whole-file save — PUT
+  /api/v1/library/{workspace_id}/content or PUT .../content-binary (ADR-083
+  EMB-001/EMB-007, founder ruling N2). Returned when the request's
+  expect_version does not match the file's current version — the file
+  changed since the caller last read it (by another Omnipus writer, an
+  agent, or an external editor), and applying the write would silently
+  discard whatever changed.
+
+  Uses the SAME version token as the knowledge base's own write guard
+  (KnowledgeConflictError) — one token, produced by
+  pkg/knowledge/version.go's ComputeVersionToken / ReadNoteVersion (founder
+  ruling closing ADR-083 Ambiguity A-11), never a second definition of
+  "changed" invented for the Library door.
+
+  Shares the "error" and "code" fields of the standard ErrorResponse
+  envelope so a generic error handler still works on it unchanged; the extra
+  fields are what a conflict-aware handler uses to offer a reload-and-retry.
+type: object
+additionalProperties: false
+required:
+  - error
+  - code
+  - path
+properties:
+  error:
+    type: string
+    minLength: 1
+    description: Human-readable message, safe to display.
+    example: "uploads/report.md changed on disk since you opened it"
+  code:
+    type: string
+    enum:
+      - library_version_conflict
+    description: >
+      Machine-readable discriminator. A single value, so a client can branch
+      on it without string matching on the message.
+    example: "library_version_conflict"
+  path:
+    type: string
+    minLength: 1
+    description: >
+      Workspace-relative path of the file that was NOT written.
+    example: "uploads/report.md"
+  expected_version:
+    type: string
+    description: >
+      The opaque version token the caller sent in expect_version — what it
+      believed the file was.
+    example: "v1:9f2a7c40"
+  actual_version:
+    type: string
+    description: >
+      The opaque version token of the file as it now stands. A caller that
+      re-reads, merges and retries sends this one back. Absent when the
+      file has been deleted since.
+    example: "v1:1b8e330d"

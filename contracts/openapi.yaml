@@ -278,6 +278,8 @@ components:
       $ref: ./components/schemas/LibraryContentRequest.yaml
     LibraryBinaryContentRequest:
       $ref: ./components/schemas/LibraryBinaryContentRequest.yaml
+    LibraryConflictError:
+      $ref: ./components/schemas/LibraryConflictError.yaml
     CreateVaultRequest:
       $ref: ./components/schemas/CreateVaultRequest.yaml
     LibraryRenameRequest:
@@ -8150,7 +8152,13 @@ paths:
         the SPA falls back to GET .../download rather than guessing from
         the content field. Returns 403 if path resolves outside the
         workspace's work tree; 404 if path does not exist or names a
-        directory.
+        directory. The 200 response's ETag header carries the file's
+        current version token (ADR-083 EMB-007/EMB-007a) even when the
+        body omits content (binary or too_large) — read the file's own
+        bytes to compute it rather than hashing the response body, which
+        would collide for every binary/too_large file. Send the bare
+        (unquoted) value back as expect_version on a subsequent
+        PUT .../content or PUT .../content-binary.
       tags:
       - Library
       security:
@@ -8172,6 +8180,14 @@ paths:
       responses:
         '200':
           description: File text content (or the is_text/too_large signal that it cannot be inlined).
+          headers:
+            ETag:
+              schema:
+                type: string
+              description: >
+                Quoted strong version token (pkg/knowledge/version.go) of
+                the file's current raw bytes, e.g. "v1:9f2a7c40". Present
+                on every 200, including binary and too_large responses.
           content:
             application/json:
               schema:
@@ -8194,7 +8210,12 @@ paths:
         path (library-spec.md D-5), creating the file if it does not
         already exist and overwriting any existing content entirely.
         Returns 403 if path resolves outside the workspace's work tree;
-        404 if the path's parent directory does not exist.
+        404 if the path's parent directory does not exist. Requires
+        expect_version (ADR-083 EMB-001/EMB-007, founder ruling N2): 400
+        if absent, empty, or sent in the quoted wire form; 409 with a
+        LibraryConflictError body if the file's current token no longer
+        matches. The comparison and the write occur inside one
+        acquisition of the same lock the agent write path takes.
       tags:
       - Library
       security:
@@ -8215,6 +8236,15 @@ paths:
       responses:
         '200':
           description: The written file's updated entry.
+          headers:
+            ETag:
+              schema:
+                type: string
+              description: >
+                Quoted strong version token of the file's NEW content
+                after this write, e.g. "v1:1b8e330d". A second save in the
+                same session MUST send this value back as expect_version,
+                not the token the original load returned.
           content:
             application/json:
               schema:
@@ -8227,6 +8257,14 @@ paths:
           $ref: '#/components/responses/403Forbidden'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '409':
+          description: >
+            expect_version no longer matches the file's current version —
+            it changed since the caller last read it.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LibraryConflictError'
         '500':
           $ref: '#/components/responses/500InternalServerError'
 
@@ -8242,8 +8280,13 @@ paths:
         given workspace-relative path, creating the file if it does not
         already exist and overwriting any existing content entirely.
         Returns 400 if content_base64 is not valid base64 or decodes to more
-        than 25 MB. Returns 403 if path resolves outside the workspace's
-        work tree; 404 if the path's parent directory does not exist.
+        than 25 MB, or if expect_version is absent, empty, or sent in the
+        quoted wire form (ADR-083 EMB-001/EMB-007, founder ruling N2).
+        Returns 403 if path resolves outside the workspace's work tree; 404
+        if the path's parent directory does not exist; 409 with a
+        LibraryConflictError body if the file's current token no longer
+        matches expect_version. The comparison and the write occur inside
+        one acquisition of the same lock the agent write path takes.
       tags:
       - Library
       security:
@@ -8264,6 +8307,16 @@ paths:
       responses:
         '200':
           description: The written file's updated entry.
+          headers:
+            ETag:
+              schema:
+                type: string
+              description: >
+                Quoted strong version token of the file's NEW content
+                after this write, e.g. "v1:1b8e330d". The annotated-PDF
+                editor MUST replace its held token with this value so a
+                second save in the same session compares against it, not
+                the token its original download returned.
           content:
             application/json:
               schema:
@@ -8276,6 +8329,14 @@ paths:
           $ref: '#/components/responses/403Forbidden'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '409':
+          description: >
+            expect_version no longer matches the file's current version —
+            it changed since the caller last read it.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LibraryConflictError'
         '500':
           $ref: '#/components/responses/500InternalServerError'
 
@@ -8519,7 +8580,16 @@ paths:
         binary counterpart to GET .../content — used for non-text files
         and for text files GET .../content reports as too_large. Returns
         403 if path resolves outside the workspace's work tree; 404 if
-        path does not exist or names a directory.
+        path does not exist or names a directory. The 200 response's ETag
+        header carries the same version token GET .../content would
+        return for this path (ADR-083 EMB-007/EMB-007a — byte-identical
+        between the two doors), read directly off the streamed bytes so
+        the annotated-PDF editor — whose only read on its save path is
+        this endpoint — can capture it and send it back as
+        expect_version on PUT .../content-binary. Set on this operation
+        ONLY, never inside the shared byte-stream helper other Library
+        routes reuse, so Range requests and conditional GETs on those
+        other routes are unaffected (ADR-083 EMB-007b).
       tags:
       - Library
       security:
@@ -8541,6 +8611,16 @@ paths:
       responses:
         '200':
           description: File content streamed with a best-effort Content-Type.
+          headers:
+            ETag:
+              schema:
+                type: string
+              description: >
+                Quoted strong version token (pkg/knowledge/version.go) of
+                the streamed file's current raw bytes, e.g. "v1:9f2a7c40".
+                Byte-identical to the ETag GET .../content returns for the
+                same path. Send the bare (unquoted) value back as
+                expect_version on PUT .../content-binary.
           content:
             application/octet-stream:
               schema:

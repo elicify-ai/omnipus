@@ -37,6 +37,56 @@ properties:
     type: string
     description: Heading fragment, for a heading link such as [[note#Section]].
     example: "Section"
+  heading_found:
+    type: boolean
+    description: >
+      Whether the text in "heading" matched an actual heading in the
+      resolved target (ADR-083 EMB-035/EMB-039). Meaningful ONLY when the
+      target is a markdown file AND "heading" is non-empty — the graph
+      builder records headings for markdown files alone, so this MUST be
+      set FALSE BY CONSTRUCTION for a ".base" target (heading is then a
+      view label, not a heading) and for a link carrying "block" instead
+      of "heading". A reader MUST NOT render a "no such heading" refusal
+      from this flag in either of those two cases.
+
+      NOT YET in this schema's "required" list — deliberately, and
+      temporarily. The handler that would always emit it
+      (pkg/gateway/rest_knowledge.go::knowledgeEdge) has not been updated
+      yet, and several existing SPA test fixtures construct a
+      KnowledgeGraphEdge literal without this field; marking it required
+      now breaks their TypeScript compilation ahead of that handler and
+      fixture work, which is out of scope for the contract-only change
+      that introduced this field. The next wave MUST add heading_found to
+      this schema's "required" array in the SAME commit that updates
+      knowledgeEdge() to always set it and migrates the fixtures that
+      construct edges by hand (Test 110's Go pairing, Test 122's reader
+      pairing) — see EMB-039.
+    example: true
+  block:
+    type: string
+    description: >
+      Block anchor with the leading "#^" removed, for a link to an
+      anchored block such as [[note#^abc123]] (ADR-083 EMB-036). Its own
+      property, separate from "heading" — a block reference never
+      populates "heading", and "heading_found" is meaningless when this
+      field is set. Present only for a block link.
+    example: "abc123"
+  unresolved_reason:
+    type: string
+    enum:
+      - no_match
+      - outside_root
+    description: >
+      Why resolution is "unresolved" (ADR-083 EMB-006's containment case,
+      US-4). "no_match" is an ordinary broken link — nothing in the
+      collection carries that path or name, and an operator can fix it.
+      "outside_root" is a link that tried to leave the collection root
+      entirely, reported on its own terms rather than lumped in with
+      "no_match" so the reader's refusal text can distinguish "this note
+      does not exist" from "this note is outside what I can show you".
+      Present only when resolution is "unresolved"; absent when it
+      resolved.
+    example: "no_match"
   resolution:
     type: string
     enum:

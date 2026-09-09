@@ -41,3 +41,25 @@ properties:
       via this endpoint. The SPA uses this to hide controls that are inoperative
       when bypass is active.
     example: false
+  video_embed_hosts:
+    type: array
+    items:
+      type: string
+      minLength: 1
+      maxLength: 253
+    maxItems: 16
+    description: >
+      Allow-listed video-embed hostnames (ADR-083 D-C/D9, EMB-075/EMB-081).
+      A note's markdown-link video embed is drawn as a locally-rendered,
+      click-to-play frame only when its URL's host EXACTLY matches an
+      entry here — never a prefix or suffix match, so a look-alike domain
+      is never framed. This is the same allow-list the served
+      Content-Security-Policy's frame-src directive carries (EMB-079); a
+      test asserts the two are equal (EMB-080). The shipped default
+      contains exactly one entry. An operator who empties this list turns
+      video framing off entirely: no external host reaches the served
+      policy, and every video embed falls back to a plain link. Read-only
+      — this reflects an operator configuration key, not settable via
+      this endpoint.
+    example:
+      - "www.youtube-nocookie.com"
