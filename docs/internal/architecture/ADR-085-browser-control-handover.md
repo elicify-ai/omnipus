@@ -1,100 +1,133 @@
-# ADR-085 — Taking the browser wheel parks the turn; it does not cancel it
+# ADR-085 — The operator takes the browser wheel without the turn being cancelled
 
-- **Status:** Proposed (awaiting operator ratification) — 2026-09-09
-- **Relates to:** ADR-039/ADR-040/ADR-041 (live browser view, implicit control), ADR-053 §5.1 (turn parking), ADR-082 (UI-independent turns)
+- **Status:** Proposed (revision 2, after adversarial review) — 2026-09-09
+- **Relates to:** ADR-038 D6 / ADR-075 (the control-deferral gate), ADR-039/040/041 (live view, implicit control), ADR-061 (WebRTC is the only video path), ADR-057 FR-011 (a delegated child has its own transcript session), ADR-077 / Constraint #6 (per-tool policy entries)
 - **Spec:** `docs/internal/specs/browser-control-handover-spec.md`
 
 ## 1. Operator direction (verbatim, 2026-09-09)
 
 > the cancel is not good, we need a more elegant solution, like the browser tool signals the agent that the user took control, but does not cancel the turn
 
-and, on handing back:
-
 > we do not need the hand back button, the user has to prompt again
-
-and, on what the agent does meanwhile:
 
 > [continue other work] yes it should continue other work
 
 ## 2. Evidence
 
-Operator report, 2026-09-09: a turn ended with "This turn was stopped before it finished." The operator had not clicked Stop — they took control of the live browser while the agent was driving it.
-
-The transcript is unambiguous about the mechanism:
+A turn ended with "This turn was stopped before it finished." The operator had not clicked Stop; they took control of the live browser while the agent was driving it. The transcript records it as a deliberate user cancel:
 
 ```
 type: turn_canceled, canceled_by_user: admin, canceled_by_channel: web,
 cancel_method: graceful, descendants_canceled: [jim-turn-6]
 ```
 
-This is by design today, and documented at the top of `src/components/browser/BrowserLiveView.tsx`:
+That is today's design, stated at the top of `src/components/browser/BrowserLiveView.tsx`: the first interactive action "pauses the agent (reuses the chat store's existing `cancelStream` — the same action the chat Stop button calls)". **"Pause" was implemented as "cancel".** The turn is destroyed, the message misattributes it to the operator aborting, and ADR-040 D1 removed the explicit control toggle (asserted by `BrowserLiveView.controlToggle.test.tsx`), so there is no button to hand it back.
 
-> the FIRST interactive action — the "Take over" button, a frame click, a tab-strip click, or a URL submit — pauses the agent (reuses the chat store's existing `cancelStream` — the same action the chat Stop button calls) AND acquires the lock AND … dispatches that same action, all in ONE take
+### 2.1 Corrections to revision 1 (established by review, verified in code)
 
-So "pause the agent" was implemented as "cancel the turn". Three consequences:
+Revision 1 asserted two things about the current system that are false. They are corrected here because the design depends on them:
 
-| # | Consequence | Evidence |
-|---|---|---|
-| E1 | The turn is destroyed, not paused. | `RequestCancel` is the sole gateway cancel entry point; the turn ends as `turn_canceled`. |
-| E2 | The message misattributes it to the user aborting. | "This turn was stopped before it finished." — indistinguishable from a Stop click. |
-| E3 | There is no way back. | An earlier decision (ADR-040 D1) deliberately removed the explicit toggle; `BrowserLiveView.controlToggle.test.tsx` asserts no "Take control" / "Release control" / "Hand to agent" button exists. |
+- **The browser tools DO already consult the control lock.** `pkg/tools/browser/tools.go::controlledResult` calls `IsControlled` and returns a non-error deferral (`{"deferred": true, "reason": "a human is currently controlling this browser …"}`) from eleven call sites across `tools.go`, `tools_interact.go` and `tabs.go`. `live.go::IsControlled`'s own doc comment names it "the turn-coordination gate (ADR-038 D6)". The signalling this ADR asked for largely ships today.
+- **Escape already releases the wheel.** `BrowserLiveView.tsx::handleKeyDown`'s Escape branch calls `releaseWheel()` → `sendControl('release')`. Revision 1 quoted the pre-fix behaviour (a local no-op) as if it were current; that was the WCAG 2.1.2 defect this branch fixed.
 
-Escape inside the frame is a deliberate local no-op (WCAG 2.1.2, no keyboard trap) and does **not** cancel — that part is correct and stays.
+### 2.2 Why revision 1's mechanism was abandoned
 
-## 3. Precedent
+Revision 1 proposed parking the turn via `tools.ToolResult.ParksTurn`. Review established that this cannot deliver the operator's decisions:
 
-ChatGPT's agent parks rather than cancels: it pauses for a takeover (typically at a login the agent should not perform), the operator acts, control returns, and the agent resumes from its prior state; it also suspends screenshot capture while the human drives, so credentials do not enter the record. Claude Cowork addresses the same problem upstream, via permission modes and confirmation before consequential actions, and documents no takeover/hand-back cycle. Our current behaviour is the outlier.
+| # | Finding |
+|---|---|
+| F1 | `ParksTurn` is read by `pkg/agent/loop.go` only when a **tool call returns**. A WS `browser_control{action:"take"}` frame (`pkg/gateway/browser_ws.go::handleControl`) runs on another goroutine and has no path into the running turn's tool loop, so a click cannot park anything at click time. |
+| F2 | Both existing producers (`pkg/tools/message_parent.go`, `pkg/tools/ask_user_question.go`) set the flag **only after a durable record is persisted**, rolling back if the persist fails (`askuser.Registry::CreatePending`: "a set that is not durably persisted must not park a turn"). The browser control lock is process memory — `LiveView.controller string` under `lv.mu` — with no on-disk record and no boot re-hydration. Revision 1's "the pending state is durable" was false. |
+| F3 | A parked turn **ends**. `pkg/agent/goal_loop.go::checkGoalLoopAfterTurn` returns immediately on `TurnEndStatusParked` and never re-dispatches. So parking forecloses the operator's settled decision that the agent continues non-browser work. |
 
-## 4. Decisions
+**Decision: do not park the turn.** The operator's three decisions are satisfied natively by the deferral gate that already exists. This dissolves F1, F2 and F3, the one-park-per-chat collision, and the goal-round question.
 
-### D1 — Taking the wheel parks the turn
+## 3. Decisions
 
-The first interactive action while the agent is working acquires the control lock and **parks** the enclosing turn instead of cancelling it. The mechanism already exists and is proven: a tool result flagged `ParksTurn` (`pkg/tools/result.go`) makes `runTurn` end the turn cleanly — not an error, not an abort — with the pending state recorded durably. `AskUserQuestion` and `message_parent(kind=question, wait=true)` already use it.
+### D1 — Taking the wheel neither cancels nor parks; it defers
 
-No `turn_canceled` entry, no interrupted status, no `RequestCancel`.
+`takeWheelIfNeeded` stops calling `cancelStream`. Taking the wheel sets the control lock and nothing else. The running turn continues.
 
-### D2 — Resume is a prompt, not a button (operator decision)
+When the agent next calls a control-gated browser tool, it receives the existing non-error deferral saying a human holds the browser. It is free to do other work and to end its turn naturally when it has nothing left. **No `turn_canceled` entry, no interrupted status, no `TurnEndStatusParked`, no `RequestCancel`.**
 
-No hand-back control is added; ADR-040 D1's removal of the explicit toggle stands. The operator's next message resumes the work and returns the wheel to the agent. The resume dispatch carries the current page state (URL, title) so the agent re-orients rather than assuming its pre-handover view.
+Consequence, stated so nobody specs otherwise: between the operator's click and the agent's next gated browser call, the agent keeps running unchanged. That is correct — nothing was blocked until it tried to drive.
 
-### D3 — Browser actions are refused politely while the operator holds the wheel
+### D2 — The deferral tells the agent what to do, and the gate covers every reachable tab set
 
-The lock is tracked already (`LiveViewRegistry`, `controlledByOther`) but the action tools never consult it. They will: an attempted navigate/click/type while the operator drives returns an ordinary tool result stating control is with the operator and the action was not performed — not an error, not a retry-able failure. The result says explicitly not to retry until control returns; after a bounded number of attempts the agent is told to state what it is waiting for and stop trying.
+Three changes to the existing gate, and nothing else:
 
-### D4 — The agent continues non-browser work (operator decision)
+1. **Wording.** The reason says explicitly not to retry until control returns, and that the operator resumes by sending a message.
+2. **Bounded attempts.** After N deferred attempts in one turn (N=3 unless the spec justifies otherwise), the agent is told to state plainly what it is waiting for and stop attempting browser work for the remainder of the turn.
+3. **Coverage — the real gap.** The gate is evaluated per resolved `(BrowsingKey, TabOwner)` pair. The panel takes the lock on `manager.PanelTabSetID(chatSessionID)`, while a tool resolves its owner from `tools.ToolTranscriptSessionID(ctx)`. Under ADR-057 FR-011 a delegated child has its **own** transcript session, so a delegated agent driving its own tab set sees `IsControlled == false` and keeps clicking while the operator holds the parent's wheel. The gate must be evaluated against every tab set reachable from the chat whose wheel was taken.
 
-Parking is scoped to the browser, not the agent. Work that does not need the browser proceeds.
+### D3 — Resume is the operator's next prompt; the agent re-orients by looking
 
-### D5 — The agent can hand over deliberately
+No hand-back control is added; ADR-040 D1 stands. The operator's next message is an **ordinary turn** — there is no resume dispatcher, no injected page state, and no memory of the handover beyond the conversation itself. Revision 1's "the resume dispatch carries the current page state" named an artefact with no writer and no reader; it is deleted.
 
-A new **action on the existing browser tool family** (not a new tool, no new policy entry): hand the browser to the operator, flagged `ParksTurn`, with a reason. Used when the agent reaches a sign-in or anything it should not do on the operator's behalf. This is the ChatGPT precedent and it also gives the operator a natural moment to act.
+The agent re-orients by calling `browser_screenshot`, whose description already states that it reports the tab's current URL and title "including a page the user navigated to themselves via the live browser panel (the tab is shared)" and instructs the model to read the URL from the tool rather than infer it.
 
-### D6 — Capture is suspended while the operator drives
+**Releasing the lock is not a resume.** Escape, entering annotate mode, closing the panel and a WS disconnect all release the lock without resuming anything. The agent must not silently resume driving in that state; the waiting surface (D6) stays visible until a prompt arrives.
 
-Screenshot capture and frame persistence stop while the lock is held by the operator, resuming when control returns. Today an operator who takes the wheel to log in has their credentials screenshotted into the transcript. This is a live privacy defect independent of everything else here.
+### D4 — Release is explicit, server-side, and ghost-proof
 
-### D7 — Waiting is visible
+Today the lock happens to release on the next prompt through the client-side auto-release effect (`effectiveAgentWorking && isControlling → sendControl('release')`). D8 disarms that effect, so the release must be made explicit or the operator holds the wheel forever and the agent is locked out of a browser nobody is driving — the stale-lock class `EnsureControlForInput`'s doc comment already warns about.
 
-The chat states that the agent is paused because the operator took the browser, and what it is waiting for. Silence that implies progress is the same defect the goal acknowledgement line fixed.
+- On accepting a chat turn for a session whose panel lock is held, the **gateway** releases it (`LiveViewRegistry` release for the holder). Server-side, because the operator may have closed the panel.
+- A lock whose holder is no longer among the live viewers is **void**; the existing ghost-steal path must be reachable rather than leaving the agent deferred forever.
+- Ownership is the `viewerID` holding `LiveView.controller`. Any authenticated user's prompt on that session releases it, audited with the acting user, not the holder.
+- **Unchanged constraint:** input dispatch stays ungated (operator directive, 2026-08-03). The lock is authoritative for **tool deferral and presentation only**, never an authorization decision on `dispatchInput`. A second viewer driving without the lock neither defers the agent nor blocks it.
 
-### D8 — One park per chat surface
+### D5 — Capture stops while the operator holds the wheel
 
-`AskUserQuestion` refuses a second card while one is pending ("one card per chat surface"). Browser parking respects the same single-park invariant: the two must not collide, and the failure mode when they would must be explicit rather than a silent overwrite.
+The read-only capture tools — `browser_screenshot`, `browser_get_text`, `browser_snapshot` — are deliberately ungated today ("they don't inject input"). Under D1 the agent keeps running, so it can screenshot the operator's login form while they type into it. **D1 makes this worse, so D5 is required, not optional.**
+
+While the operator holds the wheel, those three join the deferral gate and return the same non-error result. Gating the tool is the only point that stops all three of `browser_screenshot`'s sinks at once: the JPEG written under the turn's working directory, the MediaStore entry created from its returned data URL, and the `[file:…]` artifact tag.
+
+Revision 1's "frame persistence" is deleted — nothing records live-view frames (ADR-061 removed the JPEG screencast; WebRTC is the only path and is never recorded). The operator's own view is unaffected, because WebRTC is independent of these tools. Captures taken **before** the take-over are not retracted; that is accepted and stated.
+
+### D6 — The waiting state is visible, and the agent says it
+
+Because the turn is not parked (D1), the agent can still speak — unlike a parked turn, which returns from inside the tool loop with no further model call. The deferral's wording (D2) drives the agent to say what it is waiting for.
+
+That is not sufficient on its own, because the deferred tool call may be hidden from the thread. A system-authored line is emitted when the operator takes the wheel, stating that the agent has stopped driving the browser and that sending a message returns it. Precedent: `pkg/agent/goal_loop.go`'s system-transcript writer.
+
+### D7 — Agent-initiated handover is a new tool with its own policy entry
+
+`browser_handover(reason)`, used when the agent reaches a sign-in or anything it should not do on the operator's behalf. It passes the lock to the operator, emits the D6 surface, and returns a result instructing the agent to conclude its turn with an explanation. It does **not** park.
+
+Revision 1 claimed this needed "no new policy entry". That was wrong: every browser verb in this codebase is a distinct `tools.Tool` with its own name and its own entry in `pkg/config/defaults.go`. Per Constraint #6 / ADR-077 the new tool requires an entry in `coreagent::allStaticToolNames`, a seeded default in `defaults.go` (`allow`, matching the family), and per-agent seeding — otherwise `ReconcileToolPolicyCeiling` has nothing to reconcile and `ValidateToolPolicyCoverage` fires as genuine internal drift.
+
+### D8 — The client take-over state is rebuilt around the lock, not around cancel
+
+`takeWheelIfNeeded` calls `cancelStream` first because `isStreaming` does not flip synchronously; `agentPausedByUserRef` is the local override that makes the take work in one click. Removing the cancel removes that trigger, and without a replacement the take-over silently reverts: `effectiveAgentWorking` stays true, `computeDriveMode` keeps `agent-working`, `canDispatchInput` stays false so the operator's clicks do nothing, and the auto-release effect fires and revokes the lock they just took.
+
+Replacement: an explicit **operator-holds-wheel** state set the instant `sendControl('take')` is sent and confirmed by the server's `controlling` ack. `computeDriveMode` must let it beat `agentWorking`, and the auto-release effect must be gated on it so it can never revoke a lock the operator took while a turn is in flight.
 
 ### D9 — Stop still cancels
 
-The Stop button and `/cancel` keep their current meaning. Only the take-the-wheel path changes.
+The Stop button and `/cancel` are unchanged. Only the take-the-wheel path changes.
 
-## 5. Consequences
+### D10 — Audit
 
-- A turn survives an operator taking the browser; nothing is destroyed.
-- The operator can be away indefinitely without a wedged turn: the turn already ended cleanly and the pending state is durable.
-- The transcript stops recording an operator's steering action as an abort.
-- Credentials typed during a takeover no longer reach the record.
-- The agent may occasionally have nothing non-browser to do and will end its turn saying it is waiting — which is correct, and visible per D7.
+A take that causes the agent to defer is a materially different event from an ordinary take. It is audited with session id, turn id, viewer id, user, tab set, and the tool that was deferred, alongside the existing `auditControl` / `auditRelease` records.
 
-## 6. Out of scope
+### D11 — Delegated agents
+
+`pkg/agent/subturn.go` propagates a child's park onto the parent, and `pkg/tools/delegate.go` honours it. Under D1 nothing parks, so there is no cascade: a delegated agent driving a taken browser simply defers (D2.3 makes that reachable), reports it to its parent through its normal result, and the parent decides. This is stated because revision 1's park would have cascaded a stop up the whole ancestry with no resume path.
+
+## 4. Consequences
+
+- A turn survives the operator taking the browser. Nothing is destroyed and nothing is recorded as an abort.
+- The agent genuinely continues non-browser work, because the turn never ended.
+- No durable handover record is introduced, and none is needed: the operator's next prompt is an ordinary turn. A gateway restart while the operator holds the wheel loses only the lock, which is already true today.
+- Credentials typed during a takeover no longer reach the transcript.
+- An agent with nothing non-browser to do will end its turn saying it is waiting. That is correct and visible.
+- The `AskUserQuestion` composer lock and the browser lock no longer interact: with no browser park there is no second pending state, so the deadlock revision 1 would have created (card locks the composer, operator cannot prompt to resume) does not arise.
+
+## 5. Out of scope
 
 - Reinstating an explicit control toggle (ADR-040 D1 stands; operator reconfirmed).
-- Changing Escape-in-frame behaviour (WCAG local release, correct today).
+- Changing Escape-in-frame behaviour (it releases the wheel; correct today).
+- Making the lock an authorization decision on input dispatch (operator directive, 2026-08-03).
+- **`tools.browser.take_control_enabled: false`** — with take-control disabled no take ever succeeds (`handleControl` refuses and audits `take_control_disabled`), so none of this ADR is reachable on such an install. Stated so no implementer specs a dead path.
 - The Judge's stance (ADR-084).
