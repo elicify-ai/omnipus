@@ -1157,12 +1157,14 @@ func readBoundedLine(br *bufio.Reader, maxLineBytes int) (line []byte, consumed 
 			// exactly that.
 			line = append(line, chunk[:take]...)
 		}
-		switch e {
-		case nil:
+		// A tagless switch, not `switch e`: errorlint requires errors.Is for
+		// the wrapped case, and a boolean case cannot live in a value switch.
+		switch {
+		case e == nil:
 			// Delimiter found within this chunk: done, whether or not the
 			// line turned out to be oversized.
 			return line, consumed, tooLong, nil
-		case bufio.ErrBufferFull:
+		case errors.Is(e, bufio.ErrBufferFull):
 			// No delimiter yet anywhere in the reader's internal buffer:
 			// more of this same line remains — keep reading chunks. This
 			// is the case that matters for C1: a line with no '\n' at all
@@ -1401,7 +1403,7 @@ func (s *state) scanFile(ctx, scanCtx context.Context, job scanJob) error {
 			}
 		}
 		if rerr != nil {
-			if rerr == io.EOF {
+			if errors.Is(rerr, io.EOF) {
 				return flush()
 			}
 			s.countSkippedProblem()

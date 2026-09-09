@@ -6,6 +6,7 @@ package filegrep
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -74,7 +75,7 @@ func TestReadBoundedLine_BoundsMemoryOnLongLine(t *testing.T) {
 			"rather than retained, they were still read off the underlying reader and must be "+
 			"charged to BytesScanned honestly", consumed, totalSize)
 	}
-	if err != io.EOF {
+	if !errors.Is(err, io.EOF) {
 		t.Errorf("err = %v, want io.EOF (the source ends without ever emitting '\\n')", err)
 	}
 	for i, c := range line {
@@ -112,8 +113,15 @@ func TestReadBoundedLine_OrdinaryShortLineUnaffected(t *testing.T) {
 			line2, tooLong2, err2, "second line\n")
 	}
 
-	_, _, _, err3 := readBoundedLine(br, 1<<20)
-	if err3 != io.EOF {
+	// Named rather than three blank identifiers (dogsled): the exhausted
+	// reader must also report NOTHING left and NOT flag an over-long line —
+	// asserting only the error would let a stray leftover byte or a spurious
+	// tooLong survive here unnoticed.
+	line3, consumed3, tooLong3, err3 := readBoundedLine(br, 1<<20)
+	if len(line3) != 0 || consumed3 != 0 || tooLong3 {
+		t.Errorf("third call = (%q, %d, %v), want empty/0/false at EOF", line3, consumed3, tooLong3)
+	}
+	if !errors.Is(err3, io.EOF) {
 		t.Fatalf("third call err = %v, want io.EOF", err3)
 	}
 }

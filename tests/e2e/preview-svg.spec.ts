@@ -839,8 +839,18 @@ test.describe('ADR-067 §10.4 — .svg on the inline allow-list, and type confus
     }
     // A loopback bind is the default install and the case that broke Safari;
     // one entry there means the alias rule was lost.
+    //
+    // TWO, not three, since §10.3's 2026-09-09 amendment: CSP3 §2.3.1's
+    // host-source grammar is ALPHA / DIGIT / "-", so there is NO spelling of an
+    // IPv6 host it can express. `[::1]` was emitted and DISCARDED by every
+    // engine, granting nothing while logging six "invalid source" errors per
+    // preview. Asserting 3 here would demand we re-emit a source that never
+    // worked. An IPv6 reader is still covered by 'self'.
     if (/^https?:\/\/(127\.|localhost|\[::1\])/.test(canonical)) {
-      expect(sources.length, `§10.3: a loopback bind names all three spellings. ${evidence}`).toBe(3);
+      expect(
+        sources.length,
+        `§10.3: a loopback bind names both CSP-expressible spellings. ${evidence}`,
+      ).toBe(2);
     }
   });
 

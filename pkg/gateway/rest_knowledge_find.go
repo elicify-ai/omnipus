@@ -741,7 +741,8 @@ func vaultSearchViewHits(env vaultprops.FindEnv, query string, limit int) ([]gen
 	sort.Slice(views, func(i, j int) bool { return views[i].Name() < views[j].Name() })
 	for _, v := range views {
 		if len(out) >= limit {
-			complete = false
+			// NOTE: the return below states false explicitly; assigning to
+			// `complete` here as well would be dead (ineffassign).
 			if reason == "" {
 				reason = "views: the result limit was reached before every saved view could be checked"
 			}
