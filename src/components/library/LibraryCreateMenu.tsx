@@ -45,8 +45,6 @@ import type { LibraryEntry } from '@/lib/api'
 
 interface LibraryCreateMenuProps {
   workspaceId: string | null
-  /** Display name of workspaceId, for the New-vault dialog's destination line. */
-  workspaceName: string
   /** The directory currently browsed within the workspace; '' = workspace root. */
   browsedDir: string
   isReservedLibraryDir: boolean
@@ -62,7 +60,6 @@ interface LibraryCreateMenuProps {
 
 export function LibraryCreateMenu({
   workspaceId,
-  workspaceName,
   browsedDir,
   isReservedLibraryDir,
   mountedCount,
@@ -148,7 +145,6 @@ export function LibraryCreateMenu({
           open={vaultDialogOpen}
           onOpenChange={setVaultDialogOpen}
           workspaceId={workspaceId}
-          workspaceName={workspaceName}
           parentPath={browsedDir}
           onCreated={onVaultCreated}
         />

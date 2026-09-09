@@ -1,19 +1,18 @@
 // LibraryNewVaultDialog — creates a new Omnipus knowledge base ("vault")
-// at the CURRENT Library location (feature C2; KB-3 fix).
+// at the CURRENT Library location (feature C2; KB-3 fix; WL-3 fix removed
+// the read-only Location line, 2026-09-09).
 //
 // Mirrors LibraryNewFolderDialog exactly: the workspace and parent directory
 // are context the caller already knows (the user is standing in them), not a
 // choice this dialog should re-ask for — a workspace picker and a free-text
 // path box only duplicate state the explorer already has and invite typos
-// the server then rejects. The only field left to fill in is the name.
+// the server then rejects. The only field left to fill in is the name, the
+// same as New folder: no destination is displayed here either.
 //
 // Unlike LibraryNewFolderDialog, this dialog still owns its own mutation
 // (POST /library/{workspace_id}/vaults takes a workspace-scoped target the
 // way mkdir does not need to) rather than delegating it to LibraryExplorer —
 // that keeps the create-vault plumbing out of LibraryExplorer.tsx.
-//
-// The destination is never left implicit: it is rendered as read-only text
-// so removing the picker never makes "where will this go?" a guess.
 //
 // "Land the user in the new vault" (the caller's job once this dialog
 // reports success) is handled by the `onCreated` callback, not by this
@@ -43,24 +42,16 @@ interface LibraryNewVaultDialogProps {
   onOpenChange: (open: boolean) => void
   /** The workspace the Library is currently browsing — the create target. */
   workspaceId: string
-  /** Display name of that workspace, for the read-only destination line. */
-  workspaceName: string
   /** The directory currently browsed within that workspace; '' = workspace root. */
   parentPath: string
   /** Called once the vault is created, so the caller can navigate there. */
   onCreated: (entry: LibraryEntry) => void
 }
 
-function destinationLabel(workspaceName: string, parentPath: string): string {
-  if (!parentPath) return `${workspaceName} (workspace root)`
-  return [workspaceName, ...parentPath.split('/').filter(Boolean)].join(' / ')
-}
-
 export function LibraryNewVaultDialog({
   open,
   onOpenChange,
   workspaceId,
-  workspaceName,
   parentPath,
   onCreated,
 }: LibraryNewVaultDialogProps) {
@@ -123,41 +114,28 @@ export function LibraryNewVaultDialog({
             A knowledge base is notes, records, and saved views the agent can search.
           </DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-4">
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="library-new-vault-name">Name</Label>
-            <Input
-              id="library-new-vault-name"
-              data-testid="library-new-vault-name-input"
-              value={name}
-              autoFocus
-              onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleSubmit()
-              }}
-            />
-            {hasSlash && (
-              <p className="text-xs text-[var(--color-error)]" data-testid="library-new-vault-name-slash">
-                A knowledge base name can't contain "/" or "\".
-              </p>
-            )}
-            {!hasSlash && isDotName && (
-              <p className="text-xs text-[var(--color-error)]" data-testid="library-new-vault-name-dot">
-                "{trimmedName}" isn't a valid knowledge base name.
-              </p>
-            )}
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <Label>Location</Label>
-            <p
-              data-testid="library-new-vault-destination"
-              className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 text-sm text-[var(--color-secondary)] font-mono truncate"
-            >
-              {destinationLabel(workspaceName, parentPath)}
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="library-new-vault-name">Name</Label>
+          <Input
+            id="library-new-vault-name"
+            data-testid="library-new-vault-name-input"
+            value={name}
+            autoFocus
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleSubmit()
+            }}
+          />
+          {hasSlash && (
+            <p className="text-xs text-[var(--color-error)]" data-testid="library-new-vault-name-slash">
+              A knowledge base name can't contain "/" or "\".
             </p>
-          </div>
-
+          )}
+          {!hasSlash && isDotName && (
+            <p className="text-xs text-[var(--color-error)]" data-testid="library-new-vault-name-dot">
+              "{trimmedName}" isn't a valid knowledge base name.
+            </p>
+          )}
           {error && <LibraryErrorBanner message={error} testId="library-new-vault-error" />}
         </div>
         <DialogFooter>

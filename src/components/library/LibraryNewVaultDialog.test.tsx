@@ -1,11 +1,12 @@
 // LibraryNewVaultDialog.test.tsx — the New knowledge base dialog (feature C2;
-// KB-3 fix, 2026-09-08).
+// KB-3 fix, 2026-09-08; WL-3 fix, 2026-09-09).
 //
 // Covers: client-side name validation, calling createVault with the
 // CONTEXTUAL (workspaceId, parentPath) — never a user-editable workspace
-// picker or folder textbox — a visible read-only destination line, landing
-// the user in the new vault on success (onCreated), and the honest
-// 409-collision message.
+// picker or folder textbox, and never a Location display either (WL-3: the
+// dialog is name-only, identical in shape to New folder) — landing the user
+// in the new vault on success (onCreated), and the honest 409-collision
+// message.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
@@ -46,7 +47,6 @@ function makeEntry(over: Partial<LibraryEntry> = {}): LibraryEntry {
 
 function renderDialog(over: {
   workspaceId?: string
-  workspaceName?: string
   parentPath?: string
   onCreated?: (e: LibraryEntry) => void
 } = {}) {
@@ -58,7 +58,6 @@ function renderDialog(over: {
         open
         onOpenChange={onOpenChange}
         workspaceId={over.workspaceId ?? 'ws-1'}
-        workspaceName={over.workspaceName ?? 'Research'}
         parentPath={over.parentPath ?? ''}
         onCreated={onCreated}
       />
@@ -94,18 +93,16 @@ describe('LibraryNewVaultDialog', () => {
     expect(screen.queryByTestId('library-new-vault-folder-input')).not.toBeInTheDocument()
   })
 
-  it('shows the workspace root as the destination when parentPath is empty', () => {
-    renderDialog({ workspaceName: 'Research', parentPath: '' })
-    expect(screen.getByTestId('library-new-vault-destination')).toHaveTextContent(
-      'Research (workspace root)',
-    )
+  it('renders no Location or destination display at the workspace root — identical in shape to New folder', () => {
+    renderDialog({ parentPath: '' })
+    expect(screen.queryByTestId('library-new-vault-destination')).not.toBeInTheDocument()
+    expect(screen.queryByText('Location')).not.toBeInTheDocument()
   })
 
-  it('shows the current folder as the destination when parentPath is set', () => {
-    renderDialog({ workspaceName: 'Research', parentPath: 'projects/q3' })
-    expect(screen.getByTestId('library-new-vault-destination')).toHaveTextContent(
-      'Research / projects / q3',
-    )
+  it('renders no Location or destination display in a nested folder either — the destination is never shown, not just at the root', () => {
+    renderDialog({ parentPath: 'projects/q3' })
+    expect(screen.queryByTestId('library-new-vault-destination')).not.toBeInTheDocument()
+    expect(screen.queryByText('Location')).not.toBeInTheDocument()
   })
 
   it('calls createVault with the contextual workspace and parent path, then lands in the new vault', async () => {

@@ -10,11 +10,12 @@
 
 import type { ComponentProps } from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useUiStore } from '@/store/ui'
 import { LibraryCreateMenu } from './LibraryCreateMenu'
+import { createVault, type LibraryEntry } from '@/lib/api'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -25,6 +26,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
+const mockedCreateVault = vi.mocked(createVault)
+
 function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
 }
@@ -32,7 +35,6 @@ function makeClient() {
 function renderMenu(over: Partial<ComponentProps<typeof LibraryCreateMenu>> = {}) {
   const props = {
     workspaceId: 'ws-1',
-    workspaceName: 'Research',
     browsedDir: '',
     isReservedLibraryDir: false,
     mountedCount: 0,
@@ -54,6 +56,7 @@ function renderMenu(over: Partial<ComponentProps<typeof LibraryCreateMenu>> = {}
 
 beforeEach(() => {
   useUiStore.setState({ toasts: [] })
+  mockedCreateVault.mockReset()
 })
 
 describe('LibraryCreateMenu', () => {
@@ -144,12 +147,31 @@ describe('LibraryCreateMenu', () => {
     expect(props.onManageMounts).toHaveBeenCalledTimes(1)
   })
 
-  it('opens the New knowledge base dialog, seeded with the current workspace and folder, when New knowledge base is selected', async () => {
-    renderMenu({ workspaceName: 'Research', browsedDir: 'projects' })
+  it('opens the New knowledge base dialog when New knowledge base is selected, showing only a name field — no Location display (WL-3)', async () => {
+    renderMenu({ browsedDir: 'projects' })
     await userEvent.click(screen.getByTestId('library-create-menu-trigger'))
     await userEvent.click(screen.getByTestId('library-create-menu-new-vault'))
 
     expect(await screen.findByTestId('library-new-vault-dialog')).toBeInTheDocument()
-    expect(screen.getByTestId('library-new-vault-destination')).toHaveTextContent('Research / projects')
+    expect(screen.getByTestId('library-new-vault-name-input')).toBeInTheDocument()
+    expect(screen.queryByTestId('library-new-vault-destination')).not.toBeInTheDocument()
+  })
+
+  it('still seeds the dialog with the current workspace and browsed folder even though neither is displayed', async () => {
+    const created = { name: 'Field notes', path: 'projects/Field notes', is_dir: true } as LibraryEntry
+    mockedCreateVault.mockResolvedValue(created)
+    renderMenu({ workspaceId: 'ws-1', browsedDir: 'projects' })
+    await userEvent.click(screen.getByTestId('library-create-menu-trigger'))
+    await userEvent.click(screen.getByTestId('library-create-menu-new-vault'))
+
+    await userEvent.type(await screen.findByTestId('library-new-vault-name-input'), 'Field notes')
+    await userEvent.click(screen.getByTestId('library-new-vault-confirm'))
+
+    await waitFor(() =>
+      expect(mockedCreateVault).toHaveBeenCalledWith('ws-1', {
+        name: 'Field notes',
+        parent_rel_path: 'projects',
+      }),
+    )
   })
 })

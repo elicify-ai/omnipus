@@ -800,7 +800,6 @@ export function LibraryExplorer({
           )}
           <LibraryCreateMenu
             workspaceId={workspaceId}
-            workspaceName={currentWorkspaceName}
             browsedDir={browsedDir}
             isReservedLibraryDir={isReservedLibraryDir}
             mountedCount={workspaceMounts.length}
