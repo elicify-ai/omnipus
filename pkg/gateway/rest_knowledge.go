@@ -644,6 +644,28 @@ func knowledgeEdge(l knowledge.ResolvedLink) gen.KnowledgeGraphEdge {
 		candidates := append([]string(nil), l.Candidates...)
 		e.Candidates = &candidates
 	}
+	// heading_found (CW-2, ADR-083 EMB-035/EMB-039). Always set, never
+	// conditional: pkg/knowledge already computes this false-by-construction
+	// for a ".base" target and for a block reference (graph.go only records
+	// headings for markdown paths, and only checks the flag when l.Heading is
+	// non-empty), so this is a straight projection, not a second decision.
+	headingFound := l.HeadingFound
+	e.HeadingFound = &headingFound
+	// block (CW-2, ADR-083 EMB-036) — its own field, separate from heading.
+	// This is BlockID's first projection onto the wire; it was parsed and
+	// otherwise unread until now.
+	if l.BlockID != "" {
+		block := l.BlockID
+		e.Block = &block
+	}
+	// unresolved_reason (CW-2, ADR-083 EMB-006/EMB-023) — present only when
+	// unresolved, mapped through knowledgeEdgeUnresolvedReason rather than
+	// cast, because pkg/knowledge.ReasonOutsideRoot's own string
+	// ("outside_collection") is not a value the wire enum permits.
+	if l.State == knowledge.ResolveUnresolved {
+		reason := knowledgeEdgeUnresolvedReason(l.Reason)
+		e.UnresolvedReason = &reason
+	}
 	return e
 }
 
@@ -686,6 +708,51 @@ func knowledgeEdgeResolution(l knowledge.ResolvedLink) gen.KnowledgeGraphEdgeRes
 		return gen.KnowledgeGraphEdgeResolutionShortestPath
 	}
 	return gen.KnowledgeGraphEdgeResolutionLexicographic
+}
+
+// knowledgeEdgeUnresolvedReason maps pkg/knowledge's UnresolvedReason onto
+// the wire's two-member enum (CW-2, KnowledgeGraphEdge.unresolved_reason:
+// "no_match" | "outside_root"). This is NOT a direct cast — pkg/knowledge's
+// own ReasonOutsideRoot constant is the STRING "outside_collection", which
+// is not a value the wire enum permits at all. A direct cast would compile
+// (both are named string types) and then fail at request time: the SPA's
+// generated Zod validator rejects the whole payload on an out-of-enum
+// value, which drops the ENTIRE knowledge-graph response — a silent, total
+// failure indistinguishable from an empty graph.
+//
+// The Go side has four non-empty reasons (see knowledge.AllUnresolvedReasons,
+// the source of truth TestKnowledgeEdgeUnresolvedReason_MapsEveryGoConstant
+// checks this switch against); the wire deliberately collapses them into the
+// same two-way split pkg/knowledge's own doc comment on UnresolvedReason
+// draws: an ordinary, fixable broken link versus a link that tried to leave
+// the collection root entirely (US-10, EMB-006's containment case).
+//
+//   - ReasonNoMatch and ReasonEmptyTarget both land on "no_match" — an empty
+//     target names nothing, which is exactly what "nothing in the collection
+//     carries that name" already says; neither is a containment attempt.
+//   - ReasonAbsoluteTarget and ReasonOutsideRoot both land on "outside_root"
+//     — an absolute filesystem path is itself an attempt to address
+//     something outside the collection, before any "../" traversal check
+//     even runs, so it belongs with the relative-traversal case rather than
+//     with an ordinary typo.
+//
+// There is no default case reachable by a value knowledge.AllUnresolvedReasons
+// returns: every member is named explicitly. A reason that reaches the
+// default is an unmapped constant — a bug in THIS function, not a value fit
+// for a silent "no_match" fallback — so it panics rather than emitting a
+// value nobody decided was correct. net/http recovers a panicking handler
+// per-request (it does not take the process down); ensureMap's existing
+// panic elsewhere in this package (rest.go) is the same "this can only be an
+// internal invariant violation" idiom.
+func knowledgeEdgeUnresolvedReason(r knowledge.UnresolvedReason) gen.KnowledgeGraphEdgeUnresolvedReason {
+	switch r {
+	case knowledge.ReasonNoMatch, knowledge.ReasonEmptyTarget:
+		return gen.KnowledgeGraphEdgeUnresolvedReasonNoMatch
+	case knowledge.ReasonAbsoluteTarget, knowledge.ReasonOutsideRoot:
+		return gen.KnowledgeGraphEdgeUnresolvedReasonOutsideRoot
+	default:
+		panic(fmt.Sprintf("knowledgeEdgeUnresolvedReason: unmapped knowledge.UnresolvedReason %q", string(r)))
+	}
 }
 
 func knowledgeSkip(s knowledge.SkippedEntry) gen.KnowledgeGraphSkip {

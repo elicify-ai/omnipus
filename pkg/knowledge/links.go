@@ -670,6 +670,29 @@ const (
 	ReasonOutsideRoot UnresolvedReason = "outside_collection"
 )
 
+// AllUnresolvedReasons returns every non-empty UnresolvedReason this package
+// defines, in declaration order. ReasonNone is deliberately excluded — it
+// means "the link resolved", not a member of the closed set of reasons a
+// link did NOT resolve.
+//
+// This exists so a caller projecting UnresolvedReason onto a narrower
+// representation (pkg/gateway/rest_knowledge.go's knowledgeEdgeUnresolvedReason
+// maps it onto the wire's two-value enum) can assert its mapping is
+// exhaustive against the SAME list this package actually produces, rather
+// than a list the test author remembers to write down. Add a reason to the
+// const block above without adding it here, and every test built on this
+// function silently keeps exercising only the old set — the two
+// declarations sit a few lines apart specifically so a reviewer sees both in
+// one diff hunk.
+func AllUnresolvedReasons() []UnresolvedReason {
+	return []UnresolvedReason{
+		ReasonNoMatch,
+		ReasonEmptyTarget,
+		ReasonAbsoluteTarget,
+		ReasonOutsideRoot,
+	}
+}
+
 // ResolvedLink is a link together with what it resolved to.
 type ResolvedLink struct {
 	Link
