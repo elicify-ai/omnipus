@@ -308,6 +308,46 @@ func ReadNoteVersion(c *Collection, rel string) (NoteVersion, error) {
 	return readNoteVersionAbs(cleaned, abs)
 }
 
+// ErrNotAbsolutePath means ReadFileVersion was given a path that is not
+// absolute. A relative path would resolve against the calling process's
+// current working directory rather than the caller's already-resolved
+// target file, which is exactly the kind of ambiguity a version token exists
+// to eliminate — so it is refused rather than silently resolved.
+var ErrNotAbsolutePath = errors.New("knowledge: path must be absolute")
+
+// ReadFileVersion reports the current version of a file at an
+// already-resolved absolute path, with NO enclosing knowledge collection
+// (EMB-007a). It exists for exactly one population: a Library file — either
+// outside every knowledge base, or inside one but reached through the
+// Library's own download/content doors rather than the collection API —
+// which has no *Collection to hand ReadNoteVersion.
+//
+// It is a THIN SIBLING, not a second implementation: it delegates straight
+// to readNoteVersionAbs, the same resolved-path code ReadNoteVersion itself
+// calls, so the two doors compute a byte-identical token for the same file.
+// Founder ruling (A-11): one note has one identity, whichever door reads it.
+// Callers MUST NOT derive a token any other way (e.g. from a response body
+// that omits content for a binary or oversized file — see
+// library.ContentResult and its ReadContent doc comment); reading the bytes
+// through this function, rather than hashing whatever a caller happens to
+// already hold, is what keeps a binary or too-large file from collapsing
+// onto the hash of an empty string.
+//
+// abs must already be a safe, resolved, absolute path — ReadFileVersion
+// performs no containment check of its own (path safety is the caller's job:
+// pkg/library's os.Root sandboxing for a Library path, or
+// Collection.ResolveInside for a collection-relative one). Given that, its
+// value semantics are otherwise identical to ReadNoteVersion's: a missing
+// file returns Exists=false and TokenAbsent rather than an error (so create
+// is a compare-and-swap too), and a path that is not a regular file — a
+// directory or any symlink — is refused with ErrNotRegularFile.
+func ReadFileVersion(abs string) (NoteVersion, error) {
+	if !filepath.IsAbs(abs) {
+		return NoteVersion{}, fmt.Errorf("%w: %q", ErrNotAbsolutePath, abs)
+	}
+	return readNoteVersionAbs(abs, abs)
+}
+
 // readNoteVersionAbs is the resolved-path half, shared with the write path so
 // that the token compared under the lock is produced by exactly the same code
 // as the token handed out by a read.
