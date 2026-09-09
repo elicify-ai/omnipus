@@ -30,7 +30,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
 
@@ -91,7 +93,13 @@ type SetGoalResultCore struct {
 // and a tool-authored one identically.
 //
 // Shape: mode, goal_id, definition, criteria_count, dod_count, criteria, dod
-// [, assessment] [, diff]. criteria/dod are marshaled as the same
+// [, assessment] [, diff] [, unchanged]. `unchanged` (bool) is added by
+// Execute itself, NOT by this function — it is set true only on the
+// fix-wave GX-B no-op path (a mode:update, real or normalised from a
+// re-register, whose content is semantically identical to the record
+// already on disk: see duplicateSubmission). Its absence means false; the
+// SPA wave consuming this field should treat a missing key the same as
+// `false`. criteria/dod are marshaled as the same
 // task.AcceptanceCriterion shape the goal_status frame's own arrays use
 // (id/kind/judgment/provenance/text/check/behavior/author/status), so the
 // SPA's existing GoalStatusFrame-shaped rendering needs no new parsing
@@ -126,21 +134,68 @@ func SetGoalResultPayload(c SetGoalResultCore) map[string]any {
 	return payload
 }
 
-// setGoalRecord mirrors pkg/agent.CompiledGoal's JSON wire shape exactly
-// (field names, field types, omitempty behavior) — see the package doc
-// comment for why this is a mirror rather than a type alias. Intent/Prompt
-// are never SET by this tool (set_goal's own args are definition/criteria/
-// dod/assessment/mode only, per ADR-081 D2 — no intent/prompt argument
-// exists), but they ARE carried through unchanged from whatever record
-// already existed on this session, so a record produced by an
-// activation-time compile (marker path or the D7 fallback, both outside this
-// tool's scope) never loses those fields to a later set_goal call.
+// setGoalRecord mirrors pkg/agent.CompiledGoal's JSON wire shape (field
+// names, field types, omitempty behavior) — see the package doc comment for
+// why this is a mirror rather than a type alias. Intent/Prompt are never SET
+// by this tool (set_goal's own args are definition/criteria/dod/assessment/
+// mode only, per ADR-081 D2 — no intent/prompt argument exists), but they
+// ARE carried through unchanged from whatever record already existed on
+// this session, so a record produced by an activation-time compile (marker
+// path or the D7 fallback, both outside this tool's scope) never loses
+// those fields to a later set_goal call.
+//
+// SupersededCriteria is the ONE field that deliberately does NOT mirror
+// pkg/agent.CompiledGoal (fix-wave GX-B "fix 5b" — operator evidence
+// 2026-09-08: a judge verdict was rendered against one criteria set, then a
+// later set_goal(mode:register) call REPLACED that set 55 seconds later,
+// leaving the verdict referencing criteria that exist nowhere). It is
+// durable provenance this tool alone manages — never a new WS frame, never
+// a contract field, never surfaced in the UI. This is safe left unmirrored
+// on CompiledGoal: pkg/agent's own compile paths (activation, the D7
+// fallback) always START a fresh record with no history to carry, and
+// never re-serialize an EXISTING set_goal-authored record without going
+// back through this tool — so this tool carrying the field forward on every
+// call (see Execute) is the only place round-tripping needs to happen.
 type setGoalRecord struct {
 	Intent     string                     `json:"intent"`
 	Prompt     string                     `json:"prompt"`
 	Definition string                     `json:"definition,omitempty"`
 	Criteria   []task.AcceptanceCriterion `json:"criteria"`
 	DoD        []task.AcceptanceCriterion `json:"dod,omitempty"`
+	// SupersededCriteria is a bounded (maxSupersededCriteriaHistory) history
+	// of outgoing (criteria, dod) sets a real mode:update REPLACED, oldest
+	// dropped first. Never touched by a no-op duplicate (duplicateSubmission)
+	// — only a content-changing update appends to it.
+	SupersededCriteria []supersededCriteriaEntry `json:"superseded_criteria,omitempty"`
+}
+
+// supersededCriteriaEntry is one entry in setGoalRecord.SupersededCriteria:
+// the full outgoing criteria+dod set a mode:update just replaced, and when.
+type supersededCriteriaEntry struct {
+	Criteria     []task.AcceptanceCriterion `json:"criteria"`
+	DoD          []task.AcceptanceCriterion `json:"dod,omitempty"`
+	SupersededAt time.Time                  `json:"superseded_at"`
+}
+
+// maxSupersededCriteriaHistory bounds setGoalRecord.SupersededCriteria —
+// the last N outgoing sets a real update replaced, oldest dropped first.
+const maxSupersededCriteriaHistory = 5
+
+// appendSupersededCriteria appends one outgoing (criteria, dod) set to
+// history (a fresh copy — the caller's slice is never mutated), capped at
+// maxSupersededCriteriaHistory with the oldest entries dropped first.
+func appendSupersededCriteria(history []supersededCriteriaEntry, outgoingCriteria, outgoingDoD []task.AcceptanceCriterion) []supersededCriteriaEntry {
+	out := make([]supersededCriteriaEntry, 0, len(history)+1)
+	out = append(out, history...)
+	out = append(out, supersededCriteriaEntry{
+		Criteria:     outgoingCriteria,
+		DoD:          outgoingDoD,
+		SupersededAt: time.Now().UTC(),
+	})
+	if len(out) > maxSupersededCriteriaHistory {
+		out = out[len(out)-maxSupersededCriteriaHistory:]
+	}
+	return out
 }
 
 // setGoalAssessment is the tool's `assessment` arg shape (ADR-081 D2): the
@@ -388,7 +443,23 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	if mErr != nil {
 		return ErrorResult(fmt.Sprintf("set_goal rejected: %v", mErr))
 	}
-	if mode == setGoalModeUpdate && strings.TrimSpace(currentRecordJSON) == "" {
+	hadExistingRecord := strings.TrimSpace(currentRecordJSON) != ""
+	if mode == setGoalModeRegister && hadExistingRecord {
+		// fix-wave GX-B (operator-ratified, 2026-09-08 evidence): a SECOND
+		// mode:register on a goal that already has a record is never a new
+		// goal — it is the agent steering the one it already registered
+		// (the operator saw THREE goal cards from exactly this: two
+		// byte-identical register calls, then a third register call
+		// carrying a real revision). Rejecting the call is what derailed
+		// the turn the first time; silently overwriting under a "new goal"
+		// label is just as wrong. Normalise to update and let the update
+		// path (diff seam, mergeCriterionKindFromOld) run unchanged — the
+		// result reports mode:update so the card renders as a revision.
+		logger.InfoCF("goal", "set_goal: register normalised to update — a record already exists for this goal",
+			map[string]any{"session_id": sessionID})
+		mode = setGoalModeUpdate
+	}
+	if mode == setGoalModeUpdate && !hadExistingRecord {
 		return ErrorResult("set_goal(mode:update) refuses: no record has been registered on this goal yet " +
 			"— call set_goal(mode:register) first")
 	}
@@ -494,6 +565,40 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		return ErrorResult(fmt.Sprintf("set_goal rejected: %v", aErr))
 	}
 
+	// fix-wave GX-B, rule (b): an update (real or normalised-from-register,
+	// above) whose content is SEMANTICALLY IDENTICAL to the record already
+	// on disk is a no-op — no write, no diff, no revision bump. Comparison
+	// is order-insensitive and ignores criterion IDs (see
+	// duplicateSubmission's doc: the model mints a fresh id every call, so
+	// two genuinely-identical submissions never share one). Checked only in
+	// mode:update — mode:register with no existing record always creates.
+	if mode == setGoalModeUpdate && duplicateSubmission(oldRec, definition, normCriteria, normDoD) {
+		logger.InfoCF("goal", "set_goal: duplicate submission ignored — record already matches, no write",
+			map[string]any{"session_id": sessionID})
+		core := SetGoalResultCore{
+			Mode:       string(mode),
+			GoalID:     goalID,
+			Definition: definition,
+			Criteria:   normCriteria,
+			DoD:        normDoD,
+		}
+		if assessment != nil {
+			core.Assessment = assessment
+		}
+		payload := SetGoalResultPayload(core)
+		// unchanged (documented alongside SetGoalResultPayload's own shape
+		// comment): true only on this no-op path, so the SPA can suppress a
+		// second card for a call that changed nothing.
+		payload["unchanged"] = true
+		encoded, payloadErr := json.Marshal(payload)
+		if payloadErr != nil {
+			logger.ErrorCF("goal", "set_goal: could not encode unchanged result payload",
+				map[string]any{"session_id": sessionID, "error": payloadErr.Error()})
+			return NewToolResult(fmt.Sprintf("goal record %s: unchanged (%d criteria, %d DoD items)", mode, len(normCriteria), len(normDoD)))
+		}
+		return NewToolResult(string(encoded))
+	}
+
 	if t.feasibilityFn != nil {
 		union := make([]task.AcceptanceCriterion, 0, len(normCriteria)+len(normDoD))
 		union = append(union, normCriteria...)
@@ -504,11 +609,21 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	}
 
 	newRec := setGoalRecord{
-		Intent:     oldRec.Intent,
-		Prompt:     oldRec.Prompt,
-		Definition: definition,
-		Criteria:   normCriteria,
-		DoD:        normDoD,
+		Intent:             oldRec.Intent,
+		Prompt:             oldRec.Prompt,
+		Definition:         definition,
+		Criteria:           normCriteria,
+		DoD:                normDoD,
+		SupersededCriteria: oldRec.SupersededCriteria,
+	}
+	if mode == setGoalModeUpdate && (len(oldRec.Criteria) > 0 || len(oldRec.DoD) > 0) {
+		// fix 5b (operator-ratified, 2026-09-08 evidence): this is a REAL,
+		// content-changing update (the duplicateSubmission no-op already
+		// returned above) — the outgoing criteria/dod set oldRec carries is
+		// about to be overwritten and, if a judge already rendered a verdict
+		// against it, that verdict would otherwise reference criteria that
+		// exist nowhere. Preserve it in the bounded history before it's gone.
+		newRec.SupersededCriteria = appendSupersededCriteria(oldRec.SupersededCriteria, oldRec.Criteria, oldRec.DoD)
 	}
 	newJSON, encErr := json.Marshal(newRec)
 	if encErr != nil {
@@ -841,4 +956,96 @@ func diffCriteriaByText(oldCriteria, newCriteria []task.AcceptanceCriterion) (ad
 		}
 	}
 	return added, changed, dropped
+}
+
+// duplicateSubmission reports whether the record Execute is about to write
+// (definition/newCriteria/newDoD, already normalized) is semantically
+// identical to old — fix-wave GX-B rule (b), evidence: two set_goal(mode:
+// register) calls in the SAME model response with byte-identical params but
+// DIFFERENT criterion ids (the model mints a fresh one every call) produced
+// two goal cards for no real change.
+//
+// Comparison is deliberately narrow and deliberately excludes three fields:
+//   - ID: never submitted by the caller (this tool's schema has no id
+//     input for criteria/dod items — see Parameters()) and freshly minted
+//     by task.NormalizeCriteria on every call, so it can never match across
+//     two calls even for genuinely identical content.
+//   - Author: reconstructed from ToolAgentID(ctx) on every call; comparing
+//     it would only ever compare the calling agent to itself.
+//   - Status: reset to pending on every fresh submission (this tool never
+//     accepts a status input) regardless of whatever a judge has since done
+//     to the item ON DISK. Comparing it would treat a criterion the judge
+//     has already progressed as "different" purely because of that
+//     progress, forcing a real rewrite that resets it back to pending —
+//     the opposite of what "a no-op leaves the record alone" means.
+func duplicateSubmission(old setGoalRecord, newDefinition string, newCriteria, newDoD []task.AcceptanceCriterion) bool {
+	if strings.TrimSpace(old.Definition) != strings.TrimSpace(newDefinition) {
+		return false
+	}
+	return criteriaSetEqual(old.Criteria, newCriteria) && criteriaSetEqual(old.DoD, newDoD)
+}
+
+// criteriaSetEqual reports whether a and b carry the same MULTISET of
+// criterion content (see duplicateSubmission for what "content" excludes),
+// independent of order — the operator's two identical register calls had
+// their criteria in matching order, but nothing about the tool's contract
+// guarantees that in general.
+func criteriaSetEqual(a, b []task.AcceptanceCriterion) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	aSigs, bSigs := criteriaSignatures(a), criteriaSignatures(b)
+	sort.Strings(aSigs)
+	sort.Strings(bSigs)
+	for i := range aSigs {
+		if aSigs[i] != bSigs[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// criteriaContentSignature is the comparable content of a single criterion
+// for duplicateSubmission — everything EXCEPT ID/Author/Status (see its
+// doc). Its own type (rather than reusing task.AcceptanceCriterion
+// directly) is what makes that exclusion explicit and impossible to widen
+// by accident when AcceptanceCriterion itself gains a field.
+type criteriaContentSignature struct {
+	Kind       task.CriterionKind       `json:"kind"`
+	Judgment   task.JudgmentKind        `json:"judgment"`
+	Provenance task.CriterionProvenance `json:"provenance,omitempty"`
+	Text       string                   `json:"text"`
+	Check      *task.CriterionCheck     `json:"check,omitempty"`
+	Behavior   *task.CriterionBehavior  `json:"behavior,omitempty"`
+}
+
+// criteriaSignatures renders each item's comparable content (see
+// criteriaContentSignature) as a stable, order-independent-comparable
+// string.
+func criteriaSignatures(items []task.AcceptanceCriterion) []string {
+	out := make([]string, len(items))
+	for i, c := range items {
+		sig := criteriaContentSignature{
+			Kind:       c.Kind,
+			Judgment:   c.Judgment,
+			Provenance: c.Provenance,
+			Text:       strings.TrimSpace(c.Text),
+			Check:      c.Check,
+			Behavior:   c.Behavior,
+		}
+		encoded, err := json.Marshal(sig)
+		if err != nil {
+			// criteriaContentSignature is a plain data struct (no funcs,
+			// channels, or cyclic pointers) — Marshal cannot fail on it in
+			// practice. If it somehow does, fail the comparison TOWARD a
+			// real write rather than a false no-op: a signature keyed off
+			// this item's own address can never equal another item's
+			// (including an item at the same index on the OTHER side of
+			// the comparison).
+			out[i] = fmt.Sprintf("set_goal:unencodable-signature:%p", &items[i])
+			continue
+		}
+		out[i] = string(encoded)
+	}
+	return out
 }
