@@ -80,7 +80,7 @@ func TestGrepGuard_CarveOutIdentityComesFromTheCarveOutsThemselves(t *testing.T)
 	}
 
 	tool := NewGrepTool(parent, true)
-	roots, closeRoots, err := tool.grepRoots(context.Background(), policy, "")
+	roots, closeRoots, _, err := tool.grepRoots(context.Background(), policy, "")
 	if err != nil {
 		t.Fatalf("build grep roots: %v", err)
 	}

@@ -230,7 +230,7 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 		return ErrorResult(fmt.Sprintf("grep: failed to resolve filesystem policy: %v", err))
 	}
 
-	roots, closeRoots, err := t.grepRoots(ctx, policy, scope)
+	roots, closeRoots, ancestorIgnoreUnreadable, err := t.grepRoots(ctx, policy, scope)
 	defer closeRoots()
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("grep: %v", err))
@@ -263,11 +263,26 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 		},
 	})
 	if searchErr != nil {
-		// filegrep.Search's ONLY error return is a bad pattern (regex
-		// compile failure, MV-1's 400 case) — every other outcome, including
-		// every budget stop, is expressed in Result itself.
+		// filegrep.Search's error return covers two distinct causes through
+		// one return: a bad regex (regexp.Compile) or a malformed
+		// include_globs/exclude_globs entry (validateGlobs, finding F-B) —
+		// there is no sentinel/typed error to switch on (see filegrep.go's
+		// own doc comment on Search). Finding L9: labelling both "invalid
+		// pattern" told an agent whose glob syntax was wrong to go
+		// double-check its regex instead. grepIsGlobPatternError recognizes
+		// validateGlobs' own message shape to give the glob case its own
+		// honest label without needing a change to pkg/filegrep.
+		if grepIsGlobPatternError(searchErr) {
+			return ErrorResult(fmt.Sprintf("grep: invalid glob pattern: %v", searchErr))
+		}
 		return ErrorResult(fmt.Sprintf("grep: invalid pattern: %v", searchErr))
 	}
+
+	// Finding L11: fold in the ancestor .gitignore/.ignore read failures
+	// resolveScopedRoot could not fold into filegrep's own Stats (they
+	// happen before a filegrep.state exists) — same counter, same honesty
+	// contract as the within-walk case, just added after the fact.
+	result.Stats.IgnoreFilesUnreadable += ancestorIgnoreUnreadable
 
 	rendered := renderGrepResult(pattern, regexFlag, caseMode, result)
 	rendered = grepCapOutput(rendered, result.Truncated)
@@ -345,7 +360,13 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) *ToolResult
 // them covered by the warning CheckMountTarget prints when the operator creates
 // that mount ("the installation's own secrets remain protected independently of
 // this mount").
-func (t *GrepTool) grepRoots(ctx context.Context, policy fspolicy.FSPolicy, scope string) ([]filegrep.Root, func(), error) {
+// The int return is the total LoadAncestorIgnore "unreadable" count summed
+// across every root this resolves (finding L11) — zero whenever scope=="",
+// since that path never preloads an ancestor chain (the walk root already
+// is the search scope). See resolveScopedRoot's doc comment for why this
+// cannot be folded into filegrep.Stats until after filegrep.Search runs;
+// Execute performs that fold.
+func (t *GrepTool) grepRoots(ctx context.Context, policy fspolicy.FSPolicy, scope string) ([]filegrep.Root, func(), int, error) {
 	var opened []*os.Root
 	closeAll := func() {
 		for _, r := range opened {
@@ -373,6 +394,7 @@ func (t *GrepTool) grepRoots(ctx context.Context, policy fspolicy.FSPolicy, scop
 		if idx, rest, matched := splitGrepScopeMount(scope, mounts); matched {
 			m := mounts[idx]
 			var root filegrep.Root
+			var ancestorUnreadable int
 			mr, mErr := os.OpenRoot(m.HostPath)
 			if mErr != nil {
 				// FR-021: a dead mount is root_lost, not a request error —
@@ -384,31 +406,32 @@ func (t *GrepTool) grepRoots(ctx context.Context, policy fspolicy.FSPolicy, scop
 				if rest == "" {
 					root = filegrep.Root{Name: m.Name, FS: guardCarveOuts(m.HostPath, mr.FS(), policy)}
 				} else {
-					r, rErr := t.resolveScopedRoot(mr, m.HostPath, rest, m.Name, fmt.Sprintf("mount %q", m.Name), policy, &opened)
+					r, n, rErr := t.resolveScopedRoot(mr, m.HostPath, rest, m.Name, fmt.Sprintf("mount %q", m.Name), policy, &opened)
 					if rErr != nil {
-						return nil, closeAll, rErr
+						return nil, closeAll, 0, rErr
 					}
 					root = r
+					ancestorUnreadable = n
 				}
 			}
-			return []filegrep.Root{root}, closeAll, nil
+			return []filegrep.Root{root}, closeAll, ancestorUnreadable, nil
 		}
 
 		wr, wErr := os.OpenRoot(policy.WorkDir)
 		if wErr != nil {
-			return nil, closeAll, fmt.Errorf("cannot open your workspace root: %w", wErr)
+			return nil, closeAll, 0, fmt.Errorf("cannot open your workspace root: %w", wErr)
 		}
 		opened = append(opened, wr)
-		root, rErr := t.resolveScopedRoot(wr, policy.WorkDir, scope, "", "your workspace", policy, &opened)
+		root, ancestorUnreadable, rErr := t.resolveScopedRoot(wr, policy.WorkDir, scope, "", "your workspace", policy, &opened)
 		if rErr != nil {
-			return nil, closeAll, rErr
+			return nil, closeAll, 0, rErr
 		}
-		return []filegrep.Root{root}, closeAll, nil
+		return []filegrep.Root{root}, closeAll, ancestorUnreadable, nil
 	}
 
 	wr, wErr := os.OpenRoot(policy.WorkDir)
 	if wErr != nil {
-		return nil, closeAll, fmt.Errorf("cannot open your workspace root: %w", wErr)
+		return nil, closeAll, 0, fmt.Errorf("cannot open your workspace root: %w", wErr)
 	}
 	opened = append(opened, wr)
 	roots := []filegrep.Root{{Name: "", FS: guardCarveOuts(policy.WorkDir, wr.FS(), policy)}}
@@ -421,7 +444,7 @@ func (t *GrepTool) grepRoots(ctx context.Context, policy fspolicy.FSPolicy, scop
 		opened = append(opened, mr)
 		roots = append(roots, filegrep.Root{Name: m.Name, FS: guardCarveOuts(m.HostPath, mr.FS(), policy)})
 	}
-	return roots, closeAll, nil
+	return roots, closeAll, 0, nil
 }
 
 // resolveScopedRoot resolves subPath (relative to container, whose real host
@@ -469,22 +492,31 @@ func (t *GrepTool) grepRoots(ctx context.Context, policy fspolicy.FSPolicy, scop
 // container in a caller-facing sentence ("your workspace", `mount "x"`).
 // *opened accumulates every os.Root this opens so grepRoots' single
 // closeAll can close them all on the caller's defer.
-func (t *GrepTool) resolveScopedRoot(container *os.Root, containerHostPath, subPath, namePrefix, label string, policy fspolicy.FSPolicy, opened *[]*os.Root) (filegrep.Root, error) {
+//
+// The int return is LoadAncestorIgnore's own "unreadable" count (finding
+// L11): this preload runs before a filegrep.state exists, so it cannot fold
+// straight into Stats.IgnoreFilesUnreadable the way the within-walk reads
+// do — an ancestor ignore file that fails to read still degrades to "no
+// additional rules from that file" and the scoped search proceeds, exactly
+// like filegrep's own within-walk handling (ignore.go). Before this fix the
+// count was silently discarded here, so a scoped search (path=subdir) with
+// a permission-denied ancestor .gitignore applied fewer rules than intended
+// with NO trace anywhere in the response — the same class of gap F-E closed
+// for the within-walk case. Callers (grepRoots) sum this across every root
+// resolved and Execute folds the total into result.Stats.IgnoreFilesUnreadable
+// before rendering, so it reaches the agent through the exact same counter.
+func (t *GrepTool) resolveScopedRoot(container *os.Root, containerHostPath, subPath, namePrefix, label string, policy fspolicy.FSPolicy, opened *[]*os.Root) (filegrep.Root, int, error) {
 	info, statErr := container.Stat(subPath)
 	if statErr != nil {
-		return filegrep.Root{}, grepScopeStatError(subPath, label, statErr)
+		return filegrep.Root{}, 0, grepScopeStatError(subPath, label, statErr)
 	}
 
 	switch {
 	case info.IsDir():
-		// The unreadable-ancestor-ignore-file count is discarded here — this preload
-		// runs before a filegrep.state exists to fold it into Stats.IgnoreFilesUnreadable,
-		// and an ancestor ignore file failing to read degrades to "no additional rules
-		// from that file," same as filegrep's own within-walk handling (ignore.go).
-		ancestor, _ := filegrep.LoadAncestorIgnore(container.FS(), subPath)
+		ancestor, unreadable := filegrep.LoadAncestorIgnore(container.FS(), subPath)
 		sub, sErr := container.OpenRoot(subPath)
 		if sErr != nil {
-			return filegrep.Root{}, fmt.Errorf("path %q in %s could not be opened as a directory: %w", subPath, label, sErr)
+			return filegrep.Root{}, 0, fmt.Errorf("path %q in %s could not be opened as a directory: %w", subPath, label, sErr)
 		}
 		*opened = append(*opened, sub)
 		anchor := filepath.Join(containerHostPath, filepath.FromSlash(subPath))
@@ -495,7 +527,7 @@ func (t *GrepTool) resolveScopedRoot(container *os.Root, containerHostPath, subP
 		return filegrep.Root{
 			Name: name, FS: guardCarveOuts(anchor, sub.FS(), policy),
 			ScopePrefix: subPath, AncestorIgnore: ancestor,
-		}, nil
+		}, unreadable, nil
 
 	case info.Mode().IsRegular():
 		parentRel := path.Dir(subPath)
@@ -505,17 +537,18 @@ func (t *GrepTool) resolveScopedRoot(container *os.Root, containerHostPath, subP
 		if parentRel != "." {
 			p, pErr := container.OpenRoot(parentRel)
 			if pErr != nil {
-				return filegrep.Root{}, fmt.Errorf("path %q in %s could not be opened: %w", subPath, label, pErr)
+				return filegrep.Root{}, 0, fmt.Errorf("path %q in %s could not be opened: %w", subPath, label, pErr)
 			}
 			*opened = append(*opened, p)
 			parent = p
 		}
 
 		var ancestor []filegrep.AncestorIgnoreLayer
+		var unreadable int
 		scopePrefix := ""
 		name := namePrefix
 		if parentRel != "." {
-			ancestor, _ = filegrep.LoadAncestorIgnore(container.FS(), parentRel)
+			ancestor, unreadable = filegrep.LoadAncestorIgnore(container.FS(), parentRel)
 			scopePrefix = parentRel
 			if namePrefix != "" {
 				name = namePrefix + "/" + parentRel
@@ -528,10 +561,10 @@ func (t *GrepTool) resolveScopedRoot(container *os.Root, containerHostPath, subP
 		fsys := guardCarveOuts(anchor, singleEntryFS{fsys: parent.FS(), name: base}, policy)
 		return filegrep.Root{
 			Name: name, FS: fsys, ScopePrefix: scopePrefix, AncestorIgnore: ancestor,
-		}, nil
+		}, unreadable, nil
 
 	default:
-		return filegrep.Root{}, fmt.Errorf(
+		return filegrep.Root{}, 0, fmt.Errorf(
 			"path %q in %s is %s, not a directory or a regular file — grep can only search directories and regular files",
 			subPath, label, describeFileKind(info.Mode()))
 	}
@@ -558,6 +591,24 @@ func describeFileKind(mode fs.FileMode) string {
 	default:
 		return fmt.Sprintf("a file of an unrecognized kind (mode %s)", mode)
 	}
+}
+
+// grepIsGlobPatternError reports whether err is filegrep's validateGlobs
+// error (a malformed include_globs/exclude_globs entry) rather than a regex
+// compile failure — finding L9. filegrep.Search bundles both causes into
+// its one error return with no sentinel or typed error to distinguish them
+// (pkg/filegrep/filegrep.go's own doc comment on Search), so this recognizes
+// validateGlobs' own message shape ("filegrep: include_globs contains an
+// invalid pattern %q" / "filegrep: exclude_globs contains an invalid
+// pattern %q", pkg/filegrep/filegrep.go's validateGlobs) — a format a
+// regexp.Compile error never produces. This is the tool-side half of L9
+// only: the identical ambiguity on the REST side
+// (rest_library_files_search.go, "invalid regex pattern: "+err.Error())
+// belongs to whoever owns that file.
+func grepIsGlobPatternError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "include_globs contains an invalid pattern") ||
+		strings.Contains(msg, "exclude_globs contains an invalid pattern")
 }
 
 // grepScopeStatError turns a failed Stat on a `path` argument into a message
@@ -1139,7 +1190,15 @@ func renderGrepResult(pattern string, regexFlag bool, caseMode filegrep.CaseMode
 	// before it is ever read).
 	fmt.Fprintf(&b, "%d match(es)", len(res.Hits))
 	if res.Truncated {
-		fmt.Fprintf(&b, " — truncated: true (reason: %s) — %s", res.TruncatedReason, grepNarrowingHint(res.TruncatedReason))
+		// Finding L10: Result.TruncatedRoot names WHICH root (workspace or a
+		// named mount) produced ReasonRootLost — before this fix it reached
+		// this far and then went unrendered, so root_lost told an agent its
+		// search was cut short without ever saying which mount died.
+		rootNote := ""
+		if res.TruncatedReason == filegrep.ReasonRootLost && res.TruncatedRoot != "" {
+			rootNote = fmt.Sprintf(", root: %s", grepTruncatedRootLabel(res.TruncatedRoot))
+		}
+		fmt.Fprintf(&b, " — truncated: true (reason: %s%s) — %s", res.TruncatedReason, rootNote, grepNarrowingHint(res.TruncatedReason))
 	} else {
 		b.WriteString(" — truncated: false")
 	}
@@ -1196,10 +1255,25 @@ func renderGrepResult(pattern string, regexFlag bool, caseMode filegrep.CaseMode
 				"believe it should still be searched.\n",
 				res.Stats.FilesPrunedIgnored)
 		}
-		if res.Stats.FilesVisited > 0 {
-			b.WriteString("Binary files (a NUL byte in their first 8 KiB) are name-matchable only, never " +
-				"content-searched (FR-005) — a term that exists solely inside a binary file's content will " +
-				"never produce a hit here, even though that file was visited.\n")
+		// Finding I5: this used to fire whenever res.Stats.FilesVisited > 0 —
+		// true on nearly every non-trivial zero-hit search whether or not a
+		// binary file was ever actually involved, which made it generic
+		// boilerplate carrying no information either way. Gating on
+		// FilesSkippedBinary (only nonzero when a file's first 8 KiB
+		// actually contained a NUL byte and got skipped, FR-005/finding F-A)
+		// means this paragraph now only appears when it is true, and names
+		// how many.
+		if res.Stats.FilesSkippedBinary > 0 {
+			fmt.Fprintf(&b, "%d file(s) were skipped as binary (a NUL byte in their first 8 KiB) and were "+
+				"name-matchable only, never content-searched (FR-005) — a term that exists solely inside one "+
+				"of those files' content will never produce a hit here.\n",
+				res.Stats.FilesSkippedBinary)
+		}
+		if res.Stats.IgnoreFilesUnreadable > 0 {
+			fmt.Fprintf(&b, "%d .gitignore/.ignore file(s) could not be read (permission denied or an I/O "+
+				"error) — the rules they would have added were NOT applied, so this result may be missing "+
+				"files that should have been searched.\n",
+				res.Stats.IgnoreFilesUnreadable)
 		}
 	} else {
 		for _, h := range res.Hits {
@@ -1262,7 +1336,33 @@ func grepStatsLine(stats filegrep.Stats) string {
 	if stats.FilesFilteredGlob > 0 {
 		fmt.Fprintf(&b, ", %d file(s)/director(ies) excluded by include_globs/exclude_globs", stats.FilesFilteredGlob)
 	}
+	// Finding I5: FilesSkippedBinary (F-A) and IgnoreFilesUnreadable (F-E)
+	// exist specifically to be surfaced — filegrep.go's own doc comment on
+	// FilesSkippedBinary says a UTF-16 file "was silently content-invisible
+	// with no observable trace anywhere in the response. This counter is
+	// that trace." The REST rendering (rest_library_files_search.go) already
+	// carries both; this renderer rendered NEITHER, so the trace the counter
+	// exists to provide never reached the agent at all. Rendered the same
+	// optional, gated way as the other counters above.
+	if stats.FilesSkippedBinary > 0 {
+		fmt.Fprintf(&b, ", %d file(s) skipped as binary (content not scanned)", stats.FilesSkippedBinary)
+	}
+	if stats.IgnoreFilesUnreadable > 0 {
+		fmt.Fprintf(&b, ", %d .gitignore/.ignore file(s) unreadable (their rules were NOT applied)", stats.IgnoreFilesUnreadable)
+	}
 	return b.String()
+}
+
+// grepTruncatedRootLabel renders Result.TruncatedRoot's raw Root.Name into
+// the same caller-facing phrasing resolveScopedRoot's own `label` parameter
+// uses elsewhere in this file ("your workspace"/`mount "x"`): "" means the
+// workspace root itself (Root.Name's documented convention, filegrep.go's
+// comment on Result.TruncatedRoot), anything else is a mount name.
+func grepTruncatedRootLabel(name string) string {
+	if name == "" {
+		return "your workspace root"
+	}
+	return fmt.Sprintf("mount %q", name)
 }
 
 // grepNarrowingHint gives a reason-specific "how to get an uncapped result
@@ -1278,6 +1378,14 @@ func grepNarrowingHint(reason filegrep.TruncatedReason) string {
 		return "results were larger than the output budget — narrow scope, lower `context_lines`, or lower `max_matches`/`max_matches_per_file`"
 	case filegrep.ReasonRootLost:
 		return "your workspace root or a mount became unreadable mid-search — check `list_mounts` and retry"
+	case filegrep.ReasonCanceled:
+		// Finding L10: this switch covered every reason except the newly
+		// added `canceled` (filegrep's finding F-H) and fell through to the
+		// default's narrowing advice — telling an agent whose search was
+		// interrupted by a user Stop to narrow its query, which was never
+		// its problem. `canceled` means the request was interrupted before
+		// it could finish on its own, not that it was too big.
+		return "the search was canceled before it finished (e.g. a user Stop) — this was an interruption, not a size limit; rerun the same search if you still need the result"
 	default:
 		return "narrow with `path`, `include_globs`/`exclude_globs`, or a lower `max_matches`"
 	}

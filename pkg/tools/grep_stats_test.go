@@ -86,17 +86,35 @@ func TestGrepRenderResult_ZeroHitExplainsPrunedIgnored_Absent(t *testing.T) {
 	}
 }
 
-// TestGrepRenderResult_ZeroHitExplainsBinarySkip is F3's second half: binary
-// files are content-unsearchable by contract (FR-005) but have no dedicated
-// Stats counter of their own — so unlike the glob/ignore cases, this note is
-// unconditional whenever at least one file was visited (there being no
-// counter to gate on), stating a real, otherwise-invisible reason a search
-// can legitimately find nothing.
+// TestGrepRenderResult_ZeroHitExplainsBinarySkip is F3's second half, UPDATED
+// for finding I5: this note used to fire unconditionally whenever
+// FilesVisited > 0 — true of nearly any non-trivial zero-hit search whether
+// or not a binary file was ever actually skipped, which made it generic
+// boilerplate carrying no evidence either way (I5's own wording: "prints
+// whenever FilesVisited > 0 REGARDLESS of whether anything was actually
+// skipped"). It is now gated on Stats.FilesSkippedBinary (finding F-A, only
+// nonzero when a file's first 8 KiB actually contained a NUL byte and its
+// content was skipped) and names the count.
 func TestGrepRenderResult_ZeroHitExplainsBinarySkip(t *testing.T) {
-	res := filegrep.Result{Stats: filegrep.Stats{FilesVisited: 4}}
+	res := filegrep.Result{Stats: filegrep.Stats{FilesVisited: 4, FilesSkippedBinary: 2}}
 	out := renderGrepResult("needle", false, filegrep.CaseSmart, res)
-	if !strings.Contains(out, "Binary files") || !strings.Contains(out, "name-matchable only") {
-		t.Fatalf("expected the zero-hit result to note binary files are content-unsearchable, got:\n%s", out)
+	if !strings.Contains(out, "2 file(s) were skipped as binary") || !strings.Contains(out, "name-matchable only") {
+		t.Fatalf("expected the zero-hit result to name the 2 binary-skipped files, got:\n%s", out)
+	}
+}
+
+// TestGrepRenderResult_ZeroHitExplainsBinarySkip_AbsentWhenNoneSkipped is
+// finding I5's DoD requirement #2: the note must NOT print when nothing was
+// actually skipped, even though plenty of (non-binary) files were visited —
+// this is exactly the "noise that carries no information" failure mode I5
+// describes: before the fix, FilesVisited=4/FilesSkippedBinary=0 printed the
+// identical boilerplate as FilesVisited=4/FilesSkippedBinary=2, so a reader
+// could not tell a real skip from routine visits by reading the note alone.
+func TestGrepRenderResult_ZeroHitExplainsBinarySkip_AbsentWhenNoneSkipped(t *testing.T) {
+	res := filegrep.Result{Stats: filegrep.Stats{FilesVisited: 4, FilesSkippedBinary: 0}}
+	out := renderGrepResult("needle", false, filegrep.CaseSmart, res)
+	if strings.Contains(out, "skipped as binary") {
+		t.Fatalf("expected no binary-skip note when FilesSkippedBinary is zero (nothing was actually skipped), got:\n%s", out)
 	}
 }
 
@@ -107,7 +125,7 @@ func TestGrepRenderResult_ZeroHitExplainsBinarySkip(t *testing.T) {
 func TestGrepRenderResult_ZeroHitExplainsBinarySkip_AbsentWhenNothingVisited(t *testing.T) {
 	res := filegrep.Result{Stats: filegrep.Stats{FilesVisited: 0}}
 	out := renderGrepResult("needle", false, filegrep.CaseSmart, res)
-	if strings.Contains(out, "Binary files") {
+	if strings.Contains(out, "Binary files") || strings.Contains(out, "skipped as binary") {
 		t.Fatalf("expected no binary-skip note when zero files were visited, got:\n%s", out)
 	}
 }
