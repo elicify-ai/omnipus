@@ -1,6 +1,6 @@
 # ADR-085 — The operator takes the browser wheel without the turn being cancelled
 
-- **Status:** Proposed (revision 2, after adversarial review) — 2026-09-09
+- **Status:** Proposed (revision 3, after spec-authoring review) — 2026-09-09
 - **Relates to:** ADR-038 D6 / ADR-075 (the control-deferral gate), ADR-039/040/041 (live view, implicit control), ADR-061 (WebRTC is the only video path), ADR-057 FR-011 (a delegated child has its own transcript session), ADR-077 / Constraint #6 (per-tool policy entries)
 - **Spec:** `docs/internal/specs/browser-control-handover-spec.md`
 
@@ -131,3 +131,36 @@ A take that causes the agent to defer is a materially different event from an or
 - Making the lock an authorization decision on input dispatch (operator directive, 2026-08-03).
 - **`tools.browser.take_control_enabled: false`** — with take-control disabled no take ever succeeds (`handleControl` refuses and audits `take_control_disabled`), so none of this ADR is reachable on such an install. Stated so no implementer specs a dead path.
 - The Judge's stance (ADR-084).
+
+## 6. Revision 3 — corrections found while writing the spec
+
+Spec authoring surfaced three further errors in revision 2. They are corrected here; the spec (`docs/internal/specs/browser-control-handover-spec.md`) implements the corrected form.
+
+### R3-a — D5 cannot simply add the capture tools to the existing gate
+
+Calling `controlledResult` is not free-standing. ADR-075 §14 rule 3 establishes a **biconditional** that three tests enforce: `pkg/tools/browser/control_gate_membership_test.go::declaredControlGateExemptions` lists the three capture tools as reasoned exemptions and asserts that roster equals `pkg/tools/browser/audit.go::readOnlyBrowserTools`; `audit_test.go::TestAudit_WriteClassSetIsTheControlledResultSet` and `lease_membership_test.go::TestWriteLease_EveryActionToolIsLeased` close the loop as *leased ⟺ gated*.
+
+Taken literally, D5 would make `browser_screenshot`, `browser_get_text` and `browser_snapshot` **write-class, per-call audited and write-leased**, so a screenshot would serialise behind an in-flight click through `lease.go::acquireWrite`. That is a real behaviour change nobody asked for.
+
+**Correction.** The classification becomes three-way — **action**, **capture**, **exempt** — where capture tools are control-gated but neither write-leased nor audited as write-class. ADR-075 §14 rule 3's biconditional is amended accordingly, explicitly and in writing, rather than being silently broken by adding a call site.
+
+### R3-b — D6's waiting surface has no wire path
+
+Revision 2 cited `pkg/agent/goal_loop.go`'s system-transcript writer as precedent. That writer only calls `AppendTranscriptStrict`; it emits **no frame**. `contracts/asyncapi.yaml`'s chat channel has no system/notice frame, and `NotificationFrame`'s `notification_type` enum is `[schedule_failed]`, targeting the header notification centre rather than the thread.
+
+So as written the "visible waiting surface" would be invisible until a reload — precisely the silence D6 exists to remove.
+
+**Correction.** D6 requires a **new contract-first wire type** for an in-thread system notice, added through Constraint #8's five-step process (schema, spec reference, `scripts/gen-contracts.sh`, generated Go and TS committed together, then consumers). The transcript entry remains, so the line survives a reload; the frame is what makes it appear immediately.
+
+### R3-c — D4's release is under-scoped, and D7's "passes the lock" is undefined
+
+**Release.** Prompts converge at three or more independent publish sites (`pkg/gateway/websocket.go`'s webchat handler, `pkg/gateway/sse.go`, and every non-web channel). A webchat-only release leaves a prompt arriving from Telegram on the same session not releasing the lock — reproducing exactly the stale-lock class D4 exists to close. The release must be applied where prompts converge on the session, not on one transport.
+
+**Handover.** `LiveView.controller` holds a `viewerID`. When no panel is open there is no viewer to grant it to, and a holder that never attached is precisely the ghost D4 declares **void**. So `browser_handover` cannot be modelled as "pass the lock" without contradicting D4.
+
+**Correction.** An agent-initiated handover is a distinct **handover-pending** state on the session, not a lock grant: the agent stops driving and the surface (D6) invites the operator in. The lock itself is taken by whoever actually attaches and clicks, through the ordinary take path. The pending state clears on the same triggers as D4's release.
+
+### R3-d — Two carriers the spec had to route around (not ADR errors, but load-bearing)
+
+- **D2.3's cross-tab-set coverage** has an exact existing carrier, `turnState.routingSessionID` (root-inherited per ADR-057 FR-011), but it sits behind a **closed consumer set** enforced by `routing_session_id_consumer_set_adr057_test.go`. Using it is a deliberate allowlist amendment, made in the open, not an incidental read.
+- **D2.2's per-turn attempt bound** has no carrier in the tool layer (`pkg/tools/base.go` has no turn id). The counter lives on `turnState`, modelled on `pkg/agent/tool_denial.go::turnDenialLedger`.
