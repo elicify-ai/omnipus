@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Judgment First</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --bg: #0A0A0B;
+    --surface: #131316;
+    --surface-2: #1A1A1F;
+    --text: #E2E8F0;
+    --text-dim: #94A3B8;
+    --gold: #D4AF37;
+    --gold-dim: #8a7326;
+    --line: #26262c;
+    --good: #6EE7A0;
+    --warn: #E8A87C;
+    --bad: #F87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif;
+    font-size: 16px;
+    line-height: 1.65;
+  }
+  .wrap { max-width: 780px; margin: 0 auto; padding: 64px 28px 96px; }
+  .eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin-bottom: 14px;
+  }
+  h1 {
+    font-family: 'Outfit', sans-serif;
+    font-weight: 700;
+    font-size: 44px;
+    line-height: 1.12;
+    margin: 0 0 18px;
+    text-wrap: balance;
+  }
+  .lede {
+    font-size: 19px;
+    color: var(--text-dim);
+    margin: 0 0 8px;
+    max-width: 60ch;
+  }
+  .lede strong { color: var(--text); font-weight: 600; }
+  h2 {
+    font-family: 'Outfit', sans-serif;
+    font-weight: 600;
+    font-size: 26px;
+    margin: 64px 0 16px;
+    text-wrap: balance;
+  }
+  h3 {
+    font-family: 'Outfit', sans-serif;
+    font-weight: 600;
+    font-size: 18px;
+    margin: 28px 0 10px;
+  }
+  p { margin: 0 0 16px; max-width: 68ch; }
+  .dim { color: var(--text-dim); }
+
+  .principle {
+    display: flex;
+    gap: 20px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 24px 26px;
+    margin: 20px 0;
+  }
+  .principle .num {
+    font-family: 'Outfit', sans-serif;
+    font-weight: 700;
+    font-size: 30px;
+    color: var(--gold);
+    line-height: 1.2;
+    flex: 0 0 auto;
+  }
+  .principle h3 { margin: 2px 0 8px; }
+  .principle p { margin-bottom: 0; }
+  .principle p + p { margin-top: 12px; }
+
+  .rule {
+    border-left: 3px solid var(--gold);
+    background: var(--surface);
+    padding: 16px 22px;
+    margin: 18px 0;
+    border-radius: 0 8px 8px 0;
+  }
+  .rule p { margin: 0; }
+  .rule p + p { margin-top: 10px; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 20px 0 8px;
+    font-size: 15px;
+  }
+  th {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    text-align: left;
+    font-weight: 500;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  td {
+    padding: 13px 14px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  td:first-child { color: var(--text-dim); white-space: nowrap; }
+  .table-scroll { overflow-x: auto; }
+
+  .tag {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    padding: 2px 10px;
+    border-radius: 99px;
+    border: 1px solid var(--line);
+    background: var(--surface-2);
+    color: var(--text-dim);
+    margin-right: 6px;
+  }
+  .tag.now { color: var(--good); border-color: rgba(110,231,160,.35); }
+  .tag.later { color: var(--warn); border-color: rgba(232,168,124,.35); }
+
+  ul { padding-left: 22px; margin: 0 0 16px; }
+  li { margin-bottom: 8px; max-width: 62ch; }
+  li::marker { color: var(--gold-dim); }
+
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 18px 0; }
+  @media (max-width: 640px) { .pair { grid-template-columns: 1fr; } }
+  .pair .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px 18px;
+    font-size: 15px;
+  }
+  .pair .card .label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .pair .good-card .label { color: var(--good); }
+  .pair .bad-card .label { color: var(--bad); }
+  .pair .card p { margin: 0; }
+  .pair .card p + p { margin-top: 8px; }
+  .pair .card em { color: var(--text-dim); font-style: normal; font-size: 13.5px; }
+
+  .flow {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin: 20px 0;
+  }
+  .flow ol { margin: 0; padding-left: 22px; }
+  .flow li { margin-bottom: 10px; }
+  .flow li::marker { color: var(--gold); font-weight: 600; }
+
+  .footer {
+    margin-top: 72px;
+    padding-top: 20px;
+    border-top: 1px solid var(--line);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="eyebrow">Omnipus &middot; Target design &middot; Judge &amp; Plan Supervisor</div>
+  <h1>Judgment first</h1>
+  <p class="lede">The Judge decides whether work is done <strong>the way a capable human reviewer would</strong> — by reading the written acceptance criteria and Definition of Done, weighing the real evidence, and making a considered call. Technical checks stop being a requirement and become what they should have been all along: <strong>optional supporting information, used when they happen to apply.</strong></p>
+
+  <h2>The two principles</h2>
+
+  <div class="principle">
+    <div class="num">1</div>
+    <div>
+      <h3>Never dependent on technical checks</h3>
+      <p>A task or plan must be fully judgeable with <em>zero</em> technical acceptance criteria. Exit codes, command runs, and action counts are extra signal — welcome when the work happens to be technical, irrelevant when it isn't. Drafting an email, researching a topic, writing a strategy memo: none of these have an exit code, and the system must treat them as first-class work, not an afterthought.</p>
+      <p>When a technical check <em>is</em> present and applicable, the Judge reads its result as one more piece of evidence — informative, sometimes decisive, never the gatekeeper that decides whether judging is even possible.</p>
+    </div>
+  </div>
+
+  <div class="principle">
+    <div class="num">2</div>
+    <div>
+      <h3>Judge written criteria like a human would</h3>
+      <p>The primary basis for every verdict is the written acceptance criteria and the Definition of Done — read with common sense, in context, as a whole. Not pattern-matched, not reduced to a checklist of mechanical lookups. A human reviewer asks: <em>does the actual work, as evidenced, genuinely satisfy what was asked?</em> That is the question the Judge answers.</p>
+      <p>Human-style judgment does not mean lenient. The Judge stays skeptical: the worker's own summary is a claim to verify, never proof. No evidence still means not done. But the <em>reasoning</em> over the evidence is judgment, not a program.</p>
+    </div>
+  </div>
+
+  <h2>One skill governs how every goal becomes criteria</h2>
+  <p>Today, how a goal turns into acceptance criteria depends on where it was created — chat goals go through a compiler, agent-created tasks improvise, and each path has its own quality. In the target state there is <strong>one built-in skill</strong> — a shipped coaching guide, like the built-in skills agents already use — that governs criteria-writing <em>everywhere</em>, automatically:</p>
+
+  <div class="flow">
+    <ol>
+      <li><strong>A goal arrives</strong> — a person types it in chat, or an agent is creating a task or plan. The path doesn't matter; the skill triggers automatically in all of them.</li>
+      <li><strong>The skill guides the rewrite.</strong> The agent restates the goal clearly and breaks it down into distinct, judgeable acceptance criteria and a Definition of Done — written in plain language, following the quality bar the skill defines (below).</li>
+      <li><strong>Unclear goals get questions, not guesses.</strong> If the goal is ambiguous — success could reasonably mean two different things — the agent asks the person (or the delegating agent) before locking anything in. A criteria set built on a guess is worse than a short delay.</li>
+      <li><strong>The result is echoed back for confirmation.</strong> The person sees the criteria in plain language — the actual things the Judge will later hold the work to — and confirms or amends before the goal goes active. (Chat goals already have this confirm step; it extends to become the universal pattern.)</li>
+      <li><strong>Technical checks attach only where they earn their place.</strong> The skill teaches when a real command check genuinely adds value — and that its absence is normal, not a deficiency.</li>
+    </ol>
+  </div>
+
+  <p class="dim">Because it's a skill — a readable, editable document, not compiled logic — the quality bar can be tuned, improved, and versioned without touching the engine. And because it's built-in, every fresh install has it from day one.</p>
+
+  <h2>What good acceptance criteria and DoDs look like</h2>
+  <p>The skill's core content. A good criterion is one a fair reviewer — human or Judge — can rule on with confidence, and the person who set the goal would recognize as <em>their</em> intent:</p>
+
+  <ul>
+    <li><strong>Outcome, not activity.</strong> It describes what exists or is true when the work is done — not the steps taken. "The summary covers all three quarterly reports" — not "read the reports."</li>
+    <li><strong>Observable.</strong> Its truth can be seen in real evidence: something produced, changed, sent, or visible in the record of what happened. If no evidence could ever show it, it can't be judged.</li>
+    <li><strong>Specific enough to fail.</strong> A criterion that any half-effort would satisfy isn't a criterion. "The email is polite, addresses each of the customer's three questions, and proposes a concrete next step" can fail; "the email is good" can't.</li>
+    <li><strong>One thing per criterion.</strong> Each criterion is separately judgeable. Bundling three requirements into one line means a partial failure gets an unclear verdict.</li>
+    <li><strong>Complete but minimal.</strong> Together, the criteria cover everything that matters for "done" — and nothing that doesn't. Padding with easy criteria dilutes the meaningful ones.</li>
+    <li><strong>Written for the judge that will read them.</strong> Plain language, no insider shorthand, no references to context the Judge won't have.</li>
+  </ul>
+
+  <div class="pair">
+    <div class="card good-card">
+      <div class="label">Good</div>
+      <p>"The research note names at least three competitors, states each one's pricing model with a source, and ends with a recommendation the reader could act on."</p>
+      <p><em>Fails honestly if any part is missing; judgeable from the produced document alone.</em></p>
+    </div>
+    <div class="card bad-card">
+      <div class="label">Not good</div>
+      <p>"Do thorough competitor research and write it up well."</p>
+      <p><em>"Thorough" and "well" can't fail — any output arguably qualifies. The Judge is left guessing what the goal-setter meant.</em></p>
+    </div>
+  </div>
+
+  <div class="pair">
+    <div class="card good-card">
+      <div class="label">Good</div>
+      <p>"Every customer question from the ticket is answered in the reply; the tone stays apologetic about the delay without over-promising a date we can't commit to."</p>
+      <p><em>Two criteria, each independently judgeable against the actual reply text.</em></p>
+    </div>
+    <div class="card bad-card">
+      <div class="label">Not good</div>
+      <p>"Handle the ticket. Also the tests should pass."</p>
+      <p><em>"Handle" is activity, not outcome — and a test check bolted onto a non-technical goal is noise, not rigor.</em></p>
+    </div>
+  </div>
+
+  <h2>Does the UI need to change? Yes — four places</h2>
+  <p>Audited against the current screens. Each of these currently pulls toward the technical path or hides the written criteria the Judge actually uses:</p>
+
+  <div class="table-scroll">
+  <table>
+    <tr><th>Surface</th><th>Today</th><th>Target</th></tr>
+    <tr>
+      <td>Criteria editor<br><span class="dim" style="font-size:12px">(Create Task, Task detail, Plan DoD — one shared component)</span></td>
+      <td>Opens on the technical check by default; the count-based type is missing from the dropdown entirely.</td>
+      <td>Opens on the written criterion by default. Technical check and count-based check are present but presented as the optional extra ("add a technical check"), not the starting point.</td>
+    </tr>
+    <tr>
+      <td>Goal confirmation card in chat</td>
+      <td>Shows the compiled condition and the literal <em>commands</em> verbatim — but never itemizes the written criteria. The user confirms a goal without seeing the actual list the Judge will hold the work to.</td>
+      <td>Leads with the written criteria, itemized in plain language — that's what the person is really agreeing to. Commands, if any, shown beneath as supporting detail.</td>
+    </tr>
+    <tr>
+      <td>Verdict display<br><span class="dim" style="font-size:12px">(per-criterion results after judging)</span></td>
+      <td>Built with the machine-check as the reference case — evidence shown per command run; prose reasons are the plainer sibling.</td>
+      <td>The Judge's written reasoning per criterion is the primary content, presented with the same weight as machine evidence — it <em>is</em> the evidence for most work.</td>
+    </tr>
+    <tr>
+      <td>Task &amp; Plan creation flows</td>
+      <td>Host the editor above and inherit its defaults; nothing in the flow invites a proper Definition of Done for non-technical work.</td>
+      <td>Inherit the fixed editor — and surface the skill-driven rewrite: when an agent drafts criteria for you, the flow shows the rewritten breakdown for confirmation, same as the chat goal card.</td>
+    </tr>
+  </table>
+  </div>
+
+  <h2>What this means for the Judge</h2>
+  <p>The evidence hierarchy inverts. Today the system leads with the machine-checkable and treats prose as the leftover category. In the target state:</p>
+  <ul>
+    <li><strong>Written criteria are the spine of every adjudication.</strong> Every criterion is judged on its written meaning against whatever real evidence exists — output produced, files changed, the visible record of what actually happened.</li>
+    <li><strong>Technical results are annotations, not prerequisites.</strong> A passing test strengthens the case; a failing one raises a flag the judgment must address. Neither replaces the judgment itself.</li>
+    <li><strong>The safeguards stay.</strong> Independent per-criterion evaluation, evidence-before-verdict, fail-closed on missing evidence, the worker's claim treated as data and never as instruction — all of these survive unchanged. They are how the human-style judgment stays honest.</li>
+  </ul>
+
+  <h2>What this means for the Plan Supervisor</h2>
+  <p>Its role does not change — it remains the correction authority that acts only when a plan can't move on its own. What changes is what it receives: verdicts grounded in judgment of the written Definition of Done, not in whether a command exited zero. Its own rules carry over untouched:</p>
+  <ul>
+    <li>It never redefines what "done" means — it changes how the plan gets there.</li>
+    <li>It never manufactures a false pass, and a replacement for failed work must be genuinely different work.</li>
+    <li>It recognizes repetition as a loop, and ends a plan honestly when the goal is truly out of reach.</li>
+  </ul>
+
+  <h2>From here to there</h2>
+  <div class="table-scroll">
+  <table>
+    <tr><th>Where</th><th>Today</th><th>Target</th></tr>
+    <tr>
+      <td>Goal set in chat</td>
+      <td>Plain language is already the default; has echo-and-confirm. But the rewrite quality is the compiler's own, not skill-governed, and the confirm card hides the criteria breakdown.</td>
+      <td>Same flow, now following the shared skill — and the confirmation shows the written criteria themselves.</td>
+    </tr>
+    <tr>
+      <td>Agents creating tasks &amp; plans</td>
+      <td>Forced to pre-classify every criterion into a rigid type; the tool interface doesn't even offer all the types; no shared quality bar at all.</td>
+      <td>Write the Definition of Done freely in plain language, guided by the same skill — with clarifying questions back to whoever set the goal when it's ambiguous.</td>
+    </tr>
+    <tr>
+      <td>The creation screens</td>
+      <td>Default to the technical check; one criterion type missing entirely.</td>
+      <td>Plain-language criterion is the default; technical checks are the optional extra.</td>
+    </tr>
+    <tr>
+      <td>Judging</td>
+      <td>Machine checks lead; prose judged as the remainder.</td>
+      <td>Written criteria lead; machine results inform.</td>
+    </tr>
+  </table>
+  </div>
+
+  <h2>Sequencing</h2>
+  <p><span class="tag now">now</span> Fix the drift: let every criterion type actually be created everywhere it's already officially supported.</p>
+  <p><span class="tag now">next</span> The criteria skill: author the built-in skill defining the quality bar above; wire it to trigger automatically on all three creation paths — chat goal, task, plan — including the clarifying-questions step.</p>
+  <p><span class="tag now">next</span> Make pre-classification optional — plain language becomes the default for tasks and plans, matching how chat goals already work.</p>
+  <p><span class="tag later">later</span> The four UI changes above — editor defaults, the criteria-first goal card, verdict display, creation flows — once the skill and the loosened authoring land, so the screens reflect the mechanism instead of leading it.</p>
+
+  <div class="rule">
+    <p><strong>The one-line test for every future change:</strong> could a completely non-technical task — no code, no commands, no files — still be given a meaningful Definition of Done and receive a fair, evidence-grounded verdict?</p>
+    <p>If yes, the change honors this design. If no, it doesn't ship.</p>
+  </div>
+
+  <div class="footer">Omnipus &middot; The Sovereign Deep &middot; v2 &middot; 2026-09-05 &middot; docs/internal/design/judge-plansupervisor-target-design.html</div>
+
+</div>
+</body>
+</html>

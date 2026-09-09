@@ -22,15 +22,77 @@ type channelEntry struct {
 	Status         string `json:"status"`
 }
 
+// channelDisplayMeta carries presentational-only metadata (Name/Tier/
+// Implementation) for each canonical supported channel type. Tier is not
+// consulted by any other code in the repo (no other package or test reads
+// it) — it is purely an informational grouping for list_channels output.
+//
+// Deliberately keyed by the SAME ids as config.KnownChannelTypes() (the
+// canonical, single-source-of-truth set pkg/config uses to validate/drop
+// channel config entries): TestKnownChannels_MatchesCanonicalChannelTypes
+// asserts the two id sets are identical, and buildKnownChannels below panics
+// at package-init time if a canonical id has no entry here — so a channel
+// type added to pkg/config's canonical list without a matching display-meta
+// entry fails the build loudly instead of silently listing it with an empty
+// Name/Tier/Implementation.
+var channelDisplayMeta = map[string]struct {
+	Name           string
+	Tier           string
+	Implementation string
+}{
+	"telegram":    {"Telegram", "tier1", "go"},
+	"discord":     {"Discord", "tier1", "go"},
+	"whatsapp":    {"WhatsApp", "tier1", "go"},
+	"slack":       {"Slack", "tier2", "go"},
+	"matrix":      {"Matrix", "tier2", "go"},
+	"google-chat": {"Google Chat", "tier2", "go"},
+	"irc":         {"IRC", "tier3", "go"},
+	"line":        {"LINE", "tier3", "go"},
+	"feishu":      {"Feishu", "tier3", "go"},
+	"qq":          {"QQ", "tier3", "go"},
+	"dingtalk":    {"DingTalk", "tier3", "go"},
+	"wecom":       {"WeCom", "tier3", "go"},
+	"weixin":      {"Weixin/WeChat", "tier3", "go"},
+}
+
 // knownChannels lists the channels Omnipus knows about with their metadata.
-var knownChannels = []channelEntry{
-	{ID: "telegram", Name: "Telegram", Tier: "tier1", Implementation: "go"},
-	{ID: "discord", Name: "Discord", Tier: "tier1", Implementation: "go"},
-	{ID: "whatsapp", Name: "WhatsApp", Tier: "tier1", Implementation: "go"},
-	{ID: "slack", Name: "Slack", Tier: "tier2", Implementation: "go"},
-	{ID: "signal", Name: "Signal", Tier: "tier2", Implementation: "bridge"},
-	{ID: "irc", Name: "IRC", Tier: "tier3", Implementation: "go"},
-	{ID: "line", Name: "LINE", Tier: "tier3", Implementation: "go"},
+// Its ID membership is DERIVED from config.KnownChannelTypes() rather than
+// hand-maintained as a second, driftable copy — this eliminates the exact
+// bug class this list used to have: "signal" was in the old hand-written
+// list here but NOT in pkg/config's canonical list, so
+// enable_channel{"id":"signal"} returned success and the entry was then
+// silently dropped on the next config reload (config.normalizeChannelMap
+// drops any key not in knownChannelTypes); meanwhile several real,
+// supported channels (feishu, qq, dingtalk, matrix, wecom, weixin,
+// google-chat) were in the canonical list but absent here, so
+// enable_channel/configure_channel/etc. on any of them returned
+// CHANNEL_NOT_FOUND for channels Omnipus genuinely supports.
+var knownChannels = buildKnownChannels()
+
+// buildKnownChannels derives the []channelEntry slice from
+// config.KnownChannelTypes(), looking up presentational metadata from
+// channelDisplayMeta. Panics if a canonical channel type has no matching
+// metadata entry — this is a static, compile-time-known set (not a runtime
+// condition), so a gap here is an authoring mistake that must fail loudly
+// rather than silently render an entry with empty fields.
+func buildKnownChannels() []channelEntry {
+	ids := config.KnownChannelTypes()
+	out := make([]channelEntry, 0, len(ids))
+	for _, id := range ids {
+		meta, ok := channelDisplayMeta[id]
+		if !ok {
+			panic(fmt.Sprintf(
+				"pkg/sysagent/tools/channel.go: canonical channel type %q (from config.KnownChannelTypes) "+
+					"has no channelDisplayMeta entry — add one so knownChannels stays in sync", id))
+		}
+		out = append(out, channelEntry{
+			ID:             id,
+			Name:           meta.Name,
+			Tier:           meta.Tier,
+			Implementation: meta.Implementation,
+		})
+	}
+	return out
 }
 
 func findChannel(id string) (channelEntry, bool) {
@@ -50,7 +112,7 @@ func NewChannelEnableTool(d *Deps) *ChannelEnableTool { return &ChannelEnableToo
 func (t *ChannelEnableTool) Name() string             { return "enable_channel" }
 func (t *ChannelEnableTool) Scope() tools.ToolScope   { return tools.ScopeCore }
 func (t *ChannelEnableTool) Description() string {
-	return "Enable a channel connection. The channel will start on the next config reload.\nParameters: id (required, the channel type e.g. 'telegram', 'discord')."
+	return "Enable a channel connection. The channel will start on the next config reload. Call list_channels for valid ids. Enabling a channel with no credentials configured is allowed but the channel will fail to connect — configure it with configure_channel first.\nParameters: id (required, the channel type e.g. 'telegram', 'discord')."
 }
 
 func (t *ChannelEnableTool) Parameters() map[string]any {
@@ -95,20 +157,19 @@ func NewChannelConfigureTool(d *Deps) *ChannelConfigureTool { return &ChannelCon
 func (t *ChannelConfigureTool) Name() string                { return "configure_channel" }
 func (t *ChannelConfigureTool) Scope() tools.ToolScope      { return tools.ScopeCore }
 func (t *ChannelConfigureTool) Description() string {
-	return "Configure an enabled channel with its credentials (token, phone_number, etc).\nParameters: id (required), plus channel-specific credentials."
+	return "Store a channel's credentials and settings. Secrets (token, app_secret) go into the encrypted credential store and are referenced from config.json by a *_ref — they are never written to config.json in plaintext. Non-secret fields (bot_id, app_id, mode) are written to config.json directly. This does NOT enable the channel and does NOT check whether it is enabled: call enable_channel separately, and note the channel only connects on the next config reload. WhatsApp does not take credentials here — it pairs by QR code in the Channels screen.\nParameters: id (required, from list_channels), token, app_secret, bot_id, app_id, mode."
 }
 
 func (t *ChannelConfigureTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"id":           map[string]any{"type": "string"},
-			"token":        map[string]any{"type": "string"},
-			"phone_number": map[string]any{"type": "string"},
-			"bot_id":       map[string]any{"type": "string"},
-			"app_id":       map[string]any{"type": "string"},
-			"app_secret":   map[string]any{"type": "string"},
-			"mode":         map[string]any{"type": "string"},
+			"id":         map[string]any{"type": "string"},
+			"token":      map[string]any{"type": "string"},
+			"bot_id":     map[string]any{"type": "string"},
+			"app_id":     map[string]any{"type": "string"},
+			"app_secret": map[string]any{"type": "string"},
+			"mode":       map[string]any{"type": "string"},
 		},
 		"required": []string{"id"},
 	}
@@ -200,11 +261,6 @@ func (t *ChannelConfigureTool) Execute(_ context.Context, args map[string]any) *
 			applyChannelRef(&ch, field, credKey)
 		}
 		// Apply non-sensitive plain fields supported by this tool.
-		if v, ok := args["phone_number"].(string); ok && v != "" {
-			// phone_number is not currently a typed field on ChannelInstanceConfig;
-			// it is accepted for forward-compatibility but has no storage path yet.
-			_ = v
-		}
 		if v, ok := args["bot_id"].(string); ok && v != "" {
 			ch.BotID = v
 		}
@@ -237,7 +293,7 @@ func NewChannelDisableTool(d *Deps) *ChannelDisableTool { return &ChannelDisable
 func (t *ChannelDisableTool) Name() string              { return "disable_channel" }
 func (t *ChannelDisableTool) Scope() tools.ToolScope    { return tools.ScopeCore }
 func (t *ChannelDisableTool) Description() string {
-	return "Disable a channel connection. The channel will stop on the next config reload.\nParameters: id (required, the channel type e.g. 'telegram', 'discord')."
+	return "Disable a channel connection. The channel will stop on the next config reload. A channel that has never been configured cannot be disabled — it is already inactive.\nParameters: id (required, the channel type e.g. 'telegram', 'discord')."
 }
 
 func (t *ChannelDisableTool) Parameters() map[string]any {
@@ -282,7 +338,7 @@ func NewChannelListTool(d *Deps) *ChannelListTool { return &ChannelListTool{deps
 func (t *ChannelListTool) Name() string           { return "list_channels" }
 func (t *ChannelListTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *ChannelListTool) Description() string {
-	return "List all channels with status and implementation tier. No parameters required."
+	return "List every messaging channel Omnipus supports — Telegram, Discord, WhatsApp, Slack, Matrix, Google Chat, IRC, LINE, Feishu, QQ, DingTalk, WeCom, Weixin — with each one's live state: not_configured, needs_credentials, or configured, plus whether it is currently enabled. Use the returned id with enable_channel, configure_channel, or test_channel. No parameters required."
 }
 
 func (t *ChannelListTool) Parameters() map[string]any {
@@ -290,7 +346,25 @@ func (t *ChannelListTool) Parameters() map[string]any {
 }
 
 func (t *ChannelListTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
-	return tools.NewToolResult(successJSON(map[string]any{"channels": knownChannels}))
+	cfg := t.deps.GetCfg()
+	out := make([]channelEntry, 0, len(knownChannels))
+	for _, c := range knownChannels {
+		e := c // copy the static display meta
+		if cfg != nil {
+			if ch, ok := cfg.Channels[c.ID]; ok {
+				e.Enabled = ch.Enabled
+				e.Status = "configured"
+				if ch.TokenRef == "" && ch.AppSecretRef == "" &&
+					(ch.Identity == nil || ch.Identity.ID == "") {
+					e.Status = "needs_credentials"
+				}
+			} else {
+				e.Status = "not_configured"
+			}
+		}
+		out = append(out, e)
+	}
+	return tools.NewToolResult(successJSON(map[string]any{"channels": out}))
 }
 
 // ---- system.channel.test ----
@@ -301,7 +375,7 @@ func NewChannelTestTool(d *Deps) *ChannelTestTool { return &ChannelTestTool{deps
 func (t *ChannelTestTool) Name() string           { return "test_channel" }
 func (t *ChannelTestTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *ChannelTestTool) Description() string {
-	return "Test a channel's configuration \u2014 checks the channel exists, is enabled, and has credentials configured.\nParameters: id (required, the channel type e.g. 'telegram', 'discord')."
+	return "Check a channel's stored configuration: that the channel type is known, that a config entry exists, whether it is enabled, and whether credentials are present. Does NOT contact the platform \u2014 this makes zero network calls, so a revoked or wrong token still reports success=true, and a channel that is configured but disabled also reports success=true (read the `enabled` field). Enable it with enable_channel and watch the gateway log for the real connection result.\nParameters: id (required, from list_channels)."
 }
 
 func (t *ChannelTestTool) Parameters() map[string]any {
@@ -332,7 +406,8 @@ func (t *ChannelTestTool) Execute(_ context.Context, args map[string]any) *tools
 			"message": fmt.Sprintf("Channel %q is not configured. Use configure_channel to set it up.", id),
 		}))
 	}
-	hasCreds := ch.TokenRef != "" || (ch.Identity != nil && ch.Identity.ID != "")
+	hasCreds := ch.TokenRef != "" || ch.AppSecretRef != "" ||
+		(ch.Identity != nil && ch.Identity.ID != "")
 	if !hasCreds {
 		return tools.NewToolResult(successJSON(map[string]any{
 			"id":      id,

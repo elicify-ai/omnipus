@@ -220,8 +220,11 @@ func TestSeed_PlanSupervisorSkillAllowlist_ExplicitNonNil(t *testing.T) {
 	ps := findSeeded(t, cfg, string(coreagent.IDPlanSupervisor))
 	require.NotNil(t, ps.Skills,
 		"PlanSupervisor's skill allowlist must be EXPLICIT — nil means unrestricted, i.e. every skill")
-	assert.Equal(t, []string{"plan"}, ps.Skills,
-		"PlanSupervisor is granted exactly the plan skill (the re-planning playbook its rubric derives from)")
+	assert.Equal(t, []string{"plan", "define-goal"}, ps.Skills,
+		"PlanSupervisor is granted exactly these two skills — plan (the re-planning playbook its "+
+			"rubric derives from) and define-goal (the ADR-074 D4 criteria-authoring quality bar, "+
+			"renamed from define-done by ADR-080 D-SKILL); an explicit amendment of "+
+			"plan-supervisor-spec FR-007/N3's original \"exactly one\"")
 }
 
 // TestSeed_PlanSupervisorSkillAllowlist_ReEnforced verifies the allowlist is
@@ -230,13 +233,21 @@ func TestSeed_PlanSupervisorSkillAllowlist_ExplicitNonNil(t *testing.T) {
 // stricter than the core-agent loop, which preserves an operator's skill
 // edits, because for a System Agent the allowlist is a role invariant.
 func TestSeed_PlanSupervisorSkillAllowlist_ReEnforced(t *testing.T) {
+	// ADR-074 D4 note: the enforced allowlist is now exactly the PAIR
+	// {plan, define-goal} (renamed from define-done by ADR-080 D-SKILL) —
+	// the "widened with an extra skill" case below legalizes exactly this
+	// shape for exactly these two names, and any OTHER widening (a third
+	// skill, a substitution, a narrowing back to one) must still be
+	// reverted to the pair on the next boot.
 	for _, tc := range []struct {
 		name   string
 		tamper []string
 	}{
 		{"cleared to nil (would resolve UNRESTRICTED)", nil},
-		{"widened with an extra skill", []string{"plan", "skill-authoring"}},
+		{"widened with an extra skill", []string{"plan", "define-goal", "skill-authoring"}},
 		{"replaced entirely", []string{"daily-briefing"}},
+		{"narrowed back to plan alone", []string{"plan"}},
+		{"reordered pair rewritten to canonical order", []string{"define-goal", "plan"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := &config.Config{}
@@ -249,7 +260,7 @@ func TestSeed_PlanSupervisorSkillAllowlist_ReEnforced(t *testing.T) {
 			require.True(t, coreagent.SeedConfig(cfg), "re-enforcement must report modified=true after tamper")
 
 			ps := findSeeded(t, cfg, string(coreagent.IDPlanSupervisor))
-			assert.Equal(t, []string{"plan"}, ps.Skills,
+			assert.Equal(t, []string{"plan", "define-goal"}, ps.Skills,
 				"the seeded allowlist must be restored exactly")
 		})
 	}
@@ -273,9 +284,12 @@ func TestSeed_JudgeSkillAllowlistUnchanged(t *testing.T) {
 // --- FR-008: the exact one-tool grant, as a complement ---------------------
 
 // TestPlanSupervisorSeed_ExactlyPlanCorrect verifies FR-008 over the SEED
-// literal: plan_correct allow, and every other name in the static catalog
-// deny. Stated as a COMPLEMENT rather than a list, so a tool added to the
-// catalog later can never silently land in PlanSupervisor's allow set.
+// literal: plan_correct allow, ToolSearch allow and Skill allow (the two
+// structural floors every agent gets — CLAUDE.md constraint 6 / ADR-072 D1 —
+// applying even to the most locked-down agent in the system), and every
+// other name in the static catalog deny. Stated as a COMPLEMENT rather than
+// a list, so a tool added to the catalog later can never silently land in
+// PlanSupervisor's allow set.
 func TestPlanSupervisorSeed_ExactlyPlanCorrect(t *testing.T) {
 	cfg := &config.Config{}
 	require.True(t, coreagent.SeedConfig(cfg))
@@ -287,16 +301,18 @@ func TestPlanSupervisorSeed_ExactlyPlanCorrect(t *testing.T) {
 	require.Len(t, pol, len(catalog),
 		"policy must enumerate the whole static catalog, one literal entry each (Constraint #6)")
 
+	allowedNames := map[string]bool{"plan_correct": true, "ToolSearch": true, "Skill": true}
 	for _, name := range catalog {
 		p, ok := pol[name]
 		require.Truef(t, ok, "policy must enumerate tool %q (no default fallback)", name)
-		if name == "plan_correct" {
-			assert.Equalf(t, config.ToolPolicyAllow, p, "%q must be allow — it is the entire grant", name)
+		if allowedNames[name] {
+			assert.Equalf(t, config.ToolPolicyAllow, p, "%q must be allow", name)
 			continue
 		}
 		assert.Equalf(t, config.ToolPolicyDeny, p,
-			"%q must be deny — PlanSupervisor's grant is exactly one tool; if you are widening it, "+
-				"amend this test deliberately (the complement failing IS the guard working)", name)
+			"%q must be deny — PlanSupervisor's grant is exactly plan_correct plus the ToolSearch "+
+				"and Skill structural floors; if you are widening it further, amend this test "+
+				"deliberately (the complement failing IS the guard working)", name)
 	}
 
 	// Named call-outs for the withheld grants the spec argues about at length,
@@ -328,13 +344,20 @@ func TestPlanSupervisorResolved_ExactlyPlanCorrect(t *testing.T) {
 	assert.Equal(t, "allow", resolveFor(t, cfg, id, "plan_correct", nil),
 		"(PlanSupervisor, plan_correct) must RESOLVE allow through the real compositor — "+
 			"a per-agent allow under an ask/deny ceiling resolves to the ceiling, not the grant")
+	assert.Equal(t, "allow", resolveFor(t, cfg, id, "ToolSearch", nil),
+		"(PlanSupervisor, ToolSearch) must RESOLVE allow — the structural floor every agent "+
+			"gets applies even to the most locked-down agent in the system")
+	assert.Equal(t, "allow", resolveFor(t, cfg, id, "Skill", nil),
+		"(PlanSupervisor, Skill) must RESOLVE allow — the ADR-072 D1 structural floor every "+
+			"agent gets applies even to the most locked-down agent in the system")
 
 	for _, name := range coreagent.AllStaticToolNames() {
-		if name == "plan_correct" {
+		if name == "plan_correct" || name == "ToolSearch" || name == "Skill" {
 			continue
 		}
 		assert.Equalf(t, "deny", resolveFor(t, cfg, id, name, nil),
-			"(PlanSupervisor, %s) must resolve deny — its grant is exactly one tool", name)
+			"(PlanSupervisor, %s) must resolve deny — its grant is exactly plan_correct plus "+
+				"the ToolSearch and Skill structural floors", name)
 	}
 }
 

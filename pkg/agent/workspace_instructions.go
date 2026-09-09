@@ -10,6 +10,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -46,15 +47,24 @@ func injectWorkspaceInstructions(msgs []providers.Message, note string) []provid
 }
 
 // buildWorkspaceInstructionsNote resolves the workspace ID, reads the
-// workspace's AGENT.md (Project Instructions), and returns the per-turn
-// injection string. Returns "" when:
+// workspace's AGENT.md (Project Instructions), composes ADR-072 D7's second
+// source on this same rail — each of that workspace's live mounts' own root
+// CLAUDE.md/AGENTS.md, ordered by mount name and labelled with it
+// (skills.ComposeProjectInstructions) — and returns the combined per-turn
+// injection string, the workspace's own instructions first per D7's stated
+// ordering ("the operator's intent outranks the repository's"). Returns ""
+// when:
 //
 //   - workspaceID is "" and no default workspace exists (ErrNoDefault — normal
 //     for a fresh install with no workspaces yet).
-//   - The AGENT.md file is absent or empty.
+//   - The AGENT.md file is absent or empty AND no mount contributes a
+//     readable root instruction file.
 //
-// A real I/O error (not "not exist") is logged at Warn level and causes "" to
-// be returned — never failing the turn over an advisory context note.
+// A real I/O error reading AGENT.md (not "not exist") is logged at Warn
+// level and treated as empty rather than aborting the whole note — a mount's
+// instructions are independent content and must not be suppressed by a
+// failure reading the workspace's own file. Never fails the turn over an
+// advisory context note.
 func buildWorkspaceInstructionsNote(workspaceID string) string {
 	home := omnipusHome()
 
@@ -72,18 +82,60 @@ func buildWorkspaceInstructionsNote(workspaceID string) string {
 		}
 	}
 
-	content, err := workspace.ReadInstructions(home, id)
+	ownContent, err := workspace.ReadInstructions(home, id)
 	if err != nil {
 		logger.WarnCF("agent", "workspace instructions: could not read AGENT.md", map[string]any{
 			"workspace_id": id,
 			"error":        err.Error(),
 		})
+		ownContent = ""
+	}
+	ownContent = strings.TrimSpace(ownContent)
+
+	projectNote := buildProjectInstructionsNote(home, id)
+
+	var parts []string
+	if ownContent != "" {
+		parts = append(parts, ownContent)
+	}
+	if projectNote != "" {
+		parts = append(parts, projectNote)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "# Workspace Instructions\n\n" + strings.Join(parts, "\n\n---\n\n")
+}
+
+// buildProjectInstructionsNote composes ADR-072 D7's mounted-project
+// instructions block for workspaceID's live mounts (skills.
+// ComposeProjectInstructions over one skills.ProjectInstructionMount per
+// mount), or "" when the workspace has no mounts, its mount record is
+// unreadable, or none of its mounts carry a readable root CLAUDE.md/
+// AGENTS.md — D6: "silent when there is nothing to find", so this is not
+// escalated to a WARN except when the composed result was actually
+// truncated at the byte cap (D7's own "silently truncating instructions is
+// worse than not loading them" — the marker is already in the returned
+// text; the WARN additionally makes it discoverable via logs).
+func buildProjectInstructionsNote(home, workspaceID string) string {
+	mounts, ok := workspace.LoadMounts(home, workspaceID)
+	if !ok || len(mounts) == 0 {
 		return ""
 	}
 
-	content = strings.TrimSpace(content)
-	if content == "" {
+	pm := make([]skills.ProjectInstructionMount, 0, len(mounts))
+	for _, m := range mounts {
+		pm = append(pm, skills.ProjectInstructionMount{Name: m.Name, Root: m.HostPath})
+	}
+	composed, truncated := skills.ComposeProjectInstructions(pm)
+	if composed == "" {
 		return ""
 	}
-	return "# Workspace Instructions\n\n" + content
+	if truncated {
+		logger.WarnCF("agent", "project instructions truncated at byte cap", map[string]any{
+			"workspace_id": workspaceID,
+			"max_bytes":    skills.MaxInstructionsBytes,
+		})
+	}
+	return composed
 }

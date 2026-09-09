@@ -252,7 +252,7 @@ func TestApplyViewport_DiscardsAMeasurementTheActiveTabHasMovedPast(t *testing.T
 // invariant it stands for stopped holding.
 func newAttachedLiveManager(t *testing.T) (*BrowserManager, *LiveView, *CaptureSession, *ingestLedger, *orderLog) {
 	t.Helper()
-	m := newTestManagerWithFakeTabs(t, 5)
+	m := newTestManagerWithFakeTabs(t)
 	m.live = newLiveViewRegistry(m)
 
 	relay := &fakeRelay{}
@@ -278,19 +278,19 @@ func newAttachedLiveManager(t *testing.T) (*BrowserManager, *LiveView, *CaptureS
 		return nil
 	}, func() {})
 
-	_, err = m.Session(DefaultSessionID)
+	_, err = m.Session(testSessionID)
 	require.NoError(t, err)
-	_, err = m.live.Attach(DefaultSessionID, "viewer-1", nil, nil, nil)
+	_, err = m.live.Attach(testSessionID, "viewer-1", nil, nil, nil)
 	require.NoError(t, err)
 	for i := 0; i < 2; i++ {
-		_, err = m.OpenTab(DefaultSessionID)
+		_, err = m.OpenTab(testSessionID)
 		require.NoError(t, err)
 	}
-	_, activeIdx, err := m.ListTabs(DefaultSessionID)
+	_, activeIdx, err := m.ListTabs(testSessionID)
 	require.NoError(t, err)
 	require.Equal(t, 2, activeIdx, "setup expects the last-opened tab to be active")
 
-	lv, ok := m.live.lookup(DefaultSessionID)
+	lv, ok := m.live.lookup(testSessionID)
 	require.True(t, ok, "attaching must have created a live view")
 
 	// Let the setup's own tab-change traffic settle, then start counting.
@@ -313,7 +313,7 @@ func newAttachedLiveManager(t *testing.T) (*BrowserManager, *LiveView, *CaptureS
 func TestSwitchTab_OrdinarySwitchReassertsForegroundBeforeTheControlFrame(t *testing.T) {
 	m, _, _, ledger, order := newAttachedLiveManager(t)
 
-	_, err := m.SwitchTab(DefaultSessionID, 0) // a real move
+	_, err := m.SwitchTab(testSessionID, 0) // a real move
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool { return ledger.recaptures() == 1 }, 3*time.Second, 5*time.Millisecond,
@@ -346,7 +346,7 @@ func TestSwitchTab_WithAViewportAppliedRecapturesOnceWithTheVerifiedSize(t *test
 	}
 	lv.mu.Unlock()
 
-	_, err := m.SwitchTab(DefaultSessionID, 0)
+	_, err := m.SwitchTab(testSessionID, 0)
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool { return ledger.recaptures() >= 1 }, 3*time.Second, 5*time.Millisecond,

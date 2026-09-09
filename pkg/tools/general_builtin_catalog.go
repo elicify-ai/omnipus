@@ -104,13 +104,25 @@ func GeneralBuiltinMetadata() []Tool {
 
 	// --- Communication / delegation tools (CategoryCommunication / CategoryDelegation) ---
 	out = append(out, NewMessageTool())
-	out = append(out, NewHandoffTool(nil, nil, nil, nil))
-	out = append(out, NewReturnToDefaultTool(nil, nil, nil))
+	out = append(out, NewSwitchAgentTool(nil, nil, nil, nil, nil))
 	out = append(out, NewSendFileTool("", false, 0, nil))
 
 	// --- Skill tools (CategorySkills) ---
+	// remove_skill is NOT listed here: it is a ScopeCore management tool
+	// (systools.SkillRemoveTool, pkg/sysagent/tools/skill.go), registered via
+	// systools.AllTools in the central BuiltinRegistry — not a ScopeGeneral
+	// tool from this metadata catalog. A duplicate ScopeGeneral "remove_skill"
+	// registered here would be silently skipped as a name collision (harmless
+	// but dead weight) since systools.AllTools populates the registry first.
 	out = append(out, NewFindSkillsTool(nil, nil))
 	out = append(out, NewInstallSkillTool(nil, ""))
+	// Skill (ADR-072 D1): the on-demand load-by-slug / search-by-query tool
+	// that replaces force-loaded skill instructions — this codebase's second
+	// instance of the "index in context, content on demand" pattern ADR-071
+	// established for ToolSearch below, one layer up for skills. Metadata-only
+	// instance (no resolver wired; the loop wires SetResolver before any
+	// Execute call), mirroring ToolsTool's own metadata entry exactly.
+	out = append(out, NewSkillTool(0))
 
 	// --- delegate tool (CategoryDelegation) — ADR-036 merge of the former
 	// spawn / run_subagent / check_spawn_status trio into one tool. ---
@@ -123,6 +135,13 @@ func GeneralBuiltinMetadata() []Tool {
 	// Constraint #6 tool-policy-coverage universe (buildKnownBuiltinToolNames)
 	// see it, mirroring delegate's registration exactly. ---
 	out = append(out, NewMessageParentTool(nil, nil))
+
+	// --- AskUserQuestion (CategoryCommunication) — askuserquestion-tool-spec
+	// v3 / ADR-074 D4b: the owner-session structured clarification tool.
+	// Metadata-only instance (nil registry fn; never Execute()d here) so the
+	// central registry and the Constraint #6 tool-policy-coverage universe
+	// (buildKnownBuiltinToolNames) see it, mirroring message_parent exactly.
+	out = append(out, NewAskUserQuestionTool(nil))
 
 	// --- Task tools (CategoryTasks) ---
 	out = append(out, NewTaskListTool(nil))
@@ -204,7 +223,7 @@ func GeneralBuiltinMetadata() []Tool {
 	// all five; nil transport is safe (Execute guards tp==nil; Description static).
 	out = append(out, EmailToolset(nil)...)
 
-	// Unified tool-discovery + load infra (CategoryToolDiscovery): the `load_tool`
+	// Unified tool-discovery + load infra (CategoryToolDiscovery): the `ToolSearch`
 	// infra tool is registered per-agent whenever compressed manifest mode is enabled
 	// OR MCP discovery is enabled (ManifestInfra tier — never appears in the
 	// manifest block; always callable when registered). The metadata instance

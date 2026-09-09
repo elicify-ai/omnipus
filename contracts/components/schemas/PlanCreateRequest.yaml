@@ -43,12 +43,14 @@ properties:
   dod:
     type: array
     items:
-      $ref: ./AcceptanceCriterion.yaml
+      $ref: ./AcceptanceCriterionInput.yaml
     description: >
       Plan-level Definition of Done. Agent-created plans require at least
       one criterion before approval (strict tier, ADR D5); human/UI creation
       may leave this empty (soft tier — the plan judge then evaluates
-      against `title` + `goal`).
+      against `title` + `goal`). Items use the authoring-time
+      `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted
+      and is inferred server-side from the payload.
   rationale:
     type: string
     maxLength: 4000

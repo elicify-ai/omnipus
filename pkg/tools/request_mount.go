@@ -65,11 +65,13 @@ func NewRequestMountTool(homePath string) *RequestMountTool {
 func (t *RequestMountTool) Name() string { return "request_mount" }
 
 func (t *RequestMountTool) Description() string {
-	return "Ask the operator for read/write access to a folder on their computer, " +
+	return "Ask the operator for write access to a folder on their computer, " +
 		"mounted into this workspace. Requires their explicit approval. Use it when a task " +
 		"genuinely needs to work in a specific existing folder — name the exact path and say " +
 		"why in your message, because that reason is what they are judging. Everything outside " +
-		"your workspace is already readable; ask only when you need to WRITE."
+		"your workspace is already readable; ask only when you need to WRITE. The mount name is " +
+		"derived automatically from the folder's basename (you do not choose it) and appears at " +
+		"work/<name>."
 }
 
 func (t *RequestMountTool) Parameters() map[string]any {
@@ -91,6 +93,14 @@ func (t *RequestMountTool) Parameters() map[string]any {
 					"operator with the request — it is the main thing they weigh.",
 			},
 		},
+		// host_path is NOT listed here even though it (or its alias, path) is
+		// always required in practice: this schema validator's "required" is
+		// a flat AND with no way to express "host_path OR path", and path is
+		// a genuine, accepted alias (see TestRequestMount_AcceptsPathAlias) —
+		// listing host_path alone would reject a path-only call before
+		// Execute's own alias-aware presence check ever runs. Execute
+		// enforces "one of host_path/path must be present" at runtime
+		// instead.
 		"required": []string{"reason"},
 	}
 }
@@ -121,7 +131,28 @@ func (t *RequestMountTool) Execute(ctx context.Context, args map[string]any) *To
 	}
 	// Resolved from the turn, never from a model-supplied parameter, so the
 	// model cannot aim a grant at another workspace.
+	//
+	// ToolWorkspaceID alone is NOT sufficient — see list_mounts.go's Execute
+	// doc comment (this tool's read-side counterpart) and
+	// ResolveTurnFSPolicy's identical fallback in resolvepath.go. A
+	// CLI/ProcessDirect turn, a scheduled/heartbeat turn, and (per the
+	// UAT-confirmed live repro) an ordinary chat turn whose channel binding
+	// never set ts.opts.WorkspaceID all leave ToolWorkspaceID(ctx) empty even
+	// though the agent's CoreTeam membership unambiguously determines its
+	// workspace — and that same turn's work dir is already re-rooted into
+	// that workspace, and list_mounts already reports mounts against it via
+	// this exact fallback ("workspace_resolved_from":"agent_membership").
+	// Without this fallback, request_mount refused every mount request on
+	// such a turn even though list_mounts, ResolveTurnFSPolicy, and every
+	// other write-path consumer agreed on the workspace — a discovery/enforce
+	// mismatch (a tool that can never succeed) rather than a genuine "no
+	// workspace" state. Resolve the SAME way, so the three never disagree.
 	workspaceID := ToolWorkspaceID(ctx)
+	if workspaceID == "" {
+		if wsID, found := workspace.FindForAgentPreferring(t.homePath, ToolAgentID(ctx), ""); found {
+			workspaceID = wsID
+		}
+	}
 	if workspaceID == "" {
 		return ErrorResult("request_mount: this turn has no workspace to mount into")
 	}

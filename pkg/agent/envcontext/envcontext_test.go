@@ -244,6 +244,45 @@ func TestEnvironmentProvider_ActiveWarnings_WindowsFlockNoop(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Finding 6(b) (context-audit 2026-08) —
+// TestEnvironmentProvider_ActiveWarnings_WindowsNoSandboxBackend
+// Traces to: this project's own docs stating plainly there is NO Windows
+// sandbox backend at all. Before this fix, ActiveWarnings' KernelLevel
+// switch only had "linux" and "darwin" cases, so a Windows host emitted
+// ZERO sandbox warning despite running completely unconfined — worse than
+// the linux/darwin fallback cases, which at least warn on a downgrade.
+// ---------------------------------------------------------------------------
+
+func TestEnvironmentProvider_ActiveWarnings_WindowsNoSandboxBackend(t *testing.T) {
+	// Inject the warning directly via mock — the renderer must include it.
+	p := &mockProvider{
+		sandboxMode:   "fallback",
+		networkPolicy: envcontext.NetworkPolicy{OutboundAllowed: false},
+		workspacePath: "/workspace",
+		omnipusHome:   "/home/.omnipus",
+		activeWarnings: []string{
+			"no sandbox backend exists on Windows — this process and any children it spawns run entirely unconfined at the kernel level; filesystem/exec restrictions below are enforced at the application level only, if at all.",
+		},
+	}
+	out := envcontext.Render(p, "")
+	if !strings.Contains(out, "no sandbox backend exists on Windows") {
+		t.Errorf("preamble missing the Windows no-sandbox-backend warning; got:\n%s", out)
+	}
+
+	// On a production run, DefaultProvider only emits this on Windows — on
+	// every other GOOS this branch of the switch never runs.
+	if runtime.GOOS != "windows" {
+		dp := envcontext.NewDefaultProvider(minimalConfig(), nil, "/tmp/ws")
+		warnings := dp.ActiveWarnings()
+		for _, w := range warnings {
+			if strings.Contains(w, "no sandbox backend exists on Windows") {
+				t.Errorf("DefaultProvider emitted the Windows no-sandbox-backend warning on non-windows GOOS=%s", runtime.GOOS)
+			}
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Review finding 2 (MAJOR) — TestEnvironmentProvider_ActiveWarnings_SandboxDegradation
 // Traces to: env-awareness-and-memory-spec.md FR-049
 //

@@ -277,7 +277,7 @@ func TestIntegration_ContextCompactionOverflow(t *testing.T) {
 	beforeCount := len(history)
 
 	// -- Act: invoke windowTrim directly --------------------------------------
-	result, ok := al.windowTrim(agent, sessionKey)
+	result, ok := al.windowTrim(agent, "", sessionKey)
 
 	// -- Assert: trim fired (ok=true) ----------------------------------------
 	require.True(t, ok,

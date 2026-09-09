@@ -8,7 +8,7 @@
 // builtin tool must return a known, non-zero ToolScope.
 //
 // Before this file, every real tool's Scope() method was at 0% direct
-// coverage in this package — only email_test.go:306 and load_tool_test.go:282
+// coverage in this package — only email_test.go:306 and ToolSearch_test.go:282
 // happened to touch a real tool's Scope() indirectly, and neither is a
 // dedicated scope assertion. Nothing verified that a shipped tool declares
 // the scope the design says it should. A tool with a mistyped, unset, or
@@ -42,7 +42,7 @@
 //     invariant for pkg/sysagent/tools, independent of any single tool's
 //     source. See TestSysagentCatalog_AllToolsAreScopeCore.
 //  3. pkg/sysagent/tools/registry.go's own doc comment on BuildRegistry:
-//     "creates a ToolRegistry containing all 35 system tools" — an
+//     "creates a ToolRegistry containing all 33 system tools" — an
 //     independently-stated count used as the catalog-membership sanity
 //     check in TestSysagentCatalog_AllToolsAreScopeCore, not derived by
 //     counting AllTools' literal entries.
@@ -158,24 +158,25 @@ func TestGeneralBuiltinMetadata_AllToolsHaveKnownScope(t *testing.T) {
 // via Scope())" — every tool systools.AllTools produces must be ScopeCore,
 // with no exceptions.
 //
-// nil Deps/NavigateCallback are safe here: only Name()/Scope() are called,
-// never Execute() — see pkg/gateway/gateway.go's buildKnownBuiltinToolNames
-// doc comment, which documents and relies on the identical safety property
-// for the identical call (every sysagent constructor only stores the *Deps
-// pointer it is given; Name()/Scope() are static and never dereference it).
+// nil Deps is safe here: only Name()/Scope() are called, never Execute() —
+// see pkg/gateway/gateway.go's buildKnownBuiltinToolNames doc comment, which
+// documents and relies on the identical safety property for the identical
+// call (every sysagent constructor only stores the *Deps pointer it is
+// given; Name()/Scope() are static and never dereference it).
 //
-// The exact-35 count comes from pkg/sysagent/tools/registry.go's own
-// BuildRegistry doc comment ("creates a ToolRegistry containing all 35
+// The exact-33 count comes from pkg/sysagent/tools/registry.go's own
+// BuildRegistry doc comment ("creates a ToolRegistry containing all 33
 // system tools"), not from counting AllTools' literal entries — an
 // independent textual source, so a silent catalog-membership drift (a tool
-// added/removed without updating that comment) is itself a finding.
+// added/removed without updating that comment) is itself a finding. (Was 35
+// until navigate and write_agent_metadata were retired.)
 //
 // Traces to: pkg/tools/base.go ToolScope doc comment;
 // pkg/sysagent/tools/registry.go BuildRegistry doc comment.
 func TestSysagentCatalog_AllToolsAreScopeCore(t *testing.T) {
-	catalog := systools.AllTools(nil, nil)
-	if len(catalog) != 35 {
-		t.Fatalf("expected systools.AllTools(nil, nil) to return exactly 35 tools (per registry.go's BuildRegistry doc comment: \"all 35 system tools\"), got %d — catalog membership drifted from its own documentation", len(catalog))
+	catalog := systools.AllTools(nil)
+	if len(catalog) != 33 {
+		t.Fatalf("expected systools.AllTools(nil) to return exactly 33 tools (per registry.go's BuildRegistry doc comment: \"all 33 system tools\"), got %d — catalog membership drifted from its own documentation", len(catalog))
 	}
 
 	for _, tl := range catalog {
@@ -190,9 +191,9 @@ func TestSysagentCatalog_AllToolsAreScopeCore(t *testing.T) {
 // on the same Name(), a by-name lookup would mask one of them.
 func TestSysagentCatalog_ToolNamesAreUnique(t *testing.T) {
 	seen := make(map[string]bool)
-	for _, tl := range systools.AllTools(nil, nil) {
+	for _, tl := range systools.AllTools(nil) {
 		if seen[tl.Name()] {
-			t.Errorf("duplicate tool name %q in systools.AllTools(nil, nil) — catalog is not name-unique", tl.Name())
+			t.Errorf("duplicate tool name %q in systools.AllTools(nil) — catalog is not name-unique", tl.Name())
 		}
 		seen[tl.Name()] = true
 	}

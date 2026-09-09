@@ -110,8 +110,13 @@ type Message struct {
 	MessageID string `json:"message_id,omitempty"`
 	From      string `json:"from"`
 	FromName  string `json:"from_name,omitempty"`
-	To        string `json:"to,omitempty"`
-	Subject   string `json:"subject"`
+	// ReplyTo is the RFC 5322 Reply-To header address, if the sender set one.
+	// When present it names the address the sender explicitly asked replies to
+	// go to (common for mailing lists, ticketing systems, and no-reply@
+	// senders) and callers such as the reply tool should prefer it over From.
+	ReplyTo string `json:"reply_to,omitempty"`
+	To      string `json:"to,omitempty"`
+	Subject string `json:"subject"`
 	// Date is the message Date header in RFC 3339 (UTC), best-effort.
 	Date string `json:"date,omitempty"`
 	// Body is the decoded plain-text body. Populated by ReadMessage; for
@@ -384,6 +389,14 @@ func (c *Client) Search(ctx context.Context, query string, opts SearchOptions) (
 	if q == "" {
 		return SearchResult{}, fmt.Errorf("email transport: search query is empty")
 	}
+	if opts.BeforeUID == 1 {
+		// Nothing has a UID strictly below 1 — terminate the pagination loop
+		// here rather than falling through to buildSearchCriteria, which
+		// ignores a beforeUID of 1 (its "beforeUID > 1" guard) and would
+		// otherwise re-run the query with no UID restriction at all, silently
+		// returning page 1 again instead of an empty final page.
+		return SearchResult{Messages: []Message{}}, nil
+	}
 	limit := clampLimit(opts.Limit)
 	client, _, err := c.dialIMAP(ctx)
 	if err != nil {
@@ -521,6 +534,9 @@ func bufferToMessage(m *imapclient.FetchMessageBuffer, withBody bool) Message {
 	if len(env.From) > 0 {
 		msg.From = addressString(env.From[0])
 		msg.FromName = env.From[0].Name
+	}
+	if len(env.ReplyTo) > 0 {
+		msg.ReplyTo = addressString(env.ReplyTo[0])
 	}
 	if len(env.To) > 0 {
 		msg.To = addressString(env.To[0])

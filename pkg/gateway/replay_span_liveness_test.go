@@ -41,7 +41,7 @@ func runReplayWithSpanActive(
 	t.Helper()
 	sink := &sliceSink{}
 	rs := computeReplayStats(entries)
-	n, err := streamReplay(context.Background(), "session_test", entries, rs, sink.emit, nil, nil, isSpanActive)
+	n, err := streamReplay(context.Background(), "session_test", entries, rs, sink.emit, nil, nil, isSpanActive, nil)
 	require.NoError(t, err, "streamReplay must not return an error for valid input")
 	return sink.all(), n
 }

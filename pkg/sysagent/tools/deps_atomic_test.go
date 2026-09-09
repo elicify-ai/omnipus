@@ -25,7 +25,7 @@ import (
 //
 // Concretely this test:
 //  1. Verifies Deps has exactly one exported field of type *atomic.Pointer[Deps].
-//  2. Verifies AllTools(nil, nil) returns exactly 35 tools (supply side intact).
+//  2. Verifies AllTools(nil) returns exactly 33 tools (supply side intact).
 //  3. Verifies a non-nil *Deps with Live wired can Load() without panicking
 //     (the reload path invariant).
 //
@@ -34,7 +34,7 @@ import (
 //	When reflected for atomic.Pointer[Deps] fields,
 //	Then at least one such field exists (FR-050 structural guarantee).
 //	When AllTools is called with a valid Deps,
-//	Then it returns == 35 tools and none panic on Name()/Description().
+//	Then it returns == 33 tools and none panic on Name()/Description().
 //
 // Traces to: FR-050 (atomic-pointer deps), FR-001/FR-002 (supply side).
 func TestRegistry_ToolDepsContract(t *testing.T) {
@@ -60,10 +60,10 @@ func TestRegistry_ToolDepsContract(t *testing.T) {
 		}
 	})
 
-	t.Run("AllTools_returns_exactly_35", func(t *testing.T) {
-		all := AllTools(nil, nil)
-		if len(all) != 35 {
-			t.Errorf("AllTools(nil, nil) returned %d tools; want == 35 (FR-001/FR-002)", len(all))
+	t.Run("AllTools_returns_exactly_33", func(t *testing.T) {
+		all := AllTools(nil)
+		if len(all) != 33 {
+			t.Errorf("AllTools(nil) returned %d tools; want == 33 (FR-001/FR-002)", len(all))
 		}
 		for _, tool := range all {
 			// Basic liveness checks — must not panic.

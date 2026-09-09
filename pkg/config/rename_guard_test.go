@@ -179,6 +179,11 @@ func TestNoAgentConfigWorkspaceIdentifier(t *testing.T) {
 //     allowlisted, and must never be added here).
 //   - (retired) pkg/sandbox/sandbox.go's comment heading ("// Workspace: full
 //     RWX ...", a prose label), not a struct field or composite literal.
+//   - pkg/agent/loop.go's comment explaining why a second, competing
+//     remove_skill registration was deleted (commit 81f7ef26): the prose
+//     names "agent.Workspace" only as the root the DELETED code used to be
+//     constructed against, pre-ADR-046 — historical context in a comment,
+//     not a live selector or composite-literal key.
 //
 // Adding a new entry is a deliberate, reviewed exception: confirm which type
 // is genuinely involved before silencing a failure this way.
@@ -187,9 +192,10 @@ var allowedWorkspaceIdentifierLines = map[string]bool{
 	"pkg/skills/github_registry.go:50": true,
 	"pkg/skills/github_registry.go:65": true,
 	"pkg/skills/github_registry.go:74": true,
-	"pkg/skills/registry.go:192":       true,
+	"pkg/skills/registry.go:208":       true,
 	"pkg/skills/config_bridge.go:53":   true,
 	"pkg/skills/config_bridge.go:54":   true,
+	"pkg/agent/loop.go:1978":           true,
 
 	"pkg/skills/github_registry_test.go:24":  true,
 	"pkg/skills/github_registry_test.go:35":  true,

@@ -119,6 +119,10 @@ export interface BrowserWebRTCSessionOptions { // not-wire-format: local constru
 interface BrowserWebRTCStateSignal { // not-wire-format: locally widened view of BrowserWebRTCStateFrame (reason enum -> string) so applyState reacts correctly to a reason value the generated wire enum doesn't list yet; never constructed from raw JSON itself
   available: boolean
   reason?: string
+  /** Free-text cause from the gateway (UAT case 16). Forwarded verbatim to
+   * `onFallback` alongside `reason` and never interpreted here — the enum
+   * classifies, this explains. */
+  reason_detail?: string
   active?: boolean
 }
 
@@ -233,7 +237,35 @@ export function pcFactoryWithICEServers(servers: readonly BrowserICEServer[]): (
  * (never swallows it) so a support engineer can still search logs/console
  * for the exact string even when the copy above it is generic.
  */
-export function translateWebRTCFallbackReason(reason: string): string {
+export function translateWebRTCFallbackReason(reason: string, detail?: string): string {
+  return appendWebRTCReasonDetail(webrtcFallbackHeadline(reason), detail)
+}
+
+/**
+ * UAT case 16. The gateway's `reason` is a CLOSED enum and four of its six
+ * values cover wildly different causes, so the copy above can only ever be a
+ * category, not an explanation. `reason_detail` is the gateway's own
+ * sentence for THIS failure — "capture session: create encoder target:
+ * browser: timed out after 20s waiting for the browser to attach the tab
+ * (target may be unresponsive)" — already whitespace-collapsed,
+ * credential-redacted and length-bounded server-side.
+ *
+ * It is appended VERBATIM rather than pattern-matched into friendlier prose,
+ * deliberately: the whole failure this fixes was a layer deciding on the
+ * operator's behalf which words they were allowed to see. A cause we do not
+ * recognise is exactly the case where the raw text matters most.
+ *
+ * The category sentence stays FIRST so the reader gets the plain-language
+ * "what happened, can I retry" before the machine detail, and every branch
+ * above keeps its Retry guidance intact.
+ */
+function appendWebRTCReasonDetail(headline: string, detail?: string): string {
+  const trimmed = detail?.trim()
+  if (!trimmed) return headline
+  return `${headline} Reported cause: ${trimmed}`
+}
+
+function webrtcFallbackHeadline(reason: string): string {
   switch (reason) {
     case 'disabled':
       return 'Live video is turned off for this installation. Ask your operator to enable it in Settings.'
@@ -304,7 +336,7 @@ export class BrowserWebRTCSession {
   private streamCb: ((stream: MediaStream) => void) | null = null
   private inputOpenCb: (() => void) | null = null
   private inputCloseCb: (() => void) | null = null
-  private fallbackCb: ((reason: string) => void) | null = null
+  private fallbackCb: ((reason: string, detail?: string) => void) | null = null
 
   constructor(options: BrowserWebRTCSessionOptions = {}) {
     this.pcFactory = options.pcFactory ?? defaultPcFactory
@@ -368,7 +400,7 @@ export class BrowserWebRTCSession {
     this.inputCloseCb = cb
   }
 
-  onFallback(cb: (reason: string) => void): void {
+  onFallback(cb: (reason: string, detail?: string) => void): void {
     this.fallbackCb = cb
   }
 
@@ -462,13 +494,13 @@ export class BrowserWebRTCSession {
   applyState(frame: BrowserWebRTCStateSignal): void {
     if (!frame.available) {
       if (this._state === 'offering' || this._state === 'connected') {
-        this._fallback(frame.reason ?? 'unavailable')
+        this._fallback(frame.reason ?? 'unavailable', frame.reason_detail)
       }
       return
     }
     if (this._state !== 'offering' && this._state !== 'connected') return
     if (frame.reason) {
-      this._fallback(frame.reason)
+      this._fallback(frame.reason, frame.reason_detail)
       return
     }
     if (frame.active === false && this._state === 'connected') {
@@ -746,14 +778,30 @@ export class BrowserWebRTCSession {
     }
   }
 
-  private _fallback(reason: string): void {
+  /**
+   * `detail` is the gateway's free-text cause (browser_webrtc_state.
+   * reason_detail). Only server-originated fallbacks carry one; the local
+   * ones this class raises on its own (ice-failed, answer-timeout, …) name
+   * their cause in the reason token itself and pass nothing.
+   */
+  private _fallback(reason: string, detail?: string): void {
     if (this._state === 'fallback') return
     this._cleanupPeer()
     this._setState('fallback')
     // A stop() mid-gather used to still fire onFallback after the panel
     // closed (the gathering timeout is a local setTimeout). Do not notify.
     if (this.stopped) return
-    this.fallbackCb?.(reason)
+    // Called with ONE argument when there is no detail, not with an explicit
+    // `undefined` second one. The locally-raised fallbacks (ice-failed,
+    // answer-timeout, …) genuinely carry no gateway cause, and a callback
+    // signature that always passes a second slot would quietly turn every
+    // existing `toHaveBeenCalledWith(reason)` assertion into a two-argument
+    // one — a churn with no meaning, over a distinction that is real.
+    if (detail === undefined) {
+      this.fallbackCb?.(reason)
+    } else {
+      this.fallbackCb?.(reason, detail)
+    }
     if (this.retryCount >= this.maxRetries) return
     // Exponential backoff, capped by the attempt count: a transient blip
     // recovers on the first retry (retryDelayMs), while a genuinely-down

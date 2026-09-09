@@ -82,7 +82,7 @@ func (al *AgentLoop) getSubTurnConfig() subTurnRuntimeConfig {
 	if maxConcurrent <= 0 {
 		// Fall back to MaxParallelAgents so that the synchronous spawn/subagent
 		// fan-out is capped by the same knob as the async task dispatch path.
-		maxConcurrent = al.cfg.Performance.EffectiveMaxParallelAgents()
+		maxConcurrent, _ = al.cfg.Performance.EffectiveMaxParallelAgents()
 	}
 
 	concurrencyTimeout := time.Duration(cfg.ConcurrencyTimeoutSec) * time.Second
@@ -278,6 +278,16 @@ type SubTurnConfig struct {
 	// `delegate.run` call on error rather than let an over-cap snapshot
 	// through.
 	ContextSnapshot *ContextSnapshot
+
+	// RequestedSkill is the ADR-072 D9 "request" mechanism (spec FR-050..056)
+	// — the tools-side mirror of tools.SubTurnConfig.RequestedSkill, which
+	// AgentLoopSpawner.SpawnSubTurn converts this from 1:1 (the same
+	// tools<->agent duplication ContextSnapshot/SubTurnConfig already
+	// document). An optional skill slug the parent names; spawnSubTurn
+	// resolves it against execSource's (the CHILD's) OWN ContextBuilder —
+	// see resolveRequestedSkillForChild — never the parent's, before any
+	// dispatch/session work below. Empty means "no requested skill".
+	RequestedSkill string
 
 	// Can be extended with temperature, topP, etc.
 }
@@ -516,6 +526,7 @@ func (s *AgentLoopSpawner) SpawnSubTurn(
 		ResolvedMaxDepth:   cfg.ResolvedMaxDepth,
 		DelegateSessionID:  cfg.DelegateSessionID,
 		IsResume:           cfg.IsResume,
+		RequestedSkill:     cfg.RequestedSkill,
 	}
 	if cfg.ContextSnapshot != nil {
 		agentCfg.ContextSnapshot = &ContextSnapshot{
@@ -556,6 +567,75 @@ func (s *AgentLoopSpawner) MarkPendingDelegateSpawn(sessionID, channel, chatID s
 		return
 	}
 	s.al.cancelPreArm.markPendingSpawn(time.Now(), keys...)
+}
+
+// requestedSkillOutcome is the closed set of outcomes
+// resolveRequestedSkillForChild can report for a `delegate.run`
+// requested_skill slug (ADR-072 D9, spec FR-050..056).
+type requestedSkillOutcome int
+
+const (
+	// requestedSkillUnresolvable is the zero value deliberately, mirroring
+	// pkg/tools/skill.go's SkillLoadNotFound: an unwired or misbehaving
+	// ContextBuilder fails toward "nothing exists", never toward "granted"
+	// or "installed-but-denied" — either of which would leak information a
+	// missing/nil builder cannot actually back up.
+	requestedSkillUnresolvable requestedSkillOutcome = iota
+	// requestedSkillDenied: the slug exists on some shelf visible to the
+	// child, but the child is not granted it.
+	requestedSkillDenied
+	// requestedSkillGranted: the child may load the slug — the resolved
+	// canonical slug is returned alongside this outcome.
+	requestedSkillGranted
+)
+
+// resolveRequestedSkillForChild resolves requested against cb — the CHILD's
+// (execSource's) OWN ContextBuilder. This is ADR-072 D9's structural gate:
+// "the receiver's grant is the real gate ... there is no code path from the
+// parent's ContextBuilder into this decision" — cb here is ALWAYS
+// execSource's builder, never the delegating parent's, so the parent's own
+// grant list has no bearing on the outcome by construction, not convention.
+//
+// Distinguishes three outcomes (spec FR-053/FR-054, never conflated):
+// granted (with the canonical slug the child may load), denied (the slug
+// exists on some shelf visible to this agent but is not granted), and
+// unresolvable (the slug matches nothing on any shelf visible to this agent
+// at all).
+//
+// cb.ResolveSkillName already applies the full per-shelf grant model
+// (D4/D4.1/D4.2) but, like the human "/<slug>" door it also gates, reports
+// only a single ok bool — ResolveSkillName's own doc comment states an
+// installed-but-ungranted slug "cannot be resolved", the same false a
+// nowhere-installed slug produces. D9 requires the two to be
+// distinguishable, so on a failed resolution this additionally checks
+// whether the slug matches ANY registry/builtin entry regardless of grant
+// (mirroring pkg/skills.ResolveSkillName's own first-pass match, minus the
+// allowed() gate) to tell "installed, not granted" from "installed
+// nowhere". The project shelf needs no separate check here: a project-shelf
+// slug always resolves successfully in the first place (D4.1 — the mount
+// IS the grant, no per-agent list applies), so a failed resolution already
+// implies it is not on the project shelf either.
+func resolveRequestedSkillForChild(cb *ContextBuilder, requested string) (canonical string, outcome requestedSkillOutcome) {
+	trimmed := strings.TrimSpace(requested)
+	if cb == nil || cb.skillsLoader == nil || trimmed == "" {
+		return "", requestedSkillUnresolvable
+	}
+	// Fetch the installed-skill list ONCE (ADR-072 Finding D). ListSkills()
+	// is an uncached, full-directory scan, and this function previously
+	// triggered it TWICE on every denied/not-found outcome — once implicitly
+	// inside cb.ResolveSkillName, and again explicitly in the fallback loop
+	// below. resolveSkillNameWithList lets both the resolution attempt and
+	// the fallback membership check share this single fetch.
+	allSkills := cb.skillsLoader.ListSkills()
+	if resolved, ok := cb.resolveSkillNameWithList(allSkills, trimmed); ok {
+		return resolved.Slug, requestedSkillGranted
+	}
+	for _, s := range allSkills {
+		if strings.EqualFold(s.ID, trimmed) || strings.EqualFold(s.Name, trimmed) {
+			return "", requestedSkillDenied
+		}
+	}
+	return "", requestedSkillUnresolvable
 }
 
 func spawnSubTurn(
@@ -849,6 +929,30 @@ func spawnSubTurn(
 	if targetAgent != nil {
 		execSource = targetAgent
 	}
+
+	// ADR-072 D9 / spec FR-050..056: requested_skill is resolved against
+	// execSource — the CHILD's own ContextBuilder, never the parent's — and
+	// checked here, before any further dispatch/session/context work below,
+	// so a denial or an unresolvable slug aborts the sub-turn cleanly at
+	// dispatch, before the child's first model call (FR-053), exactly like
+	// the depth-limit and target-unresolved checks immediately above this
+	// one. A granted slug is recorded in canonicalRequestedSkill and
+	// appended to the child's opts.ForcedSkills once opts exists below
+	// (mirrors applyExplicitSkillCommand's own one-shot activation, so the
+	// child's first turn begins with it loaded per FR-052/FR-056).
+	var canonicalRequestedSkill string
+	if requested := strings.TrimSpace(cfg.RequestedSkill); requested != "" {
+		canonical, outcome := resolveRequestedSkillForChild(execSource.ContextBuilder, requested)
+		switch outcome {
+		case requestedSkillDenied:
+			return nil, fmt.Errorf("%w: agent %q, skill %q", tools.ErrRequestedSkillDenied, execSource.ID, requested)
+		case requestedSkillUnresolvable:
+			return nil, fmt.Errorf("%w: skill %q", tools.ErrRequestedSkillNotFound, requested)
+		case requestedSkillGranted:
+			canonicalRequestedSkill = canonical
+		}
+	}
+
 	// Decide dispatch kind from the resolved DELEGATE's own executor config
 	// (not the parent's) — see the comment above. Resolved here, ahead of the
 	// AgentInstance build below, so the external-cli-only field overrides can
@@ -915,7 +1019,7 @@ func spawnSubTurn(
 	// mutex. Sessions is the one deliberate exception — always a fresh
 	// ephemeral (in-memory only) store, so child turns never pollute or
 	// persist to the source agent's real session history. Tools is set below
-	// (needs the delegate/hand_off exclusion, not a plain copy); toolPolicy
+	// (needs the delegate/switch_agent exclusion, not a plain copy); toolPolicy
 	// and providerPool are unexported atomic fields a struct literal cannot
 	// copy at all, also set below.
 	agent := AgentInstance{
@@ -971,12 +1075,12 @@ func spawnSubTurn(
 	// soul-less agent) returned Jim's own compiled persona verbatim. This
 	// also caused the tool-policy split-brain: tools.WithAgentID(turnCtx,
 	// ts.agent.ID) (loop.go) threads agent.ID into the tool-execution
-	// context, and load_tool's canLoad resolver looks up "the calling agent"
+	// context, and ToolSearch's canLoad resolver looks up "the calling agent"
 	// by that ID via a fresh al.registry.GetAgent(...) call — so an unswapped
 	// ID meant canLoad checked the PARENT's real, registry-backed policy
 	// while the final FilterToolsByPolicy call (loop.go) read the child's own
 	// (nil, deny-all) toolPolicy above — two different verdicts for the same
-	// tool, observed live as an infinite load_tool retry loop.
+	// tool, observed live as an infinite ToolSearch retry loop.
 
 	// Tool-approval grant inheritance (consent boundary — delegation): the
 	// child sub-turn inherits every "Always Allow" grant the PARENT has
@@ -1012,16 +1116,16 @@ func spawnSubTurn(
 
 	// FR-H-006 REVERSAL: "delegate" is NO LONGER excluded from the child's
 	// registry. Note: distinct from the identity-swap
-	// load_tool bug documented just above (ID/ContextBuilder, ~line 663) —
+	// ToolSearch bug documented just above (ID/ContextBuilder, ~line 663) —
 	// that one was wrong AGENT IDENTITY (an unswapped childTS.agentID made
 	// canLoad resolve the PARENT's policy instead of the child's own); this
 	// one is an INCOMPLETE TOOL SET for a correctly-identified agent (the
 	// child's identity was already right, but "delegate" was unconditionally
 	// missing from its registry regardless of identity or policy). Both
-	// happen to manifest through the same load_tool fabricated-success
+	// happen to manifest through the same ToolSearch fabricated-success
 	// symptom described below, but the two are independent bugs with
 	// independent fixes — do not conflate them when debugging a future
-	// load_tool report. The original FR-H-006 rationale ("one level
+	// ToolSearch report. The original FR-H-006 rationale ("one level
 	// only for general subagents", owner decision 2026-04-20) predates the
 	// per-edge depth-cap + trust-graph delegation system that now exists
 	// (workspace.DelegationEdge.Depth, config.SubTurn.MaxDepth,
@@ -1034,7 +1138,7 @@ func spawnSubTurn(
 	// gate — it did not just enforce "one level only", it made ANY grandchild
 	// delegation structurally impossible regardless of an explicit, wired,
 	// "unrestricted" trust edge, and it failed in a confusing way: the
-	// unified `load_tool` infra tool (ScopeCore, lazily loaded — see
+	// unified `ToolSearch` infra tool (ScopeCore, lazily loaded — see
 	// pkg/tools/tools_tool.go) reports a fabricated LOAD SUCCESS for
 	// "delegate" inside a child sub-turn (its canLoad/markLoaded closures
 	// resolve the caller's agent via al.registry.GetAgent(callerID), i.e. the
@@ -1048,10 +1152,11 @@ func spawnSubTurn(
 	// (delegationDenyBackground/Await, SetDelegationDepthResolver) at all —
 	// blocking every multi-hop chain (e.g. jim -> ray -> planner ->
 	// {explorer|researcher}) even when every edge in the chain was explicitly
-	// authorized. "hand_off" remains excluded: a nested sub-turn hijacking the
-	// ACTIVE parent session's agent is a distinct, still-valid concern
-	// (session takeover) unrelated to task-delegation chain depth, and is not
-	// governed by the depth-cap/trust-graph system at all.
+	// authorized. "switch_agent" remains excluded (ADR-071 D4 renamed
+	// hand_off + return_to_default to this one tool): a nested sub-turn
+	// hijacking the ACTIVE parent session's agent is a distinct, still-valid
+	// concern (session takeover) unrelated to task-delegation chain depth,
+	// and is not governed by the depth-cap/trust-graph system at all.
 	//
 	// Sourced from execSource (the resolved delegate, or baseAgent for
 	// self-delegation) — NOT unconditionally baseAgent. Workspace-scoped
@@ -1070,20 +1175,25 @@ func spawnSubTurn(
 	// ContextBuilder.
 	if execSource.Tools != nil {
 		// Known residual gap (not fixed here, documented only): unlike
-		// "delegate" above, "hand_off" is unconditionally excluded from
-		// EVERY child sub-turn's registry, and the SAME load_tool
+		// "delegate" above, "switch_agent" (ADR-071 D4 renamed hand_off +
+		// return_to_default to this one tool — the defect's mechanism is
+		// unaffected by the rename, see below) is unconditionally excluded
+		// from EVERY child sub-turn's registry, and the SAME ToolSearch
 		// fabricated-success-then-permission_denied bug just cured for
-		// "delegate" is still live for "hand_off" — canLoad/markLoaded
+		// "delegate" is still live for "switch_agent" — canLoad/markLoaded
 		// (pkg/tools/tools_tool.go) resolve the caller via
 		// al.registry.GetAgent(callerID), the PERSISTENT top-level agent,
-		// not this ephemeral child's own registry, so load_tool can still
-		// report a fabricated success for "hand_off" here even though it is
-		// structurally absent from agent.Tools. Root-caused but out of
-		// scope for this fix (tools_tool.go is a larger, separate change).
-		agent.Tools = execSource.Tools.CloneExcept(tools.ExcludedHandoff)
+		// not this ephemeral child's own registry, so ToolSearch can still
+		// report a fabricated success for "switch_agent" here even though it
+		// is structurally absent from agent.Tools. Root-caused but out of
+		// scope for this fix (tools_tool.go is a larger, separate change) —
+		// this is a wrong-REGISTRY bug (caller resolution), not a wrong-NAME
+		// bug, so it survives the D1 (load_tool->ToolSearch) and D4
+		// (hand_off/return_to_default->switch_agent) renames identically.
+		agent.Tools = execSource.Tools.CloneExcept(tools.ExcludedSwitchAgent)
 		// Log the constructed registry so operators can debug "my subagent has no tools" issues.
 		slog.Info("subturn: child registry constructed",
-			"excluded", []string{"hand_off"},
+			"excluded", []string{string(tools.ExcludedSwitchAgent)},
 			"remaining_count", agent.Tools.Count(),
 			"child_id", childID,
 		)
@@ -1315,6 +1425,41 @@ func spawnSubTurn(
 		// re-rooting" comment) removed a genuine tie-breaking signal for a
 		// child agent that belongs to more than one workspace's CoreTeam.
 		WorkspaceID: parentTS.opts.WorkspaceID,
+		// ADR-075 FR-032 / issue #659: AutoDenyAsk is INHERITED from the
+		// parent turn. It was not, and that was the defect.
+		//
+		// AutoDenyAsk means "there is no operator on this run, so an
+		// `ask`-policy tool must be denied rather than queued for an approval
+		// nobody can answer". It is set true only for headless/scheduled runs
+		// (ProcessScheduled). A delegated child of such a run is just as
+		// unattended as its parent — there is no second operator who appeared
+		// because the work was delegated — but the child's processOptions were
+		// built without the flag, so its first `ask`-policy tool issued an
+		// approval request into a run with nobody watching and the turn
+		// blocked until its deadline.
+		//
+		// D1 is what makes this urgent rather than tidy: under ADR-075 a
+		// delegated sub-turn browses its workspace's SIGNED-IN browser, and
+		// D2.9 seeds browser_upload_file as `ask` for every agent. Without
+		// this line the first delegated sub-turn to reach it hangs.
+		//
+		// INHERITED, NOT FORCED ON. Setting it unconditionally for every
+		// delegated child would silently convert an INTERACTIVE user's
+		// delegation into blanket denials — an operator IS attached to that
+		// run, and the approval prompt is exactly what they expect. The
+		// property the requirement names is "no operator attached", and the
+		// parent's flag is what records that.
+		AutoDenyAsk: parentTS.opts.AutoDenyAsk,
+	}
+
+	// ADR-072 D9 / FR-052/FR-056: a granted requested_skill is appended to
+	// the child's ForcedSkills — the SAME one-shot, per-turn field the human
+	// "/<skill>" slash command populates (applyExplicitSkillCommand, loop.go)
+	// — so the child's first turn begins with it already loaded, exactly as
+	// a slash-command activation would. canonicalRequestedSkill is empty
+	// whenever cfg.RequestedSkill was empty (the ordinary, unaffected case).
+	if canonicalRequestedSkill != "" {
+		opts.ForcedSkills = append(opts.ForcedSkills, canonicalRequestedSkill)
 	}
 
 	// Create event scope for the child turn

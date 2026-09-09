@@ -1,0 +1,45 @@
+{
+ "url": "http://127.0.0.1:19732/source-worker.html?run=dash720",
+ "secs": 25,
+ "recordedAt": "2026-08-30T09:47:29.278Z",
+ "loadavg": [
+  8.880859375,
+  11.78271484375,
+  12.6845703125
+ ],
+ "cpus": 8,
+ "navToEnd_ms": 32594,
+ "totalAppends": 0,
+ "totalBytes": 0,
+ "missingChunkData": 0,
+ "events": [
+  {
+   "ev": "shim",
+   "t": 0,
+   "scope": "window",
+   "url": "about:blank",
+   "hasMS": true,
+   "hasMMS": false,
+   "wall": 1545,
+   "session": "0A582069A00253AF043FDDFB3F4F412C"
+  },
+  {
+   "ev": "shim",
+   "t": 0,
+   "scope": "window",
+   "url": "http://127.0.0.1:19732/source-worker.html?run=dash720",
+   "hasMS": true,
+   "hasMMS": false,
+   "wall": 1682,
+   "session": "0A582069A00253AF043FDDFB3F4F412C"
+  },
+  {
+   "ev": "worker",
+   "t": 3,
+   "url": "mse-worker.js",
+   "wall": 1684,
+   "session": "0A582069A00253AF043FDDFB3F4F412C"
+  }
+ ],
+ "samples": []
+}

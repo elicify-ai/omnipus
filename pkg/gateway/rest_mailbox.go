@@ -654,8 +654,9 @@ var emailToolNames = []string{"read_inbox", "search_email", "read_message", "sen
 // implicitly denied simply by being absent from the map. This function used
 // to check that default_policy field and only fill genuinely-missing
 // entries. Now every agent's policies map is fully enumerated (seeded
-// explicitly allow/deny per tool via coreagent.denyAllThenOverride, backfilled
-// for pre-migration configs by config.RepairIncompleteToolPolicyCoverage) —
+// explicitly allow/deny per tool via coreagent.denyAllThenOverride; the
+// two-layer model under ADR-077 lets an unmentioned tool ride the reconciled
+// global ceiling instead of a per-agent deny backfill) —
 // there is no default_policy field any more, so a deny-by-default agent's
 // email tools are no longer "missing," they carry an EXPLICIT "deny" entry
 // inherited from the seed. Checking builtin["default_policy"] (as this

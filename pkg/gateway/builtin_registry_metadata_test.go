@@ -7,7 +7,7 @@
 //
 // These tests live in pkg/gateway because they must import both:
 //   - pkg/tools (GeneralBuiltinMetadata, BuiltinRegistry)
-//   - pkg/sysagent/tools (AllTools — the 35 system.* tools)
+//   - pkg/sysagent/tools (AllTools — the 33 system.* tools)
 //
 // pkg/tools cannot import pkg/sysagent/tools (import cycle), so the
 // combined registry test belongs in a package that can import both.
@@ -31,31 +31,31 @@ import (
 // BuiltinRegistry populated the same way as gateway boot (system tools first,
 // then general-builtin metadata) satisfies Spec-1 SC-101:
 //   - contains all general builtins (exec, read_file, web_search, web_fetch minimum)
-//   - contains all 35 system.* tools
-//   - total count > 37
+//   - contains all 33 system.* tools
+//   - total count > 35
 //   - no tool name appears twice (duplicate guard — prevents the double-count regression)
 //
 // BDD: Given the corrected gateway boot-time registry population,
 //
 //	When GET /api/v1/tools is backed by this registry,
 //	Then the response contains both general-builtin and system.* entries,
-//	And the total count is greater than 37.
+//	And the total count is greater than 35.
 //
 // Traces to: US-1/AC2, FR-101, SC-101, TDD T1/T3, Issue #350.
 func TestCentralBuiltinRegistry_ContainsGeneralAndSystemTools(t *testing.T) {
 	// Mirror the gateway boot sequence: system tools first, then general.
 	reg := tools.NewBuiltinRegistry()
 
-	// Register all 35 system tools with nil deps (metadata-only mode, same as boot).
-	sysToolList := systools.AllTools(nil, nil)
+	// Register all 33 system tools with nil deps (metadata-only mode, same as boot).
+	sysToolList := systools.AllTools(nil)
 	for _, tool := range sysToolList {
 		err := reg.RegisterBuiltin(tool)
 		require.NoError(t, err,
 			"system tool %q must register without error in metadata mode", tool.Name())
 	}
 	systemCount := reg.Count()
-	assert.Equal(t, 35, systemCount,
-		"systools.AllTools must produce exactly 35 system tools (see sysagent/tools/registry.go)")
+	assert.Equal(t, 33, systemCount,
+		"systools.AllTools must produce exactly 33 system tools (see sysagent/tools/registry.go)")
 
 	// Register general-builtin metadata (deps-free instances, never Execute()d).
 	generalToolList := tools.GeneralBuiltinMetadata()
@@ -72,8 +72,8 @@ func TestCentralBuiltinRegistry_ContainsGeneralAndSystemTools(t *testing.T) {
 		"at least one general builtin must register successfully")
 
 	total := reg.Count()
-	assert.Greater(t, total, 37,
-		"central BuiltinRegistry must contain more than 37 tools after adding general builtins (SC-101)")
+	assert.Greater(t, total, 35,
+		"central BuiltinRegistry must contain more than 35 tools after adding general builtins (SC-101)")
 	assert.Equal(t, systemCount+generalRegistered, total,
 		"Count must equal systemCount + generalRegistered (no silent duplicates)")
 
@@ -99,24 +99,24 @@ func TestCentralBuiltinRegistry_ContainsGeneralAndSystemTools(t *testing.T) {
 }
 
 // TestCentralBuiltinRegistry_NoDoubleCountSystemTools asserts that registering
-// system tools exactly once produces exactly 35 system entries — guards the
+// system tools exactly once produces exactly 33 system entries — guards the
 // double-count regression described in Issue #350.
 //
 // BDD: Given systools.AllTools registered exactly once,
 //
 //	When Count() is called,
-//	Then it returns 35 (not 70 or any other value).
+//	Then it returns 33 (not 66 or any other value).
 //
 // Traces to: Issue #350 double-count bug, FR-101, TDD T2.
 func TestCentralBuiltinRegistry_NoDoubleCountSystemTools(t *testing.T) {
 	reg := tools.NewBuiltinRegistry()
-	for _, tool := range systools.AllTools(nil, nil) {
+	for _, tool := range systools.AllTools(nil) {
 		if err := reg.RegisterBuiltin(tool); err != nil {
 			t.Logf("skipping system tool %q (err: %v)", tool.Name(), err)
 		}
 	}
-	assert.Equal(t, 35, reg.Count(),
-		"system tools registered once must produce exactly 35 entries — no double-count (Issue #350)")
+	assert.Equal(t, 33, reg.Count(),
+		"system tools registered once must produce exactly 33 entries — no double-count (Issue #350)")
 }
 
 // TestHandleToolsRegistry_WithCombinedRegistry verifies that HandleToolsRegistry
@@ -126,7 +126,7 @@ func TestCentralBuiltinRegistry_NoDoubleCountSystemTools(t *testing.T) {
 // BDD: Given a restAPI with a correctly-populated builtinRegistry (system + general),
 //
 //	When GET /api/v1/tools is called,
-//	Then the response is a JSON array with more than 38 entries,
+//	Then the response is a JSON array with more than 36 entries,
 //	And the array contains entries for exec and list_agents.
 //
 // Traces to: US-1/AC2, FR-101, SC-101, TDD T3, Issue #350.
@@ -135,7 +135,7 @@ func TestHandleToolsRegistry_WithCombinedRegistry(t *testing.T) {
 
 	// Build a combined registry (system + general builtins) and wire it into the api.
 	reg := tools.NewBuiltinRegistry()
-	for _, tool := range systools.AllTools(nil, nil) {
+	for _, tool := range systools.AllTools(nil) {
 		if err := reg.RegisterBuiltin(tool); err != nil {
 			t.Logf("system tool %q skipped: %v", tool.Name(), err)
 		}
@@ -159,8 +159,8 @@ func TestHandleToolsRegistry_WithCombinedRegistry(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries),
 		"response must unmarshal as a JSON array")
 
-	assert.Greater(t, len(entries), 38,
-		"GET /api/v1/tools must return more than 38 entries with the combined registry (SC-101)")
+	assert.Greater(t, len(entries), 36,
+		"GET /api/v1/tools must return more than 36 entries with the combined registry (SC-101)")
 
 	// Verify both general and system entries are present.
 	nameSet := make(map[string]struct{}, len(entries))

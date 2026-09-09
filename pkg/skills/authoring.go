@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
@@ -20,6 +23,33 @@ const MaxSkillMarkdownBytes = 256 * 1024
 
 // versionsDir is the per-skill subdirectory that holds prior SKILL.md snapshots.
 const versionsDir = ".versions"
+
+// builtinMarkerFile is written into a skill's directory whenever
+// SeedDefaults (embed.go) materializes a built-in skill onto disk at boot.
+//
+// UAT batch3 S68 (docs/internal/qa/uat-report-full-tool-catalog-batch3-2026-09-02.md,
+// finding #3): EditSkill used to infer "this is a genuine prior user
+// override, safe to edit in place" from mere file EXISTENCE at the writer's
+// root path. That inference is unsound in this install: SeedDefaults
+// materializes every built-in skill (summarize, skill-authoring, plan,
+// daily-briefing) onto the SAME writer-root path a real override would also
+// occupy — there is no separate, untouched "factory" location existence
+// alone can distinguish from a genuine override. The practical result was
+// editing a never-touched built-in silently mutated it in place and
+// reported created_override:false, directly contradicting edit_skill's own
+// documented contract ("the built-in is never mutated in place").
+//
+// This marker is the explicit provenance signal EditSkill needed: its
+// presence in a skill's directory means "the content at this path was
+// placed here by the boot-time seeder and has never been edited since" —
+// the FIRST edit of that skill must be treated as creating a NEW override
+// (created_override:true, matching create_skill's own semantics) even
+// though the on-disk file already existed. The marker is written alongside
+// SKILL.md when a built-in is seeded (copyEmbeddedSkill) and is REMOVED the
+// first time EditSkill writes real content over it, so a second edit of the
+// same skill correctly reports created_override:false (it is now a genuine,
+// already-local override, same as any other skill a user created directly).
+const builtinMarkerFile = ".omnipus-builtin"
 
 // ErrPathConfinement is returned when a requested skill name would escape the
 // skills root (path traversal). The authoring layer is path-confined to a
@@ -36,6 +66,16 @@ var ErrAlreadyExists = errors.New("skill already exists")
 // ErrNotFound is returned by EditSkill / ListVersions when no source skill
 // exists to edit.
 var ErrNotFound = errors.New("skill not found")
+
+// ErrProjectWriteEscapesMount is returned by ResolveProjectSkillWriter when a
+// project skill's resolved on-disk location does not actually lie within the
+// mount root it claims to belong to — a tampered or otherwise inconsistent
+// ProjectShelf entry. Defense in depth: every entry DiscoverProjectSkills /
+// MergeProjectSkills produce already satisfies this by construction (they
+// real-path-confine every candidate to the mount at discovery time, D6
+// FR-077/078), so this only fires against a shelf built or mutated some
+// other way.
+var ErrProjectWriteEscapesMount = errors.New("project skill write escapes its mount root")
 
 // SkillWriter writes and versions skills under a single, fixed skills root
 // directory. All writes are path-confined to that root, validated against the
@@ -124,15 +164,108 @@ func ValidateSkillMarkdown(expectedName, content string) error {
 		if n := fm["name"]; n != "" {
 			info.Name = n
 		}
-		if d := fm["description"]; d != "" {
-			info.Description = d
+		// S59 fix: once the frontmatter DECLARES a `description` key at all —
+		// even as `description:` (empty) or `description: null` — that
+		// declaration is authoritative and must not be silently papered over
+		// by the body's first paragraph. parseSimpleYAML's map drops
+		// empty/null values entirely, so `fm["description"] != ""` alone
+		// cannot distinguish "declared empty" from "not declared" — an
+		// author who writes an empty `description:` field was previously let
+		// through validation because info.Description still held whatever
+		// text happened to follow the H1 heading in the body, which
+		// ValidateSkillDescription then validated instead of the real
+		// (empty) frontmatter value. Only fall back to the body-extracted
+		// description when the frontmatter has no `description` key at all.
+		if frontmatterHasKey(frontmatter, "description") {
+			info.Description = fm["description"]
 		}
 	}
 
+	if err := ValidateSkillDescription(expectedName, info.Description); err != nil {
+		return fmt.Errorf("invalid SKILL.md: %w", err)
+	}
 	if err := info.validate(); err != nil {
 		return fmt.Errorf("invalid SKILL.md: %w", err)
 	}
 	return nil
+}
+
+// ValidateSkillDescription enforces ADR-072 D2 / spec FR-010/FR-011/FR-012:
+// once nothing loads automatically, a skill's one-line description is the
+// ONLY thing the model sees before deciding whether to call it, so this is
+// an authoring-time rule, not a hope. It rejects:
+//
+//   - an empty or whitespace-only description (FR-010);
+//   - a description that merely restates the skill's own name/slug (FR-011),
+//     under the EXACT comparison the spec names — case-fold both sides, then
+//     strip every whitespace and punctuation rune, then test equality. This
+//     is deliberately NOT fuzzy matching and NOT edit distance: a
+//     description that adds real words ("Handles release notes" for slug
+//     "release-notes") is a restatement of nothing and must be accepted —
+//     only an exact echo, differing solely in case/spacing/punctuation
+//     ("Release Notes", "release notes."), is rejected;
+//   - a description exceeding MaxDescriptionLength characters (FR-012).
+//
+// Deliberately scoped to the AUTHORING path only (ValidateSkillMarkdown,
+// called by CreateSkill/EditSkill) — NOT folded into SkillInfo.validate(),
+// which also runs for skills merely discovered on disk (ListSkills,
+// DiscoverProjectSkills). D2 states this is "enforced where skills are
+// authored", not a retroactive check on every already-installed skill file;
+// running the name-echo rule there too would risk silently hiding an
+// already-installed skill whose description happens to echo its name, which
+// is a availability regression this ADR never asked for.
+func ValidateSkillDescription(skillName, description string) error {
+	trimmed := strings.TrimSpace(description)
+	if trimmed == "" {
+		return errors.New("description is required and must not be empty or whitespace-only")
+	}
+	if len(description) > MaxDescriptionLength {
+		return fmt.Errorf("description exceeds the %d-character limit (got %d)", MaxDescriptionLength, len(description))
+	}
+	if skillName != "" && normalizeDescriptionForEcho(description) == normalizeDescriptionForEcho(skillName) {
+		return fmt.Errorf(
+			"description merely restates the skill's name %q — state WHEN to use the skill instead, "+
+				"e.g. \"Use when the user asks to cut a release or publish notes\" rather than \"%s\"",
+			skillName, skillName,
+		)
+	}
+	return nil
+}
+
+// frontmatterHasKey reports whether the given YAML frontmatter block
+// declares key at all, regardless of whether its value is empty, null, or
+// non-empty. parseSimpleYAML's string-map result cannot make this
+// distinction on its own (it drops empty/null values from the map), so
+// ValidateSkillMarkdown uses this to tell "the author wrote an empty
+// description:" (must fail validation) apart from "the author wrote no
+// description key" (fall back to the body-extracted description, the
+// existing legacy-compatibility behavior). Malformed YAML is treated as "key
+// not present" — ValidateSkillMarkdown's own frontmatter parsing already
+// tolerates a parse failure by falling back to zero values, and this must
+// not behave more strictly than that fallback.
+func frontmatterHasKey(frontmatter, key string) bool {
+	var raw map[string]any
+	if err := yaml.Unmarshal([]byte(frontmatter), &raw); err != nil {
+		return false
+	}
+	_, ok := raw[key]
+	return ok
+}
+
+// normalizeDescriptionForEcho implements FR-011's exact, non-fuzzy
+// comparison: case-fold, then strip every whitespace and punctuation rune.
+// No edit distance, no fuzzy matching — "Handles release notes" must NOT
+// collapse to the same normalized string as "release-notes" (Dataset F row
+// 10, deliberately accepted); only an actual restatement does.
+func normalizeDescriptionForEcho(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if unicode.IsSpace(r) || unicode.IsPunct(r) {
+			continue
+		}
+		b.WriteRune(unicode.ToLower(r))
+	}
+	return b.String()
 }
 
 // snapshotExisting copies the current SKILL.md (if any) into the skill's
@@ -191,18 +324,28 @@ func (w *SkillWriter) CreateSkill(name, content string) (string, error) {
 	return skillFile, nil
 }
 
-// EditSkill updates an existing skill named name with new SKILL.md content. The
-// prior version is snapshotted into .versions/ first so it can be rolled back.
+// EditSkill updates an existing skill named name with new SKILL.md content.
+// The prior content — a genuine local override OR a still-pristine built-in
+// materialized by SeedDefaults (see builtinMarkerFile) — is snapshotted into
+// .versions/ first, so it is always recoverable, before anything is
+// overwritten.
 //
-// If a skill named name does not yet exist in this writer's root but a source
-// (e.g. a built-in) is supplied via sourceContent, EditSkill creates a user
-// override seeded from the new content — it NEVER mutates the source in place.
-// When sourceContent is empty and the skill does not exist locally, EditSkill
-// returns ErrNotFound.
+// allowCreateOverride controls what happens when there is no genuine PRIOR
+// USER OVERRIDE at this writer's root yet: either nothing exists at this
+// path at all, or what IS there is a built-in skill that has never been
+// edited since the boot-time seeder placed it. When true, EditSkill treats
+// this exactly like authoring a brand-new skill — it writes the content and
+// reports createdOverride=true. When false and no genuine override exists,
+// EditSkill returns ErrNotFound.
 //
-// The write is path-confined and validated before anything is persisted. The
-// returned bool reports whether the write created a new override (true) versus
-// edited an already-local skill (false).
+// A built-in skill's first edit is NEVER silently treated as "already
+// local": it always reports createdOverride=true and its original,
+// unedited content is preserved in .versions/ before being replaced (UAT
+// batch3 S68 — see builtinMarkerFile's doc comment for the full defect this
+// closes). Only a SECOND edit of the same skill — now a genuine local
+// override — reports createdOverride=false.
+//
+// The write is path-confined and validated before anything is persisted.
 func (w *SkillWriter) EditSkill(
 	name, content string,
 	allowCreateOverride bool,
@@ -217,10 +360,28 @@ func (w *SkillWriter) EditSkill(
 
 	skillFile := filepath.Join(skillDir, "SKILL.md")
 	_, statErr := os.Stat(skillFile)
-	localExists := statErr == nil
+	fileExists := statErr == nil
 	if statErr != nil && !os.IsNotExist(statErr) {
 		return "", false, fmt.Errorf("stat skill: %w", statErr)
 	}
+
+	// A file's mere presence at this writer-root path is NOT proof of a
+	// genuine prior user override — SeedDefaults materializes every
+	// built-in skill onto this SAME path at boot, so on a fresh install
+	// fileExists is already true for summarize/skill-authoring/plan/
+	// daily-briefing before any user has ever touched them.
+	// builtinMarkerFile's presence distinguishes "seeded, never edited
+	// since" from "a real override"; only the latter counts as localExists
+	// for the created_override contract below.
+	isPristineBuiltin := false
+	if fileExists {
+		if _, markerErr := os.Stat(filepath.Join(skillDir, builtinMarkerFile)); markerErr == nil {
+			isPristineBuiltin = true
+		} else if !os.IsNotExist(markerErr) {
+			return "", false, fmt.Errorf("stat builtin marker: %w", markerErr)
+		}
+	}
+	localExists := fileExists && !isPristineBuiltin
 
 	if !localExists && !allowCreateOverride {
 		return "", false, ErrNotFound
@@ -230,8 +391,11 @@ func (w *SkillWriter) EditSkill(
 		return "", false, fmt.Errorf("create skill dir: %w", err)
 	}
 
-	// Snapshot the current local SKILL.md (if any) before overwriting.
-	if localExists {
+	// Snapshot whatever is currently on disk — a genuine prior override OR
+	// a still-pristine built-in — before overwriting, so the exact prior
+	// bytes (including a built-in's original, un-edited content) are always
+	// recoverable via ListVersions/ReadVersion.
+	if fileExists {
 		if _, snapErr := snapshotExisting(skillDir); snapErr != nil {
 			return "", false, snapErr
 		}
@@ -240,6 +404,19 @@ func (w *SkillWriter) EditSkill(
 	if err := fileutil.WriteFileAtomic(skillFile, []byte(content), 0o644); err != nil {
 		return "", false, fmt.Errorf("write SKILL.md: %w", err)
 	}
+
+	// The pristine-builtin marker only ever protects the FIRST edit's
+	// created_override accounting. Once this call has written real content
+	// over it, the file at this path genuinely IS the local override going
+	// forward — clear the marker so a second edit correctly reports
+	// created_override:false instead of repeating "override created" for
+	// the same skill indefinitely.
+	if isPristineBuiltin {
+		if rmErr := os.Remove(filepath.Join(skillDir, builtinMarkerFile)); rmErr != nil && !os.IsNotExist(rmErr) {
+			return "", false, fmt.Errorf("clear builtin marker: %w", rmErr)
+		}
+	}
+
 	createdOverride = !localExists
 	slog.Info("skills: edited skill", "name", name, "path", skillFile, "created_override", createdOverride)
 	return skillFile, createdOverride, nil
@@ -276,6 +453,81 @@ func (w *SkillWriter) ListVersions(name string) ([]string, error) {
 		versions[i], versions[j] = versions[j], versions[i]
 	}
 	return versions, nil
+}
+
+// RemoveSkill permanently deletes the named skill's whole directory — its
+// SKILL.md and any .versions/ snapshots — from this writer's root. There is
+// no undo. It returns ErrNotFound when no such skill exists locally in this
+// root; unlike EditSkill, there is no "source"/override fallback, since there
+// is nothing sensible to fall back to when the operation is a delete.
+func (w *SkillWriter) RemoveSkill(name string) error {
+	skillDir, err := w.resolveSkillDir(name)
+	if err != nil {
+		return err
+	}
+	if _, statErr := os.Stat(filepath.Join(skillDir, "SKILL.md")); statErr != nil {
+		if os.IsNotExist(statErr) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("stat skill: %w", statErr)
+	}
+	if err := os.RemoveAll(skillDir); err != nil {
+		return fmt.Errorf("remove skill: %w", err)
+	}
+	slog.Info("skills: removed skill", "name", name, "path", skillDir)
+	return nil
+}
+
+// ResolveProjectSkillWriter resolves slug against a workspace's already-built
+// project shelf (ADR-072 D6.1, FR-065/066/068) and, when it names a project
+// skill, returns a SkillWriter rooted at that skill's OWN recognised skills
+// directory inside the mount that owns it — never the central (global)
+// skills root that NewSkillWriter is normally called with elsewhere. Every
+// write or removal performed through the returned writer therefore lands
+// directly in the project's own repository (D6.1: "the write goes into that
+// project's own file... it does not fork a copy into the central registry")
+// and never anywhere else — there is no code path here that can also touch a
+// central-library copy.
+//
+// Before constructing anything, the resolved skill's location is confined to
+// its claimed mount root using the same lexical-containment rule
+// resolveSkillDir applies to every ordinary write (FR-068): a shelf entry
+// whose Path does not actually lie under its own MountRoot is refused with
+// ErrProjectWriteEscapesMount rather than silently handed a writer that could
+// touch something outside the mount. Every legitimate shelf entry (built by
+// DiscoverProjectSkills / MergeProjectSkills) already satisfies this, since
+// discovery itself real-path-confines every candidate to the mount before
+// admitting it (FR-077/078) — this is a second, independent check against a
+// shelf built or hand-edited some other way, not a load-bearing path for the
+// happy case.
+//
+// ResolveProjectSkillWriter returns ErrNotFound when slug is not present on
+// this project shelf — callers use that to fall through to the ordinary
+// (global-root) authoring path for a registry, builtin, or brand-new skill.
+// It resolves an EXISTING project skill only; authoring a brand-new project
+// skill from nothing is out of scope (D6.1's own scenarios are "editing"/
+// "removing" a project skill that is already discovered on the shelf).
+func ResolveProjectSkillWriter(shelf ProjectShelf, slug string) (*SkillWriter, ProjectSkill, error) {
+	trimmed := strings.TrimSpace(slug)
+	if trimmed == "" || shelf == nil {
+		return nil, ProjectSkill{}, ErrNotFound
+	}
+	ps, ok := shelf[strings.ToLower(trimmed)]
+	if !ok {
+		return nil, ProjectSkill{}, ErrNotFound
+	}
+
+	skillDir := filepath.Dir(filepath.Clean(ps.Path)) // .../<recognised-dir>/<slug>
+	recognisedDir := filepath.Dir(skillDir)           // .../<recognised-dir>
+	mountRoot := filepath.Clean(ps.MountRoot)
+
+	rel, relErr := filepath.Rel(mountRoot, recognisedDir)
+	if relErr != nil || rel == "." || rel == ".." ||
+		strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return nil, ProjectSkill{}, ErrProjectWriteEscapesMount
+	}
+
+	return NewSkillWriter(recognisedDir), ps, nil
 }
 
 // ReadVersion returns the content of a specific snapshot file (as returned by

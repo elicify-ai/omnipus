@@ -1,4 +1,4 @@
-// Omnipus — reproduction tests for load_tool bugs C2/C3/C4 and message normalization B.
+// Omnipus — reproduction tests for ToolSearch bugs C2/C3/C4 and message normalization B.
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
@@ -26,10 +26,10 @@ func loadToolFor(t *testing.T, al *AgentLoop, agentID string) *tools.ToolsTool {
 	t.Helper()
 	ag, ok := al.registry.GetAgent(agentID)
 	require.True(t, ok, "agent %q must exist", agentID)
-	raw, ok := ag.Tools.Get("load_tool")
-	require.True(t, ok, "load_tool must be registered for %q", agentID)
+	raw, ok := ag.Tools.Get("ToolSearch")
+	require.True(t, ok, "ToolSearch must be registered for %q", agentID)
 	tt, ok := raw.(*tools.ToolsTool)
-	require.True(t, ok, "load_tool must be *tools.ToolsTool")
+	require.True(t, ok, "ToolSearch must be *tools.ToolsTool")
 	return tt
 }
 
@@ -41,7 +41,7 @@ func execCtx(agentID, sessionID string) context.Context {
 // ── C2: Full-tier tools must return no-op SUCCESS (not error) ─────────────────
 
 // TestLoadTool_FullTierReturnsNoopSuccess reproduces C2:
-// load_tool{names:["search_web"]} for Jim currently returns an error
+// ToolSearch{names:["search_web"]} for Jim currently returns an error
 // ("unknown or not available") instead of a graceful no-op success.
 func TestLoadTool_FullTierReturnsNoopSuccess(t *testing.T) {
 	cfg := newCompressedCfg(t)
@@ -70,39 +70,49 @@ func TestLoadTool_FullTierReturnsNoopSuccess(t *testing.T) {
 // ── C3: Policy-denied tools must give a clear reason ─────────────────────────
 
 // TestLoadTool_PolicyDeniedCarriesReason reproduces C3:
-// load_tool{names:["send_file"]} for Ava currently says
+// ToolSearch{names:["create_task"]} for Ava currently says
 // "unknown or not available" instead of "denied by … policy".
 //
-// Note: we use send_file (ManifestLazy, registered for all agents via
+// Note: we use create_task (ManifestLazy, registered for all agents via
 // registerSharedTools, NOT in Ava's deny-by-default allow-list) — NOT
 // read_file (ManifestFull). Full-tier tools return a no-op success (C2
 // behavior) regardless of policy, so they are not the right subject here.
+//
+// send_file was the original fixture here, but ADR-071 D3 promoted it (along
+// with list_mounts, message_parent, recall_conversation) into ManifestFull
+// (see pkg/tools/manifest.go's fullManifestToolNames) as a conversational
+// addressing primitive with no natural discovery moment — it is no longer
+// ManifestLazy, so it can't exercise this policy-denial path. create_task
+// stays ManifestLazy under ADR-071 D3 (moved to the previewed lazy tier
+// alongside bash/navigate/update_task) and is still absent from Ava's
+// deny-by-default allow-list, so it reproduces the same policy-denied
+// scenario the test is meant to cover.
 func TestLoadTool_PolicyDeniedCarriesReason(t *testing.T) {
 	cfg := newCompressedCfg(t)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	defer al.Close()
 
-	// send_file is lazy-tier and NOT in Ava's explicit allow-list.
-	require.Equal(t, tools.ManifestLazy, tools.ToolManifestTier("send_file"),
-		"send_file must be ManifestLazy for this test to be meaningful")
+	// create_task is lazy-tier and NOT in Ava's explicit allow-list.
+	require.Equal(t, tools.ManifestLazy, tools.ToolManifestTier("create_task"),
+		"create_task must be ManifestLazy for this test to be meaningful")
 
-	// Structural guarantee: send_file must NOT be in Ava's policy-filtered set.
+	// Structural guarantee: create_task must NOT be in Ava's policy-filtered set.
 	avaAgent, ok := al.registry.GetAgent("ava")
 	require.True(t, ok)
 	allTools := avaAgent.Tools.GetAll()
 	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, avaAgent.AgentType, avaAgent.LoadToolPolicy())
 	for _, tool := range policyFiltered {
-		require.NotEqual(t, "send_file", tool.Name(),
-			"send_file must NOT be policy-allowed for ava — update test if Ava policy changed")
+		require.NotEqual(t, "create_task", tool.Name(),
+			"create_task must NOT be policy-allowed for ava — update test if Ava policy changed")
 	}
 
 	tt := loadToolFor(t, al, "ava")
 	ctx := execCtx("ava", "sess-c3-denied")
 
-	result := tt.Execute(ctx, map[string]any{"names": []any{"send_file"}})
+	result := tt.Execute(ctx, map[string]any{"names": []any{"create_task"}})
 
 	assert.True(t, result.IsError,
-		"send_file must be rejected for ava (policy denied); got: %s", result.ForLLM)
+		"create_task must be rejected for ava (policy denied); got: %s", result.ForLLM)
 	assert.True(t,
 		strings.Contains(result.ForLLM, "denied") || strings.Contains(result.ForLLM, "policy"),
 		"error message must mention 'denied' or 'policy'; got: %s", result.ForLLM)
@@ -114,7 +124,7 @@ func TestLoadTool_PolicyDeniedCarriesReason(t *testing.T) {
 // ── C4: Unknown names must suggest the correct name ──────────────────────────
 
 // TestLoadTool_UnknownNameSuggestsAlternative reproduces C4:
-// load_tool{names:["task_update"]} (hallucinated — real name is "update_task")
+// ToolSearch{names:["task_update"]} (hallucinated — real name is "update_task")
 // currently says "unknown or not available" with no hint.
 func TestLoadTool_UnknownNameSuggestsAlternative(t *testing.T) {
 	cfg := newCompressedCfg(t)

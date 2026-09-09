@@ -253,7 +253,6 @@ func TestConformance_g6_PerChildCeiling_NoisyChildCannotStarveSibling(t *testing
 			SessionID: sid, State: session.LifecycleRunning,
 			OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: "parent-delegate",
 			ParentDurableKey: "parent-1", WorkspaceID: "ws", AgentID: "worker",
-			LaunchProfile: session.LaunchProfileSpecialist,
 		}); err != nil {
 			t.Fatalf("seed %s: %v", sid, err)
 		}
@@ -497,12 +496,27 @@ func TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback(t *testing.
 // conformance scenario to drive a faithful met verdict against the compiled
 // Phase-2 criteria ladder (not the legacy "goal-condition" back-compat path
 // the unit tests exercise by clearing GoalCriteriaJSON).
+//
+// ADR-080 D-DOD's judged-set union seam (compiledGoalCriteriaFor,
+// goal_compile.go): adjudication now feeds Criteria UNION DoD to the Judge,
+// so compiled.DoD's own item(s) (at minimum the built-in floor DoD —
+// compileGoalIntent itself sets the floor DoD at compile time, fix-wave
+// finding #2, so this holds even for the t0 scenario's deterministic-
+// fallback compile — mockProvider's Chat is not JSON, so
+// goalCompileIntentLLM falls back to compileGoalIntent — with
+// loadCompiledGoal's OWN backfill kept only as a legacy-goal safety net for
+// a persisted goal compiled before this fix) ride the SAME per-criterion
+// verdict list this stub returns — omitting them would leave the floor DoD
+// unjudgeable and the overall verdict unmet.
 func metJudgeProviderForCompiled(t *testing.T, compiled *CompiledGoal, reason string) *fakeJudgeProvider {
 	t.Helper()
 	var entries []string
 	if compiled != nil {
 		for _, c := range compiled.Criteria {
 			entries = append(entries, fmt.Sprintf(`{"id":%q,"met":true,"reason":%q}`, c.ID, reason))
+		}
+		for _, d := range compiled.DoD {
+			entries = append(entries, fmt.Sprintf(`{"id":%q,"met":true,"reason":%q}`, d.ID, reason))
 		}
 	}
 	body := `{"met":true,"criteria":[` + strings.Join(entries, ",") + `]}`
@@ -577,11 +591,14 @@ func TestConformance_t0_ChatGoal_Design(t *testing.T) {
 	coll, collDone := newEventCollector(t, al)
 	defer collDone()
 
-	// (1) /goal set compiles a SMART ladder (GoalCriteriaJSON non-empty) and
-	// emits the conversational confirm-in-chat frame (goal_status active).
+	// (1) /goal set compiles a SMART ladder (GoalCriteriaJSON non-empty after
+	// confirm) and emits the confirm-in-chat surface. ADR-074 D4a: a PROSE
+	// intent parks as a pending goal (pill=queued) and activates on the
+	// explicit confirm (pill=active).
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal land the contract-first layer", UserInitiated: true},
 		agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
 	meta, _ := store.GetMeta(sid)
 	if meta.GoalCondition == "" {
 		t.Fatal("(1) /goal set must persist the goal condition")
@@ -661,15 +678,18 @@ func TestConformance_t0_ChatGoal_Design(t *testing.T) {
 			walk = append(walk, p)
 		}
 	}
-	wantWalk := []string{goalPillActive, goalPillWaitingOnUser, goalPillActive, goalPillJudging, goalPillDone}
+	// ADR-074 D4a prepends the pending step: queued (compiled, awaiting the
+	// user's confirmation) precedes active.
+	wantWalk := []string{goalPillQueued, goalPillActive, goalPillWaitingOnUser, goalPillActive, goalPillJudging, goalPillDone}
 	if !equalStringSlices(walk, wantWalk) {
-		t.Fatalf("(5) pill walk = %v, want %v (active→waiting_on_user→active(resume)→judging→done)", walk, wantWalk)
+		t.Fatalf("(5) pill walk = %v, want %v (queued→active→waiting_on_user→active(resume)→judging→done)", walk, wantWalk)
 	}
 
 	// (6) /goal clear cancels an in-flight verifier session registered for this
 	// goal (FR-037/N-12). Set a fresh goal, register a verifier session, clear.
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal a second goal", UserInitiated: true}, agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
 	verifierUnit := verifierUnitForGoal(sid)
 	pe.VerifierRegistry().Register(verifierUnit, "verifier-t0-inflight")
 	if _, ok := pe.VerifierRegistry().Lookup(verifierUnit); !ok {
@@ -1437,7 +1457,7 @@ func TestConformance_bootsweep_Design(t *testing.T) {
 	//     A running session with a checkpoint + undelivered messages.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "bs-running", Generation: 1, State: session.LifecycleRunning,
-		WorkspaceID: "ws", AgentID: "agent-1", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws", AgentID: "agent-1",
 		OwnerScopeKind:        session.OwnerScopeHuman,
 		LastCheckpointRef:     "ckpt-bs",
 		UndeliveredMessageIDs: []string{"bs-msg-1", "bs-msg-2"},
@@ -1446,13 +1466,13 @@ func TestConformance_bootsweep_Design(t *testing.T) {
 	// A queued session — also non-terminal, also swept.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "bs-queued", Generation: 1, State: session.LifecycleQueued,
-		WorkspaceID: "ws", AgentID: "agent-1", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws", AgentID: "agent-1",
 		OwnerScopeKind: session.OwnerScopeHuman,
 	})
 	// A terminal session — MUST be left alone.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "bs-done", Generation: 1, State: session.LifecycleCompleted,
-		WorkspaceID: "ws", AgentID: "agent-1", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws", AgentID: "agent-1",
 		OwnerScopeKind: session.OwnerScopeHuman,
 	})
 	// CRIT-1: a paused awaiting-correction owner (exemption b) — preserved.
@@ -1463,14 +1483,14 @@ func TestConformance_bootsweep_Design(t *testing.T) {
 	})
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "bs-owner", Generation: 1, State: session.LifecyclePaused,
-		WorkspaceID: "ws", AgentID: "owner", LaunchProfile: session.LaunchProfileSpecialist,
+		WorkspaceID: "ws", AgentID: "owner",
 		OwnerScopeKind: session.OwnerScopeHuman, OwnsPlanID: "plan-bs",
 	})
 	// N-15: an in-flight goal predating the upgrade (stale semantics version).
 	h.pe.currentSemanticsVersionOverride = 3
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "bs-stale-goal", Generation: 1, State: session.LifecycleRunning,
-		WorkspaceID: "ws", AgentID: "agent-1", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws", AgentID: "agent-1",
 		OwnerScopeKind: session.OwnerScopeHuman, GoalRef: "goal-bs",
 	})
 	h.pe.SetGoalSemanticsVersioner(func(sid string) int {

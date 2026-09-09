@@ -12,6 +12,7 @@ enum:
   - attach_session
   - device_pairing_response
   - session_close
+  - ask_user_answer
   # ── Server → client ─────────────────────────────────────────────────────────
   - session_started
   - token
@@ -33,6 +34,7 @@ enum:
   - replay_warning
   - cancel_stage
   - pong
+  - ask_user_question
   # ── Server → client (internal / ack) ────────────────────────────────────────
   - session_close_ack
   - device_pairing_request

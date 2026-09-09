@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -178,6 +179,104 @@ func TestMountNameFromHostPath(t *testing.T) {
 
 	// No separator can survive, or the "name" would be a path.
 	assert.NotContains(t, mountNameFromHostPath("/tmp/a/b"), "/")
+}
+
+// TestRequestMount_CoreTeamMemberWithNoExplicitWorkspaceIDCanMount is the
+// regression test for the UAT-reported CRITICAL finding S6
+// (docs/internal/qa/uat-report-full-tool-catalog-batch1-2026-09-02.md §2.1):
+// "request_mount cannot ever succeed" — it always failed with "this turn has
+// no workspace to mount into" even after the operator approved the request,
+// while the SAME turn's list_mounts calls immediately before and after
+// correctly resolved the workspace via
+// "workspace_resolved_from":"agent_membership".
+//
+// Root cause: request_mount only ever consulted ToolWorkspaceID(ctx), unlike
+// its own read-side counterpart list_mounts.go (see that Execute's doc
+// comment) and ResolveTurnFSPolicy (resolvepath.go, and see
+// TestResolveTurnFSPolicy_CoreTeamMemberGetsMountsWithoutExplicitWorkspaceID
+// above in this package for the identical fix on the write-grant side) —
+// both of which fall back to workspace.FindForAgentPreferring keyed on
+// CoreTeam membership when the turn carries no explicit workspace_id. An
+// ordinary chat turn for an agent that belongs to a workspace's CoreTeam, but
+// whose channel binding never set ts.opts.WorkspaceID, is exactly this shape
+// — and it is the shape the live UAT repro hit. Without the fallback,
+// request_mount was UNRECOVERABLY broken for that entire class of turn: no
+// REST mount record was ever created, and it silently made write_file to the
+// mount's intended alias name land in an ordinary in-workspace directory of
+// the same name instead of the real external folder.
+//
+// This mirrors ResolveTurnFSPolicy's CoreTeam regression test's seeding
+// exactly (workspace.SaveRecord with CoreTeam=[agentID], WithAgentID only —
+// deliberately NO WithWorkspaceID) and asserts the mount actually succeeds,
+// end to end: a real workspace mount record is created AND a subsequent
+// write through the mount's alias reaches the real external folder — closing
+// both halves of the reported defect in one proof.
+func TestRequestMount_CoreTeamMemberWithNoExplicitWorkspaceIDCanMount(t *testing.T) {
+	home := t.TempDir()
+	// ResolveTurnFSPolicy's own mount lookup (the write-side half of this
+	// test) reads config.OmnipusHomeDir(), not an agentHome parameter — it
+	// must be pointed at this test's isolated home too, exactly like
+	// TestResolveTurnFSPolicy_CoreTeamMemberGetsMountsWithoutExplicitWorkspaceID
+	// above does.
+	t.Setenv(config.EnvHome, home)
+
+	const wsID = "ws-coreteam-mount"
+	const agentID = "agent-coreteam-mount-member"
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	require.NoError(t, workspace.SaveRecord(home, workspace.Workspace{
+		ID:        wsID,
+		Name:      "CoreTeam Mount Test",
+		Status:    "active",
+		CreatedAt: now,
+		UpdatedAt: now,
+		CoreTeam:  []string{agentID},
+	}))
+	_, err := workspace.EnsureWorkDir(home, wsID)
+	require.NoError(t, err)
+
+	target := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(target, "existing.txt"), []byte("real"), 0o600))
+
+	tool := NewRequestMountTool(home)
+
+	// The exact shape the live repro hit: agent identity only, no
+	// WithWorkspaceID — resolved purely via CoreTeam membership.
+	ctx := WithAgentID(context.Background(), agentID)
+	require.Empty(t, ToolWorkspaceID(ctx), "test setup: no turn-carried workspace id")
+
+	res := tool.Execute(ctx, map[string]any{
+		"host_path": target,
+		"reason":    "regression coverage for the agent-membership fallback",
+	})
+	require.False(t, res.IsError,
+		"a CoreTeam member with no explicit workspace_id must still be able to mount: %s", res.ForLLM)
+
+	// Half 1 of the reported defect: a real workspace mount record must exist.
+	mounts, ok := workspace.LoadMounts(home, wsID)
+	require.True(t, ok)
+	require.Len(t, mounts, 1)
+	assert.Equal(t, filepath.Base(target), mounts[0].Name)
+
+	// Half 2: a write through the mount's alias must reach the REAL external
+	// folder, not silently land in an ordinary in-workspace directory of the
+	// same name (the exact silent-mislead the UAT report flagged as "worse
+	// than a clean failure").
+	work, err := workspace.EnsureWorkDir(home, wsID)
+	require.NoError(t, err)
+	policy, err := ResolveTurnFSPolicy(ctx, work, true)
+	require.NoError(t, err)
+	handle, err := ResolvePath(ctx, policy, "test", "",
+		FSOpWrite, filepath.Join(work, mounts[0].Name, "probe_after_grant.txt"))
+	require.NoError(t, err, "write through the mount alias must be permitted")
+	require.NoError(t, handle.WriteFile([]byte("via-mount")))
+	require.NoError(t, handle.Close())
+
+	resolvedTarget, err := filepath.EvalSymlinks(target)
+	require.NoError(t, err)
+	got, err := os.ReadFile(filepath.Join(resolvedTarget, "probe_after_grant.txt"))
+	require.NoError(t, err, "the write must have actually reached the real external folder")
+	assert.Equal(t, "via-mount", string(got))
 }
 
 func TestRequestMount_AcceptsPathAlias(t *testing.T) {

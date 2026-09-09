@@ -12,6 +12,7 @@ package mcp
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -299,6 +300,106 @@ func TestResolveServerEnvFile(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "workspace path is empty") {
 			t.Errorf("error = %q, want it to mention the empty workspace path", err.Error())
+		}
+	})
+}
+
+// TestResolveServerEnvRefs covers ResolveServerEnvRefs, the credential-store
+// counterpart to ResolveServerEnvFile: add_mcp_server (pkg/sysagent/tools/
+// mcp.go) stores env secrets in the credential store and writes only refs
+// into config.MCPServerConfig.EnvRefs, and this is where those refs get
+// turned back into real values at connect time.
+//
+// BDD:
+//
+//	Given an MCPServerConfig with EnvRefs and a credential resolver
+//	When  ResolveServerEnvRefs is called
+//	Then  each ref is resolved into Env, an EnvRefs value overrides a
+//	  same-named literal Env value, a server with no EnvRefs is an untouched
+//	  no-op even with a nil resolver (back-compat for literal-Env servers
+//	  added before this mechanism, or via the gateway REST API), and a
+//	  resolver failure (locked store, missing ref, nil resolver with
+//	  non-empty EnvRefs) is reported as an error rather than silently
+//	  connecting with a missing secret.
+func TestResolveServerEnvRefs(t *testing.T) {
+	t.Run("no EnvRefs is a no-op even with a nil resolver (back-compat)", func(t *testing.T) {
+		cfg := config.MCPServerConfig{
+			Enabled: true,
+			Command: "some-command",
+			Env:     map[string]string{"LITERAL": "unchanged"},
+		}
+		got, err := ResolveServerEnvRefs(cfg, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got.Env["LITERAL"] != "unchanged" {
+			t.Errorf("literal Env must survive untouched, got: %+v", got.Env)
+		}
+	})
+
+	t.Run("non-empty EnvRefs with a nil resolver errors", func(t *testing.T) {
+		cfg := config.MCPServerConfig{
+			EnvRefs: map[string]string{"TOKEN": "mcp_srv_TOKEN"},
+		}
+		_, err := ResolveServerEnvRefs(cfg, nil)
+		if err == nil {
+			t.Fatal("expected error when EnvRefs is non-empty and resolver is nil, got nil")
+		}
+	})
+
+	t.Run("resolves refs into Env, overriding a same-named literal", func(t *testing.T) {
+		cfg := config.MCPServerConfig{
+			Env: map[string]string{
+				"KEEP":     "literal-value",
+				"OVERRIDE": "stale-literal",
+			},
+			EnvRefs: map[string]string{
+				"OVERRIDE": "mcp_srv_OVERRIDE",
+				"SECRET":   "mcp_srv_SECRET",
+			},
+		}
+		store := map[string]string{
+			"mcp_srv_OVERRIDE": "fresh-secret",
+			"mcp_srv_SECRET":   "another-secret",
+		}
+		resolve := func(refKey string) (string, error) {
+			v, ok := store[refKey]
+			if !ok {
+				return "", fmt.Errorf("no such credential %q", refKey)
+			}
+			return v, nil
+		}
+		got, err := ResolveServerEnvRefs(cfg, resolve)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got.Env["KEEP"] != "literal-value" {
+			t.Errorf("KEEP = %q, want literal-value untouched", got.Env["KEEP"])
+		}
+		if got.Env["OVERRIDE"] != "fresh-secret" {
+			t.Errorf("OVERRIDE = %q, want the ref to win over the stale literal", got.Env["OVERRIDE"])
+		}
+		if got.Env["SECRET"] != "another-secret" {
+			t.Errorf("SECRET = %q, want the resolved ref value", got.Env["SECRET"])
+		}
+		// The original cfg (caller's copy) must not be mutated — the merge
+		// happens on a fresh map.
+		if cfg.Env["OVERRIDE"] != "stale-literal" {
+			t.Errorf("caller's cfg.Env mutated: %+v", cfg.Env)
+		}
+	})
+
+	t.Run("a resolver failure is surfaced, not silently dropped", func(t *testing.T) {
+		cfg := config.MCPServerConfig{
+			EnvRefs: map[string]string{"MISSING": "mcp_srv_MISSING"},
+		}
+		resolve := func(string) (string, error) { return "", fmt.Errorf("credential store is locked") }
+		_, err := ResolveServerEnvRefs(cfg, resolve)
+		if err == nil {
+			t.Fatal("expected the resolver's error to propagate, got nil")
+		}
+		if !strings.Contains(err.Error(), "credential store is locked") {
+			t.Errorf("error = %q, want it to wrap the resolver's error", err.Error())
 		}
 	})
 }

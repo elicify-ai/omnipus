@@ -45,7 +45,7 @@ func TestLifecycleFilter_ParentDurableKey_DirectChildrenOnly(t *testing.T) {
 	if err := s.Persist(&LifecycleRecord{
 		SessionID: chatA, State: LifecycleRunning,
 		OwnerScopeKind: OwnerScopeHuman,
-		WorkspaceID:    "ws-1", AgentID: "mia", LaunchProfile: LaunchProfileUtility,
+		WorkspaceID:    "ws-1", AgentID: "mia",
 	}); err != nil {
 		t.Fatalf("persist chatA: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestLifecycleFilter_ParentDurableKey_DirectChildrenOnly(t *testing.T) {
 			SessionID: id, State: LifecycleRunning,
 			OwnerScopeKind: OwnerScopeParentSession, OwnerScopeID: chatA,
 			ParentAgentID: "mia", ParentDurableKey: chatA,
-			WorkspaceID: "ws-1", AgentID: "ray", LaunchProfile: LaunchProfileUtility,
+			WorkspaceID: "ws-1", AgentID: "ray",
 		}); err != nil {
 			t.Fatalf("persist %q: %v", id, err)
 		}
@@ -66,7 +66,7 @@ func TestLifecycleFilter_ParentDurableKey_DirectChildrenOnly(t *testing.T) {
 		SessionID: grandD, State: LifecycleRunning,
 		OwnerScopeKind: OwnerScopeParentSession, OwnerScopeID: childB,
 		ParentAgentID: "ray", ParentDurableKey: childB,
-		WorkspaceID: "ws-1", AgentID: "ava", LaunchProfile: LaunchProfileUtility,
+		WorkspaceID: "ws-1", AgentID: "ava",
 	}); err != nil {
 		t.Fatalf("persist grandD: %v", err)
 	}
@@ -122,7 +122,6 @@ func TestLifecycleFilter_ParentDurableKey_ComposesWithOtherFilterFields(t *testi
 		SessionID: runningChild, State: LifecycleRunning,
 		OwnerScopeKind: OwnerScopeParentSession, OwnerScopeID: parent,
 		ParentDurableKey: parent, WorkspaceID: "ws-1", AgentID: "ray",
-		LaunchProfile: LaunchProfileUtility,
 	}); err != nil {
 		t.Fatalf("persist runningChild: %v", err)
 	}
@@ -130,7 +129,6 @@ func TestLifecycleFilter_ParentDurableKey_ComposesWithOtherFilterFields(t *testi
 		SessionID: doneChild, State: LifecycleCompleted,
 		OwnerScopeKind: OwnerScopeParentSession, OwnerScopeID: parent,
 		ParentDurableKey: parent, WorkspaceID: "ws-1", AgentID: "ava",
-		LaunchProfile: LaunchProfileUtility,
 	}); err != nil {
 		t.Fatalf("persist doneChild: %v", err)
 	}

@@ -3,6 +3,7 @@ package skills
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -520,4 +521,47 @@ func TestGetSkillMetadata_IgnoresHTMLCommentBlocks(t *testing.T) {
 	require.NotNil(t, meta)
 	assert.Equal(t, "biomed-skill", meta.Name)
 	assert.Equal(t, "Summarize biomedical papers.", meta.Description)
+}
+
+// TestListSkills_SkipsDotPrefixedDirectories is the defensive-guard proof for
+// the install_skill staging fix (pkg/tools/skills_install.go): a force=true
+// reinstall stages its download under skillsDir/.staging/<slug>.install-XXXX/
+// before renaming it into place. Even if that staging directory somehow ended
+// up with a SKILL.md in it (a fully-extracted-but-not-yet-renamed skill, or a
+// future staging-path change that lands directly in skillsDir), ListSkills
+// must never surface it as an installed skill — a concurrent list_skills call
+// or a system-prompt build mid-install must not see a phantom entry, and a
+// staging directory orphaned by a crash must not become a permanent phantom.
+func TestListSkills_SkipsDotPrefixedDirectories(t *testing.T) {
+	tmp := t.TempDir()
+	global := filepath.Join(tmp, "global")
+
+	// A real, well-formed skill — the control.
+	createSkillDir(t, global, "real-skill", "real-skill", "an actual installed skill")
+
+	// A staging directory sitting directly in the scanned root, complete with
+	// a SKILL.md, simulating either (a) the in-flight window of an install
+	// before the .staging fix, or (b) a crash-orphaned leftover. Its name
+	// pattern matches what os.MkdirTemp(skillsDir, "."+slug+".install-")
+	// used to produce.
+	createSkillDir(t, global, ".sneaky-skill.install-abc123", "sneaky-skill", "should never be listed")
+
+	// The new dedicated staging root itself, with an in-flight install nested
+	// inside it — must also never surface, even though .staging itself has no
+	// SKILL.md directly inside it.
+	createSkillDir(t, filepath.Join(global, ".staging"), "sneaky-skill.install-def456", "sneaky-skill", "mid-install, must not be listed")
+
+	sl := NewSkillsLoader(tmp, global, "")
+	infos := sl.ListSkills()
+
+	ids := make([]string, 0, len(infos))
+	for _, info := range infos {
+		ids = append(ids, info.ID)
+	}
+
+	assert.Contains(t, ids, "real-skill", "the real skill must still be listed")
+	assert.Len(t, ids, 1, "only the real skill may be listed; got: %v", ids)
+	for _, id := range ids {
+		assert.False(t, strings.HasPrefix(id, "."), "no dot-prefixed directory may ever be surfaced as a skill, got id %q", id)
+	}
 }

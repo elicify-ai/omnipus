@@ -49,7 +49,7 @@ func TestBootSweep_NonTerminalToFailedInterrupted(t *testing.T) {
 	// messages that MUST be carried into the failed record.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "sess-running", Generation: 1, State: session.LifecycleRunning,
-		WorkspaceID: "ws", AgentID: "agent-1", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws", AgentID: "agent-1",
 		OwnerScopeKind:        session.OwnerScopeHuman,
 		LastCheckpointRef:     "ckpt-abc",
 		UndeliveredMessageIDs: []string{"msg-1", "msg-2"},
@@ -58,13 +58,13 @@ func TestBootSweep_NonTerminalToFailedInterrupted(t *testing.T) {
 	// A queued session — also non-terminal, also swept.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "sess-queued", Generation: 1, State: session.LifecycleQueued,
-		WorkspaceID: "ws", AgentID: "agent-1", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws", AgentID: "agent-1",
 		OwnerScopeKind: session.OwnerScopeHuman,
 	})
 	// A terminal session — MUST be left alone.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "sess-done", Generation: 1, State: session.LifecycleCompleted,
-		WorkspaceID: "ws", AgentID: "agent-1", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws", AgentID: "agent-1",
 		OwnerScopeKind: session.OwnerScopeHuman,
 	})
 
@@ -125,7 +125,7 @@ func TestBootSweep_NeedsInputReconstructable_Preserved(t *testing.T) {
 	h := newBootSweepHarness(t)
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "sess-ni", Generation: 1, State: session.LifecycleNeedsInput,
-		WorkspaceID: "ws", AgentID: "agent-1", LaunchProfile: session.LaunchProfileSpecialist,
+		WorkspaceID: "ws", AgentID: "agent-1",
 		OwnerScopeKind:    session.OwnerScopeHuman,
 		LastCheckpointRef: "ckpt-1",
 		NeedsInput:        &session.NeedsInput{CorrelationID: "corr-1", TTLDeadline: time.Now().Add(24 * time.Hour)},
@@ -151,7 +151,7 @@ func TestBootSweep_NeedsInputNotReconstructable_Swept(t *testing.T) {
 	h := newBootSweepHarness(t)
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "sess-ni-nockpt", Generation: 1, State: session.LifecycleNeedsInput,
-		WorkspaceID: "ws", AgentID: "agent-1", LaunchProfile: session.LaunchProfileSpecialist,
+		WorkspaceID: "ws", AgentID: "agent-1",
 		OwnerScopeKind: session.OwnerScopeHuman,
 		// no LastCheckpointRef -> clause (1) fails
 		NeedsInput: &session.NeedsInput{CorrelationID: "corr-1", TTLDeadline: time.Now().Add(24 * time.Hour)},
@@ -213,7 +213,7 @@ func TestBootSweep_AwaitingCorrectionOwnerExempt(t *testing.T) {
 	// identify the plan), but OwnsPlanID names the awaiting-correction plan.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "sess-owner", Generation: 1, State: session.LifecyclePaused,
-		WorkspaceID: "ws", AgentID: "owner-agent", LaunchProfile: session.LaunchProfileSpecialist,
+		WorkspaceID: "ws", AgentID: "owner-agent",
 		OwnerScopeKind: session.OwnerScopeHuman, // human, not plan_id
 		OwnsPlanID:     "plan-1",                // the named linkage
 	})
@@ -238,7 +238,7 @@ func TestBootSweep_PausedOwnerNotAwaitingCorrection_Swept(t *testing.T) {
 	})
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "sess-owner-2", Generation: 1, State: session.LifecyclePaused,
-		WorkspaceID: "ws", AgentID: "owner-agent", LaunchProfile: session.LaunchProfileSpecialist,
+		WorkspaceID: "ws", AgentID: "owner-agent",
 		OwnerScopeKind: session.OwnerScopeHuman, OwnsPlanID: "plan-2",
 	})
 
@@ -409,13 +409,13 @@ func TestBootSweep_AwaitingCorrectionOwnerNotSweptAcrossRestart(t *testing.T) {
 	})
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "owner-rs", Generation: 1, State: session.LifecyclePaused,
-		WorkspaceID: "ws", AgentID: "owner", LaunchProfile: session.LaunchProfileSpecialist,
+		WorkspaceID: "ws", AgentID: "owner",
 		OwnerScopeKind: session.OwnerScopeHuman, OwnsPlanID: "plan-rs",
 	})
 	// A stranded running session (no plan) that SHOULD be swept.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "stray", Generation: 1, State: session.LifecycleRunning,
-		WorkspaceID: "ws", AgentID: "a", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws", AgentID: "a",
 		OwnerScopeKind: session.OwnerScopeHuman,
 	})
 
@@ -440,7 +440,7 @@ func TestN15_GoalSemanticsRebaseline(t *testing.T) {
 	// -> swept normally (the mechanism is armed but no version is recorded yet).
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "goal-unversioned", Generation: 1, State: session.LifecycleRunning,
-		WorkspaceID: "ws", AgentID: "a", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws", AgentID: "a",
 		OwnerScopeKind: session.OwnerScopeHuman, GoalRef: "goal-1",
 	})
 	res := h.pe.runBootSweep(context.Background())
@@ -458,7 +458,7 @@ func TestN15_GoalSemanticsRebaseline(t *testing.T) {
 	h.pe.currentSemanticsVersionOverride = 3
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "goal-stale", Generation: 1, State: session.LifecycleRunning,
-		WorkspaceID: "ws", AgentID: "a", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws", AgentID: "a",
 		OwnerScopeKind: session.OwnerScopeHuman, GoalRef: "goal-2",
 	})
 	h.pe.SetGoalSemanticsVersioner(func(sid string) int {
@@ -484,7 +484,7 @@ func TestN15_GoalSemanticsRebaseline(t *testing.T) {
 	// a stranded running session with no live turn).
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "goal-current", Generation: 1, State: session.LifecycleRunning,
-		WorkspaceID: "ws", AgentID: "a", LaunchProfile: session.LaunchProfileUtility,
+		WorkspaceID: "ws", AgentID: "a",
 		OwnerScopeKind: session.OwnerScopeHuman, GoalRef: "goal-3",
 	})
 	h.pe.SetGoalSemanticsVersioner(func(sid string) int { return 3 })

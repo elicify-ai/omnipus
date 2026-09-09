@@ -117,6 +117,16 @@ test(
 test(
   'oversized_post_renders_typed_error_413',
   async ({ page }) => {
+    // This test's whole purpose is to provoke a rejected request, so the
+    // browser logs "Failed to load resource … 405" by design. Asserting zero
+    // console errors here would be asserting the test does not do its job.
+    // Opted out per test rather than by widening the fixture's allow-list,
+    // which would blind every OTHER test to a real 405.
+    test.info().annotations.push({
+      type: 'expects-console-errors',
+      description: 'deliberately POSTs an oversized body to observe the typed error',
+    })
+
     // Navigate to a page that shows the main app UI (authenticated).
     await page.goto('/')
     await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })

@@ -579,7 +579,20 @@ func (t *ExecTool) Scope() ToolScope       { return ScopeCore }
 func (t *ExecTool) Category() ToolCategory { return CategoryShell }
 
 func (t *ExecTool) Description() string {
-	return `Execute a shell command (sh -c on Linux/macOS, powershell on Windows). Set run_in_background=true for long-running commands (returns a session_id immediately); use action=poll/read/kill with that session_id to check on it, read incremental output, or terminate it. cwd is relative to the workspace only (no absolute paths, no '..' escapes). timeout_seconds defaults to 300 and must be between 1 and 3600; enforced identically in the foreground and in the background — a background session times out on its own after timeout_seconds elapses, and is otherwise stopped only by an explicit kill action or an explicit session cancel.`
+	return "Execute a shell command (foreground or backgrounded) in the workspace and get its output.\n" +
+		"sh -c on Linux/macOS, powershell on Windows. Set run_in_background=true for long-running commands " +
+		"(returns a session_id immediately); use action=poll/read/kill with that session_id to check on it, " +
+		"read incremental output, or terminate it. cwd is relative to the workspace only (no absolute paths, " +
+		"no '..' escapes). timeout_seconds defaults to 300 and must be between 1 and 3600; enforced identically " +
+		"in the foreground and in the background — a background session times out on its own after " +
+		"timeout_seconds elapses, and is otherwise stopped only by an explicit kill action or an explicit " +
+		"session cancel. Output is truncated beyond a size cap — a SUCCEEDING command keeps up to 64,000 " +
+		"characters, a FAILING one only 10,000 (the failure cap is smaller, so a large error command's output " +
+		"is cut harder than a successful one's); redirect to a file and read it with read_file/offset when you " +
+		"need all of it. Commands are screened by a safety guard (deny patterns, a binary allowlist, and a " +
+		"path-use check) before they run — writing outside your workspace requires a mount first (see " +
+		"list_mounts / request_mount); a \"blocked by safety guard\" or \"blocked by exec allowlist\" error means " +
+		"the guard refused the command, not that it failed to run."
 }
 
 func (t *ExecTool) Parameters() map[string]any {
@@ -1851,11 +1864,20 @@ func truncateOutput(output string, exitCode int) string {
 	if exitCode == 0 {
 		limit = maxForegroundSuccessOutputLen
 	}
-	if len(output) > limit {
-		totalLen := len(output)
-		return output[:limit] + fmt.Sprintf(
+	// Rune-sliced (never splits a multi-byte UTF-8 codepoint mid-character,
+	// unlike a raw output[:limit] byte slice) — see G-1 in the tool-catalog
+	// review; same bug class already fixed in BuildCompressedManifest
+	// (manifest.go). Deliberately NOT utils.Truncate here: that helper
+	// reserves 3 of the caller's own limit chars for its own "..." marker,
+	// which would cut the body short of the exact limit AND double up with
+	// this function's own, more informative "(truncated, N more chars)"
+	// suffix below.
+	runes := []rune(output)
+	runeCount := len(runes)
+	if runeCount > limit {
+		return string(runes[:limit]) + fmt.Sprintf(
 			"\n... (truncated, %d more chars)",
-			totalLen-limit,
+			runeCount-limit,
 		)
 	}
 	return output
@@ -1993,6 +2015,32 @@ func (t *ExecTool) runBackground(
 	go func() { defer pipeWG.Done(); pipeReadFn(stdoutReader) }()
 	go func() { defer pipeWG.Done(); pipeReadFn(stderrReader) }()
 
+	// naturalCompletionCh is closed by the completion goroutine below the
+	// instant it has recorded a terminal status for the session (whatever
+	// that status turns out to be), so the timeout-guard goroutine can bail
+	// out instead of firing its stale timer against an already-finished
+	// session. Without this, S10 (UAT full-tool-catalog batch1, 2026-09-02,
+	// §2.2): the timeout timer below is scheduled once, at session start, for
+	// timeoutSeconds regardless of how quickly the command actually
+	// finishes — a command that completes in 2 seconds under a 300s default
+	// timeout leaves this goroutine asleep until t=300s and STILL fires then.
+	// KillAndRelabel's statusPriority "upgrade" rule (session.go) — meant for
+	// a genuine near-simultaneous race between two callers relabeling the
+	// SAME dying process — cannot tell that race apart from this stale-timer
+	// case, so it happily overwrites the correct, minutes-old StatusDone
+	// (priority 1) with StatusTimeout (priority 2): a poll issued before the
+	// timer fires correctly reports "done", and a read issued moments after
+	// it fires reports "timeout" with no output (the field is empty in the
+	// upgrade branch — only Status is rewritten, and by then the buffer may
+	// already have been drained) — self-contradictory to a caller and
+	// factually wrong, since the command was never killed for exceeding its
+	// budget. Closing this channel as soon as the process's real fate is
+	// known removes the false-positive path entirely while leaving the
+	// genuine boundary race (natural exit and timer firing within the same
+	// instant) exactly as before: KillAndRelabel's priority tie-breaking
+	// still decides that case correctly.
+	naturalCompletionCh := make(chan struct{})
+
 	// FR-B3: enforce timeout_seconds identically for background as for
 	// foreground. Fires session.KillAndRelabel(StatusTimeout) (the same kill
 	// primitive SessionManager.KillAllForSession uses, atomically relabeled
@@ -2003,7 +2051,13 @@ func (t *ExecTool) runBackground(
 		go func() {
 			timer := time.NewTimer(time.Duration(timeoutSeconds) * time.Second)
 			defer timer.Stop()
-			<-timer.C
+			select {
+			case <-naturalCompletionCh:
+				// The session already reached a terminal status (done, killed,
+				// or canceled) before the timer fired — nothing to enforce.
+				return
+			case <-timer.C:
+			}
 			if killErr := session.KillAndRelabel(StatusTimeout); killErr != nil {
 				if !errors.Is(killErr, ErrSessionDone) {
 					slog.Warn("bash: background timeout kill failed",
@@ -2052,6 +2106,12 @@ func (t *ExecTool) runBackground(
 		// drain this same buffered output (Reset is session.Read()'s job).
 		outputSoFar := session.outputBuffer.String()
 		session.mu.Unlock()
+
+		// Stop the timeout guard now that the session's real fate is settled
+		// — see naturalCompletionCh's doc comment above. Safe to close
+		// unconditionally even when no timeout goroutine was started
+		// (timeoutSeconds <= 0): nothing ever selects on it in that case.
+		close(naturalCompletionCh)
 
 		if cb != nil {
 			cb(context.Background(), backgroundCompletionResult(sessionID, finalStatus, finalExitCode, outputSoFar))
@@ -2260,8 +2320,23 @@ func (t *ExecTool) inTurnSecretSet(p string, policy fspolicy.FSPolicy) bool {
 	if fspolicy.IsCarveOut(p, policy) {
 		return true
 	}
+	// The child-only half of the secret set, which IsCarveOut deliberately no
+	// longer covers. ADR-072 D10.3 removed $OMNIPUS_HOME/skills from the app
+	// layer's carve-out roots so the in-process file tools could gate a
+	// skill's INSTRUCTION FILE rather than its whole directory — a distinction
+	// this guard must not inherit. `bash` is a spawned CHILD: on POSIX the
+	// kernel ruleset still denies it the whole skills directory, so following
+	// the narrowing here would only produce a guard that passes a command the
+	// kernel then refuses; on Windows there is no ruleset at all
+	// (selectBackendPlatform returns FallbackBackend), so this guard is the
+	// only thing there is. Both reasons point the same way: keep the
+	// directory-shaped deny for children.
+	home := config.OmnipusHomeDir()
+	if fspolicy.CoversChildOnlySecretPath(p, home) {
+		return true
+	}
 	if resolved, err := resolvePathAgainstExistingAncestor(p); err == nil && resolved != p {
-		if fspolicy.IsCarveOut(resolved, policy) {
+		if fspolicy.IsCarveOut(resolved, policy) || fspolicy.CoversChildOnlySecretPath(resolved, home) {
 			return true
 		}
 	}

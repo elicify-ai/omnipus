@@ -15,6 +15,7 @@ import { useUiStore } from '@/store/ui'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, isCancelledStatus, type ToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
+import { stripUntrustedContentWrapper } from '@/lib/untrustedToolContent'
 
 // ── Shared result parser ──────────────────────────────────────────────────────
 
@@ -40,19 +41,28 @@ const RAW_STRING_RESULT_TOOLS = new Set([
 function parseResult(result: unknown, toolName: string): GenericBrowserResult {
   if (!result) return {}
   if (typeof result === 'string') {
+    // SEC-25: click/type/wait/evaluate/get_text/navigate are classified as
+    // untrusted (pkg/agent/prompt_guard.go) and the gateway sends us the
+    // PromptGuard-sanitized string, not the tool's raw output — unwrap the
+    // [UNTRUSTED_CONTENT] marker before treating this as JSON.
+    const unwrapped = stripUntrustedContentWrapper(result)
+    if (unwrapped === null) {
+      // High-strictness install: the backend fully redacted this result.
+      return { text: '(content withheld by security policy)' }
+    }
     try {
-      return JSON.parse(result) as GenericBrowserResult
+      return JSON.parse(unwrapped) as GenericBrowserResult
     } catch (err) {
       if (RAW_STRING_RESULT_TOOLS.has(toolName)) {
-        return { text: result }
+        return { text: unwrapped }
       }
       console.warn(
         `[BrowserTool] ${toolName} returned non-JSON string result`,
         err,
-        result.slice(0, 200),
+        unwrapped.slice(0, 200),
       )
       return {
-        error: `Malformed result (expected JSON): ${result.slice(0, 200)}`,
+        error: `Malformed result (expected JSON): ${unwrapped.slice(0, 200)}`,
       }
     }
   }

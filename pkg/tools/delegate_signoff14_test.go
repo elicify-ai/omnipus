@@ -92,7 +92,7 @@ func TestDelegateTool_Respond_NativeRedispatchesWithIsResume(t *testing.T) {
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-resume-proof", State: session.LifecycleNeedsInput,
 		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileSpecialist,
+		WorkspaceID: "ws-1", AgentID: "worker",
 		NeedsInput: &session.NeedsInput{CorrelationID: "corr-resume", TTLDeadline: time.Now().Add(time.Hour)},
 	}); err != nil {
 		t.Fatalf("seed lifecycle record failed: %v", err)
@@ -161,7 +161,7 @@ func TestDelegateTool_Respond_EnqueueFailure_LeavesSessionParkedNotWedged(t *tes
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-enqueue-fail", State: session.LifecycleNeedsInput,
 		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-		WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileSpecialist,
+		WorkspaceID: "ws-1", AgentID: "worker",
 		NeedsInput: &session.NeedsInput{CorrelationID: "corr-enqueue-fail", TTLDeadline: time.Now().Add(time.Hour)},
 	}); err != nil {
 		t.Fatalf("seed lifecycle record failed: %v", err)
@@ -309,7 +309,7 @@ func TestDelegateTool_Cancel_NothingToCancel_StillSurfacesShellKillWarnings(t *t
 			if err := lc.Persist(&session.LifecycleRecord{
 				SessionID: childID, State: session.LifecycleRunning,
 				OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: parentKey,
-				WorkspaceID: "ws-1", AgentID: "worker", LaunchProfile: session.LaunchProfileUtility,
+				WorkspaceID: "ws-1", AgentID: "worker",
 			}); err != nil {
 				t.Fatalf("seed lifecycle record failed: %v", err)
 			}

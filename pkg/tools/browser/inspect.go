@@ -30,12 +30,17 @@ const (
 // Deliberately much shorter than BrowserManager.PageTimeout() (the budget
 // for a full page load/navigation, commonly 30s+) — document.elementFromPoint
 // is a trivial synchronous DOM query, not a page load, so there is no reason
-// to let it wait as long as a full page when the shared CDP command queue is
-// contended (every chromedp.Run for this browser process funnels through one
-// fixed-capacity command queue drained by one goroutine — see
-// handleScreencastEvent's doc comment in live.go for the full ADR-038
-// analysis of why one busy/wedged command can back up every other command on
-// this browser, any session, any tool).
+// to let it wait as long as a full page when the CDP command queue for this
+// workspace's browser is contended (every chromedp.Run against one Chrome
+// funnels through one fixed-capacity command queue drained by one goroutine,
+// so a single busy or wedged command backs up every other command on that
+// browser, any session, any tool — see runCDPWithTimeout and attach()'s doc
+// comment in live.go for the ADR-038 analysis).
+//
+// The citation used to name handleScreencastEvent, which no longer exists:
+// ADR-061 deleted the JPEG screencast pipeline outright and took that function
+// with it. The queue it documented is still there and still the reason this
+// constant exists, so the reference is retargeted rather than dropped.
 //
 // UAT finding (ADR-039 BE-2): a tester's pop-out annotate flow got a 502 from
 // /api/v1/browser/inspect. The gateway log showed InspectPoint's CDP call DID
@@ -113,11 +118,12 @@ func formatCoord(v float64) string {
 }
 
 // InspectPoint resolves the DOM element at device (CSS) pixel (x, y) on the
-// agent's shared live-view tab (DefaultSessionID) and returns its tag name,
+// live-view tab — the WORKSPACE-OWNED set the operator drives
+// (BrowserManager.OperatorSessionID) — and returns its tag name,
 // trimmed innerText, and trimmed outerHTML (ADR-039 D-B3).
 //
 // Best-effort by design: a point with no element under it, or a CDP round
-// trip that fails outright (tab crashed, timed out against m.PageTimeout(),
+// trip that fails outright (tab crashed, timed out against inspectEvalTimeout,
 // wedged transport, the page navigated away mid-eval), both come back as
 // InspectResult{Ok:false}, err=nil — the caller (the gateway's inspect
 // handler) is expected to surface this as a soft ok:false result to the SPA,
@@ -133,7 +139,7 @@ func formatCoord(v float64) string {
 // cannot contribute to the ADR-038 deadlock class that motivated
 // LiveView.runCDP. This mirrors the SAME established pattern
 // EvaluateTool/WaitTool (tools.go) already use for a one-off, timeout-bounded
-// chromedp.Run against the shared tab — it deliberately does not go through
+// chromedp.Run against a resolved tab — it deliberately does not go through
 // the LiveView/live-view registry at all (no screencast, no control-lock
 // interaction), so it stays disjoint from live.go/browser_ws.go.
 //
@@ -149,19 +155,29 @@ func formatCoord(v float64) string {
 // (pkg/gateway/browser_inspect.go) is written entirely in terms of this
 // function's (result, err) contract and needs no panic-handling of its own as
 // long as that contract genuinely always holds — this is where it's enforced.
-func (m *BrowserManager) InspectPoint(x, y float64) (result InspectResult, err error) {
+func (m *BrowserManager) InspectPoint(panelSessionID string, x, y float64) (result InspectResult, err error) {
+	// Issue #671: inspect must read the tab the panel is SHOWING. The caller
+	// resolves it the same way the live view does (PanelTabSetID); an empty id
+	// — a caller with no chat context — falls back to the operator's
+	// workspace-owned set, which is what this function used unconditionally
+	// before. Reading the operator's tab while the panel shows the chat's
+	// returns "no element at that point" for a point the user can plainly see,
+	// or worse, an element from a page they are not looking at.
+	if panelSessionID == "" {
+		panelSessionID = m.OperatorSessionID()
+	}
 	defer func() {
 		if rec := recover(); rec != nil {
 			logger.ErrorCF("browser", "inspect: panic recovered, reporting best-effort no-result", map[string]any{
 				"panic":      fmt.Sprintf("%v", rec),
 				"stack":      string(debug.Stack()),
-				"session_id": DefaultSessionID,
+				"session_id": panelSessionID,
 			})
 			result, err = InspectResult{}, nil
 		}
 	}()
 
-	tabCtx, sessionErr := m.Session(DefaultSessionID)
+	tabCtx, sessionErr := m.Session(panelSessionID)
 	if sessionErr != nil {
 		return InspectResult{}, fmt.Errorf("browser: inspect: cannot resolve session: %w", sessionErr)
 	}
@@ -191,7 +207,7 @@ func (m *BrowserManager) InspectPoint(x, y float64) (result InspectResult, err e
 		// infrastructure problem undiagnosable from the logs.
 		logger.WarnCF("browser", "inspect: CDP/eval round trip failed, reporting best-effort no-result", map[string]any{
 			"error":      runErr.Error(),
-			"session_id": DefaultSessionID,
+			"session_id": panelSessionID,
 		})
 		return InspectResult{}, nil
 	}

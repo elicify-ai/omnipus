@@ -96,15 +96,17 @@
         "tests/e2e/agents.spec.ts",
         "tests/e2e/auth.spec.ts",
         "tests/e2e/burst-resilience.spec.ts",
+        "tests/e2e/calendar-recurrence.spec.ts",
+        "tests/e2e/calendar.spec.ts",
         "tests/e2e/contract-counters.spec.ts",
+        "tests/e2e/create-agent.spec.ts",
         "tests/e2e/security-tools.spec.ts",
         "tests/e2e/sidebar.spec.ts",
         "tests/e2e/skills.spec.ts",
+        "tests/e2e/uat-audit-and-settings.spec.ts",
+        "tests/e2e/uat-shell-and-screens.spec.ts",
         "tests/e2e/ws-reconnect.spec.ts",
-        "tests/e2e/xss.spec.ts",
-        "tests/e2e/calendar.spec.ts",
-        "tests/e2e/calendar-recurrence.spec.ts",
-        "tests/e2e/create-agent.spec.ts"
+        "tests/e2e/xss.spec.ts"
       ]
     },
     {
@@ -113,13 +115,15 @@
       "port": 6065,
       "solo": true,
       "specs": [
+        "tests/e2e/browser-live-video.spec.ts",
         "tests/e2e/idle-no-reconnect.spec.ts",
         "tests/e2e/multi-turn-render.spec.ts",
         "tests/e2e/replay-fidelity.spec.ts",
         "tests/e2e/retention.spec.ts",
         "tests/e2e/settings-memory.spec.ts",
         "tests/e2e/tool-order.spec.ts",
-        "tests/e2e/browser-live-video.spec.ts"
+        "tests/e2e/uat-browser-panel.spec.ts",
+        "tests/e2e/uat-ownership-api.spec.ts"
       ]
     },
     {

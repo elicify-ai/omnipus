@@ -62,6 +62,7 @@ import {
   Agent as AgentSchema,
   AgentSession as AgentSessionSchema,
   AuditLogResponse as AuditLogResponseSchema,
+  AuditEntry as AuditEntrySchema,
   ExecAllowlist as ExecAllowlistSchema,
   ExecProxyStatus as ExecProxyStatusSchema,
   GlobalToolPolicies as GlobalToolPoliciesSchema,
@@ -1903,11 +1904,34 @@ export async function fetchSessionDetail(sessionId: string): Promise<SessionDeta
   }
 }
 
-export async function createSession(agentId: string): Promise<Session> {
+/**
+ * Create a session for an agent, optionally inside a workspace.
+ *
+ * `workspaceId` is the workspace the chat this session backs belongs to. Pass
+ * it whenever the caller knows one — omit it only for the global/inbox chat,
+ * which genuinely belongs to no workspace.
+ *
+ * It matters beyond bookkeeping: the live browser panel decides which
+ * workspace's browser, and whose live logins, it shows by reading the
+ * workspace off the attaching chat session's own meta on the server (ADR-075
+ * FR-016/FR-017 — no workspace travels on the attach frame itself). A session
+ * created without one leaves that read empty, and an agent on more than one
+ * workspace's team is then refused as ambiguous. Sending it here means a chat
+ * carries its workspace from birth instead of from its first message.
+ */
+export async function createSession(agentId: string, workspaceId?: string): Promise<Session> {
+  const trimmedWorkspaceId = typeof workspaceId === 'string' ? workspaceId.trim() : ''
   // Wire returns the wire Session shape (nested stats); transform to SPA Session.
   const raw = await request<RawSession>('/sessions', {
     method: 'POST',
-    body: JSON.stringify({ agent_id: agentId }),
+    body: JSON.stringify({
+      agent_id: agentId,
+      // Omitted entirely when absent: the contract caps it at 128 chars and
+      // rejects a workspace that does not exist, and "" is not a workspace.
+      ...(trimmedWorkspaceId.length > 0 && trimmedWorkspaceId.length <= 128
+        ? { workspace_id: trimmedWorkspaceId }
+        : {}),
+    }),
   }, WireSessionSchema as ZodType<RawSession>)
   return rawToSession(raw)
 }
@@ -3163,6 +3187,19 @@ export function deleteAgentMailbox(agentId: string, workspaceId: string): Promis
 // McpServerCreate — re-exported from generated openapi-types (contract-first #8).
 // See contracts/components/schemas/McpServerCreate.yaml.
 
+/**
+ * Read a skill's last-invocation timestamp (ISO 8601), or `null` when the
+ * skill has never been invoked or the backend has no audit history for it.
+ * `last_invoked` is a real `Skill` wire field (ADR-072 D3.1,
+ * contracts/components/schemas/Skill.yaml) populated by
+ * `pkg/gateway/rest.go::listSkills` from `pkg/audit.Logger
+ * ::LastInvokedForSkill` — validated by `SkillSchema` like every other
+ * `Skill` field, no raw-body access involved.
+ */
+export function skillLastInvoked(skill: Skill): string | null {
+  return skill.last_invoked ?? null
+}
+
 export async function fetchSkills(): Promise<Skill[]> {
   // Tolerant per-item validation: a single skill whose payload fails the Skill
   // schema must NOT hide the entire installed-skills list. (A community/ClawHub
@@ -3174,11 +3211,12 @@ export async function fetchSkills(): Promise<Skill[]> {
   let dropped = 0
   for (const item of raw) {
     const parsed = SkillSchema.safeParse(item)
-    if (parsed.success) out.push(parsed.data as Skill)
-    else dropped++
+    if (parsed.success) {
+      out.push(parsed.data as Skill)
+    } else dropped++
   }
   if (dropped > 0 && import.meta.env?.DEV) {
-     
+
     console.warn(`fetchSkills: dropped ${dropped} skill(s) that failed schema validation`)
   }
   return out
@@ -3591,8 +3629,89 @@ export type AuditDecision = 'allow' | 'deny' | 'error'
 // AuditEntry — re-exported from generated openapi-types (no local body needed).
 // AuditEventType and AuditDecision remain as local type aliases for UI use.
 
-export function fetchAuditLog(): Promise<AuditLogResponse> {
-  return request<AuditLogResponse>('/audit-log', undefined, AuditLogResponseSchema as ZodType<AuditLogResponse>)
+// Top-level shape assertion for GET /audit-log. `entries` is deliberately
+// typed as an array of UNKNOWN here so the array itself is not rejected
+// wholesale — each element is validated separately by fetchAuditLog below.
+// Everything else on the envelope (chain_status, chain_broken_index) is
+// re-validated against the generated AuditLogResponse schema afterwards, so
+// the generated schema stays the single source of truth (Constraint #8) and
+// genuine envelope drift still fails loudly.
+const AuditLogEnvelopeShapeSchema = z.object({ entries: z.array(z.unknown()) }).passthrough()
+
+/**
+ * GET /api/v1/audit-log — with PER-ENTRY validation.
+ *
+ * Issue #667, second half. Validating the whole AuditLogResponse in one
+ * `safeParse` (as `request()` does for every other endpoint) means `entries:
+ * z.array(AuditEntry)` fails as a UNIT: a single record the schema rejects
+ * throws ApiSchemaError for the entire response and AuditLogViewer renders
+ * "Failed to load audit log" — the operator sees NOTHING, not "one row
+ * missing". Widening the `event` pattern to allow dots fixed the names that
+ * exist today; it did not remove the fragility, and an audit file is
+ * append-only history nobody can rewrite, so the next unrecognised name has
+ * exactly the same blast radius.
+ *
+ * Per CLAUDE.md hard-constraint #8 the SPA edge drops the bad item, bumps the
+ * counter and shows a dev-mode toast instead of crashing. This mirrors
+ * `parseWireMessageList` above: invalid entries are counted through the
+ * SHARED `_recordApiSchemaError` path (dev toast + production telemetry +
+ * the window.__omnipus_test_hooks counter), never a parallel counter.
+ *
+ * Unlike the message list this does NOT substitute a placeholder row. An
+ * audit record is evidence: a synthesised row would need an invented
+ * timestamp to satisfy the schema, and a fabricated timestamp interleaved
+ * into an append-only chronological log is worse than an absent row. The
+ * drop is surfaced through the counter/telemetry channel instead.
+ */
+export async function fetchAuditLog(): Promise<AuditLogResponse> {
+  const endpoint = 'GET /api/v1/audit-log'
+  // A non-object body, or `entries` that is not an array at all, is genuine
+  // contract drift and still throws ApiSchemaError from request().
+  const raw = await request<{ entries: unknown[] }>(
+    '/audit-log',
+    undefined,
+    AuditLogEnvelopeShapeSchema as unknown as ZodType<{ entries: unknown[] }>,
+  )
+
+  const kept: unknown[] = []
+  let dropped = 0
+  let firstIssue: string | undefined
+  for (const item of raw.entries) {
+    const result = AuditEntrySchema.safeParse(item)
+    if (result.success) {
+      kept.push(result.data)
+      continue
+    }
+    dropped++
+    firstIssue ??= result.error.issues[0]?.message
+    _recordApiSchemaError(endpoint, result.error.issues.length)
+  }
+  if (dropped > 0) {
+    void maybeDevToast(
+      `[api] Dropped ${dropped} unreadable audit record${dropped === 1 ? '' : 's'} from ${endpoint}: ${firstIssue ?? 'unknown'}`,
+      `${endpoint}:audit-entry-schema`,
+    )
+  }
+
+  // Envelope re-validation against the GENERATED schema. Every surviving
+  // entry already passed AuditEntry, so a failure here can only come from the
+  // envelope's own fields (e.g. a chain_status outside the enum) — real
+  // contract drift that must stay loud.
+  const parsed = AuditLogResponseSchema.safeParse({ ...raw, entries: kept })
+  if (!parsed.success) {
+    _recordApiSchemaError(endpoint, parsed.error.issues.length)
+    const schemaErr = new ApiSchemaError(
+      endpoint,
+      parsed.error.issues.map((i) => ({ path: i.path as (string | number)[], message: i.message })),
+      raw,
+    )
+    void maybeDevToast(
+      `[api] Schema mismatch: /audit-log — ${schemaErr.zodIssues[0]?.message ?? 'unknown'}`,
+      'GET:/audit-log:schema',
+    )
+    throw schemaErr
+  }
+  return parsed.data
 }
 
 // ── User Context (USER.md) ────────────────────────────────────────────────────
@@ -4306,19 +4425,82 @@ export function fetchHostFolders(path?: string): Promise<HostFolderListing> {
 }
 
 /**
+ * ADR-072 D1.2/FR-074/FR-074a: what mount-creation time discloses about a
+ * mount's recognised skills directory. SPA-shaped (camelCase) transform of
+ * the real wire fields `WorkspaceMountCreateResponse.skills_count` /
+ * `.skills_grants_message` / `.skills_threshold_warning` — see
+ * contracts/components/schemas/WorkspaceMountCreateResponse.yaml, populated
+ * by `pkg/gateway/rest_workspace_mounts.go::mountToCreateResponse` from
+ * `pkg/skills/mount_threshold.go::EvaluateMountSkillsDisclosure`. Mirrors
+ * the transformation-type convention used elsewhere in this file (e.g.
+ * `Session`, `ToolCall`): the wire shape is the generated
+ * `WorkspaceMountCreateResponse` type; this is the SPA's normalised view.
+ */
+export interface MountSkillsDisclosure { // not-wire-format: SPA transformation type (camelCase view over the real wire fields WorkspaceMountCreateResponse.skills_count/skills_grants_message/skills_threshold_warning) — see doc comment above
+  /** How many project skills the mount's recognised skills directory carries. */
+  count: number
+  /**
+   * FR-074a: states, every time count > 0 (even for a handful of skills),
+   * that the mount's skills directory grants agents new auto-loadable
+   * instructions — not merely files. Independent of the threshold.
+   */
+  grantsMessage: string
+  /**
+   * FR-074: non-empty only when count exceeds the mount-add-time threshold
+   * (spec default 500) — states the count and its per-turn consequence. The
+   * mount is still created either way (FR-075); this is information, not a
+   * refusal.
+   */
+  thresholdWarning: string | null
+}
+
+/**
+ * Read the ADR-072 D1.2 skills disclosure off a real
+ * `WorkspaceMountCreateResponse` (already validated against the generated
+ * schema by `createWorkspaceMount`), or `null` when the mount carries no
+ * recognised skills directory (`skills_count` absent — see
+ * `EvaluateMountSkillsDisclosure`'s zero-count contract).
+ */
+export function mountSkillsDisclosure(
+  resp: WorkspaceMountCreateResponse,
+): MountSkillsDisclosure | null {
+  if (
+    typeof resp.skills_count !== 'number' ||
+    resp.skills_count <= 0 ||
+    typeof resp.skills_grants_message !== 'string'
+  ) {
+    return null
+  }
+  return {
+    count: resp.skills_count,
+    grantsMessage: resp.skills_grants_message,
+    thresholdWarning: resp.skills_threshold_warning ?? null,
+  }
+}
+
+/**
  * Mount a real local folder into a workspace, making it writable there.
  *
  * Resolves with a `warning` when the target was broad but allowed (the home
  * directory, the filesystem root, a top-level system directory) — the caller
  * MUST surface it. Rejects (400) when the target is or lies inside the Omnipus
  * data directory, the one hard boundary.
+ *
+ * Also carries an ADR-072 D1.2 skills disclosure when the mounted folder has
+ * a recognised skills directory — read it via `mountSkillsDisclosure(resp)`.
+ * Goes through the standard `request<T>()` schema-validated path like every
+ * other endpoint (drop + counter + dev-toast on a schema mismatch, per
+ * Constraint #8) — no manual raw-body reimplementation needed now that
+ * `skills_count`/`skills_grants_message`/`skills_threshold_warning` are real
+ * `WorkspaceMountCreateResponse` fields.
  */
 export function createWorkspaceMount(
   workspaceId: string,
   body: WorkspaceMountCreateRequest,
 ): Promise<WorkspaceMountCreateResponse> {
+  const path = `/workspaces/${encodeURIComponent(workspaceId)}/mounts`
   return request<WorkspaceMountCreateResponse>(
-    `/workspaces/${encodeURIComponent(workspaceId)}/mounts`,
+    path,
     { method: 'POST', body: JSON.stringify(body) },
     WorkspaceMountCreateResponseSchema as ZodType<WorkspaceMountCreateResponse>,
   )

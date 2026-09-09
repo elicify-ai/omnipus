@@ -141,17 +141,17 @@ func TestLiveView_RebindWatch_NoFalseDeathBroadcast(t *testing.T) {
 // tab-context cancellation CloseTab performs (closing.cancel() in
 // manager.go), which is the load-bearing trigger for this bug.
 func TestLiveView_CloseActiveTab_NoFalseDeathAndRebindsToSurvivor(t *testing.T) {
-	m := newTestManagerWithFakeTabs(t, 5)
+	m := newTestManagerWithFakeTabs(t)
 	reg := newLiveViewRegistry(m)
 
-	_, err := m.Session(DefaultSessionID) // tab 0
+	_, err := m.Session(testSessionID) // tab 0
 	require.NoError(t, err)
-	tab1, err := m.OpenTab(DefaultSessionID) // tab 1, becomes active
+	tab1, err := m.OpenTab(testSessionID) // tab 1, becomes active
 	require.NoError(t, err)
 	require.Equal(t, 1, tab1.Index)
 	require.True(t, tab1.Active)
 
-	survivorCtxBeforeClose, err := m.Session(DefaultSessionID)
+	survivorCtxBeforeClose, err := m.Session(testSessionID)
 	require.NoError(t, err)
 
 	var statusMu sync.Mutex
@@ -162,11 +162,11 @@ func TestLiveView_CloseActiveTab_NoFalseDeathAndRebindsToSurvivor(t *testing.T) 
 		statusMu.Unlock()
 	}
 
-	controlledByOther, err := reg.Attach(DefaultSessionID, "viewer1", onStatus, nil, nil)
+	controlledByOther, err := reg.Attach(testSessionID, "viewer1", onStatus, nil, nil)
 	require.NoError(t, err)
 	require.False(t, controlledByOther)
 
-	lv := reg.view(DefaultSessionID)
+	lv := reg.view(testSessionID)
 	lv.mu.Lock()
 	require.Equal(
 		t,
@@ -178,12 +178,12 @@ func TestLiveView_CloseActiveTab_NoFalseDeathAndRebindsToSurvivor(t *testing.T) 
 
 	// Close the ACTIVE tab (index 1) — the exact live-UAT repro. Tab 0 slides
 	// in as the new active tab.
-	closedTabs, newActiveIdx, err := m.CloseTab(DefaultSessionID, 1)
+	closedTabs, newActiveIdx, err := m.CloseTab(testSessionID, 1)
 	require.NoError(t, err)
 	require.Len(t, closedTabs, 1)
 	require.Equal(t, 0, newActiveIdx)
 
-	survivorCtx, err := m.Session(DefaultSessionID)
+	survivorCtx, err := m.Session(testSessionID)
 	require.NoError(t, err)
 	require.NotEqual(
 		t,

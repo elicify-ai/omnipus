@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
+	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -588,6 +590,119 @@ func TestListSkillsMethodNotAllowed(t *testing.T) {
 	api.HandleSkills(w, r)
 
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+}
+
+// TestDeleteSkillRemovesFromGlobalSkillsDir is a regression test for the
+// workspace-root mismatch found alongside the remove_skill defect. Under
+// ADR-046 FR-009, install_skill (the chat tool) targets the single, fixed,
+// install-wide GLOBAL skills directory ($OMNIPUS_HOME/skills,
+// pkg/agent.globalSkillsDir) — never any individual agent's own workspace —
+// so deleteSkill's installer MUST search that same $OMNIPUS_HOME/skills
+// directory (i.e. be rooted at a.homePath, since NewSkillInstaller joins
+// "skills" onto its root itself) for a delete of a real installed skill to
+// ever succeed. An earlier version of this handler resolved the installer
+// against a specific agent's Workspace instead, which was correct for the
+// PRE-ADR-046 per-agent-workspace model but points at a directory
+// install_skill no longer writes into post-ADR-046.
+// Traces to: UAT defect 1 (remove_skill / skill-management identity mismatch).
+func TestDeleteSkillRemovesFromGlobalSkillsDir(t *testing.T) {
+	// Not using newTestRestAPIWithHome here: it mints its OWN internal
+	// t.TempDir() for homePath, but OMNIPUS_HOME (read by
+	// pkg/agent.getGlobalConfigDir(), independently of cfg.Agents.Defaults.Home)
+	// must be set to that SAME directory, and it must be set before the agent
+	// loop (and its default agent's SkillsLoader) is constructed — a chicken-
+	// and-egg the shared helper can't satisfy since it doesn't expose its
+	// tmpDir until after construction. Build the same shape inline instead,
+	// driven by one tmpDir we control from the start.
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	tmpDir := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", tmpDir)
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
+			},
+		},
+	}
+	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	api := &restAPI{
+		agentLoop:     al,
+		allowedOrigin: "http://localhost:3000",
+		onboardingMgr: onboarding.NewManager(tmpDir),
+		homePath:      tmpDir,
+		taskStore:     task.New(tmpDir + "/tasks"),
+		taskLock:      task.TaskFileLock,
+	}
+
+	// Install a skill exactly the way install_skill's tool does: a directory
+	// named after the slug under the global skills dir ($OMNIPUS_HOME/skills).
+	slug := "docker-compose"
+	skillDir := filepath.Join(tmpDir, "skills", slug)
+	require.NoError(t, os.MkdirAll(skillDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "SKILL.md"),
+		[]byte("---\nname: docker-compose\ndescription: manage compose stacks\n---\n"), 0o644))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodDelete, "/api/v1/skills/"+slug, nil)
+	r.URL.Path = "/api/v1/skills/" + slug
+	api.HandleSkills(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code, "response body: %s", w.Body.String())
+
+	_, statErr := os.Stat(skillDir)
+	assert.True(t, os.IsNotExist(statErr), "skill directory should have been removed")
+}
+
+// TestDeleteSkillRejectsBuiltinSkill verifies the 403 guard that protects the
+// embedded default skills (seeded into the global skills dir on first boot)
+// from being deleted through the API — the frontend disables the button, but
+// the backend is the enforcing gate.
+func TestDeleteSkillRejectsBuiltinSkill(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", tmpDir)
+	api := newTestRestAPIWithHome(t)
+
+	names := skills.DefaultSkillNames()
+	require.NotEmpty(t, names, "the embedded default skill set must be non-empty")
+	builtinName := names[0]
+
+	// Seed it on disk exactly where the global skills dir would hold it, so
+	// a permissive resolver couldn't accidentally 404 its way to a false pass.
+	skillDir := filepath.Join(tmpDir, "skills", builtinName)
+	require.NoError(t, os.MkdirAll(skillDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "SKILL.md"),
+		[]byte(fmt.Sprintf("---\nname: %s\ndescription: builtin\n---\n", builtinName)), 0o644))
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodDelete, "/api/v1/skills/"+builtinName, nil)
+	r.URL.Path = "/api/v1/skills/" + builtinName
+	api.HandleSkills(w, r)
+
+	assert.Equal(t, http.StatusForbidden, w.Code, "response body: %s", w.Body.String())
+	// Must survive the rejected delete.
+	_, statErr := os.Stat(skillDir)
+	assert.NoError(t, statErr, "builtin skill directory must not be removed")
+}
+
+// TestDeleteSkillNotFoundForUnknownSkill verifies the 404 path still works
+// once the workspace root is fixed (i.e. the fix doesn't turn every delete
+// into a false-positive success).
+func TestDeleteSkillNotFoundForUnknownSkill(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodDelete, "/api/v1/skills/does-not-exist", nil)
+	r.URL.Path = "/api/v1/skills/does-not-exist"
+	api.HandleSkills(w, r)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
 // --- Doctor action_link test (US-B4) ---

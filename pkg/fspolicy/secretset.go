@@ -10,9 +10,10 @@ import (
 )
 
 // SecretEntriesRelative is THE definition of what must never be reachable
-// inside $OMNIPUS_HOME. ADR-063 D3, spec FR-3.1/FR-3.2. It is the union of two
-// lists that used to live apart, and each half protected something the other
-// missed:
+// inside $OMNIPUS_HOME. ADR-063 D3, spec FR-3.1/FR-3.2. It is the union of
+// three lists — SecretEntriesAlways, SecretEntriesAlwaysPathOnly (added by
+// ADR-072 D10.1) and SecretEntriesPerTurn — and each protects something the
+// others missed:
 //
 //	master.key, credentials.json  — both lists had these; root of trust
 //	config.json, cli.token        — kernel only. config.json lets a child turn
@@ -24,6 +25,17 @@ import (
 //	                                credential disclosures, and both were found
 //	                                by review rather than by the merge; see
 //	                                SecretEntriesAlways for the detail.
+//	skills                        — added by ADR-072 D10 Part A / D10.1, then
+//	                                narrowed by D10.3: a KERNEL-layer
+//	                                context-free path-deny, kept in its own
+//	                                list (SecretEntriesAlwaysPathOnly)
+//	                                because it is BOTH excluded from
+//	                                pkg/tools/shell.go's literal-text command
+//	                                guard AND excluded from the app layer's
+//	                                carve-out roots. See
+//	                                SecretEntriesAlwaysPathOnly for both
+//	                                reasons and for what gates it instead at
+//	                                the app layer.
 //
 // # Why this lives in pkg/fspolicy and not pkg/sandbox
 //
@@ -36,14 +48,21 @@ import (
 //
 // # It is split, and the split is load-bearing
 //
-// SecretEntriesAlways needs no context. SecretEntriesPerTurn (agents/,
-// workspaces/) only means anything once a work dir is known, because those
-// roots contain the caller's OWN directory and denying them outright locks an
-// agent out of the place it is meant to work. Use SecretPathsAlways where there
-// is no turn (kernel boot) and DeniedPathsFor where there is. This combined
-// list exists for the app layer, which always has a work dir, and for callers
-// that genuinely want the whole vocabulary.
-var SecretEntriesRelative = append(append([]string{}, SecretEntriesAlways...), SecretEntriesPerTurn...)
+// SecretEntriesAlways and SecretEntriesAlwaysPathOnly both need no turn
+// context — they differ in which CONSUMERS read them (the shell text guard
+// and the app-layer carve-out list read the first and not the second).
+// SecretEntriesPerTurn (agents/, workspaces/) only means anything once a work
+// dir is known, because those roots contain the caller's OWN directory and
+// denying them outright locks an agent out of the place it is meant to work.
+// Use SecretPathsAlways where there is no turn (kernel boot) and
+// DeniedPathsFor where there is.
+//
+// This combined list is the whole vocabulary, and it is NOT the app layer's
+// carve-out list any more: buildCarveOuts calls appCarveOutSecretPaths, which
+// omits SecretEntriesAlwaysPathOnly (ADR-072 D10.3). Reach for
+// appCarveOutSecretPaths for an app-layer decision and for this list only
+// where the whole vocabulary is genuinely wanted.
+var SecretEntriesRelative = append(append(append([]string{}, SecretEntriesAlways...), SecretEntriesAlwaysPathOnly...), SecretEntriesPerTurn...)
 
 // SecretEntriesAlways is the part of the set that needs NO turn context: no
 // agent, in any shape, ever has a legitimate reason to reach these.
@@ -110,6 +129,109 @@ var SecretEntriesAlways = []string{
 	// above) — a future rotated-file naming tweak or a new file dropped in
 	// system/ must not need a second edit here to stay covered.
 	"system",
+}
+
+// SecretEntriesAlwaysPathOnly is the third category ADR-072 D10 Part A / D10.1
+// (the r3 correction) introduces, as narrowed by D10.3 (r6): entries that are
+// a context-free path deny at the KERNEL layer (DeniedPathsFor,
+// SecretPathsAlways, KernelDeniedPathsFor — the deny list a spawned child
+// sees) and are read by NEITHER of SecretEntriesAlways' two other consumers:
+//
+//  1. NOT pkg/tools/shell.go's buildSecretGuardPatterns, which compiles ONE
+//     word-boundary literal-text regex per SecretEntriesAlways entry and
+//     blocks any bash command whose TEXT merely mentions the name (D10.1).
+//  2. NOT the app layer's carve-out roots — buildCarveOuts, i.e.
+//     FSPolicy.CarveOuts, i.e. what IsCarveOut refuses (D10.3, below).
+//
+// # Why the app layer must NOT carve this out (D10.3)
+//
+// A whole-directory app-layer deny over $OMNIPUS_HOME/skills breaks the
+// commonest real skill shape: a skill directory routinely holds helper
+// scripts, templates and reference files its own SKILL.md tells the agent to
+// open or run, and denying the subtree makes a skill that loads successfully
+// unable to work as authored. D10.3 therefore narrows the app-layer gate from
+// the DIRECTORY to the skill's INSTRUCTION FILE, which is a filename-shaped
+// rule this package cannot express at all — IsCarveOut, CoversForDeny and
+// CoversForGrant are containment tests, there is no pattern or glob facility
+// here by design.
+//
+// So the app-layer gate for this category lives in the layer that CAN express
+// it: pkg/tools/resolvepath.go's classifySkillsGatePath +
+// isSkillInstructionFileLeaf, which refuse a read/list/send whose leaf is a
+// recognised instruction filename under a skills root (judged by filesystem
+// identity via CoversForDeny, on both the path as written and its resolved
+// realpath). Leaving `skills` in the app carve-out list ALSO made that gate
+// dead code: IsCarveOut runs first in ResolvePath, so the coarse deny
+// answered every skills path before the narrow one was consulted — the
+// narrowing shipped with passing tests and zero production effect, because
+// the resolver's own unit tests build FSPolicy literals with no CarveOuts.
+//
+// # Why the KERNEL layer still denies the whole directory
+//
+// Deliberate, documented asymmetry, not an oversight. Narrowing the kernel
+// deny to instruction files means enumerating one deny path per installed
+// skill per turn (D10.3's own "computed from the ListSkills() the loader
+// already performs", whose cost "must be measured"), and on Linux the ruleset
+// confines the gateway's own threads as well as its children — so a
+// per-instruction-file kernel deny would also have to be made child-only,
+// which ADR-072 D10/§6.8 explicitly flags as needing a spike on a real Linux
+// host before implementation. Until that spike happens the kernel keeps the
+// coarse, whole-directory deny.
+//
+// The practical consequence, stated plainly: `bash` (and any spawned child)
+// cannot read ANY file under $OMNIPUS_HOME/skills on a platform with a kernel
+// backend, including a skill's bundled helper files that the in-process file
+// tools may now read. That is the conservative direction — a skill's bundled
+// script is reachable through read_file, which is how an agent following the
+// skill's instructions actually reads it — and it is the accepted gap pending
+// D10.2/§6.8. On Windows there is no kernel backend at all, so nothing is
+// closed there; D10.2 already states exactly that.
+//
+// # Why "skills" cannot simply join SecretEntriesAlways
+//
+// $OMNIPUS_HOME/skills (the installed skill registry, D4.1 shelf 2/3) is
+// structurally identical to entities/ or system/ — a whole directory under
+// $OMNIPUS_HOME with no legitimate agent-tool reader outside the Skill tool
+// (which reads it in-process, below the ResolvePath boundary, so the deny
+// here does not touch it) — so it belongs in the ALWAYS *path* half by the
+// same reasoning as every entry above.
+//
+// But SecretEntriesAlways has a SECOND consumer shell.go's own comment names
+// explicitly: "the five ALWAYS names are never legitimate in ANY turn, which
+// is what makes a context-free literal match safe for them and not for the
+// rest [SecretEntriesPerTurn]." "skills" fails that exact test — unlike
+// master.key or entities, it is an ORDINARY ENGLISH WORD an agent
+// legitimately types constantly ("grep -r skills .", "git commit -m 'add
+// skills'", "ls ~/projects/skills-demo"). Joining SecretEntriesAlways would
+// auto-generate `\bskills\b` into shell.go's defaultDenyPatterns and block
+// every one of those, and TestSecretGuardPatterns_CoverEverySecretEntryAlways
+// would then DEMAND that over-broad behaviour (it fails any
+// SecretEntriesAlways entry the guard does not block) — so the false
+// positive cannot even be caught by that coupling test; it would look like
+// coverage.
+//
+// # Resolution
+//
+// A third, disjoint category: consumed by the KERNEL path-denial functions
+// (DeniedPathsFor, SecretPathsAlways, and — via KernelDeniedPathsFor deriving
+// from DeniedPathsFor — the deny list spawned children see on POSIX) and by
+// SecretEntriesRelative, the whole-vocabulary list; and deliberately NOT read
+// by buildSecretGuardPatterns (D10.1) nor by appCarveOutSecretPaths, the
+// app-layer carve-out list (D10.3). This preserves the anti-drift property
+// that motivated generating the guard in the first place: coupling tests, one
+// per set (TestSecretGuardPatterns_CoverEverySecretEntryAlways for the
+// text-guarded set, TestSecretEntries_SkillsDeniedForPathsNotTextGuard for
+// this one), so neither set can silently fall behind or silently widen.
+//
+// # Adding a second member is not a mechanical edit
+//
+// Every consumer distinction above was decided for `skills` specifically. A
+// new entry here inherits ALL of them at once — no shell text guard, no
+// app-layer carve-out, kernel deny only — and the app-layer half is only safe
+// because something else (resolvepath.go's instruction-file gate) covers it.
+// Anything without such a replacement gate belongs in SecretEntriesAlways.
+var SecretEntriesAlwaysPathOnly = []string{
+	"skills",
 }
 
 // SecretEntriesPerTurn is the part that is only meaningful WITH a work dir,
@@ -255,6 +377,15 @@ func SecretBackupPathPrefixes(home string) []string {
 //
 // Returns nil for an empty home so a caller with no configured home does not
 // produce denies rooted at "/".
+//
+// # This is NOT the app layer's carve-out list
+//
+// It was, until ADR-072 D10.3. buildCarveOuts now calls
+// appCarveOutSecretPaths instead, which is this list minus
+// SecretEntriesAlwaysPathOnly. The remaining production consumer is
+// pkg/sandbox/derive_from_fspolicy.go's fail-closed fallback, a KERNEL-layer
+// caller that wants the strictest set it can name when the per-turn
+// enumeration fails — which is exactly what this returns.
 func SecretPaths(home string) []string {
 	if home == "" {
 		return nil
@@ -277,6 +408,92 @@ func SecretPaths(home string) []string {
 	return out
 }
 
+// appCarveOutSecretPaths returns the roots the APP layer denies —
+// FSPolicy.CarveOuts, the list IsCarveOut walks. It is SecretPaths minus
+// SecretEntriesAlwaysPathOnly (ADR-072 D10.3).
+//
+// # Why the app layer gets its own list rather than reusing SecretPaths
+//
+// Every other entry in the secret set is denied identically by both layers,
+// and keeping one list is what stopped the two from drifting (ADR-063 D3).
+// SecretEntriesAlwaysPathOnly is the single, documented exception: the app
+// layer's gate for it is finer-grained than a directory (a skill's
+// instruction FILE, in pkg/tools/resolvepath.go), and a whole-directory
+// carve-out here both breaks skills that bundle files and silently overrides
+// that finer gate — IsCarveOut is consulted first in ResolvePath, so the
+// coarse answer wins and the narrow one never runs. See
+// SecretEntriesAlwaysPathOnly's doc comment for the full reasoning and for
+// why the kernel layer deliberately does NOT follow this narrowing.
+//
+// Expressed as "the whole set minus one list" rather than as its own literal,
+// so a new entry added to SecretEntriesAlways or SecretEntriesPerTurn reaches
+// the app layer automatically — the hand-copied second list is what ADR-063
+// D3 removed, and this must not reintroduce one.
+//
+// Returns nil for an empty home, matching SecretPaths.
+func appCarveOutSecretPaths(home string) []string {
+	if home == "" {
+		return nil
+	}
+	clean := filepath.Clean(home)
+
+	names := make([]string, 0, len(SecretEntriesAlways)+len(SecretEntriesPerTurn))
+	names = append(names, SecretEntriesAlways...)
+	names = append(names, SecretEntriesPerTurn...)
+
+	out := make([]string, 0, len(names)+4)
+	seen := make(map[string]struct{}, len(names)+4)
+	for _, name := range names {
+		p := filepath.Join(clean, name)
+		out = append(out, p)
+		seen[p] = struct{}{}
+	}
+	for _, p := range secretBackupPaths(clean) {
+		if _, dup := seen[p]; dup {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	return out
+}
+
+// CoversChildOnlySecretPath reports whether candidate is, or is inside, one of
+// the SecretEntriesAlwaysPathOnly roots under home — the entries the APP
+// layer's carve-out list deliberately omits (ADR-072 D10.3) but every
+// CHILD-facing layer still denies as a whole directory.
+//
+// It exists so an app-layer check that speaks for a CHILD rather than for the
+// in-process file tools — pkg/tools/shell.go's pre-exec path guard, which is
+// the only thing standing in front of `bash` on a platform with no kernel
+// backend — can reproduce the child posture without re-deriving
+// "$OMNIPUS_HOME/skills" as a literal of its own.
+//
+// The two layers must not be conflated: the in-process file tools read a
+// skill's bundled helper files (D10.3 narrowed their gate to the instruction
+// file), while a spawned child gets the whole directory denied, because
+// narrowing THAT needs D10.2/§6.8's Linux child-only spike. A guard for `bash`
+// that only consulted IsCarveOut would silently follow the app layer's
+// narrowing, contradicting the kernel ruleset the same command then runs
+// under — and on Windows, where there is no ruleset at all, it would be the
+// whole difference.
+//
+// Deny-side: CoversForDeny, so case, Unicode-normalization and symlink
+// spellings of the same directory all match, with a case-folded fallback when
+// the filesystem cannot answer.
+func CoversChildOnlySecretPath(candidate, home string) bool {
+	if home == "" || candidate == "" {
+		return false
+	}
+	clean := filepath.Clean(home)
+	for _, name := range SecretEntriesAlwaysPathOnly {
+		if CoversForDeny(filepath.Join(clean, name), candidate) {
+			return true
+		}
+	}
+	return false
+}
+
 // SecretPathsAlways returns only the context-free part of the set: the entries
 // no agent may reach in any shape. Use this where there is no work dir to
 // compare against — the kernel policy computed at boot, before any turn exists.
@@ -285,21 +502,32 @@ func SecretPaths(home string) []string {
 // wholesale to every child, locking every agent out of its own working
 // directory. That is not a hypothetical: it is what the first cut of this
 // change did, and four tests caught it immediately.
+//
+// Includes SecretEntriesAlwaysPathOnly alongside SecretEntriesAlways: both are
+// context-free (no work dir needed to decide), and this function's whole
+// contract is "the part that needs no turn context" — the ONLY thing that
+// distinguishes SecretEntriesAlwaysPathOnly from SecretEntriesAlways is
+// whether shell.go's text guard also reads it, which this path-only function
+// has no opinion on either way.
 func SecretPathsAlways(home string) []string {
 	if home == "" {
 		return nil
 	}
 	clean := filepath.Clean(home)
-	out := make([]string, 0, len(SecretEntriesAlways)+4)
+	out := make([]string, 0, len(SecretEntriesAlways)+len(SecretEntriesAlwaysPathOnly)+4)
 	for _, name := range SecretEntriesAlways {
+		out = append(out, filepath.Join(clean, name))
+	}
+	for _, name := range SecretEntriesAlwaysPathOnly {
 		out = append(out, filepath.Join(clean, name))
 	}
 	return append(out, secretBackupPaths(clean)...)
 }
 
 // DeniedPathsFor returns the paths a turn with this work dir must not reach:
-// every SecretEntriesAlways entry, plus the SecretEntriesPerTurn roots MINUS
-// the one containing the caller's own work dir.
+// every SecretEntriesAlways and SecretEntriesAlwaysPathOnly entry, plus the
+// SecretEntriesPerTurn roots MINUS the one containing the caller's own work
+// dir.
 //
 // The exception is deliberately the same per-root rule IsCarveOut applies, and
 // it is narrow: a root R is re-admitted only when workDir is a PROPER
@@ -323,6 +551,9 @@ func DeniedPathsFor(home, workDir string) []string {
 	clean := filepath.Clean(home)
 	out := make([]string, 0, len(SecretEntriesRelative)+4)
 	for _, name := range SecretEntriesAlways {
+		out = append(out, filepath.Join(clean, name))
+	}
+	for _, name := range SecretEntriesAlwaysPathOnly {
 		out = append(out, filepath.Join(clean, name))
 	}
 	for _, name := range SecretEntriesPerTurn {

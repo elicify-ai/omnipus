@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
@@ -118,6 +119,20 @@ type AgentLoop struct {
 	activeTurnStates   sync.Map     // key: sessionKey (string), value: *turnState
 	subTurnCounter     atomic.Int64 // Counter for generating unique SubTurn IDs
 	sessionActiveAgent sync.Map     // key: "session:"+sessionID (string), value: agentID (string); set by handoff, cleared on agent deletion
+	// lastSwitchToDefault records, per session, whether the most recent
+	// switch_agent call was a return-to-default (tools.HandoffEvent.ToDefault)
+	// rather than a named-agent hand-off. It exists so the WS agent_switched
+	// frame builder (pkg/gateway/websocket.go) can report the tool's own
+	// intent instead of re-deriving "was this a return to default" after the
+	// fact by comparing the resulting active agent id against the configured
+	// default agent id — a comparison that misreports an explicit
+	// switch_agent(target:"<id>") that happens to name the current default
+	// agent as a return-to-default. Populated by onHandoffFrontend
+	// synchronously, before the matching ToolExecEnd event is emitted, so the
+	// WS handler always observes the value it needs; read once via
+	// GetLastSwitchToDefault (LoadAndDelete — one-shot per switch).
+	// key: "session:"+sessionID (string), value: bool.
+	lastSwitchToDefault sync.Map
 
 	// orphanWatches holds the orphan-foreground-turn watchdog's pending grace
 	// timer per session (ADR-045): key sessionID (string), value *orphanWatch.
@@ -234,35 +249,57 @@ type AgentLoop struct {
 	// receive this instance so the allow_internal policy is honored uniformly.
 	ssrfChecker *security.SSRFChecker
 
-	// browserMgrs holds one BrowserManager per agent (US-4/US-6/US-7; ADR-038
-	// D4). Populated in registerSharedTools, keyed by agentID; guarded by mu
-	// (the same lock the old single al.browserMgr field used). Every entry's
-	// connection is torn down in AgentLoop.Close() — AND, per ADR-038 finding
-	// #2 + ADR-043, whenever registerSharedTools replaces an existing agentID's
-	// entry on hot-reload (see the Release/Shutdown call at that site). In
-	// ADR-043 shared-Chrome mode (the normal gateway case) that teardown is
-	// coordinator.Release(agentID) — it drops only the manager's WS connection
-	// (CRIT-002/C1: does NOT kill Chrome, does NOT dispose the browser
-	// context, which survives for the new manager to re-adopt). The Chrome
-	// process itself is killed solely by coordinator.Shutdown() in Close().
-	// In the no-coordinator test/legacy path the old manager IS its own Chrome
-	// owner, so manager.Shutdown() (which cancels the chromedp allocator
-	// context) is the real process kill there. Dropping the Go
-	// *BrowserManager reference alone never kills anything — the allocator
-	// context is parented on context.Background(), not on the reference — so
-	// the explicit Release/Shutdown on reload is what prevents a per-reload
-	// Chromium leak in that legacy path. registerSharedTools re-runs on every
-	// ReloadProviderAndConfig (any Settings save).
+	// browserMgrs holds one BrowserManager per BROWSING KEY — one browser, one
+	// Chrome, one profile directory, one workspace (ADR-075 FR-001). The map
+	// key is browser.BrowsingKey.String() ("ws:<workspaceID>"), NOT an agent id.
+	// Guarded by mu.
 	//
-	// Before ADR-038 D4 this was a single `browserMgr *browser.BrowserManager`
-	// field, overwritten (with the prior value Shutdown()'d) on every agent
-	// processed by registerSharedTools's per-agent loop — so only the LAST
-	// agent registered ended up with a live manager; every earlier agent's
-	// browser tools silently operated on an already-Shutdown() manager. Do
-	// NOT reintroduce a single shared field — the gateway's live-view WS
-	// handler (pkg/gateway/browser_ws.go) needs a specific agent's manager,
-	// not "whichever agent registered last."
+	// ⚠️ THE KEY CHANGED, AND THE OLD KEY IS THE BUG. This map used to be keyed
+	// by agentID (ADR-038 D4), which made "which browser am I driving" a
+	// property of whichever agent happened to be on the chat. ADR-075 §1.1
+	// records the consequence: an operator browses in the live panel, switches
+	// the chat from Mia to Jim, and Jim reports zero tabs — the tab was in
+	// Mia's browser. Under the browsing key every agent on a workspace shares
+	// ONE browser, and whose tabs are whose inside it is a separate, explicit
+	// dimension (browser.TabOwner, FR-080) rather than an accident of the map.
+	//
+	// Do NOT re-key this by agent, and do NOT reintroduce a single shared
+	// field: the gateway's live-view WS handler needs a SPECIFIC browser, and
+	// a process-wide singleton would put two workspaces' logins in one cookie
+	// jar.
+	//
+	// Every entry's connection is torn down in AgentLoop.Close(), and whenever
+	// registerSharedTools replaces an existing key's entry on hot-reload (see
+	// the Release/Shutdown call at that site). In ADR-043 shared-Chrome mode
+	// that teardown is coordinator.Release(key) — it drops only the manager's
+	// WS connection (CRIT-002/C1: does NOT kill Chrome, does NOT dispose the
+	// browser context, which survives for the new manager to re-adopt). The
+	// Chrome process itself is killed solely by coordinator.Shutdown() in
+	// Close(). In the no-coordinator test/legacy path the old manager IS its
+	// own Chrome owner, so manager.Shutdown() (which cancels the chromedp
+	// allocator context) is the real process kill there. Dropping the Go
+	// *BrowserManager reference alone never kills anything — the allocator
+	// context is parented on context.Background(), not on the reference.
 	browserMgrs map[string]*browser.BrowserManager
+
+	// browserRegisteredAgents records which agents actually got browser tools
+	// on the last registerSharedTools pass. It is the ONLY thing that can
+	// distinguish BrowserResolveNotRegistered ("this agent has no browser
+	// tools") from BrowserResolveNoWorkspace ("it has them, but this turn is
+	// not rooted in a workspace") now that managers are created lazily per key
+	// rather than eagerly per agent — before ADR-075, absence from browserMgrs
+	// meant both, and browser_inspect.go reported the former for both.
+	// Guarded by mu.
+	browserRegisteredAgents map[string]bool
+
+	// browserFactory mints a BrowserManager for a browsing key, carrying the
+	// CURRENT reload's BrowserConfig and SSRF checker. Set by
+	// registerSharedTools on every pass; read by BrowserManagerForKey, which
+	// is what creates a manager for a key no agent was registered under (rung
+	// 1 of ResolveBrowsingKey accepts an explicit turn workspace_id, which need
+	// not match any agent's CoreTeam membership). nil until the first
+	// registration pass. Guarded by mu.
+	browserFactory func(key browser.BrowsingKey) (*browser.BrowserManager, error)
 
 	// browserCoordinator (ADR-043) is the gateway-scoped owner of the ONE
 	// shared Chrome + every agent's browser context. Constructed once and
@@ -270,6 +307,13 @@ type AgentLoop struct {
 	// so the coordinator — and the per-agent contexts it owns — survive a
 	// Settings save). nil only in tests that construct managers directly.
 	browserCoordinator *browser.BrowserCoordinator
+	// browserPool (ADR-075 FR-037) owns ONE Chrome per workspace, each with
+	// its own profile directory. It supersedes browserCoordinator as the
+	// thing managers attach to; the coordinator field survives only for the
+	// direct/test path and for shutdown symmetry. Constructed once and reused
+	// across hot-reload, for the same reason the coordinator was: a Settings
+	// save must not log every workspace out.
+	browserPool *browser.BrowserPool
 	// homePath is $OMNIPUS_HOME (the parent of the workspace path), handed to
 	// NewBrowserCoordinator, which builds the ownership-marker path
 	// (<homePath>/browser/shared-chrome.pid) from it.
@@ -397,6 +441,15 @@ type AgentLoop struct {
 	// remain accessible via GetAgentStore for read-only access to old sessions.
 	sharedSessionStore *session.UnifiedStore
 
+	// askUserRegistry is the gateway-injected AskUserQuestion pending
+	// registry (askuserquestion-tool-spec v3 §0.4; pkg/askuser.Registry).
+	// Nil until SetAskUserRegistry is called; the per-agent
+	// AskUserQuestionTool instances resolve it LIVE per call (late-bound, so
+	// registerSharedTools may run before the gateway wires it) and fail
+	// closed while nil. Guarded by askUserRegistryMu.
+	askUserRegistry   tools.AskUserQuestionRegistry
+	askUserRegistryMu sync.RWMutex
+
 	// toolApprover is the gateway-injected implementation of the human-in-the-loop
 	// approval gate (FR-011, FR-082). Nil until SetToolApprover is called; when nil,
 	// ask-policy tools are treated as allow (open gate, no WS event).
@@ -500,14 +553,42 @@ type AgentLoop struct {
 	channelSessionIdx sync.Map
 
 	// loadedTools tracks which lazy tools have been on-demand loaded by the
-	// manifest optimization (cfg.Tools.Manifest.Compressed) for each session.
-	// Key: manifest session ID (transcript session ID, or the session key when
-	// transcripts are disabled — see manifestSessionID). Value: map[string]bool
-	// (tool name → loaded). Protected by loadedToolsMu. A new session ID lazily
-	// creates a fresh set on first load; entries are evicted by forgetSession on
-	// CloseSession (transcript sessions). Only populated when Compressed is true.
+	// manifest optimization (cfg.Tools.Manifest.Compressed) for each
+	// (agent, session) bucket. Key: manifestBucketKey(agentID, transcriptID,
+	// sessionKey) — ADR-071 D3 §4.6 narrowed this from a session-only key so
+	// a switch_agent mid-session no longer lets the incoming agent inherit
+	// the outgoing agent's loaded Tier 3 tools. Value: map[string]bool (tool
+	// name → loaded). Protected by loadedToolsMu. A new bucket lazily creates
+	// a fresh set on first load; entries are evicted by forgetSession's
+	// suffix sweep on CloseSession (transcript sessions). Only populated when
+	// Compressed is true.
 	loadedTools   map[string]map[string]bool
 	loadedToolsMu sync.Mutex
+
+	// pendingSearchPromotions is a side table of loadedTools (ADR-071
+	// §4.3.1a): bucket key → tool name → the turn index (bucketTurnCounter
+	// value) at which ToolSearch's query (by-description) path promoted it.
+	// Written only on the query path (never on an exact-name `names` load —
+	// FR-038a); cleared when the tool is invoked; swept for staleness once
+	// per real conversational turn, after the turnLoop for-loop's per-round
+	// TickTTL() calls are all done for that turn (see tickSearchPromotionHorizon's
+	// call site). Purely observational
+	// — nothing here evicts anything from loadedTools or changes what is
+	// callable. Protected by loadedToolsMu (shares the mutex with loadedTools
+	// since both are written/read together at the same call sites; the mutex
+	// does NOT enumerate the map, so forgetSession's suffix sweep must reach
+	// this map explicitly — see forgetSession).
+	pendingSearchPromotions map[string]map[string]int
+
+	// bucketTurnCounter tracks a monotonically increasing turn index per
+	// (agent, session) bucket, incremented once per TickTTL call for that
+	// bucket (ADR-071 §4.3.1a). It backs pendingSearchPromotions' "turn
+	// index" write/sweep. A plain per-bucket counter rather than ts.iteration
+	// because ts.iteration resets with every new turnState (one per runTurn
+	// call), while the no-followup horizon must be counted across the whole
+	// conversation. Protected by loadedToolsMu; swept alongside the two maps
+	// above by forgetSession.
+	bucketTurnCounter map[string]int
 
 	// lastTurnResultMu guards lastTurnResult.  Written by runAgentLoop after
 	// every turn; read by tests to assert turnFailed without threading the flag
@@ -836,17 +917,20 @@ func NewAgentLoop(
 
 	eventBus := NewEventBus()
 	al := &AgentLoop{
-		bus:                    msgBus,
-		cfg:                    cfg,
-		registry:               registry,
-		state:                  stateManager,
-		eventBus:               eventBus,
-		fallback:               fallbackChain,
-		cmdRegistry:            commands.NewRegistry(commands.BuiltinDefinitions()),
-		steering:               newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
-		contextBuilderRegistry: NewContextBuilderRegistry(),
-		loadedTools:            make(map[string]map[string]bool),
-		browserMgrs:            make(map[string]*browser.BrowserManager),
+		bus:                     msgBus,
+		cfg:                     cfg,
+		registry:                registry,
+		state:                   stateManager,
+		eventBus:                eventBus,
+		fallback:                fallbackChain,
+		cmdRegistry:             commands.NewRegistry(commands.BuiltinDefinitions()),
+		steering:                newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
+		contextBuilderRegistry:  NewContextBuilderRegistry(),
+		loadedTools:             make(map[string]map[string]bool),
+		pendingSearchPromotions: make(map[string]map[string]int),
+		bucketTurnCounter:       make(map[string]int),
+		browserMgrs:             make(map[string]*browser.BrowserManager),
+		browserRegisteredAgents: make(map[string]bool),
 	}
 	// Concurrency-gate consolidation (2026-08-04): session admission's cap is
 	// resolved LIVE from the SAME central authority TaskExecutor's dispatch
@@ -856,7 +940,8 @@ func NewAgentLoop(
 	// this must be resolved fresh on every check rather than cached once
 	// here at construction time.
 	al.admission = newAdmissionControllerWithResolver(func() int {
-		return al.GetConfig().Performance.EffectiveMaxParallelAgents()
+		n, _ := al.GetConfig().Performance.EffectiveMaxParallelAgents()
+		return n
 	})
 	// ADR-057 W17, same live-resolution treatment: root-level delegate()
 	// fan-out must never drift from the central authority either. On
@@ -869,7 +954,8 @@ func NewAgentLoop(
 			return resolvedCap
 		}
 		if liveCfg != nil {
-			return liveCfg.Performance.EffectiveMaxParallelAgents()
+			n, _ := liveCfg.Performance.EffectiveMaxParallelAgents()
+			return n
 		}
 		return 1
 	})
@@ -963,6 +1049,19 @@ func NewAgentLoop(
 			// run_retrospective tools would silently lose audit logging (SEC-15)
 			// the first time config reloads.
 			al.wireMemoryAuditLoggerOn(registry, auditLogger)
+
+			// ADR-072 D6.1.1/R4 fix: install the process-wide skills write-audit
+			// logger. tools.SetSkillsWriteAuditLogger's own doc comment names
+			// this exact call site ("a later integration phase wires this at
+			// gateway boot, alongside the other audit-logger wiring") — until
+			// this call existed nowhere in production, tools.ResolvePath's
+			// write hook (and pkg/sysagent/tools' project-shelf authoring path,
+			// via tools.EmitSkillWriteAudit) was a permanent silent no-op:
+			// write_file/edit_file/edit_skill/remove_skill writes into a
+			// recognised skills location produced zero audit entries regardless
+			// of sandbox.audit_log. Idempotent (last caller wins), mirrors
+			// audit.SetProcessChainKey's process-wide-var pattern exactly.
+			tools.SetSkillsWriteAuditLogger(auditLogger)
 		}
 	}
 
@@ -1702,6 +1801,15 @@ func registerSharedTools(
 ) {
 	allowReadPaths := buildAllowReadPatterns(cfg)
 
+	// FR-026b. Browser managers are per BROWSING KEY, and N agents commonly
+	// share one workspace — so the per-agent loop below must do the
+	// create/Release/Shutdown cycle exactly ONCE per key, not once per agent.
+	// Without this set, five agents on one workspace would tear down and
+	// rebuild the same browser five times on every Settings save, and the
+	// fifth pass would Release a manager the fourth had just installed.
+	seenBrowserKeys := make(map[string]bool)
+	liveBrowserKeys := make(map[string]bool)
+
 	for _, agentID := range registry.ListAgentIDs() {
 		agent, ok := registry.GetAgent(agentID)
 		if !ok {
@@ -1790,6 +1898,16 @@ func registerSharedTools(
 		// docs/internal/false-green-patterns.md §5.
 		agent.Tools.RegisterReplacing(messageTool)
 
+		// AskUserQuestion (askuserquestion-tool-spec v3, ADR-074 D4b): the
+		// owner-session structured clarification tool. The registry is
+		// resolved LIVE per call via the closure (the gateway wires it with
+		// SetAskUserRegistry after boot), so this registration needs no
+		// re-wire pass; an unwired registry fails closed inside Execute with
+		// a clear "ask conversationally" error, never a silent park.
+		agent.Tools.RegisterReplacing(tools.NewAskUserQuestionTool(func() tools.AskUserQuestionRegistry {
+			return al.getAskUserRegistry()
+		}))
+
 		// Handoff tools — always registered (ScopeCore).
 		getRegistryReader := func() tools.AgentRegistryReader {
 			return al.GetRegistry()
@@ -1817,6 +1935,13 @@ func registerSharedTools(
 					al.sessionActiveAgent.Store(k, evt.AgentID)
 				}
 			}
+			// Record the tool's own toDefault intent, keyed the same way
+			// GetSessionActiveAgent is (evt.SessionID, "session:" prefix) so
+			// the WS agent_switched frame builder can read it back via the
+			// exact evtSID it already uses to look up the active agent.
+			if evt.SessionID != "" {
+				al.lastSwitchToDefault.Store("session:"+evt.SessionID, evt.ToDefault)
+			}
 		}
 		// The handoff target's window is the one its own instance resolved
 		// through the ADR-066 D2 ladder (its provider, its model, its
@@ -1842,10 +1967,10 @@ func registerSharedTools(
 			}
 			// No configured override — fall through to the registry's own
 			// resolution ladder (lexicographically-first non-worker agent)
-			// rather than a hardcoded name; ReturnToDefaultTool.Execute
-			// already handles an empty result as "no default agent
-			// configured" rather than silently switching to a name that
-			// doesn't exist.
+			// rather than a hardcoded name; SwitchAgentTool.Execute's
+			// target:"default" branch already handles an empty result as
+			// "no default agent configured" rather than silently switching
+			// to a name that doesn't exist.
 			// liveRegistry, not the `registry` parameter this closure could
 			// capture: that one is the boot-time instance, and a full registry
 			// rebuild (TriggerReload, e.g. after the default agent changes)
@@ -1863,8 +1988,7 @@ func registerSharedTools(
 		// sharedStore is the shared session store; tools handle a nil store by
 		// skipping transcript ops (nil only occurs in tests without a store).
 		sharedStore := al.GetSessionStore()
-		agent.Tools.RegisterReplacing(tools.NewHandoffTool(getRegistryReader, sharedStore, getContextWindow, onHandoffFrontend))
-		agent.Tools.RegisterReplacing(tools.NewReturnToDefaultTool(sharedStore, getDefaultAgent, onHandoffFrontend))
+		agent.Tools.RegisterReplacing(tools.NewSwitchAgentTool(getRegistryReader, sharedStore, getContextWindow, getDefaultAgent, onHandoffFrontend))
 
 		// Send file tool (outbound media via MediaStore — store injected later by SetMediaStore).
 		sendFileTool := tools.NewSendFileTool(
@@ -1905,6 +2029,17 @@ func registerSharedTools(
 			// agent.Home, so a skill installed by one agent is discoverable
 			// by every other agent.
 			agent.Tools.RegisterReplacing(tools.NewInstallSkillTool(registryMgr, globalSkillsDir()))
+			// remove_skill is NOT registered here: it is a ScopeCore
+			// management tool (systools.SkillRemoveTool, "remove_skill"),
+			// wired onto every agent's Tools registry by WireSysagentDeps
+			// (pkg/gateway/gateway.go), which shares its SkillInstaller/
+			// SkillsLoader with this same skill engine. A prior version of
+			// this block registered a second, competing ScopeGeneral
+			// implementation here, constructed against the agent's own
+			// per-agent workspace root (the field ADR-057 FR-001/FR-002
+			// renamed to .Home) — a root that predates ADR-046 FR-009's move
+			// to a single global skills directory and that install_skill
+			// above no longer targets. Do not reintroduce it.
 		}
 
 		// Email tools (M11) — registered ONLY for the agent that owns a configured,
@@ -1966,8 +2101,8 @@ func registerSharedTools(
 				return al.GetConfig().Tools.Delegate.EffectiveRequireParentAgentID()
 			})
 			// W2: action:"status" live-progress snapshot for a running native
-			// task. sharedStore mirrors the exact store wiring
-			// NewHandoffTool already uses just above (line ~1469) — the same
+			// task. sharedStore mirrors the exact store wiring the
+			// tools.NewSwitchAgentTool(...) call above already uses — the same
 			// *session.UnifiedStore delegated children's transcript entries
 			// are actually written to. It is a plain value captured once at
 			// registration time (NOT a live func()), so it does not itself
@@ -1982,8 +2117,8 @@ func registerSharedTools(
 			// would panic on a nil receiver. Only wire the store when non-nil so
 			// a running-native status snapshot degrades to prompt-only instead
 			// of crashing the whole action:"status" call. (The sibling
-			// NewHandoffTool/NewReturnToDefaultTool wiring above shares this
-			// pre-existing latent pattern; tracked separately.)
+			// NewSwitchAgentTool wiring above shares this pre-existing latent
+			// pattern; tracked separately.)
 			if sharedStore != nil {
 				delegateTool.SetSessionStore(sharedStore)
 			}
@@ -2261,9 +2396,12 @@ func registerSharedTools(
 				if cfg.Tools.Browser.PageTimeoutSec > 0 {
 					browserCfg.PageTimeout = time.Duration(cfg.Tools.Browser.PageTimeoutSec) * time.Second
 				}
-				if cfg.Tools.Browser.MaxTabs > 0 {
-					browserCfg.MaxTabs = cfg.Tools.Browser.MaxTabs
-				}
+				// FR-023a: the lease wait is CLAMPED against page_timeout at
+				// load AND here on every reload — EffectiveLeaseWaitSec is the
+				// one function that does both, so the two can never disagree.
+				browserCfg.LeaseWait = time.Duration(
+					cfg.Tools.Browser.EffectiveLeaseWaitSec(),
+				) * time.Second
 				if cfg.Tools.Browser.ProfileDir != "" {
 					browserCfg.ProfileDir = cfg.Tools.Browser.ProfileDir
 				}
@@ -2278,6 +2416,21 @@ func registerSharedTools(
 				} else if cfg.Tools.Browser.IdleTTLSec < 0 {
 					browserCfg.IdleTTL = 0
 				}
+				// ADR-075 FR-040a / FR-072: the whole-browser idle window and
+				// the closed-profile cache-trim schedule. Both are documented
+				// operator keys, and both were unreachable until this line —
+				// the value was parsed into nothing and the pool silently ran
+				// its built-in constants, so an operator who changed the number
+				// saw exactly what one who had not saw. Assigned
+				// UNCONDITIONALLY (0 means "unset", which is what the pool's
+				// own default fallback expects) and on the reload pass as well
+				// as the fresh-seed one, so a Settings save takes effect
+				// without a restart. Zero and negative both mean "use the
+				// default" — there is no value that switches idle close off
+				// (FR-061). Regression coverage:
+				// pkg/tools/browser/pool_ttl_config_reachability_test.go.
+				browserCfg.IdleCloseTTL = cfg.Tools.Browser.EffectiveIdleCloseTTL()
+				browserCfg.CacheTrimInterval = cfg.Tools.Browser.EffectiveCacheTrimInterval()
 				// Start page: an operator override wins; otherwise default to
 				// the gateway's own served start page so a fresh tab lands
 				// somewhere branded and legible instead of about:blank (a blank
@@ -2371,14 +2524,23 @@ func registerSharedTools(
 					browserSSRF.AllowGatewayOrigin("localhost", cfg.Gateway.Port)
 				}
 
-				// browser.evaluate registration: always register the tool so the
-				// LLM sees it in its tool list. The live safety floor (deny by
-				// default, SEC-04/SEC-06) is the tool's own executeEnabled gate —
-				// BrowserEvaluateEnabled=true is the required explicit operator
-				// opt-in for the tool to actually execute. (#438: the
+				// browser_evaluate registration: the tool is ALWAYS registered,
+				// on every agent, regardless of this flag — registration has
+				// never been conditional. What the flag gates is EXECUTION, at
+				// EvaluateTool.Execute.
+				//
+				// sandbox.browser_evaluate_enabled is now SEEDED TRUE
+				// (ADR D1.9b ruling 2), so on a fresh install the tool works and
+				// which agents may call it is decided by tool policy. This
+				// remains the operator's runtime kill switch.
+				//
+				// nil resolves to FALSE, not true: a construction that skips
+				// DefaultConfig() must not silently turn arbitrary in-page
+				// JavaScript on. The default lives in the seed, which is data,
+				// never in this resolution. (#438: the
 				// pkg/policy.builtinToolPolicies entry is advisory; that path is
 				// test-only, not a live dispatch gate.)
-				evaluateEnabled := cfg.Sandbox.BrowserEvaluateEnabled
+				evaluateEnabled := config.ResolveBool(cfg.Sandbox.BrowserEvaluateEnabled, false)
 				// ADR-043: ensure the gateway-scoped shared-Chrome coordinator
 				// exists (constructed once; reused across hot-reload so the
 				// per-agent browser contexts it owns — and thus agents' login
@@ -2387,148 +2549,98 @@ func registerSharedTools(
 				// ensureStarted takes the CDPURL branch first.
 				//
 				// MED-1: on a RELOAD (coordinator already exists), apply the
-				// runtime-cheap config deltas. max_total_tabs is a live policy
-				// (TryOpenTab reads it under c.mu) and takes effect immediately;
+				// runtime-cheap config deltas.
 				// headless/exec_path/profile_dir are launch-time properties of
 				// the already-running Chrome and cannot hot-apply —
 				// ApplyRuntimeConfig warn-logs those so an operator isn't
 				// silently misled. CRIT-002 stays intact: the coordinator is
 				// never rebuilt on reload.
 				al.mu.Lock()
-				if al.browserCoordinator == nil {
-					al.browserCoordinator = browser.NewBrowserCoordinator(
-						al.homePath,
-						browserCfg,
-						cfg.Tools.Browser.MaxTotalTabs,
-					)
+				if al.browserPool == nil {
+					al.browserPool = browser.NewBrowserPool(al.homePath, browserCfg)
+					// FR-042a: before this gateway launches anything, settle
+					// what a PREVIOUS run left behind — stale markers cleared,
+					// orphaned Chromes terminated, keys another live gateway
+					// still owns refused. Discriminated by the launch lock, not
+					// by the marker's pid; see ReconcileMarkers for why that
+					// distinction is what stops one gateway killing another's
+					// browser.
+					if refused := al.browserPool.ReconcileMarkers(); len(refused) > 0 {
+						logger.WarnCF("agent", "another gateway owns some workspaces' browsers — this one will not start them",
+							map[string]any{"workspaces": refused})
+					}
 				} else {
-					al.browserCoordinator.ApplyRuntimeConfig(browserCfg, cfg.Tools.Browser.MaxTotalTabs)
+					al.browserPool.ApplyRuntimeConfig(browserCfg)
 				}
-				// ADR-048 condition 1: thread tools.browser.capture_shared_context
-				// through to the coordinator on every fresh-seed AND reload pass —
-				// SetCaptureSharedContext (not NewBrowserCoordinator's constructor
-				// args) so this stays a single call site regardless of which
-				// branch above ran.
-				al.browserCoordinator.SetCaptureSharedContext(cfg.Tools.Browser.CaptureSharedContext)
-				coordinator := al.browserCoordinator
+				// FR-034: push tools.browser.actionability_gate into the
+				// actionability gate's single chokepoint. It runs on the
+				// fresh-seed pass AND on every config reload — the revert
+				// switch takes effect without a restart, which is the whole
+				// reason it exists.
+				browser.SetActionabilityGate(cfg.Tools.Browser.ActionabilityGate)
+				// ADR-075 D2 FR-027: browser_snapshot renders field VALUES by
+				// operator ruling, so its rendered outline is run through the
+				// credential replacer before it is returned. Wired at this
+				// call site, and for the same reason as the line above: it
+				// runs on the fresh-seed pass AND on every config reload, so a
+				// secret the operator registers after boot is covered without
+				// a restart. Defence in depth, not the control that makes the
+				// tool safe — it substitutes registered credential plaintexts
+				// and does nothing for arbitrary form values.
+				browser.SetSensitiveDataReplacer(cfg.SensitiveDataReplacer())
+				pool := al.browserPool
 				al.mu.Unlock()
 				// fs-workspace: browser tools (browser_screenshot) get agent.Home +
 				// RestrictToWorkspace so screenshot paths resolve through the same
 				// workspace root as the other file tools (FR-009).
-				mgr, regErr := browser.RegisterTools(
-					agent.Tools, browserCfg, browserSSRF, evaluateEnabled,
+				// FR-002a: the tools take a RESOLVER, not a manager. The
+				// browser a tool drives is now a property of the TURN
+				// (ResolveBrowsingKey + BrowserManagerForKey), never of
+				// whichever agent it was registered under — which is the
+				// reported defect ADR-075 §1.1 records.
+				if regErr := browser.RegisterTools(
+					agent.Tools, al.browserResolver(), evaluateEnabled,
 					agent.Home, cfg.Agents.Defaults.RestrictToWorkspace,
-				)
-				if regErr == nil {
-					mgr.AttachSharedChrome(coordinator, agentID)
-				}
-				if regErr != nil {
-					logger.ErrorCF("agent", "Failed to register browser tools — "+
-						"ensure Chromium/Chrome is installed or set tools.browser.cdp_url",
-						map[string]any{"error": regErr.Error()})
+				); regErr != nil {
+					logger.ErrorCF("agent", "Failed to register browser tools",
+						map[string]any{"error": regErr.Error(), "agent_id": agentID})
 				} else {
-					// ADR-038 D4/finding #2 + ADR-043: store per-agent, keyed by
-					// agentID. registerSharedTools re-runs on every hot reload
-					// (ReloadProviderAndConfig, any Settings save). When it
-					// does, the PRIOR manager for this SAME agentID must be
-					// torn down before installing the new one.
-					//
-					// W1/C2/F-INFO-3 (D4 invariant 3): in ADR-043 shared-Chrome
-					// mode the teardown goes through the COORDINATOR's Release,
-					// not a bare manager.Shutdown(). Release drops the old
-					// manager's ref from the coordinator's bookkeeping (so
-					// TotalOpenTabs stops counting its tabs) AND calls its
-					// dropConnection (= Shutdown in coordinator mode = close
-					// the WS connection + detach tabs) — WITHOUT killing Chrome
-					// or disposing the agent's browser context (CRIT-002/C1:
-					// the coordinator owns both; the context persists so the
-					// next Register re-adopts it and login survives the save).
-					// In the no-coordinator test/legacy path (coordinator==nil)
-					// the old manager IS its own Chrome owner, so Shutdown() it
-					// directly (the pre-ADR-043 behavior — only
-					// BrowserManager.Shutdown, which cancels the chromedp
-					// allocator context, kills the subprocess; dropping the Go
-					// reference does nothing). Release is a full substitute for
-					// the prior.Shutdown() reload call it replaces: the
-					// registered manager is guaranteed to be the same object as
-					// `prior` (Register is the only c.managers writer, and a
-					// manager registers itself under its own agentID), so
-					// Release's internal dropConnection reaches `prior` exactly.
-					// An unregistered prior (no browser tool used since the last
-					// reload) has started==false in coordinator mode, so there
-					// is no local state to clean — Release's no-op for an absent
-					// c.managers entry is correct.
-					//
-					// A viewer attached to the OLD manager's live view is not
-					// silently orphaned: the connection teardown cancels every
-					// session's chromedp context, which
-					// LiveView.watchForUnexpectedDeath (pkg/tools/browser/live.go,
-					// also finding #2) detects and reports to any attached
-					// viewer as a browser_status(error) frame, so the SPA can
-					// re-attach — which resolves the NEW manager via
-					// BrowserManagerForAgent. Teardown for ALL entries still
-					// also happens, unconditionally, in Close().
-					//
-					// BOTH calls below run whenever a coordinator exists,
-					// rather than the coordinator branch being a substitute
-					// for prior.Shutdown() as an earlier version of this fix
-					// assumed: an agent configured with an explicit
-					// tools.browser.cdp_url NEVER calls coordinator.Register
-					// in the first place (ensureStarted's CDPURL branch
-					// returns before ever consulting m.coordinator — see
-					// AttachSharedChrome's doc comment), so `prior` in that
-					// mode is absent from the coordinator's c.managers map
-					// and coord.Release(agentID) is a silent no-op for it —
-					// dropConnection never reaches it, Started() never flips
-					// false, and its remote-allocator connection leaks on
-					// every reload (caught by
-					// TestRegisterSharedTools_HotReload_ShutsDownReplacedBrowserManager,
-					// which pins CDPURL specifically to exercise this path).
-					// prior.Shutdown() is safe to call unconditionally
-					// alongside coord.Release: it is idempotent (Shutdown /
-					// dropConnection share the same reset logic) and, per
-					// Shutdown's own doc comment, a no-op on Chrome/context
-					// in coordinator mode (m.allocCancel is the no-op stub
-					// ensureStarted installs there) — so CRIT-002 (Chrome +
-					// context survive a reload) is unaffected. coord.Release
-					// still runs whenever coord != nil so the coordinator's
-					// OWN bookkeeping (c.managers entry, tab-budget counts)
-					// stays correct for managers that WERE actually
-					// registered with it.
 					al.mu.Lock()
-					prior := al.browserMgrs[agentID]
-					coord := al.browserCoordinator
-					al.browserMgrs[agentID] = mgr
-					al.mu.Unlock()
-					if coord != nil {
-						// CRIT-002 path: connection-only teardown, Chrome +
-						// browser context survive for the new manager to
-						// re-adopt.
-						coord.Release(agentID)
+					al.browserRegisteredAgents[agentID] = true
+					// The factory carries THIS reload's config + SSRF checker,
+					// so a lazily-created manager gets the operator's current
+					// security state rather than boot-time state.
+					cfgSnapshot := browserCfg
+					ssrfSnapshot := browserSSRF
+					al.browserFactory = func(key browser.BrowsingKey) (*browser.BrowserManager, error) {
+						m, err := browser.NewBrowserManager(cfgSnapshot, ssrfSnapshot)
+						if err != nil {
+							return nil, err
+						}
+						m.AttachPool(pool, key)
+						return m, nil
 					}
-					if prior != nil {
-						// Always Shutdown the replaced manager, even when a
-						// coordinator exists: a remote-CDP manager (cdp_url
-						// set) never attaches to the coordinator, so Release
-						// above is a no-op for it and its allocator would
-						// leak on every hot reload. Shutdown is idempotent
-						// and connection-only for a coordinator-attached
-						// manager (CRIT-002: it must NOT kill the shared
-						// Chrome — TestManager_Shutdown_DropsConnectionNotProcess),
-						// and kills the manager's own Chrome in the
-						// no-coordinator legacy path.
-						prior.Shutdown()
-						// B2c(i): invalidate the retired manager's own
-						// exec-path cache at the same reload trigger the
-						// coordinator's ApplyRuntimeConfig (above,
-						// al.browserCoordinator.ApplyRuntimeConfig) responds
-						// to — see BrowserManager.InvalidateExecPathCache's
-						// doc comment for why this is currently a no-op
-						// against the freshly-replaced `mgr` (a new instance
-						// already starts with an empty cache) but closes the
-						// gap against `prior` and any future refactor that
-						// stops replacing the whole manager on reload.
-						prior.InvalidateExecPathCache()
+					factory := al.browserFactory
+					al.mu.Unlock()
+
+					// FR-026b: one register/release cycle per BROWSING KEY per
+					// reload, not per agent. N agents on one workspace resolve
+					// to ONE key, and doing this per agent would tear the same
+					// browser down and back up N times per Settings save.
+					key, keyErr := browser.ResolveBrowsingKeyForAgent(omnipusHome(), agentID, "")
+					switch {
+					case keyErr != nil:
+						// No workspace (or an ambiguous membership, FR-033).
+						// The tools stay registered and each call reports
+						// ErrNoBrowsingContext by name — never a shared browser.
+						logger.DebugCF("agent", "no browser for this agent yet — it is not rooted in one workspace",
+							map[string]any{"agent_id": agentID, "reason": keyErr.Error()})
+					case seenBrowserKeys[key.String()]:
+						liveBrowserKeys[key.String()] = true
+					default:
+						seenBrowserKeys[key.String()] = true
+						liveBrowserKeys[key.String()] = true
+						al.rewireBrowserManagerForKey(key, factory)
 					}
 				}
 			}
@@ -2568,7 +2680,7 @@ func registerSharedTools(
 				map[string]any{"agent_id": agentID})
 		}
 
-		// Register the unified `load_tool` infra tool (search + load paths).
+		// Register the unified `ToolSearch` infra tool (search + load paths).
 		// Replaces the former search_tools_bm25 + search_tools_regex + standalone load_tool trio.
 		// The resolver uses context-aware closures so per-session and per-agent state
 		// is read from the tool ctx at call time, avoiding data races on the shared
@@ -2578,14 +2690,14 @@ func registerSharedTools(
 		// or MCP discovery settings. Registration is cheap and harmless when unused.
 		//
 		// Why unconditional: the tools_on_demand PUT endpoint flips Compressed live via
-		// SwapConfig without re-running agent registration. If load_tool was only registered
-		// when Compressed=true at boot, a false→true live toggle would leave load_tool absent
-		// from the registry, causing Get("load_tool") to return !ok in buildCompressedToolDefs
+		// SwapConfig without re-running agent registration. If ToolSearch was only registered
+		// when Compressed=true at boot, a false→true live toggle would leave ToolSearch absent
+		// from the registry, causing Get("ToolSearch") to return !ok in buildCompressedToolDefs
 		// and ensureInfraToolsExecutable — every lazy tool silently unreachable, no error logged.
 		// The "no restart needed" promise the UI makes becomes false.
 		//
 		// When Compressed is OFF at turn time, the per-turn gates (cfg.Tools.Manifest.Compressed
-		// at lines ~5049, ~5115, ~5026) skip the compressed paths entirely: load_tool is never
+		// at lines ~5049, ~5115, ~5026) skip the compressed paths entirely: ToolSearch is never
 		// sent to the model and never force-added to policyFiltered. For an agent whose tools
 		// mostly resolve to deny it is also stripped by FilterToolsByPolicy in the uncompressed
 		// path (not in allow-list), so no spurious callable appears. For an agent whose tools
@@ -2593,8 +2705,17 @@ func registerSharedTools(
 		// (the model has all tools anyway).
 		//
 		// Guard against double-registration in case the MCP init path already added it.
+		// Derives the name(s) to check from tools.InfraManifestToolNames() rather than a
+		// hardcoded literal, so this guard cannot silently stop guarding on a future rename.
 		{
-			if _, alreadyTools := agent.Tools.Get("load_tool"); !alreadyTools {
+			alreadyTools := true
+			for _, infraName := range tools.InfraManifestToolNames() {
+				if _, ok := agent.Tools.Get(infraName); !ok {
+					alreadyTools = false
+					break
+				}
+			}
+			if !alreadyTools {
 				capturedAgentID := agentID
 
 				ttl := cfg.Tools.MCP.Discovery.TTL
@@ -2611,7 +2732,7 @@ func registerSharedTools(
 					// canLoad returns (true, "") when name is a policy-allowed LAZY tool for
 					// the calling agent. Full/infra tools are handled before this call (they
 					// return a no-op success in execLoad). When denied, the returned reason
-					// string is surfaced verbatim in the load_tool error message.
+					// string is surfaced verbatim in the ToolSearch error message.
 					func(ctx context.Context, name string) (bool, string) {
 						callerID := tools.ToolAgentID(ctx)
 						if callerID == "" {
@@ -2622,15 +2743,15 @@ func registerSharedTools(
 							return false, name + " — agent not found"
 						}
 						allAgentTools := callerAgent.Tools.GetAll()
-						policyFiltered, _ := tools.FilterToolsByPolicy(
+						policyFiltered, policyVerdicts := tools.FilterToolsByPolicy(
 							allAgentTools,
 							callerAgent.AgentType,
 							callerAgent.LoadToolPolicy(),
 						)
 						// Tier gate: full/infra tools are already callable — they never
 						// need to be loaded. Check policy FIRST so a denied full-tier tool
-						// gets a clear "denied" signal rather than a false "already available"
-						// (F4 fix). If policy allows a full-tier tool, return the sentinel
+						// gets a clear "denied" signal rather than a false "already available".
+						// If policy allows a full-tier tool, return the sentinel
 						// "already available — just call it directly" reason so execLoad can
 						// treat it as a no-op success rather than a load.
 						if tools.ToolManifestTier(name) != tools.ManifestLazy {
@@ -2647,6 +2768,16 @@ func registerSharedTools(
 						}
 						for _, t := range policyFiltered {
 							if t.Name() == name {
+								// ADR-071 §3.2's ambiguity band needs to know when a
+								// loadable tool's resolved policy is "ask" (requires
+								// user confirmation) so it can exclude such tools from
+								// the speculative cross-category promotion clause.
+								// FilterToolsByPolicy already resolved this per-tool
+								// verdict; surface it via the typed sentinel reason
+								// rather than a second lookup.
+								if policyVerdicts[name] == "ask" {
+									return true, tools.CanLoadAskPolicyPrefix
+								}
 								return true, ""
 							}
 						}
@@ -2659,12 +2790,15 @@ func registerSharedTools(
 						// but load rejects it as "unknown" — the chicken-and-egg the MCP UAT
 						// caught: search uses the hidden corpus, canLoad used only GetAll.)
 						if hiddenTool, hok := callerAgent.Tools.GetIncludingHidden(name); hok {
-							hiddenAllowed, _ := tools.FilterToolsByPolicy(
+							hiddenAllowed, hiddenVerdicts := tools.FilterToolsByPolicy(
 								[]tools.Tool{hiddenTool},
 								callerAgent.AgentType,
 								callerAgent.LoadToolPolicy(),
 							)
 							if len(hiddenAllowed) > 0 {
+								if hiddenVerdicts[name] == "ask" {
+									return true, tools.CanLoadAskPolicyPrefix
+								}
 								return true, ""
 							}
 							// Tool exists (visible or hidden) but policy denies it.
@@ -2678,8 +2812,14 @@ func registerSharedTools(
 							}
 						}
 						// Genuinely unknown: suggest the closest registered name so the model
-						// can correct a hallucinated or transposed name (C4 fix).
-						if suggestion := tools.FindClosestToolName(allAgentTools, name); suggestion != "" {
+						// can correct a hallucinated or transposed name (C4 fix). Match
+						// against policyFiltered (the POLICY-ALLOWED set), not allAgentTools
+						// (the pre-policy set) — a typo suggestion must never point at a tool
+						// this agent's policy denies. Cost: hidden MCP tools aren't in
+						// policyFiltered, so a near-miss typo of a hidden MCP tool's name
+						// gets a bare "unknown tool" with no "did you mean" hint. That's the
+						// correct tradeoff (never suggest a name the agent can't call).
+						if suggestion := tools.FindClosestToolName(policyFiltered, name); suggestion != "" {
 							return false, name + " — unknown tool (did you mean '" + suggestion + "'?)"
 						}
 						return false, name + " — unknown tool name"
@@ -2726,52 +2866,227 @@ func registerSharedTools(
 						}
 
 						// Mark only the successfully resolved names as loaded.
-						sessionID := manifestSessionID(
+						// ADR-071 D3 §4.6: the bucket is (agent, session), not
+						// session alone — callerID is the same value already
+						// resolved above (tools.ToolAgentID(ctx), falling back
+						// to capturedAgentID), matching what the readers
+						// (buildCompressedToolDefs/buildToolManifestNote) derive
+						// from ts.agent.ID.
+						bucket := manifestBucketKey(
+							callerID,
 							tools.ToolTranscriptSessionID(ctx),
 							tools.ToolSessionKey(ctx),
 						)
-						al.markToolsLoaded(sessionID, loadedOK)
+						al.markToolsLoaded(bucket, loadedOK)
+
+						// ADR-071 §4.3.1(a) FR-038/FR-038a: record a pending
+						// search-follow-up entry for each newly-promoted name,
+						// but ONLY on the query (by-description) path — an
+						// exact-name `names` load is the model deliberately
+						// naming a tool it already knows about, and recording
+						// it would reintroduce the false-positive floor r3/r4
+						// diagnosed and corrected (see the ADR's MIN-001 note).
+						if tools.IsSearchPromotion(ctx) {
+							al.recordPendingSearchPromotions(bucket, loadedOK)
+						}
 						return schemas, rejected
 					},
 				)
 				agent.Tools.RegisterReplacing(toolsTool)
 			}
 		}
+
+		// Register the ADR-072 D1 `Skill` tool (load-by-slug + search-by-query
+		// paths) — this codebase's second instance of the "index in context,
+		// content on demand" pattern ADR-071 established for ToolSearch
+		// immediately above, one layer up for skills. ALWAYS registered
+		// unconditionally, mirroring ToolSearch's own registration exactly:
+		// Constraint #6 seeds "Skill": allow for every agent
+		// (pkg/coreagent/core.go, pkg/config/defaults.go), so the tool must
+		// exist to be governed by that policy regardless of whether this
+		// installation has any skills installed yet. Resolver closures read
+		// per-call state from ctx at call time, avoiding data races on the
+		// shared instance across concurrent turns on the same agent.
+		{
+			capturedAgentID := agentID
+
+			skillMaxResults := cfg.Tools.MCP.Discovery.MaxSearchResults
+			if skillMaxResults <= 0 {
+				// ADR-072 D1.2/MIN-003: Skill's search mode deliberately
+				// inherits ToolSearch's own result cap rather than
+				// introducing a second number to reason about.
+				skillMaxResults = 5
+			}
+
+			if _, already := agent.Tools.Get("Skill"); !already {
+				skillTool := tools.NewSkillTool(skillMaxResults)
+				skillTool.SetResolver(
+					// load resolves slug for the acting agent through the full
+					// per-shelf grant model (ADR-072 D4/D4.1, via
+					// ContextBuilder.ResolveSkillFullForWorkspace) and loads its
+					// body directly from the resolved shelf's own on-disk path
+					// for this turn only — every Skill call audited (D3.1).
+					func(ctx context.Context, slug string) tools.SkillLoadOutcome {
+						callerID := tools.ToolAgentID(ctx)
+						if callerID == "" {
+							callerID = capturedAgentID
+						}
+						workspaceID := tools.ToolWorkspaceID(ctx)
+						callerAgent, ok := al.registry.GetAgent(callerID)
+						if !ok {
+							audit.EmitSkillCall(al.auditLogger, callerID, workspaceID, slug,
+								audit.SkillCallModeLoad, audit.SkillCallOutcomeNotFound, "")
+							return tools.SkillLoadOutcome{Status: tools.SkillLoadNotFound}
+						}
+
+						if resolved, resolvedOK := callerAgent.ContextBuilder.ResolveSkillFullForWorkspace(workspaceID, slug); resolvedOK {
+							if content, readOK := skills.LoadSkillFile(resolved.Path); readOK {
+								audit.EmitSkillCall(al.auditLogger, callerID, workspaceID, resolved.Slug,
+									audit.SkillCallModeLoad, audit.SkillCallOutcomeLoaded, string(resolved.Shelf))
+								return tools.SkillLoadOutcome{
+									Status:        tools.SkillLoadLoaded,
+									Content:       content,
+									Shelf:         resolved.Shelf,
+									CanonicalSlug: resolved.Slug,
+								}
+							}
+							// Resolved but the file vanished or became unreadable
+							// between resolution and read (rare race) — report
+							// not-found rather than a silent empty load.
+							logger.WarnCF("agent", "skill resolved but its content could not be read",
+								map[string]any{"agent_id": callerID, "skill": slug, "path": resolved.Path})
+							audit.EmitSkillCall(al.auditLogger, callerID, workspaceID, slug,
+								audit.SkillCallModeLoad, audit.SkillCallOutcomeNotFound, "")
+							return tools.SkillLoadOutcome{Status: tools.SkillLoadNotFound}
+						}
+
+						// Not resolved — distinguish "exists but this agent is
+						// not granted it" (registry/builtin shelf, unfiltered
+						// via ListSkillsDetailed) from "genuinely absent on any
+						// shelf" (ADR-072 D4/FR-054's SkillNotFoundCode).
+						for _, s := range callerAgent.ContextBuilder.ListSkillsDetailed() {
+							if strings.EqualFold(s.ID, slug) || strings.EqualFold(s.Name, slug) {
+								audit.EmitSkillCall(al.auditLogger, callerID, workspaceID, slug,
+									audit.SkillCallModeLoad, audit.SkillCallOutcomeDenied, "")
+								return tools.SkillLoadOutcome{Status: tools.SkillLoadDenied}
+							}
+						}
+						audit.EmitSkillCall(al.auditLogger, callerID, workspaceID, slug,
+							audit.SkillCallModeLoad, audit.SkillCallOutcomeNotFound, "")
+						return tools.SkillLoadOutcome{Status: tools.SkillLoadNotFound}
+					},
+					// canUse reports whether the acting agent may load slug —
+					// the SAME per-shelf grant model `load` consults, exposed
+					// separately so the search path can filter the ranked
+					// match list without loading every candidate's full body.
+					func(ctx context.Context, slug string) bool {
+						callerID := tools.ToolAgentID(ctx)
+						if callerID == "" {
+							callerID = capturedAgentID
+						}
+						callerAgent, ok := al.registry.GetAgent(callerID)
+						if !ok {
+							return false
+						}
+						workspaceID := tools.ToolWorkspaceID(ctx)
+						_, resolvedOK := callerAgent.ContextBuilder.ResolveSkillFullForWorkspace(workspaceID, slug)
+						return resolvedOK
+					},
+					// corpus returns every installed skill's slug+description
+					// across every shelf visible to the acting agent's
+					// workspace — registry+builtin (UNFILTERED by any grant)
+					// plus that workspace's own project shelf — for BM25
+					// ranking (ADR-071 §3.2.2, applied to skills by ADR-072
+					// D1): the corpus must never be pre-filtered, only the
+					// ranked match list (via canUse above).
+					func(ctx context.Context) []tools.SkillSearchDoc {
+						callerID := tools.ToolAgentID(ctx)
+						if callerID == "" {
+							callerID = capturedAgentID
+						}
+						callerAgent, ok := al.registry.GetAgent(callerID)
+						if !ok {
+							return nil
+						}
+						workspaceID := tools.ToolWorkspaceID(ctx)
+						all := callerAgent.ContextBuilder.ListSkillsDetailed()
+						projectShelf := callerAgent.ContextBuilder.ProjectShelfForWorkspace(workspaceID)
+
+						docs := make([]tools.SkillSearchDoc, 0, len(all)+len(projectShelf))
+						seen := make(map[string]struct{}, len(all)+len(projectShelf))
+						for _, s := range all {
+							docs = append(docs, tools.SkillSearchDoc{Slug: s.ID, Description: s.Description})
+							seen[strings.ToLower(s.ID)] = struct{}{}
+						}
+						for key, ps := range projectShelf {
+							if _, dup := seen[key]; dup {
+								// D4.2 carve-out: a granted registry/builtin
+								// slug already claims this name in the menu and
+								// on resolution — the search corpus must not
+								// offer it twice under two different shelves.
+								continue
+							}
+							docs = append(docs, tools.SkillSearchDoc{Slug: ps.ID, Description: ps.Description})
+						}
+						return docs
+					},
+				)
+				agent.Tools.RegisterReplacing(skillTool)
+			}
+		}
 	}
 
-	// W4 (agent-removal doesn't dispose context): a REMOVED agent is skipped by
-	// the per-agent loop above, so its BrowserManager stays in al.browserMgrs
-	// and — worse — its coordinator-owned browser context (cookie/localStorage
-	// partition) leaks forever in c.contexts. Diff the registered set against
-	// the current config: any agentID still in al.browserMgrs but no longer in
-	// the registry has been removed — dispose its context via
+	// FR-026a. A workspace whose last agent was removed (or whose team moved
+	// off it) leaves a BrowserManager in al.browserMgrs and — worse — a
+	// coordinator-owned browser context (cookie/localStorage partition)
+	// leaking forever in c.contexts. Diff the LIVE BROWSING KEYS this pass
+	// resolved against what the map holds, and dispose the difference via
 	// coordinator.RemoveAgent (which cancels the OWNING chromedp context so
 	// chromedp runs Target.disposeBrowserContext, unlike reload-Release which
-	// preserves it) and drop it from al.browserMgrs. Distinguishes a reload
-	// (agent still present → Release preserves the context) from a removal
-	// (agent gone → RemoveAgent frees the partition).
+	// preserves it).
+	//
+	// ⚠️ The liveness predicate is the set of live BROWSING KEYS, never
+	// registry.ListAgentIDs(). This diff used to compare the map against agent
+	// ids, which was correct only while the map WAS keyed by agent id: run
+	// unchanged against a key-keyed map it matches nothing, so every browser
+	// looks removed and every workspace's Chrome context is disposed on the
+	// first Settings save — logins gone, silently, with a cheerful INFO line
+	// per workspace saying it removed a manager for a "deleted agent".
+	al.mu.Lock()
+	pool := al.browserPool
+	var removedKeys []string
+	for k := range al.browserMgrs {
+		if !liveBrowserKeys[k] {
+			removedKeys = append(removedKeys, k)
+			delete(al.browserMgrs, k)
+		}
+	}
 	registeredAgentIDs := registry.ListAgentIDs()
 	stillPresent := make(map[string]bool, len(registeredAgentIDs))
 	for _, id := range registeredAgentIDs {
 		stillPresent[id] = true
 	}
-	al.mu.Lock()
-	coord := al.browserCoordinator
-	var removedAgentIDs []string
-	for id := range al.browserMgrs {
+	for id := range al.browserRegisteredAgents {
 		if !stillPresent[id] {
-			removedAgentIDs = append(removedAgentIDs, id)
-			delete(al.browserMgrs, id)
+			delete(al.browserRegisteredAgents, id)
 		}
 	}
 	al.mu.Unlock()
-	for _, id := range removedAgentIDs {
-		if coord != nil {
-			coord.RemoveAgent(id)
+	for _, k := range removedKeys {
+		// FR-026's roster-change half: a workspace that no longer has a single
+		// browser-policy-allowed agent on its CoreTeam gets its Chrome CLOSED.
+		//
+		// Closed, not deleted. The workspace still exists and its user still
+		// expects to be logged in when an agent is added back, so the profile
+		// directory stays on disk (FR-043a: workspace DELETION is the only
+		// trigger that removes it, and that path lives in the REST handler).
+		if pool != nil {
+			if key, kerr := browser.ParseBrowsingKeyString(k); kerr == nil {
+				pool.Close(key)
+			}
 		}
-		logger.InfoCF("agent", "removed browser manager for deleted agent", map[string]any{
-			"agent_id": id,
-		})
+		logger.InfoCF("agent", "closed the browser for a workspace no live agent is rooted in (its profile is kept)",
+			map[string]any{"browsing_key": k})
 	}
 }
 
@@ -2805,8 +3120,33 @@ func agentExistsChecker(registry *AgentRegistry) func(id string) bool {
 		return nil
 	}
 	return func(id string) bool {
-		_, ok := registry.GetAgent(id)
-		return ok
+		if _, ok := registry.GetAgent(id); ok {
+			return true
+		}
+		// Fall back to the durable entity store before concluding the agent
+		// is genuinely nonexistent. The in-memory registry this probe
+		// consults is only refreshed by the reload pipeline (the async,
+		// fire-and-forget gateway.go reloadTrigger for a plain hot-reload;
+		// UpsertAgentFast for create/update's fast path, which itself
+		// defers to that same async reload when one is already in flight —
+		// see UpsertAgentFastFunc's own doc comment), so an agent whose
+		// entity record was JUST durably written (agentstore.Store.Create
+		// always runs synchronously before either publish path — see
+		// UpsertAgentFast's DEFECT 1 fix comment in registry.go, which
+		// establishes this exact "ask the durable entity store, not the
+		// possibly-stale in-memory view" precedent) can be real on disk
+		// before the registry catches up. Without this fallback, a
+		// delegate/switch_agent call landing in that window reports the
+		// misleading "agent %q does not exist" — masking the actual denial
+		// reason (e.g. a missing trust edge) a UAT run observed when the
+		// target agent, in fact, existed. Best-effort: a store read error
+		// here is treated the same as "not found" (the pre-existing
+		// behavior for a target that genuinely never existed) rather than
+		// failing the whole delegation check — this probe is message-only
+		// and never controls the allow/deny outcome (see this function's
+		// own callers' doc comments).
+		_, err := agentstore.New(omnipusHome()).Get(id)
+		return err == nil
 	}
 }
 
@@ -3851,16 +4191,16 @@ func (al *AgentLoop) Close() {
 	// own context; a double-cancel is a no-op.
 	al.stopSessionWorkers()
 
-	// Drop every agent's browser-manager connection (ADR-038 D4). In ADR-043
+	// Drop every browser's manager connection (one per browsing key). In ADR-043
 	// shared-Chrome mode this closes each manager's WS connection + detaches
 	// its tabs but does NOT kill the Chrome process — that is the coordinator's
 	// job, done by coordinator.Shutdown() immediately below (the SOLE process-
 	// kill path, MIN-008/FR-008). In the no-coordinator test/legacy path each
 	// manager IS its own Chrome owner, so manager.Shutdown() kills its Chrome.
 	al.mu.Lock()
-	for agentID, mgr := range al.browserMgrs {
+	for key, mgr := range al.browserMgrs {
 		mgr.Shutdown()
-		delete(al.browserMgrs, agentID)
+		delete(al.browserMgrs, key)
 	}
 	al.mu.Unlock()
 
@@ -3869,6 +4209,10 @@ func (al *AgentLoop) Close() {
 	// longer cancels an ExecAllocator in coordinator mode). This is the SOLE
 	// process-kill path — disposes every agent's browser context + kills Chrome
 	// (MIN-008 / FR-008: Close() is the only kill).
+	if al.browserPool != nil {
+		al.browserPool.Shutdown()
+		al.browserPool = nil
+	}
 	if al.browserCoordinator != nil {
 		al.browserCoordinator.Shutdown()
 		al.browserCoordinator = nil
@@ -4636,6 +4980,13 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	// al.auditLogger is only non-nil when audit logging was actually enabled.
 	if al.auditLogger != nil {
 		al.wireMemoryAuditLoggerOn(registry, al.auditLogger)
+		// ADR-072 D6.1.1/R4 fix: re-assert the process-wide skills write-audit
+		// logger on reload too, mirroring the memory-tool re-wire immediately
+		// above. SetSkillsWriteAuditLogger is a process-wide var (not
+		// registry-scoped), so this is idempotent, but a hot reload must not
+		// be the one path that silently leaves it unset if a future change
+		// ever makes al.auditLogger's identity or lifetime reload-sensitive.
+		tools.SetSkillsWriteAuditLogger(al.auditLogger)
 	}
 
 	// Re-wire the shared memory-write rate limiter (v0.2 #155 item 6) onto
@@ -4657,6 +5008,13 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	// Re-wire per-turn working-directory injectors on the new registry, same
 	// reasoning: a workspace's core_team can change via hot-reload too.
 	wireWorkingDirInjectors(al, registry)
+
+	// Re-wire per-workspace project-shelf resolvers (ADR-072 R1 fix regression,
+	// live UAT 2026-09-02): this was missing here, so a mounted project's
+	// skills silently stopped resolving for every agent after this reload path
+	// ran even once — which onboarding itself triggers, so it hit nearly every
+	// real install. Mirror the two siblings above.
+	wireProjectShelfResolvers(al, registry)
 
 	// Atomically swap the config and registry under write lock
 	// This ensures readers see a consistent pair
@@ -4765,18 +5123,206 @@ func (al *AgentLoop) GetConfig() *config.Config {
 	return al.cfg
 }
 
-// BrowserManagerForAgent returns agentID's BrowserManager (ADR-038 D4),
-// thread-safe. Returns (nil, false) when the agent has no browser manager —
-// either browser tools failed to register for it (see the ErrorCF log in
-// registerSharedTools) or agentID is unknown. The gateway's live-view WS
-// handler (pkg/gateway/browser_ws.go) is the primary caller: it resolves the
-// manager for the attached agent, then calls .Session(sessionID) on it to
-// reach the same chromedp context that agent's browser_* tools drive.
-func (al *AgentLoop) BrowserManagerForAgent(agentID string) (*browser.BrowserManager, bool) {
+// BrowserResolveOutcome is a closed enum naming WHY a browser could not be
+// resolved. "not registered" and "no workspace" are DIFFERENT operator-facing
+// problems and were indistinguishable before ADR-075 — browser_inspect.go
+// reported the former for both, so an operator whose agent simply was not on a
+// workspace team was told browser tools had failed to register.
+//
+// There is deliberately NO BrowserResolvePoolFull: ADR-075 D1.5a deleted every
+// counter, so the panel never has a capacity reason to render.
+type BrowserResolveOutcome int
+
+const (
+	BrowserResolveOK BrowserResolveOutcome = iota
+	// BrowserResolveNoWorkspace is browser.ErrNoBrowsingContext: this agent is
+	// not rooted in a workspace, so it has no browser of its own.
+	BrowserResolveNoWorkspace
+	// BrowserResolveAmbiguous is FR-033: more than one candidate workspace and
+	// no preference supplied. The browser REFUSES rather than tie-breaking,
+	// because choosing would silently pick which set of live logins to act with.
+	BrowserResolveAmbiguous
+	// BrowserResolveNotRegistered means browser tools genuinely are not
+	// registered for this agent.
+	BrowserResolveNotRegistered
+	// BrowserResolveLaunchFailed means the browser is addressable but could not
+	// be created (config or SSRF wiring failure).
+	BrowserResolveLaunchFailed
+)
+
+// BrowserManagerForKey returns (creating on first use) the manager that owns
+// key's browser. Exactly one manager and one Chrome per key, process-wide —
+// FR-001. There is no cap: ADR-075 D1.5a made live memory the only limit, and
+// it is enforced at each tab open inside the manager (FR-060).
+func (al *AgentLoop) BrowserManagerForKey(
+	_ context.Context, key browser.BrowsingKey,
+) (*browser.BrowserManager, error) {
+	if key.IsZero() {
+		return nil, browser.ErrNoBrowsingContext
+	}
+	al.mu.Lock()
+	if mgr, ok := al.browserMgrs[key.String()]; ok && mgr != nil {
+		al.mu.Unlock()
+		return mgr, nil
+	}
+	factory := al.browserFactory
+	al.mu.Unlock()
+	if factory == nil {
+		return nil, fmt.Errorf("browser: browser tools are not registered on this gateway")
+	}
+	mgr, err := factory(key)
+	if err != nil {
+		return nil, err
+	}
+	// Re-check under the lock: two turns on one workspace can reach here
+	// concurrently, and the loser must DISCARD its manager rather than install
+	// a second Chrome for the same key.
+	al.mu.Lock()
+	if existing, ok := al.browserMgrs[key.String()]; ok && existing != nil {
+		al.mu.Unlock()
+		mgr.Shutdown()
+		return existing, nil
+	}
+	al.browserMgrs[key.String()] = mgr
+	al.mu.Unlock()
+	return mgr, nil
+}
+
+// rewireBrowserManagerForKey installs a freshly-configured manager for key,
+// tearing down the one it replaces. Called once per key per reload (FR-026b).
+//
+// The teardown discipline is ADR-043's, unchanged, with agentID replaced by the
+// browsing key: coordinator.Release drops the old manager's connection and
+// bookkeeping WITHOUT killing Chrome or disposing the browser context (CRIT-002
+// — the context persists so the new manager re-adopts it and login survives the
+// save), and prior.Shutdown() additionally covers the explicit-cdp_url manager
+// that never registered with the coordinator at all and would otherwise leak
+// its allocator on every reload.
+func (al *AgentLoop) rewireBrowserManagerForKey(
+	key browser.BrowsingKey,
+	factory func(browser.BrowsingKey) (*browser.BrowserManager, error),
+) {
+	if factory == nil {
+		return
+	}
+	mgr, err := factory(key)
+	if err != nil {
+		logger.ErrorCF("agent", "Failed to create the browser for this workspace — "+
+			"ensure Chromium/Chrome is installed or set tools.browser.cdp_url",
+			map[string]any{"error": err.Error(), "browsing_key": key.String()})
+		return
+	}
+	al.mu.Lock()
+	prior := al.browserMgrs[key.String()]
+	pool := al.browserPool
+	al.browserMgrs[key.String()] = mgr
+	al.mu.Unlock()
+	if pool != nil {
+		// Reload: drop the OLD manager's registration only. The Chrome
+		// process and its profile directory survive, which is what makes a
+		// Settings save cost nobody their login (FR-043).
+		pool.Release(key, prior)
+	}
+	if prior != nil {
+		prior.Shutdown()
+		prior.InvalidateExecPathCache()
+	}
+}
+
+// BrowserPool returns the per-workspace browser pool (ADR-075 FR-037), or nil
+// before the first registration pass has built it. The gateway needs it for
+// boot preprovision (FR-016c), for the one-minute sweep's whole-Chrome idle
+// close (FR-040a) and for workspace-deletion disposal (FR-026).
+func (al *AgentLoop) BrowserPool() *browser.BrowserPool {
+	al.mu.Lock()
+	defer al.mu.Unlock()
+	return al.browserPool
+}
+
+// browserResolver returns the browser.ManagerResolver every browser tool
+// resolves its manager through, per Execute (FR-002a).
+func (al *AgentLoop) browserResolver() browser.ManagerResolver {
+	return &agentLoopBrowserResolver{al: al}
+}
+
+// agentLoopBrowserResolver implements browser.ManagerResolver over
+// ResolveBrowsingKey + BrowserManagerForKey. The interface is declared in
+// pkg/tools/browser and implemented here because the import direction forbids
+// the reverse.
+type agentLoopBrowserResolver struct{ al *AgentLoop }
+
+func (r *agentLoopBrowserResolver) ManagerFor(
+	ctx context.Context,
+) (*browser.BrowserManager, browser.BrowsingKey, browser.TabOwner, error) {
+	// omnipusHome(), not al.homePath: workspace membership is resolved from
+	// $OMNIPUS_HOME everywhere else in this package (wireWorkingDirInjectors,
+	// resolveTurnWorkDirOrRefuse), and the browser must not disagree with the
+	// work dir about which workspace a turn is rooted in. al.homePath is the
+	// coordinator's ownership-marker root, which is a different question.
+	key, err := browser.ResolveBrowsingKey(ctx, omnipusHome())
+	if err != nil {
+		return nil, browser.BrowsingKey{}, browser.TabOwner{}, err
+	}
+	// FR-080: the tab set is the SESSION's, keyed on transcriptSessionID and
+	// never on routingSessionID (which a whole delegation subtree shares, so it
+	// would merge every descendant's tabs into the root's). An empty transcript
+	// session is a NAMED FAILURE, never a fall-through to the operator's
+	// workspace-owned set.
+	//
+	// This is the turn's HOME tab set, which is not always the set the call
+	// ACTS on. An agent reaches the operator's workspace-owned tabs by acting
+	// on one browser_list_tabs showed it (FR-070 — implicit acquisition, no
+	// tool, no policy entry, no wire field), and pkg/tools/browser's
+	// resolveTurn resolves that: it is a property of the call, not of the turn,
+	// so there is nothing for this resolver to decide. Do NOT "fix" this to
+	// return TabOwnerWorkspace() under any condition — a transcript-less or
+	// misrouted turn silently landing on the operator's tabs is the implicit
+	// merge ErrNoTabOwner exists to prevent.
+	owner, err := browser.TabOwnerSession(tools.ToolTranscriptSessionID(ctx))
+	if err != nil {
+		return nil, browser.BrowsingKey{}, browser.TabOwner{}, err
+	}
+	mgr, err := r.al.BrowserManagerForKey(ctx, key)
+	if err != nil {
+		return nil, browser.BrowsingKey{}, browser.TabOwner{}, err
+	}
+	return mgr, key, owner, nil
+}
+
+// BrowserManagerForAgent is RETAINED for the gateway. It resolves
+// agentID -> BrowsingKey server-side using preferredWorkspaceID (from the
+// attaching chat session's meta, FR-017) and delegates to BrowserManagerForKey.
+//
+// The second return distinguishes the failure reasons the panel must show
+// differently (FR-008a) — it is NOT a bare bool, because "browser tools are not
+// registered for this agent" and "this agent is not on a workspace team" need
+// different operator advice and used to render identically.
+func (al *AgentLoop) BrowserManagerForAgent(
+	ctx context.Context, agentID, preferredWorkspaceID string,
+) (*browser.BrowserManager, BrowserResolveOutcome) {
 	al.mu.RLock()
-	defer al.mu.RUnlock()
-	mgr, ok := al.browserMgrs[agentID]
-	return mgr, ok
+	registered := al.browserRegisteredAgents[agentID]
+	al.mu.RUnlock()
+	if !registered {
+		return nil, BrowserResolveNotRegistered
+	}
+	key, err := browser.ResolveBrowsingKeyForAgent(omnipusHome(), agentID, preferredWorkspaceID)
+	if err != nil {
+		// ResolveBrowsingKeyForAgent reports both "no workspace" and FR-033's
+		// ambiguous multi-membership as ErrNoBrowsingContext (they are the same
+		// answer to the agent: this turn has no browser of its own). The panel
+		// wants them apart, and the only thing that separates them is whether
+		// more than one workspace claims the agent.
+		if ids, _ := workspace.FindAllForAgent(omnipusHome(), agentID); len(ids) > 1 {
+			return nil, BrowserResolveAmbiguous
+		}
+		return nil, BrowserResolveNoWorkspace
+	}
+	mgr, err := al.BrowserManagerForKey(ctx, key)
+	if err != nil {
+		return nil, BrowserResolveLaunchFailed
+	}
+	return mgr, BrowserResolveOK
 }
 
 // BrowserManagers returns a defensive-copy snapshot of every BrowserManager
@@ -4805,9 +5351,13 @@ func (al *AgentLoop) BrowserManagers() []*browser.BrowserManager {
 // authoritative primitive (tools.EffectiveToolPolicy) AND the SAME live policy
 // snapshot (the agent instance's LoadToolPolicy) that the agent loop's
 // FilterToolsByPolicy uses at defs-assembly time, so the two can never diverge.
-// It encapsulates, in order: (1) infra force-allow (load_tool → allow,
-// unconditional), (2) the scope gate (fail-closed for unknown scopes), and
-// (3) global×agent strictest-wins (deny > ask > allow, god-mode, wildcards).
+// It encapsulates, in order: (1) the scope gate (fail-closed for unknown
+// scopes), and (2) global×agent strictest-wins (deny > ask > allow, god-mode,
+// wildcards). ToolSearch resolves through this same merge as every other
+// static builtin tool — it is seeded "allow" as real, explicit data for every
+// agent (pkg/coreagent/core.go), not a code-level force-allow (there used to
+// be an unconditional infra fast-path here; it was a CLAUDE.md
+// hard-constraint-6 violation and has been removed).
 //
 // BEHAVIOR CHANGE (intentional): this ALIGNS the exec gate to the agent loop's
 // wildcard-aware verdict. The OLD gateway resolver matched policy keys by
@@ -4825,12 +5375,6 @@ func (al *AgentLoop) BrowserManagers() []*browser.BrowserManager {
 // the exec gate was already surfaced to the model, so it is not an unknown-scope
 // tool — ScopeGeneral imposes no extra restriction beyond the policy merge).
 func (al *AgentLoop) ResolveApprovalToolPolicy(agentID, toolName string) string {
-	// Infra fast-path: force-allow regardless of agent/config resolution so the
-	// gate behaves correctly even before the registry/config are wired.
-	if tools.ToolManifestTier(toolName) == tools.ManifestInfra {
-		return "allow"
-	}
-
 	// Preferred path: resolve through the agent instance's LIVE policy snapshot
 	// (LoadToolPolicy — the same *ToolPolicyCfg, including any GodMode flag, that
 	// FilterToolsByPolicy receives) and the tool's real scope, so this verdict
@@ -4884,6 +5428,37 @@ func (al *AgentLoop) GetSessionActiveAgent(sessionID string) (string, bool) {
 		return s, true
 	}
 	return "", false
+}
+
+// GetLastSwitchToDefault returns whether the most recent switch_agent call
+// on the given session was a return-to-default (true) or a named-agent
+// hand-off (false), as reported by the tool itself
+// (tools.HandoffEvent.ToDefault) rather than re-derived from the resulting
+// agent id. Returns (false, false) if no such record is pending — e.g. no
+// switch_agent has run yet for this session, or it has already been
+// consumed.
+//
+// One-shot: this LoadAndDeletes the entry, since it exists only to answer
+// "was the switch that just completed a return-to-default" once, at the WS
+// agent_switched frame builder that reads it right after the matching
+// ToolExecEnd event fires. Leaving stale entries around risks a later,
+// unrelated switch_agent call on the same session silently reusing a value
+// it never itself observed.
+func (al *AgentLoop) GetLastSwitchToDefault(sessionID string) (bool, bool) {
+	if sessionID == "" {
+		return false, false
+	}
+	v, ok := al.lastSwitchToDefault.LoadAndDelete("session:" + sessionID)
+	if !ok {
+		return false, false
+	}
+	b, ok := v.(bool)
+	if !ok {
+		logger.ErrorCF("agent", "lastSwitchToDefault: invariant violated — unexpected value type",
+			map[string]any{"session_id": sessionID, "got_type": fmt.Sprintf("%T", v)})
+		return false, false
+	}
+	return b, true
 }
 
 // SwapConfig atomically replaces the in-memory config with the supplied,
@@ -5136,6 +5711,40 @@ func (al *AgentLoop) SetPlanStore(store *plan.Store) {
 				taskCreate.SetPlanStore(store)
 			}
 		}
+	}
+
+	// UAT fix (fix/uat-defects-2026-08-22): re-wire the system.* tool surface
+	// (create_task_in_workspace, pkg/sysagent/tools) with the real plan store
+	// too. WireSysagentDeps runs at boot BEFORE this store exists — the
+	// gateway constructs sysAgentDeps and calls WireSysagentDeps well ahead
+	// of plan.New/SetPlanStore (see gateway.go's boot wiring region) — so
+	// every system.* tool instance registered by then was built with a nil
+	// deps.PlanStore. Without this, create_task_in_workspace(plan_id=...)
+	// fails closed with "plan store is not configured" FOREVER, for every
+	// agent, even against a plan that was just created in the very same
+	// workspace by the very same turn (the plain create_task tool above was
+	// already re-wired here; the system.* twin was not).
+	//
+	// al.sysagentDeps is read-modify-written under al.mu (mirrors the
+	// al.planStore guard a few lines up in this same function) because the
+	// gateway listener is already live by the time this runs (boot wires
+	// sysAgentDeps and starts serving well before constructing planStore),
+	// so a concurrent hot-reload's ReloadProviderAndConfig could in
+	// principle race the field. wireSysagentDepsLocked itself is called
+	// OUTSIDE the lock — it does not touch al.mu, and holding al.mu across
+	// it would only widen the critical section for no benefit (mirrors the
+	// wirePlanToolsForAgent loop above, which does the same).
+	al.mu.Lock()
+	var sysDeps *systools.Deps
+	if al.sysagentDeps != nil {
+		depsCopy := *al.sysagentDeps
+		depsCopy.PlanStore = store
+		al.sysagentDeps = &depsCopy
+		sysDeps = al.sysagentDeps
+	}
+	al.mu.Unlock()
+	if sysDeps != nil {
+		al.wireSysagentDepsLocked(reg, sysDeps)
 	}
 }
 
@@ -6432,7 +7041,7 @@ func (al *AgentLoop) wireSysagentDepsLocked(registry *AgentRegistry, deps *systo
 	if registry == nil || deps == nil {
 		return
 	}
-	sysToolList := systools.AllTools(deps, nil)
+	sysToolList := systools.AllTools(deps)
 	for _, agentID := range registry.ListAgentIDs() {
 		ag, ok := registry.GetAgent(agentID)
 		if !ok || ag == nil || ag.Tools == nil {
@@ -7169,6 +7778,18 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		return response, agent, nil
 	}
 
+	// ADR-074 D4a reply routing (judgment-first spec US-3 S9): when this
+	// session carries a pending goal state (compiled-awaiting-confirmation or
+	// awaiting a clarification answer), a BARE chat message may be the confirm
+	// token or the clarification answer. The hook answers synchronously
+	// (handled=true), rewrites the turn into round 1 on a fresh-goal confirm
+	// (handled=false + opts.UserMessage), or passes an ordinary message
+	// through untouched — a routine chat message never silently mutates goal
+	// state.
+	if goalHandled, goalReply := al.applyGoalPendingReply(ctx, msg, agent, &opts); goalHandled {
+		return goalReply, agent, nil
+	}
+
 	resp, err := al.runAgentLoop(ctx, agent, opts)
 	return resp, agent, err
 }
@@ -7833,13 +8454,13 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	turnCtx = WithAgentLoop(turnCtx, al)
 	// SEC-15: Inject agent ID so audit entries carry the agent identity.
 	turnCtx = tools.WithAgentID(turnCtx, ts.agent.ID)
-	// Inject session key so handoff/return_to_default tools can address the session.
+	// Inject session key so switch_agent can address the session.
 	if ts.sessionKey == "" {
-		logger.WarnCF("agent", "runTurn: sessionKey is empty — handoff tool will not work",
+		logger.WarnCF("agent", "runTurn: sessionKey is empty — switch_agent tool will not work",
 			map[string]any{"agent_id": ts.agentID, "chat_id": ts.chatID})
 	}
 	turnCtx = tools.WithSessionKey(turnCtx, ts.sessionKey)
-	// Inject the actual session ID (directory name) for the handoff tool.
+	// Inject the actual session ID (directory name) for the switch_agent tool.
 	// The session key is a routing key; the transcript session ID is the
 	// real session directory (e.g., "session_01KP30THP63YFESKGECYYHYQWY").
 	turnCtx = tools.WithTranscriptSessionID(turnCtx, ts.opts.TranscriptSessionID)
@@ -8140,6 +8761,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 			switchedAgent, switchErr := al.handleModelSwitch(
 				ctx,
 				ts.agent,
+				ts.opts.TranscriptSessionID,
 				ts.sessionKey,
 				requested,
 				bus.InboundMessage{Metadata: ts.opts.Metadata},
@@ -8339,7 +8961,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		// the turn actually sends). Charging the whole registry here, as this
 		// site used to, fired the check on a conversation that fit and had
 		// windowTrim evict one turn per turn.
-		toolDefsTokens := al.sentToolSurfaceTokens(ts.agent, ts.sessionKey)
+		toolDefsTokens := al.sentToolSurfaceTokens(ts.agent, ts.opts.TranscriptSessionID, ts.sessionKey)
 		// C1: `messages` never carries the ephemeral system notes runTurn
 		// injects into callMessages before the request that is actually
 		// sent (scratchpad, workspace instructions — AGENT.md, up to
@@ -8354,7 +8976,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		if isOverContextBudgetTokens(agentContextBudget(ts.agent), messages, nonMessageTokens) {
 			logger.WarnCF("agent", "Proactive window trim: context budget exceeded before LLM call",
 				map[string]any{"session_key": ts.sessionKey})
-			if compression, ok := al.windowTrim(ts.agent, ts.sessionKey); ok {
+			if compression, ok := al.windowTrim(ts.agent, ts.opts.TranscriptSessionID, ts.sessionKey); ok {
 				al.emitEvent(
 					EventKindContextCompress,
 					ts.eventMeta("runTurn", "turn.context.compress"),
@@ -8573,15 +9195,15 @@ turnLoop:
 		allAgentTools := ts.agent.Tools.GetAll()
 		policyFilteredTools, filterTimePolicyMap := tools.FilterToolsByPolicy(allAgentTools, ts.agent.AgentType, ts.agent.LoadToolPolicy())
 
-		// The unified `load_tool` infra tool is registration-gated, NOT policy-gated:
+		// The unified `ToolSearch` infra tool is registration-gated, NOT policy-gated:
 		// when compressed mode is on it must be callable by EVERY agent — including
-		// deny-by-default agents (Ava/Mia/Ray) — or the model is shown `load_tool` in
+		// deny-by-default agents (Ava/Mia/Ray) — or the model is shown `ToolSearch` in
 		// its defs but its EXECUTION is denied, leaving every lazy tool permanently
 		// unreachable. Force it into both the sent defs (policyFilteredTools) and
 		// the execution-time policy snapshot (filterTimePolicyMap, consulted by
 		// resolveToolPolicyAtExec) as "allow". This mirrors the defs force-include
 		// in buildCompressedToolDefs at the authorization layer. (Found by live
-		// validation: a deny-by-default agent called load_tool and the exec gate
+		// validation: a deny-by-default agent called ToolSearch and the exec gate
 		// denied it — reachability broke.)
 		policyFilteredTools = ensureInfraToolsExecutable(
 			ts.agent.Tools, policyFilteredTools, filterTimePolicyMap)
@@ -8632,15 +9254,17 @@ turnLoop:
 		if cfg.Tools.Manifest.Compressed {
 			providerToolDefs = al.buildCompressedToolDefs(ts, policyFilteredTools)
 		} else {
-			// Non-compressed defs path: strip manifest infra tools (load_tool)
-			// before surfacing defs to the model. The unified resolver
-			// (tools.EffectiveToolPolicy) force-allows infra UNCONDITIONALLY, so
-			// load_tool is now present in policyFilteredTools even when
-			// compression is off; but load_tool exists only to drive the
-			// compressed manifest mechanism and has no function when compression is
-			// off, so the model never sees it here regardless of what the agent's
-			// tool-policy map resolves for it (see stripInfraToolDefs for the
-			// mostly-deny vs. mostly-allow behavior note) (#438).
+			// Non-compressed defs path: strip manifest infra tools (ToolSearch)
+			// before surfacing defs to the model. ToolSearch resolves through the
+			// same global×agent merge as every other static builtin tool and is
+			// seeded "allow" as real, explicit data for every agent
+			// (pkg/coreagent/core.go), so it is typically present in
+			// policyFilteredTools even when compression is off; but ToolSearch
+			// exists only to drive the compressed manifest mechanism and has no
+			// function when compression is off, so the model never sees it here
+			// regardless of what the agent's tool-policy map resolves for it (see
+			// stripInfraToolDefs for the mostly-deny vs. mostly-allow behavior
+			// note) (#438).
 			providerToolDefs = tools.ToolsToProviderDefs(stripInfraToolDefs(policyFilteredTools))
 		}
 
@@ -8693,11 +9317,32 @@ turnLoop:
 				injected = append(injected, callMessages[1:]...)
 				callMessages = injected
 			}
+			// Inject the ADR-078 D2 pending-goal note as an ephemeral system
+			// message: while a goal is compiled and awaiting the user's
+			// confirmation (fresh pending only — see buildGoalPendingNote's
+			// gating), the model must not proceed context-blind about it. Like
+			// the scratchpad note above, this is rebuilt every turn from session
+			// meta and never persisted to history.
+			callMessages = injectGoalPendingNote(callMessages, buildGoalPendingNote(ts.opts.TranscriptStore, ts.opts.TranscriptSessionID))
 			// Inject per-turn workspace instructions (AGENT.md) as an ephemeral
-			// system message immediately after the system prompt. Call BEFORE
-			// injectManifestNote so that the manifest note lands at [1] and
-			// workspace instructions land at [2] in the final message array.
-			// Empty/absent instructions are a no-op — zero behavioral change.
+			// system message immediately after the system prompt. Empty/absent
+			// instructions are a no-op — zero behavioral change.
+			//
+			// Ordering note (finding 10c, context-audit 2026-08, extended by
+			// ADR-078 D2's goal-pending note — this comment previously claimed
+			// "workspace instructions land at [2]", which stopped being true once
+			// the web-rendering note was added between this call and
+			// injectManifestNote below): all of these injectors
+			// (injectGoalPendingNote above, this one, injectWebRenderingNote,
+			// injectManifestNote) insert at index 1 of the message array, so call
+			// order alone determines final position — the LAST call ends up
+			// CLOSEST to the system message. With every note present this turn,
+			// final order is: [0] system prompt · [1] manifest note · [2]
+			// web-rendering note · [3] workspace instructions · [4] goal-pending
+			// note (spliced above, before this call) · [5] scratchpad (spliced
+			// above, before that) · [6+] history. See injectWorkspaceInstructions'
+			// own doc comment (workspace_instructions.go) for the authoritative,
+			// single-sourced version of this contract.
 			callMessages = injectWorkspaceInstructions(callMessages, buildWorkspaceInstructionsNote(ts.opts.WorkspaceID))
 			// Web-only: encourage Mermaid diagrams when the turn comes from the web
 			// chat (the sole surface that renders them). Per-turn + surface-gated on
@@ -9321,7 +9966,7 @@ turnLoop:
 				if !compactionAttemptedOnTimeout && !ts.opts.NoHistory && !ts.agent.budgetChecksExempt() {
 					// The sent surface, not the whole registry — same helper
 					// windowTrim measures with (FR-028; see the pre-turn site).
-					toolDefsTokens := al.sentToolSurfaceTokens(ts.agent, ts.sessionKey)
+					toolDefsTokens := al.sentToolSurfaceTokens(ts.agent, ts.opts.TranscriptSessionID, ts.sessionKey)
 					retryMessages := callMessages
 					if span := al.activeRecallSpan(ts.sessionKey); span != nil {
 						retryMessages = append(append([]providers.Message(nil), callMessages...), span.Messages()...)
@@ -9338,7 +9983,7 @@ turnLoop:
 						//     failure; fall through to backoff+retry unchanged.
 						//  3. ok=false, NothingToTrim=false — TruncateHistory was attempted
 						//     but the window genuinely did not shrink — abandon the retry.
-						compression, ok := al.windowTrim(ts.agent, ts.sessionKey)
+						compression, ok := al.windowTrim(ts.agent, ts.opts.TranscriptSessionID, ts.sessionKey)
 						if ok {
 							al.emitEvent(
 								EventKindContextCompress,
@@ -9492,7 +10137,7 @@ turnLoop:
 				// error, so our own estimate said it fit and was wrong.
 				// Honouring the "already fits" guard here would make the
 				// retry byte-identical to the call that just failed.
-				if compression, ok := al.windowTrimForce(ts.agent, ts.sessionKey, true); ok {
+				if compression, ok := al.windowTrimForce(ts.agent, ts.opts.TranscriptSessionID, ts.sessionKey, true); ok {
 					al.emitEvent(
 						EventKindContextCompress,
 						ts.eventMeta("runTurn", "turn.context.compress"),
@@ -10617,6 +11262,48 @@ turnLoop:
 				}
 			}
 
+			// UAT fix (fix/uat-defects-2026-08-22, Defect 1): dispatch-side
+			// circuit breaker for a tool call that has already failed with
+			// this exact same name+arguments toolFailureCircuitBreakThreshold
+			// times in a row THIS turn (see tool_failure_circuit_breaker.go).
+			// Mirrors the SEC-26 rate-limit denial immediately above — fail
+			// closed (do not even call Execute), surface the denial as a
+			// normal tool-result error so the model can react, keep the
+			// turn running rather than aborting it. Skipping Execute here
+			// (rather than only warning post-hoc) is what actually bounds
+			// the token burn: a model that ignores the warning notice below
+			// still cannot force more than toolFailureCircuitBreakThreshold
+			// real dispatch attempts of the identical call in one turn.
+			toolCBSig := toolCallSignature(toolName, toolArgs)
+			if cbReason, tripped := ts.toolCircuitBreakerTripped(toolCBSig); tripped {
+				errMsg := toolCircuitBreakerDenialMessage(toolName, cbReason)
+				deniedMsg := al.admitToolResult(ts, toolResultAdmission{
+					Tool: tc.Name, ToolCallID: tc.ID, Content: errMsg, IsError: true, ParallelN: len(normalizedToolCalls),
+				}).Message
+				messages = append(messages, deniedMsg)
+				if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+					res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+					turnStatus = status
+					return res, exitErr
+				}
+				al.emitEvent(
+					EventKindToolExecSkipped,
+					ts.eventMeta("runTurn", "turn.tool.skipped"),
+					ToolExecSkippedPayload{
+						Tool:   toolName,
+						Reason: errMsg,
+					},
+				)
+				continue
+			}
+
+			// ADR-071 §4.3.1(a) "Clear": a tool about to be dispatched is, by
+			// definition, no longer an abandoned promotion — delete any
+			// pending search-follow-up entry for it under this agent's
+			// bucket. Runs unconditionally (harmless no-op when there is no
+			// pending entry, e.g. a full-tier tool or a by-name load).
+			al.clearPendingSearchPromotion(ts.manifestBucket(), toolName)
+
 			toolStart := time.Now()
 			// Inject the current tool call's ID into the context so that tools like
 			// spawn can read it as their parentSpawnCallID when they in turn call
@@ -10628,6 +11315,14 @@ turnLoop:
 			// the correlation anchor a spawned child sub-turn's transcript
 			// entries will carry back as ParentSpawnCallID.
 			execCtx = tools.WithToolCallID(execCtx, tc.ID)
+			// Carry the turn's EXISTING AutoDenyAsk onto the tool context.
+			// The loop already uses it to auto-deny `ask`-policy calls; a
+			// tool that must refuse one ARGUMENT rather than the whole call
+			// (browser_handle_dialog{accept:true}) has no other way to know
+			// whether anyone is there to approve. Deliberately the same
+			// field, not a second discriminator: two independently-computed
+			// answers to "is anyone there" would eventually disagree.
+			execCtx = tools.WithAutoDenyAsk(execCtx, ts.opts.AutoDenyAsk)
 			toolResult := ts.agent.Tools.ExecuteWithContext(
 				execCtx,
 				toolName,
@@ -10675,6 +11370,29 @@ turnLoop:
 
 			if toolResult == nil {
 				toolResult = tools.ErrorResult("hook returned nil tool result")
+			}
+
+			// UAT fix (fix/uat-defects-2026-08-22, Defect 1): update this
+			// exact call's consecutive-failure streak. A success (or a hook
+			// that turned a failure into one) clears the streak outright; a
+			// real failure bumps it and, once it crosses either threshold,
+			// augments the error content the model is about to see (warn),
+			// or trips the pre-dispatch breaker above for every later call
+			// with this identical signature this turn (hard stop). Keyed on
+			// toolCBSig computed before dispatch/hooks so a hook renaming the
+			// tool does not fragment the streak it is meant to track.
+			if toolResult.IsError {
+				streak := ts.recordToolFailure(toolCBSig)
+				switch {
+				case streak >= toolFailureCircuitBreakThreshold:
+					reason := toolFailureCircuitBreakerReason(toolName, streak)
+					ts.tripToolCircuitBreaker(toolCBSig, reason)
+					toolResult.ForLLM = toolResult.ContentForLLM() + toolFailureWarnNotice(toolName, streak)
+				case streak >= toolFailureWarnThreshold:
+					toolResult.ForLLM = toolResult.ContentForLLM() + toolFailureWarnNotice(toolName, streak)
+				}
+			} else {
+				ts.recordToolSuccess(toolCBSig)
 			}
 			// Always deliver any media the tool produced AND tag the result with
 			// artifact references so the LLM can reason about them in the
@@ -11177,6 +11895,34 @@ turnLoop:
 			"agent_id": ts.agent.ID, "iteration": iteration,
 		})
 	}
+
+	// ADR-071 §4.3.1(a): advance and sweep this bucket's search-promotion
+	// horizon exactly once per REAL conversational turn, not once per
+	// turnLoop round-trip. This deliberately sits OUTSIDE (after) the
+	// turnLoop for-loop above, unlike the (unrelated) MCP discovery TTL tick
+	// it used to sit next to: `iteration`, incremented once per pass through
+	// that loop, counts LLM-call rounds within a single turn — a turn that
+	// makes several sequential tool calls before its final response can pass
+	// through the loop body, and therefore the old in-loop call site, many
+	// times before the user ever sees a reply. With
+	// searchPromotionHorizonTurns = 5 that could silently expire a
+	// ToolSearch promotion mid-turn, even though the field's own doc comment
+	// says it counts "across the whole conversation" (turns, not rounds).
+	//
+	// This site fires once per natural exit of the turnLoop for-loop, which
+	// is once per real conversational turn in the overwhelmingly common
+	// case. The one nuance: late-arriving steering messages `goto turnLoop`
+	// below to continue THIS SAME turn rather than starting a new one — each
+	// such continuation is itself a further round of natural back-to-back
+	// tool-calling activity on the same turn, so ticking again when it in
+	// turn naturally exits is consistent with "count real conversational
+	// turns" rather than "count LLM-call rounds," not a double-count of one
+	// turn. A turn that instead exits via an early return above (hard abort,
+	// delegate park) never reaches this line, so it does not tick at all —
+	// deliberate: neither is a completed conversational round from the
+	// user's perspective, and a parked turn is expected to resume later
+	// rather than count as elapsed time against the horizon.
+	al.tickSearchPromotionHorizon(ts.manifestBucket())
 
 	if steerMsgs := al.dequeueSteeringMessagesForScope(ts.sessionKey); len(steerMsgs) > 0 {
 		logger.InfoCF("agent", "Steering arrived after turn completion; continuing turn before finalizing",
@@ -11733,7 +12479,7 @@ func (al *AgentLoop) assembleMessages(
 // three groups are sent (buildCompressedToolDefs, tool_manifest.go):
 //
 //   - ManifestFull  — full schema, every turn
-//   - ManifestInfra — full schema (load_tool is always callable)
+//   - ManifestInfra — full schema (ToolSearch is always callable)
 //   - ManifestLazy  — full schema ONLY while loaded this session; otherwise it
 //     is one line in the compact manifest block, ~25x cheaper
 //
@@ -11750,7 +12496,15 @@ func (al *AgentLoop) assembleMessages(
 //
 // When the compressed manifest is off every tool really is sent, so the whole
 // registry is the correct answer and we fall back to it.
-func (al *AgentLoop) sentToolSurfaceTokens(agent *AgentInstance, sessionKey string) int {
+//
+// transcriptID/sessionKey are the same two inputs manifestBucketKey takes
+// everywhere else (ADR-071 D3 §4.6) — callers that have a *turnState in
+// scope MUST pass ts.opts.TranscriptSessionID and ts.sessionKey (or, more
+// directly, thread ts.manifestBucket() down to whichever caller owns this
+// call). Passing a bare sessionKey with no agentID/transcriptID component
+// (the pre-fix bug here) can never match a bucket written by markToolsLoaded,
+// so the lookup below always saw an empty loaded set.
+func (al *AgentLoop) sentToolSurfaceTokens(agent *AgentInstance, transcriptID, sessionKey string) int {
 	if agent == nil || agent.Tools == nil {
 		return 0
 	}
@@ -11762,7 +12516,8 @@ func (al *AgentLoop) sentToolSurfaceTokens(agent *AgentInstance, sessionKey stri
 		return estimateToolDefsTokens(agent.Tools.ToProviderDefs())
 	}
 
-	loaded := al.sessionLoadedTools(sessionKey)
+	bucket := manifestBucketKey(agent.ID, transcriptID, sessionKey)
+	loaded := al.sessionLoadedTools(bucket)
 
 	sent := make([]tools.Tool, 0, len(all))
 	for _, t := range all {
@@ -11827,8 +12582,13 @@ var skipAdvanceTotal atomic.Int64
 //
 // The tool-surface term is what the turn ACTUALLY SENDS, not the whole
 // registry — see sentToolSurfaceTokens.
-func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compressionResult, bool) {
-	return al.windowTrimForce(agent, sessionKey, false)
+//
+// transcriptID is forwarded to sentToolSurfaceTokens unchanged — pass
+// ts.opts.TranscriptSessionID when a *turnState is in scope, "" otherwise
+// (manifestBucketKey then falls back to sessionKey alone for the loaded-tool
+// bucket, same as an agent with no transcript session).
+func (al *AgentLoop) windowTrim(agent *AgentInstance, transcriptID, sessionKey string) (compressionResult, bool) {
+	return al.windowTrimForce(agent, transcriptID, sessionKey, false)
 }
 
 // windowTrimForce is windowTrim with the "the window already fits, do
@@ -11846,7 +12606,7 @@ func (al *AgentLoop) windowTrim(agent *AgentInstance, sessionKey string) (compre
 // the call that just failed. This is the documented reactive fallback for
 // "the estimate undershoots reality".
 func (al *AgentLoop) windowTrimForce(
-	agent *AgentInstance, sessionKey string, force bool,
+	agent *AgentInstance, transcriptID, sessionKey string, force bool,
 ) (compressionResult, bool) {
 	if agent.budgetChecksExempt() {
 		// FR-005: an exempt provider manages its own context; there is no
@@ -11859,7 +12619,7 @@ func (al *AgentLoop) windowTrimForce(
 		return compressionResult{NothingToTrim: true}, false
 	}
 
-	toolDefsTokens := al.sentToolSurfaceTokens(agent, sessionKey)
+	toolDefsTokens := al.sentToolSurfaceTokens(agent, transcriptID, sessionKey)
 
 	// ADR-066 FR-019: measure the window AS THE PROVIDER SEES IT. GetHistory
 	// returns the archive's raw tail; results the choke point capped or an
@@ -12184,6 +12944,7 @@ func estimateHistoryTokens(history []providers.Message) int {
 func (al *AgentLoop) handleModelSwitch(
 	ctx context.Context,
 	agent *AgentInstance,
+	transcriptID string,
 	sessionKey string,
 	newModel string,
 	_ bus.InboundMessage,
@@ -12253,7 +13014,7 @@ func (al *AgentLoop) handleModelSwitch(
 		agent.ContextWindow = newContextWindow
 		agent.mu.Unlock()
 
-		if _, trimOK := al.windowTrim(agent, sessionKey); !trimOK {
+		if _, trimOK := al.windowTrim(agent, transcriptID, sessionKey); !trimOK {
 			logger.DebugCF("agent", "handleModelSwitch: windowTrim returned false (history too small to trim)",
 				map[string]any{"session_key": sessionKey})
 		} else {
@@ -12486,21 +13247,32 @@ func (al *AgentLoop) handleCommand(
 	}
 }
 
+// activeSkillNames returns the skills active for THIS turn only — never the
+// agent's full grant list (ADR-072 D1/D3: skills are loaded on demand via the
+// Skill tool, not force-injected into every turn's context).
+//
+// Before ADR-072, this unioned agent.SkillsFilter (the agent's ENTIRE
+// per-agent grant list, agentCfg.Skills) with opts.ForcedSkills every single
+// message — the exact force-load mechanism the on-demand Skill tool
+// (pkg/tools/skill.go) replaces. A turn's active skills are now only what was
+// explicitly loaded this turn: via opts.ForcedSkills, which the Skill tool's
+// "load" outcome and the pre-existing /<slug> slash-command
+// (applyExplicitSkillCommand) and delegate's requested_skill (D9,
+// spawnSubTurn's ForcedSkills append) all populate one-shot, per turn — never
+// via the agent's static grant list, which only gates WHICH skills may be
+// loaded (skillAllowed/D5), not which ones are.
 func activeSkillNames(agent *AgentInstance, opts processOptions) []string {
 	if agent == nil {
 		return nil
 	}
 
-	combined := make([]string, 0, len(agent.SkillsFilter)+len(opts.ForcedSkills))
-	combined = append(combined, agent.SkillsFilter...)
-	combined = append(combined, opts.ForcedSkills...)
-	if len(combined) == 0 {
+	if len(opts.ForcedSkills) == 0 {
 		return nil
 	}
 
 	var resolved []string
-	seen := make(map[string]struct{}, len(combined))
-	for _, name := range combined {
+	seen := make(map[string]struct{}, len(opts.ForcedSkills))
+	for _, name := range opts.ForcedSkills {
 		name = strings.TrimSpace(name)
 		if name == "" {
 			continue
@@ -13062,22 +13834,18 @@ func (al *AgentLoop) resolveToolPolicyAtExec(
 }
 
 // resolveSingleToolPolicy loads the current policy pointer and resolves the
-// effective policy for toolName using FilterToolsByPolicy. Returns "" if the
-// tool is not found in the agent's registered tools.
+// effective policy for toolName using FilterToolsByPolicy. Returns "deny" if
+// the tool is not found in the agent's registered tools or has no policy
+// entry on either side.
+//
+// The unified `ToolSearch` infra tool used to get an unconditional
+// registration-gated force-allow here (bypassing FilterToolsByPolicy
+// entirely) because no seeded agent named it in its own tool-policy override
+// map — a CLAUDE.md hard-constraint-6 violation. ToolSearch is now seeded
+// "allow" as real, explicit data for every agent (pkg/coreagent/core.go), so
+// it resolves correctly through the same FilterToolsByPolicy call as every
+// other tool below; the force-allow shortcut has been removed.
 func (al *AgentLoop) resolveSingleToolPolicy(ts *turnState, toolName string) string {
-	// The unified `load_tool` infra tool is registration-gated, not policy-gated:
-	// it only exists on the agent when compressed mode or MCP discovery is on,
-	// and when present it MUST always be executable — it drives the manifest
-	// mechanism itself, so denying it makes every lazy tool unreachable. Treat a
-	// registered infra tool as "allow" regardless of what the agent's own
-	// tool-policy map resolves for it.
-	// (Without this, resolveToolPolicyAtExec re-derives livePolicy="deny" for a
-	// deny-by-default agent and overrides the filter-time allow — the live bug.)
-	if tools.ToolManifestTier(toolName) == tools.ManifestInfra {
-		if _, ok := ts.agent.Tools.Get(toolName); ok {
-			return "allow"
-		}
-	}
 	allTools := ts.agent.Tools.GetAll()
 	_, pmap := tools.FilterToolsByPolicy(allTools, ts.agent.AgentType, ts.agent.LoadToolPolicy())
 	p, ok := pmap[toolName]
@@ -13388,17 +14156,61 @@ func (al *AgentLoop) sessionLoadedTools(sessionID string) map[string]bool {
 	return out
 }
 
-// forgetSession removes the session's loaded-tool entry from the manifest map,
-// preventing unbounded memory growth. Called from CloseSession with the same
-// key that the manifest system uses (manifestSessionID derivation).
-// Safe for concurrent access — protected by loadedToolsMu. No-op for unknown keys.
+// forgetSession removes every (agent, session) bucket belonging to sessionID
+// from the loaded-tool map and its pendingSearchPromotions/bucketTurnCounter
+// siblings, preventing unbounded memory growth. Called from CloseSession with
+// the transcript sessionID — the same value manifestBucketKey's session
+// component derives from.
+//
+// ADR-071 D3 §4.6 point 4: since loadedTools is now keyed by
+// manifestBucketKey(agentID, transcriptID, sessionKey) — a composite key —
+// an exact-match `delete(al.loadedTools, sessionID)` would match nothing and
+// silently reintroduce the unbounded growth this function exists to prevent.
+// This is now a suffix sweep for every key ending in
+// manifestBucketKeySep+sessionID, mirroring the O(n) recallSpans scan two
+// lines below (same justification: session close is a cold path, not the hot
+// turn path).
+//
+// §4.3.1(a) r5: the same sweep MUST cover pendingSearchPromotions too — it is
+// not swept by virtue of sharing loadedToolsMu (the mutex protects the maps,
+// it does not enumerate them). Every entry found there is, by definition, a
+// promotion abandoned before its follow-up horizon elapsed (the session is
+// closing), so it is tallied and counted via
+// tools.RecordToolSearchNoFollowUp() — count-then-delete in the same critical
+// section, and the recorder call made AFTER releasing the lock so no
+// cross-package call happens under it.
+//
+// Safe for concurrent access — protected by loadedToolsMu. No-op for the
+// empty key.
 func (al *AgentLoop) forgetSession(sessionID string) {
 	if sessionID == "" {
 		return
 	}
+	suffix := manifestBucketKeySep + sessionID
+
 	al.loadedToolsMu.Lock()
-	defer al.loadedToolsMu.Unlock()
-	delete(al.loadedTools, sessionID)
+	for key := range al.loadedTools {
+		if key == sessionID || strings.HasSuffix(key, suffix) {
+			delete(al.loadedTools, key)
+		}
+	}
+	var abandonedPromotions int
+	for key, pending := range al.pendingSearchPromotions {
+		if key == sessionID || strings.HasSuffix(key, suffix) {
+			abandonedPromotions += len(pending)
+			delete(al.pendingSearchPromotions, key)
+		}
+	}
+	for key := range al.bucketTurnCounter {
+		if key == sessionID || strings.HasSuffix(key, suffix) {
+			delete(al.bucketTurnCounter, key)
+		}
+	}
+	al.loadedToolsMu.Unlock()
+
+	for i := 0; i < abandonedPromotions; i++ {
+		tools.RecordToolSearchNoFollowUp()
+	}
 
 	// MINOR fix: clean up recall spans for this session so recallSpans sync.Map
 	// does not grow without bound as sessions are closed (FR-019). The span key
@@ -13407,15 +14219,101 @@ func (al *AgentLoop) forgetSession(sessionID string) {
 	// contains the sessionID as a suffix so we delete spans regardless of agentID.
 	// The scan is safe here because forgetSession is on the session-close path
 	// (not the hot turn path), so the O(n) Range is acceptable.
-	suffix := ":session:" + sessionID
+	recallSuffix := ":session:" + sessionID
 	al.recallSpans.Range(func(k, _ any) bool {
 		if key, ok := k.(string); ok {
-			if key == sessionID || strings.HasSuffix(key, suffix) {
+			if key == sessionID || strings.HasSuffix(key, recallSuffix) {
 				al.recallSpans.Delete(key)
 			}
 		}
 		return true
 	})
+}
+
+// searchPromotionHorizonTurns is the number of turns a query-path ToolSearch
+// promotion may sit unused before it counts toward
+// omnipus_toolsearch_no_followup_total (ADR-071 §4.3.1a, FR-038).
+//
+// This is a NEW, INDEPENDENT literal — it MUST NOT be derived from, coupled
+// to, or merged with cfg.Tools.MCP.Discovery.TTL, whose default is also 5.
+// The equal value is a coincidence of two separate choices: the MCP TTL
+// decides when an externally-provided tool stops being callable; this
+// horizon decides only when an unused static discovery is COUNTED, and
+// withdraws nothing from anyone. They are also not operator-equivalent — the
+// MCP TTL is operator-configurable and an operator who has tuned it away
+// from 5 must not see this horizon move with it. Conflating the two is the
+// exact defect ADR-071 §1.1.1 records as its own worst mistake.
+const searchPromotionHorizonTurns = 5
+
+// recordPendingSearchPromotions records each newly query-path-promoted name
+// in names against bucket's current turn index, for later no-followup
+// detection (ADR-071 §4.3.1a). Only ever called from the markLoaded closure
+// when tools.IsSearchPromotion(ctx) is true — an exact-name `names` load
+// must never reach here (FR-038a). No-op for an empty bucket or names.
+// Safe for concurrent access — protected by loadedToolsMu.
+func (al *AgentLoop) recordPendingSearchPromotions(bucket string, names []string) {
+	if bucket == "" || len(names) == 0 {
+		return
+	}
+	al.loadedToolsMu.Lock()
+	defer al.loadedToolsMu.Unlock()
+	if al.pendingSearchPromotions[bucket] == nil {
+		al.pendingSearchPromotions[bucket] = make(map[string]int, len(names))
+	}
+	turn := al.bucketTurnCounter[bucket]
+	for _, n := range names {
+		al.pendingSearchPromotions[bucket][n] = turn
+	}
+}
+
+// clearPendingSearchPromotion deletes bucket's pending-discovery record for
+// name, if any, because it is about to be invoked (ADR-071 §4.3.1a "Clear").
+// Called from the tool-dispatch site on every call regardless of tier — a
+// no-op map delete when there is no pending entry for name.
+// Safe for concurrent access — protected by loadedToolsMu.
+func (al *AgentLoop) clearPendingSearchPromotion(bucket, name string) {
+	if bucket == "" || name == "" {
+		return
+	}
+	al.loadedToolsMu.Lock()
+	defer al.loadedToolsMu.Unlock()
+	if pending := al.pendingSearchPromotions[bucket]; pending != nil {
+		delete(pending, name)
+	}
+}
+
+// tickSearchPromotionHorizon advances bucket's turn counter by one and
+// sweeps its pendingSearchPromotions entries for staleness (ADR-071
+// §4.3.1a). Called exactly once per real conversational turn — after
+// runTurn's turnLoop for-loop naturally exits, deliberately NOT inside that
+// loop (unlike the unrelated per-round ts.agent.Tools.TickTTL() call it used
+// to sit next to) — one existing call site. Any entry whose
+// recorded turn index is more than searchPromotionHorizonTurns turns old
+// increments omnipus_toolsearch_no_followup_total exactly once and is
+// deleted (deleting on fire is what makes it fire exactly once per wasted
+// promotion, not every turn thereafter). Purely observational: nothing is
+// evicted from loadedTools, nothing changes about which tools are callable.
+// No-op for the empty bucket.
+func (al *AgentLoop) tickSearchPromotionHorizon(bucket string) {
+	if bucket == "" {
+		return
+	}
+	al.loadedToolsMu.Lock()
+	al.bucketTurnCounter[bucket]++
+	current := al.bucketTurnCounter[bucket]
+	pending := al.pendingSearchPromotions[bucket]
+	var stale int
+	for name, recordedTurn := range pending {
+		if current-recordedTurn > searchPromotionHorizonTurns {
+			delete(pending, name)
+			stale++
+		}
+	}
+	al.loadedToolsMu.Unlock()
+
+	for i := 0; i < stale; i++ {
+		tools.RecordToolSearchNoFollowUp()
+	}
 }
 
 // ChannelOwnership returns the stored resolver, or nil before wiring.

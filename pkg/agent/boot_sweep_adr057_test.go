@@ -73,7 +73,6 @@ func TestBootSweep_ReconcilesChildAcrossRestart(t *testing.T) {
 		ParentAgentID:    "parent-agent",
 		ParentDurableKey: u19ParentDurableKey,
 		AgentID:          "child-agent",
-		LaunchProfile:    session.LaunchProfileUtility,
 		CreatedAt:        time.Now().Add(-1 * time.Minute),
 	})
 

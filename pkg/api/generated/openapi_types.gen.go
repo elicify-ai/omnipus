@@ -53,6 +53,27 @@ func (e AcceptanceCriterionBehaviorScope) Valid() bool {
 	}
 }
 
+// Defines values for AcceptanceCriterionJudgment.
+const (
+	AcceptanceCriterionJudgmentArtifact     AcceptanceCriterionJudgment = "artifact"
+	AcceptanceCriterionJudgmentBoolean      AcceptanceCriterionJudgment = "boolean"
+	AcceptanceCriterionJudgmentQuantitative AcceptanceCriterionJudgment = "quantitative"
+)
+
+// Valid indicates whether the value is a known member of the AcceptanceCriterionJudgment enum.
+func (e AcceptanceCriterionJudgment) Valid() bool {
+	switch e {
+	case AcceptanceCriterionJudgmentArtifact:
+		return true
+	case AcceptanceCriterionJudgmentBoolean:
+		return true
+	case AcceptanceCriterionJudgmentQuantitative:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AcceptanceCriterionKind.
 const (
 	AcceptanceCriterionKindBehavior AcceptanceCriterionKind = "behavior"
@@ -74,6 +95,30 @@ func (e AcceptanceCriterionKind) Valid() bool {
 	}
 }
 
+// Defines values for AcceptanceCriterionProvenance.
+const (
+	AcceptanceCriterionProvenanceFloor     AcceptanceCriterionProvenance = "floor"
+	AcceptanceCriterionProvenanceInferred  AcceptanceCriterionProvenance = "inferred"
+	AcceptanceCriterionProvenanceStated    AcceptanceCriterionProvenance = "stated"
+	AcceptanceCriterionProvenanceWorkspace AcceptanceCriterionProvenance = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the AcceptanceCriterionProvenance enum.
+func (e AcceptanceCriterionProvenance) Valid() bool {
+	switch e {
+	case AcceptanceCriterionProvenanceFloor:
+		return true
+	case AcceptanceCriterionProvenanceInferred:
+		return true
+	case AcceptanceCriterionProvenanceStated:
+		return true
+	case AcceptanceCriterionProvenanceWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AcceptanceCriterionStatus.
 const (
 	AcceptanceCriterionStatusMet     AcceptanceCriterionStatus = "met"
@@ -89,6 +134,129 @@ func (e AcceptanceCriterionStatus) Valid() bool {
 	case AcceptanceCriterionStatusPending:
 		return true
 	case AcceptanceCriterionStatusUnmet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AcceptanceCriterionInputAuthorKind.
+const (
+	AcceptanceCriterionInputAuthorKindAgent AcceptanceCriterionInputAuthorKind = "agent"
+	AcceptanceCriterionInputAuthorKindUser  AcceptanceCriterionInputAuthorKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the AcceptanceCriterionInputAuthorKind enum.
+func (e AcceptanceCriterionInputAuthorKind) Valid() bool {
+	switch e {
+	case AcceptanceCriterionInputAuthorKindAgent:
+		return true
+	case AcceptanceCriterionInputAuthorKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AcceptanceCriterionInputBehaviorScope.
+const (
+	AcceptanceCriterionInputBehaviorScopeAttempt     AcceptanceCriterionInputBehaviorScope = "attempt"
+	AcceptanceCriterionInputBehaviorScopeTaskSession AcceptanceCriterionInputBehaviorScope = "task_session"
+)
+
+// Valid indicates whether the value is a known member of the AcceptanceCriterionInputBehaviorScope enum.
+func (e AcceptanceCriterionInputBehaviorScope) Valid() bool {
+	switch e {
+	case AcceptanceCriterionInputBehaviorScopeAttempt:
+		return true
+	case AcceptanceCriterionInputBehaviorScopeTaskSession:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AcceptanceCriterionInputJudgment.
+const (
+	AcceptanceCriterionInputJudgmentArtifact     AcceptanceCriterionInputJudgment = "artifact"
+	AcceptanceCriterionInputJudgmentBoolean      AcceptanceCriterionInputJudgment = "boolean"
+	AcceptanceCriterionInputJudgmentQuantitative AcceptanceCriterionInputJudgment = "quantitative"
+)
+
+// Valid indicates whether the value is a known member of the AcceptanceCriterionInputJudgment enum.
+func (e AcceptanceCriterionInputJudgment) Valid() bool {
+	switch e {
+	case AcceptanceCriterionInputJudgmentArtifact:
+		return true
+	case AcceptanceCriterionInputJudgmentBoolean:
+		return true
+	case AcceptanceCriterionInputJudgmentQuantitative:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AcceptanceCriterionInputKind.
+const (
+	AcceptanceCriterionInputKindBehavior AcceptanceCriterionInputKind = "behavior"
+	AcceptanceCriterionInputKindCheck    AcceptanceCriterionInputKind = "check"
+	AcceptanceCriterionInputKindProse    AcceptanceCriterionInputKind = "prose"
+)
+
+// Valid indicates whether the value is a known member of the AcceptanceCriterionInputKind enum.
+func (e AcceptanceCriterionInputKind) Valid() bool {
+	switch e {
+	case AcceptanceCriterionInputKindBehavior:
+		return true
+	case AcceptanceCriterionInputKindCheck:
+		return true
+	case AcceptanceCriterionInputKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AcceptanceCriterionInputProvenance.
+const (
+	AcceptanceCriterionInputProvenanceFloor     AcceptanceCriterionInputProvenance = "floor"
+	AcceptanceCriterionInputProvenanceInferred  AcceptanceCriterionInputProvenance = "inferred"
+	AcceptanceCriterionInputProvenanceStated    AcceptanceCriterionInputProvenance = "stated"
+	AcceptanceCriterionInputProvenanceWorkspace AcceptanceCriterionInputProvenance = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the AcceptanceCriterionInputProvenance enum.
+func (e AcceptanceCriterionInputProvenance) Valid() bool {
+	switch e {
+	case AcceptanceCriterionInputProvenanceFloor:
+		return true
+	case AcceptanceCriterionInputProvenanceInferred:
+		return true
+	case AcceptanceCriterionInputProvenanceStated:
+		return true
+	case AcceptanceCriterionInputProvenanceWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AcceptanceCriterionInputStatus.
+const (
+	AcceptanceCriterionInputStatusMet     AcceptanceCriterionInputStatus = "met"
+	AcceptanceCriterionInputStatusPending AcceptanceCriterionInputStatus = "pending"
+	AcceptanceCriterionInputStatusUnmet   AcceptanceCriterionInputStatus = "unmet"
+)
+
+// Valid indicates whether the value is a known member of the AcceptanceCriterionInputStatus enum.
+func (e AcceptanceCriterionInputStatus) Valid() bool {
+	switch e {
+	case AcceptanceCriterionInputStatusMet:
+		return true
+	case AcceptanceCriterionInputStatusPending:
+		return true
+	case AcceptanceCriterionInputStatusUnmet:
 		return true
 	default:
 		return false
@@ -1463,24 +1631,6 @@ func (e DelegateRunActionAction) Valid() bool {
 	}
 }
 
-// Defines values for DelegateRunActionLaunchProfile.
-const (
-	DelegateRunActionLaunchProfileSpecialist DelegateRunActionLaunchProfile = "specialist"
-	DelegateRunActionLaunchProfileUtility    DelegateRunActionLaunchProfile = "utility"
-)
-
-// Valid indicates whether the value is a known member of the DelegateRunActionLaunchProfile enum.
-func (e DelegateRunActionLaunchProfile) Valid() bool {
-	switch e {
-	case DelegateRunActionLaunchProfileSpecialist:
-		return true
-	case DelegateRunActionLaunchProfileUtility:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for DelegateSessionResponseState.
 const (
 	DelegateSessionResponseStateCancelled  DelegateSessionResponseState = "cancelled"
@@ -1526,24 +1676,6 @@ const (
 func (e DelegateStatusActionAction) Valid() bool {
 	switch e {
 	case Status:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for DelegateStatusResponseSessionLaunchProfile.
-const (
-	DelegateStatusResponseSessionLaunchProfileSpecialist DelegateStatusResponseSessionLaunchProfile = "specialist"
-	DelegateStatusResponseSessionLaunchProfileUtility    DelegateStatusResponseSessionLaunchProfile = "utility"
-)
-
-// Valid indicates whether the value is a known member of the DelegateStatusResponseSessionLaunchProfile enum.
-func (e DelegateStatusResponseSessionLaunchProfile) Valid() bool {
-	switch e {
-	case DelegateStatusResponseSessionLaunchProfileSpecialist:
-		return true
-	case DelegateStatusResponseSessionLaunchProfileUtility:
 		return true
 	default:
 		return false
@@ -1889,6 +2021,27 @@ func (e GoalCriteriaBehaviorScope) Valid() bool {
 	}
 }
 
+// Defines values for GoalCriteriaJudgment.
+const (
+	GoalCriteriaJudgmentArtifact     GoalCriteriaJudgment = "artifact"
+	GoalCriteriaJudgmentBoolean      GoalCriteriaJudgment = "boolean"
+	GoalCriteriaJudgmentQuantitative GoalCriteriaJudgment = "quantitative"
+)
+
+// Valid indicates whether the value is a known member of the GoalCriteriaJudgment enum.
+func (e GoalCriteriaJudgment) Valid() bool {
+	switch e {
+	case GoalCriteriaJudgmentArtifact:
+		return true
+	case GoalCriteriaJudgmentBoolean:
+		return true
+	case GoalCriteriaJudgmentQuantitative:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for GoalCriteriaKind.
 const (
 	GoalCriteriaKindBehavior GoalCriteriaKind = "behavior"
@@ -1910,6 +2063,30 @@ func (e GoalCriteriaKind) Valid() bool {
 	}
 }
 
+// Defines values for GoalCriteriaProvenance.
+const (
+	GoalCriteriaProvenanceFloor     GoalCriteriaProvenance = "floor"
+	GoalCriteriaProvenanceInferred  GoalCriteriaProvenance = "inferred"
+	GoalCriteriaProvenanceStated    GoalCriteriaProvenance = "stated"
+	GoalCriteriaProvenanceWorkspace GoalCriteriaProvenance = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the GoalCriteriaProvenance enum.
+func (e GoalCriteriaProvenance) Valid() bool {
+	switch e {
+	case GoalCriteriaProvenanceFloor:
+		return true
+	case GoalCriteriaProvenanceInferred:
+		return true
+	case GoalCriteriaProvenanceStated:
+		return true
+	case GoalCriteriaProvenanceWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for GoalCriteriaStatus.
 const (
 	GoalCriteriaStatusMet     GoalCriteriaStatus = "met"
@@ -1925,6 +2102,129 @@ func (e GoalCriteriaStatus) Valid() bool {
 	case GoalCriteriaStatusPending:
 		return true
 	case GoalCriteriaStatusUnmet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalDodAuthorKind.
+const (
+	GoalDodAuthorKindAgent GoalDodAuthorKind = "agent"
+	GoalDodAuthorKindUser  GoalDodAuthorKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the GoalDodAuthorKind enum.
+func (e GoalDodAuthorKind) Valid() bool {
+	switch e {
+	case GoalDodAuthorKindAgent:
+		return true
+	case GoalDodAuthorKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalDodBehaviorScope.
+const (
+	GoalDodBehaviorScopeAttempt     GoalDodBehaviorScope = "attempt"
+	GoalDodBehaviorScopeTaskSession GoalDodBehaviorScope = "task_session"
+)
+
+// Valid indicates whether the value is a known member of the GoalDodBehaviorScope enum.
+func (e GoalDodBehaviorScope) Valid() bool {
+	switch e {
+	case GoalDodBehaviorScopeAttempt:
+		return true
+	case GoalDodBehaviorScopeTaskSession:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalDodJudgment.
+const (
+	GoalDodJudgmentArtifact     GoalDodJudgment = "artifact"
+	GoalDodJudgmentBoolean      GoalDodJudgment = "boolean"
+	GoalDodJudgmentQuantitative GoalDodJudgment = "quantitative"
+)
+
+// Valid indicates whether the value is a known member of the GoalDodJudgment enum.
+func (e GoalDodJudgment) Valid() bool {
+	switch e {
+	case GoalDodJudgmentArtifact:
+		return true
+	case GoalDodJudgmentBoolean:
+		return true
+	case GoalDodJudgmentQuantitative:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalDodKind.
+const (
+	GoalDodKindBehavior GoalDodKind = "behavior"
+	GoalDodKindCheck    GoalDodKind = "check"
+	GoalDodKindProse    GoalDodKind = "prose"
+)
+
+// Valid indicates whether the value is a known member of the GoalDodKind enum.
+func (e GoalDodKind) Valid() bool {
+	switch e {
+	case GoalDodKindBehavior:
+		return true
+	case GoalDodKindCheck:
+		return true
+	case GoalDodKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalDodProvenance.
+const (
+	GoalDodProvenanceFloor     GoalDodProvenance = "floor"
+	GoalDodProvenanceInferred  GoalDodProvenance = "inferred"
+	GoalDodProvenanceStated    GoalDodProvenance = "stated"
+	GoalDodProvenanceWorkspace GoalDodProvenance = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the GoalDodProvenance enum.
+func (e GoalDodProvenance) Valid() bool {
+	switch e {
+	case GoalDodProvenanceFloor:
+		return true
+	case GoalDodProvenanceInferred:
+		return true
+	case GoalDodProvenanceStated:
+		return true
+	case GoalDodProvenanceWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalDodStatus.
+const (
+	GoalDodStatusMet     GoalDodStatus = "met"
+	GoalDodStatusPending GoalDodStatus = "pending"
+	GoalDodStatusUnmet   GoalDodStatus = "unmet"
+)
+
+// Valid indicates whether the value is a known member of the GoalDodStatus enum.
+func (e GoalDodStatus) Valid() bool {
+	switch e {
+	case GoalDodStatusMet:
+		return true
+	case GoalDodStatusPending:
+		return true
+	case GoalDodStatusUnmet:
 		return true
 	default:
 		return false
@@ -2675,6 +2975,27 @@ func (e PlanDodBehaviorScope) Valid() bool {
 	}
 }
 
+// Defines values for PlanDodJudgment.
+const (
+	PlanDodJudgmentArtifact     PlanDodJudgment = "artifact"
+	PlanDodJudgmentBoolean      PlanDodJudgment = "boolean"
+	PlanDodJudgmentQuantitative PlanDodJudgment = "quantitative"
+)
+
+// Valid indicates whether the value is a known member of the PlanDodJudgment enum.
+func (e PlanDodJudgment) Valid() bool {
+	switch e {
+	case PlanDodJudgmentArtifact:
+		return true
+	case PlanDodJudgmentBoolean:
+		return true
+	case PlanDodJudgmentQuantitative:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PlanDodKind.
 const (
 	PlanDodKindBehavior PlanDodKind = "behavior"
@@ -2690,6 +3011,30 @@ func (e PlanDodKind) Valid() bool {
 	case PlanDodKindCheck:
 		return true
 	case PlanDodKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanDodProvenance.
+const (
+	PlanDodProvenanceFloor     PlanDodProvenance = "floor"
+	PlanDodProvenanceInferred  PlanDodProvenance = "inferred"
+	PlanDodProvenanceStated    PlanDodProvenance = "stated"
+	PlanDodProvenanceWorkspace PlanDodProvenance = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the PlanDodProvenance enum.
+func (e PlanDodProvenance) Valid() bool {
+	switch e {
+	case PlanDodProvenanceFloor:
+		return true
+	case PlanDodProvenanceInferred:
+		return true
+	case PlanDodProvenanceStated:
+		return true
+	case PlanDodProvenanceWorkspace:
 		return true
 	default:
 		return false
@@ -2840,6 +3185,27 @@ func (e PlanCreateRequestDodBehaviorScope) Valid() bool {
 	}
 }
 
+// Defines values for PlanCreateRequestDodJudgment.
+const (
+	PlanCreateRequestDodJudgmentArtifact     PlanCreateRequestDodJudgment = "artifact"
+	PlanCreateRequestDodJudgmentBoolean      PlanCreateRequestDodJudgment = "boolean"
+	PlanCreateRequestDodJudgmentQuantitative PlanCreateRequestDodJudgment = "quantitative"
+)
+
+// Valid indicates whether the value is a known member of the PlanCreateRequestDodJudgment enum.
+func (e PlanCreateRequestDodJudgment) Valid() bool {
+	switch e {
+	case PlanCreateRequestDodJudgmentArtifact:
+		return true
+	case PlanCreateRequestDodJudgmentBoolean:
+		return true
+	case PlanCreateRequestDodJudgmentQuantitative:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PlanCreateRequestDodKind.
 const (
 	PlanCreateRequestDodKindBehavior PlanCreateRequestDodKind = "behavior"
@@ -2855,6 +3221,30 @@ func (e PlanCreateRequestDodKind) Valid() bool {
 	case PlanCreateRequestDodKindCheck:
 		return true
 	case PlanCreateRequestDodKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanCreateRequestDodProvenance.
+const (
+	PlanCreateRequestDodProvenanceFloor     PlanCreateRequestDodProvenance = "floor"
+	PlanCreateRequestDodProvenanceInferred  PlanCreateRequestDodProvenance = "inferred"
+	PlanCreateRequestDodProvenanceStated    PlanCreateRequestDodProvenance = "stated"
+	PlanCreateRequestDodProvenanceWorkspace PlanCreateRequestDodProvenance = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the PlanCreateRequestDodProvenance enum.
+func (e PlanCreateRequestDodProvenance) Valid() bool {
+	switch e {
+	case PlanCreateRequestDodProvenanceFloor:
+		return true
+	case PlanCreateRequestDodProvenanceInferred:
+		return true
+	case PlanCreateRequestDodProvenanceStated:
+		return true
+	case PlanCreateRequestDodProvenanceWorkspace:
 		return true
 	default:
 		return false
@@ -2918,6 +3308,27 @@ func (e PlanListResponsePlansDodBehaviorScope) Valid() bool {
 	}
 }
 
+// Defines values for PlanListResponsePlansDodJudgment.
+const (
+	PlanListResponsePlansDodJudgmentArtifact     PlanListResponsePlansDodJudgment = "artifact"
+	PlanListResponsePlansDodJudgmentBoolean      PlanListResponsePlansDodJudgment = "boolean"
+	PlanListResponsePlansDodJudgmentQuantitative PlanListResponsePlansDodJudgment = "quantitative"
+)
+
+// Valid indicates whether the value is a known member of the PlanListResponsePlansDodJudgment enum.
+func (e PlanListResponsePlansDodJudgment) Valid() bool {
+	switch e {
+	case PlanListResponsePlansDodJudgmentArtifact:
+		return true
+	case PlanListResponsePlansDodJudgmentBoolean:
+		return true
+	case PlanListResponsePlansDodJudgmentQuantitative:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PlanListResponsePlansDodKind.
 const (
 	PlanListResponsePlansDodKindBehavior PlanListResponsePlansDodKind = "behavior"
@@ -2933,6 +3344,30 @@ func (e PlanListResponsePlansDodKind) Valid() bool {
 	case PlanListResponsePlansDodKindCheck:
 		return true
 	case PlanListResponsePlansDodKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanListResponsePlansDodProvenance.
+const (
+	PlanListResponsePlansDodProvenanceFloor     PlanListResponsePlansDodProvenance = "floor"
+	PlanListResponsePlansDodProvenanceInferred  PlanListResponsePlansDodProvenance = "inferred"
+	PlanListResponsePlansDodProvenanceStated    PlanListResponsePlansDodProvenance = "stated"
+	PlanListResponsePlansDodProvenanceWorkspace PlanListResponsePlansDodProvenance = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the PlanListResponsePlansDodProvenance enum.
+func (e PlanListResponsePlansDodProvenance) Valid() bool {
+	switch e {
+	case PlanListResponsePlansDodProvenanceFloor:
+		return true
+	case PlanListResponsePlansDodProvenanceInferred:
+		return true
+	case PlanListResponsePlansDodProvenanceStated:
+		return true
+	case PlanListResponsePlansDodProvenanceWorkspace:
 		return true
 	default:
 		return false
@@ -3083,6 +3518,27 @@ func (e PlanRestartResponsePlanDodBehaviorScope) Valid() bool {
 	}
 }
 
+// Defines values for PlanRestartResponsePlanDodJudgment.
+const (
+	PlanRestartResponsePlanDodJudgmentArtifact     PlanRestartResponsePlanDodJudgment = "artifact"
+	PlanRestartResponsePlanDodJudgmentBoolean      PlanRestartResponsePlanDodJudgment = "boolean"
+	PlanRestartResponsePlanDodJudgmentQuantitative PlanRestartResponsePlanDodJudgment = "quantitative"
+)
+
+// Valid indicates whether the value is a known member of the PlanRestartResponsePlanDodJudgment enum.
+func (e PlanRestartResponsePlanDodJudgment) Valid() bool {
+	switch e {
+	case PlanRestartResponsePlanDodJudgmentArtifact:
+		return true
+	case PlanRestartResponsePlanDodJudgmentBoolean:
+		return true
+	case PlanRestartResponsePlanDodJudgmentQuantitative:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PlanRestartResponsePlanDodKind.
 const (
 	PlanRestartResponsePlanDodKindBehavior PlanRestartResponsePlanDodKind = "behavior"
@@ -3098,6 +3554,30 @@ func (e PlanRestartResponsePlanDodKind) Valid() bool {
 	case PlanRestartResponsePlanDodKindCheck:
 		return true
 	case PlanRestartResponsePlanDodKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanRestartResponsePlanDodProvenance.
+const (
+	PlanRestartResponsePlanDodProvenanceFloor     PlanRestartResponsePlanDodProvenance = "floor"
+	PlanRestartResponsePlanDodProvenanceInferred  PlanRestartResponsePlanDodProvenance = "inferred"
+	PlanRestartResponsePlanDodProvenanceStated    PlanRestartResponsePlanDodProvenance = "stated"
+	PlanRestartResponsePlanDodProvenanceWorkspace PlanRestartResponsePlanDodProvenance = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the PlanRestartResponsePlanDodProvenance enum.
+func (e PlanRestartResponsePlanDodProvenance) Valid() bool {
+	switch e {
+	case PlanRestartResponsePlanDodProvenanceFloor:
+		return true
+	case PlanRestartResponsePlanDodProvenanceInferred:
+		return true
+	case PlanRestartResponsePlanDodProvenanceStated:
+		return true
+	case PlanRestartResponsePlanDodProvenanceWorkspace:
 		return true
 	default:
 		return false
@@ -3248,6 +3728,27 @@ func (e PlanUpdateRequestDodBehaviorScope) Valid() bool {
 	}
 }
 
+// Defines values for PlanUpdateRequestDodJudgment.
+const (
+	PlanUpdateRequestDodJudgmentArtifact     PlanUpdateRequestDodJudgment = "artifact"
+	PlanUpdateRequestDodJudgmentBoolean      PlanUpdateRequestDodJudgment = "boolean"
+	PlanUpdateRequestDodJudgmentQuantitative PlanUpdateRequestDodJudgment = "quantitative"
+)
+
+// Valid indicates whether the value is a known member of the PlanUpdateRequestDodJudgment enum.
+func (e PlanUpdateRequestDodJudgment) Valid() bool {
+	switch e {
+	case PlanUpdateRequestDodJudgmentArtifact:
+		return true
+	case PlanUpdateRequestDodJudgmentBoolean:
+		return true
+	case PlanUpdateRequestDodJudgmentQuantitative:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PlanUpdateRequestDodKind.
 const (
 	PlanUpdateRequestDodKindBehavior PlanUpdateRequestDodKind = "behavior"
@@ -3263,6 +3764,30 @@ func (e PlanUpdateRequestDodKind) Valid() bool {
 	case PlanUpdateRequestDodKindCheck:
 		return true
 	case PlanUpdateRequestDodKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlanUpdateRequestDodProvenance.
+const (
+	PlanUpdateRequestDodProvenanceFloor     PlanUpdateRequestDodProvenance = "floor"
+	PlanUpdateRequestDodProvenanceInferred  PlanUpdateRequestDodProvenance = "inferred"
+	PlanUpdateRequestDodProvenanceStated    PlanUpdateRequestDodProvenance = "stated"
+	PlanUpdateRequestDodProvenanceWorkspace PlanUpdateRequestDodProvenance = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the PlanUpdateRequestDodProvenance enum.
+func (e PlanUpdateRequestDodProvenance) Valid() bool {
+	switch e {
+	case PlanUpdateRequestDodProvenanceFloor:
+		return true
+	case PlanUpdateRequestDodProvenanceInferred:
+		return true
+	case PlanUpdateRequestDodProvenanceStated:
+		return true
+	case PlanUpdateRequestDodProvenanceWorkspace:
 		return true
 	default:
 		return false
@@ -4703,24 +5228,6 @@ func (e SessionDetailSessionType) Valid() bool {
 	}
 }
 
-// Defines values for SessionLifecycleRecordLaunchProfile.
-const (
-	Specialist SessionLifecycleRecordLaunchProfile = "specialist"
-	Utility    SessionLifecycleRecordLaunchProfile = "utility"
-)
-
-// Valid indicates whether the value is a known member of the SessionLifecycleRecordLaunchProfile enum.
-func (e SessionLifecycleRecordLaunchProfile) Valid() bool {
-	switch e {
-	case Specialist:
-		return true
-	case Utility:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for SessionLifecycleRecordOwnerScopeKind.
 const (
 	SessionLifecycleRecordOwnerScopeKindHuman         SessionLifecycleRecordOwnerScopeKind = "human"
@@ -5573,6 +6080,27 @@ func (e TaskCriteriaBehaviorScope) Valid() bool {
 	}
 }
 
+// Defines values for TaskCriteriaJudgment.
+const (
+	TaskCriteriaJudgmentArtifact     TaskCriteriaJudgment = "artifact"
+	TaskCriteriaJudgmentBoolean      TaskCriteriaJudgment = "boolean"
+	TaskCriteriaJudgmentQuantitative TaskCriteriaJudgment = "quantitative"
+)
+
+// Valid indicates whether the value is a known member of the TaskCriteriaJudgment enum.
+func (e TaskCriteriaJudgment) Valid() bool {
+	switch e {
+	case TaskCriteriaJudgmentArtifact:
+		return true
+	case TaskCriteriaJudgmentBoolean:
+		return true
+	case TaskCriteriaJudgmentQuantitative:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskCriteriaKind.
 const (
 	TaskCriteriaKindBehavior TaskCriteriaKind = "behavior"
@@ -5588,6 +6116,30 @@ func (e TaskCriteriaKind) Valid() bool {
 	case TaskCriteriaKindCheck:
 		return true
 	case TaskCriteriaKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskCriteriaProvenance.
+const (
+	TaskCriteriaProvenanceFloor     TaskCriteriaProvenance = "floor"
+	TaskCriteriaProvenanceInferred  TaskCriteriaProvenance = "inferred"
+	TaskCriteriaProvenanceStated    TaskCriteriaProvenance = "stated"
+	TaskCriteriaProvenanceWorkspace TaskCriteriaProvenance = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the TaskCriteriaProvenance enum.
+func (e TaskCriteriaProvenance) Valid() bool {
+	switch e {
+	case TaskCriteriaProvenanceFloor:
+		return true
+	case TaskCriteriaProvenanceInferred:
+		return true
+	case TaskCriteriaProvenanceStated:
+		return true
+	case TaskCriteriaProvenanceWorkspace:
 		return true
 	default:
 		return false
@@ -5789,6 +6341,27 @@ func (e TaskCreateRequestCriteriaBehaviorScope) Valid() bool {
 	}
 }
 
+// Defines values for TaskCreateRequestCriteriaJudgment.
+const (
+	TaskCreateRequestCriteriaJudgmentArtifact     TaskCreateRequestCriteriaJudgment = "artifact"
+	TaskCreateRequestCriteriaJudgmentBoolean      TaskCreateRequestCriteriaJudgment = "boolean"
+	TaskCreateRequestCriteriaJudgmentQuantitative TaskCreateRequestCriteriaJudgment = "quantitative"
+)
+
+// Valid indicates whether the value is a known member of the TaskCreateRequestCriteriaJudgment enum.
+func (e TaskCreateRequestCriteriaJudgment) Valid() bool {
+	switch e {
+	case TaskCreateRequestCriteriaJudgmentArtifact:
+		return true
+	case TaskCreateRequestCriteriaJudgmentBoolean:
+		return true
+	case TaskCreateRequestCriteriaJudgmentQuantitative:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskCreateRequestCriteriaKind.
 const (
 	TaskCreateRequestCriteriaKindBehavior TaskCreateRequestCriteriaKind = "behavior"
@@ -5804,6 +6377,30 @@ func (e TaskCreateRequestCriteriaKind) Valid() bool {
 	case TaskCreateRequestCriteriaKindCheck:
 		return true
 	case TaskCreateRequestCriteriaKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskCreateRequestCriteriaProvenance.
+const (
+	TaskCreateRequestCriteriaProvenanceFloor     TaskCreateRequestCriteriaProvenance = "floor"
+	TaskCreateRequestCriteriaProvenanceInferred  TaskCreateRequestCriteriaProvenance = "inferred"
+	TaskCreateRequestCriteriaProvenanceStated    TaskCreateRequestCriteriaProvenance = "stated"
+	TaskCreateRequestCriteriaProvenanceWorkspace TaskCreateRequestCriteriaProvenance = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the TaskCreateRequestCriteriaProvenance enum.
+func (e TaskCreateRequestCriteriaProvenance) Valid() bool {
+	switch e {
+	case TaskCreateRequestCriteriaProvenanceFloor:
+		return true
+	case TaskCreateRequestCriteriaProvenanceInferred:
+		return true
+	case TaskCreateRequestCriteriaProvenanceStated:
+		return true
+	case TaskCreateRequestCriteriaProvenanceWorkspace:
 		return true
 	default:
 		return false
@@ -5996,6 +6593,27 @@ func (e TaskUpdateRequestCriteriaBehaviorScope) Valid() bool {
 	}
 }
 
+// Defines values for TaskUpdateRequestCriteriaJudgment.
+const (
+	TaskUpdateRequestCriteriaJudgmentArtifact     TaskUpdateRequestCriteriaJudgment = "artifact"
+	TaskUpdateRequestCriteriaJudgmentBoolean      TaskUpdateRequestCriteriaJudgment = "boolean"
+	TaskUpdateRequestCriteriaJudgmentQuantitative TaskUpdateRequestCriteriaJudgment = "quantitative"
+)
+
+// Valid indicates whether the value is a known member of the TaskUpdateRequestCriteriaJudgment enum.
+func (e TaskUpdateRequestCriteriaJudgment) Valid() bool {
+	switch e {
+	case TaskUpdateRequestCriteriaJudgmentArtifact:
+		return true
+	case TaskUpdateRequestCriteriaJudgmentBoolean:
+		return true
+	case TaskUpdateRequestCriteriaJudgmentQuantitative:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskUpdateRequestCriteriaKind.
 const (
 	TaskUpdateRequestCriteriaKindBehavior TaskUpdateRequestCriteriaKind = "behavior"
@@ -6011,6 +6629,30 @@ func (e TaskUpdateRequestCriteriaKind) Valid() bool {
 	case TaskUpdateRequestCriteriaKindCheck:
 		return true
 	case TaskUpdateRequestCriteriaKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskUpdateRequestCriteriaProvenance.
+const (
+	TaskUpdateRequestCriteriaProvenanceFloor     TaskUpdateRequestCriteriaProvenance = "floor"
+	TaskUpdateRequestCriteriaProvenanceInferred  TaskUpdateRequestCriteriaProvenance = "inferred"
+	TaskUpdateRequestCriteriaProvenanceStated    TaskUpdateRequestCriteriaProvenance = "stated"
+	TaskUpdateRequestCriteriaProvenanceWorkspace TaskUpdateRequestCriteriaProvenance = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the TaskUpdateRequestCriteriaProvenance enum.
+func (e TaskUpdateRequestCriteriaProvenance) Valid() bool {
+	switch e {
+	case TaskUpdateRequestCriteriaProvenanceFloor:
+		return true
+	case TaskUpdateRequestCriteriaProvenanceInferred:
+		return true
+	case TaskUpdateRequestCriteriaProvenanceStated:
+		return true
+	case TaskUpdateRequestCriteriaProvenanceWorkspace:
 		return true
 	default:
 		return false
@@ -6313,16 +6955,16 @@ func (e ToolRegistryEntryScope) Valid() bool {
 
 // Defines values for ToolRegistryEntrySource.
 const (
-	ToolRegistryEntrySourceBuiltin ToolRegistryEntrySource = "builtin"
-	ToolRegistryEntrySourceMcp     ToolRegistryEntrySource = "mcp"
+	Builtin ToolRegistryEntrySource = "builtin"
+	Mcp     ToolRegistryEntrySource = "mcp"
 )
 
 // Valid indicates whether the value is a known member of the ToolRegistryEntrySource enum.
 func (e ToolRegistryEntrySource) Valid() bool {
 	switch e {
-	case ToolRegistryEntrySourceBuiltin:
+	case Builtin:
 		return true
-	case ToolRegistryEntrySourceMcp:
+	case Mcp:
 		return true
 	default:
 		return false
@@ -6718,8 +7360,14 @@ type AcceptanceCriterion struct {
 	// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 	Id *string `json:"id,omitempty"`
 
+	// Judgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+	Judgment AcceptanceCriterionJudgment `json:"judgment"`
+
 	// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 	Kind AcceptanceCriterionKind `json:"kind"`
+
+	// Provenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+	Provenance *AcceptanceCriterionProvenance `json:"provenance,omitempty"`
 
 	// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
 	Status AcceptanceCriterionStatus `json:"status"`
@@ -6734,11 +7382,89 @@ type AcceptanceCriterionAuthorKind string
 // AcceptanceCriterionBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
 type AcceptanceCriterionBehaviorScope string
 
+// AcceptanceCriterionJudgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+type AcceptanceCriterionJudgment string
+
 // AcceptanceCriterionKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 type AcceptanceCriterionKind string
 
+// AcceptanceCriterionProvenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+type AcceptanceCriterionProvenance string
+
 // AcceptanceCriterionStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
 type AcceptanceCriterionStatus string
+
+// AcceptanceCriterionInput Authoring-time (request) shape of a Definition-of-Done criterion — ADR-074 D2. Identical field set to `AcceptanceCriterion` (the canonical response schema), except `kind` is optional here: when omitted, the server infers it from the payload (a `check` payload implies `kind: check`, a `behavior` payload implies `kind: behavior`, no payload implies `kind: prose`). A criterion omitting `kind` while carrying BOTH payloads is rejected 400 (ambiguous), and an EXPLICIT `kind` mismatching its payload stays a 400 (shape rules unchanged). The server always persists an explicit kind, so every criterion in a response carries one.
+type AcceptanceCriterionInput struct {
+	// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
+	Author struct {
+		// Id Agent ID or username of the author.
+		Id string `json:"id"`
+
+		// Kind Whether this criterion was authored by an agent or a human user.
+		Kind AcceptanceCriterionInputAuthorKind `json:"kind"`
+	} `json:"author"`
+
+	// Behavior Present iff the effective kind is `behavior` (400 if present with another effective kind — no mixed shape). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
+	Behavior *struct {
+		// MaxCount Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
+		MaxCount *int `json:"max_count,omitempty"`
+
+		// MinCount Minimum number of successful calls of `tool` required within `scope`.
+		MinCount *int `json:"min_count,omitempty"`
+
+		// Scope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+		Scope *AcceptanceCriterionInputBehaviorScope `json:"scope,omitempty"`
+
+		// Tool Name of the tool whose successful-call count is checked.
+		Tool string `json:"tool"`
+	} `json:"behavior,omitempty"`
+
+	// Check Present iff the effective kind is `check` (400 if present with another effective kind — no mixed shape). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
+	Check *struct {
+		// Command Shell command run through the assignee's `bash` tool.
+		Command string `json:"command"`
+
+		// ExpectedExitCode Exit code that counts as PASS (`met`) for this check.
+		ExpectedExitCode int `json:"expected_exit_code"`
+	} `json:"check,omitempty"`
+
+	// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
+	Id *string `json:"id,omitempty"`
+
+	// Judgment ADR-080 D-TYPES. What SHAPE of claim this criterion is — `boolean`, `quantitative`, or `artifact` — orthogonal to `kind` (the verification MECHANISM). OPTIONAL on this input shape: when omitted, the server infers it from the effective `kind` via `task.InferJudgment` — `check` => `boolean`, `behavior` => `quantitative`, `prose` => `boolean` (the default for the honestly-subjective catch-all). An EXPLICIT `judgment` that mismatches a technical `kind` (e.g. `judgment: artifact` with `kind: check`) is a 400. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+	Judgment *AcceptanceCriterionInputJudgment `json:"judgment,omitempty"`
+
+	// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. OPTIONAL on this input shape (ADR-074 D2): when omitted, inferred from the payload — `check` payload => `check`, `behavior` payload => `behavior`, no payload => `prose`. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+	Kind *AcceptanceCriterionInputKind `json:"kind,omitempty"`
+
+	// Provenance ADR-080 D-DOD. The authority layer this criterion (typically a DoD item) was derived from. ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored elsewhere. Never required.
+	Provenance *AcceptanceCriterionInputProvenance `json:"provenance,omitempty"`
+
+	// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+	Status AcceptanceCriterionInputStatus `json:"status"`
+
+	// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
+	Text string `json:"text"`
+}
+
+// AcceptanceCriterionInputAuthorKind Whether this criterion was authored by an agent or a human user.
+type AcceptanceCriterionInputAuthorKind string
+
+// AcceptanceCriterionInputBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+type AcceptanceCriterionInputBehaviorScope string
+
+// AcceptanceCriterionInputJudgment ADR-080 D-TYPES. What SHAPE of claim this criterion is — `boolean`, `quantitative`, or `artifact` — orthogonal to `kind` (the verification MECHANISM). OPTIONAL on this input shape: when omitted, the server infers it from the effective `kind` via `task.InferJudgment` — `check` => `boolean`, `behavior` => `quantitative`, `prose` => `boolean` (the default for the honestly-subjective catch-all). An EXPLICIT `judgment` that mismatches a technical `kind` (e.g. `judgment: artifact` with `kind: check`) is a 400. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+type AcceptanceCriterionInputJudgment string
+
+// AcceptanceCriterionInputKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. OPTIONAL on this input shape (ADR-074 D2): when omitted, inferred from the payload — `check` payload => `check`, `behavior` payload => `behavior`, no payload => `prose`. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+type AcceptanceCriterionInputKind string
+
+// AcceptanceCriterionInputProvenance ADR-080 D-DOD. The authority layer this criterion (typically a DoD item) was derived from. ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored elsewhere. Never required.
+type AcceptanceCriterionInputProvenance string
+
+// AcceptanceCriterionInputStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+type AcceptanceCriterionInputStatus string
 
 // ActivityEvent A single activity event as returned by GET /activity. Events represent notable runtime occurrences (session starts, task lifecycle changes) from the last 24 hours, returned in reverse-chronological order (max 50 entries).
 type ActivityEvent struct {
@@ -7386,7 +8112,7 @@ type AgentToolEntry struct {
 	// EffectivePolicy The policy actually enforced at LLM-call time after global policy overrides are applied.
 	EffectivePolicy AgentToolEntryEffectivePolicy `json:"effective_policy"`
 
-	// ManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via load_tool; "infra" = always-callable discovery tool (load_tool / search_tools_*) that drives the manifest mechanism itself and never appears in the manifest block.
+	// ManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via ToolSearch; "infra" = always-callable discovery tool (ToolSearch) that drives the manifest mechanism itself and never appears in the manifest block.
 	ManifestTier AgentToolEntryManifestTier `json:"manifest_tier"`
 
 	// Name Canonical tool name.
@@ -7399,7 +8125,7 @@ type AgentToolEntryConfiguredPolicy string
 // AgentToolEntryEffectivePolicy The policy actually enforced at LLM-call time after global policy overrides are applied.
 type AgentToolEntryEffectivePolicy string
 
-// AgentToolEntryManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via load_tool; "infra" = always-callable discovery tool (load_tool / search_tools_*) that drives the manifest mechanism itself and never appears in the manifest block.
+// AgentToolEntryManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via ToolSearch; "infra" = always-callable discovery tool (ToolSearch) that drives the manifest mechanism itself and never appears in the manifest block.
 type AgentToolEntryManifestTier string
 
 // AgentToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
@@ -7457,7 +8183,7 @@ type AgentToolsResponse struct {
 		// EffectivePolicy The policy actually enforced at LLM-call time after global policy overrides are applied.
 		EffectivePolicy AgentToolsResponseToolsEffectivePolicy `json:"effective_policy"`
 
-		// ManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via load_tool; "infra" = always-callable discovery tool (load_tool / search_tools_*) that drives the manifest mechanism itself and never appears in the manifest block.
+		// ManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via ToolSearch; "infra" = always-callable discovery tool (ToolSearch) that drives the manifest mechanism itself and never appears in the manifest block.
 		ManifestTier AgentToolsResponseToolsManifestTier `json:"manifest_tier"`
 
 		// Name Canonical tool name.
@@ -7477,7 +8203,7 @@ type AgentToolsResponseToolsConfiguredPolicy string
 // AgentToolsResponseToolsEffectivePolicy The policy actually enforced at LLM-call time after global policy overrides are applied.
 type AgentToolsResponseToolsEffectivePolicy string
 
-// AgentToolsResponseToolsManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via load_tool; "infra" = always-callable discovery tool (load_tool / search_tools_*) that drives the manifest mechanism itself and never appears in the manifest block.
+// AgentToolsResponseToolsManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via ToolSearch; "infra" = always-callable discovery tool (ToolSearch) that drives the manifest mechanism itself and never appears in the manifest block.
 type AgentToolsResponseToolsManifestTier string
 
 // AgentToolsUpdateRequest Request body for PUT /api/v1/agents/{id}/tools. Replaces the agent's tool policy configuration. Supports both the current policy format (builtin.policies, a complete map) and the legacy explicit/inherit mode format (builtin.mode + builtin.visible) for backward compatibility. Legacy fields are converted to policy format server-side before persisting.
@@ -7721,7 +8447,8 @@ type AuditEntry struct {
 	// Details Event-specific metadata. Structure varies by event type.
 	Details *map[string]interface{} `json:"details,omitempty"`
 
-	// Event Event type identifier. Well-known values: tool_call, exec, file_op, llm_call, policy_eval, rate_limit, ssrf, startup, shutdown. Custom values are permitted for extensibility — must match ^[a-z_]+$ (lowercase letters and underscores only).
+	// Event Event type identifier. Two naming families coexist and BOTH are legal: the original flat names (tool_call, exec, file_op, llm_call, policy_eval, rate_limit, ssrf, startup, shutdown) and the dot-separated hierarchical names that every newer event uses (skill.call, onboarding.admin_created, turn.cancel.attempt, browser.webrtc.stream_started, workspace.create, …). Custom values are permitted for extensibility — must match ^[a-z_.]+$ (lowercase letters, underscores and dots only).
+	// The dot is REQUIRED here and must not be removed (issue #667). Over 50 dot-separated names are declared in pkg/audit (audit.go, events.go) and emitted from production handlers, and more are registered as bare literals in pkg/audit.IsValidEventName for back-compat with audit files written before the project→workspace and milestone→task renames. Audit logs are append-only history that cannot be rewritten — the HMAC chain (pkg/audit/hmac.go) is computed over each entry's canonical JSON INCLUDING this field, so renaming events on disk would invalidate every chain link. A pattern that rejects dots therefore does not "validate" anything; it makes AuditLogResponse's `entries` array fail as a whole (src/lib/api.ts::request throws ApiSchemaError on the response, it does not drop single rows), blanking Settings → Security → Audit Log on any real install. Regression guard: pkg/audit/event_name_contract_test.go checks every declared event name against this very pattern, read from this file.
 	Event string `json:"event"`
 
 	// NewValue The config value after the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types.
@@ -7780,7 +8507,8 @@ type AuditLogResponse struct {
 		// Details Event-specific metadata. Structure varies by event type.
 		Details *map[string]interface{} `json:"details,omitempty"`
 
-		// Event Event type identifier. Well-known values: tool_call, exec, file_op, llm_call, policy_eval, rate_limit, ssrf, startup, shutdown. Custom values are permitted for extensibility — must match ^[a-z_]+$ (lowercase letters and underscores only).
+		// Event Event type identifier. Two naming families coexist and BOTH are legal: the original flat names (tool_call, exec, file_op, llm_call, policy_eval, rate_limit, ssrf, startup, shutdown) and the dot-separated hierarchical names that every newer event uses (skill.call, onboarding.admin_created, turn.cancel.attempt, browser.webrtc.stream_started, workspace.create, …). Custom values are permitted for extensibility — must match ^[a-z_.]+$ (lowercase letters, underscores and dots only).
+		// The dot is REQUIRED here and must not be removed (issue #667). Over 50 dot-separated names are declared in pkg/audit (audit.go, events.go) and emitted from production handlers, and more are registered as bare literals in pkg/audit.IsValidEventName for back-compat with audit files written before the project→workspace and milestone→task renames. Audit logs are append-only history that cannot be rewritten — the HMAC chain (pkg/audit/hmac.go) is computed over each entry's canonical JSON INCLUDING this field, so renaming events on disk would invalidate every chain link. A pattern that rejects dots therefore does not "validate" anything; it makes AuditLogResponse's `entries` array fail as a whole (src/lib/api.ts::request throws ApiSchemaError on the response, it does not drop single rows), blanking Settings → Security → Audit Log on any real install. Regression guard: pkg/audit/event_name_contract_test.go checks every declared event name against this very pattern, read from this file.
 		Event string `json:"event"`
 
 		// NewValue The config value after the change, recursively redacted for sensitive keys. Present on security_setting_change records. May be absent for other event types.
@@ -7871,10 +8599,10 @@ type BearerToken = string
 
 // BrowserInspectRequest Resolve the DOM element at a point in the live browser so the SPA can attach the element's text/HTML as context when a user annotates a spot. Coordinates are device (CSS) pixels of the WebRTC video frame. Best-effort — see ADR-039.
 type BrowserInspectRequest struct {
-	// AgentId Agent whose BrowserManager owns the live tab.
+	// AgentId The agent to resolve the browsing context from. This is the ONLY input that selects a browser on this endpoint, and the browser it selects belongs to the agent's workspace, not to the agent (ADR-075 FR-001).
 	AgentId string `json:"agent_id"`
 
-	// SessionId Browser session id (context/correlation; the live tab is the agent's default).
+	// SessionId A BROWSER session id, carried for context/correlation and logging only. Unlike BrowserAttachFrame's and BrowserWebRTCOfferFrame's session_id this is NOT a chat session id and it gains no workspace semantics under ADR-075: browser_inspect resolves the browsing context from agent_id ALONE, so an agent that belongs to more than one workspace is REFUSED here (ADR-075 FR-033) rather than borrowing whichever workspace the live panel happened to resolve.
 	SessionId string `json:"session_id"`
 
 	// X Device (CSS) x of the point to inspect.
@@ -8397,6 +9125,9 @@ type CriterionVerdict struct {
 	// CriterionId ID of the AcceptanceCriterion this verdict judges.
 	CriterionId string `json:"criterion_id"`
 
+	// EvidenceQuote ADR-074 D7 — the verbatim evidence excerpt the judge grounded this verdict in, copied out of the UNTRUSTED-DATA region of its input (diff/window/claim) per the rubric's quote-before-verdict instruction. Optional and empty-safe: absent/empty on every fail-closed verdict, every pre-D7 persisted verdict, and installs whose Judge soul predates the quote-emitting rubric. Truncated rune-safe to 500 code points at the parser. UNTRUSTED CONTENT — any re-emission into another agent's prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as inert quoted text.
+	EvidenceQuote *string `json:"evidence_quote,omitempty"`
+
 	// Met Whether this criterion was satisfied. Fail-closed default `false` — absence of evidence never defaults to `true` (NFR-2).
 	Met bool `json:"met"`
 
@@ -8462,7 +9193,7 @@ type DefaultModelUpdateRequest struct {
 	Provider string `json:"provider"`
 }
 
-// DelegateActionRequest The `delegate` tool call's argument shape, discriminated by `action` — the corrected 9-action set (ADR-053 §5.1) replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`cancel`/`follow_up` are control surfaces. Two published launch profiles (`utility`/`specialist`, see `DelegateRunAction.launch_profile`) govern visibility/steering/ child_messaging; illegal combinations are rejected at the handler, not by this schema alone.
+// DelegateActionRequest The `delegate` tool call's argument shape, discriminated by `action` — the corrected 9-action set (ADR-053 §5.1) replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`cancel`/`follow_up` are control surfaces. Steering is always available for a direct delegation (see ADR-053 Amendment).
 type DelegateActionRequest struct {
 	union json.RawMessage
 }
@@ -8610,7 +9341,7 @@ type DelegateRespondResponse struct {
 // DelegateRespondResponseCorrectiveSessionState The newly-spawned/resumed session's initial lifecycle state.
 type DelegateRespondResponseCorrectiveSessionState string
 
-// DelegateRunAction `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface). Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY portion of the curated context snapshot (R§8.5) — parent-named artifact references + optional notes. The MANDATORY core (task prompt + compiled criteria + engine-injected child identity from the target agent, ADR-032) is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4); only `snapshot` here is subject to `snapshot_max_bytes`/ `snapshot_max_refs`. Illegal `launch_profile`/`child_messaging`/ `steering` combinations are rejected at the handler (not schema- expressible beyond the enum itself) — see `launch_profile`'s description for the two published legal profiles.
+// DelegateRunAction `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface). Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY portion of the curated context snapshot (R§8.5) — parent-named artifact references + optional notes. The MANDATORY core (task prompt + compiled criteria + engine-injected child identity from the target agent, ADR-032) is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4); only `snapshot` here is subject to `snapshot_max_bytes`/ `snapshot_max_refs`. Steering is always available for a direct delegation — there is no longer a launch-profile choice gating it (see ADR-053 Amendment).
 type DelegateRunAction struct {
 	Action DelegateRunActionAction `json:"action"`
 
@@ -8622,9 +9353,6 @@ type DelegateRunAction struct {
 
 	// Label Human-readable label for the spawned span (subagent_start.task_label).
 	Label *string `json:"label,omitempty"`
-
-	// LaunchProfile `utility` — visibility=outcome, steering=none, child_messaging= progress_only (fire-and-collect; maps today's one-shot spawn). `specialist` — visibility=checkpoints, steering=parent_and_human, child_messaging=full (collaborating native worker; a 3P child on this profile degrades to fire-and-collect, D5). The full illegal-combo legality table (e.g. visibility=outcome with child_messaging=full) is enforced at the handler, not by this enum alone.
-	LaunchProfile DelegateRunActionLaunchProfile `json:"launch_profile"`
 
 	// Snapshot The DISCRETIONARY portion of the curated context snapshot (R§8.5). Deny-by-default — nothing beyond this + the mandatory core reaches the child. Over-cap is rejected with a narrow-the-snapshot tool error, never silently truncated.
 	Snapshot *struct {
@@ -8650,9 +9378,6 @@ type DelegateRunAction struct {
 
 // DelegateRunActionAction defines model for DelegateRunAction.Action.
 type DelegateRunActionAction string
-
-// DelegateRunActionLaunchProfile `utility` — visibility=outcome, steering=none, child_messaging= progress_only (fire-and-collect; maps today's one-shot spawn). `specialist` — visibility=checkpoints, steering=parent_and_human, child_messaging=full (collaborating native worker; a 3P child on this profile degrades to fire-and-collect, D5). The full illegal-combo legality table (e.g. visibility=outcome with child_messaging=full) is enforced at the handler, not by this enum alone.
-type DelegateRunActionLaunchProfile string
 
 // DelegateSessionResponse Response shape shared by `delegate` actions that spawn or resume a child session — `run`, `follow_up` (native warm resume or 3P cold respawn), and a 3P `respond` (which spawns a new corrective session, D5). Reused rather than duplicated across those three actions (DoD-11).
 type DelegateSessionResponse struct {
@@ -8729,9 +9454,6 @@ type DelegateStatusResponse struct {
 		// LastCheckpointRef The `message_id` of the most recent `SessionMessageCheckpoint` this session emitted, or the go-git `commit_ref` it carried. Used for boot-sweep recover-to-checkpoint (§5).
 		LastCheckpointRef *string `json:"last_checkpoint_ref,omitempty"`
 
-		// LaunchProfile `utility` — visibility=outcome, steering=none, child_messaging= progress_only (fire-and-collect). `specialist` — visibility= checkpoints, steering=parent_and_human, child_messaging=full (a 3P child on this profile still degrades to fire-and-collect). Illegal combinations are rejected at `delegate.run`, not schema-enforced here (see `DelegateRunAction`).
-		LaunchProfile DelegateStatusResponseSessionLaunchProfile `json:"launch_profile"`
-
 		// NeedsInput Present iff `state == needs_input`; absent otherwise (no schema `nullable: true` — an optional-object field paired with `nullable` generates a `T | null | undefined` Zod type against an openapi-typescript TS type that only ever emits `T | undefined` for a nullable, non-required, non-scalar property, a real codegen mismatch between the two generators for this shape; plain optional-only is unambiguous and matches how every other optional nested object in this contract set is expressed). `reconstructable` is a PARK-TIME HINT ONLY (m5) — the authoritative determination is `isNeedsInputReconstructable(rec)` re-evaluated AT BOOT (R§8.6), never this stored value.
 		NeedsInput *struct {
 			// CorrelationId The open question/decision_request this session is parked on.
@@ -8778,9 +9500,6 @@ type DelegateStatusResponse struct {
 	// UnackedCount Open question+blocker count against this child's per-child ceiling (D15, max 20).
 	UnackedCount int `json:"unacked_count"`
 }
-
-// DelegateStatusResponseSessionLaunchProfile `utility` — visibility=outcome, steering=none, child_messaging= progress_only (fire-and-collect). `specialist` — visibility= checkpoints, steering=parent_and_human, child_messaging=full (a 3P child on this profile still degrades to fire-and-collect). Illegal combinations are rejected at `delegate.run`, not schema-enforced here (see `DelegateRunAction`).
-type DelegateStatusResponseSessionLaunchProfile string
 
 // DelegateStatusResponseSessionOwnerScopeKind SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
 type DelegateStatusResponseSessionOwnerScopeKind string
@@ -9299,8 +10018,14 @@ type Goal struct {
 		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 		Id *string `json:"id,omitempty"`
 
+		// Judgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+		Judgment GoalCriteriaJudgment `json:"judgment"`
+
 		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 		Kind GoalCriteriaKind `json:"kind"`
+
+		// Provenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+		Provenance *GoalCriteriaProvenance `json:"provenance,omitempty"`
 
 		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
 		Status GoalCriteriaStatus `json:"status"`
@@ -9311,6 +10036,60 @@ type Goal struct {
 
 	// Definition The compiled SMART restatement of `prompt` (US-3 echo-confirm) — distinct from the raw prompt. Absent for `task_explicit`/`plan_dod` sources, which have no separate compile step.
 	Definition *string `json:"definition,omitempty"`
+
+	// Dod ADR-080 D-DOD — the goal's Definition of Done, DISTINCT from `criteria`: generic standing quality gates (e.g. no secrets in the output) vs. outcome-specific checks. `AcceptanceCriterion`-shaped (judged identically) but modelled as its own array, mirroring the existing `Plan.dod` precedent — never mixed into `criteria`. REQUIRED with `minItems: 1` — the compiler's built-in floor layer guarantees at least one item on every newly-compiled goal. A pre-ADR-080 persisted goal with no `dod` is backfilled with the built-in floor DoD at load time (before this schema validates), so a legacy goal always satisfies `minItems: 1` too. The Judge evaluates `criteria` UNION `dod` together.
+	Dod []struct {
+		// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
+		Author struct {
+			// Id Agent ID or username of the author.
+			Id string `json:"id"`
+
+			// Kind Whether this criterion was authored by an agent or a human user.
+			Kind GoalDodAuthorKind `json:"kind"`
+		} `json:"author"`
+
+		// Behavior Present iff `kind == behavior` (400 if present with a different `kind` — no mixed shape); required iff `kind == behavior` (400 if absent). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
+		Behavior *struct {
+			// MaxCount Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
+			MaxCount *int `json:"max_count,omitempty"`
+
+			// MinCount Minimum number of successful calls of `tool` required within `scope`.
+			MinCount *int `json:"min_count,omitempty"`
+
+			// Scope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+			Scope *GoalDodBehaviorScope `json:"scope,omitempty"`
+
+			// Tool Name of the tool whose successful-call count is checked.
+			Tool string `json:"tool"`
+		} `json:"behavior,omitempty"`
+
+		// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
+		Check *struct {
+			// Command Shell command run through the assignee's `bash` tool.
+			Command string `json:"command"`
+
+			// ExpectedExitCode Exit code that counts as PASS (`met`) for this check.
+			ExpectedExitCode int `json:"expected_exit_code"`
+		} `json:"check,omitempty"`
+
+		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
+		Id *string `json:"id,omitempty"`
+
+		// Judgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+		Judgment GoalDodJudgment `json:"judgment"`
+
+		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
+		Kind GoalDodKind `json:"kind"`
+
+		// Provenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+		Provenance *GoalDodProvenance `json:"provenance,omitempty"`
+
+		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+		Status GoalDodStatus `json:"status"`
+
+		// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
+		Text string `json:"text"`
+	} `json:"dod"`
 
 	// GoalId Unique goal identifier.
 	GoalId string `json:"goal_id"`
@@ -9340,11 +10119,35 @@ type GoalCriteriaAuthorKind string
 // GoalCriteriaBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
 type GoalCriteriaBehaviorScope string
 
+// GoalCriteriaJudgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+type GoalCriteriaJudgment string
+
 // GoalCriteriaKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 type GoalCriteriaKind string
 
+// GoalCriteriaProvenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+type GoalCriteriaProvenance string
+
 // GoalCriteriaStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
 type GoalCriteriaStatus string
+
+// GoalDodAuthorKind Whether this criterion was authored by an agent or a human user.
+type GoalDodAuthorKind string
+
+// GoalDodBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+type GoalDodBehaviorScope string
+
+// GoalDodJudgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+type GoalDodJudgment string
+
+// GoalDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
+type GoalDodKind string
+
+// GoalDodProvenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+type GoalDodProvenance string
+
+// GoalDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+type GoalDodStatus string
 
 // GoalSource How this goal's criteria were authored.
 type GoalSource string
@@ -9545,6 +10348,9 @@ type JudgeVerdict struct {
 	PerCriterion []struct {
 		// CriterionId ID of the AcceptanceCriterion this verdict judges.
 		CriterionId string `json:"criterion_id"`
+
+		// EvidenceQuote ADR-074 D7 — the verbatim evidence excerpt the judge grounded this verdict in, copied out of the UNTRUSTED-DATA region of its input (diff/window/claim) per the rubric's quote-before-verdict instruction. Optional and empty-safe: absent/empty on every fail-closed verdict, every pre-D7 persisted verdict, and installs whose Judge soul predates the quote-emitting rubric. Truncated rune-safe to 500 code points at the parser. UNTRUSTED CONTENT — any re-emission into another agent's prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as inert quoted text.
+		EvidenceQuote *string `json:"evidence_quote,omitempty"`
 
 		// Met Whether this criterion was satisfied. Fail-closed default `false` — absence of evidence never defaults to `true` (NFR-2).
 		Met bool `json:"met"`
@@ -10211,6 +11017,9 @@ type Message struct {
 			// CriterionId ID of the AcceptanceCriterion this verdict judges.
 			CriterionId string `json:"criterion_id"`
 
+			// EvidenceQuote ADR-074 D7 — the verbatim evidence excerpt the judge grounded this verdict in, copied out of the UNTRUSTED-DATA region of its input (diff/window/claim) per the rubric's quote-before-verdict instruction. Optional and empty-safe: absent/empty on every fail-closed verdict, every pre-D7 persisted verdict, and installs whose Judge soul predates the quote-emitting rubric. Truncated rune-safe to 500 code points at the parser. UNTRUSTED CONTENT — any re-emission into another agent's prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as inert quoted text.
+			EvidenceQuote *string `json:"evidence_quote,omitempty"`
+
 			// Met Whether this criterion was satisfied. Fail-closed default `false` — absence of evidence never defaults to `true` (NFR-2).
 			Met bool `json:"met"`
 
@@ -10601,13 +11410,16 @@ type PendingRestartEntry struct {
 	PersistedValue interface{} `json:"persisted_value"`
 }
 
-// PerformanceSettings Agent concurrency and fan-out settings returned by GET /api/v1/performance. Controls the max-parallel gate for task/subagent dispatch — the SINGLE authority for agent concurrency (concurrency-gate consolidation, 2026-08-04).
+// PerformanceSettings Agent concurrency and fan-out settings returned by GET /api/v1/performance. Concurrency is bounded by LIVE available memory at the moment of admission, not by a number precomputed at startup.
 type PerformanceSettings struct {
-	// EffectiveMaxParallelAgents The resolved value actually in use (after applying the auto-detect memory-based heuristic or env-var override). Always present in responses; absent in requests.
+	// EffectiveMaxParallelAgents The resolved value actually in use. When max_parallel_agents_configured is true this is the operator's own value (from config or the OMNIPUS_MAX_PARALLEL_AGENTS env var). When it is false, this is the physical OS-thread-safety backstop and NOT a capacity recommendation — a client must not present it as one; render the automatic, memory-bounded state instead. Always present in responses; absent in requests.
 	EffectiveMaxParallelAgents *int `json:"effective_max_parallel_agents,omitempty"`
 
-	// MaxParallelAgents Maximum number of tasks/subagents that may run concurrently on the dispatch path. 0 (on the wire, surfaced here as the resolved effective value — see effective_max_parallel_agents) means "use the auto-detected default", sized from available memory (availableMemory / ~3.5 MB per agent), floored so a small box still functions. There is NO policy ceiling: an explicitly configured value is always honored as given (never silently clamped — only a floor applies). A configured value is bounded only by a documented PHYSICAL OS-thread-safety ceiling (around 2000) when left on auto-detect; an explicit value above that ceiling is still honored in full, with a server-side warning logged rather than the value being lowered. Overridden by the OMNIPUS_MAX_PARALLEL_AGENTS env var.
+	// MaxParallelAgents Maximum number of tasks/subagents that may run concurrently on the dispatch path. There is no longer a computed default: 0 on disk means "not configured", and is surfaced here as the resolved effective value (see effective_max_parallel_agents and max_parallel_agents_configured) because 0 is an internal sentinel that is never a real concurrency value. When nothing is configured, concurrency is bounded by live available memory at the moment each agent turn is admitted, and the number reported here is a PHYSICAL OS-thread-safety backstop rather than an estimate of what this machine can run. There is NO policy ceiling: an explicitly configured value is always honored as given (never silently clamped — only a floor of 1 applies), including a value above the physical backstop, which is honored in full with a server-side warning logged rather than being lowered. Overridden by the OMNIPUS_MAX_PARALLEL_AGENTS env var.
 	MaxParallelAgents *int `json:"max_parallel_agents,omitempty"`
+
+	// MaxParallelAgentsConfigured Whether max_parallel_agents was actually set by an operator, in config.json or via the OMNIPUS_MAX_PARALLEL_AGENTS env var. false means nothing is configured and concurrency is bounded by live available memory; effective_max_parallel_agents then carries the physical backstop, which is not a number to show an operator as a recommendation. This field exists because the two cases are otherwise indistinguishable on the wire — max_parallel_agents substitutes the effective value whenever the configured value is below the schema floor, so an unconfigured host looks exactly like an explicitly configured one. Always present in responses; absent in requests.
+	MaxParallelAgentsConfigured *bool `json:"max_parallel_agents_configured,omitempty"`
 
 	// ToolsOnDemand Tool-loading mode. true (default) — agents load tools on demand to keep each message small (the compressed tool manifest); a load step is required before a non-core tool is callable. false — every allowed tool is sent on every message with no loading step (more tokens per message). Maps to tools.manifest.compressed. Always present in responses.
 	ToolsOnDemand *bool `json:"tools_on_demand,omitempty"`
@@ -10696,8 +11508,14 @@ type Plan struct {
 		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 		Id *string `json:"id,omitempty"`
 
+		// Judgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+		Judgment PlanDodJudgment `json:"judgment"`
+
 		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 		Kind PlanDodKind `json:"kind"`
+
+		// Provenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+		Provenance *PlanDodProvenance `json:"provenance,omitempty"`
 
 		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
 		Status PlanDodStatus `json:"status"`
@@ -10791,8 +11609,14 @@ type PlanDodAuthorKind string
 // PlanDodBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
 type PlanDodBehaviorScope string
 
+// PlanDodJudgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+type PlanDodJudgment string
+
 // PlanDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 type PlanDodKind string
+
+// PlanDodProvenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+type PlanDodProvenance string
 
 // PlanDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
 type PlanDodStatus string
@@ -10841,7 +11665,7 @@ type PlanCreateRequest struct {
 	// Description Optional free-form description.
 	Description *string `json:"description,omitempty"`
 
-	// Dod Plan-level Definition of Done. Agent-created plans require at least one criterion before approval (strict tier, ADR D5); human/UI creation may leave this empty (soft tier — the plan judge then evaluates against `title` + `goal`).
+	// Dod Plan-level Definition of Done. Agent-created plans require at least one criterion before approval (strict tier, ADR D5); human/UI creation may leave this empty (soft tier — the plan judge then evaluates against `title` + `goal`). Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload.
 	Dod *[]struct {
 		// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
 		Author struct {
@@ -10852,7 +11676,7 @@ type PlanCreateRequest struct {
 			Kind PlanCreateRequestDodAuthorKind `json:"kind"`
 		} `json:"author"`
 
-		// Behavior Present iff `kind == behavior` (400 if present with a different `kind` — no mixed shape); required iff `kind == behavior` (400 if absent). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
+		// Behavior Present iff the effective kind is `behavior` (400 if present with another effective kind — no mixed shape). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
 		Behavior *struct {
 			// MaxCount Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
 			MaxCount *int `json:"max_count,omitempty"`
@@ -10867,7 +11691,7 @@ type PlanCreateRequest struct {
 			Tool string `json:"tool"`
 		} `json:"behavior,omitempty"`
 
-		// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
+		// Check Present iff the effective kind is `check` (400 if present with another effective kind — no mixed shape). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
 		Check *struct {
 			// Command Shell command run through the assignee's `bash` tool.
 			Command string `json:"command"`
@@ -10879,8 +11703,14 @@ type PlanCreateRequest struct {
 		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 		Id *string `json:"id,omitempty"`
 
-		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
-		Kind PlanCreateRequestDodKind `json:"kind"`
+		// Judgment ADR-080 D-TYPES. What SHAPE of claim this criterion is — `boolean`, `quantitative`, or `artifact` — orthogonal to `kind` (the verification MECHANISM). OPTIONAL on this input shape: when omitted, the server infers it from the effective `kind` via `task.InferJudgment` — `check` => `boolean`, `behavior` => `quantitative`, `prose` => `boolean` (the default for the honestly-subjective catch-all). An EXPLICIT `judgment` that mismatches a technical `kind` (e.g. `judgment: artifact` with `kind: check`) is a 400. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+		Judgment *PlanCreateRequestDodJudgment `json:"judgment,omitempty"`
+
+		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. OPTIONAL on this input shape (ADR-074 D2): when omitted, inferred from the payload — `check` payload => `check`, `behavior` payload => `behavior`, no payload => `prose`. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+		Kind *PlanCreateRequestDodKind `json:"kind,omitempty"`
+
+		// Provenance ADR-080 D-DOD. The authority layer this criterion (typically a DoD item) was derived from. ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored elsewhere. Never required.
+		Provenance *PlanCreateRequestDodProvenance `json:"provenance,omitempty"`
 
 		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
 		Status PlanCreateRequestDodStatus `json:"status"`
@@ -10911,8 +11741,14 @@ type PlanCreateRequestDodAuthorKind string
 // PlanCreateRequestDodBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
 type PlanCreateRequestDodBehaviorScope string
 
-// PlanCreateRequestDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
+// PlanCreateRequestDodJudgment ADR-080 D-TYPES. What SHAPE of claim this criterion is — `boolean`, `quantitative`, or `artifact` — orthogonal to `kind` (the verification MECHANISM). OPTIONAL on this input shape: when omitted, the server infers it from the effective `kind` via `task.InferJudgment` — `check` => `boolean`, `behavior` => `quantitative`, `prose` => `boolean` (the default for the honestly-subjective catch-all). An EXPLICIT `judgment` that mismatches a technical `kind` (e.g. `judgment: artifact` with `kind: check`) is a 400. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+type PlanCreateRequestDodJudgment string
+
+// PlanCreateRequestDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. OPTIONAL on this input shape (ADR-074 D2): when omitted, inferred from the payload — `check` payload => `check`, `behavior` payload => `behavior`, no payload => `prose`. (No schema `default:` here on purpose — see the header comment's codegen trap.)
 type PlanCreateRequestDodKind string
+
+// PlanCreateRequestDodProvenance ADR-080 D-DOD. The authority layer this criterion (typically a DoD item) was derived from. ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored elsewhere. Never required.
+type PlanCreateRequestDodProvenance string
 
 // PlanCreateRequestDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
 type PlanCreateRequestDodStatus string
@@ -10992,8 +11828,14 @@ type PlanListResponse struct {
 			// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 			Id *string `json:"id,omitempty"`
 
+			// Judgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+			Judgment PlanListResponsePlansDodJudgment `json:"judgment"`
+
 			// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 			Kind PlanListResponsePlansDodKind `json:"kind"`
+
+			// Provenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+			Provenance *PlanListResponsePlansDodProvenance `json:"provenance,omitempty"`
 
 			// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
 			Status PlanListResponsePlansDodStatus `json:"status"`
@@ -11091,8 +11933,14 @@ type PlanListResponsePlansDodAuthorKind string
 // PlanListResponsePlansDodBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
 type PlanListResponsePlansDodBehaviorScope string
 
+// PlanListResponsePlansDodJudgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+type PlanListResponsePlansDodJudgment string
+
 // PlanListResponsePlansDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 type PlanListResponsePlansDodKind string
+
+// PlanListResponsePlansDodProvenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+type PlanListResponsePlansDodProvenance string
 
 // PlanListResponsePlansDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
 type PlanListResponsePlansDodStatus string
@@ -11189,8 +12037,14 @@ type PlanRestartResponse struct {
 			// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 			Id *string `json:"id,omitempty"`
 
+			// Judgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+			Judgment PlanRestartResponsePlanDodJudgment `json:"judgment"`
+
 			// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 			Kind PlanRestartResponsePlanDodKind `json:"kind"`
+
+			// Provenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+			Provenance *PlanRestartResponsePlanDodProvenance `json:"provenance,omitempty"`
 
 			// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
 			Status PlanRestartResponsePlanDodStatus `json:"status"`
@@ -11288,8 +12142,14 @@ type PlanRestartResponsePlanDodAuthorKind string
 // PlanRestartResponsePlanDodBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
 type PlanRestartResponsePlanDodBehaviorScope string
 
+// PlanRestartResponsePlanDodJudgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+type PlanRestartResponsePlanDodJudgment string
+
 // PlanRestartResponsePlanDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 type PlanRestartResponsePlanDodKind string
+
+// PlanRestartResponsePlanDodProvenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+type PlanRestartResponsePlanDodProvenance string
 
 // PlanRestartResponsePlanDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
 type PlanRestartResponsePlanDodStatus string
@@ -11324,7 +12184,7 @@ type PlanUpdateRequest struct {
 	// Description New free-form description.
 	Description *string `json:"description,omitempty"`
 
-	// Dod Replacement Definition of Done set (replaces the current `dod` atomically).
+	// Dod Replacement Definition of Done set (replaces the current `dod` atomically). Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload.
 	Dod *[]struct {
 		// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
 		Author struct {
@@ -11335,7 +12195,7 @@ type PlanUpdateRequest struct {
 			Kind PlanUpdateRequestDodAuthorKind `json:"kind"`
 		} `json:"author"`
 
-		// Behavior Present iff `kind == behavior` (400 if present with a different `kind` — no mixed shape); required iff `kind == behavior` (400 if absent). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
+		// Behavior Present iff the effective kind is `behavior` (400 if present with another effective kind — no mixed shape). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
 		Behavior *struct {
 			// MaxCount Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
 			MaxCount *int `json:"max_count,omitempty"`
@@ -11350,7 +12210,7 @@ type PlanUpdateRequest struct {
 			Tool string `json:"tool"`
 		} `json:"behavior,omitempty"`
 
-		// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
+		// Check Present iff the effective kind is `check` (400 if present with another effective kind — no mixed shape). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
 		Check *struct {
 			// Command Shell command run through the assignee's `bash` tool.
 			Command string `json:"command"`
@@ -11362,8 +12222,14 @@ type PlanUpdateRequest struct {
 		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 		Id *string `json:"id,omitempty"`
 
-		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
-		Kind PlanUpdateRequestDodKind `json:"kind"`
+		// Judgment ADR-080 D-TYPES. What SHAPE of claim this criterion is — `boolean`, `quantitative`, or `artifact` — orthogonal to `kind` (the verification MECHANISM). OPTIONAL on this input shape: when omitted, the server infers it from the effective `kind` via `task.InferJudgment` — `check` => `boolean`, `behavior` => `quantitative`, `prose` => `boolean` (the default for the honestly-subjective catch-all). An EXPLICIT `judgment` that mismatches a technical `kind` (e.g. `judgment: artifact` with `kind: check`) is a 400. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+		Judgment *PlanUpdateRequestDodJudgment `json:"judgment,omitempty"`
+
+		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. OPTIONAL on this input shape (ADR-074 D2): when omitted, inferred from the payload — `check` payload => `check`, `behavior` payload => `behavior`, no payload => `prose`. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+		Kind *PlanUpdateRequestDodKind `json:"kind,omitempty"`
+
+		// Provenance ADR-080 D-DOD. The authority layer this criterion (typically a DoD item) was derived from. ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored elsewhere. Never required.
+		Provenance *PlanUpdateRequestDodProvenance `json:"provenance,omitempty"`
 
 		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
 		Status PlanUpdateRequestDodStatus `json:"status"`
@@ -11391,8 +12257,14 @@ type PlanUpdateRequestDodAuthorKind string
 // PlanUpdateRequestDodBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
 type PlanUpdateRequestDodBehaviorScope string
 
-// PlanUpdateRequestDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
+// PlanUpdateRequestDodJudgment ADR-080 D-TYPES. What SHAPE of claim this criterion is — `boolean`, `quantitative`, or `artifact` — orthogonal to `kind` (the verification MECHANISM). OPTIONAL on this input shape: when omitted, the server infers it from the effective `kind` via `task.InferJudgment` — `check` => `boolean`, `behavior` => `quantitative`, `prose` => `boolean` (the default for the honestly-subjective catch-all). An EXPLICIT `judgment` that mismatches a technical `kind` (e.g. `judgment: artifact` with `kind: check`) is a 400. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+type PlanUpdateRequestDodJudgment string
+
+// PlanUpdateRequestDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. OPTIONAL on this input shape (ADR-074 D2): when omitted, inferred from the payload — `check` payload => `check`, `behavior` payload => `behavior`, no payload => `prose`. (No schema `default:` here on purpose — see the header comment's codegen trap.)
 type PlanUpdateRequestDodKind string
+
+// PlanUpdateRequestDodProvenance ADR-080 D-DOD. The authority layer this criterion (typically a DoD item) was derived from. ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored elsewhere. Never required.
+type PlanUpdateRequestDodProvenance string
 
 // PlanUpdateRequestDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
 type PlanUpdateRequestDodStatus string
@@ -12505,6 +13377,11 @@ type SessionCreateRequest struct {
 
 	// Type Session type. Defaults to "chat" when omitted.
 	Type *SessionCreateRequestType `json:"type,omitempty"`
+
+	// WorkspaceId The workspace this session belongs to. Optional; omit it for a session that belongs to no workspace (the global/inbox chat), which is NOT the same as a default — an absent value stays absent and is never guessed at.
+	// Stamped straight onto the new session's meta, so a session created for a workspace chat carries its workspace from birth rather than from its first message. That gap is what ADR-075 FR-017 tripped over: the live browser panel reads the workspace off the attaching chat session's own meta, server-side, and the SPA's "Open browser" launcher creates its session here — with no workspace — before any message has been sent. An agent on more than one workspace's team was therefore refused (FR-033) and told to open the panel from a chat belonging to the workspace it meant, which is exactly where the click had come from.
+	// Must name a workspace that exists (400 otherwise). Membership is NOT checked here: the value is a preference, and every consumer that grants access on it re-checks membership itself — browser.ResolveBrowsingKeyForAgent honours it only when the agent really is on that workspace's team.
+	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
 // SessionCreateRequestType Session type. Defaults to "chat" when omitted.
@@ -12638,6 +13515,9 @@ type SessionDetail struct {
 			PerCriterion []struct {
 				// CriterionId ID of the AcceptanceCriterion this verdict judges.
 				CriterionId string `json:"criterion_id"`
+
+				// EvidenceQuote ADR-074 D7 — the verbatim evidence excerpt the judge grounded this verdict in, copied out of the UNTRUSTED-DATA region of its input (diff/window/claim) per the rubric's quote-before-verdict instruction. Optional and empty-safe: absent/empty on every fail-closed verdict, every pre-D7 persisted verdict, and installs whose Judge soul predates the quote-emitting rubric. Truncated rune-safe to 500 code points at the parser. UNTRUSTED CONTENT — any re-emission into another agent's prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as inert quoted text.
+				EvidenceQuote *string `json:"evidence_quote,omitempty"`
 
 				// Met Whether this criterion was satisfied. Fail-closed default `false` — absence of evidence never defaults to `true` (NFR-2).
 				Met bool `json:"met"`
@@ -12822,9 +13702,6 @@ type SessionLifecycleRecord struct {
 	// LastCheckpointRef The `message_id` of the most recent `SessionMessageCheckpoint` this session emitted, or the go-git `commit_ref` it carried. Used for boot-sweep recover-to-checkpoint (§5).
 	LastCheckpointRef *string `json:"last_checkpoint_ref,omitempty"`
 
-	// LaunchProfile `utility` — visibility=outcome, steering=none, child_messaging= progress_only (fire-and-collect). `specialist` — visibility= checkpoints, steering=parent_and_human, child_messaging=full (a 3P child on this profile still degrades to fire-and-collect). Illegal combinations are rejected at `delegate.run`, not schema-enforced here (see `DelegateRunAction`).
-	LaunchProfile SessionLifecycleRecordLaunchProfile `json:"launch_profile"`
-
 	// NeedsInput Present iff `state == needs_input`; absent otherwise (no schema `nullable: true` — an optional-object field paired with `nullable` generates a `T | null | undefined` Zod type against an openapi-typescript TS type that only ever emits `T | undefined` for a nullable, non-required, non-scalar property, a real codegen mismatch between the two generators for this shape; plain optional-only is unambiguous and matches how every other optional nested object in this contract set is expressed). `reconstructable` is a PARK-TIME HINT ONLY (m5) — the authoritative determination is `isNeedsInputReconstructable(rec)` re-evaluated AT BOOT (R§8.6), never this stored value.
 	NeedsInput *struct {
 		// CorrelationId The open question/decision_request this session is parked on.
@@ -12867,9 +13744,6 @@ type SessionLifecycleRecord struct {
 	// WorkspaceId Workspace this session belongs to.
 	WorkspaceId string `json:"workspace_id"`
 }
-
-// SessionLifecycleRecordLaunchProfile `utility` — visibility=outcome, steering=none, child_messaging= progress_only (fire-and-collect). `specialist` — visibility= checkpoints, steering=parent_and_human, child_messaging=full (a 3P child on this profile still degrades to fire-and-collect). Illegal combinations are rejected at `delegate.run`, not schema-enforced here (see `DelegateRunAction`).
-type SessionLifecycleRecordLaunchProfile string
 
 // SessionLifecycleRecordOwnerScopeKind SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
 type SessionLifecycleRecordOwnerScopeKind string
@@ -13489,6 +14363,9 @@ type Skill struct {
 	// Id Unique skill identifier (typically the skill directory name or npm package name).
 	Id string `json:"id"`
 
+	// LastInvoked ADR-072 D3.1: ISO 8601 timestamp of the most recent time this skill was requested by name through the Skill tool's load path (pkg/audit.Logger ::LastInvokedForSkill — both "loaded" and "denied" load outcomes count, a search match does not). Null when the skill has never been invoked by name, or its invocation history could not be determined.
+	LastInvoked *time.Time `json:"last_invoked,omitempty"`
+
 	// Name Human-readable skill name.
 	Name string `json:"name"`
 
@@ -13720,8 +14597,14 @@ type Task struct {
 		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 		Id *string `json:"id,omitempty"`
 
+		// Judgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+		Judgment TaskCriteriaJudgment `json:"judgment"`
+
 		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 		Kind TaskCriteriaKind `json:"kind"`
+
+		// Provenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+		Provenance *TaskCriteriaProvenance `json:"provenance,omitempty"`
 
 		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
 		Status TaskCriteriaStatus `json:"status"`
@@ -13863,8 +14746,14 @@ type TaskCriteriaAuthorKind string
 // TaskCriteriaBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
 type TaskCriteriaBehaviorScope string
 
+// TaskCriteriaJudgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+type TaskCriteriaJudgment string
+
 // TaskCriteriaKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
 type TaskCriteriaKind string
+
+// TaskCriteriaProvenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+type TaskCriteriaProvenance string
 
 // TaskCriteriaStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
 type TaskCriteriaStatus string
@@ -13919,7 +14808,7 @@ type TaskCreateRequest struct {
 	// BlockedBy Task IDs this task depends on (depends-on / blocked_by). Each must exist and must not create a cycle (validated at creation).
 	BlockedBy *[]string `json:"blocked_by,omitempty"`
 
-	// Criteria Optional initial acceptance criteria (Definition of Done, ADR-049 D2/D5/FR-3). Agent tool paths reject a create with zero criteria; human/UI creation may leave this empty (soft tier).
+	// Criteria Optional initial acceptance criteria (Definition of Done, ADR-049 D2/D5/FR-3). Agent tool paths reject a create with zero criteria; human/UI creation may leave this empty (soft tier). Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload.
 	Criteria *[]struct {
 		// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
 		Author struct {
@@ -13930,7 +14819,7 @@ type TaskCreateRequest struct {
 			Kind TaskCreateRequestCriteriaAuthorKind `json:"kind"`
 		} `json:"author"`
 
-		// Behavior Present iff `kind == behavior` (400 if present with a different `kind` — no mixed shape); required iff `kind == behavior` (400 if absent). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
+		// Behavior Present iff the effective kind is `behavior` (400 if present with another effective kind — no mixed shape). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
 		Behavior *struct {
 			// MaxCount Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
 			MaxCount *int `json:"max_count,omitempty"`
@@ -13945,7 +14834,7 @@ type TaskCreateRequest struct {
 			Tool string `json:"tool"`
 		} `json:"behavior,omitempty"`
 
-		// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
+		// Check Present iff the effective kind is `check` (400 if present with another effective kind — no mixed shape). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
 		Check *struct {
 			// Command Shell command run through the assignee's `bash` tool.
 			Command string `json:"command"`
@@ -13957,8 +14846,14 @@ type TaskCreateRequest struct {
 		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 		Id *string `json:"id,omitempty"`
 
-		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
-		Kind TaskCreateRequestCriteriaKind `json:"kind"`
+		// Judgment ADR-080 D-TYPES. What SHAPE of claim this criterion is — `boolean`, `quantitative`, or `artifact` — orthogonal to `kind` (the verification MECHANISM). OPTIONAL on this input shape: when omitted, the server infers it from the effective `kind` via `task.InferJudgment` — `check` => `boolean`, `behavior` => `quantitative`, `prose` => `boolean` (the default for the honestly-subjective catch-all). An EXPLICIT `judgment` that mismatches a technical `kind` (e.g. `judgment: artifact` with `kind: check`) is a 400. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+		Judgment *TaskCreateRequestCriteriaJudgment `json:"judgment,omitempty"`
+
+		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. OPTIONAL on this input shape (ADR-074 D2): when omitted, inferred from the payload — `check` payload => `check`, `behavior` payload => `behavior`, no payload => `prose`. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+		Kind *TaskCreateRequestCriteriaKind `json:"kind,omitempty"`
+
+		// Provenance ADR-080 D-DOD. The authority layer this criterion (typically a DoD item) was derived from. ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored elsewhere. Never required.
+		Provenance *TaskCreateRequestCriteriaProvenance `json:"provenance,omitempty"`
 
 		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
 		Status TaskCreateRequestCriteriaStatus `json:"status"`
@@ -14061,8 +14956,14 @@ type TaskCreateRequestCriteriaAuthorKind string
 // TaskCreateRequestCriteriaBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
 type TaskCreateRequestCriteriaBehaviorScope string
 
-// TaskCreateRequestCriteriaKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
+// TaskCreateRequestCriteriaJudgment ADR-080 D-TYPES. What SHAPE of claim this criterion is — `boolean`, `quantitative`, or `artifact` — orthogonal to `kind` (the verification MECHANISM). OPTIONAL on this input shape: when omitted, the server infers it from the effective `kind` via `task.InferJudgment` — `check` => `boolean`, `behavior` => `quantitative`, `prose` => `boolean` (the default for the honestly-subjective catch-all). An EXPLICIT `judgment` that mismatches a technical `kind` (e.g. `judgment: artifact` with `kind: check`) is a 400. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+type TaskCreateRequestCriteriaJudgment string
+
+// TaskCreateRequestCriteriaKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. OPTIONAL on this input shape (ADR-074 D2): when omitted, inferred from the payload — `check` payload => `check`, `behavior` payload => `behavior`, no payload => `prose`. (No schema `default:` here on purpose — see the header comment's codegen trap.)
 type TaskCreateRequestCriteriaKind string
+
+// TaskCreateRequestCriteriaProvenance ADR-080 D-DOD. The authority layer this criterion (typically a DoD item) was derived from. ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored elsewhere. Never required.
+type TaskCreateRequestCriteriaProvenance string
 
 // TaskCreateRequestCriteriaStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
 type TaskCreateRequestCriteriaStatus string
@@ -14265,7 +15166,7 @@ type TaskUpdateRequest struct {
 	// CompletedAt When the task completed or failed.
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 
-	// Criteria Replacement acceptance-criteria set (ADR-049 D2/D5/FR-3) — replaces the current `criteria` atomically. Agent tool paths reject an update that reduces the count below 1.
+	// Criteria Replacement acceptance-criteria set (ADR-049 D2/D5/FR-3) — replaces the current `criteria` atomically. Agent tool paths reject an update that reduces the count below 1. Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload.
 	Criteria *[]struct {
 		// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
 		Author struct {
@@ -14276,7 +15177,7 @@ type TaskUpdateRequest struct {
 			Kind TaskUpdateRequestCriteriaAuthorKind `json:"kind"`
 		} `json:"author"`
 
-		// Behavior Present iff `kind == behavior` (400 if present with a different `kind` — no mixed shape); required iff `kind == behavior` (400 if absent). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
+		// Behavior Present iff the effective kind is `behavior` (400 if present with another effective kind — no mixed shape). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
 		Behavior *struct {
 			// MaxCount Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
 			MaxCount *int `json:"max_count,omitempty"`
@@ -14291,7 +15192,7 @@ type TaskUpdateRequest struct {
 			Tool string `json:"tool"`
 		} `json:"behavior,omitempty"`
 
-		// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
+		// Check Present iff the effective kind is `check` (400 if present with another effective kind — no mixed shape). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
 		Check *struct {
 			// Command Shell command run through the assignee's `bash` tool.
 			Command string `json:"command"`
@@ -14303,8 +15204,14 @@ type TaskUpdateRequest struct {
 		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 		Id *string `json:"id,omitempty"`
 
-		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
-		Kind TaskUpdateRequestCriteriaKind `json:"kind"`
+		// Judgment ADR-080 D-TYPES. What SHAPE of claim this criterion is — `boolean`, `quantitative`, or `artifact` — orthogonal to `kind` (the verification MECHANISM). OPTIONAL on this input shape: when omitted, the server infers it from the effective `kind` via `task.InferJudgment` — `check` => `boolean`, `behavior` => `quantitative`, `prose` => `boolean` (the default for the honestly-subjective catch-all). An EXPLICIT `judgment` that mismatches a technical `kind` (e.g. `judgment: artifact` with `kind: check`) is a 400. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+		Judgment *TaskUpdateRequestCriteriaJudgment `json:"judgment,omitempty"`
+
+		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. OPTIONAL on this input shape (ADR-074 D2): when omitted, inferred from the payload — `check` payload => `check`, `behavior` payload => `behavior`, no payload => `prose`. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+		Kind *TaskUpdateRequestCriteriaKind `json:"kind,omitempty"`
+
+		// Provenance ADR-080 D-DOD. The authority layer this criterion (typically a DoD item) was derived from. ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored elsewhere. Never required.
+		Provenance *TaskUpdateRequestCriteriaProvenance `json:"provenance,omitempty"`
 
 		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
 		Status TaskUpdateRequestCriteriaStatus `json:"status"`
@@ -14401,8 +15308,14 @@ type TaskUpdateRequestCriteriaAuthorKind string
 // TaskUpdateRequestCriteriaBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
 type TaskUpdateRequestCriteriaBehaviorScope string
 
-// TaskUpdateRequestCriteriaKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
+// TaskUpdateRequestCriteriaJudgment ADR-080 D-TYPES. What SHAPE of claim this criterion is — `boolean`, `quantitative`, or `artifact` — orthogonal to `kind` (the verification MECHANISM). OPTIONAL on this input shape: when omitted, the server infers it from the effective `kind` via `task.InferJudgment` — `check` => `boolean`, `behavior` => `quantitative`, `prose` => `boolean` (the default for the honestly-subjective catch-all). An EXPLICIT `judgment` that mismatches a technical `kind` (e.g. `judgment: artifact` with `kind: check`) is a 400. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+type TaskUpdateRequestCriteriaJudgment string
+
+// TaskUpdateRequestCriteriaKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. OPTIONAL on this input shape (ADR-074 D2): when omitted, inferred from the payload — `check` payload => `check`, `behavior` payload => `behavior`, no payload => `prose`. (No schema `default:` here on purpose — see the header comment's codegen trap.)
 type TaskUpdateRequestCriteriaKind string
+
+// TaskUpdateRequestCriteriaProvenance ADR-080 D-DOD. The authority layer this criterion (typically a DoD item) was derived from. ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored elsewhere. Never required.
+type TaskUpdateRequestCriteriaProvenance string
 
 // TaskUpdateRequestCriteriaStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
 type TaskUpdateRequestCriteriaStatus string
@@ -14899,6 +15812,15 @@ type WorkspaceMountCreateResponse struct {
 
 	// Name The mount's name, as created (see WorkspaceMountCreateRequest.name).
 	Name string `json:"name"`
+
+	// SkillsCount ADR-072 D1.2/FR-074/FR-074a: how many project skills this mount's recognised skills directory contributes, as counted by pkg/skills/mount_threshold.go's EvaluateMountSkillsDisclosure at mount-creation time. Present only when the mount carries a recognised skills directory with at least one skill — absent (not zero) when the mount has none, mirroring `warning`'s own absent-not-empty convention.
+	SkillsCount *int `json:"skills_count,omitempty"`
+
+	// SkillsGrantsMessage FR-074a: states, every time skills_count is present — even a single-digit count — that this mount's skills directory grants agents new, auto-loadable instructions in this workspace, not merely files sitting in the repository. Independent of skills_threshold_warning: set whenever skills_count is present, regardless of whether the threshold was exceeded. Absent exactly when skills_count is absent.
+	SkillsGrantsMessage *string `json:"skills_grants_message,omitempty"`
+
+	// SkillsThresholdWarning FR-074: present only when skills_count exceeds the mount-add-time threshold (pkg/skills/mount_threshold.go's DefaultMountSkillsWarnThreshold, spec default 500) — states the count and its per-turn consequence. The mount is still created either way (FR-075): this is information, never a refusal. Absent when the threshold was not exceeded, including whenever skills_count itself is absent.
+	SkillsThresholdWarning *string `json:"skills_threshold_warning,omitempty"`
 
 	// Status Server-computed liveness of the mount target at creation time (FR-8.2). Always "ok" immediately after a successful create — included for shape symmetry with WorkspaceMount.yaml.
 	Status WorkspaceMountCreateResponseStatus `json:"status"`

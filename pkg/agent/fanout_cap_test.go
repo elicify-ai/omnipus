@@ -33,7 +33,7 @@ func TestSubTurnFanOutCap_FollowsConfig(t *testing.T) {
 		al.cfg.Agents.Defaults.SubTurn.MaxConcurrent = 0 // unset → fall back
 
 		rtCfg := al.getSubTurnConfig()
-		eff := al.cfg.Performance.EffectiveMaxParallelAgents()
+		eff, _ := al.cfg.Performance.EffectiveMaxParallelAgents()
 		if rtCfg.maxConcurrent != eff {
 			t.Fatalf(
 				"MaxParallelAgents=%d: getSubTurnConfig().maxConcurrent = %d, want EffectiveMaxParallelAgents()=%d",

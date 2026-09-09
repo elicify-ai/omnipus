@@ -74,8 +74,9 @@ func TestBrowserSSRFWiring_SingletonNotMutated_CloneAccepts(t *testing.T) {
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent, "test fixture must seed at least one agent")
 
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok, "registerSharedTools must have registered a browser manager for the default agent")
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, BrowserResolveOK, outcome,
+		"registerSharedTools must have built a browser for the default agent's workspace")
 
 	cloneErr := mgr.ValidateURL(context.Background(), gatewayOriginURL)
 	assert.NoError(t, cloneErr,

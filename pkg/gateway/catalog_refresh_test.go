@@ -159,7 +159,7 @@ func TestGatewayBoot_OfflineSnapshot_Then_StartupPull(t *testing.T) {
 		nil,
 	)
 
-	go runCatalogRefreshLoop(pulled, catalog.NewFileStore(home), time.Hour, 5*time.Second, time.Hour)
+	go runCatalogRefreshLoop(context.Background(), pulled, catalog.NewFileStore(home), time.Hour, 5*time.Second, time.Hour)
 
 	select {
 	case <-puller.ready:
@@ -199,7 +199,7 @@ func TestGatewayBoot_OfflineSnapshot_Then_StartupPull(t *testing.T) {
 		catalog.NewFileStore(home),
 		nil,
 	)
-	go runCatalogRefreshLoop(skipCat, catalog.NewFileStore(home), time.Hour, 5*time.Second, time.Hour)
+	go runCatalogRefreshLoop(context.Background(), skipCat, catalog.NewFileStore(home), time.Hour, 5*time.Second, time.Hour)
 	time.Sleep(200 * time.Millisecond)
 	assert.Zero(t, skipPuller.hitCount(),
 		"startup pull must be skipped while the persisted document is younger than the skip window")
@@ -245,7 +245,7 @@ func TestRefreshLoop_24h_NoRequestPathPulls(t *testing.T) {
 		nil,
 	)
 
-	go runCatalogRefreshLoop(cat, catalog.NewFileStore(home), time.Hour, 5*time.Second, 0)
+	go runCatalogRefreshLoop(context.Background(), cat, catalog.NewFileStore(home), time.Hour, 5*time.Second, 0)
 
 	select {
 	case <-puller.ready:
@@ -287,7 +287,7 @@ func TestRefreshLoop_TickerFires(t *testing.T) {
 	cat := catalog.Boot(context.Background(), catalog.EmbeddedSnapshot, puller,
 		catalog.NewFileStore(home), nil)
 
-	go runCatalogRefreshLoop(cat, catalog.NewFileStore(home), 20*time.Millisecond, time.Second, 0)
+	go runCatalogRefreshLoop(context.Background(), cat, catalog.NewFileStore(home), 20*time.Millisecond, time.Second, 0)
 
 	require.Eventually(t, func() bool { return puller.hitCount() >= 3 },
 		5*time.Second, 10*time.Millisecond,
@@ -300,7 +300,7 @@ func TestRefreshLoop_TickerFires(t *testing.T) {
 func TestRefreshLoop_NoCatalog_NoPanic(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
-		runCatalogRefreshLoop(nil, nil, time.Millisecond, time.Second, 0)
+		runCatalogRefreshLoop(context.Background(), nil, nil, time.Millisecond, time.Second, 0)
 		close(done)
 	}()
 	select {

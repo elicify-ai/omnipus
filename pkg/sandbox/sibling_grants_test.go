@@ -72,8 +72,10 @@ func TestExpandRulesExcluding_GrantsSiblingsNotTheSecret(t *testing.T) {
 		}
 	}
 	// The siblings must survive, or the exclusion has simply broken the product
-	// instead of protecting it.
-	for _, sibling := range []string{"agents", "sessions", "skills", "logs"} {
+	// instead of protecting it. "skills" is deliberately NOT here any more —
+	// ADR-072 D10 Part A / D10.1 added it to fspolicy.SecretEntriesAlwaysPathOnly,
+	// so it is now one of the secrets excluded above, the same as "entities".
+	for _, sibling := range []string{"agents", "sessions", "logs"} {
 		want := filepath.Join(home, sibling)
 		if !contains(paths, want) {
 			t.Errorf("sibling %q must still be granted; got %v", want, paths)
@@ -297,8 +299,10 @@ func TestExpandRulesExcluding_TopLevelCreationIsNarrowed(t *testing.T) {
 	// The case that actually matters: writes INSIDE a granted subdirectory are
 	// untouched. If this ever fails, agents cannot write to their own
 	// workspaces and the exclusion has broken the product rather than hardened
-	// it.
-	for _, sub := range []string{"agents", "sessions", "skills"} {
+	// it. "skills" is deliberately NOT here any more — ADR-072 D10 Part A /
+	// D10.1 made it a secret (fspolicy.SecretEntriesAlwaysPathOnly), so it must
+	// NOT be granted; see the explicit check for that below.
+	for _, sub := range []string{"agents", "sessions"} {
 		want := filepath.Join(home, sub)
 		var found bool
 		for _, r := range got {
@@ -311,6 +315,13 @@ func TestExpandRulesExcluding_TopLevelCreationIsNarrowed(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("%q must still be granted", want)
+		}
+	}
+
+	skillsPath := filepath.Join(home, "skills")
+	for _, r := range got {
+		if r.Path == skillsPath {
+			t.Errorf("%q must NOT be granted — it is a secret (ADR-072 D10 Part A / D10.1)", skillsPath)
 		}
 	}
 }

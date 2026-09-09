@@ -132,15 +132,15 @@ Mia takes everything inbound, evaluates the request, and hands off to the right 
 ]
 ```
 
-Mia's prompt knows about Jim / Ava / Ray / Max and uses the `handoff` tool when she identifies a request that fits one of them better. The receiving agent picks up in the same transcript — no copy-paste, no context loss.
+Mia's prompt knows about Jim / Ava / Ray / Max and uses the `switch_agent` tool when she identifies a request that fits one of them better. The receiving agent picks up in the same transcript — no copy-paste, no context loss.
 
 ## Mid-session hand-off (the second layer)
 
-Once an agent owns a message, it can call the `handoff` tool to transfer control. It accepts a target `agent_id` and an optional short brief, atomically switches the session's active agent, hands the receiver the full transcript so it sees what came before, and returns immediately (12 ms in the live demo).
+Once an agent owns a message, it can call `switch_agent(target: <agent_id>)` to transfer control. It accepts a target agent id and an optional short note, atomically switches the session's active agent, hands the receiver the full transcript so it sees what came before, and returns immediately (12 ms in the live demo).
 
-The receiving agent's first turn sees a tool-call entry naming the handoff and the brief — the agent can ack, ask scoping questions, or start work. The chat UI shows the handoff chip in line with the conversation, so the user understands who they're talking to at every point.
+The receiving agent's first turn sees a tool-call entry naming the handoff and the note — the agent can ack, ask scoping questions, or start work. The chat UI shows the handoff chip in line with the conversation, so the user understands who they're talking to at every point.
 
-Hand-off is reversible: any agent in the chain can call `return_to_default` to send control back to the default routing agent (typically Mia).
+Hand-off is reversible: any agent in the chain can call `switch_agent(target: "default")` to send control back to the default routing agent (typically Mia).
 
 For the full agent-tools API including handoff arguments, see [tools-reference.md](tools-reference.md).
 
@@ -152,7 +152,7 @@ A typical multi-channel deployment has one Omnipus binary fielding messages from
 
 [pkg/channels/README.md](../pkg/channels/README.md) covers per-channel config (`allow_from`, `dm_policy`, `group_policy`).
 
-[tools-reference.md](tools-reference.md) documents `handoff`, `return_to_default`, and the rest of the agent-tools API.
+[tools-reference.md](tools-reference.md) documents `switch_agent` and the rest of the agent-tools API.
 
 [memory.md](memory.md) explains what survives a hand-off (the transcript) and what doesn't (per-agent memory).
 

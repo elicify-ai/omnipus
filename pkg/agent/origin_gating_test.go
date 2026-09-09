@@ -72,6 +72,14 @@ func TestOriginGating_GoalLoop(t *testing.T) {
 			if _, handled := al.handleCommand(context.Background(), msg, agentInst, &opts); handled && !tc.userInitiated {
 				t.Fatal("a non-user-initiated /goal must never be synchronously handled (status/clear are also gated)")
 			}
+			// ADR-074 D4a: a user-initiated PROSE set parks as pending and
+			// activates on the explicit confirm — drive the confirm through
+			// the same origin-gated pipeline. For the non-user-initiated
+			// cases the set was inert, and this confirm must be too.
+			al.handleCommand(context.Background(), bus.InboundMessage{
+				Content:       "/goal confirm",
+				UserInitiated: tc.userInitiated,
+			}, agentInst, &opts)
 			after, err := store.GetMeta(meta.ID)
 			if err != nil {
 				t.Fatalf("GetMeta: %v", err)

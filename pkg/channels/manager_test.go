@@ -2892,3 +2892,149 @@ func (m *mockChannelStartSignal) Start(context.Context) error {
 	}
 	return nil
 }
+
+// TestReload_EnableConfigureDisable_NeverLeavesStaleDegradedFailure is the
+// regression guard for the UAT-reported CRITICAL/infra defect: "enabling then
+// disabling a channel can permanently degrade the gateway until a full
+// restart" (docs/internal/qa/uat-report-full-tool-catalog-batch1-2026-09-02.md
+// §2, finding 5).
+//
+// Root cause: enable_channel("irc") is a normal, documented two-step flow —
+// "Enabling a channel with no credentials configured is allowed but the
+// channel will fail to connect — configure it with configure_channel first"
+// (pkg/sysagent/tools/channel.go's ChannelEnableTool.Description). While IRC
+// is enabled but missing its required "server" field, initChannels's
+// prerequisite-checker branch skips construction without ever registering it
+// in m.channels — so it is NEVER hash-committed to m.channelHashes (the
+// added-loop below deletes it from `list` on failure, exactly like a real
+// construction failure would). A channel that was never hash-committed can
+// never appear in a LATER reload's `removed` diff either (compareChannels
+// only emits `removed` for keys present in the OLD m.channelHashes) — so
+// disable_channel("irc") afterward produces neither an `added` nor a
+// `removed` entry for it, and the pre-fix added-only scoped clear left its
+// ChannelInitError orphaned in m.failedChannels forever: no future reload's
+// added/removed diff could ever reach an instanceID that was never
+// successfully committed, so FailedChannels() (and therefore /health) stayed
+// "degraded" until a full gateway restart rebuilt m.failedChannels from
+// scratch.
+//
+// This test drives the REAL enable -> reload -> configure(unrelated field,
+// still missing "server") -> reload -> disable -> reload cycle through the
+// production Manager.Reload path (not a hand-copied simulation of its
+// algorithm, unlike several of the older tests above) and asserts:
+//  1. after the first reload (enabled, unconfigured), FailedChannels reports
+//     a SPECIFIC, actionable reason naming the missing field — not the
+//     generic "config/registration name mismatch or skipped init" text,
+//     which reads as an internal bug for this ordinary, expected case.
+//  2. after the final reload (disabled), FailedChannels is empty — the
+//     stale entry must not survive being disabled, regardless of the
+//     added/removed diff bookkeeping.
+func TestReload_EnableConfigureDisable_NeverLeavesStaleDegradedFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m := &Manager{
+		channels:      make(map[string]Channel),
+		workers:       make(map[string]*channelWorker),
+		bus:           bus.NewMessageBus(),
+		config:        &config.Config{},
+		channelHashes: make(map[string]string),
+	}
+	if err := m.StartAll(ctx); err != nil {
+		t.Fatalf("StartAll: %v", err)
+	}
+
+	// Step 1: enable_channel("irc") — Enabled=true, no "server" configured yet.
+	// Mirrors ChannelEnableTool.Execute, which sets nothing but Enabled=true.
+	cfg := config.DefaultConfig()
+	ircInst := cfg.Channels["irc"]
+	ircInst.Type = "irc"
+	ircInst.Enabled = true
+	cfg.Channels["irc"] = ircInst
+
+	if err := m.Reload(ctx, cfg, credentials.SecretBundle{}); err != nil {
+		t.Fatalf("Reload after enable: %v", err)
+	}
+
+	failedAfterEnable := m.FailedChannels()
+	var ircFailure *ChannelInitError
+	for i := range failedAfterEnable {
+		if failedAfterEnable[i].Name == "irc" {
+			ircFailure = &failedAfterEnable[i]
+			break
+		}
+	}
+	if ircFailure == nil {
+		t.Fatalf("expected an \"irc\" entry in FailedChannels() after enabling with no server "+
+			"configured, got: %+v", failedAfterEnable)
+	}
+	msg := ircFailure.Error()
+	if strings.Contains(msg, "config/registration name mismatch or skipped init") {
+		t.Errorf("expected a specific, actionable missing-config reason for irc, got the generic "+
+			"internal-bug-sounding fallback text: %q", msg)
+	}
+	if !strings.Contains(msg, "server") {
+		t.Errorf("expected the failure reason to name the missing \"server\" field, got: %q", msg)
+	}
+	if _, ok := m.GetChannel("irc"); ok {
+		t.Fatalf("irc must not be registered while its prerequisites are unmet")
+	}
+
+	// Step 2: configure_channel("irc", token="...") — sets an UNRELATED field
+	// (configure_channel has no "server" parameter at all; see
+	// ChannelConfigureTool.Parameters), so the "server" prerequisite is still
+	// unmet after this step. Mirrors the UAT repro exactly: configure_channel
+	// cannot satisfy IRC's prerequisite regardless of what is passed to it.
+	ircInst2 := cfg.Channels["irc"]
+	ircInst2.TokenRef = "channel_irc_token"
+	cfg.Channels["irc"] = ircInst2
+	if err := m.Reload(ctx, cfg, credentials.SecretBundle{}); err != nil {
+		t.Fatalf("Reload after configure: %v", err)
+	}
+	failedAfterConfigure := m.FailedChannels()
+	found := false
+	for _, f := range failedAfterConfigure {
+		if f.Name == "irc" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected irc to still be reported as failed after configure_channel (which cannot "+
+			"satisfy IRC's \"server\" prerequisite), got: %+v", failedAfterConfigure)
+	}
+
+	// Step 3: disable_channel("irc") — Enabled=false. Mirrors ChannelDisableTool.
+	ircInst3 := cfg.Channels["irc"]
+	ircInst3.Enabled = false
+	cfg.Channels["irc"] = ircInst3
+	if err := m.Reload(ctx, cfg, credentials.SecretBundle{}); err != nil {
+		t.Fatalf("Reload after disable: %v", err)
+	}
+
+	// The regression: this must be EMPTY. Before the fix, "irc" was never
+	// hash-committed (steps 1 and 2 both deleted it from the pending hash set
+	// on failure), so this reload's added/removed diff contains neither
+	// "irc" added nor "irc" removed — the stale failure entry from step 1/2
+	// was orphaned and FailedChannels() (and therefore /health) stayed
+	// "degraded" forever, surviving every subsequent reload.
+	failedAfterDisable := m.FailedChannels()
+	for _, f := range failedAfterDisable {
+		if f.Name == "irc" {
+			t.Fatalf("disabling irc must clear its stale failure entry — a disabled channel is a "+
+				"clean state, not a degraded one — got: %+v", failedAfterDisable)
+		}
+	}
+
+	// A follow-up reload with nothing changed must also stay clean — this is
+	// the "idempotent cycle" acceptance bar: enable->configure->disable->reload
+	// must never leave the gateway permanently degraded.
+	if err := m.Reload(ctx, cfg, credentials.SecretBundle{}); err != nil {
+		t.Fatalf("Reload after disable (idempotent follow-up): %v", err)
+	}
+	for _, f := range m.FailedChannels() {
+		if f.Name == "irc" {
+			t.Fatalf("a follow-up reload with irc still disabled must not resurrect its failure: %+v",
+				m.FailedChannels())
+		}
+	}
+}

@@ -9,14 +9,7 @@
 package audit_test
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"os"
-	"path/filepath"
-	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -47,69 +40,13 @@ import (
 // actually sees at runtime, the same way a real audit.Emit call would), and
 // asserts audit.IsValidEventName accepts every single one.
 func TestIsValidEventName_ExhaustiveOverEventConsts(t *testing.T) {
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	pkgDir := filepath.Dir(thisFile)
-
-	entries, err := os.ReadDir(pkgDir)
-	if err != nil {
-		t.Fatalf("read pkg/audit dir: %v", err)
-	}
-
-	fset := token.NewFileSet()
-	// eventValues maps const identifier name -> its string literal value, as
-	// declared in source. Collected across every non-test file in the
-	// package so a future new file is covered automatically.
-	eventValues := map[string]string{}
-
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		filePath := filepath.Join(pkgDir, name)
-		file, parseErr := parser.ParseFile(fset, filePath, nil, parser.SkipObjectResolution)
-		if parseErr != nil {
-			t.Fatalf("parse %s: %v", filePath, parseErr)
-		}
-		for _, decl := range file.Decls {
-			genDecl, isGenDecl := decl.(*ast.GenDecl)
-			if !isGenDecl || genDecl.Tok != token.CONST {
-				continue
-			}
-			for _, spec := range genDecl.Specs {
-				valueSpec, isValueSpec := spec.(*ast.ValueSpec)
-				if !isValueSpec {
-					continue
-				}
-				for i, ident := range valueSpec.Names {
-					if !strings.HasPrefix(ident.Name, "Event") {
-						continue
-					}
-					// Every real Event* constant in this package is declared
-					// with an inline string literal value (either standalone
-					// `const EventFoo = "..."` or one line per name inside a
-					// `const ( ... )` block) — never via iota or a derived
-					// expression. Skip anything that doesn't fit that shape
-					// rather than guessing at its value.
-					if i >= len(valueSpec.Values) {
-						continue
-					}
-					lit, isBasicLit := valueSpec.Values[i].(*ast.BasicLit)
-					if !isBasicLit || lit.Kind != token.STRING {
-						continue
-					}
-					val, unquoteErr := strconv.Unquote(lit.Value)
-					if unquoteErr != nil {
-						t.Fatalf("unquote %s's value in %s: %v", ident.Name, filePath, unquoteErr)
-					}
-					eventValues[ident.Name] = val
-				}
-			}
-		}
-	}
+	// Collected via the shared AST walk in event_name_contract_test.go
+	// (collectEventConsts): const identifier name -> its string literal value,
+	// across every non-test file in the package, so a future new file is
+	// covered automatically. That sibling test asserts the complementary
+	// property over the same set — that every one of these values satisfies
+	// AuditEntry.yaml's wire pattern (issue #667).
+	eventValues := collectEventConsts(t)
 
 	if len(eventValues) == 0 {
 		t.Fatal(

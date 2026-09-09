@@ -1223,7 +1223,11 @@ describe('TaskDetailPanel — prompt draft survives a due-date autosave (data-lo
 
     function Harness() {
       const [task, setTask] = useState<Task>(baseTask)
-      applyPatch = (patch) => setTask((prev) => ({ ...prev, ...patch }))
+      // `as Task` matches the mocked updateTask below: a TaskUpdateRequest's
+      // criteria use the ADR-074 AcceptanceCriterionInput shape (kind
+      // optional), so a raw request->response spread no longer typechecks —
+      // fine for this harness, which never patches criteria.
+      applyPatch = (patch) => setTask((prev) => ({ ...prev, ...patch }) as Task)
       return (
         <QueryClientProvider client={makeClient()}>
           <TaskDetailPanel task={task} onClose={vi.fn()} />

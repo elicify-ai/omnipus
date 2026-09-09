@@ -69,7 +69,6 @@ func TestLifecycleStore_PruneTerminal_ReopenDuringPruneWindow(t *testing.T) {
 		OwnerScopeKind: OwnerScopeHuman,
 		WorkspaceID:    "ws-1",
 		AgentID:        "agent-1",
-		LaunchProfile:  LaunchProfileUtility,
 	}); err != nil {
 		t.Fatalf("seed Persist failed: %v", err)
 	}

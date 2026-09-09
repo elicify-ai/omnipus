@@ -29,6 +29,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools/browser"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -1488,6 +1489,48 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// the delete) — see removeMailboxesForWorkspace's doc comment.
 	removeMailboxesForWorkspace(a, id)
 
+	// FR-026 + FR-043a + SC-017: the deleted workspace's BROWSER.
+	//
+	// This is the one and only place a browser profile directory is removed.
+	// A workspace's profile holds its live logins — session cookies for
+	// whatever its agents signed into — so a departed client's data must
+	// actually depart, and equally must NOT depart on any of the four events
+	// that merely pause a workspace (idle close, eviction, roster change,
+	// reload). Those keep the profile precisely so the workspace is still
+	// logged in when it comes back.
+	//
+	// ORDER IS THE WHOLE THING (SC-017): Close(key) must RETURN before
+	// DeleteProfile(key) runs. Chrome writes its cookie jar and Local Storage
+	// on the way down; deleting the directory out from under a live process
+	// races those writes, and DeleteProfile refuses outright while the key is
+	// still live rather than trusting the caller to have got it right.
+	// One Close + one DeleteProfile is not enough, and the single-shot version
+	// reported success in the case where it was not — see
+	// deleteWorkspaceBrowserProfile.
+	if pool := browserPoolFor(a); pool != nil {
+		if key, kerr := browser.ParseBrowsingKeyString("ws:" + id); kerr == nil {
+			if derr := deleteWorkspaceBrowserProfile(pool, key); derr != nil {
+				slog.Warn("rest: delete workspace: cascade browser profile", "id", id, "error", derr)
+			}
+		} else {
+			// Never silent: an unusable key means the profile directory this
+			// workspace's logins live in is not addressable, so nothing below
+			// removes it and the data outlives the workspace.
+			slog.Warn("rest: delete workspace: cascade browser profile: unusable browsing key — "+
+				"the workspace's browser profile is NOT removed",
+				"id", id, "error", kerr)
+		}
+	} else {
+		// The pool is nil when this gateway booted with browser tools
+		// disabled. A profile directory written by an earlier boot that had
+		// them enabled is still on disk, with the workspace's live logins in
+		// it, and this delete does not reach it. Say so rather than letting
+		// the absence of a pool read as the absence of a profile.
+		slog.Warn("rest: delete workspace: no browser pool on this gateway — a browser profile left on "+
+			"disk by an earlier boot is NOT removed by this delete",
+			"id", id)
+	}
+
 	// Remove the workspace's mount record. Mounts live in
 	// entities/mounts/<id>.json (out of a sandboxed child's reach — see
 	// pkg/workspace/mountstore.go), NOT under the workspace directory, so the
@@ -1984,4 +2027,112 @@ func removeMailboxesForWorkspace(a *restAPI, workspaceID string) {
 				"agent_id", agentID, "workspace_id", workspaceID, "error", err)
 		}
 	}
+}
+
+// --- FR-043a / SC-017: the deleted workspace's browser profile ---------------
+
+// browserProfileDeleteAttempts and browserProfileDeleteSettle bound the
+// confirm-and-retry in deleteWorkspaceBrowserProfile.
+//
+// Four attempts and a short settle, not a long wait: the window being covered
+// is a Chrome writing its last few files on the way down, which is milliseconds
+// to low hundreds of milliseconds. The normal case costs neither — it confirms
+// on the first pass and never sleeps at all. browserProfileDeleteSettle is a
+// var rather than a const only so a test can shrink it.
+const browserProfileDeleteAttempts = 4
+
+var browserProfileDeleteSettle = 150 * time.Millisecond
+
+// browserProfileExistsFn indirects the CONFIRM step's os.Stat.
+//
+// It exists for one reason: the condition this function was written for — a
+// profile directory that comes BACK after a successful delete, because a Chrome
+// that another goroutine was already shutting down was still writing its cookie
+// jar into it — cannot be staged from a test without launching a real browser
+// and winning a race against it. The seam lets a test stage it exactly, the way
+// removeAllFn above stages a delete failure. The happy path deliberately does
+// NOT use the seam in its own test, so the production Stat is exercised too.
+var browserProfileExistsFn = func(dir string) bool {
+	_, err := os.Stat(dir)
+	return err == nil
+}
+
+// deleteWorkspaceBrowserProfile performs the FR-043a profile delete and then
+// CONFIRMS it, retrying while the directory keeps coming back.
+//
+// The single-shot version — Close(key) then DeleteProfile(key), warn on error —
+// had two ways to leave a departed client's live logins sitting on disk, and
+// neither of them produced an error to warn about:
+//
+//   - MID-SHUTDOWN. Close(key) returns immediately when the pool's instances
+//     map has no entry for the key. It has no entry when something else is
+//     ALREADY tearing that browser down — the idle reaper's CloseIdle removes
+//     the instance from the map first and only then runs the seconds-long
+//     coordinator Shutdown. So Close returns while Chrome is still alive,
+//     DeleteProfile sees no live instance and RemoveAll's the directory, and
+//     the dying Chrome then recreates it and writes the cookie jar and Local
+//     Storage it flushes on exit. DeleteProfile returned nil. The workspace is
+//     gone and its logins are not.
+//
+//   - RE-ACQUIRED. A turn that started just before the delete can Acquire the
+//     same key after Close returned, putting an instance back in the map;
+//     DeleteProfile then refuses by design ("call Close first") and nothing
+//     ever tried again.
+//
+// The fix is to stop trusting the delete's own return value as evidence and ask
+// the filesystem. This is the whole point: DeleteProfile answering nil is a
+// statement about one RemoveAll call, not about whether the directory is gone,
+// and those two things differ in exactly the case that matters.
+//
+// The residual is named rather than hidden: a Chrome that recreates the
+// directory AFTER the final confirming Stat still wins, and this returns nil.
+// Closing that properly needs the pool to expose a per-key "shutdown finished"
+// latch that Close can wait on — a pool.go change, out of this unit's scope —
+// and is described in the R5 report. What this function guarantees is that the
+// common orderings are handled and that a directory still standing at the end
+// is REPORTED instead of silently accepted.
+func deleteWorkspaceBrowserProfile(pool *browser.BrowserPool, key browser.BrowsingKey) error {
+	dir, dirErr := pool.ProfileDirFor(key)
+
+	var lastErr error
+	for attempt := 1; attempt <= browserProfileDeleteAttempts; attempt++ {
+		// Close first, every time. On the retry passes this is what handles
+		// the re-acquired case: the instance that appeared after the previous
+		// pass is torn down before the next DeleteProfile is asked.
+		pool.Close(key)
+		lastErr = pool.DeleteProfile(key)
+
+		if dirErr != nil {
+			// The key has no resolvable profile directory, so there is nothing
+			// to confirm against and retrying cannot change that.
+			return lastErr
+		}
+		if !browserProfileExistsFn(dir) {
+			return nil
+		}
+		if attempt < browserProfileDeleteAttempts {
+			time.Sleep(browserProfileDeleteSettle)
+		}
+	}
+
+	if lastErr != nil {
+		return fmt.Errorf("browser profile %s survived %d delete attempts: %w",
+			dir, browserProfileDeleteAttempts, lastErr)
+	}
+	return fmt.Errorf(
+		"browser profile directory %s still exists after %d delete attempts that each reported success — "+
+			"a browser shutting down is most likely recreating it, and the deleted workspace's logins are "+
+			"still on disk",
+		dir, browserProfileDeleteAttempts)
+}
+
+// browserPoolFor reaches the per-workspace browser pool through the agent loop,
+// tolerating both a nil loop and a pool that has not been built yet (a gateway
+// booted with browser tools disabled never builds one). Extracted so the
+// delete handler reads as one intention rather than three nil checks.
+func browserPoolFor(a *restAPI) *browser.BrowserPool {
+	if a == nil || a.agentLoop == nil {
+		return nil
+	}
+	return a.agentLoop.BrowserPool()
 }

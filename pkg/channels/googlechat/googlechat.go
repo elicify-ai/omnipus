@@ -205,6 +205,31 @@ func (c *GoogleChatChannel) sendWebhook(ctx context.Context, msg bus.OutboundMes
 	return nil
 }
 
+// spaceResourceName normalizes a Google Chat chat_id to the space resource
+// name the Chat API expects ("spaces/<id>"), adding the "spaces/" prefix
+// exactly once regardless of whether the caller already supplied it.
+//
+// processEvent (below) sets an INBOUND message's ChatID to event.Space.Name,
+// which Google's own API always returns already prefixed ("spaces/AAAA") —
+// so that is this channel's native chat_id format, and it is what turnChat/
+// ToolChatID(ctx) hands back to an agent that inspects its current
+// conversation. An agent forwarding that same value into send_message for a
+// proactive/out-of-band message (the tool's own documented use case) was
+// hitting a double-prefix bug: every outbound call site built its endpoint
+// as fmt.Sprintf(".../spaces/%s/...", spaceID) unconditionally, so an
+// already-prefixed spaceID produced ".../spaces/spaces/AAAA/..." — a
+// malformed, always-404 resource name. Normalizing here, once, keeps every
+// call site correct for BOTH an already-prefixed chat_id (the common case,
+// since it is the value this channel itself hands out) and a bare space ID
+// an agent might reasonably supply instead, matching how send_message
+// already tolerates unprefixed/raw chat ids for every other channel.
+func spaceResourceName(chatID string) string {
+	if strings.HasPrefix(chatID, "spaces/") {
+		return chatID
+	}
+	return "spaces/" + chatID
+}
+
 // sendBotMessage sends a message via Google Chat Bot API.
 func (c *GoogleChatChannel) sendBotMessage(ctx context.Context, msg bus.OutboundMessage) error {
 	token, err := c.getAccessToken(ctx)
@@ -212,8 +237,8 @@ func (c *GoogleChatChannel) sendBotMessage(ctx context.Context, msg bus.Outbound
 		return fmt.Errorf("get access token: %w", err)
 	}
 
-	spaceID := msg.ChatID
-	endpoint := fmt.Sprintf("%s/spaces/%s/messages", googleChatAPIBase, spaceID)
+	spaceID := spaceResourceName(msg.ChatID)
+	endpoint := fmt.Sprintf("%s/%s/messages", googleChatAPIBase, spaceID)
 
 	// Thread reply if ReplyToMessageID is set
 	if msg.ReplyToMessageID != "" {
@@ -246,8 +271,8 @@ func (c *GoogleChatChannel) sendBotMessage(ctx context.Context, msg bus.Outbound
 		logger.WarnCF("google-chat", "Thread not found, sending as new message", map[string]any{
 			"chat_id": msg.ChatID,
 		})
-		// Retry without thread key
-		newEndpoint := fmt.Sprintf("%s/spaces/%s/messages", googleChatAPIBase, spaceID)
+		// Retry without thread key. spaceID is already normalized above.
+		newEndpoint := fmt.Sprintf("%s/%s/messages", googleChatAPIBase, spaceID)
 		parsedURL, err := url.Parse(newEndpoint)
 		if err != nil {
 			return fmt.Errorf("parse fallback URL: %w", err)
@@ -709,7 +734,7 @@ func (c *GoogleChatChannel) StartTyping(ctx context.Context, chatID string) (fun
 		return func() {}, err
 	}
 
-	endpoint := fmt.Sprintf("%s/spaces/%s/presence:startTyping", googleChatAPIBase, chatID)
+	endpoint := fmt.Sprintf("%s/%s/presence:startTyping", googleChatAPIBase, spaceResourceName(chatID))
 	payload := map[string]any{}
 	body, err := json.Marshal(payload)
 	if err != nil {

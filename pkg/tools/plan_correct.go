@@ -133,7 +133,12 @@ func (t *PlanCorrectTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *PlanCorrectTool) Description() string {
 	return "Correct a running plan that has parked for adjudication (phase awaiting_supervision) or " +
-		"stalled with no dispatchable member. Four verbs: append (add tail work), supersede (mark a " +
+		"stalled with no dispatchable member — use this when a plan looks stuck and needs to be " +
+		"unstuck. Only the plan supervisor may call this; every other caller is refused. Order new " +
+		"work with optional tail_edges (from/to naming an existing member id or a tail member's ref " +
+		"from this same call) — the graph must stay acyclic and no edge may touch the member being " +
+		"superseded. Each verb accepts only its own fields: passing a field a verb does not take is " +
+		"rejected outright, not ignored. Four verbs: append (add tail work), supersede (mark a " +
 		"done member's outcome ignored by the judge — REQUIRES at least one replacement tail member; " +
 		"the system automatically carries every acceptance criterion of the superseded member onto " +
 		"your replacement work, so you do not need to know or restate its exact criteria — just " +
@@ -145,7 +150,9 @@ func (t *PlanCorrectTool) Description() string {
 		"never supplied by you — but superseded_member_id and retried_member_id name an EXISTING " +
 		"member and MUST be that member's real id from the plan's member list, never a label like " +
 		"\"m2\" or a title. Corrections consume the plan's existing judge-round budget; they do not " +
-		"get a separate one."
+		"get a separate one. When a correction adds tail members you are authoring their acceptance " +
+		"criteria: before authoring acceptance criteria, load the define-goal skill (via the Skill " +
+		"tool) and follow its quality bar."
 }
 
 func (t *PlanCorrectTool) Parameters() map[string]any {
@@ -215,9 +222,14 @@ func (t *PlanCorrectTool) Parameters() map[string]any {
 								"properties": map[string]any{
 									"kind": map[string]any{
 										"type": "string",
-										"enum": []string{"check", "prose"},
+										"enum": []string{"check", "prose", "behavior"},
 										"description": "check: a shell command verified via the assignee's bash tool; " +
-											"prose: a free-text statement judged by the verifier",
+											"prose: a free-text statement judged by the verifier; " +
+											"behavior: a deterministic count of successful calls of a named tool " +
+											"in the session's tool-call log. Optional (ADR-074 D2) — when " +
+											"omitted, inferred from the payload: check payload => check, " +
+											"behavior payload => behavior, no payload => prose. An explicit " +
+											"kind mismatching its payload is rejected.",
 									},
 									"text": map[string]any{
 										"type":        "string",
@@ -229,10 +241,11 @@ func (t *PlanCorrectTool) Parameters() map[string]any {
 											"command":            map[string]any{"type": "string", "description": "Shell command to run"},
 											"expected_exit_code": map[string]any{"type": "integer", "minimum": 0, "maximum": 255},
 										},
-										"description": "Required when kind is \"check\"; must be omitted when kind is \"prose\"",
+										"description": "Required when kind is \"check\"; must be omitted for other kinds",
 									},
+									"behavior": task.BehaviorCriterionParamSchema(),
 								},
-								"required": []string{"kind", "text"},
+								"required": []string{"text"},
 							},
 							"description": "REQUIRED, at least one: this member's acceptance criteria describing " +
 								"the REPLACEMENT work itself. For a supersede, you do not need to know or " +
@@ -856,21 +869,41 @@ func cloneCriterionForInheritance(c task.AcceptanceCriterion) task.AcceptanceCri
 	return c
 }
 
-// criterionKey renders the (kind, expression) identity of a criterion for
-// FR-030b's comparison. The "expression" is the criterion's machine-meaningful
-// payload: the command and expected exit code for a check, the tool/count/scope
-// triple for a behavior, and the statement itself for prose. Rendered display
-// text is never the comparison basis for check/behavior criteria.
+// criterionKey renders the (kind, judgment, expression) identity of a
+// criterion for FR-030b's comparison. The "expression" is the criterion's
+// machine-meaningful payload: the command and expected exit code for a
+// check, the tool/count/scope triple for a behavior, and the statement
+// itself for prose. Rendered display text is never the comparison basis for
+// check/behavior criteria. ADR-080 D-TYPES: judgment is folded into every
+// branch's key so two criteria match only if their judgment matches too —
+// redundant for check/behavior (judgment is deterministic from kind there)
+// but load-bearing for prose, where judgment is author-stated and can vary
+// independently of identical text (e.g. a re-tag from boolean to
+// quantitative on otherwise-unchanged wording is a real change).
 func criterionKey(c *task.AcceptanceCriterion) string {
+	// Resolve an empty judgment to its inferred value so an un-normalized
+	// criterion (e.g. a legacy one carried in from a superseded plan) keys
+	// IDENTICALLY to its already-normalized form — otherwise dedup breaks the
+	// moment one side has been normalized and the other has not (go-test
+	// regression 2026-09-07). Mirrors task.InferJudgment's correlation:
+	// behavior→quantitative, check/prose→boolean.
+	j := string(c.Judgment)
+	if j == "" {
+		if c.Kind == task.KindBehavior {
+			j = string(task.JudgmentQuantitative)
+		} else {
+			j = string(task.JudgmentBoolean)
+		}
+	}
 	switch c.Kind {
 	case task.KindCheck:
 		if c.Check == nil {
-			return "check|<missing>"
+			return "check|" + j + "|<missing>"
 		}
-		return "check|" + c.Check.Command + "|" + strconv.Itoa(c.Check.ExpectedExitCode)
+		return "check|" + j + "|" + c.Check.Command + "|" + strconv.Itoa(c.Check.ExpectedExitCode)
 	case task.KindBehavior:
 		if c.Behavior == nil {
-			return "behavior|<missing>"
+			return "behavior|" + j + "|<missing>"
 		}
 		maxCount := "unbounded"
 		if c.Behavior.MaxCount != nil {
@@ -880,10 +913,10 @@ func criterionKey(c *task.AcceptanceCriterion) string {
 		if scope == "" {
 			scope = "task_session"
 		}
-		return "behavior|" + c.Behavior.Tool + "|" +
+		return "behavior|" + j + "|" + c.Behavior.Tool + "|" +
 			strconv.Itoa(c.Behavior.EffectiveMinCount()) + "|" + maxCount + "|" + scope
 	default:
-		return string(c.Kind) + "|" + strings.TrimSpace(c.Text)
+		return string(c.Kind) + "|" + j + "|" + strings.TrimSpace(c.Text)
 	}
 }
 

@@ -174,8 +174,18 @@ func (s *Session) HandleViewerOfferHandle(viewerID string, sdpOffer string) (ans
 	// comment for why the two must be the identical pointer.
 	handle = pcHandle
 
+	// Same candidate/timing/selected-pair instrumentation the ingest leg
+	// carries (icediag.go). The viewer leg is where a hosted install's ICE
+	// actually has work to do -- srflx, TURN, ICE-Lite, a real network
+	// between the peers -- so "-> failed" with no candidate record is, if
+	// anything, LESS diagnosable here than on the loopback leg.
+	diag := newICEDiag(prefix, "viewer", s.logf)
+	pc.OnICECandidate(diag.noteLocalCandidate)
+	pc.OnICEGatheringStateChange(diag.noteGatheringState)
+
 	pc.OnICEConnectionStateChange(func(st webrtc.ICEConnectionState) {
 		s.logf("%s ICE connection state -> %s", prefix, st.String())
+		diag.noteICEState(st, pc)
 	})
 	pc.OnConnectionStateChange(func(st webrtc.PeerConnectionState) {
 		s.logf("%s peer connection state -> %s", prefix, st.String())
@@ -213,6 +223,7 @@ func (s *Session) HandleViewerOfferHandle(viewerID string, sdpOffer string) (ans
 	})
 
 	offer := webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: sdpOffer}
+	diag.noteRemoteOffer(offer.SDP)
 	if err = pc.SetRemoteDescription(offer); err != nil {
 		return "", handle, fmt.Errorf("webrtc: viewer %s: set remote description: %w", prefix, err)
 	}

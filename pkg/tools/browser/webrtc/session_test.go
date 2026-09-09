@@ -1403,3 +1403,47 @@ func countViewerGoroutines() int {
 	}
 	return strings.Count(dump, ".drainViewerRTCP(") + strings.Count(dump, ".runInputQueue(")
 }
+
+// TestSessionIngestDeath_RelayStopsClaimingItHasVideo is the end-to-end half
+// of issue #674, over a real Go<->Go wire flow rather than the unexported
+// state machine (that half is ingest_liveness_test.go).
+//
+// It pins two facts that together are the fix:
+//
+//  1. SetOnIngestLive fires when a video feed actually starts. Without a
+//     positive success signal, the owner's bounded automatic recovery can only
+//     ever exhaust its attempt budget — it would keep counting failures
+//     against a stream that had already come back.
+//  2. Once the encoder is gone, the relay stops reporting that it has video.
+//     Before the fix the shared local track was assigned once and never
+//     retired, so Stats().HasVideo — and, far worse, waitForTracks — kept
+//     saying yes forever, and every later viewer offer was answered instantly
+//     against a track nothing was writing to.
+func TestSessionIngestDeath_RelayStopsClaimingItHasVideo(t *testing.T) {
+	sess := relay.NewSession(relay.Config{}, nil, safeLogf(t))
+	t.Cleanup(func() { _ = sess.Close() })
+
+	var liveCalls atomic.Int32
+	sess.SetOnIngestLive(func() { liveCalls.Add(1) })
+
+	enc := newFakeEncoder(t, true)
+	enc.startPumping(t)
+	answer, err := sess.HandleIngestOffer(nonTrickleOffer(t, enc.pc))
+	if err != nil {
+		t.Fatalf("HandleIngestOffer: %v", err)
+	}
+	setAnswer(t, enc.pc, answer)
+
+	waitCond(t, testWait, "ingest video track to attach", func() bool { return sess.Stats().HasVideo })
+	waitCond(t, testWait, "the ingest-live hook to fire", func() bool { return liveCalls.Load() > 0 })
+
+	// The encoder vanishes — the exact thing that leaves the shared local
+	// tracks in place with nothing feeding them.
+	if err := enc.pc.Close(); err != nil {
+		t.Fatalf("closing the fake encoder: %v", err)
+	}
+
+	waitCond(t, testWait, "the relay to stop claiming it has video", func() bool {
+		return !sess.Stats().HasVideo
+	})
+}

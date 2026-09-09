@@ -20,6 +20,13 @@ const (
 	// transcript window fed to a verifier adjudication (ADR-052 FR-032,
 	// operator interview 2026-07-21 confirmed N=20000).
 	DefaultVerifierWindowTokens = 20000
+	// DefaultGoalCompileWindowTokens is ADR-079 D1's operator-ratified
+	// session-transcript-window bound fed into every /goal compile call
+	// (initial, resumed, and repair) — deliberately MATCHES
+	// DefaultVerifierWindowTokens (operator ratified 2026-09-06: maximum
+	// recent-history coverage over the draft's smaller 6000, since goals are
+	// frequently expressed against events set well back in a session).
+	DefaultGoalCompileWindowTokens = 20000
 	// DefaultSupervisionTurnTimeoutSeconds is FR-021's observation deadline:
 	// how long after a supervision wake is armed the PlanSupervisor waits for
 	// that turn to produce a correction before counting the attempt spent.
@@ -73,6 +80,15 @@ type PlanningConfig struct {
 	// exists yet (interview 2026-07-21 confirmed N=20000 globally;
 	// per-verifier override is a noted future direction only).
 	VerifierWindowTokens int `json:"verifier_window_tokens,omitempty"`
+	// GoalCompileWindowTokens bounds the last-N-tokens session-transcript
+	// window fed into a /goal compile call (ADR-079 D1): non-authoritative
+	// background context, distinct from and subordinate to the goal
+	// statement itself (INV-3). Read+rendered via the SAME
+	// sessionWindowText/renderVerifierWindowText tail the Judge's own
+	// VerifierWindowTokens feed uses — this field only supplies a different
+	// budget at a different call site. No per-entity override (mirrors
+	// VerifierWindowTokens's own no-per-entity-override rationale above).
+	GoalCompileWindowTokens int `json:"goal_compile_window_tokens,omitempty"`
 	// BootSweepBudgetSeconds bounds the wall-clock time the ADR-053 §5 boot
 	// sweep may take to reconcile persisted non-terminal sessions to
 	// failed(interrupted) at startup (FR-118 "within N s"). Zero inherits the
@@ -254,4 +270,15 @@ func (c PlanningConfig) EffectiveVerifierWindowTokens() int {
 		return c.VerifierWindowTokens
 	}
 	return DefaultVerifierWindowTokens
+}
+
+// EffectiveGoalCompileWindowTokens resolves the /goal compile
+// session-transcript-window token bound (ADR-079 D1): this config's
+// GoalCompileWindowTokens when >=1, else DefaultGoalCompileWindowTokens.
+// Same no-per-entity-override rationale as EffectiveVerifierWindowTokens.
+func (c PlanningConfig) EffectiveGoalCompileWindowTokens() int {
+	if c.GoalCompileWindowTokens >= 1 {
+		return c.GoalCompileWindowTokens
+	}
+	return DefaultGoalCompileWindowTokens
 }

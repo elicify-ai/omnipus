@@ -372,6 +372,75 @@ func TestBash_TimeoutEnforced_Background(t *testing.T) {
 	}, 10*time.Second, 100*time.Millisecond, "background session must reach status=timeout")
 }
 
+// TestBash_NaturalCompletionSurvivesStaleTimeoutGuard is a regression test
+// for UAT full-tool-catalog batch1 2026-09-02, S10 (report §2.2): a
+// background session that finishes NATURALLY well within its timeout_seconds
+// budget must stay reported as "done" forever after — a `poll`/`read` called
+// AFTER the original timeout_seconds window has elapsed must never see the
+// session flip to "timeout", and poll/read must always agree with each other.
+//
+// Root cause (pre-fix): the timeout-guard goroutine's timer was scheduled
+// once at session start for the full timeout_seconds, independent of how
+// quickly the command actually finished. When that stale timer eventually
+// fired against an already-"done" session, KillAndRelabel's statusPriority
+// "upgrade" rule (meant for a genuine near-simultaneous race) silently
+// overwrote the correct StatusDone with StatusTimeout minutes later — so a
+// `poll` issued before the timer fired correctly reported "done", and a
+// `read` issued moments after it fired reported "timeout" with no output,
+// even though the command had already finished successfully long before.
+//
+// This test uses the minimum allowed timeout_seconds (1s) with a command
+// that finishes in well under that, then waits past the timeout window
+// before polling and reading again — exactly the "poll says done, then a
+// later read disagrees" sequence the UAT report captured.
+func TestBash_NaturalCompletionSurvivesStaleTimeoutGuard(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses POSIX true")
+	}
+	tool, _ := newBashTool(t, false)
+	tool.godMode = true
+
+	runResult := tool.Execute(bashCtx(t), map[string]any{
+		"command":           "true",
+		"run_in_background": true,
+		"timeout_seconds":   float64(1), // minimum allowed
+	})
+	require.False(t, runResult.IsError, "background start must succeed, got ForLLM=%q", runResult.ForLLM)
+	sessionID := mustSessionID(t, runResult)
+
+	// Confirm the session reaches "done" quickly — well before the 1s
+	// timeout window elapses.
+	require.Eventually(t, func() bool {
+		poll := tool.Execute(bashCtx(t), map[string]any{"action": "poll", "session_id": sessionID})
+		var resp ExecResponse
+		if err := json.Unmarshal([]byte(poll.ForLLM), &resp); err != nil {
+			return false
+		}
+		return resp.Status == "done"
+	}, 2*time.Second, 20*time.Millisecond, "background session must reach status=done")
+
+	// Wait past the original timeout_seconds window — this is when the
+	// pre-fix stale timer goroutine would have fired and overwritten the
+	// status.
+	time.Sleep(1500 * time.Millisecond)
+
+	pollAfter := tool.Execute(bashCtx(t), map[string]any{"action": "poll", "session_id": sessionID})
+	require.False(t, pollAfter.IsError)
+	var pollResp ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(pollAfter.ForLLM), &pollResp))
+	assert.Equal(t, "done", pollResp.Status,
+		"a session that finished naturally must never be relabeled \"timeout\" after its "+
+			"timeout_seconds window elapses")
+
+	readAfter := tool.Execute(bashCtx(t), map[string]any{"action": "read", "session_id": sessionID})
+	require.False(t, readAfter.IsError)
+	var readResp ExecResponse
+	require.NoError(t, json.Unmarshal([]byte(readAfter.ForLLM), &readResp))
+	assert.Equal(t, pollResp.Status, readResp.Status,
+		"poll and read against the same session must always agree on its terminal status")
+	assert.Equal(t, "done", readResp.Status, "read must never report \"timeout\" for a naturally-completed session")
+}
+
 // ---------------------------------------------------------------------------
 // Background run/poll/read/kill (tests 10-13, 13b)
 // ---------------------------------------------------------------------------

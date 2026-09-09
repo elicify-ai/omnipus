@@ -122,6 +122,12 @@ type MetaPatch struct {
 	// GoalPendingJSON is the proposed CompiledGoal during a re-statement
 	// amendment (N-6/D11). Pass an empty string to CLEAR it (on confirm/clear).
 	GoalPendingJSON *string
+	// PendingAskJSON is the AskUserQuestion durable pending set (see
+	// SessionMeta.PendingAskJSON). Pass an empty string to CLEAR it.
+	PendingAskJSON *string
+	// GoalClarificationJSON is the ADR-074 D4a pending-clarification record
+	// (US-3 S7). Pass an empty string to CLEAR it (on answer/clear/restate).
+	GoalClarificationJSON *string
 
 	// Loop fields (ADR-049 D6/D7, /loop). Only non-nil fields are written;
 	// callers that want to CLEAR a loop must pass an empty-string LoopMode
@@ -893,6 +899,14 @@ func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 	}
 	if patch.GoalPendingJSON != nil {
 		meta.GoalPendingJSON = *patch.GoalPendingJSON
+		goalTouched = true
+	}
+	if patch.PendingAskJSON != nil {
+		meta.PendingAskJSON = *patch.PendingAskJSON
+		goalTouched = true
+	}
+	if patch.GoalClarificationJSON != nil {
+		meta.GoalClarificationJSON = *patch.GoalClarificationJSON
 		goalTouched = true
 	}
 	if patch.LoopMode != nil {

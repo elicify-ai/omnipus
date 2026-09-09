@@ -51,13 +51,23 @@ func setupMultiMCPRegistry() *ToolRegistry {
 	return reg
 }
 
-// newMultiMCPTool returns a ToolsTool wrapping the given registry.
+// newMultiMCPTool returns a ToolsTool wrapping the given registry, wired
+// with a permissive resolver (canLoad always true) so its BM25-ranking
+// assertions keep testing ranking, not policy filtering. ADR-071 §3.2.2
+// (CRIT-201) made a resolver-less ToolsTool disclose nothing at all — tests
+// that specifically exercise that no-resolver path construct NewToolsTool
+// directly instead of using this helper (see
+// TestMultiMCP_QueryNoResolver_NeverPromotes).
 func newMultiMCPTool(reg *ToolRegistry) *ToolsTool {
-	return NewToolsTool(reg, 5, 10)
+	tt := NewToolsTool(reg, 5, 10)
+	tt.SetResolver(permissiveCanLoad, stubMarkLoaded)
+	return tt
 }
 
 // execBM25Query calls tools{query:q} on tt (the new param-inferred shape).
-// No resolver is wired, so this is purely the BM25 search path (no auto-load).
+// tt is normally built via newMultiMCPTool, which wires a permissive
+// resolver so the auto-load path runs and the policy-filtered match list
+// (ADR-071 §3.2.2) is non-empty.
 func execBM25Query(tt *ToolsTool, ctx context.Context, query string) *ToolResult {
 	return tt.Execute(ctx, map[string]any{"query": query})
 }
@@ -463,7 +473,11 @@ func TestMultiMCP_Concurrent_PromoteAndSearch(t *testing.T) {
 func TestMultiMCP_Persistence_QueryThenLoadContent(t *testing.T) {
 	reg := setupMultiMCPRegistry()
 
-	// Step 1: Query finds the tool (read-only without resolver, not promoted).
+	// Step 1: Query finds AND auto-loads the tool. ADR-071 §3.2.2 requires a
+	// resolver to see anything at all, and newMultiMCPTool wires a
+	// permissive one — so unlike before D2, the top hit is auto-promoted by
+	// the query itself (the same as any other resolver-backed query; see
+	// TestMultiMCP_AutoLoad_TopHitQueryWithResolver).
 	tt := newMultiMCPTool(reg)
 	ctx := context.Background()
 	res := execBM25Query(tt, ctx, "search repositories")
@@ -474,19 +488,11 @@ func TestMultiMCP_Persistence_QueryThenLoadContent(t *testing.T) {
 		t.Fatalf("query must find mcp_alpha_search_repos; got: %s", res.ForLLM)
 	}
 
-	// After query alone: NOT promoted (no resolver wired).
-	_, ok := reg.Get("mcp_alpha_search_repos")
-	if ok {
-		t.Error("tool must NOT be Get-able after query alone (no resolver = no auto-load)")
-	}
-
-	// Step 2: Load by name promotes the tool.
-	reg.PromoteTools([]string{"mcp_alpha_search_repos"}, 5)
-
-	// After promote: Get-able.
+	// Step 2: the auto-loading query already promoted it — Get-able
+	// immediately, with no separate PromoteTools call needed.
 	gotTool, ok := reg.Get("mcp_alpha_search_repos")
 	if !ok {
-		t.Fatal("mcp_alpha_search_repos must be Get-able after PromoteTools")
+		t.Fatal("mcp_alpha_search_repos must be Get-able after the auto-loading query")
 	}
 
 	// Content test: actual Name must match.
@@ -526,16 +532,24 @@ func TestMultiMCP_Rejection_UnknownToolNotPromoted(t *testing.T) {
 // ─── Query without resolver: read-only (multi-server) ─────────────────────
 
 // TestMultiMCP_QueryNoResolver_NeverPromotes proves that without a resolver,
-// tools{query:...} finds tools but does NOT promote them (read-only fallback).
+// tools{query:...} discloses nothing at all and does NOT promote anything —
+// ADR-071 §3.2.2 point 5's fail-closed contract, not merely a read-only
+// fallback that still names the match (the pre-D2 behavior this test used
+// to assert).
 func TestMultiMCP_QueryNoResolver_NeverPromotes(t *testing.T) {
 	reg := setupMultiMCPRegistry()
-	tt := newMultiMCPTool(reg) // no resolver set
+	tt := NewToolsTool(reg, 5, 10) // no resolver set — bypasses newMultiMCPTool deliberately
 	ctx := context.Background()
 
 	// Query for all mcp tools.
 	res := execBM25Query(tt, ctx, "search repositories")
 	if res.IsError {
 		t.Fatalf("query failed: %s", res.ForLLM)
+	}
+
+	const want = "No tools found matching the query."
+	if res.ForLLM != want {
+		t.Errorf("tools(query) without resolver must disclose nothing; got: %q, want: %q", res.ForLLM, want)
 	}
 
 	// Neither tool must have TTL > 0 after a query-only call with no resolver.
@@ -549,11 +563,6 @@ func TestMultiMCP_QueryNoResolver_NeverPromotes(t *testing.T) {
 	}
 	if betaEntry != nil && betaEntry.TTL > 0 {
 		t.Errorf("tools(query) without resolver must NOT promote mcp_beta_query_docs; TTL=%d", betaEntry.TTL)
-	}
-
-	// Response must tell model how to load by name.
-	if !strings.Contains(res.ForLLM, "names") {
-		t.Errorf("query response must mention 'names' for loading; got: %s", res.ForLLM)
 	}
 }
 

@@ -481,7 +481,7 @@ Emitted by the WhatsApp native/QR channel during linked-device pairing so the SP
 | S→C | `replay_message` | One replayed transcript entry during an `attach_session` |
 | S→C | `rate_limit` | Rate-limit denial applied to an agent action (SEC-26) |
 | S→C | `media` | One or more media attachments from a tool (parts array, never null) |
-| S→C | `agent_switched` | Active agent for a session changed (handoff or return_to_default) |
+| S→C | `agent_switched` | Active agent for a session changed (`switch_agent`) |
 | S→C | `tool_approval_required` | Tool call paused for ask-policy approval (FR-011, FR-082); `args` always an object, never null |
 | S→C | `session_state` | One-shot approval-state snapshot on every WS reconnect (FR-052, FR-073, FR-081) |
 | S→C | `system_overload` | System at capacity — an agent action was blocked (FR-016, MAJ-009) |

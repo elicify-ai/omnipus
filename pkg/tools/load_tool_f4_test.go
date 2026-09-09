@@ -1,4 +1,4 @@
-// Omnipus — F4 reproduction tests for load_tool full-tier policy gate (v0.1.0)
+// Omnipus — F4 reproduction tests for ToolSearch full-tier policy gate (v0.1.0)
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
@@ -97,11 +97,11 @@ func TestCanLoad_AllowedFullTierToolStillReportsAvailable(t *testing.T) {
 
 // TestCanLoad_DeniedInfraTool proves the same fix applies to infra-tier tools.
 func TestCanLoad_DeniedInfraTool(t *testing.T) {
-	if ToolManifestTier("load_tool") != ManifestInfra {
-		t.Skip("load_tool must be ManifestInfra for this test to be valid")
+	if ToolManifestTier("ToolSearch") != ManifestInfra {
+		t.Skip("ToolSearch must be ManifestInfra for this test to be valid")
 	}
 
-	// canLoad that denies load_tool itself (extreme edge case, but must behave correctly).
+	// canLoad that denies ToolSearch itself (extreme edge case, but must behave correctly).
 	deniedCanLoad := func(_ context.Context, name string) (bool, string) {
 		return false, name + " — denied"
 	}
@@ -113,7 +113,7 @@ func TestCanLoad_DeniedInfraTool(t *testing.T) {
 	tt.SetResolver(deniedCanLoad, markLoaded)
 
 	r := tt.Execute(context.Background(), map[string]any{
-		"names": []any{"load_tool"},
+		"names": []any{"ToolSearch"},
 	})
 
 	// MUST be an error, NOT "already available".
@@ -128,7 +128,7 @@ func TestCanLoad_DeniedInfraTool(t *testing.T) {
 // ── Fix B: mixed full-tier-denied + lazy-allowed batch surfaces the denial ────
 
 // TestExecLoad_MixedBatch_DenialNotSilenced reproduces Fix B (N1):
-// A load_tool{names:[denied-full, allowed-lazy, allowed-full]} request must:
+// A ToolSearch{names:[denied-full, allowed-lazy, allowed-full]} request must:
 //   - Load the allowed-lazy tool (schemas present).
 //   - List the denied-full tool in rejected with the policy reason.
 //   - Acknowledge the allowed-full tool as already-available.

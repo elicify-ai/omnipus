@@ -65,6 +65,22 @@ type SkillRegistry interface {
 	DownloadAndInstall(ctx context.Context, slug, version, targetDir string) (*InstallResult, error)
 }
 
+// OwnerScopedRegistry is an optional capability a SkillRegistry may implement
+// when a bare slug lookup can be ambiguous (the same slug published by more
+// than one owner) and the registry's API supports narrowing the lookup to a
+// specific owner to resolve it. Callers that receive an ambiguous-match error
+// from DownloadAndInstall should check for this interface and retry via
+// DownloadAndInstallForOwner once the caller has an owner handle to
+// disambiguate with (e.g. from a search result's OwnerHandle field, or the
+// registry's own error response).
+type OwnerScopedRegistry interface {
+	// DownloadAndInstallForOwner behaves like DownloadAndInstall but scopes
+	// the slug lookup to skills published by ownerHandle.
+	DownloadAndInstallForOwner(
+		ctx context.Context, slug, ownerHandle, version, targetDir string,
+	) (*InstallResult, error)
+}
+
 // GitHubRegistryConfig configures a single GitHub-hosted skill registry.
 // A GitHub registry enables direct installation from a GitHub repository
 // via owner/repo references. Search and metadata lookups return

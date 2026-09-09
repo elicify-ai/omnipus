@@ -1,0 +1,184 @@
+<!doctype html><meta charset="utf-8"><title>MSE spike viewer (replay)</title>
+<body style="margin:0;background:#111;color:#eee;font:12px monospace">
+<video id="v" autoplay playsinline style="width:960px;height:540px;background:#000"></video>
+<pre id="log" style="white-space:pre-wrap"></pre>
+<script>
+// Replays a recorded appendBuffer log into this browser's own MediaSource.
+// ?run=<dir>  &  optional &from=<seconds> to test mid-stream join.
+const Q = new URLSearchParams(location.search);
+const RUN = Q.get('run') || 'run';
+const FROM = Q.get('from') ? Number(Q.get('from')) : null;
+const REALTIME = Q.get('realtime') === '1';
+const log = m => { document.getElementById('log').textContent += m + '\n'; console.log(m); };
+window.__done = false; window.__err = null; window.__stats = {};
+// Watchdog: never let the harness hang waiting on __done. Engines that block
+// autoplay can stall AudioContext.resume() / play() indefinitely.
+setTimeout(() => { if (!window.__done) { window.__err = (window.__err || '') + ' WATCHDOG-TIMEOUT'; window.__done = true; } }, 120000);
+const withTimeout = (p, ms, what) => Promise.race([
+  Promise.resolve(p).catch(e => { throw e; }),
+  new Promise(r => setTimeout(() => r('timeout:' + what), ms)),
+]);
+
+(async () => {
+ try {
+  const man = await (await fetch(`/out/${RUN}/manifest.json`)).json();
+  const evs = man.events;
+  const v = document.getElementById('v');
+
+  // Web Audio tap so we can PROVE audio is decoding (RMS > 0), not just present.
+  let ac = null, analyser = null;
+  try {
+    ac = new (window.AudioContext || window.webkitAudioContext)();
+    const src = ac.createMediaElementSource(v);
+    analyser = ac.createAnalyser(); analyser.fftSize = 2048;
+    src.connect(analyser); analyser.connect(ac.destination);
+    // must not await unconditionally: blocked-autoplay engines never resolve this
+    const r = await withTimeout(ac.resume(), 3000, 'ac.resume');
+    log('audioContext state=' + ac.state + (r === 'timeout:ac.resume' ? ' (resume timed out)' : ''));
+  } catch (e) { log('audio tap failed: ' + e.message); }
+
+  const ms = new MediaSource();
+  v.src = URL.createObjectURL(ms);
+  await new Promise(r => ms.addEventListener('sourceopen', r, { once: true }));
+  log('sourceopen');
+
+  const sbs = new Map();      // recorded sb id -> real SourceBuffer
+  const mimes = new Map();
+  for (const e of evs) if (e.ev === 'addSourceBuffer') mimes.set(e.sb, e.mime);
+  log('recorded source buffers: ' + JSON.stringify([...mimes]));
+
+  // support check first — a real portability signal
+  for (const [id, mime] of mimes) {
+    log(`isTypeSupported(${mime}) = ${MediaSource.isTypeSupported(mime)}`);
+  }
+
+  const wait = sb => sb.updating ? new Promise(r => { const d = () => r(); sb.addEventListener('updateend', d, { once: true }); setTimeout(() => { sb.removeEventListener('updateend', d); r('timeout'); }, 15000); }) : Promise.resolve();
+
+  // If joining mid-stream, keep the init segment of each sb + only appends at/after FROM.
+  // Init segment heuristic: the first append on each source buffer (validated in analyse.js).
+  let plan = evs.filter(e => ['addSourceBuffer','append','remove','changeType','prop','duration','endOfStream'].includes(e.ev));
+  // Mid-stream join. Needs, per source buffer: the LAST init segment that precedes
+  // the join point (ABR switches emit a fresh init each time -- using the first one
+  // deserialises against the wrong representation), plus media covering the playhead.
+  // A joiner must cut only at a BOUNDARY (start of a media segment) -- appends are
+  // byte-stream slices, so cutting at an arbitrary append splices mid-mdat. It then
+  // needs the newest INIT preceding that boundary, since each ABR switch emits a new one.
+  if (FROM != null) {
+    const mediaAt = e => (e.buffered && e.buffered.length) ? e.buffered[e.buffered.length - 1][1] : 0;
+    const keep = new Set();
+    const bySb = new Map();
+    for (const e of plan) if (e.ev === 'append') { if (!bySb.has(e.sb)) bySb.set(e.sb, []); bySb.get(e.sb).push(e); }
+    for (const [sb, list] of bySb) {
+      // last segment boundary that starts at or before the join point
+      let cut = -1;
+      for (let i = 0; i < list.length; i++) if (list[i].kind === 'BOUNDARY' && mediaAt(list[i]) <= FROM) cut = i;
+      if (cut < 0) cut = list.findIndex(e => e.kind === 'BOUNDARY');
+      if (cut < 0) { log(`sb${sb}: no BOUNDARY found, cannot join`); continue; }
+      let lastInit = null;
+      for (let i = 0; i < cut; i++) if (list[i].kind === 'INIT') lastInit = list[i];
+      if (!lastInit) lastInit = list.find(e => e.kind === 'INIT');
+      // negative control: &badinit=1 deliberately uses the OLDEST init instead of
+      // the newest, to show whether "newest init" is load-bearing or incidental.
+      if (Q.get('badinit') === '1') lastInit = list.find(e => e.kind === 'INIT') || lastInit;
+      if (lastInit) keep.add(lastInit);
+      let n = 0;
+      for (let i = cut; i < list.length; i++) { keep.add(list[i]); n++; }   // contiguous tail
+      log(`sb${sb}: init=${lastInit ? lastInit.id : 'NONE'} + tail from append #${list[cut].id} (${n} appends, media~${mediaAt(list[cut]).toFixed(1)}s)`);
+    }
+    plan = plan.filter(e => e.ev !== 'append' || keep.has(e));
+    log(`mid-stream join at ${FROM}s: replaying ${plan.filter(e => e.ev === 'append').length} appends`);
+  }
+
+  let appended = 0, bytes = 0, t0 = performance.now(), firstErr = null;
+  for (const e of plan) {
+    try {
+      if (e.ev === 'addSourceBuffer') {
+        const sb = ms.addSourceBuffer(e.mime);
+        sbs.set(e.sb, sb);
+        sb.addEventListener('error', () => log(`SB${e.sb} error event`));
+      } else if (e.ev === 'changeType') {
+        const sb = sbs.get(e.sb); if (sb) { await wait(sb); sb.changeType(e.mime); log(`changeType SB${e.sb} -> ${e.mime}`); }
+      } else if (e.ev === 'prop') {
+        const sb = sbs.get(e.sb); if (sb) { await wait(sb); try { sb[e.prop] = e.value; } catch (x) { log(`prop ${e.prop} failed: ${x.message}`); } }
+      } else if (e.ev === 'duration') {
+        if (isFinite(e.value)) { try { ms.duration = e.value; } catch (x) {} }
+      } else if (e.ev === 'remove') {
+        const sb = sbs.get(e.sb); if (sb && isFinite(e.start) && isFinite(e.end) && e.end > e.start) { await wait(sb); sb.remove(e.start, e.end); await wait(sb); }
+      } else if (e.ev === 'append') {
+        const sb = sbs.get(e.sb);
+        if (!sb) { log(`no SB for append sb=${e.sb}`); continue; }
+        if (!e.file) { log(`append id=${e.id} had NO captured data`); continue; }
+        const buf = await (await fetch(`/out/${RUN}/${e.file}`)).arrayBuffer();
+        await wait(sb);
+        if (e.tsOffset != null && isFinite(e.tsOffset) && sb.timestampOffset !== e.tsOffset) { try { sb.timestampOffset = e.tsOffset; } catch (x) {} }
+        sb.appendBuffer(buf);
+        await wait(sb);
+        appended++; bytes += buf.byteLength;
+        if (REALTIME) await new Promise(r => setTimeout(r, 30));
+      } else if (e.ev === 'endOfStream') {
+        // deliberately skipped during replay; called at the end below
+      }
+    } catch (x) {
+      if (!firstErr) firstErr = `${e.ev} id=${e.id||''} sb=${e.sb||''}: ${x.name}: ${x.message}`;
+      log('APPEND FAIL ' + firstErr);
+      break;
+    }
+  }
+  const replayMs = performance.now() - t0;
+  log(`replay complete: ${appended} appends, ${bytes} bytes in ${replayMs|0}ms`);
+
+  try { if (ms.readyState === 'open') ms.endOfStream(); } catch (x) {}
+
+  // ---- real-time playback measurement -------------------------------------
+  // Seek to a point safely INSIDE the buffered range, then compare elapsed
+  // media time against elapsed wall time. rate ~= 1.0 means real playback.
+  const bstart = v.buffered.length ? v.buffered.start(0) : 0;
+  const seekTo = (FROM != null) ? FROM : bstart + 1;
+  await new Promise(r => { v.addEventListener('seeked', r, { once: true }); v.currentTime = seekTo; setTimeout(r, 3000); });
+  log(`seeked to ${v.currentTime.toFixed(3)} (buffered starts ${bstart.toFixed(2)})`);
+  try { const pr = await withTimeout(v.play(), 5000, 'play'); if (pr === 'timeout:play') log('play() did not settle in 5s'); } catch (x) { log('play() rejected: ' + x.message); }
+
+  let maxRms = 0;
+  const data = analyser ? new Float32Array(analyser.fftSize) : null;
+  const q0 = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality().totalVideoFrames : 0;
+  const a0 = v.webkitAudioDecodedByteCount || 0;
+  const ct0 = v.currentTime, w0 = performance.now();
+  const trace = [];
+  for (let i = 0; i < 32; i++) {                     // ~8 s at 250 ms
+    await new Promise(r => setTimeout(r, 250));
+    if (analyser) { analyser.getFloatTimeDomainData(data);
+      let s = 0; for (const x of data) s += x * x;
+      maxRms = Math.max(maxRms, Math.sqrt(s / data.length)); }
+    trace.push({ w: +((performance.now() - w0) / 1000).toFixed(2), ct: +v.currentTime.toFixed(3),
+      f: v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality().totalVideoFrames : null,
+      ab: v.webkitAudioDecodedByteCount, p: v.paused, rs: v.readyState });
+  }
+  const wallEl = (performance.now() - w0) / 1000, mediaEl = v.currentTime - ct0;
+  const playbackRate = wallEl > 0 ? mediaEl / wallEl : 0;
+  const framesDecoded = (v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality().totalVideoFrames : 0) - q0;
+  const audioBytesDecoded = (v.webkitAudioDecodedByteCount || 0) - a0;
+  log(`PLAYBACK wall=${wallEl.toFixed(2)}s media=${mediaEl.toFixed(2)}s rate=${playbackRate.toFixed(3)} frames=${framesDecoded} audioBytes=${audioBytesDecoded}`);
+
+  const buf = []; for (let i = 0; i < v.buffered.length; i++) buf.push([+v.buffered.start(i).toFixed(2), +v.buffered.end(i).toFixed(2)]);
+
+  window.__stats = {
+    appended, bytes, replayMs: replayMs | 0,
+    mimes: [...mimes], supported: [...mimes].map(([i,m]) => [m, MediaSource.isTypeSupported(m)]),
+    firstErr,
+    videoWidth: v.videoWidth, videoHeight: v.videoHeight, readyState: v.readyState,
+    seekedTo: +seekTo.toFixed(3), startedAt: +ct0.toFixed(3),
+    currentTime: +v.currentTime.toFixed(3), paused: v.paused, duration: v.duration,
+    wallElapsed: +wallEl.toFixed(2), mediaElapsed: +mediaEl.toFixed(2),
+    playbackRate: +playbackRate.toFixed(3), framesDecoded, audioBytesDecoded,
+    buffered: buf, error: v.error ? (v.error.code + ':' + v.error.message) : null,
+    audioMaxRms: +maxRms.toFixed(5), audioDecodedBytes: v.webkitAudioDecodedByteCount,
+    videoDecodedBytes: v.webkitVideoDecodedByteCount,
+    droppedVideoFrames: v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality().droppedVideoFrames : null,
+    trace,
+  };
+  log(JSON.stringify(window.__stats, null, 1));
+  window.__done = true;
+ } catch (e) { window.__err = e.stack || String(e); log('FATAL ' + window.__err); window.__done = true; }
+})();
+</script>
+</body>

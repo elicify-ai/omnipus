@@ -45,7 +45,10 @@ func (t *SetTodosTool) Description() string {
 		"Pass the FULL list every call (replace-semantics — no item IDs). " +
 		"Use this for the throwaway checklist of what you're doing this turn; " +
 		"use create_task + dependencies for a durable multi-wave plan. " +
-		"Your checklist is shown on the board and re-shown to you each turn."
+		"Your checklist is shown on the board and re-shown to you each turn. " +
+		"You have ONE active checklist at a time: calling this with a different `goal` closes the " +
+		"previous checklist card as done and starts a fresh one, so reuse the exact same `goal` string " +
+		"for every update to the same unit of work."
 }
 
 func (t *SetTodosTool) Parameters() map[string]any {

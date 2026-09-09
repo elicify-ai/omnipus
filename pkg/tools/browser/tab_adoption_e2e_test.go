@@ -89,7 +89,7 @@ func TestExecute_TargetBlankClick_AdoptsNewTab(t *testing.T) {
 	require.False(t, navRes.IsError, "navigate must succeed; got: %s", navRes.ForLLM)
 
 	// Sanity: exactly one tab before the click.
-	tabs0, active0, err := mgr.ListTabs(defaultSessionID)
+	tabs0, active0, err := mgr.ListTabs(testSessionID)
 	require.NoError(t, err)
 	require.Len(t, tabs0, 1, "exactly one tab before the target=_blank click")
 	require.Equal(t, 0, active0)
@@ -110,7 +110,7 @@ func TestExecute_TargetBlankClick_AdoptsNewTab(t *testing.T) {
 	}
 
 	// 3. The tab set now has TWO tabs and the booked page is active.
-	tabs, active, err := mgr.ListTabs(defaultSessionID)
+	tabs, active, err := mgr.ListTabs(testSessionID)
 	require.NoError(t, err)
 	require.Len(t, tabs, 2, "the adopted target=_blank tab must be in the tab set")
 	require.GreaterOrEqual(t, active, 0)
@@ -149,24 +149,24 @@ func TestOpenTab_RealChromium_SecondTabSharesSameBrowser(t *testing.T) {
 	cfg := testBrowserCfg(t)
 	_, mgr := newPermissiveRegistry(t, cfg)
 
-	tab0Ctx, err := mgr.Session(defaultSessionID)
+	tab0Ctx, err := mgr.Session(testSessionID)
 	require.NoError(t, err)
 	require.NoError(t, chromedp.Run(tab0Ctx, chromedp.Navigate(srv.URL)))
 
-	tab1, err := mgr.OpenTab(defaultSessionID)
+	tab1, err := mgr.OpenTab(testSessionID)
 	require.NoError(t, err,
 		"OpenTab must open a second tab in the SAME running browser, not try to launch a second Chromium")
 	assert.Equal(t, 1, tab1.Index)
 	assert.True(t, tab1.Active)
 
-	tabs, activeIdx, err := mgr.ListTabs(defaultSessionID)
+	tabs, activeIdx, err := mgr.ListTabs(testSessionID)
 	require.NoError(t, err)
 	require.Len(t, tabs, 2, "OpenTab must result in exactly 2 tabs in the SAME browsing context")
 	assert.Equal(t, 1, activeIdx)
 
 	// Tab 1 (now active) must be independently usable — navigate + read the
 	// resulting title.
-	tab1Ctx, err := mgr.Session(defaultSessionID)
+	tab1Ctx, err := mgr.Session(testSessionID)
 	require.NoError(t, err)
 	require.False(t, sameChromedpContext(tab0Ctx, tab1Ctx), "tab 0 and tab 1 must be distinct chromedp contexts")
 	var title string
@@ -177,9 +177,9 @@ func TestOpenTab_RealChromium_SecondTabSharesSameBrowser(t *testing.T) {
 	// Switch back to tab 0 and confirm IT is STILL independently usable too
 	// (proves both tabs stayed alive in the same browser this whole time,
 	// rather than tab 1's creation having torn down and replaced tab 0).
-	_, err = mgr.SwitchTab(defaultSessionID, 0)
+	_, err = mgr.SwitchTab(testSessionID, 0)
 	require.NoError(t, err)
-	tab0CtxAgain, err := mgr.Session(defaultSessionID)
+	tab0CtxAgain, err := mgr.Session(testSessionID)
 	require.NoError(t, err)
 	assert.True(t, sameChromedpContext(tab0Ctx, tab0CtxAgain), "Session must follow SwitchTab back to the original tab 0 context")
 	var heading string
@@ -213,15 +213,15 @@ func TestCloseTab_RealChromium_ClosingTab0KeepsBrowserAndSurvivorAlive(t *testin
 	require.NotNil(t, navRes)
 	require.False(t, navRes.IsError, "navigate must succeed; got: %s", navRes.ForLLM)
 
-	_, err := mgr.OpenTab(defaultSessionID)
+	_, err := mgr.OpenTab(testSessionID)
 	require.NoError(t, err, "opening a second tab must succeed")
 
-	tabsBefore, _, err := mgr.ListTabs(defaultSessionID)
+	tabsBefore, _, err := mgr.ListTabs(testSessionID)
 	require.NoError(t, err)
 	require.Len(t, tabsBefore, 2, "sanity: two tabs open before closing tab 0")
 
 	// Close tab 0 specifically — NOT the active/last tab; tab 1 survives.
-	closedTabs, activeIdx, err := mgr.CloseTab(defaultSessionID, 0)
+	closedTabs, activeIdx, err := mgr.CloseTab(testSessionID, 0)
 	require.NoError(t, err, "closing tab 0 must succeed and must NOT kill the browser")
 	require.Len(t, closedTabs, 1, "one tab remains after closing tab 0 out of 2")
 	assert.Equal(t, 0, activeIdx, "the surviving tab slides into index 0 and becomes active")
@@ -230,7 +230,7 @@ func TestCloseTab_RealChromium_ClosingTab0KeepsBrowserAndSurvivorAlive(t *testin
 	// must still be independently usable — navigate and read text via raw
 	// chromedp — proving the browser (and this tab) are genuinely still
 	// alive, not orphaned/dead.
-	survivorCtx, err := mgr.Session(defaultSessionID)
+	survivorCtx, err := mgr.Session(testSessionID)
 	require.NoError(t, err)
 	var title string
 	require.NoError(
@@ -245,7 +245,7 @@ func TestCloseTab_RealChromium_ClosingTab0KeepsBrowserAndSurvivorAlive(t *testin
 
 	// And via the actual browser_get_text TOOL path too (not just raw
 	// chromedp against the manually-resolved ctx) — proves the manager's
-	// DefaultSessionID plumbing still works end-to-end post-close.
+	// testSessionID plumbing still works end-to-end post-close.
 	getText := mustGetTool(t, registry, "browser_get_text")
 	getTextRes := getText.Execute(ctx, map[string]any{"selector": "#sched"})
 	require.NotNil(t, getTextRes)
@@ -266,30 +266,30 @@ func TestSwitchTab_RealChromium_SessionFollowsActiveTab(t *testing.T) {
 	cfg := testBrowserCfg(t)
 	_, mgr := newPermissiveRegistry(t, cfg)
 
-	tab0Ctx, err := mgr.Session(defaultSessionID)
+	tab0Ctx, err := mgr.Session(testSessionID)
 	require.NoError(t, err)
 	require.NoError(t, chromedp.Run(tab0Ctx, chromedp.Navigate(srv.URL)))
 
-	_, err = mgr.OpenTab(defaultSessionID)
+	_, err = mgr.OpenTab(testSessionID)
 	require.NoError(t, err)
-	tab1Ctx, err := mgr.Session(defaultSessionID)
+	tab1Ctx, err := mgr.Session(testSessionID)
 	require.NoError(t, err)
 	require.NoError(t, chromedp.Run(tab1Ctx, chromedp.Navigate(srv.URL+"/booked")))
 
 	require.False(t, sameChromedpContext(tab0Ctx, tab1Ctx), "tab 0 and tab 1 must be distinct chromedp contexts")
 
-	_, err = mgr.SwitchTab(defaultSessionID, 0)
+	_, err = mgr.SwitchTab(testSessionID, 0)
 	require.NoError(t, err)
-	followedCtx, err := mgr.Session(defaultSessionID)
+	followedCtx, err := mgr.Session(testSessionID)
 	require.NoError(t, err)
 	assert.True(t, sameChromedpContext(tab0Ctx, followedCtx), "Session(default) must follow SwitchTab back to tab 0")
 	var title string
 	require.NoError(t, chromedp.Run(followedCtx, chromedp.Title(&title)))
 	assert.Equal(t, "Contact", title, "tab 0 must still show its OWN page (Contact), not tab 1's (Booked)")
 
-	_, err = mgr.SwitchTab(defaultSessionID, 1)
+	_, err = mgr.SwitchTab(testSessionID, 1)
 	require.NoError(t, err)
-	followedCtx2, err := mgr.Session(defaultSessionID)
+	followedCtx2, err := mgr.Session(testSessionID)
 	require.NoError(t, err)
 	assert.True(t, sameChromedpContext(tab1Ctx, followedCtx2), "Session(default) must follow SwitchTab to tab 1")
 	var title2 string
@@ -318,11 +318,11 @@ func TestCloseTab_RealChromium_ActiveTabClose_LiveViewFollowsSurvivorNoFalseDeat
 	cfg := testBrowserCfg(t)
 	_, mgr := newPermissiveRegistry(t, cfg)
 
-	tab0Ctx, err := mgr.Session(defaultSessionID)
+	tab0Ctx, err := mgr.Session(testSessionID)
 	require.NoError(t, err)
 	require.NoError(t, chromedp.Run(tab0Ctx, chromedp.Navigate(srv.URL)))
 
-	tab1, err := mgr.OpenTab(defaultSessionID)
+	tab1, err := mgr.OpenTab(testSessionID)
 	require.NoError(t, err)
 	require.Equal(t, 1, tab1.Index)
 	require.True(t, tab1.Active)
@@ -335,14 +335,14 @@ func TestCloseTab_RealChromium_ActiveTabClose_LiveViewFollowsSurvivorNoFalseDeat
 		statusMu.Unlock()
 	}
 
-	controlledByOther, err := mgr.Live().Attach(defaultSessionID, "viewer1", onStatus, nil, nil)
+	controlledByOther, err := mgr.Live().Attach(testSessionID, "viewer1", onStatus, nil, nil)
 	require.NoError(t, err)
 	require.False(t, controlledByOther)
-	t.Cleanup(func() { mgr.Live().Detach(defaultSessionID, "viewer1") })
+	t.Cleanup(func() { mgr.Live().Detach(testSessionID, "viewer1") })
 
-	tab1Ctx, err := mgr.Session(defaultSessionID)
+	tab1Ctx, err := mgr.Session(testSessionID)
 	require.NoError(t, err)
-	lv := mgr.Live().view(defaultSessionID)
+	lv := mgr.Live().view(testSessionID)
 	lv.mu.Lock()
 	require.True(t, sameChromedpContext(tab1Ctx, lv.tabCtx),
 		"sanity: the live view must be bound to tab 1 (the active tab) before the close")
@@ -350,12 +350,12 @@ func TestCloseTab_RealChromium_ActiveTabClose_LiveViewFollowsSurvivorNoFalseDeat
 
 	// Close the ACTIVE tab (index 1) — the exact live-UAT repro. Tab 0
 	// survives and becomes active.
-	closedTabs, activeIdx, err := mgr.CloseTab(defaultSessionID, 1)
+	closedTabs, activeIdx, err := mgr.CloseTab(testSessionID, 1)
 	require.NoError(t, err)
 	require.Len(t, closedTabs, 1)
 	require.Equal(t, 0, activeIdx)
 
-	survivorCtx, err := mgr.Session(defaultSessionID)
+	survivorCtx, err := mgr.Session(testSessionID)
 	require.NoError(t, err)
 
 	// The live view must rebind to the REAL surviving tab context — not stay
@@ -401,7 +401,7 @@ func TestExecute_OpenTab_RealChromium_OpensBlankTab(t *testing.T) {
 	assert.Equal(t, true, openData["success"])
 	assert.EqualValues(t, 1, openData["active_index"], "the new tab must be tab index 1")
 
-	tabs, activeIdx, err := mgr.ListTabs(defaultSessionID)
+	tabs, activeIdx, err := mgr.ListTabs(testSessionID)
 	require.NoError(t, err)
 	require.Len(t, tabs, 2, "browser_open_tab must ADD a tab, not reuse the current one")
 	assert.Equal(t, 1, activeIdx, "the new tab must become active")
@@ -409,9 +409,9 @@ func TestExecute_OpenTab_RealChromium_OpensBlankTab(t *testing.T) {
 
 	// Tab 0's content must be untouched — proves this genuinely opened a
 	// SECOND tab rather than navigating the existing one away.
-	_, err = mgr.SwitchTab(defaultSessionID, 0)
+	_, err = mgr.SwitchTab(testSessionID, 0)
 	require.NoError(t, err)
-	tab0Ctx, err := mgr.Session(defaultSessionID)
+	tab0Ctx, err := mgr.Session(testSessionID)
 	require.NoError(t, err)
 	var heading string
 	require.NoError(t, chromedp.Run(tab0Ctx, chromedp.Text("h1", &heading, chromedp.ByQuery)))
@@ -450,13 +450,13 @@ func TestExecute_OpenTab_RealChromium_NavigatesToURL(t *testing.T) {
 	require.True(t, ok, "openData[\"url\"] must be a string, got %T", openData["url"])
 	assert.True(t, strings.Contains(openURL, "/booked"))
 
-	tabs, activeIdx, err := mgr.ListTabs(defaultSessionID)
+	tabs, activeIdx, err := mgr.ListTabs(testSessionID)
 	require.NoError(t, err)
 	require.Len(t, tabs, 2)
 	assert.True(t, strings.Contains(tabs[activeIdx].URL, "/booked"))
 
 	// The new tab is genuinely usable — read its content via the actual
-	// browser_get_text TOOL path (proves DefaultSessionID plumbing follows
+	// browser_get_text TOOL path (proves testSessionID plumbing follows
 	// the newly-opened, newly-active tab end to end).
 	getText := mustGetTool(t, registry, "browser_get_text")
 	getTextRes := getText.Execute(ctx, map[string]any{"selector": "#sched"})
@@ -469,7 +469,7 @@ func TestExecute_OpenTab_RealChromium_NavigatesToURL(t *testing.T) {
 // TestExecute_OpenTab_SSRFBlockedURL_NoTabConsumed proves a blocked url is
 // rejected BEFORE any tab is opened — exactly like browser_navigate's own
 // SSRF gate — so a malicious/blocked target never wastes a slot against
-// MaxTabs nor leaves a half-opened tab behind. Does not need skipIfNoBrowser:
+// the memory gate nor leaves a half-opened tab behind. Does not need skipIfNoBrowser:
 // ValidateURL runs before BrowserManager.OpenTab is ever called, so this
 // never touches chromedp (mirrors TestExecute_Navigate_SchemeBlocks's own
 // no-browser-needed rationale).
@@ -484,7 +484,7 @@ func TestExecute_OpenTab_SSRFBlockedURL_NoTabConsumed(t *testing.T) {
 	assert.True(t, openRes.IsError, "a blocked scheme must error, not silently no-op")
 	assert.Contains(t, openRes.ForLLM, "blocked")
 
-	tabs, _, err := mgr.ListTabs(defaultSessionID)
+	tabs, _, err := mgr.ListTabs(testSessionID)
 	require.NoError(t, err)
 	assert.Empty(t, tabs, "a blocked url must not consume a tab — no browsing context should exist yet")
 }
@@ -574,14 +574,14 @@ func TestCloseTab_RealChromium_TargetGenuinelyClosedInChrome(t *testing.T) {
 	_, mgr := newPermissiveRegistry(t, cfg)
 
 	// --- Set up two real tabs and record Chrome's OWN target IDs for both. ---
-	tab0Ctx, err := mgr.Session(defaultSessionID)
+	tab0Ctx, err := mgr.Session(testSessionID)
 	require.NoError(t, err)
 	require.NoError(t, chromedp.Run(tab0Ctx, chromedp.Navigate(srv.URL)))
 	tab0ID := chromeTargetIDOf(t, tab0Ctx)
 
-	_, err = mgr.OpenTab(defaultSessionID)
+	_, err = mgr.OpenTab(testSessionID)
 	require.NoError(t, err)
-	tab1Ctx, err := mgr.Session(defaultSessionID)
+	tab1Ctx, err := mgr.Session(testSessionID)
 	require.NoError(t, err)
 	require.NoError(t, chromedp.Run(tab1Ctx, chromedp.Navigate(srv.URL+"/booked")))
 	tab1ID := chromeTargetIDOf(t, tab1Ctx)
@@ -602,12 +602,12 @@ func TestCloseTab_RealChromium_TargetGenuinelyClosedInChrome(t *testing.T) {
 	// created, never on how many targets the shared browser happens to hold.
 
 	// --- Case 1: close tab 0 out of 2 (the len(se.tabs) > 1 branch). ---
-	closedTabs, activeIdx, err := mgr.CloseTab(defaultSessionID, 0)
+	closedTabs, activeIdx, err := mgr.CloseTab(testSessionID, 0)
 	require.NoError(t, err)
 	require.Len(t, closedTabs, 1, "one tab remains after closing tab 0 out of 2")
 	require.Equal(t, 0, activeIdx)
 
-	survivorCtx, err := mgr.Session(defaultSessionID)
+	survivorCtx, err := mgr.Session(testSessionID)
 	require.NoError(t, err)
 	survivorID := chromeTargetIDOf(t, survivorCtx)
 	assert.Equal(t, tab1ID, survivorID, "the surviving tab must still be Chrome's original tab1 target")
@@ -625,12 +625,12 @@ func TestCloseTab_RealChromium_TargetGenuinelyClosedInChrome(t *testing.T) {
 	assert.True(t, afterFirstClose[tab1ID], "the surviving tab's real target must still be present")
 
 	// --- Case 2: close the LAST remaining tab (createFirstTab replacement). ---
-	closedTabs2, activeIdx2, err := mgr.CloseTab(defaultSessionID, 0)
+	closedTabs2, activeIdx2, err := mgr.CloseTab(testSessionID, 0)
 	require.NoError(t, err, "closing the last tab must succeed and produce a replacement (ADR-041 D3)")
 	require.Len(t, closedTabs2, 1, "ADR-041 D3: closing the last tab must never leave zero tabs")
 	require.Equal(t, 0, activeIdx2)
 
-	replacementCtx, err := mgr.Session(defaultSessionID)
+	replacementCtx, err := mgr.Session(testSessionID)
 	require.NoError(t, err)
 	replacementID := chromeTargetIDOf(t, replacementCtx)
 	assert.NotEqual(t, tab1ID, replacementID,

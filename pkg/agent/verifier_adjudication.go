@@ -311,18 +311,23 @@ func (al *AgentLoop) resolveVerifierWindowText(in JudgeCriteriaInput) string {
 	}
 }
 
-// sessionWindowText is the shared read+render tail for both the task-scope
-// and goal-scope FR-032 window feeds (Simplifier Q2: the two scopes'
-// wrappers below differ only in HOW they resolve sessionID — task scope
-// resolves it via the task store first, goal scope already has it in
-// GoalSessionID — the read+trim+render body is identical, so it lives here
-// once). extraLogFields are merged into the Warn log's structured fields on
-// a ReadTranscript failure (session_id and error are always included) — the
-// task-scope wrapper passes its task_id for correlation; the goal-scope
-// wrapper passes nil. Returns "" (never an error) on a read failure — window
-// evidence is a best-effort enrichment, never a hard requirement for
-// adjudication to proceed.
-func (al *AgentLoop) sessionWindowText(store *session.UnifiedStore, sessionID string, extraLogFields map[string]any) string {
+// sessionWindowText is the shared read+render tail for the task-scope,
+// goal-scope FR-032 window feeds AND the ADR-079 D1 /goal-compile window
+// feed (Simplifier Q2: the callers below differ only in HOW they resolve
+// sessionID and WHICH token budget applies — the read+trim+render body is
+// identical, so it lives here once). budgetTokens is the caller's own
+// resolved bound (the Judge passes effectiveVerifierWindowTokens(); the
+// compile feed, goalCompileWindowText in goal_compile_llm.go, passes
+// effectiveGoalCompileWindowTokens() — a mechanical parameterization, ADR-079
+// D1, that changes no existing caller's behavior since every pre-existing
+// call site still passes its own effectiveVerifierWindowTokens()).
+// extraLogFields are merged into the Warn log's structured fields on a
+// ReadTranscript failure (session_id and error are always included) — the
+// task-scope wrapper passes its task_id for correlation; the goal-scope and
+// compile wrappers pass nil. Returns "" (never an error) on a read failure —
+// window evidence is a best-effort enrichment, never a hard requirement for
+// adjudication (or compilation) to proceed.
+func (al *AgentLoop) sessionWindowText(store *session.UnifiedStore, sessionID string, budgetTokens int, extraLogFields map[string]any) string {
 	entries, err := store.ReadTranscript(sessionID)
 	if err != nil {
 		fields := map[string]any{"session_id": sessionID, "error": err.Error()}
@@ -332,22 +337,45 @@ func (al *AgentLoop) sessionWindowText(store *session.UnifiedStore, sessionID st
 		logger.WarnCF("agent", "verifier: could not read session for window feed", fields)
 		return ""
 	}
-	return renderVerifierWindowText(entries, al.effectiveVerifierWindowTokens())
+	return renderVerifierWindowText(entries, budgetTokens)
 }
 
 // goalSessionWindowText renders the transcript window for a chat /goal
 // verification (FR-032): the last N tokens of the session carrying the goal
-// condition, read from the goal agent's own session store. Returns "" (never
-// an error) on any missing/unresolvable input.
+// condition. Returns "" (never an error) on any missing/unresolvable input.
+//
+// STORE RESOLUTION (2026-09-06 UAT defect, judgment-first H-7 class): live
+// chat sessions are written to the SHARED store (al.GetSessionStore() —
+// whose own doc marks GetAgentStore as "legacy per-agent session access"),
+// but this feed used to read ONLY the per-agent legacy store. Because
+// ReadTranscript returns empty-with-no-error for a session directory that
+// does not exist in the store it's asked, the window came back silently
+// empty and the goal Judge fail-closed every criterion with "no evidence"
+// against a session whose transcript plainly held the reply — observed live
+// on the first end-to-end /goal UAT. The shared store is now consulted
+// first; the legacy per-agent store remains as a fallback for old installs
+// whose sessions still live there.
 func (al *AgentLoop) goalSessionWindowText(goalSessionID, agentID string) string {
 	if goalSessionID == "" || agentID == "" {
+		logger.WarnCF("agent", "verifier: goal window feed skipped — empty session or agent id",
+			map[string]any{"goal_session_id": goalSessionID, "agent_id": agentID})
 		return ""
+	}
+	if shared := al.GetSessionStore(); shared != nil {
+		if text := al.sessionWindowText(shared, goalSessionID, al.effectiveVerifierWindowTokens(), nil); text != "" {
+			return text
+		}
+		logger.WarnCF("agent", "verifier: goal window empty from the SHARED store — falling back to the legacy per-agent store",
+			map[string]any{"goal_session_id": goalSessionID, "agent_id": agentID})
+	} else {
+		logger.WarnCF("agent", "verifier: no shared session store — goal window falling back to the legacy per-agent store",
+			map[string]any{"goal_session_id": goalSessionID, "agent_id": agentID})
 	}
 	store := al.GetAgentStore(agentID)
 	if store == nil {
 		return ""
 	}
-	return al.sessionWindowText(store, goalSessionID, nil)
+	return al.sessionWindowText(store, goalSessionID, al.effectiveVerifierWindowTokens(), nil)
 }
 
 // taskSessionWindowText resolves and renders a task's own working-session
@@ -378,13 +406,21 @@ func (al *AgentLoop) taskSessionWindowText(taskID, assigneeAgentID string) strin
 	if t == nil || t.SessionID == "" {
 		return "" // task has no session yet — not an error, just nothing to feed
 	}
+	// Shared store first (see goalSessionWindowText's STORE RESOLUTION note —
+	// same 2026-09-06 UAT defect class; task sessions are written to the
+	// shared store too), legacy per-agent store as the old-install fallback.
+	if shared := al.GetSessionStore(); shared != nil {
+		if text := al.sessionWindowText(shared, t.SessionID, al.effectiveVerifierWindowTokens(), map[string]any{"task_id": taskID}); text != "" {
+			return text
+		}
+	}
 	store := al.GetAgentStore(assigneeAgentID)
 	if store == nil {
 		logger.WarnCF("agent", "verifier: no session store for assignee agent (task window feed)",
 			map[string]any{"task_id": taskID, "agent_id": assigneeAgentID})
 		return ""
 	}
-	return al.sessionWindowText(store, t.SessionID, map[string]any{"task_id": taskID})
+	return al.sessionWindowText(store, t.SessionID, al.effectiveVerifierWindowTokens(), map[string]any{"task_id": taskID})
 }
 
 // renderTranscriptEntriesForWindow converts raw session.TranscriptEntry
@@ -1019,7 +1055,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 		var missing []string // criteria the verifier RAN on but omitted → unjudgeable
 		for _, c := range proseCriteria {
 			if pc, found := byID[c.ID]; found {
-				out = append(out, task.CriterionVerdict{CriterionID: c.ID, Met: pc.Met, Reason: pc.Reason})
+				out = append(out, task.CriterionVerdict{CriterionID: c.ID, Met: pc.Met, Reason: pc.Reason, EvidenceQuote: pc.EvidenceQuote})
 			} else {
 				// The verifier turn ran and judged OTHER criteria but returned
 				// no verdict for THIS one → criterion_unjudgeable (ran, no

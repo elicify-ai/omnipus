@@ -34,12 +34,12 @@ import (
 )
 
 // mockLLMWithSingleToolCall returns a mock LLM server that emits one streaming
-// tool call (tool name "handoff", args: target jim) on the FIRST request, then
-// a plain text reply on all subsequent requests.
+// tool call (tool name "switch_agent", args: target jim) on the FIRST
+// request, then a plain text reply on all subsequent requests.
 //
-// The handoff tool is a core builtin so no special tool registration is needed.
-// The agent loop will execute it, call SwitchAgent, and the session's
-// ActiveAgentID will flip to "jim".
+// switch_agent (ADR-071 D4) is a core builtin so no special tool registration
+// is needed. The agent loop will execute it, call SwitchAgent, and the
+// session's ActiveAgentID will flip to "jim".
 //
 // On the second+ request (after handoff, when jim is processing), the mock
 // returns a second tool call — this is the "jim tool call" whose agent_id we
@@ -67,9 +67,10 @@ func mockLLMHandoffThenToolCall(tb testing.TB) *httptest.Server {
 
 		switch n {
 		case 1:
-			// First request (mia's turn): return handoff tool call to jim.
-			// The handoff tool requires {"agent_id": "jim", "context": "..."}.
-			writeMockToolCallStream(w, "hand_off", `{"agent_id":"jim","context":"regression test handoff"}`)
+			// First request (mia's turn): return a switch_agent tool call to
+			// jim (ADR-071 D4: hand_off/return_to_default merged into
+			// switch_agent(target, note)).
+			writeMockToolCallStream(w, "switch_agent", `{"target":"jim","note":"regression test handoff"}`)
 		case 2:
 			// Second request (mia wrapping up after handoff executes): return plain
 			// text so the turn finishes.

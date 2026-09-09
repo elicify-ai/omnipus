@@ -1,0 +1,66 @@
+<!doctype html><meta charset="utf-8"><title>Safari Opus-only replay</title>
+<body style="margin:0;padding:12px;background:#111;color:#eee;font:12px ui-monospace,monospace">
+<div style="font:600 14px system-ui;padding-bottom:8px">Opus-only replay — does real Safari decode the audio SourceBuffer?</div>
+<audio id="a" controls muted style="width:640px"></audio>
+<pre id="log" style="white-space:pre-wrap"></pre>
+<script>
+// Replays ONLY the audio SourceBuffer of a recording. If an audio-only element
+// reaches readyState 4 and its currentTime advances, the Opus stream is being
+// demuxed and decoded -- a signal not subject to WebKit's MediaElementSource
+// silencing on MSE-backed media (which is why the RMS tap read zero).
+const Q = new URLSearchParams(location.search);
+const RUN = Q.get('run') || 'yt-vp9';
+const log = m => { document.getElementById('log').textContent += m + '\n'; };
+const R = { name: 'safari-audio-' + RUN, run: RUN, ua: navigator.userAgent, ts: new Date().toISOString() };
+const wait = sb => sb.updating ? new Promise(r => sb.addEventListener('updateend', r, { once: true })) : Promise.resolve();
+
+(async () => {
+ try {
+  const man = await (await fetch(`/out/${RUN}/manifest.json`)).json();
+  const a = document.getElementById('a');
+  const audioSb = man.events.find(e => e.ev === 'addSourceBuffer' && /audio\//.test(e.mime));
+  R.audioMime = audioSb.mime;
+  R.isTypeSupported = MediaSource.isTypeSupported(audioSb.mime);
+  log(`audio mime: ${audioSb.mime}  isTypeSupported=${R.isTypeSupported}`);
+
+  const ms = new MediaSource();
+  a.src = URL.createObjectURL(ms);
+  await new Promise(r => ms.addEventListener('sourceopen', r, { once: true }));
+  const sb = ms.addSourceBuffer(audioSb.mime);
+  log('addSourceBuffer OK');
+
+  let n = 0, bytes = 0, err = null;
+  for (const e of man.events) {
+    if (e.ev !== 'append' || e.sb !== audioSb.sb || !e.file) continue;
+    try {
+      const buf = await (await fetch(`/out/${RUN}/${e.file}`)).arrayBuffer();
+      await wait(sb); sb.appendBuffer(buf); await wait(sb);
+      n++; bytes += buf.byteLength;
+    } catch (x) { err = `${x.name}: ${x.message}`; log('FAIL ' + err); break; }
+  }
+  R.appendsAccepted = n; R.bytesAccepted = bytes; R.firstErr = err;
+  try { if (ms.readyState === 'open') ms.endOfStream(); } catch (x) {}
+  log(`audio replay: ${n} appends, ${bytes} bytes, err=${err}`);
+
+  const buf = []; for (let i = 0; i < a.buffered.length; i++) buf.push([+a.buffered.start(i).toFixed(2), +a.buffered.end(i).toFixed(2)]);
+  R.buffered = buf; R.duration = a.duration; R.readyState = a.readyState;
+  R.audioTracks = a.audioTracks ? [...a.audioTracks].map(t => ({ kind: t.kind, label: t.label, language: t.language, enabled: t.enabled })) : 'unsupported';
+  log(`buffered=${JSON.stringify(buf)} duration=${a.duration} readyState=${a.readyState}`);
+  log(`audioTracks=${JSON.stringify(R.audioTracks)}`);
+
+  a.currentTime = 1;
+  try { await a.play(); } catch (x) { R.playRejected = x.message; log('play() rejected: ' + x.message); }
+  const t0 = a.currentTime, w0 = performance.now();
+  for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 250));
+  R.wallElapsed = +((performance.now() - w0) / 1000).toFixed(2);
+  R.mediaElapsed = +(a.currentTime - t0).toFixed(2);
+  R.playbackRate = +(R.mediaElapsed / R.wallElapsed).toFixed(3);
+  R.readyStateAfter = a.readyState; R.paused = a.paused;
+  R.error = a.error ? (a.error.code + ':' + a.error.message) : null;
+  log(`AUDIO PLAYBACK wall=${R.wallElapsed}s media=${R.mediaElapsed}s rate=${R.playbackRate} rs=${a.readyState} paused=${a.paused} err=${R.error}`);
+  log(JSON.stringify(R, null, 1));
+ } catch (e) { R.fatal = e.stack || String(e); log('FATAL ' + R.fatal); }
+ fetch('/report', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(R) })
+   .then(() => log('[reported]'));
+})();
+</script>

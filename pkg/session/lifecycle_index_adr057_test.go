@@ -40,7 +40,7 @@ func TestLifecycleParentIndex_MaintainedInsidePersist(t *testing.T) {
 	if err := s.Persist(&LifecycleRecord{
 		SessionID: childA, State: LifecycleQueued,
 		OwnerScopeKind: OwnerScopeHuman, ParentDurableKey: parent,
-		WorkspaceID: "ws-1", AgentID: "ray", LaunchProfile: LaunchProfileUtility,
+		WorkspaceID: "ws-1", AgentID: "ray",
 	}); err != nil {
 		t.Fatalf("persist childA: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestLifecycleParentIndex_MaintainedInsidePersist(t *testing.T) {
 	if err := s.Persist(&LifecycleRecord{
 		SessionID: childB, State: LifecycleQueued,
 		OwnerScopeKind: OwnerScopeHuman, ParentDurableKey: parent,
-		WorkspaceID: "ws-1", AgentID: "ava", LaunchProfile: LaunchProfileUtility,
+		WorkspaceID: "ws-1", AgentID: "ava",
 	}); err != nil {
 		t.Fatalf("persist childB: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestLifecycleParentIndex_MaintainedInsidePersist(t *testing.T) {
 	if err := s.Persist(&LifecycleRecord{
 		SessionID: childA, Generation: 1, State: LifecycleRunning,
 		OwnerScopeKind: OwnerScopeHuman, ParentDurableKey: parent,
-		WorkspaceID: "ws-1", AgentID: "ray", LaunchProfile: LaunchProfileUtility,
+		WorkspaceID: "ws-1", AgentID: "ray",
 	}); err != nil {
 		t.Fatalf("persist childA gen1: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestLifecycleParentIndex_UnattributedRecordNotIndexed(t *testing.T) {
 	if err := s.Persist(&LifecycleRecord{
 		SessionID: "orphan-11b", State: LifecycleQueued,
 		OwnerScopeKind: OwnerScopeHuman, ParentDurableKey: "",
-		WorkspaceID: "ws-1", AgentID: "ray", LaunchProfile: LaunchProfileUtility,
+		WorkspaceID: "ws-1", AgentID: "ray",
 	}); err != nil {
 		t.Fatalf("persist: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestLifecycleParentIndex_PruneTerminalRemovesFromIndex(t *testing.T) {
 	if err := s.Persist(&LifecycleRecord{
 		SessionID: child, State: LifecycleCompleted,
 		OwnerScopeKind: OwnerScopeHuman, ParentDurableKey: parent,
-		WorkspaceID: "ws-1", AgentID: "ray", LaunchProfile: LaunchProfileUtility,
+		WorkspaceID: "ws-1", AgentID: "ray",
 	}); err != nil {
 		t.Fatalf("persist: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestLifecycleParentIndex_SelfHealsStaleEntryOutsidePrune(t *testing.T) {
 	if err := s.Persist(&LifecycleRecord{
 		SessionID: child, State: LifecycleRunning,
 		OwnerScopeKind: OwnerScopeHuman, ParentDurableKey: parent,
-		WorkspaceID: "ws-1", AgentID: "ray", LaunchProfile: LaunchProfileUtility,
+		WorkspaceID: "ws-1", AgentID: "ray",
 	}); err != nil {
 		t.Fatalf("persist: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestLifecycleParentIndex_WarmsAcrossSimulatedRestart(t *testing.T) {
 		if err := first.Persist(&LifecycleRecord{
 			SessionID: id, State: LifecycleRunning,
 			OwnerScopeKind: OwnerScopeHuman, ParentDurableKey: parent,
-			WorkspaceID: "ws-1", AgentID: "ray", LaunchProfile: LaunchProfileUtility,
+			WorkspaceID: "ws-1", AgentID: "ray",
 		}); err != nil {
 			t.Fatalf("seed via first instance: %v", err)
 		}
@@ -296,7 +296,7 @@ func TestParentIndex_SteadyStateQueryNeverTouchesUnrelatedSessionFiles(t *testin
 		if err := s.Persist(&LifecycleRecord{
 			SessionID: id, State: LifecycleRunning,
 			OwnerScopeKind: OwnerScopeHuman, ParentDurableKey: parent,
-			WorkspaceID: "ws-1", AgentID: "ray", LaunchProfile: LaunchProfileUtility,
+			WorkspaceID: "ws-1", AgentID: "ray",
 		}); err != nil {
 			t.Fatalf("seed child %q: %v", id, err)
 		}
@@ -309,7 +309,7 @@ func TestParentIndex_SteadyStateQueryNeverTouchesUnrelatedSessionFiles(t *testin
 		if err := s.Persist(&LifecycleRecord{
 			SessionID: id, State: LifecycleRunning,
 			OwnerScopeKind: OwnerScopeHuman, // deliberately no ParentDurableKey — unrelated to `parent`
-			WorkspaceID:    "ws-1", AgentID: "ray", LaunchProfile: LaunchProfileUtility,
+			WorkspaceID:    "ws-1", AgentID: "ray",
 		}); err != nil {
 			t.Fatalf("seed poison %q: %v", id, err)
 		}

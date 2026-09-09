@@ -63,6 +63,16 @@ func TestBuildEnabledRefMap_IncludesNonChannelRefsWhenEnabled(t *testing.T) {
 		{Name: "clawhub", Type: "clawhub", Enabled: true, AuthTokenRef: "CLAWHUB_REF"},
 		{Name: "github", Type: "github", Enabled: false, TokenRef: "GITHUB_REF"},
 	}
+	// BUG 4 (architect finding): MCP server env-var refs must be gated at
+	// BOTH the per-server level (srv.Enabled) and the global kill-switch
+	// level (cfg.Tools.MCP.Enabled) — a server marked Enabled under a
+	// globally-disabled tools.mcp.enabled never actually connects, so its
+	// ref must not read as "in use" any more than a disabled channel's does.
+	cfg.Tools.MCP.Enabled = true
+	cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
+		"mcp-enabled":  {Enabled: true, Type: "stdio", Command: "npx", EnvRefs: map[string]string{"TOKEN": "MCP_ENABLED_REF"}},
+		"mcp-disabled": {Enabled: false, Type: "stdio", Command: "npx", EnvRefs: map[string]string{"TOKEN": "MCP_DISABLED_REF"}},
+	}
 
 	m := buildEnabledRefMap(cfg)
 
@@ -77,6 +87,27 @@ func TestBuildEnabledRefMap_IncludesNonChannelRefsWhenEnabled(t *testing.T) {
 
 	assert.True(t, m["CLAWHUB_REF"], "enabled marketplace ref must be in the map")
 	assert.False(t, m["GITHUB_REF"], "disabled marketplace ref must NOT be in the map")
+
+	assert.True(t, m["MCP_ENABLED_REF"], "an enabled MCP server's env ref must be in the map")
+	assert.False(t, m["MCP_DISABLED_REF"], "a disabled MCP server's env ref must NOT be in the map")
+}
+
+// TestBuildEnabledRefMap_MCPGlobalKillSwitchGatesAllServers proves the second
+// half of the MCP gate: even a per-server Enabled=true entry must NOT read as
+// "in use" when the global tools.mcp.enabled kill-switch is off, mirroring
+// ReconcileMCP's own desired-set gating (pkg/agent/loop_mcp.go: mcpCfg.Enabled
+// gates the whole loop before any per-server Enabled check).
+func TestBuildEnabledRefMap_MCPGlobalKillSwitchGatesAllServers(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Tools.MCP.Enabled = false
+	cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
+		"mcp-enabled": {Enabled: true, Type: "stdio", Command: "npx", EnvRefs: map[string]string{"TOKEN": "MCP_REF"}},
+	}
+
+	m := buildEnabledRefMap(cfg)
+
+	assert.False(t, m["MCP_REF"],
+		"an MCP server's ref must not be 'in use' when the global tools.mcp.enabled kill-switch is off")
 }
 
 // TestRefreshConfigAndRewireServices_RejectsOnCorruptedEnabledChannelCredential

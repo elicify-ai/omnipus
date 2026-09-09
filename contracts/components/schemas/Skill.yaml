@@ -78,3 +78,14 @@ properties:
       Sourced from the SKILL.md frontmatter `argument-hint:` field (ClawHub convention).
       Absent when the skill does not declare a hint.
     example: "[topic]"
+  last_invoked:
+    type: string
+    format: date-time
+    nullable: true
+    description: >
+      ADR-072 D3.1: ISO 8601 timestamp of the most recent time this skill was
+      requested by name through the Skill tool's load path (pkg/audit.Logger
+      ::LastInvokedForSkill — both "loaded" and "denied" load outcomes count,
+      a search match does not). Null when the skill has never been invoked by
+      name, or its invocation history could not be determined.
+    example: "2026-08-15T10:00:00Z"

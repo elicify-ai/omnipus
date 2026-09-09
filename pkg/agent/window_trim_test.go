@@ -101,7 +101,7 @@ func windowAfterTrim(t *testing.T, al *AgentLoop, sessionKey string) ([]provider
 	t.Helper()
 	agent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, agent)
-	result, ok := al.windowTrim(agent, sessionKey)
+	result, ok := al.windowTrim(agent, "", sessionKey)
 	window := agent.Sessions.GetHistory(sessionKey)
 	return window, result, ok
 }
@@ -213,7 +213,7 @@ func TestWindowTrim_CutsOnTurnBoundary(t *testing.T) {
 
 		// First trim.
 		agent := al.GetRegistry().GetDefaultAgent()
-		al.windowTrim(agent, sk)
+		al.windowTrim(agent, "", sk)
 
 		// Second trim to exercise Skip>0 path.
 		window, _, _ := windowAfterTrim(t, al, sk)
@@ -338,7 +338,7 @@ func TestWindowTrim_NoDroppedMarker(t *testing.T) {
 
 	agent := al.GetRegistry().GetDefaultAgent()
 
-	al.windowTrim(agent, sk)
+	al.windowTrim(agent, "", sk)
 
 	window := joinWindowContent(agent.Sessions.GetHistory(sk))
 	assert.NotContains(t, window, "Emergency compression dropped",
@@ -407,7 +407,7 @@ func TestWindowTrim_RecallSpanDropAloneReturnsOK(t *testing.T) {
 	require.NotNil(t, agent)
 	windowBefore := agent.Sessions.GetHistory(sk)
 
-	result, ok := al.windowTrim(agent, sk)
+	result, ok := al.windowTrim(agent, "", sk)
 
 	assert.True(t, ok,
 		"windowTrim must report ok=true when dropping the recall span alone "+
@@ -466,6 +466,7 @@ func TestModelSwitch_ReWindowsNoSummary(t *testing.T) {
 	updatedAgent, err := al.handleModelSwitch(
 		context.Background(),
 		agent,
+		"",
 		sk,
 		newModel,
 		bus.InboundMessage{},
@@ -517,6 +518,7 @@ func TestModelSwitch_ReWindowsNoSummary(t *testing.T) {
 		updated2, err2 := al2.handleModelSwitch(
 			context.Background(),
 			ag2,
+			"",
 			sk2,
 			newSmallModel,
 			bus.InboundMessage{},
@@ -560,7 +562,7 @@ func TestModelSwitch_UpsizeKeepsSkipForward(t *testing.T) {
 	require.NoError(t, agent.Sessions.Save(sk))
 
 	// Trim once so Skip > 0.
-	_, ok := al.windowTrim(agent, sk)
+	_, ok := al.windowTrim(agent, "", sk)
 	require.True(t, ok, "first trim must succeed")
 	windowBefore := agent.Sessions.GetHistory(sk)
 	beforeLen := len(windowBefore)
@@ -573,6 +575,7 @@ func TestModelSwitch_UpsizeKeepsSkipForward(t *testing.T) {
 	updatedAgent, err := al.handleModelSwitch(
 		context.Background(),
 		agent,
+		"",
 		sk,
 		largerModel,
 		bus.InboundMessage{},
@@ -692,7 +695,7 @@ func TestArchive_FloorPathPreservesEvicted(t *testing.T) {
 	beforeArchive := archiveLineCount(t, al, sk)
 	require.Equal(t, len(history), beforeArchive, "archive must start with all messages")
 
-	_, ok := al.windowTrim(al.GetRegistry().GetDefaultAgent(), sk)
+	_, ok := al.windowTrim(al.GetRegistry().GetDefaultAgent(), "", sk)
 	require.True(t, ok, "floor-path trim must return ok=true")
 
 	afterArchive := archiveLineCount(t, al, sk)
@@ -727,7 +730,7 @@ func TestArchive_ModelSwitchPreservesEvicted(t *testing.T) {
 	require.NoError(t, agent.Sessions.Save(sk))
 
 	// First eviction: advance Skip > 0.
-	_, ok := al.windowTrim(agent, sk)
+	_, ok := al.windowTrim(agent, "", sk)
 	require.True(t, ok, "first trim must succeed")
 
 	archiveAfterFirstTrim := archiveLineCount(t, al, sk)
@@ -739,7 +742,7 @@ func TestArchive_ModelSwitchPreservesEvicted(t *testing.T) {
 	al.cfg.Context.DefaultContextWindow = intPtr(1000)
 	al.mu.Unlock()
 
-	_, err := al.handleModelSwitch(context.Background(), agent, sk, newModel, bus.InboundMessage{})
+	_, err := al.handleModelSwitch(context.Background(), agent, "", sk, newModel, bus.InboundMessage{})
 	require.NoError(t, err)
 
 	archiveAfterSwitch := archiveLineCount(t, al, sk)
@@ -799,7 +802,7 @@ func TestArchive_AppendOnlyWithAttachStep(t *testing.T) {
 
 	h.ag.ContextWindow = 2000
 	h.ag.MaxTokens = 200
-	_, ok := h.al.windowTrim(h.ag, key)
+	_, ok := h.al.windowTrim(h.ag, "", key)
 	require.True(t, ok, "trim must succeed")
 	windowAfterTrim := len(h.ag.Sessions.GetHistory(key))
 	require.Less(t, windowAfterTrim, 12, "trim must have advanced Skip")
@@ -863,7 +866,7 @@ func TestWindowTrim_AlreadyFitsEvictsNothing(t *testing.T) {
 	before := agent.Sessions.GetHistory(sessionKey)
 	require.Len(t, before, len(history), "precondition: the whole window is live")
 
-	result, ok := al.windowTrim(agent, sessionKey)
+	result, ok := al.windowTrim(agent, "", sessionKey)
 
 	assert.False(t, ok, "a window that already fits must not report an eviction")
 	assert.True(t, result.NothingToTrim,

@@ -1,7 +1,7 @@
 // Humanized, sentence-case labels for tool-call chips.
 //
 // Tool IDs use snake_case (`recall_memory`, `browser_navigate`,
-// `create_task`) and special verbs (`hand_off`). The collapsed chip
+// `create_task`) and special verbs (`switch_agent`). The collapsed chip
 // should show a readable label; the expanded chip still shows the raw ID so
 // power users see the real tool name.
 //
@@ -18,12 +18,18 @@ const EXPLICIT_LABELS: Record<string, string> = {
   recall: 'Recall memory',
   // New canonical names
   run_retrospective: 'Retrospective',
-  hand_off: 'Hand off',
+  // ADR-071 D4: `hand_off` and `return_to_default` are merged into one
+  // tool, `switch_agent(target, note?)` — see §5.1 of the ADR.
+  switch_agent: 'Switch agent',
   // ADR-036: `delegate` replaces spawn / run_subagent / check_spawn_status
   // (one unified delegation tool — see §3.2).
   delegate: 'Delegate task',
-  // Legacy names (backward compat with old session transcripts)
+  // Legacy names (backward compat with old session transcripts). `hand_off`
+  // and `handoff` were the pre-ADR-071 names (`return_to_default`'s literal
+  // is not mapped here — the generic fallback already renders it as "Return
+  // to default", so no explicit entry is needed for it to stay readable).
   retrospective: 'Retrospective',
+  hand_off: 'Hand off',
   handoff: 'Hand off',
   run_subagent: 'Run subagent',
   check_spawn_status: 'Check spawn status',
@@ -98,11 +104,16 @@ const EXPLICIT_LABELS: Record<string, string> = {
   write_agent_metadata: 'Write agent metadata',
   // Token usage
   get_usage: 'Get token usage',
-  // Tool discovery — canonical loader tool (renamed tools → load_tool, 2026-06-26).
-  // The canonical name is `load_tool`; it finds and loads tool schemas on demand.
-  load_tool: 'Find & load tools',
+  // Tool discovery — canonical loader tool (renamed tools → load_tool,
+  // 2026-06-26; renamed load_tool → ToolSearch, ADR-071 D1).
+  // The canonical name is `ToolSearch`; it finds and loads tool schemas on demand.
+  ToolSearch: 'Find & load tools',
   // Legacy names kept for backward compat with old session transcripts only.
-  // Do NOT use these names for new tool calls — the canonical name is `load_tool`.
+  // Do NOT use these names for new tool calls — the canonical name is
+  // `ToolSearch`. `load_tool` is retained ONLY so a conversation transcript
+  // recorded before the ADR-071 D1 rename still renders a readable label
+  // instead of falling through to the raw identifier (FR-015).
+  load_tool: 'Find & load tools',
   /* retired: search_tools_bm25 → 'Search tools (BM25)' */
   /* retired: search_tools_regex → 'Search tools (regex)' */
   /* retired: tools → 'Tools (search & load)' (§-consolidation intermediate name) */

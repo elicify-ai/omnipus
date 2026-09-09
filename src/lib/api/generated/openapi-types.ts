@@ -3181,9 +3181,9 @@ export interface components {
          * @description Resolve the DOM element at a point in the live browser so the SPA can attach the element's text/HTML as context when a user annotates a spot. Coordinates are device (CSS) pixels of the WebRTC video frame. Best-effort — see ADR-039.
          */
         BrowserInspectRequest: {
-            /** @description Browser session id (context/correlation; the live tab is the agent's default). */
+            /** @description A BROWSER session id, carried for context/correlation and logging only. Unlike BrowserAttachFrame's and BrowserWebRTCOfferFrame's session_id this is NOT a chat session id and it gains no workspace semantics under ADR-075: browser_inspect resolves the browsing context from agent_id ALONE, so an agent that belongs to more than one workspace is REFUSED here (ADR-075 FR-033) rather than borrowing whichever workspace the live panel happened to resolve. */
             session_id: string;
-            /** @description Agent whose BrowserManager owns the live tab. */
+            /** @description The agent to resolve the browsing context from. This is the ONLY input that selects a browser on this endpoint, and the browser it selects belongs to the agent's workspace, not to the agent (ADR-075 FR-001). */
             agent_id: string;
             /** @description Device (CSS) x of the point to inspect. */
             x: number;
@@ -3649,6 +3649,13 @@ export interface components {
              * @enum {string}
              */
             type?: "chat" | "task" | "channel";
+            /**
+             * @description The workspace this session belongs to. Optional; omit it for a session that belongs to no workspace (the global/inbox chat), which is NOT the same as a default — an absent value stays absent and is never guessed at.
+             *     Stamped straight onto the new session's meta, so a session created for a workspace chat carries its workspace from birth rather than from its first message. That gap is what ADR-075 FR-017 tripped over: the live browser panel reads the workspace off the attaching chat session's own meta, server-side, and the SPA's "Open browser" launcher creates its session here — with no workspace — before any message has been sent. An agent on more than one workspace's team was therefore refused (FR-033) and told to open the panel from a chat belonging to the workspace it meant, which is exactly where the click had come from.
+             *     Must name a workspace that exists (400 otherwise). Membership is NOT checked here: the value is a preference, and every consumer that grants access on it re-checks membership itself — browser.ResolveBrowsingKeyForAgent honours it only when the agent really is on that workspace's team.
+             * @example 01M1H9JS5EHRYWDBM0BYA45NFM
+             */
+            workspace_id?: string;
         };
         /** @description Body for PUT /sessions/{id}. Renames a session. */
         SessionRenameRequest: {
@@ -5273,7 +5280,7 @@ export interface components {
              */
             effective_policy: "allow" | "ask" | "deny";
             /**
-             * @description How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via load_tool; "infra" = always-callable discovery tool (load_tool / search_tools_*) that drives the manifest mechanism itself and never appears in the manifest block.
+             * @description How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via ToolSearch; "infra" = always-callable discovery tool (ToolSearch) that drives the manifest mechanism itself and never appears in the manifest block.
              * @example full
              * @enum {string}
              */
@@ -5578,7 +5585,8 @@ export interface components {
              */
             timestamp: string;
             /**
-             * @description Event type identifier. Well-known values: tool_call, exec, file_op, llm_call, policy_eval, rate_limit, ssrf, startup, shutdown. Custom values are permitted for extensibility — must match ^[a-z_]+$ (lowercase letters and underscores only).
+             * @description Event type identifier. Two naming families coexist and BOTH are legal: the original flat names (tool_call, exec, file_op, llm_call, policy_eval, rate_limit, ssrf, startup, shutdown) and the dot-separated hierarchical names that every newer event uses (skill.call, onboarding.admin_created, turn.cancel.attempt, browser.webrtc.stream_started, workspace.create, …). Custom values are permitted for extensibility — must match ^[a-z_.]+$ (lowercase letters, underscores and dots only).
+             *     The dot is REQUIRED here and must not be removed (issue #667). Over 50 dot-separated names are declared in pkg/audit (audit.go, events.go) and emitted from production handlers, and more are registered as bare literals in pkg/audit.IsValidEventName for back-compat with audit files written before the project→workspace and milestone→task renames. Audit logs are append-only history that cannot be rewritten — the HMAC chain (pkg/audit/hmac.go) is computed over each entry's canonical JSON INCLUDING this field, so renaming events on disk would invalidate every chain link. A pattern that rejects dots therefore does not "validate" anything; it makes AuditLogResponse's `entries` array fail as a whole (src/lib/api.ts::request throws ApiSchemaError on the response, it does not drop single rows), blanking Settings → Security → Audit Log on any real install. Regression guard: pkg/audit/event_name_contract_test.go checks every declared event name against this very pattern, read from this file.
              * @example tool_call
              */
             event: string;
@@ -6022,19 +6030,24 @@ export interface components {
         };
         /**
          * PerformanceSettings
-         * @description Agent concurrency and fan-out settings returned by GET /api/v1/performance. Controls the max-parallel gate for task/subagent dispatch — the SINGLE authority for agent concurrency (concurrency-gate consolidation, 2026-08-04).
+         * @description Agent concurrency and fan-out settings returned by GET /api/v1/performance. Concurrency is bounded by LIVE available memory at the moment of admission, not by a number precomputed at startup.
          */
         PerformanceSettings: {
             /**
-             * @description Maximum number of tasks/subagents that may run concurrently on the dispatch path. 0 (on the wire, surfaced here as the resolved effective value — see effective_max_parallel_agents) means "use the auto-detected default", sized from available memory (availableMemory / ~3.5 MB per agent), floored so a small box still functions. There is NO policy ceiling: an explicitly configured value is always honored as given (never silently clamped — only a floor applies). A configured value is bounded only by a documented PHYSICAL OS-thread-safety ceiling (around 2000) when left on auto-detect; an explicit value above that ceiling is still honored in full, with a server-side warning logged rather than the value being lowered. Overridden by the OMNIPUS_MAX_PARALLEL_AGENTS env var.
+             * @description Maximum number of tasks/subagents that may run concurrently on the dispatch path. There is no longer a computed default: 0 on disk means "not configured", and is surfaced here as the resolved effective value (see effective_max_parallel_agents and max_parallel_agents_configured) because 0 is an internal sentinel that is never a real concurrency value. When nothing is configured, concurrency is bounded by live available memory at the moment each agent turn is admitted, and the number reported here is a PHYSICAL OS-thread-safety backstop rather than an estimate of what this machine can run. There is NO policy ceiling: an explicitly configured value is always honored as given (never silently clamped — only a floor of 1 applies), including a value above the physical backstop, which is honored in full with a server-side warning logged rather than being lowered. Overridden by the OMNIPUS_MAX_PARALLEL_AGENTS env var.
              * @example 4
              */
             max_parallel_agents?: number;
             /**
-             * @description The resolved value actually in use (after applying the auto-detect memory-based heuristic or env-var override). Always present in responses; absent in requests.
+             * @description The resolved value actually in use. When max_parallel_agents_configured is true this is the operator's own value (from config or the OMNIPUS_MAX_PARALLEL_AGENTS env var). When it is false, this is the physical OS-thread-safety backstop and NOT a capacity recommendation — a client must not present it as one; render the automatic, memory-bounded state instead. Always present in responses; absent in requests.
              * @example 4
              */
             effective_max_parallel_agents?: number;
+            /**
+             * @description Whether max_parallel_agents was actually set by an operator, in config.json or via the OMNIPUS_MAX_PARALLEL_AGENTS env var. false means nothing is configured and concurrency is bounded by live available memory; effective_max_parallel_agents then carries the physical backstop, which is not a number to show an operator as a recommendation. This field exists because the two cases are otherwise indistinguishable on the wire — max_parallel_agents substitutes the effective value whenever the configured value is below the schema floor, so an unconfigured host looks exactly like an explicitly configured one. Always present in responses; absent in requests.
+             * @example false
+             */
+            max_parallel_agents_configured?: boolean;
             /**
              * @description Tool-loading mode. true (default) — agents load tools on demand to keep each message small (the compressed tool manifest); a load step is required before a non-core tool is callable. false — every allowed tool is sent on every message with no loading step (more tokens per message). Maps to tools.manifest.compressed. Always present in responses.
              * @example true
@@ -6766,6 +6779,12 @@ export interface components {
              * @example [topic]
              */
             argument_hint?: string;
+            /**
+             * Format: date-time
+             * @description ADR-072 D3.1: ISO 8601 timestamp of the most recent time this skill was requested by name through the Skill tool's load path (pkg/audit.Logger ::LastInvokedForSkill — both "loaded" and "denied" load outcomes count, a search match does not). Null when the skill has never been invoked by name, or its invocation history could not be determined.
+             * @example 2026-08-15T10:00:00Z
+             */
+            last_invoked?: string | null;
         };
         /** @description A single slash command available on a given surface, as returned by GET /api/v1/commands. The web chat palette renders these. Aliases and deprecated command names are NOT returned as separate entries. */
         SlashCommand: {
@@ -8340,8 +8359,8 @@ export interface components {
              * @example false
              */
             is_join?: boolean;
-            /** @description Optional initial acceptance criteria (Definition of Done, ADR-049 D2/D5/FR-3). Agent tool paths reject a create with zero criteria; human/UI creation may leave this empty (soft tier). */
-            criteria?: components["schemas"]["AcceptanceCriterion"][];
+            /** @description Optional initial acceptance criteria (Definition of Done, ADR-049 D2/D5/FR-3). Agent tool paths reject a create with zero criteria; human/UI creation may leave this empty (soft tier). Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload. */
+            criteria?: components["schemas"]["AcceptanceCriterionInput"][];
             /**
              * @description Per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9). Null/absent inherits the global `PlanningConfig.task_max_attempts` default (3).
              * @example 5
@@ -8456,8 +8475,8 @@ export interface components {
              * @example false
              */
             is_join?: boolean;
-            /** @description Replacement acceptance-criteria set (ADR-049 D2/D5/FR-3) — replaces the current `criteria` atomically. Agent tool paths reject an update that reduces the count below 1. */
-            criteria?: components["schemas"]["AcceptanceCriterion"][];
+            /** @description Replacement acceptance-criteria set (ADR-049 D2/D5/FR-3) — replaces the current `criteria` atomically. Agent tool paths reject an update that reduces the count below 1. Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload. */
+            criteria?: components["schemas"]["AcceptanceCriterionInput"][];
             /**
              * @description New per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9). Null clears the override (inherit the global default).
              * @example 5
@@ -9663,6 +9682,21 @@ export interface components {
              * @example mounting "/Users/operator" contains this Omnipus installation's own data directory (/Users/operator/.omnipus) — the installation's own secrets remain protected independently of this mount, but every OTHER file under /Users/operator becomes writable by any agent on this workspace
              */
             warning?: string;
+            /**
+             * @description ADR-072 D1.2/FR-074/FR-074a: how many project skills this mount's recognised skills directory contributes, as counted by pkg/skills/mount_threshold.go's EvaluateMountSkillsDisclosure at mount-creation time. Present only when the mount carries a recognised skills directory with at least one skill — absent (not zero) when the mount has none, mirroring `warning`'s own absent-not-empty convention.
+             * @example 3
+             */
+            skills_count?: number;
+            /**
+             * @description FR-074a: states, every time skills_count is present — even a single-digit count — that this mount's skills directory grants agents new, auto-loadable instructions in this workspace, not merely files sitting in the repository. Independent of skills_threshold_warning: set whenever skills_count is present, regardless of whether the threshold was exceeded. Absent exactly when skills_count is absent.
+             * @example This mount's skills directory grants 3 skills to every agent working in this workspace as auto-loadable agent instructions — not just files sitting in the repository. Any agent acting here may call and run them, with no separate grant needed.
+             */
+            skills_grants_message?: string;
+            /**
+             * @description FR-074: present only when skills_count exceeds the mount-add-time threshold (pkg/skills/mount_threshold.go's DefaultMountSkillsWarnThreshold, spec default 500) — states the count and its per-turn consequence. The mount is still created either way (FR-075): this is information, never a refusal. Absent when the threshold was not exceeded, including whenever skills_count itself is absent.
+             * @example This mount would contribute 5000 skills — well beyond a plausible hand-authored collection (threshold: 500). Every one of them will appear in the skills menu on every turn in this workspace. The mount is being created anyway; you may want to confirm this isn't a vendored or generated tree before relying on it.
+             */
+            skills_threshold_warning?: string;
         };
         /**
          * Plan
@@ -9895,8 +9929,8 @@ export interface components {
              * @example jim
              */
             owner_agent_id: string;
-            /** @description Plan-level Definition of Done. Agent-created plans require at least one criterion before approval (strict tier, ADR D5); human/UI creation may leave this empty (soft tier — the plan judge then evaluates against `title` + `goal`). */
-            dod?: components["schemas"]["AcceptanceCriterion"][];
+            /** @description Plan-level Definition of Done. Agent-created plans require at least one criterion before approval (strict tier, ADR D5); human/UI creation may leave this empty (soft tier — the plan judge then evaluates against `title` + `goal`). Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload. */
+            dod?: components["schemas"]["AcceptanceCriterionInput"][];
             /**
              * @description ADR-053 §Contract Surface — persisted planning rationale (the "why" behind the plan's decomposition, e.g. the write-set/stream split chosen and the join points authored). Plan-lint and the owner-loop correction flow read this alongside `write_set`/`stream`/`is_join` on member tasks. Optional — absent for simple plans with no parallel-stream reasoning to record.
              * @example Split into two lint-disjoint worktree streams (schema + client) that converge at a single merge member, per the shard+assemble topology.
@@ -9951,8 +9985,8 @@ export interface components {
              * @example jim
              */
             owner_agent_id?: string;
-            /** @description Replacement Definition of Done set (replaces the current `dod` atomically). */
-            dod?: components["schemas"]["AcceptanceCriterion"][];
+            /** @description Replacement Definition of Done set (replaces the current `dod` atomically). Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload. */
+            dod?: components["schemas"]["AcceptanceCriterionInput"][];
             /**
              * @description Per-plan bounds overrides, MERGED field-by-field into the plan's stored bounds. A field present here is written; a field ABSENT here keeps its stored value, and omitting `bounds` entirely leaves all of them untouched.
              *
@@ -10004,6 +10038,18 @@ export interface components {
              */
             kind: "check" | "prose" | "behavior";
             /**
+             * @description ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+             * @example boolean
+             * @enum {string}
+             */
+            judgment: "boolean" | "quantitative" | "artifact";
+            /**
+             * @description ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+             * @example floor
+             * @enum {string}
+             */
+            provenance?: "stated" | "workspace" | "floor" | "inferred";
+            /**
              * @description The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
              * @example All new pkg/plan tests pass
              */
@@ -10022,6 +10068,99 @@ export interface components {
                 expected_exit_code: number;
             };
             /** @description Present iff `kind == behavior` (400 if present with a different `kind` — no mixed shape); required iff `kind == behavior` (400 if absent). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated). */
+            behavior?: {
+                /**
+                 * @description Name of the tool whose successful-call count is checked.
+                 * @example bash
+                 */
+                tool: string;
+                /**
+                 * @description Minimum number of successful calls of `tool` required within `scope`.
+                 * @default 1
+                 * @example 1
+                 */
+                min_count: number;
+                /**
+                 * @description Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
+                 * @example 5
+                 */
+                max_count?: number;
+                /**
+                 * @description Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+                 * @default task_session
+                 * @example task_session
+                 * @enum {string}
+                 */
+                scope: "attempt" | "task_session";
+            };
+            /** @description Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting. */
+            author: {
+                /**
+                 * @description Whether this criterion was authored by an agent or a human user.
+                 * @example agent
+                 * @enum {string}
+                 */
+                kind: "agent" | "user";
+                /**
+                 * @description Agent ID or username of the author.
+                 * @example jim
+                 */
+                id: string;
+            };
+            /**
+             * @description Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+             * @example pending
+             * @enum {string}
+             */
+            status: "pending" | "met" | "unmet";
+        };
+        /**
+         * AcceptanceCriterionInput
+         * @description Authoring-time (request) shape of a Definition-of-Done criterion — ADR-074 D2. Identical field set to `AcceptanceCriterion` (the canonical response schema), except `kind` is optional here: when omitted, the server infers it from the payload (a `check` payload implies `kind: check`, a `behavior` payload implies `kind: behavior`, no payload implies `kind: prose`). A criterion omitting `kind` while carrying BOTH payloads is rejected 400 (ambiguous), and an EXPLICIT `kind` mismatching its payload stays a 400 (shape rules unchanged). The server always persists an explicit kind, so every criterion in a response carries one.
+         */
+        AcceptanceCriterionInput: {
+            /**
+             * @description Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
+             * @example 550e8400-e29b-41d4-a716-446655440010
+             */
+            id?: string;
+            /**
+             * @description `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. OPTIONAL on this input shape (ADR-074 D2): when omitted, inferred from the payload — `check` payload => `check`, `behavior` payload => `behavior`, no payload => `prose`. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+             * @example check
+             * @enum {string}
+             */
+            kind?: "check" | "prose" | "behavior";
+            /**
+             * @description ADR-080 D-TYPES. What SHAPE of claim this criterion is — `boolean`, `quantitative`, or `artifact` — orthogonal to `kind` (the verification MECHANISM). OPTIONAL on this input shape: when omitted, the server infers it from the effective `kind` via `task.InferJudgment` — `check` => `boolean`, `behavior` => `quantitative`, `prose` => `boolean` (the default for the honestly-subjective catch-all). An EXPLICIT `judgment` that mismatches a technical `kind` (e.g. `judgment: artifact` with `kind: check`) is a 400. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+             * @example boolean
+             * @enum {string}
+             */
+            judgment?: "boolean" | "quantitative" | "artifact";
+            /**
+             * @description ADR-080 D-DOD. The authority layer this criterion (typically a DoD item) was derived from. ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored elsewhere. Never required.
+             * @example floor
+             * @enum {string}
+             */
+            provenance?: "stated" | "workspace" | "floor" | "inferred";
+            /**
+             * @description The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
+             * @example All new pkg/plan tests pass
+             */
+            text: string;
+            /** @description Present iff the effective kind is `check` (400 if present with another effective kind — no mixed shape). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed. */
+            check?: {
+                /**
+                 * @description Shell command run through the assignee's `bash` tool.
+                 * @example go test ./pkg/plan/... -run TestPlanStore_CreatePersists
+                 */
+                command: string;
+                /**
+                 * @description Exit code that counts as PASS (`met`) for this check.
+                 * @example 0
+                 */
+                expected_exit_code: number;
+            };
+            /** @description Present iff the effective kind is `behavior` (400 if present with another effective kind — no mixed shape). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated). */
             behavior?: {
                 /**
                  * @description Name of the tool whose successful-call count is checked.
@@ -10205,6 +10344,11 @@ export interface components {
              * @example go test output shows 3 failing tests; criterion requires all passing.
              */
             reason: string;
+            /**
+             * @description ADR-074 D7 — the verbatim evidence excerpt the judge grounded this verdict in, copied out of the UNTRUSTED-DATA region of its input (diff/window/claim) per the rubric's quote-before-verdict instruction. Optional and empty-safe: absent/empty on every fail-closed verdict, every pre-D7 persisted verdict, and installs whose Judge soul predates the quote-emitting rubric. Truncated rune-safe to 500 code points at the parser. UNTRUSTED CONTENT — any re-emission into another agent's prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as inert quoted text.
+             * @example --- PASS: TestPlanStore_CreatePersists (0.02s)
+             */
+            evidence_quote?: string;
         };
         /**
          * PlanApproveError
@@ -11110,12 +11254,6 @@ export interface components {
              */
             is_3p: boolean;
             /**
-             * @description `utility` — visibility=outcome, steering=none, child_messaging= progress_only (fire-and-collect). `specialist` — visibility= checkpoints, steering=parent_and_human, child_messaging=full (a 3P child on this profile still degrades to fire-and-collect). Illegal combinations are rejected at `delegate.run`, not schema-enforced here (see `DelegateRunAction`).
-             * @example specialist
-             * @enum {string}
-             */
-            launch_profile: "utility" | "specialist";
-            /**
              * @description The `message_id` of the most recent `SessionMessageCheckpoint` this session emitted, or the go-git `commit_ref` it carried. Used for boot-sweep recover-to-checkpoint (§5).
              * @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WF
              */
@@ -11201,6 +11339,8 @@ export interface components {
             definition?: string;
             /** @description REUSED unchanged (S1) — `kind: check` is the machine-checkable ladder rung ("machine" = `check`), `behavior` the deterministic tool-call-log rung, `prose` the subjective Judge rung. */
             criteria: components["schemas"]["AcceptanceCriterion"][];
+            /** @description ADR-080 D-DOD — the goal's Definition of Done, DISTINCT from `criteria`: generic standing quality gates (e.g. no secrets in the output) vs. outcome-specific checks. `AcceptanceCriterion`-shaped (judged identically) but modelled as its own array, mirroring the existing `Plan.dod` precedent — never mixed into `criteria`. REQUIRED with `minItems: 1` — the compiler's built-in floor layer guarantees at least one item on every newly-compiled goal. A pre-ADR-080 persisted goal with no `dod` is backfilled with the built-in floor DoD at load time (before this schema validates), so a legacy goal always satisfies `minItems: 1` too. The Judge evaluates `criteria` UNION `dod` together. */
+            dod: components["schemas"]["AcceptanceCriterion"][];
             /**
              * @description Attempt ceiling before the goal loop wakes the owner (3 native / 6 default per session_messaging config, restart-gated).
              * @example 3
@@ -11306,11 +11446,11 @@ export interface components {
              */
             resumed_from?: string | null;
         };
-        /** @description The `delegate` tool call's argument shape, discriminated by `action` — the corrected 9-action set (ADR-053 §5.1) replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`cancel`/`follow_up` are control surfaces. Two published launch profiles (`utility`/`specialist`, see `DelegateRunAction.launch_profile`) govern visibility/steering/ child_messaging; illegal combinations are rejected at the handler, not by this schema alone. */
+        /** @description The `delegate` tool call's argument shape, discriminated by `action` — the corrected 9-action set (ADR-053 §5.1) replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`cancel`/`follow_up` are control surfaces. Steering is always available for a direct delegation (see ADR-053 Amendment). */
         DelegateActionRequest: components["schemas"]["DelegateRunAction"] | components["schemas"]["DelegateStatusAction"] | components["schemas"]["DelegateInboxAction"] | components["schemas"]["DelegateInboxAckAction"] | components["schemas"]["DelegateSteerAction"] | components["schemas"]["DelegateRespondAction"] | components["schemas"]["DelegateCancelAction"] | components["schemas"]["DelegateFollowUpAction"] | components["schemas"]["DelegatePeekAction"];
         /**
          * DelegateRunAction
-         * @description `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface). Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY portion of the curated context snapshot (R§8.5) — parent-named artifact references + optional notes. The MANDATORY core (task prompt + compiled criteria + engine-injected child identity from the target agent, ADR-032) is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4); only `snapshot` here is subject to `snapshot_max_bytes`/ `snapshot_max_refs`. Illegal `launch_profile`/`child_messaging`/ `steering` combinations are rejected at the handler (not schema- expressible beyond the enum itself) — see `launch_profile`'s description for the two published legal profiles.
+         * @description `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface). Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY portion of the curated context snapshot (R§8.5) — parent-named artifact references + optional notes. The MANDATORY core (task prompt + compiled criteria + engine-injected child identity from the target agent, ADR-032) is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4); only `snapshot` here is subject to `snapshot_max_bytes`/ `snapshot_max_refs`. Steering is always available for a direct delegation — there is no longer a launch-profile choice gating it (see ADR-053 Amendment).
          */
         DelegateRunAction: {
             /**
@@ -11333,12 +11473,6 @@ export interface components {
              * @example Log anomaly scan
              */
             label?: string;
-            /**
-             * @description `utility` — visibility=outcome, steering=none, child_messaging= progress_only (fire-and-collect; maps today's one-shot spawn). `specialist` — visibility=checkpoints, steering=parent_and_human, child_messaging=full (collaborating native worker; a 3P child on this profile degrades to fire-and-collect, D5). The full illegal-combo legality table (e.g. visibility=outcome with child_messaging=full) is enforced at the handler, not by this enum alone.
-             * @example specialist
-             * @enum {string}
-             */
-            launch_profile: "utility" | "specialist";
             /**
              * @description True for a synchronous (blocking) delegation. A synchronous delegation whose child raises a `question` is rejected by default with a clear tool error (never a silent deadlock, MIN-3) unless the caller also sets `allow_blocking_question`.
              * @example false
@@ -18619,6 +18753,7 @@ export type PlanCreateRequest = components["schemas"]["PlanCreateRequest"];
 export type PlanUpdateRequest = components["schemas"]["PlanUpdateRequest"];
 export type PlanListResponse = components["schemas"]["PlanListResponse"];
 export type AcceptanceCriterion = components["schemas"]["AcceptanceCriterion"];
+export type AcceptanceCriterionInput = components["schemas"]["AcceptanceCriterionInput"];
 export type EvidenceRecord = components["schemas"]["EvidenceRecord"];
 export type JudgeVerdict = components["schemas"]["JudgeVerdict"];
 export type CriterionVerdict = components["schemas"]["CriterionVerdict"];

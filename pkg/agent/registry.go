@@ -85,6 +85,24 @@ func NewAgentRegistry(
 	for i := range cfg.Agents.List {
 		ac := &cfg.Agents.List[i]
 		id := routing.NormalizeAgentID(ac.ID)
+		// ADR-071 §5.1.3 part 3: a PRE-EXISTING agent already id'd literally
+		// "default" at boot/reload gets a WARN, not a hard abort — the create
+		// (id: always a fresh uuid) and update (id: immutable via PUT)
+		// boundary rejections in pkg/gateway/rest.go only stop this going
+		// forward; a hand-edited config.json is the one path that still
+		// reaches here. The agent stays fully reachable by every OTHER
+		// route (routing bindings, the UI agent picker, delegate, direct
+		// agent_id addressing) — only switch_agent's literal target:"default"
+		// path is shadowed, since that sentinel always wins over an
+		// id-matched lookup, matched case-insensitively (strings.EqualFold,
+		// same as this check). id is already lowercased by
+		// NormalizeAgentID, matching switch_agent's case-insensitive
+		// collision rule.
+		if id == tools.SwitchAgentDefaultTarget {
+			logger.WarnCF("agent",
+				"agent id is literally \"default\" — unreachable via switch_agent's target:\"default\" literal path (that sentinel always resolves to the CONFIGURED default agent instead); rename this agent",
+				map[string]any{"agent_id": id, "name": ac.Name})
+		}
 		instance := NewAgentInstance(ac, &cfg.Agents.Defaults, cfg, provider)
 		// Upgrade agent type for runtime-seeded core agents whose config may not
 		// have Type field set (e.g., agents seeded before the Type field was introduced).
@@ -744,6 +762,13 @@ func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*Agent
 		}
 		wireDelegationInjectors(al, newRegistry)
 		wireWorkingDirInjectors(al, newRegistry)
+		// ADR-072 R1 fix regression (live UAT, 2026-09-02): wireProjectShelfResolvers
+		// was only ever called once, from NewAgentLoop at boot — unlike its
+		// siblings above, it was never re-applied here, so a mounted project's
+		// skills silently stopped resolving for every agent after the FIRST
+		// config reload of the process (onboarding itself triggers one, so this
+		// hit nearly every real install). Mirror the siblings' re-wiring.
+		wireProjectShelfResolvers(al, newRegistry)
 		// MediaStore is deliberately left nil by registerSharedTools' send_file
 		// wiring (see its own doc comment) because it may not exist yet on the
 		// very first wiring pass inside NewAgentLoop; every real reload

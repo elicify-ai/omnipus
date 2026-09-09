@@ -57,6 +57,9 @@ func (t *TaskListTool) Parameters() map[string]any {
 }
 
 func (t *TaskListTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	if t.store == nil {
+		return ErrorResult("list_tasks failed: task store is not available")
+	}
 	role, _ := args["role"].(string)
 	if role != "assignee" && role != "delegator" {
 		return ErrorResult("role must be 'assignee' or 'delegator'")
@@ -334,6 +337,11 @@ func (t *TaskCreateTool) SetPlanStore(store *plan.Store) {
 // Shape/length validation (kind enum, text bounds, check-shape-iff-kind,
 // ID/status defaulting) is left to the store's own normalizeCriteria,
 // invoked from Store.Create — this only handles the untyped-map decode.
+//
+// Behavior payloads (ADR-052 FR-034 / ADR-074 D3a) decode via the shared
+// task.DecodeBehaviorPayload, which honors the pointer semantics
+// pkg/task/criterion.go documents (absent min_count/max_count stay nil; an
+// explicit 0 decodes to a pointer at 0).
 func parseCriteriaArgs(raw []any, authorAgentID string) ([]task.AcceptanceCriterion, error) {
 	out := make([]task.AcceptanceCriterion, 0, len(raw))
 	for i, item := range raw {
@@ -342,11 +350,13 @@ func parseCriteriaArgs(raw []any, authorAgentID string) ([]task.AcceptanceCriter
 			return nil, fmt.Errorf("criteria[%d]: must be an object", i)
 		}
 		kind, _ := m["kind"].(string)
+		judgment, _ := m["judgment"].(string)
 		text, _ := m["text"].(string)
 		c := task.AcceptanceCriterion{
-			Kind:   task.CriterionKind(kind),
-			Text:   text,
-			Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: authorAgentID},
+			Kind:     task.CriterionKind(kind),
+			Judgment: task.JudgmentKind(judgment),
+			Text:     text,
+			Author:   task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: authorAgentID},
 		}
 		if chk, ok := m["check"].(map[string]any); ok {
 			command, _ := chk["command"].(string)
@@ -356,6 +366,30 @@ func parseCriteriaArgs(raw []any, authorAgentID string) ([]task.AcceptanceCriter
 			}
 			c.Check = &task.CriterionCheck{Command: command, ExpectedExitCode: expectedExitCode}
 		}
+		if beh, ok := m["behavior"].(map[string]any); ok {
+			c.Behavior = task.DecodeBehaviorPayload(beh)
+		}
+		// ADR-074 D2: kind is optional at authoring time — resolve it from the
+		// payload shape HERE, before the caller's ADR-049 D2-rule-5 all-check
+		// bash-policy gate runs, so the gate fires on inferred kinds too. An
+		// explicit kind passes through unchanged; kind-less with BOTH payloads
+		// is rejected as ambiguous.
+		k, kErr := task.InferCriterionKind(&c)
+		if kErr != nil {
+			return nil, fmt.Errorf("criteria[%d]: %w", i, kErr)
+		}
+		c.Kind = k
+		// ADR-080 D-TYPES: judgment is likewise optional at authoring time —
+		// resolve it from the now-resolved kind HERE (mirroring InferCriterionKind
+		// immediately above), so every criterion this parser produces carries an
+		// explicit judgment before it ever reaches criterionKey/sameShape
+		// dedup comparisons against already-normalized (and therefore
+		// judgment-backfilled) stored criteria.
+		j, jErr := task.InferJudgment(&c)
+		if jErr != nil {
+			return nil, fmt.Errorf("criteria[%d]: %w", i, jErr)
+		}
+		c.Judgment = j
 		out = append(out, c)
 	}
 	return out, nil
@@ -390,7 +424,16 @@ func (t *TaskCreateTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *TaskCreateTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *TaskCreateTool) Description() string {
-	return "Create a task and assign it to an agent for execution. The task lands as a visible card on the workspace board."
+	return "Create a task and assign it to an agent for execution.\n" +
+		"This is a DELEGATION: it passes the same delegation-policy gate (trust set + modes + depth) as " +
+		"any other delegation, and is refused if you are not authorized to delegate to the assignee. " +
+		"criteria is REQUIRED: at least one acceptance criterion (Definition of Done) — a task created " +
+		"with none is rejected. Before authoring acceptance criteria, load the define-goal skill " +
+		"(via the Skill tool) and follow its quality bar. " +
+		"If every criterion is kind=check, the assignee's effective bash policy " +
+		"must be allow, or the create is rejected as structurally unsatisfiable (a machine check that can " +
+		"never run can never adjudicate MET). The task lands as a visible card on the workspace board in " +
+		"status `next` (triaged and dispatchable) — never `inbox`."
 }
 
 func (t *TaskCreateTool) Parameters() map[string]any {
@@ -452,9 +495,13 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 					"properties": map[string]any{
 						"kind": map[string]any{
 							"type": "string",
-							"enum": []string{"check", "prose"},
+							"enum": []string{"check", "prose", "behavior"},
 							"description": "check: a shell command verified via the assignee's own bash tool; " +
-								"prose: a free-text statement judged by the Judge System Agent",
+								"prose: a free-text statement judged by the Judge System Agent; " +
+								"behavior: a deterministic count of successful calls of a named tool in the " +
+								"session's tool-call log. Optional (ADR-074 D2) — when omitted, inferred " +
+								"from the payload: check payload => check, behavior payload => behavior, " +
+								"no payload => prose. An explicit kind mismatching its payload is rejected.",
 						},
 						"text": map[string]any{
 							"type":        "string",
@@ -466,10 +513,11 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 								"command":            map[string]any{"type": "string", "description": "Shell command to run"},
 								"expected_exit_code": map[string]any{"type": "integer", "minimum": 0, "maximum": 255},
 							},
-							"description": "Required when kind is \"check\"; must be omitted when kind is \"prose\"",
+							"description": "Required when kind is \"check\"; must be omitted for other kinds",
 						},
+						"behavior": task.BehaviorCriterionParamSchema(),
 					},
-					"required": []string{"kind", "text"},
+					"required": []string{"text"},
 				},
 				"description": "Acceptance criteria (Definition of Done) for this task. REQUIRED: at least " +
 					"one criterion — an agent-created task with zero criteria is rejected.",
@@ -560,6 +608,9 @@ func (t *TaskCreateTool) resolveWorkspaceID(ctx context.Context) (string, error)
 }
 
 func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	if t.store == nil {
+		return ErrorResult("create_task failed: task store is not available")
+	}
 	title, _ := args["title"].(string)
 	prompt, _ := args["prompt"].(string)
 	agentID, _ := args["agent_id"].(string)
@@ -872,9 +923,12 @@ func (t *TaskUpdateTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *TaskUpdateTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *TaskUpdateTool) Description() string {
-	return "Update a task assigned to you or that you created. Mark status (done/failed — in_progress " +
-		"is reached only through real dispatch via run_task, never written directly here) and optionally " +
-		"edit title, priority, due date, agent_id, or blocked_by. Only provided fields are updated."
+	return "Update a task assigned to you or that you created: status, title, priority, due date, agent_id, or blocked_by.\n" +
+		"Mark status (done/failed — in_progress is reached only through real dispatch via run_task, " +
+		"never written directly here). If the task has acceptance criteria, a done claim is NOT applied " +
+		"directly: during that task's own run it is recorded as a claim for the evidence-ladder judge " +
+		"(the task stays non-terminal and the response says so), and outside that run it is refused. " +
+		"Tasks with no criteria are marked done immediately. Only provided fields are updated."
 }
 
 func (t *TaskUpdateTool) Parameters() map[string]any {
@@ -942,6 +996,9 @@ func (t *TaskUpdateTool) Parameters() map[string]any {
 }
 
 func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	if t.store == nil {
+		return ErrorResult("update_task failed: task store is not available")
+	}
 	taskID, _ := args["task_id"].(string)
 	callerID := ToolAgentID(ctx)
 	if callerID == "" {
@@ -1258,7 +1315,9 @@ func (t *TaskDeleteTool) Name() string           { return "delete_task" }
 func (t *TaskDeleteTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *TaskDeleteTool) Category() ToolCategory { return CategoryTasks }
 func (t *TaskDeleteTool) Description() string {
-	return "Delete a task by ID. Only use when explicitly asked to remove a task."
+	return "Permanently delete a to-do/task item by task_id. Only use when explicitly asked to remove a " +
+		"task. You may only delete a task you own — one you created or are assigned to; a task created " +
+		"or assigned to someone else is refused, with no delegation override on this path."
 }
 
 func (t *TaskDeleteTool) Parameters() map[string]any {
@@ -1272,6 +1331,9 @@ func (t *TaskDeleteTool) Parameters() map[string]any {
 }
 
 func (t *TaskDeleteTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	if t.store == nil {
+		return ErrorResult("delete_task failed: task store is not available")
+	}
 	taskID, _ := args["task_id"].(string)
 	if taskID == "" {
 		return ErrorResult("task_id is required")
@@ -1371,7 +1433,11 @@ func (t *AgentListTool) Name() string           { return "list_agents" }
 func (t *AgentListTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *AgentListTool) Category() ToolCategory { return CategoryAgents }
 func (t *AgentListTool) Description() string {
-	return "List all available agents with their IDs and names. Use this to resolve agent names to IDs before delegating tasks."
+	return "List all available agents with their IDs, names, and type.\n" +
+		"type is one of core/Main/Subagent/subagent_3p — you cannot chat-delegate to a Subagent or " +
+		"subagent_3p worker. Use this to resolve agent names to IDs before delegating tasks. Being " +
+		"listed here does not mean you may delegate to that agent — delegation trust is scoped per " +
+		"workspace and is checked when you actually call."
 }
 
 func (t *AgentListTool) Parameters() map[string]any {
@@ -1382,6 +1448,9 @@ func (t *AgentListTool) Parameters() map[string]any {
 }
 
 func (t *AgentListTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	if t.listAgents == nil {
+		return ErrorResult("list_agents failed: agent lister is not configured")
+	}
 	agents := t.listAgents()
 	data, err := json.Marshal(agents)
 	if err != nil {

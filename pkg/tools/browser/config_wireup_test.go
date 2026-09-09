@@ -149,7 +149,7 @@ func TestApplyRuntimeConfig_PreferPackagedFlip_InvalidatesExecPathCache(t *testi
 
 	newCfg := oldCfg
 	newCfg.PreferPackaged = true
-	coordinator.ApplyRuntimeConfig(newCfg, 1)
+	coordinator.ApplyRuntimeConfig(newCfg)
 
 	assert.Empty(t, coordinator.execPath.cachedPath())
 }

@@ -195,8 +195,41 @@ func (a *restAPI) setCredential(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save credential: %v", err))
 		return
 	}
+	// Trigger reload AND WAIT for it (triggerReloadAndWaitOutcome, not a bare
+	// TriggerReload — mirrors HandleProviders' PUT branch and
+	// createAgent/updateAgent/deleteAgent). A credential value only becomes
+	// LIVE for a provider once executeReload's credentials.InjectFromConfig
+	// step re-runs os.Setenv(ref, newValue) — see ModelConfig.APIKey(), which
+	// reads the ref straight out of the process environment set at
+	// boot/reload. Without this call, a credential write here sits correctly
+	// encrypted in the store but the OLD value stays live in-process
+	// (whatever the last boot/reload injected) until some unrelated config
+	// write happens to trigger a reload — a stale-credential window that was
+	// previously invisible to the caller (UAT batch3 finding #6: a stale
+	// OPENROUTER_API_KEY value survived a `credentials set` and required an
+	// explicit `/reload` to take effect). A reload failure does NOT undo the
+	// store write above (the new value really is saved), so this still
+	// returns 201 — mirroring the provider-update pattern of reporting the
+	// persisted fact and warning separately about live application.
+	confirmed, reloadErr := a.triggerReloadAndWaitOutcome()
+	if reloadErr != nil {
+		slog.Error("config reload after credential set failed", "key", req.Key, "error", reloadErr)
+	} else if !confirmed {
+		slog.Warn("rest: reload after credential set did not confirm within the poll window; "+
+			"providers/channels using this credential may still be served the stale value", "key", req.Key)
+	}
 	w.WriteHeader(http.StatusCreated)
-	jsonOK(w, map[string]string{"key": req.Key})
+	resp := map[string]any{"key": req.Key}
+	if reloadErr != nil {
+		resp["reload_warning"] = fmt.Sprintf(
+			"credential %q was saved but the live reload failed (%s); it will apply after the next "+
+				"config reload or gateway restart", req.Key, reloadErr.Error())
+	} else if !confirmed {
+		resp["reload_warning"] = fmt.Sprintf(
+			"credential %q was saved but the live reload did not confirm in time; it may not be live yet",
+			req.Key)
+	}
+	jsonOK(w, resp)
 }
 
 // deleteCredential removes a credential by key. Like setCredential, it requires
@@ -238,7 +271,27 @@ func (a *restAPI) deleteCredential(w http.ResponseWriter, r *http.Request, key s
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not delete credential: %v", err))
 		return
 	}
-	jsonOK(w, map[string]string{"status": "removed", "key": key})
+	// Trigger reload AND WAIT for it — same reasoning as setCredential above.
+	// Symmetric behavior: if this ref is still wired into an ENABLED channel's
+	// config, executeReload's escalation check rejects the reload (rollback,
+	// nothing degrades silently); if it is only a provider's key, the reload
+	// continues with that provider's row degraded. Either way the deletion
+	// itself already committed to the store, so this is reported via
+	// reload_warning rather than undone.
+	confirmed, reloadErr := a.triggerReloadAndWaitOutcome()
+	resp := map[string]string{"status": "removed", "key": key}
+	if reloadErr != nil {
+		slog.Error("config reload after credential delete failed", "key", key, "error", reloadErr)
+		resp["reload_warning"] = fmt.Sprintf(
+			"credential %q was deleted but the live reload failed (%s); dependent providers/channels "+
+				"may still be degraded until the next config reload or gateway restart", key, reloadErr.Error())
+	} else if !confirmed {
+		slog.Warn("rest: reload after credential delete did not confirm within the poll window; "+
+			"providers/channels using this credential may still be served the stale value", "key", key)
+		resp["reload_warning"] = fmt.Sprintf(
+			"credential %q was deleted but the live reload did not confirm in time; it may not be live yet", key)
+	}
+	jsonOK(w, resp)
 }
 
 // rotateCredentials handles POST /api/v1/credentials/rotate (G5). It re-encrypts

@@ -114,7 +114,7 @@ func TestValidateConfigKey_NamedEscalationsRefused(t *testing.T) {
 		{"tools.mcp.servers", "register an arbitrary program as an MCP server"},
 		{"tools.browser.exec_path", "make the gateway launch an arbitrary binary"},
 		{"tools.browser.cdp_url", "attach the browser to an attacker-controlled endpoint"},
-		{"tools.browser.evaluate_enabled", "enable arbitrary in-page JavaScript"},
+		{"sandbox.browser_evaluate_enabled", "enable arbitrary in-page JavaScript"},
 		{"tools.cron.allow_command", "let scheduled jobs run shell commands"},
 		{"tools.web.private_host_whitelist", "exempt private hosts from SSRF"},
 		{"tools.web.proxy", "route all outbound web traffic through a chosen proxy"},

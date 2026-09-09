@@ -163,10 +163,10 @@ func TestREST_GetAgentTools_FilteredView(t *testing.T) {
 // TestREST_GetAgentTools_ManifestTierValues verifies that well-known tools carry the
 // correct manifest_tier classification in the per-agent tools view.
 // BDD: Given an agent that has read_file (full), workspace.shell (compressed), and
-// possibly load_tool (infra) in its tool set,
+// possibly ToolSearch (infra) in its tool set,
 // When GET /api/v1/agents/{id}/tools is called,
 // Then read_file has manifest_tier="full", workspace.shell has "compressed", and
-// if load_tool is present it has "infra".
+// if ToolSearch is present it has "infra".
 // Traces to: tool-manifest-optimization-2026-06.md Gap 3.
 func TestREST_GetAgentTools_ManifestTierValues(t *testing.T) {
 	api := newTestRestAPIWithHomeAndAgent(t)
@@ -214,9 +214,9 @@ func TestREST_GetAgentTools_ManifestTierValues(t *testing.T) {
 		assert.Equal(t, "compressed", tier, "workspace.shell must have manifest_tier=compressed")
 	}
 
-	// load_tool is an infra tool when registered (compressed mode on).
-	if tier, found := tierByName["load_tool"]; found {
-		assert.Equal(t, "infra", tier, "load_tool must have manifest_tier=infra")
+	// ToolSearch is an infra tool when registered (compressed mode on).
+	if tier, found := tierByName["ToolSearch"]; found {
+		assert.Equal(t, "infra", tier, "ToolSearch must have manifest_tier=infra")
 	}
 
 	// search_tools_bm25 is an infra tool when registered.

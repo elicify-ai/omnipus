@@ -47,9 +47,13 @@ func resultJSON(t *testing.T, forLLM string) map[string]any {
 }
 
 // TestMCPTools_RoundTrip exercises the wired system.mcp.add / list / remove
-// tools against a real (in-memory) config and asserts the data survives.
+// tools against a real (in-memory) config and a real (in-memory, unlocked)
+// credential store, and asserts the data survives. Uses
+// newTestDepsWithCredStore (defined in channel_impl_test.go) rather than
+// newTestDeps because add_mcp_server now requires a credential store
+// whenever env is non-empty.
 func TestMCPTools_RoundTrip(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDepsWithCredStore(t)
 	ctx := context.Background()
 
 	add := systools.NewMCPAddTool(deps)
@@ -75,8 +79,25 @@ func TestMCPTools_RoundTrip(t *testing.T) {
 	if srv.Type != "stdio" || srv.Command != "npx" || !srv.Enabled {
 		t.Fatalf("persisted server has wrong fields: %+v", srv)
 	}
-	if len(srv.Args) != 2 || srv.Env["ROOT"] != "/tmp" {
-		t.Fatalf("args/env not persisted: %+v", srv)
+	if len(srv.Args) != 2 {
+		t.Fatalf("args not persisted: %+v", srv)
+	}
+	// env must NOT be written to config.json in plaintext — only a
+	// credential-store ref lands in EnvRefs, and Env stays empty.
+	if len(srv.Env) != 0 {
+		t.Fatalf("env must not be persisted in plaintext, got srv.Env=%+v", srv.Env)
+	}
+	ref, ok := srv.EnvRefs["ROOT"]
+	if !ok || ref == "" {
+		t.Fatalf("want a credential-store ref for env key ROOT, got EnvRefs=%+v", srv.EnvRefs)
+	}
+	// The ref must actually resolve to the real value in the credential store.
+	got, err := deps.CredStore.Get(ref)
+	if err != nil {
+		t.Fatalf("credential store lookup for ref %q failed: %v", ref, err)
+	}
+	if got != "/tmp" {
+		t.Fatalf("credential store value for ref %q = %q, want /tmp", ref, got)
 	}
 	// Adding a server must also flip the global MCP kill-switch on, in the
 	// same config write, or the newly added server is silently ignored by
@@ -85,12 +106,15 @@ func TestMCPTools_RoundTrip(t *testing.T) {
 		t.Fatalf("want cfg.Tools.MCP.Enabled=true after add_mcp_server, got false")
 	}
 
-	// --- list shows it ---
+	// --- list shows it, with no env in the response ---
 	res = list.Execute(ctx, nil)
 	m = resultJSON(t, res.ForLLM)
 	servers, _ := m["servers"].([]any)
 	if len(servers) != 1 {
 		t.Fatalf("list expected 1 server, got %d: %s", len(servers), res.ForLLM)
+	}
+	if strings.Contains(res.ForLLM, "\"env\"") || strings.Contains(res.ForLLM, "ROOT") {
+		t.Fatalf("list_mcp_servers must never return env values or keys, got: %s", res.ForLLM)
 	}
 
 	// --- duplicate add is rejected ---
@@ -106,7 +130,7 @@ func TestMCPTools_RoundTrip(t *testing.T) {
 		t.Fatalf("remove without confirm should fail, got: %s", res.ForLLM)
 	}
 
-	// --- remove with confirm succeeds and persists ---
+	// --- remove with confirm succeeds, persists, and cleans up the credential ---
 	res = remove.Execute(ctx, map[string]any{"name": "filesystem", "confirm": true})
 	if m2 := resultJSON(t, res.ForLLM); m2["success"] == false {
 		t.Fatalf("remove failed: %s", res.ForLLM)
@@ -114,12 +138,189 @@ func TestMCPTools_RoundTrip(t *testing.T) {
 	if _, ok := cfg.Tools.MCP.Servers["filesystem"]; ok {
 		t.Fatalf("server still present in cfg after remove")
 	}
+	if _, err := deps.CredStore.Get(ref); err == nil {
+		t.Fatalf("want the env credential (ref %q) deleted from the credential store after remove_mcp_server, but it is still readable", ref)
+	}
 
 	// --- remove of unknown server returns NOT_FOUND ---
 	res = remove.Execute(ctx, map[string]any{"name": "ghost", "confirm": true})
 	m = resultJSON(t, res.ForLLM)
 	if m["success"] != false {
 		t.Fatalf("removing unknown server should fail, got: %s", res.ForLLM)
+	}
+}
+
+// TestMCPAdd_EnvRequiresCredentialStore asserts add_mcp_server refuses env
+// values outright when no credential store is wired, rather than silently
+// falling back to writing them in plaintext (the regression this whole
+// fix exists to close).
+func TestMCPAdd_EnvRequiresCredentialStore(t *testing.T) {
+	deps, cfg := newTestDeps() // CredStore is nil
+	add := systools.NewMCPAddTool(deps)
+	res := add.Execute(context.Background(), map[string]any{
+		"name":    "no-cred-store",
+		"command": "npx",
+		"env":     map[string]any{"TOKEN": "sekrit"},
+	})
+	m := resultJSON(t, res.ForLLM)
+	if m["success"] != false {
+		t.Fatalf("add with env and no credential store must fail, got: %s", res.ForLLM)
+	}
+	if _, ok := cfg.Tools.MCP.Servers["no-cred-store"]; ok {
+		t.Fatalf("server must not be persisted when env storage fails")
+	}
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "CREDENTIAL_SAVE_FAILED" {
+		t.Fatalf("want error code CREDENTIAL_SAVE_FAILED, got: %v", errObj)
+	}
+	// A server with NO env values at all must still succeed without a
+	// credential store — env is the only thing that requires one.
+	res = add.Execute(context.Background(), map[string]any{"name": "no-env-fine", "command": "npx"})
+	m = resultJSON(t, res.ForLLM)
+	if m["success"] == false {
+		t.Fatalf("add with no env values must succeed even without a credential store: %s", res.ForLLM)
+	}
+}
+
+// TestMCPAdd_NameCollisionDoesNotHijackExistingCredentials is the regression
+// test for a security finding: add_mcp_server used to write
+// every incoming env value to the credential store under mcp_<name>_<key>
+// BEFORE checking whether a server named <name> already existed. Concretely:
+// add_mcp_server{name:"github", env:{"GITHUB_TOKEN":"wrong"}} against an
+// already-configured "github" server used to overwrite the real token under
+// the same credential key, THEN discover the name collision and return
+// ALREADY_EXISTS — leaving the existing server's live credential silently
+// hijacked despite the call reporting failure.
+//
+// This test proves: (a) the collision is rejected with ALREADY_EXISTS, and
+// (b) the pre-existing server's credential-store value is completely
+// unchanged by the rejected call — the fix moved the duplicate-name check to
+// run BEFORE any CredStore.Set.
+func TestMCPAdd_NameCollisionDoesNotHijackExistingCredentials(t *testing.T) {
+	deps, cfg := newTestDepsWithCredStore(t)
+	ctx := context.Background()
+	add := systools.NewMCPAddTool(deps)
+
+	// Seed an already-configured "github" server with a real token.
+	res := add.Execute(ctx, map[string]any{
+		"name":    "github",
+		"command": "npx",
+		"env":     map[string]any{"GITHUB_TOKEN": "real-token-value"},
+	})
+	m := resultJSON(t, res.ForLLM)
+	if m["success"] == false {
+		t.Fatalf("seed add returned error: %s", res.ForLLM)
+	}
+	srv, ok := cfg.Tools.MCP.Servers["github"]
+	if !ok {
+		t.Fatalf("seed server not persisted")
+	}
+	realRef := srv.EnvRefs["GITHUB_TOKEN"]
+	if realRef == "" {
+		t.Fatalf("seed server has no credential ref for GITHUB_TOKEN: %+v", srv)
+	}
+	realValue, err := deps.CredStore.Get(realRef)
+	if err != nil || realValue != "real-token-value" {
+		t.Fatalf("seed credential lookup: got (%q, %v), want (real-token-value, nil)", realValue, err)
+	}
+
+	// Attempt to add a server with the SAME name and a wrong token.
+	res = add.Execute(ctx, map[string]any{
+		"name":    "github",
+		"command": "npx",
+		"env":     map[string]any{"GITHUB_TOKEN": "wrong"},
+	})
+	m = resultJSON(t, res.ForLLM)
+	if m["success"] != false {
+		t.Fatalf("colliding add must fail, got: %s", res.ForLLM)
+	}
+	errObj, _ := m["error"].(map[string]any)
+	if errObj["code"] != "ALREADY_EXISTS" {
+		t.Fatalf("want error code ALREADY_EXISTS, got: %v", errObj)
+	}
+
+	// The pre-existing server's credential must be COMPLETELY UNCHANGED —
+	// this is the actual security assertion, not just the error code.
+	gotValue, err := deps.CredStore.Get(realRef)
+	if err != nil {
+		t.Fatalf("credential lookup after rejected collision failed: %v", err)
+	}
+	if gotValue != "real-token-value" {
+		t.Fatalf("SECURITY REGRESSION: existing credential was overwritten by a rejected add_mcp_server call — got %q, want %q", gotValue, "real-token-value")
+	}
+
+	// The config entry itself must also be untouched (still command "npx",
+	// still pointing at the same ref).
+	srv, ok = cfg.Tools.MCP.Servers["github"]
+	if !ok {
+		t.Fatalf("existing server disappeared after rejected collision")
+	}
+	if srv.EnvRefs["GITHUB_TOKEN"] != realRef {
+		t.Fatalf("existing server's EnvRefs changed after rejected collision: got %+v", srv.EnvRefs)
+	}
+}
+
+// TestMCPRemove_OrphansCredentialsWhenStoreUnavailable asserts remove_mcp_server
+// still removes the config entry (the server is gone either way) even when it
+// cannot clean up the associated credential-store entries, and says so.
+func TestMCPRemove_OrphansCredentialsWhenStoreUnavailable(t *testing.T) {
+	deps, cfg := newTestDeps() // CredStore is nil
+	cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
+		"srv": {Enabled: true, Type: "stdio", Command: "npx", EnvRefs: map[string]string{"TOKEN": "mcp_srv_TOKEN"}},
+	}
+	remove := systools.NewMCPRemoveTool(deps)
+	res := remove.Execute(context.Background(), map[string]any{"name": "srv", "confirm": true})
+	m := resultJSON(t, res.ForLLM)
+	if m["success"] == false {
+		t.Fatalf("remove must still succeed (config removal does not depend on credential cleanup): %s", res.ForLLM)
+	}
+	if _, ok := cfg.Tools.MCP.Servers["srv"]; ok {
+		t.Fatalf("server still present in cfg after remove")
+	}
+	if _, hasWarning := m["cred_cleanup_warning"]; !hasWarning {
+		t.Fatalf("want cred_cleanup_warning when the credential store is unavailable, got: %s", res.ForLLM)
+	}
+}
+
+// TestMCPList_ReportsLiveStatus asserts list_mcp_servers surfaces
+// live connection status per server when deps.MCPStatus is wired, and omits
+// it cleanly when it is not (nil-safe for tests / a partially wired gateway).
+func TestMCPList_ReportsLiveStatus(t *testing.T) {
+	deps, cfg := newTestDeps()
+	cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
+		"connected-srv":    {Enabled: true, Type: "stdio", Command: "npx"},
+		"disconnected-srv": {Enabled: false, Type: "stdio", Command: "npx"},
+	}
+	deps.MCPStatus = func(name string) (string, int, string) {
+		if name == "connected-srv" {
+			return "connected", 4, ""
+		}
+		return "disconnected", 0, ""
+	}
+	list := systools.NewMCPListTool(deps)
+	res := list.Execute(context.Background(), nil)
+	m := resultJSON(t, res.ForLLM)
+	servers, _ := m["servers"].([]any)
+	statusByName := map[string]string{}
+	for _, s := range servers {
+		entry, _ := s.(map[string]any)
+		statusByName[entry["name"].(string)], _ = entry["status"].(string)
+	}
+	if statusByName["connected-srv"] != "connected" {
+		t.Fatalf("want connected-srv status=connected, got: %s", res.ForLLM)
+	}
+	if statusByName["disconnected-srv"] != "disconnected" {
+		t.Fatalf("want disconnected-srv status=disconnected, got: %s", res.ForLLM)
+	}
+
+	// Without MCPStatus wired, the field is simply absent — not fabricated.
+	nilStatusDeps, nilCfg := newTestDeps()
+	nilCfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
+		"srv": {Enabled: true, Type: "stdio", Command: "npx"},
+	}
+	res = systools.NewMCPListTool(nilStatusDeps).Execute(context.Background(), nil)
+	if strings.Contains(res.ForLLM, "\"status\"") {
+		t.Fatalf("status field must be absent when MCPStatus is not wired, got: %s", res.ForLLM)
 	}
 }
 

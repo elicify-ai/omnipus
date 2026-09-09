@@ -58,7 +58,7 @@ import { cn, initialOf } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { IconRenderer } from '@/components/shared/IconRenderer'
-import { BrowserLiveWsConnection, translateBrowserErrorMessage } from '@/lib/browserLiveWs'
+import { BrowserLiveWsConnection, describeVideoHealth, translateBrowserErrorMessage } from '@/lib/browserLiveWs'
 import { BrowserWebRTCSession, translateWebRTCFallbackReason, DEFAULT_FIRST_ANSWER_TIMEOUT_MS } from '@/lib/browserWebRTC'
 import {
   computeCropRect,
@@ -80,7 +80,12 @@ import { useUiStore } from '@/store/ui'
 import { useChatStore } from '@/store/chat'
 import { queryClient } from '@/lib/queryClient'
 import type { Agent } from '@/lib/api'
-import type { BrowserInputFrame, BrowserStatusFrame, BrowserTabsFrame } from '@/lib/api/generated/asyncapi-types'
+import type {
+  BrowserInputFrame,
+  BrowserStatusFrame,
+  BrowserTabsFrame,
+  BrowserVideoHealthFrame,
+} from '@/lib/api/generated/asyncapi-types'
 
 export interface BrowserLiveViewProps {
   sessionId: string
@@ -614,7 +619,26 @@ export function BrowserLiveView({
   // the panel's primary error state (see `displayError` below). `null` =
   // no failure reported (yet).
   const [webrtcError, setWebrtcError] = useState<string | null>(null)
+  // UAT case 16 — the gateway's free-text cause for THIS failure
+  // (browser_webrtc_state.reason_detail), held alongside the closed `reason`
+  // enum in `webrtcError`. Kept as separate state rather than pre-joined into
+  // one string so the two stay independently inspectable (and so a reason
+  // arriving with no detail can never leave a stale detail from a previous,
+  // unrelated failure glued to it — every `applyWebrtcFailure` sets BOTH).
+  const [webrtcErrorDetail, setWebrtcErrorDetail] = useState<string | null>(null)
   const [webrtcHasAudio, setWebrtcHasAudio] = useState(false)
+  // Issue #674 — the gateway's own verdict on the SHARED capture feeding this
+  // panel: lost / recovering (with a bounded attempt count) / recovered /
+  // unrecoverable. Held as the raw generated frame so no hand-written wire
+  // shape is introduced (hard constraint #8) and so every field the gateway
+  // chose to send stays available to the copy in describeVideoHealth.
+  //
+  // This is NOT redundant with `webrtcError`. That one is about THIS viewer's
+  // signalling (may I offer, did my PeerConnection fail); this is about the
+  // upstream capture, which can die while this viewer's PeerConnection is
+  // perfectly healthy — which is exactly the case that used to look like
+  // nothing at all for a full FIRST_FRAME_TIMEOUT_MS.
+  const [videoHealth, setVideoHealth] = useState<BrowserVideoHealthFrame | null>(null)
   // True once the `<video>` sink has decoded its first real frame
   // (`onLoadedMetadata` — the point `videoWidth`/`videoHeight` become
   // non-zero). This is the direct replacement for the old JPEG-era `frame`
@@ -755,7 +779,9 @@ export function BrowserLiveView({
   const attached = mediaStream !== null
 
   const isControlling = statusState === 'controlling'
-  const webrtcErrorMessage = webrtcError ? translateWebRTCFallbackReason(webrtcError) : null
+  const webrtcErrorMessage = webrtcError
+    ? translateWebRTCFallbackReason(webrtcError, webrtcErrorDetail ?? undefined)
+    : null
   // Unified error surface: a transport-level error always wins; then a
   // WebRTC failure (there is nothing left to fall back to, so this is
   // terminal until the user retries or a fresh attempt succeeds); then the
@@ -803,9 +829,18 @@ export function BrowserLiveView({
     return () => clearTimeout(timer)
   }, [videoReady, connected, firstFrameDeadlineNonce])
 
+  // Issue #674 — the capture-side verdict, ranked BELOW a signalling failure
+  // (which is terminal for this viewer and therefore more specific) but ABOVE
+  // both the generic status error and the first-frame deadline. That ordering
+  // is the whole point of the frame: when the gateway has told us exactly what
+  // happened, the panel must say THAT, not fall through to a 45s timeout's
+  // guess about a stale tab.
+  const videoHealthMessage = describeVideoHealth(videoHealth)
+
   const displayError =
     connError ??
     webrtcErrorMessage ??
+    videoHealthMessage ??
     (statusIsError ? statusMessage ?? 'The live browser session reported an error.' : null) ??
     (firstFrameTimedOut && !videoReady
       ? 'No video received from the live browser. The capture may be bound to a tab that is no longer active — try switching tabs or reloading the page.'
@@ -1085,6 +1120,7 @@ export function BrowserLiveView({
     machine.onStream((stream) => {
       setWebrtcStream(stream)
       setWebrtcError(null) // recovered
+      setWebrtcErrorDetail(null)
     })
     machine.onInputChannelOpen(() => {
       inputChannelOpenRef.current = true
@@ -1108,12 +1144,23 @@ export function BrowserLiveView({
     // Factored out (fix-wave, external review F1, 2026-08-13) so the SAME
     // reset-and-report logic can also run from `onWebRTCState` below for the
     // gap that callback covers on its own — see that handler's doc comment.
-    const applyWebrtcFailure = (reason: string) => {
-      console.warn('[browser-live] WebRTC failed:', reason)
+    const applyWebrtcFailure = (reason: string, detail?: string) => {
+      // Logged as ONE argument when there is no gateway cause, not with a
+      // trailing empty string: a console line reading `failed: ice-failed ""`
+      // is noise, and the arity is what the sibling suites assert on.
+      if (detail === undefined) {
+        console.warn('[browser-live] WebRTC failed:', reason)
+      } else {
+        console.warn('[browser-live] WebRTC failed:', reason, detail)
+      }
       setWebrtcStream(null)
       setWebrtcHasAudio(false)
       setVideoReady(false)
       setWebrtcError(reason)
+      // Always written, never conditionally skipped: a fresh failure with no
+      // detail must CLEAR the previous one's, or the panel would attribute an
+      // old cause to a new failure.
+      setWebrtcErrorDetail(detail ?? null)
       inputChannelOpenRef.current = false
     }
     machine.onFallback(applyWebrtcFailure)
@@ -1233,8 +1280,29 @@ export function BrowserLiveView({
         // the exact same reset-and-report logic `onFallback` uses above, so
         // this can never drift into different copy for the identical signal.
         if (machine.state !== 'offering' && machine.state !== 'connected') {
-          applyWebrtcFailure(f.reason ?? 'unavailable')
+          applyWebrtcFailure(f.reason ?? 'unavailable', f.reason_detail)
         }
+      },
+      // Issue #674 — the gateway telling us, promptly, what happened to the
+      // shared capture. Deliberately does NOT tear the WebRTC session down:
+      // the relay's shared local tracks outlive an ingest replacement, so a
+      // successful automatic recapture resumes THIS PeerConnection with no
+      // renegotiation. Tearing it down here would turn a recoverable blip
+      // into a full re-offer, which is slower and can fail on its own.
+      // `recovered` clears the state rather than storing it: the panel's job
+      // then is to stop showing an error, not to show a different one.
+      //
+      // Deliberately does NOT reset `videoReady`. The frozen last frame stays
+      // on screen under an honest error strip, which is better than the two
+      // alternatives: blanking to the "waiting for the first frame" overlay
+      // throws away the only picture the user has, and — because the shared
+      // relay tracks survive a recapture — `onLoadedMetadata` need never fire
+      // again, so `videoReady` would stay false and the FIRST_FRAME_TIMEOUT_MS
+      // deadline would raise a SECOND, wrong error 45s after a recovery that
+      // actually worked. It would also drop `activeFrameDims`, breaking
+      // click-coordinate mapping for the whole recovery window.
+      onVideoHealth: (f) => {
+        setVideoHealth(f.state === 'recovered' ? null : f)
       },
       onError: (message) => setConnError(message),
       onConnected: () => {
@@ -1254,6 +1322,9 @@ export function BrowserLiveView({
         setWebrtcStream(null)
         setWebrtcHasAudio(false)
         setVideoReady(false)
+        // A capture-health verdict is only trustworthy up to the drop; the
+        // fresh browser_attach round-trip after reconnect re-establishes it.
+        setVideoHealth(null)
         inputChannelOpenRef.current = false
         // The control-lock is server-side and per-connection — once the
         // transport drops, whatever control state we last knew is stale (the
@@ -2518,6 +2589,10 @@ export function BrowserLiveView({
   // comment) and a real retry attempt must reset both, not just one.
   const retryWebRTC = () => {
     setWebrtcError(null)
+    setWebrtcErrorDetail(null)
+    // #674: Retry must clear EVERY source displayError can come from, or the
+    // click looks ignored — the same defect F7 fixed for firstFrameTimedOut.
+    setVideoHealth(null)
     setFirstFrameTimedOut(false)
     setFirstFrameDeadlineNonce((n) => n + 1)
     webrtcRef.current?.stop()

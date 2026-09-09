@@ -46,7 +46,7 @@ func TestNewAgentLoop_AdmissionCapMatchesPerformanceConfig(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
 	defer al.Close()
 
-	want := cfg.Performance.EffectiveMaxParallelAgents()
+	want, _ := cfg.Performance.EffectiveMaxParallelAgents()
 	if want != 3 {
 		t.Fatalf("test setup invariant broken: EffectiveMaxParallelAgents() = %d, want 3", want)
 	}

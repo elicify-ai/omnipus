@@ -18,14 +18,15 @@ func TestPlanningConfig_DefaultsAndValidation(t *testing.T) {
 			t.Fatalf("expected nil for all-zero Planning config, got %v", err)
 		}
 		want := PlanningConfig{
-			TaskMaxAttempts:      DefaultTaskMaxAttempts,
-			GoalMaxRounds:        DefaultGoalMaxRounds,
-			PlanJudgeMaxRounds:   DefaultPlanJudgeMaxRounds,
-			LoopMaxRuns:          DefaultLoopMaxRuns,
-			IdleExpiryDays:       DefaultIdleExpiryDays,
-			GlobalActiveLoopCap:  DefaultGlobalActiveLoopCap,
-			CheckTimeoutSeconds:  DefaultCheckTimeoutSeconds,
-			VerifierWindowTokens: DefaultVerifierWindowTokens,
+			TaskMaxAttempts:         DefaultTaskMaxAttempts,
+			GoalMaxRounds:           DefaultGoalMaxRounds,
+			PlanJudgeMaxRounds:      DefaultPlanJudgeMaxRounds,
+			LoopMaxRuns:             DefaultLoopMaxRuns,
+			IdleExpiryDays:          DefaultIdleExpiryDays,
+			GlobalActiveLoopCap:     DefaultGlobalActiveLoopCap,
+			CheckTimeoutSeconds:     DefaultCheckTimeoutSeconds,
+			VerifierWindowTokens:    DefaultVerifierWindowTokens,
+			GoalCompileWindowTokens: DefaultGoalCompileWindowTokens,
 		}
 		if cfg.Planning != want {
 			t.Fatalf("defaults not applied: got %+v, want %+v", cfg.Planning, want)
@@ -122,20 +123,52 @@ func TestPlanningConfig_DefaultsAndValidation(t *testing.T) {
 		}
 	})
 
+	// ADR-079 D1 — GoalCompileWindowTokens follows the same zero-value
+	// backfill / >=1 validation pattern as VerifierWindowTokens above.
+	t.Run("GoalCompileWindowTokens zero applies default", func(t *testing.T) {
+		cfg := minimalValidConfig()
+		cfg.Planning.GoalCompileWindowTokens = 0
+		if err := validateBootConfig(cfg); err != nil {
+			t.Fatalf("expected nil for GoalCompileWindowTokens=0, got %v", err)
+		}
+		if cfg.Planning.GoalCompileWindowTokens != DefaultGoalCompileWindowTokens {
+			t.Fatalf("expected default %d, got %d", DefaultGoalCompileWindowTokens, cfg.Planning.GoalCompileWindowTokens)
+		}
+	})
+
+	t.Run("GoalCompileWindowTokens negative rejected", func(t *testing.T) {
+		cfg := minimalValidConfig()
+		cfg.Planning = PlanningConfig{
+			TaskMaxAttempts:         DefaultTaskMaxAttempts,
+			GoalMaxRounds:           DefaultGoalMaxRounds,
+			PlanJudgeMaxRounds:      DefaultPlanJudgeMaxRounds,
+			LoopMaxRuns:             DefaultLoopMaxRuns,
+			IdleExpiryDays:          DefaultIdleExpiryDays,
+			GlobalActiveLoopCap:     DefaultGlobalActiveLoopCap,
+			CheckTimeoutSeconds:     DefaultCheckTimeoutSeconds,
+			VerifierWindowTokens:    DefaultVerifierWindowTokens,
+			GoalCompileWindowTokens: -1,
+		}
+		if err := validateBootConfig(cfg); err == nil {
+			t.Fatal("expected error for negative GoalCompileWindowTokens")
+		}
+	})
+
 	t.Run("DefaultConfig is already boot-valid", func(t *testing.T) {
 		cfg := DefaultConfig()
 		if err := validateBootConfig(cfg); err != nil {
 			t.Fatalf("DefaultConfig() must pass validateBootConfig, got %v", err)
 		}
 		want := PlanningConfig{
-			TaskMaxAttempts:      DefaultTaskMaxAttempts,
-			GoalMaxRounds:        DefaultGoalMaxRounds,
-			PlanJudgeMaxRounds:   DefaultPlanJudgeMaxRounds,
-			LoopMaxRuns:          DefaultLoopMaxRuns,
-			IdleExpiryDays:       DefaultIdleExpiryDays,
-			GlobalActiveLoopCap:  DefaultGlobalActiveLoopCap,
-			CheckTimeoutSeconds:  DefaultCheckTimeoutSeconds,
-			VerifierWindowTokens: DefaultVerifierWindowTokens,
+			TaskMaxAttempts:         DefaultTaskMaxAttempts,
+			GoalMaxRounds:           DefaultGoalMaxRounds,
+			PlanJudgeMaxRounds:      DefaultPlanJudgeMaxRounds,
+			LoopMaxRuns:             DefaultLoopMaxRuns,
+			IdleExpiryDays:          DefaultIdleExpiryDays,
+			GlobalActiveLoopCap:     DefaultGlobalActiveLoopCap,
+			CheckTimeoutSeconds:     DefaultCheckTimeoutSeconds,
+			VerifierWindowTokens:    DefaultVerifierWindowTokens,
+			GoalCompileWindowTokens: DefaultGoalCompileWindowTokens,
 		}
 		if cfg.Planning != want {
 			t.Fatalf("DefaultConfig().Planning = %+v, want %+v", cfg.Planning, want)
@@ -211,12 +244,22 @@ func TestBounds_PerEntityOverridesGlobal(t *testing.T) {
 		if got := zero.EffectiveVerifierWindowTokens(); got != DefaultVerifierWindowTokens {
 			t.Fatalf("EffectiveVerifierWindowTokens on zero config = %d, want default %d", got, DefaultVerifierWindowTokens)
 		}
+		if got := zero.EffectiveGoalCompileWindowTokens(); got != DefaultGoalCompileWindowTokens {
+			t.Fatalf("EffectiveGoalCompileWindowTokens on zero config = %d, want default %d", got, DefaultGoalCompileWindowTokens)
+		}
 	})
 
 	t.Run("VerifierWindowTokens set value wins over default", func(t *testing.T) {
 		g := PlanningConfig{VerifierWindowTokens: 5000}
 		if got := g.EffectiveVerifierWindowTokens(); got != 5000 {
 			t.Fatalf("EffectiveVerifierWindowTokens() = %d, want 5000", got)
+		}
+	})
+
+	t.Run("GoalCompileWindowTokens set value wins over default", func(t *testing.T) {
+		g := PlanningConfig{GoalCompileWindowTokens: 8000}
+		if got := g.EffectiveGoalCompileWindowTokens(); got != 8000 {
+			t.Fatalf("EffectiveGoalCompileWindowTokens() = %d, want 8000", got)
 		}
 	})
 }

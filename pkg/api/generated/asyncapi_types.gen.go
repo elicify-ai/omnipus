@@ -24,6 +24,62 @@ type AgentSwitchedFrame struct {
 	Type               string  `json:"type"`
 }
 
+// AskUserAnswerFrame — Client → server (askuserquestion-tool-spec v3 §3). The card's submission: either a full answer set (every question answered exactly once — server-validated by askuser.Registry.Submit, first-valid-wins) or cancel:true (the Cancel affordance — selections discarded, submission-free cancelled resume). Canonical copy — keep in sync by hand with components/schemas/AskUserAnswerFrame.yaml.
+type AskUserAnswerFrame struct {
+	Answers []struct {
+		AutoDefault *bool    `json:"auto_default,omitempty"`
+		FreeText    *string  `json:"free_text,omitempty"`
+		Header      string   `json:"header"`
+		Selected    []string `json:"selected,omitempty"`
+	} `json:"answers,omitempty"`
+	// true = cancel the set (answers ignored/absent).
+	Cancel    *bool  `json:"cancel,omitempty"`
+	CardId    string `json:"card_id"`
+	SessionId string `json:"session_id"`
+	Type      string `json:"type"`
+}
+
+// AskUserQuestionCard — One AskUserQuestion card (askuserquestion-tool-spec v3, ADR-074 D4b): the durable pending/terminal record of a parked question set, as rendered by the SPA card. Carried by AskUserQuestionFrame (live push) and SessionStateFrame.pending_asks (reconnect snapshot). Canonical copy — keep in sync by hand with components/schemas/AskUserQuestionCard.yaml (the inboundschemas copy is machine-synced from that file by gen-contracts step 5).
+type AskUserQuestionCard struct {
+	// Agent that asked — names the card's "needs your input" header.
+	AgentId string `json:"agent_id"`
+	// Populated when status != pending — the collapsed record renders from THIS record (spec §0.6), never by parsing the resume message.
+	Answers []struct {
+		AutoDefault bool     `json:"auto_default"`
+		FreeText    *string  `json:"free_text,omitempty"`
+		Header      string   `json:"header"`
+		Question    string   `json:"question"`
+		Selected    []string `json:"selected,omitempty"`
+	} `json:"answers,omitempty"`
+	// Headers of default_safe questions the server has already resolved-pending-submit (US-3 S2) — reconnect hydration marks them selected + auto.
+	AutoResolved []string `json:"auto_resolved,omitempty"`
+	CardId       string   `json:"card_id"`
+	CreatedAt    string   `json:"created_at"`
+	// When the set carries at least one default_safe question: the instant those questions auto-resolve to their recommendation (created_at + the fixed 30 minutes). Drives the countdown line.
+	DefaultSafeAt *string `json:"default_safe_at,omitempty"`
+	Questions     []struct {
+		Context     *string `json:"context,omitempty"`
+		DefaultSafe *bool   `json:"default_safe,omitempty"`
+		Header      string  `json:"header"`
+		MultiSelect *bool   `json:"multi_select,omitempty"`
+		Options     []struct {
+			Description *string `json:"description,omitempty"`
+			Label       string  `json:"label"`
+		} `json:"options"`
+		Question    string  `json:"question"`
+		Recommended *string `json:"recommended,omitempty"`
+	} `json:"questions"`
+	// Transcript session id the set is parked on (session-scoped).
+	SessionId string `json:"session_id"`
+	Status    string `json:"status"`
+}
+
+// AskUserQuestionFrame — Server → client (askuserquestion-tool-spec v3 §3). Live push of an AskUserQuestion card: emitted at park time (status pending), on a default-safe auto-resolution (auto_resolved grows), and on terminal transitions (answered/cancelled — the SPA collapses the card and unlocks the composer). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES; card.session_id is the routing key). Canonical copy — keep in sync by hand with components/schemas/AskUserQuestionFrame.yaml.
+type AskUserQuestionFrame struct {
+	Card AskUserQuestionCard `json:"card"`
+	Type string              `json:"type"`
+}
+
 // AttachSessionFrame — Client → server request to attach to an existing session. When `since` is provided, the server skips replay frames whose timestamp <= `since`, sending only frames the SPA has not yet seen. Omitting `since` requests a full replay (legacy behaviour).
 type AttachSessionFrame struct {
 	SessionId string `json:"session_id"`
@@ -39,7 +95,7 @@ type AuthFrame struct {
 	Type  string `json:"type"`
 }
 
-// BrowserAttachFrame — Client → server. Binds this browser-live WebSocket connection to a session's browser and starts watching it for control-lock and tab-strip bookkeeping (video is carried exclusively by WebRTC — see BrowserWebRTCStateFrame, ADR-061). Per ADR-043 agents browse concurrently in isolated per-agent browser contexts within one shared Chrome; agent_id is the binding key (selects which agent's BrowserManager + browser context the live view attaches to), and session_id is correlation-only (the server binds to the active tab in that agent's context).
+// BrowserAttachFrame — Client → server. Binds this browser-live WebSocket connection to a workspace's browser and starts watching it for control-lock and tab-strip bookkeeping (video is carried exclusively by WebRTC — see BrowserWebRTCStateFrame, ADR-061). Per ADR-075 a browser belongs to a WORKSPACE, not to an agent: one workspace, one Chrome, one profile directory, one cookie jar, shared by every agent on that workspace's team. session_id RESOLVES the browsing context — the gateway reads the named chat session's own workspace_id from the session meta, server-side, and attaches to that workspace's browser. agent_id names who is asking and is checked for membership of that workspace; it is NO LONGER the binding key. When the session names no workspace the gateway falls back to the agent's own workspace membership, and REFUSES rather than tie-breaking when that is ambiguous (ADR-075 FR-033).
 type BrowserAttachFrame struct {
 	AgentId   string `json:"agent_id"`
 	SessionId string `json:"session_id"`
@@ -156,6 +212,21 @@ type BrowserTabsFrame struct {
 	Type string `json:"type"`
 }
 
+// BrowserVideoHealthFrame — Server → client. A prompt, specific statement about the live-browser video feed, pushed the moment the gateway learns of a change rather than left for the SPA to infer. Why it exists (issue #674): the gateway knows within microseconds when the capture ingest connection dies — it gets a terminal PeerConnection state from Pion — but the SPA used to learn only by exhausting its first-frame timeout, and the panel therefore sat on "Connecting…" for tens of seconds before saying anything true. Shortening that timeout is the wrong fix: its value was derived after a live incident in which a healthy-but-slow cold start showed a red error and then connected fine. This frame fixes the SIGNAL instead, so the honesty deadline stays where it is and simply stops being the only source of news. Per ADR-061, WebRTC is the ONLY live-browser video path — there is no screencast fallback to degrade to — so a failure here must be shown, not papered over. `state` says what is happening; `attempt`/`max_attempts` make the automatic recovery legible instead of an unbounded spinner; and `state: unrecoverable` is a terminal, named error rather than a retry that never ends. Distinct from browser_webrtc_state, which describes whether this VIEWER may offer / is negotiated (an availability and signalling concern). This frame describes the upstream CAPTURE feeding every viewer, and is delivered to all of them.
+type BrowserVideoHealthFrame struct {
+	// Which automatic recapture attempt this is, 1-based. 0 when the state is not part of an attempt sequence (recovered).
+	Attempt *int `json:"attempt,omitempty"`
+	// Optional free-text cause for the operator to read and act on, carried on `lost` and `unrecoverable`. Server-side the text is whitespace-collapsed, credential-redacted and length-bounded before it is sent, exactly as browser_webrtc_state.reason_detail is; URLs, CDP target ids, ports and timeouts are deliberately KEPT, because they are what makes the sentence actionable. Absent when the state alone fully explains the situation.
+	Detail *string `json:"detail,omitempty"`
+	// The attempt budget the gateway will spend before declaring the feed unrecoverable. Present so the panel can say "2 of 3" rather than implying an unbounded retry.
+	MaxAttempts *int `json:"max_attempts,omitempty"`
+	// Echoes the chat session_id this viewer attached with, for client-side correlation only.
+	SessionId *string `json:"session_id,omitempty"`
+	// lost = the capture's ingest connection died and automatic recovery is starting; the panel has no video right now. recovering = an automatic recapture has just been issued (see `attempt`). recovered = video is flowing again; any error the panel was showing for this cause should be cleared. unrecoverable = the bounded recovery budget is spent and nothing further will be retried automatically — a terminal, named failure the operator must see.
+	State string `json:"state"`
+	Type  string `json:"type"`
+}
+
 // BrowserViewportFrame — Client → server. Reports the live-browser panel's current render box so the gateway can size the captured tab to match it. The captured tab was pinned to a hardcoded 1280x720 while the docked panel is an arbitrary resizable shape, so object-fit:contain could only ever fill one dimension and letterboxed the rest (operator UAT 2026-07-31). device_scale_factor addresses the same report's second half, blur: the managed headless Chrome renders at DPR 1, so a capture displayed larger than its CSS size upscales. Sent on attach and debounced on resize; the server applies the metrics then triggers browser_capture_control{action: recapture} so the encoder rebuilds its stream at the new geometry (capture constraints are pinned per stream).
 type BrowserViewportFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
@@ -178,13 +249,13 @@ type BrowserWebRTCAnswerFrame struct {
 	Type      string  `json:"type"`
 }
 
-// BrowserWebRTCOfferFrame — Client → server. Viewer SDP offer to start (or restart) a WebRTC media session for a session's live browser, sent on the existing /api/v1/browser/ws channel after browser_attach. Non-trickle: the SPA gathers all ICE candidates locally before sending, so `sdp` is the complete offer. The gateway's Pion relay (ADR-047 D1) treats agent_id as the binding key exactly like browser_attach (ADR-043 per-agent browser contexts) — it ensures/creates that agent's capture session (starting the tabCapture encoder page on first WebRTC-capable viewer offer, ADR-047 D2) and creates a new viewer PeerConnection fed from the shared media tracks. session_id is correlation-only, echoed back on browser_webrtc_answer / browser_webrtc_state. See ADR-047 D1/D4.
+// BrowserWebRTCOfferFrame — Client → server. Viewer SDP offer to start (or restart) a WebRTC media session for a workspace's live browser, sent on the existing /api/v1/browser/ws channel after browser_attach. Non-trickle: the SPA gathers all ICE candidates locally before sending, so `sdp` is the complete offer. The gateway's Pion relay (ADR-047 D1) resolves the browsing context exactly as browser_attach does under ADR-075: session_id names the chat session whose workspace_id the gateway reads server-side, and the capture session it ensures/creates belongs to THAT WORKSPACE's browser — one capture per workspace browser, shared by every agent on the team (ADR-075 FR-016a), started on the first WebRTC-capable viewer offer (ADR-047 D2) and fed to each new viewer PeerConnection from the shared media tracks. agent_id names who is asking and is checked for membership of that workspace; it is NO LONGER the binding key, and two agents on one workspace no longer contend for a capture. See ADR-075 and ADR-047 D1/D4.
 type BrowserWebRTCOfferFrame struct {
-	// Agent whose BrowserManager/capture session this offer targets.
+	// The agent this panel is open on. It names WHO is asking and must be a member of the workspace session_id resolves to; it does not by itself select a capture session, because the capture belongs to the workspace's browser and every agent on that team shares it.
 	AgentId string `json:"agent_id"`
 	// Complete SDP offer (application/sdp body), gathered with ICE candidates already resolved (non-trickle, ADR-047 D4).
 	Sdp string `json:"sdp"`
-	// The client's chat session id, carried for context/correlation and logging only — echoed back on browser_webrtc_answer / browser_webrtc_state so the client can match them to this offer. Does not select the browsing context; agent_id is the binding key (mirrors BrowserAttachFrame).
+	// The client's chat session id. Exactly as in BrowserAttachFrame, it RESOLVES the browsing context under ADR-075 FR-017 — the gateway reads this session's own workspace_id server-side and targets that workspace's browser and its single capture session. It is still echoed back on browser_webrtc_answer / browser_webrtc_state so the client can match them to this offer. A session that names no workspace degrades to the agent's own unambiguous membership, and to FR-033's refusal when the agent is on more than one workspace. agent_id is no longer the binding key.
 	SessionId string `json:"session_id"`
 	Type      string `json:"type"`
 }
@@ -203,8 +274,10 @@ type BrowserWebRTCStateFrame struct {
 		Urls       []string `json:"urls"`
 		Username   *string  `json:"username,omitempty"`
 	} `json:"ice_servers,omitempty"`
-	// Present when available=false (or when active unexpectedly drops to false): disabled = tools.browser.webrtc_enabled is off; not_capable = platform/managed-Chrome capability classification is below WebRTC eligibility (ADR-047 D5, e.g. chrome-headless-shell only, no full Chrome); lite_build = binary built with -tags lite (Pion compiled out, ADR-047 D7); error = a runtime failure (capture/encoder/ICE) took the WebRTC path out of service for this session; multi_agent_capture_denied = another agent's capture is already being viewed (ADR-048 condition 2; v1 is single-capture).
+	// Present when available=false (or when active unexpectedly drops to false): disabled = tools.browser.webrtc_enabled is off; not_capable = platform/managed-Chrome capability classification is below WebRTC eligibility (ADR-047 D5, e.g. chrome-headless-shell only, no full Chrome); lite_build = binary built with -tags lite (Pion compiled out, ADR-047 D7); error = a runtime failure (capture/encoder/ICE) took the WebRTC path out of service for this session; multi_agent_capture_denied = another agent's capture is already being viewed (ADR-048 condition 2; v1 is single-capture); ingest_timeout = the capture pipeline produced no video track within waitForTracksTimeout (webrtc.ErrNoIngestVideoTrack) — distinct from error because the cause sits UPSTREAM of ICE, the encoder page never delivered frames, so retrying the viewer connection is usually futile while restarting capture is not.
 	Reason *string `json:"reason,omitempty"`
+	// Optional free-text cause that accompanies `reason`, for the operator to read and act on. `reason` is a CLOSED enum and four of its six values collapse wildly different causes into one token, so on its own it cannot say WHY video failed — an operator saw "capture session: create encoder target: browser: timed out after 20s waiting for the browser to attach the tab" in gateway.log while the panel showed only "the live browser reported an error starting video". ADR-061 deleted the silent JPEG fallback precisely so a failure would be visible AND specific; a visible failure naming no cause gives back what that deletion bought. The browser_attach path already sends its full error chain as free text on browser_status; this field closes the same gap for the start-video route. Server-side the text is whitespace-collapsed, credential-redacted (labelled secrets, bearer tokens and bare long hex runs — the capture token's shape) and length-bounded before it is sent; URLs, CDP target ids, ports and timeouts are deliberately KEPT, because they are what makes the sentence actionable. Absent when the enum alone fully explains the state (disabled / lite_build / not_capable) or on a success frame.
+	ReasonDetail *string `json:"reason_detail,omitempty"`
 	// Echoes the session_id from the triggering browser_webrtc_offer / browser_attach, for client-side correlation only.
 	SessionId *string `json:"session_id,omitempty"`
 	Type      string  `json:"type"`
@@ -311,6 +384,54 @@ type GoalStatusFrame struct {
 	ActiveLoops int    `json:"active_loops"`
 	Cap         int    `json:"cap"`
 	Condition   string `json:"condition"`
+	// ADR-074 D5.2 / judgment-first FR-011 — compiled criteria breakdown for the `queued` (pending-confirm) emission. Items are a hand-synced INLINE duplicate of the canonical components/schemas/AcceptanceCriterion.yaml shape (AsyncAPI does not resolve cross-file $ref for its own codegen — the JudgeVerdictFrame/CriterionVerdict precedent); keep both in sync by hand, never a third criteria shape.
+	Criteria []struct {
+		Author struct {
+			Id   string `json:"id"`
+			Kind string `json:"kind"`
+		} `json:"author"`
+		Behavior *struct {
+			MaxCount *int    `json:"max_count,omitempty"`
+			MinCount *int    `json:"min_count,omitempty"`
+			Scope    *string `json:"scope,omitempty"`
+			Tool     string  `json:"tool"`
+		} `json:"behavior,omitempty"`
+		Check *struct {
+			Command          string `json:"command"`
+			ExpectedExitCode int    `json:"expected_exit_code"`
+		} `json:"check,omitempty"`
+		Id         *string `json:"id,omitempty"`
+		Judgment   string  `json:"judgment"`
+		Kind       string  `json:"kind"`
+		Provenance *string `json:"provenance,omitempty"`
+		Status     string  `json:"status"`
+		Text       string  `json:"text"`
+	} `json:"criteria,omitempty"`
+	// ADR-080 D-STATEMENT — the compiled SMART restatement, rendered before the criteria breakdown. Present on the `queued` (pending-confirm) emission; keep in sync by hand with components/schemas/GoalStatusFrame.yaml.
+	Definition *string `json:"definition,omitempty"`
+	// ADR-080 D-DOD — the goal's Definition of Done breakdown, DISTINCT from `criteria`, for the `queued` (pending-confirm) emission. Items are a hand-synced INLINE duplicate of the canonical components/schemas/AcceptanceCriterion.yaml shape, same as `criteria` above — keep both in sync by hand with components/schemas/GoalStatusFrame.yaml.
+	Dod []struct {
+		Author struct {
+			Id   string `json:"id"`
+			Kind string `json:"kind"`
+		} `json:"author"`
+		Behavior *struct {
+			MaxCount *int    `json:"max_count,omitempty"`
+			MinCount *int    `json:"min_count,omitempty"`
+			Scope    *string `json:"scope,omitempty"`
+			Tool     string  `json:"tool"`
+		} `json:"behavior,omitempty"`
+		Check *struct {
+			Command          string `json:"command"`
+			ExpectedExitCode int    `json:"expected_exit_code"`
+		} `json:"check,omitempty"`
+		Id         *string `json:"id,omitempty"`
+		Judgment   string  `json:"judgment"`
+		Kind       string  `json:"kind"`
+		Provenance *string `json:"provenance,omitempty"`
+		Status     string  `json:"status"`
+		Text       string  `json:"text"`
+	} `json:"dod,omitempty"`
 	// ADR-053 R§8.11 — the specific goal-id this pill/timer/round- budget belongs to (a session may carry multiple independent goals). Optional — see components/schemas/GoalStatusFrame.yaml for the shape decision.
 	GoalId       *string `json:"goal_id,omitempty"`
 	LatestReason string  `json:"latest_reason"`
@@ -333,9 +454,10 @@ type JudgeVerdictFrame struct {
 	Met          bool   `json:"met"`
 	Model        string `json:"model"`
 	PerCriterion []struct {
-		CriterionId string `json:"criterion_id"`
-		Met         bool   `json:"met"`
-		Reason      string `json:"reason"`
+		CriterionId   string  `json:"criterion_id"`
+		EvidenceQuote *string `json:"evidence_quote,omitempty"`
+		Met           bool    `json:"met"`
+		Reason        string  `json:"reason"`
 	} `json:"per_criterion"`
 	PlanId *string `json:"plan_id,omitempty"`
 	Round  int     `json:"round"`
@@ -551,8 +673,10 @@ type SessionStateFrame struct {
 	EmittedAt string `json:"emitted_at"`
 	// Always array, never null. Capped at 1000.
 	PendingApprovals []SessionStatePendingApproval `json:"pending_approvals"`
-	Type             string                        `json:"type"`
-	UserId           string                        `json:"user_id"`
+	// askuserquestion-tool-spec v3 US-6 S1/FR-9 — snapshot of every PENDING AskUserQuestion card (global registry cap 64) so a reconnecting SPA re-hydrates its card + composer lock. Optional (older gateways omit it); absent/empty means no pending sets.
+	PendingAsks []AskUserQuestionCard `json:"pending_asks,omitempty"`
+	Type        string                `json:"type"`
+	UserId      string                `json:"user_id"`
 }
 
 // SessionStatePendingApproval — One pending approval entry in a SessionStateFrame.
@@ -613,7 +737,7 @@ type SubagentStateFrame struct {
 	SessionId       string `json:"session_id"`
 	SpanId          string `json:"span_id"`
 	State           string `json:"state"`
-	SteeringReceipt struct {
+	SteeringReceipt *struct {
 		AppliedAt     string `json:"applied_at"`
 		CorrelationId string `json:"correlation_id"`
 	} `json:"steering_receipt,omitempty"`
@@ -852,8 +976,11 @@ const (
 	WsFrameTypeBrowserCaptureOffer      WsFrameType = "browser_capture_offer"
 	WsFrameTypeBrowserCaptureAnswer     WsFrameType = "browser_capture_answer"
 	WsFrameTypeBrowserCaptureControl    WsFrameType = "browser_capture_control"
+	WsFrameTypeBrowserVideoHealth       WsFrameType = "browser_video_health"
 	WsFrameTypeGoalStatus               WsFrameType = "goal_status"
 	WsFrameTypeLoopStatus               WsFrameType = "loop_status"
 	WsFrameTypePlanStatus               WsFrameType = "plan_status"
 	WsFrameTypeJudgeVerdict             WsFrameType = "judge_verdict"
+	WsFrameTypeAskUserQuestion          WsFrameType = "ask_user_question"
+	WsFrameTypeAskUserAnswer            WsFrameType = "ask_user_answer"
 )

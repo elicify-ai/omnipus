@@ -3,13 +3,13 @@
 // These tests exercise the fail-closed guard in metadata_guard.go that blocks
 // read_file / write_file / edit_file / append_file from accessing
 // agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md and redirects callers to
-// system.agent.read_metadata / system.agent.write_metadata.
+// read_agent_metadata (read) / update_agent (write).
 //
 // Regression tests per issue #240:
 //   - BEFORE the guard: writes to SOUL.md via write_file succeeded (SilentResult,
 //     file on disk).
 //   - AFTER the guard: result.IsError==true, ForLLM contains
-//     "system.agent.write_metadata" or "system.agent.read_metadata", and file
+//     "update_agent" or "read_agent_metadata", and file
 //     key hints in the suggestion.
 //
 // The fuzzy case covers agent-prefixed filenames (e.g. "hustle-heartbeat.md"
@@ -159,8 +159,8 @@ func TestFileTools_AllowNonMetadataFiles(t *testing.T) {
 }
 
 // TestFileTools_HeartbeatGuardSuggestsKey verifies that blocking a write to
-// HEARTBEAT.md emits a suggestion that names the "heartbeat" file key and the
-// system.agent.write_metadata replacement tool.
+// HEARTBEAT.md emits a suggestion that names the "heartbeat" update_agent
+// field and the update_agent replacement tool.
 //
 // Traces to: issue #240 — the structured error must hand the agent the exact
 // metadata key to use.
@@ -177,13 +177,13 @@ func TestFileTools_HeartbeatGuardSuggestsKey(t *testing.T) {
 	if !result.IsError {
 		t.Fatalf("expected guard error for HEARTBEAT.md, got success: %s", result.ForLLM)
 	}
-	// The suggestion must include heartbeat somewhere in it (the file key).
+	// The suggestion must include heartbeat somewhere in it (the update_agent field).
 	// The JSON encoding escapes the double quotes, so we look for the plain string.
 	if !strings.Contains(result.ForLLM, "heartbeat") {
 		t.Errorf("guard error should suggest heartbeat, got: %s", result.ForLLM)
 	}
-	if !strings.Contains(result.ForLLM, "system.agent.write_metadata") {
-		t.Errorf("guard error should mention system.agent.write_metadata, got: %s", result.ForLLM)
+	if !strings.Contains(result.ForLLM, "update_agent") {
+		t.Errorf("guard error should mention update_agent, got: %s", result.ForLLM)
 	}
 }
 
@@ -248,8 +248,8 @@ func TestMetadataGuardError_StructuredJSON(t *testing.T) {
 	if msg, _ := errObj["message"].(string); !strings.Contains(msg, "SOUL.md") {
 		t.Errorf("message should mention SOUL.md, got: %s", msg)
 	}
-	if sug, _ := errObj["suggestion"].(string); !strings.Contains(sug, "system.agent.write_metadata") {
-		t.Errorf("suggestion should mention system.agent.write_metadata, got: %s", sug)
+	if sug, _ := errObj["suggestion"].(string); !strings.Contains(sug, "update_agent") {
+		t.Errorf("suggestion should mention update_agent, got: %s", sug)
 	}
 	if sug, _ := errObj["suggestion"].(string); !strings.Contains(sug, "soul") {
 		t.Errorf("suggestion should contain soul file key, got: %s", sug)
@@ -278,9 +278,9 @@ func assertMetadataGuardError(t *testing.T, body, op string) {
 	sug, _ := errObj["suggestion"].(string)
 	var expectedTool string
 	if op == "read" {
-		expectedTool = "system.agent.read_metadata"
+		expectedTool = "read_agent_metadata"
 	} else {
-		expectedTool = "system.agent.write_metadata"
+		expectedTool = "update_agent"
 	}
 	if !strings.Contains(sug, expectedTool) {
 		t.Errorf("suggestion should mention %s for op=%q, got: %s", expectedTool, op, sug)

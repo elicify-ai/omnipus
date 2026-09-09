@@ -170,11 +170,28 @@ func fixtureWithSchemaVersion(t *testing.T, schemaVersion string) []byte {
 	return encode(t, m)
 }
 
-// bootEmbedded boots a catalog from the fixture as the embedded snapshot.
+// bootEmbedded boots a catalog from the fixture as the embedded snapshot,
+// with the test clock pinned to fixtureFreshNow so no assertion downstream
+// depends on the real wall clock (the suite began failing the day the
+// fixture's updated_at aged past StaleAfter).
+//
+// Boot constructs the Catalog internally, so nowFn cannot be pinned before
+// Boot's own apply runs. Rather than replicate Boot's wiring around a
+// pinned New() — which would stop exercising Boot's real code path (parse,
+// persisted-vs-embedded arbitration, applyDoc) — we run the real Boot
+// as-is, then pin nowFn and re-Apply the same fixture bytes: applyDoc
+// re-bakes the served pair (staleness is computed at apply time) under the
+// pinned clock, and Degraded() reads the same seam live. The re-apply is
+// observably identical to Boot's embedded outcome (same document, same
+// version, served_from=embedded — Apply's marker matches Boot's embedded
+// branch; no bootEmbedded caller pre-seeds a persisted file, so Boot never
+// takes the pulled branch here), and it logs nothing and fires no hooks.
 func bootEmbedded(t *testing.T, p Puller, s Store, log Logger) *Catalog {
 	t.Helper()
 	c := Boot(context.Background(), loadFixture(t), p, s, log)
 	require.NotNil(t, c.Document(), "fixture must boot")
+	c.nowFn = func() time.Time { return fixtureFreshNow }
+	require.NoError(t, c.Apply(loadFixture(t)), "re-apply under the pinned clock")
 	return c
 }
 

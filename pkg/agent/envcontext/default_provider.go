@@ -214,6 +214,17 @@ func (p *DefaultProvider) ActiveWarnings() []string {
 				warnings,
 				"sandbox is running in application-level fallback mode — macOS Seatbelt (sandbox-exec) is unavailable or disabled via OMNIPUS_SEATBELT_DISABLE; spawned children are NOT kernel-confined.",
 			)
+		case "windows":
+			// There is NO Windows sandbox backend at all (unlike linux/darwin,
+			// this is never a downgrade from a kernel-capable state — no such
+			// state exists on this platform). selectBackendPlatform always
+			// returns FallbackBackend on Windows; without this case the agent
+			// got zero sandbox warning here despite the project's own docs
+			// stating plainly that Windows has no kernel-level enforcement.
+			warnings = append(
+				warnings,
+				"no sandbox backend exists on Windows — this process and any children it spawns run entirely unconfined at the kernel level; filesystem/exec restrictions below are enforced at the application level only, if at all.",
+			)
 		}
 	}
 

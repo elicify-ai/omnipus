@@ -11,6 +11,7 @@ package task
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 
 	"github.com/google/uuid"
 )
@@ -30,8 +31,152 @@ const (
 // IsValidCriterionKind reports whether k is a known criterion kind. Any other
 // value fails closed — validateCriterion is reached only after this gate, so
 // there is no unrecognized-kind fallthrough left to guard in its switch.
+//
+// Invariant (ADR-074 D2): authoring-time payloads may omit kind — it is
+// resolved by InferCriterionKind before validation — but every PERSISTED
+// criterion always carries an explicit, valid kind: normalizeCriteria infers
+// then validates on every store write, so an empty or unknown kind never
+// reaches disk (guards criterionKey/sameShape consumers, required-test #4).
 func IsValidCriterionKind(k CriterionKind) bool {
 	return k == KindCheck || k == KindProse || k == KindBehavior
+}
+
+// InferCriterionKind resolves a criterion's effective kind when the authoring
+// payload omitted it (ADR-074 D2). The rule: absent kind + check payload =>
+// check; + behavior payload => behavior; + no payload => prose. Absent kind
+// with BOTH payloads is ambiguous and is an error (EC-1). An EXPLICIT kind is
+// returned unchanged — inference never overrides it; a mismatch between an
+// explicit kind and its payload stays a 400 in validateCriterion (shape rules
+// unchanged).
+//
+// This is the ONLY inference implementation (spec FR-002): its call sites are
+// exactly the two tool-layer criteria parsers (pkg/tools/task.go's
+// parseCriteriaArgs, pkg/sysagent/tools/task.go's twin — both BEFORE the
+// ADR-049 D2-rule-5 all-check bash-policy gate, so the gate fires on inferred
+// kinds too) and normalizeCriteria below (which covers the REST paths: the
+// gateway converters pass an absent kind THROUGH as empty and never default
+// it themselves).
+func InferCriterionKind(c *AcceptanceCriterion) (CriterionKind, error) {
+	if c.Kind != "" {
+		return c.Kind, nil
+	}
+	switch {
+	case c.Check != nil && c.Behavior != nil:
+		return "", fmt.Errorf("kind is omitted and both check and behavior payloads are present — " +
+			"ambiguous; supply kind explicitly or remove one payload")
+	case c.Check != nil:
+		return KindCheck, nil
+	case c.Behavior != nil:
+		return KindBehavior, nil
+	default:
+		return KindProse, nil
+	}
+}
+
+// JudgmentKind is ADR-080 D-TYPES' orthogonal "what SHAPE of claim is this"
+// axis, distinct from CriterionKind's "by what MECHANISM is this verified".
+// Neither merges nor renames the other — see the ADR-080 D-TYPES
+// reconciliation table.
+type JudgmentKind string
+
+// The three judgment kinds (ADR-080 D-TYPES).
+const (
+	// JudgmentBoolean is a yes/no fact the Judge can rule true or false.
+	JudgmentBoolean JudgmentKind = "boolean"
+	// JudgmentQuantitative is a value against a threshold or comparator.
+	JudgmentQuantitative JudgmentKind = "quantitative"
+	// JudgmentArtifact is a named produced/changed/sent thing whose existence
+	// is checkable.
+	JudgmentArtifact JudgmentKind = "artifact"
+)
+
+// IsValidJudgment reports whether j is a known judgment kind. Mirrors
+// IsValidCriterionKind precisely.
+//
+// Invariant (ADR-080 D-TYPES): authoring-time payloads may omit judgment — it
+// is resolved by InferJudgment before validation — but every PERSISTED
+// criterion always carries an explicit, valid judgment: normalizeCriteria
+// infers then validates on every store write, so an empty or unknown
+// judgment never reaches disk.
+func IsValidJudgment(j JudgmentKind) bool {
+	return j == JudgmentBoolean || j == JudgmentQuantitative || j == JudgmentArtifact
+}
+
+// InferJudgment resolves a criterion's effective judgment kind (ADR-080
+// D-TYPES), mirroring InferCriterionKind precisely. c.Kind MUST already be
+// resolved (an explicit or InferCriterionKind-inferred value) before calling
+// this — the technical kinds have a natural, deterministic judgment:
+//
+//	kind: check    => judgment: boolean       (exit-code pass/fail)
+//	kind: behavior => judgment: quantitative  (count vs min/max)
+//	kind: prose    => judgment: author-stated, defaulting to boolean
+//
+// An explicit judgment on the criterion wins when it agrees with (or, for
+// prose, is any valid value alongside) the technical kind's natural
+// judgment; an explicit judgment that MISMATCHES a technical kind's natural
+// judgment (e.g. judgment: artifact with kind: check) is an error — the two
+// technical kinds are not author-taggable, only prose is. An explicit but
+// invalid judgment value is likewise an error.
+func InferJudgment(c *AcceptanceCriterion) (JudgmentKind, error) {
+	switch c.Kind {
+	case KindCheck:
+		if c.Judgment != "" && c.Judgment != JudgmentBoolean {
+			return "", fmt.Errorf("judgment %q is incompatible with kind \"check\" "+
+				"(check criteria are always boolean)", c.Judgment)
+		}
+		return JudgmentBoolean, nil
+	case KindBehavior:
+		if c.Judgment != "" && c.Judgment != JudgmentQuantitative {
+			return "", fmt.Errorf("judgment %q is incompatible with kind \"behavior\" "+
+				"(behavior criteria are always quantitative)", c.Judgment)
+		}
+		return JudgmentQuantitative, nil
+	case KindProse:
+		if c.Judgment == "" {
+			return JudgmentBoolean, nil
+		}
+		if !IsValidJudgment(c.Judgment) {
+			return "", fmt.Errorf("invalid judgment %q (must be \"boolean\", \"quantitative\", or \"artifact\")", c.Judgment)
+		}
+		return c.Judgment, nil
+	default:
+		// c.Kind has not yet been resolved by InferCriterionKind — every
+		// normalizeCriteria call site resolves kind first, so this branch is
+		// unreached in practice; fail closed rather than guess.
+		return "", fmt.Errorf("cannot infer judgment: kind %q is not resolved", c.Kind)
+	}
+}
+
+// CriterionProvenance is ADR-080 D-DOD's authority-layer tag: the layer a
+// criterion (typically a DoD item) was derived from, highest authority
+// first. Additive-optional — meaningful only on Goal.DoD items; absent/
+// ignored on regular acceptance criteria and on task/plan criteria.
+type CriterionProvenance string
+
+// The four provenance layers (ADR-080 D-DOD), highest authority first.
+const (
+	// ProvenanceStated is a quality gate the goal setter named explicitly.
+	ProvenanceStated CriterionProvenance = "stated"
+	// ProvenanceWorkspace is derived from workspace/project instructions.
+	ProvenanceWorkspace CriterionProvenance = "workspace"
+	// ProvenanceFloor is one of the built-in universal quality gates that
+	// guarantees a DoD always exists (layer 3, at least one item).
+	ProvenanceFloor CriterionProvenance = "floor"
+	// ProvenanceInferred is bounded, type-appropriate inference shown for the
+	// setter's approval — never silently invented.
+	ProvenanceInferred CriterionProvenance = "inferred"
+)
+
+// IsValidCriterionProvenance reports whether p is a known provenance layer,
+// or empty (provenance is additive-optional and legitimately absent on
+// non-DoD criteria).
+func IsValidCriterionProvenance(p CriterionProvenance) bool {
+	switch p {
+	case "", ProvenanceStated, ProvenanceWorkspace, ProvenanceFloor, ProvenanceInferred:
+		return true
+	default:
+		return false
+	}
 }
 
 // BehaviorScope enumerates CriterionBehavior.Scope (ADR-052 FR-034): whether
@@ -172,6 +317,13 @@ type AcceptanceCriterion struct {
 	ID string `json:"id"`
 	// Kind is check (machine-checkable) or prose (LLM-judged).
 	Kind CriterionKind `json:"kind"`
+	// Judgment is ADR-080 D-TYPES' orthogonal "what SHAPE of claim is this"
+	// axis (boolean/quantitative/artifact). Server-inferred via InferJudgment
+	// when omitted on an authoring payload; always explicit once persisted.
+	Judgment JudgmentKind `json:"judgment"`
+	// Provenance is ADR-080 D-DOD's authority-layer tag. Additive-optional —
+	// meaningful only on Goal.DoD items; empty/ignored elsewhere.
+	Provenance CriterionProvenance `json:"provenance,omitempty"`
 	// Text is the criterion statement (prose) or a human-readable description
 	// of what the check verifies (check). 1..1000 runes.
 	Text string `json:"text"`
@@ -240,6 +392,27 @@ func normalizeCriteria(criteria []AcceptanceCriterion) ([]AcceptanceCriterion, e
 		if c.Status == "" {
 			c.Status = CritPending
 		}
+		// ADR-074 D2: an authoring payload may omit kind — infer it from the
+		// payload shape BEFORE validation, so every persisted criterion
+		// carries an explicit, valid kind (the IsValidCriterionKind
+		// invariant). Explicit kinds pass through unchanged; a dual-payload
+		// kind-less criterion is rejected here (EC-1).
+		k, kErr := InferCriterionKind(c)
+		if kErr != nil {
+			return nil, verr("criteria[%d]: %v", i, kErr)
+		}
+		c.Kind = k
+		// ADR-080 D-TYPES: infer judgment AFTER kind is resolved (InferJudgment
+		// switches on c.Kind) — mirrors the kind-inference-then-validate order
+		// above, and guarantees every persisted criterion carries an explicit
+		// judgment (this is also the load-time backfill path for legacy
+		// persisted criteria carrying no judgment: check->boolean,
+		// behavior->quantitative, prose->boolean).
+		j, jErr := InferJudgment(c)
+		if jErr != nil {
+			return nil, verr("criteria[%d]: %v", i, jErr)
+		}
+		c.Judgment = j
 		if err := validateCriterion(c, i); err != nil {
 			return nil, err
 		}
@@ -266,6 +439,12 @@ func validateCriterion(c *AcceptanceCriterion, idx int) error {
 	if !IsValidCriterionKind(c.Kind) {
 		return verr("criteria[%d]: invalid kind %q (must be \"check\", \"prose\", or \"behavior\")", idx, c.Kind)
 	}
+	if !IsValidJudgment(c.Judgment) {
+		return verr("criteria[%d]: invalid judgment %q (must be \"boolean\", \"quantitative\", or \"artifact\")", idx, c.Judgment)
+	}
+	if !IsValidCriterionProvenance(c.Provenance) {
+		return verr("criteria[%d]: invalid provenance %q (must be \"stated\", \"workspace\", \"floor\", \"inferred\", or empty)", idx, c.Provenance)
+	}
 	n := len([]rune(c.Text))
 	if n < 1 {
 		return verr("criteria[%d]: text is required", idx)
@@ -284,6 +463,17 @@ func validateCriterion(c *AcceptanceCriterion, idx int) error {
 		if c.Behavior != nil {
 			return verr("criteria[%d]: check criterion must not carry a behavior payload", idx)
 		}
+		// Fix-wave finding #3: re-assert the kind<->judgment correlation
+		// InferJudgment already enforces on an OMITTED judgment — a
+		// caller that bypasses InferJudgment and hands validateCriterion a
+		// criterion with an explicit, mismatched judgment (e.g.
+		// {kind:"check", judgment:"artifact"}) must still be rejected here,
+		// not silently accepted because the shape checks above happened to
+		// pass. Check criteria are always boolean (exit-code pass/fail).
+		if c.Judgment != "" && c.Judgment != JudgmentBoolean {
+			return verr("criteria[%d]: judgment %q is incompatible with kind \"check\" "+
+				"(check criteria are always boolean)", idx, c.Judgment)
+		}
 	case KindProse:
 		if c.Check != nil {
 			return verr("criteria[%d]: prose criterion must not carry a check object", idx)
@@ -297,6 +487,12 @@ func validateCriterion(c *AcceptanceCriterion, idx int) error {
 		}
 		if err := validateCriterionBehavior(c.Behavior, idx); err != nil {
 			return err
+		}
+		// Fix-wave finding #3: mirrors the KindCheck re-assertion above —
+		// behavior criteria are always quantitative (count vs min/max).
+		if c.Judgment != "" && c.Judgment != JudgmentQuantitative {
+			return verr("criteria[%d]: judgment %q is incompatible with kind \"behavior\" "+
+				"(behavior criteria are always quantitative)", idx, c.Judgment)
 		}
 	}
 	if c.Author.Kind != AuthorKindAgent && c.Author.Kind != AuthorKindUser {

@@ -22,9 +22,18 @@ type searchDoc struct {
 // from. Instances are immutable once published via atomic pointer, so they can
 // be read lock-free. A nil engine means "no hidden tools at this version"
 // (cached so an empty registry isn't re-snapshotted every call).
+//
+// docCount (ADR-071 §3.2.2) is the corpus size at build time — the number of
+// documents backing engine. execSearchAndLoad passes it as Search's topK so
+// ranking runs over the WHOLE corpus rather than just the first
+// maxSearchResults, which the policy filter needs to build a truthful
+// policy-loadable list. This costs nothing extra: BM25Engine's own doc
+// comment states all indexing work happens inside Search() on every call
+// regardless of topK — topK only sizes the final min-heap extraction.
 type bm25CachedEngine struct {
-	engine  *utils.BM25Engine[searchDoc]
-	version uint64
+	engine   *utils.BM25Engine[searchDoc]
+	version  uint64
+	docCount int
 }
 
 // snapshotToSearchDocs converts a HiddenToolSnapshot to BM25 searchDoc slice.
@@ -54,31 +63,4 @@ func cachedEngineOrNil(c *bm25CachedEngine) *bm25CachedEngine {
 		return nil
 	}
 	return c
-}
-
-// SearchBM25 ranks searchable tools against query using BM25 via utils.BM25Engine.
-// The corpus includes hidden/MCP tools AND visible lazy-tier built-in tools,
-// matching the widened corpus used by ToolsTool.getOrBuildEngine.
-// This non-cached variant rebuilds the engine on every call. Used by tests
-// and any code that doesn't hold a ToolsTool instance.
-func (r *ToolRegistry) SearchBM25(query string, maxSearchResults int) []ToolSearchResult {
-	snap := r.SnapshotSearchableTools()
-	docs := snapshotToSearchDocs(snap)
-	if len(docs) == 0 {
-		return nil
-	}
-
-	ranked := buildBM25Engine(docs).Search(query, maxSearchResults)
-	if len(ranked) == 0 {
-		return nil
-	}
-
-	out := make([]ToolSearchResult, len(ranked))
-	for i, r := range ranked {
-		out[i] = ToolSearchResult{
-			Name:        r.Document.Name,
-			Description: r.Document.Description,
-		}
-	}
-	return out
 }

@@ -231,6 +231,7 @@ func TestSwitchTime_EndToEnd_HappyPath(t *testing.T) {
 	updatedAgent, err := al.handleModelSwitch(
 		context.Background(),
 		agent,
+		"",
 		sessionKey,
 		newModel,
 		bus.InboundMessage{
@@ -310,6 +311,7 @@ func TestSwitchTime_EmptySession_NoSyntheticMessage(t *testing.T) {
 	updatedAgent, err := al.handleModelSwitch(
 		context.Background(),
 		agent,
+		"",
 		sessionKey,
 		newModel,
 		bus.InboundMessage{
@@ -353,6 +355,7 @@ func TestSwitchTime_LLMHistoryHasNoSystemMessage(t *testing.T) {
 	updatedAgent, err := al.handleModelSwitch(
 		context.Background(),
 		agent,
+		"",
 		sessionKey,
 		newModel,
 		bus.InboundMessage{
@@ -411,6 +414,7 @@ func TestSwitchTime_UnknownModel_LogsWarn(t *testing.T) {
 	_, switchErr := al.handleModelSwitch(
 		context.Background(),
 		agent,
+		"",
 		sessionKey,
 		typoModel,
 		bus.InboundMessage{

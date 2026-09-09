@@ -14,12 +14,31 @@ properties:
     example: "2026-05-16T10:30:00Z"
   event:
     type: string
-    pattern: '^[a-z_]+$'
+    pattern: '^[a-z_.]+$'
     description: >
-      Event type identifier. Well-known values:
-      tool_call, exec, file_op, llm_call, policy_eval, rate_limit,
-      ssrf, startup, shutdown. Custom values are permitted for
-      extensibility — must match ^[a-z_]+$ (lowercase letters and underscores only).
+      Event type identifier. Two naming families coexist and BOTH are legal:
+      the original flat names (tool_call, exec, file_op, llm_call, policy_eval,
+      rate_limit, ssrf, startup, shutdown) and the dot-separated hierarchical
+      names that every newer event uses (skill.call, onboarding.admin_created,
+      turn.cancel.attempt, browser.webrtc.stream_started, workspace.create, …).
+      Custom values are permitted for extensibility — must match ^[a-z_.]+$
+      (lowercase letters, underscores and dots only).
+
+      The dot is REQUIRED here and must not be removed (issue #667). Over 50
+      dot-separated names are declared in pkg/audit (audit.go, events.go) and
+      emitted from production handlers, and more are registered as bare
+      literals in pkg/audit.IsValidEventName for back-compat with audit files
+      written before the project→workspace and milestone→task renames. Audit
+      logs are append-only history that cannot be rewritten — the HMAC chain
+      (pkg/audit/hmac.go) is computed over each entry's canonical JSON
+      INCLUDING this field, so renaming events on disk would invalidate every
+      chain link. A pattern that rejects dots therefore does not "validate"
+      anything; it makes AuditLogResponse's `entries` array fail as a whole
+      (src/lib/api.ts::request throws ApiSchemaError on the response, it does
+      not drop single rows), blanking Settings → Security → Audit Log on any
+      real install. Regression guard: pkg/audit/event_name_contract_test.go
+      checks every declared event name against this very pattern, read from
+      this file.
     example: tool_call
   decision:
     type: string

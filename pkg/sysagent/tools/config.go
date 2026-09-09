@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -24,7 +25,12 @@ func NewConfigGetTool(d *Deps) *ConfigGetTool   { return &ConfigGetTool{deps: d}
 func (t *ConfigGetTool) Name() string           { return "get_config" }
 func (t *ConfigGetTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *ConfigGetTool) Description() string {
-	return "Read a configuration value by dot-notation key.\nParameters: key (required, e.g. 'gateway.port')."
+	return "Read a setting (port, timeout, host, feature flag, or similar) from config.json by dot-notation " +
+		"key, e.g. 'gateway.port', 'sandbox.mode'. Pair with set_config to change a value. Credential-shaped " +
+		"fields (API keys, secrets, tokens, passwords) and a handful of security-critical keys (gateway " +
+		"account/token data, the whole sandbox namespace's writable form, etc.) are refused or returned " +
+		"redacted — use list_providers to check configured providers without exposing keys." +
+		"\nParameters: key (required, e.g. 'gateway.port')."
 }
 
 func (t *ConfigGetTool) Parameters() map[string]any {
@@ -84,7 +90,7 @@ func NewConfigSetTool(d *Deps) *ConfigSetTool   { return &ConfigSetTool{deps: d}
 func (t *ConfigSetTool) Name() string           { return "set_config" }
 func (t *ConfigSetTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *ConfigSetTool) Description() string {
-	return "Update a configuration value.\nParameters: key (required), value (required)."
+	return "Update a setting (port, timeout, host, feature flag, or similar) in config.json by dot-notation key, e.g. 'gateway.port', 'sandbox.tool_policies'. Only updates settings that already exist — it never creates a new one, and a key naming nothing that exists is refused rather than silently dropped. Writable sections are limited to: gateway., agents., sandbox., channels., tools., devices., providers, workspace_path — everything else is refused. Within those, several security-critical subtrees are refused too, even though their prefix is writable: the whole sandbox.* namespace, gateway.dev_mode_bypass/users/token/cli_token/public_url/trust_xff, tools.exec/mcp/browser/allow_read_paths/allow_write_paths, and the channel ownership fields channels.*.identity/workspace_id — each refusal names where the setting actually belongs. Credential/API-key-shaped values (api_key, secret, token, password in the name) are always refused here — use configure_provider or configure_channel instead, which route secrets into the encrypted credential store. The result includes a requires_restart field: when true, the change was saved but has no effect until the operator restarts the gateway — check it and relay that to the user rather than assuming the change is already live.\nParameters: key (required), value (required)."
 }
 
 func (t *ConfigSetTool) Parameters() map[string]any {
@@ -148,6 +154,14 @@ func (t *ConfigSetTool) Execute(_ context.Context, args map[string]any) *tools.T
 			schemaErr = err
 			return fmt.Errorf("INVALID_KEY: %w", err)
 		}
+		// Fix up a value the caller JSON-encoded as a STRING but that is
+		// destined for a non-string field (see coerceValueToFieldKind) —
+		// before writing and before it is compared in observeConfigWrite or
+		// echoed back in the response payload, so both reflect what was
+		// actually stored rather than the raw argument as sent. Safe to
+		// call now: validateConfigKeyLands just proved key lands, so the
+		// walk below addresses the same field dotSet is about to write.
+		value = coerceValueToFieldKind(resolveConfigFieldKind(cfg, key), value)
 		prevValue, _ = dotGet(cfg, key)
 		if err := dotSet(cfg, key, value); err != nil {
 			setErr = err
@@ -421,8 +435,9 @@ var blockedConfigKeys = []blockedConfigKey{
 	{
 		Key: "tools.browser",
 		Reason: "exec_path and cdp_url make the gateway launch or attach to a chosen binary, " +
-			"profile_dir points the browser profile anywhere, and evaluate_enabled turns on " +
-			"arbitrary in-page JavaScript",
+			"and profile_dir points the browser profile anywhere " +
+			"(arbitrary in-page JavaScript is governed separately by sandbox.browser_evaluate_enabled, " +
+			"which the sandbox subtree blocks)",
 		ReadOKReason: "browser paths and endpoints. Reads are open post-ADR-062, so the filesystem layout it discloses is already visible",
 	},
 	{
@@ -1178,6 +1193,85 @@ func validateConfigKeyLands(cfg *config.Config, key string) error {
 		}
 	}
 	return nil
+}
+
+// resolveConfigFieldKind walks cfg along key's segments — the same walk
+// validateConfigKeyLands performs, reusing its exact field-resolution rules
+// (lookupJSONField's json-tag precedence, struct/map/interface descent) —
+// and returns the reflect.Kind of the field a write to key would land on.
+//
+// Call this only after validateConfigKeyLands has already confirmed key
+// lands; this performs no existence validation of its own. If the walk
+// cannot complete (which should not happen given that precondition) it
+// returns reflect.Invalid — the safe "can't tell" answer, since
+// coerceValueToFieldKind only ever acts on reflect.Bool and leaves every
+// other Kind, including Invalid, completely alone.
+func resolveConfigFieldKind(cfg *config.Config, key string) reflect.Kind {
+	t, v := reflect.TypeOf(cfg), reflect.ValueOf(cfg)
+	for _, seg := range configKeySegments(cfg, key) {
+		t, v = derefValue(t, v)
+		switch t.Kind() {
+		case reflect.Interface:
+			// A free-form field: everything below it is stored as written,
+			// with whatever type the caller sent — nothing to coerce.
+			return reflect.Interface
+		case reflect.Struct:
+			f, ok := lookupJSONField(t, seg)
+			if !ok {
+				return reflect.Invalid
+			}
+			v = fieldValue(v, f.Index)
+			t = f.Type
+		case reflect.Map:
+			var entry reflect.Value
+			if v.IsValid() && !v.IsNil() {
+				entry = v.MapIndex(reflect.ValueOf(seg).Convert(t.Key()))
+			}
+			v, t = entry, t.Elem()
+		default:
+			return reflect.Invalid
+		}
+	}
+	return derefType(t).Kind()
+}
+
+// coerceValueToFieldKind fixes up value when it was encoded as a JSON STRING
+// but the config field it is destined for is not a string.
+//
+// set_config's "value" parameter deliberately carries no declared JSON
+// Schema type ("New config value (any JSON-compatible type)" — see
+// ConfigSetTool.Parameters), so nothing tells an LLM tool call whether to
+// emit a bare boolean or a quoted one. In live UAT, a real model asked to
+// flip a boolean setting sent {"key": "...", "value": "false"} — value
+// decoded as the Go string "false", not the Go bool false. Before this fix,
+// that string was written straight into the config's generic map form by
+// setDot, and the FINAL json.Unmarshal back into the typed *config.Config
+// struct (dotSet) failed outright: "cannot unmarshal string into Go struct
+// field ... of type bool". set_config reported a type error and nothing was
+// written — it could not set a boolean field via a stringly-typed argument
+// at all, no matter how the value was spelled.
+//
+// Only bool is coerced: strconv.ParseBool accepts the same forms
+// encoding/json's own bool literal covers plus the common shorthands
+// ("1"/"0", "t"/"f", any case of "true"/"false"), and a bool is the one
+// scalar kind where "value came in as a string" is unambiguous — there is
+// exactly one reasonable reading of "false" as a bool. String and numeric
+// destination fields are deliberately left untouched here: a string field
+// already accepts a JSON string as-is (nothing to fix), and coercing a
+// string into a number would have to guess a base/format the caller never
+// specified — that is a different, undiagnosed problem, not this one. If
+// the incoming value is not a string, or ParseBool cannot parse it, the
+// value is returned completely unchanged, so every already-working type
+// (string, int, float, object, array) is unaffected by this fix.
+func coerceValueToFieldKind(kind reflect.Kind, value any) any {
+	s, isString := value.(string)
+	if !isString || kind != reflect.Bool {
+		return value
+	}
+	if b, err := strconv.ParseBool(strings.TrimSpace(s)); err == nil {
+		return b
+	}
+	return value
 }
 
 // observeConfigWrite reads key back out of cfg after dotSet wrote value there

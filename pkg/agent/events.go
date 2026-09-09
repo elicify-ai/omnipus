@@ -6,6 +6,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // EventKind identifies a structured agent-loop event.
@@ -754,6 +755,26 @@ type GoalStatusChangedPayload struct {
 	ActiveLoops  int    `json:"active_loops"`
 	Cap          int    `json:"cap"`
 	State        string `json:"state"`
+	// Criteria (ADR-074 D5.2 / judgment-first FR-011) is the compiled
+	// acceptance-criteria breakdown behind Condition, carried on the
+	// `queued` (pending-confirm) emission so the SPA's confirmation card
+	// itemizes exactly what will run (commands verbatim). Empty on
+	// round/lifecycle pushes. The WS forwarder maps it onto the wire
+	// frame's optional `criteria` field.
+	Criteria []task.AcceptanceCriterion `json:"criteria,omitempty"`
+	// Definition (ADR-080 D-STATEMENT) is the compiled SMART restatement of
+	// the goal (mirrors CompiledGoal.Definition / Goal.definition), carried
+	// on the `queued` emission alongside Criteria/DoD so the confirm card can
+	// render it BEFORE the criteria breakdown. Empty on round/lifecycle
+	// pushes. The WS forwarder maps it onto the wire frame's optional
+	// `definition` field.
+	Definition string `json:"definition,omitempty"`
+	// DoD (ADR-080 D-DOD) is the goal's Definition of Done breakdown,
+	// DISTINCT from Criteria, carried on the `queued` emission so the
+	// confirm card can flag `provenance == inferred` items for approve/drop.
+	// Empty on round/lifecycle pushes. The WS forwarder maps it onto the
+	// wire frame's optional `dod` field.
+	DoD []task.AcceptanceCriterion `json:"dod,omitempty"`
 }
 
 // LoopStatusChangedPayload carries a session's `/loop` status for the SPA

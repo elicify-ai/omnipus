@@ -62,7 +62,6 @@ func newMessageParentTestSetup(t *testing.T) (*MessageParentTool, *session.Lifec
 		ParentDurableKey: "parent-1",
 		WorkspaceID:      "ws-1",
 		AgentID:          "worker",
-		LaunchProfile:    session.LaunchProfileSpecialist,
 	}); err != nil {
 		t.Fatalf("seed lifecycle record failed: %v", err)
 	}
@@ -225,7 +224,7 @@ func TestMessageParentTool_3PChild_Rejected(t *testing.T) {
 		SessionID: "child-3p", State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: "parent-x",
 		ParentDurableKey: "parent-1", WorkspaceID: "ws-1", AgentID: "worker-3p",
-		LaunchProfile: session.LaunchProfileSpecialist, Is3P: true,
+		Is3P: true,
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}

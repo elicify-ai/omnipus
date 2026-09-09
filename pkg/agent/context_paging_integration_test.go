@@ -108,7 +108,7 @@ func TestRecallSpan_DroppedFirstUnderPressure(t *testing.T) {
 
 		// Run windowTrim. Because the window alone is tiny and under budget, but
 		// window+span is over budget, windowTrim should drop the span and return ok=false.
-		_, ok := al.windowTrim(al.GetRegistry().GetDefaultAgent(), sk)
+		_, ok := al.windowTrim(al.GetRegistry().GetDefaultAgent(), "", sk)
 
 		// The span must be dropped.
 		if al.activeRecallSpan(sk) != nil {
@@ -165,7 +165,7 @@ func TestRecallSpan_DroppedFirstUnderPressure(t *testing.T) {
 
 		pressureBefore := RecallSpanDropCount("pressure")
 
-		_, ok := al2.windowTrim(al2.GetRegistry().GetDefaultAgent(), sk2)
+		_, ok := al2.windowTrim(al2.GetRegistry().GetDefaultAgent(), "", sk2)
 
 		// The span must be dropped.
 		if al2.activeRecallSpan(sk2) != nil {

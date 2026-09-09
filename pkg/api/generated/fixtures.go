@@ -1029,15 +1029,18 @@ func FixtureTask_Populated() Task {
 			Command          string `json:"command"`
 			ExpectedExitCode int    `json:"expected_exit_code"`
 		} `json:"check,omitempty"`
-		Id     *string            `json:"id,omitempty"`
-		Kind   TaskCriteriaKind   `json:"kind"`
-		Status TaskCriteriaStatus `json:"status"`
-		Text   string             `json:"text"`
+		Id         *string                 `json:"id,omitempty"`
+		Judgment   TaskCriteriaJudgment    `json:"judgment"`
+		Kind       TaskCriteriaKind        `json:"kind"`
+		Provenance *TaskCriteriaProvenance `json:"provenance,omitempty"`
+		Status     TaskCriteriaStatus      `json:"status"`
+		Text       string                  `json:"text"`
 	}{
 		{
-			Kind:   TaskCriteriaKind("check"),
-			Text:   "go test ./pkg/plan/... passes",
-			Status: TaskCriteriaStatus("pending"),
+			Kind:     TaskCriteriaKind("check"),
+			Judgment: TaskCriteriaJudgment("boolean"),
+			Text:     "go test ./pkg/plan/... passes",
+			Status:   TaskCriteriaStatus("pending"),
 			Check: &struct {
 				Command          string `json:"command"`
 				ExpectedExitCode int    `json:"expected_exit_code"`
@@ -2096,9 +2099,10 @@ func FixtureUploadFilesResponse_Edge() UploadFilesResponse {
 
 func FixtureAcceptanceCriterion_Populated() AcceptanceCriterion {
 	return AcceptanceCriterion{
-		Id:   strPtr("550e8400-e29b-41d4-a716-446655440010"),
-		Kind: AcceptanceCriterionKind("check"),
-		Text: "All new pkg/plan tests pass",
+		Id:       strPtr("550e8400-e29b-41d4-a716-446655440010"),
+		Kind:     AcceptanceCriterionKind("check"),
+		Judgment: AcceptanceCriterionJudgment("boolean"),
+		Text:     "All new pkg/plan tests pass",
 		Check: &struct {
 			Command          string `json:"command"`
 			ExpectedExitCode int    `json:"expected_exit_code"`
@@ -2121,8 +2125,9 @@ func FixtureAcceptanceCriterion_ZeroValue() AcceptanceCriterion {
 // FixtureAcceptanceCriterion_Prose — a prose (LLM-judged) criterion with no check.
 func FixtureAcceptanceCriterion_Prose() AcceptanceCriterion {
 	return AcceptanceCriterion{
-		Kind: AcceptanceCriterionKind("prose"),
-		Text: "The release notes clearly explain the migration path",
+		Kind:     AcceptanceCriterionKind("prose"),
+		Judgment: AcceptanceCriterionJudgment("artifact"),
+		Text:     "The release notes clearly explain the migration path",
 		Author: struct {
 			Id   string                        `json:"id"`
 			Kind AcceptanceCriterionAuthorKind `json:"kind"`
@@ -2160,10 +2165,12 @@ func FixtureEvidenceRecord_ZeroValue() EvidenceRecord {
 // Traces to: contracts/components/schemas/CriterionVerdict.yaml
 
 func FixtureCriterionVerdict_Populated() CriterionVerdict {
+	quote := "--- PASS: TestPlanStore_CreatePersists (0.02s)"
 	return CriterionVerdict{
-		CriterionId: "550e8400-e29b-41d4-a716-446655440010",
-		Met:         true,
-		Reason:      "go test output shows all tests passing.",
+		CriterionId:   "550e8400-e29b-41d4-a716-446655440010",
+		Met:           true,
+		Reason:        "go test output shows all tests passing.",
+		EvidenceQuote: &quote,
 	}
 }
 
@@ -2183,9 +2190,10 @@ func FixtureJudgeVerdict_Populated() JudgeVerdict {
 		Round:  1,
 		Met:    false,
 		PerCriterion: []struct {
-			CriterionId string `json:"criterion_id"`
-			Met         bool   `json:"met"`
-			Reason      string `json:"reason"`
+			CriterionId   string  `json:"criterion_id"`
+			EvidenceQuote *string `json:"evidence_quote,omitempty"`
+			Met           bool    `json:"met"`
+			Reason        string  `json:"reason"`
 		}{
 			{CriterionId: "550e8400-e29b-41d4-a716-446655440010", Met: false, Reason: "3 tests still failing"},
 		},
@@ -2300,10 +2308,12 @@ func FixturePlanListResponse_Populated() PlanListResponse {
 					Command          string `json:"command"`
 					ExpectedExitCode int    `json:"expected_exit_code"`
 				} `json:"check,omitempty"`
-				Id     *string                        `json:"id,omitempty"`
-				Kind   PlanListResponsePlansDodKind   `json:"kind"`
-				Status PlanListResponsePlansDodStatus `json:"status"`
-				Text   string                         `json:"text"`
+				Id         *string                             `json:"id,omitempty"`
+				Judgment   PlanListResponsePlansDodJudgment    `json:"judgment"`
+				Kind       PlanListResponsePlansDodKind        `json:"kind"`
+				Provenance *PlanListResponsePlansDodProvenance `json:"provenance,omitempty"`
+				Status     PlanListResponsePlansDodStatus      `json:"status"`
+				Text       string                              `json:"text"`
 			} `json:"dod,omitempty"`
 			FailedReason               *PlanListResponsePlansFailedReason `json:"failed_reason,omitempty"`
 			Goal                       *string                            `json:"goal,omitempty"`

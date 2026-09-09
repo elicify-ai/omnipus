@@ -13,11 +13,10 @@ import "github.com/elicify-ai/omnipus/pkg/tools"
 
 // Agent tools
 
-func (*AgentCreateTool) Category() tools.ToolCategory        { return tools.CategoryAgents }
-func (*AgentUpdateTool) Category() tools.ToolCategory        { return tools.CategoryAgents }
-func (*AgentDeleteTool) Category() tools.ToolCategory        { return tools.CategoryAgents }
-func (*AgentReadMetadataTool) Category() tools.ToolCategory  { return tools.CategoryAgents }
-func (*AgentWriteMetadataTool) Category() tools.ToolCategory { return tools.CategoryAgents }
+func (*AgentCreateTool) Category() tools.ToolCategory       { return tools.CategoryAgents }
+func (*AgentUpdateTool) Category() tools.ToolCategory       { return tools.CategoryAgents }
+func (*AgentDeleteTool) Category() tools.ToolCategory       { return tools.CategoryAgents }
+func (*AgentReadMetadataTool) Category() tools.ToolCategory { return tools.CategoryAgents }
 
 // Channel tools
 
@@ -42,10 +41,6 @@ func (*UsageQueryTool) Category() tools.ToolCategory { return tools.CategoryPlat
 func (*MCPAddTool) Category() tools.ToolCategory    { return tools.CategoryMCP }
 func (*MCPRemoveTool) Category() tools.ToolCategory { return tools.CategoryMCP }
 func (*MCPListTool) Category() tools.ToolCategory   { return tools.CategoryMCP }
-
-// Navigate tool
-
-func (*NavigateTool) Category() tools.ToolCategory { return tools.CategoryPlatform }
 
 // Workspace tools
 

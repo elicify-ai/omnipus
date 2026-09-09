@@ -22,6 +22,13 @@ func newManifestBucketLoop() *AgentLoop {
 	return &AgentLoop{loadedTools: make(map[string]map[string]bool)}
 }
 
+// The two ADR-057 tests below drove manifestSessionID directly (session-only
+// keying) before ADR-071 D3 §4.6 narrowed the bucket to (agent, session).
+// Per the ADR's own note ("its assertions remain valid, since two different
+// transcripts still yield two different buckets"), they are updated here to
+// route through manifestBucketKey with an explicit agent id rather than
+// rewritten — the isolation property under test is unchanged.
+
 // TestManifestBucket_ChildBucketIsItsOwnNotTheParents pins regression-dataset
 // row 7 and the "MUST NOT use a routing session id as a tool-manifest bucket"
 // non-behaviour.
@@ -51,15 +58,22 @@ func TestManifestBucket_ChildBucketIsItsOwnNotTheParents(t *testing.T) {
 
 	al := newManifestBucketLoop()
 
-	parentBucket := manifestSessionID(parentSid, parentSessionKey)
-	childBucket := manifestSessionID(childSid, childSessionKey)
-	if parentBucket != parentSid {
-		t.Fatalf("the bucket must be the acting session's transcript id; got %q, want %q",
-			parentBucket, parentSid)
+	const (
+		parentAgentID = "jim"
+		childAgentID  = "ava"
+	)
+
+	parentBucket := manifestBucketKey(parentAgentID, parentSid, parentSessionKey)
+	childBucket := manifestBucketKey(childAgentID, childSid, childSessionKey)
+	wantParentBucket := parentAgentID + manifestBucketKeySep + parentSid
+	wantChildBucket := childAgentID + manifestBucketKeySep + childSid
+	if parentBucket != wantParentBucket {
+		t.Fatalf("the bucket must be agentID+sep+the acting session's transcript id; got %q, want %q",
+			parentBucket, wantParentBucket)
 	}
-	if childBucket != childSid {
-		t.Fatalf("the bucket must be the acting session's transcript id; got %q, want %q",
-			childBucket, childSid)
+	if childBucket != wantChildBucket {
+		t.Fatalf("the bucket must be agentID+sep+the acting session's transcript id; got %q, want %q",
+			childBucket, wantChildBucket)
 	}
 	if parentBucket == childBucket {
 		t.Fatal("two sessions with distinct transcript ids must derive distinct buckets")
@@ -88,18 +102,36 @@ func TestManifestBucket_ChildBucketIsItsOwnNotTheParents(t *testing.T) {
 	}
 
 	// --- Negative control. Reconstruct the PRE-ADR-057 shape: the child's
-	// processOptions carried the PARENT's transcript session id. If this does
-	// not reproduce the shared bucket, the assertions above are vacuous and
-	// would pass against an implementation that ignored its inputs.
-	sharedBucket := manifestSessionID(parentSid, childSessionKey)
+	// processOptions carried the PARENT's transcript session id AND (since
+	// this is a same-agent handoff scenario, the ADR-071 D3 §4.6 case) the
+	// SAME acting agent id. If this does not reproduce the shared bucket,
+	// the assertions above are vacuous and would pass against an
+	// implementation that ignored its inputs. childSessionKey is
+	// deliberately left in the call to prove manifestBucketKey prefers the
+	// transcript id over the session key, exactly as manifestSessionID does.
+	sharedBucket := manifestBucketKey(parentAgentID, parentSid, childSessionKey)
 	if sharedBucket != parentBucket {
 		t.Fatalf("negative control is broken: a child carrying the parent's transcript "+
-			"id must derive the parent's bucket, got %q want %q", sharedBucket, parentBucket)
+			"id AND agent id must derive the parent's bucket, got %q want %q", sharedBucket, parentBucket)
 	}
 	if !al.sessionLoadedTools(sharedBucket)[lazyTool] {
 		t.Fatal("negative control is broken: the pre-ADR-057 shape must see the " +
 			"parent's loaded tools — if it does not, this test cannot distinguish " +
 			"the fix from the bug")
+	}
+
+	// --- Second negative-control axis, specific to ADR-071 D3 §4.6: even
+	// with the PARENT's transcript session id, a DIFFERENT agent id (the
+	// real switch_agent shape) must NOT reproduce the shared bucket — this
+	// is the exact leak §4.6 closes.
+	differentAgentSameSession := manifestBucketKey(childAgentID, parentSid, parentSessionKey)
+	if differentAgentSameSession == parentBucket {
+		t.Fatal("§4.6 regression: a different agent id sharing the parent's transcript " +
+			"session id must NOT derive the parent's bucket")
+	}
+	if al.sessionLoadedTools(differentAgentSameSession)[lazyTool] {
+		t.Error("§4.6 regression: a different agent on the same transcript session must " +
+			"not see the other agent's loaded tools")
 	}
 }
 

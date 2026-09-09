@@ -383,7 +383,10 @@ func TestProcessMessage_SkillCommandLoadsRequestedSkill(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
+			// ADR-072 D5: absence of a grant list denies every skill now, so
+			// this test must explicitly grant "shell" — it used to resolve
+			// under the old "no allowlist = unrestricted" default.
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir, Skills: []string{"shell"}}},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -483,7 +486,9 @@ func TestProcessMessage_SkillTokenAloneRunsSkill(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
+			// ADR-072 D5: absence of a grant list denies every skill now, so
+			// this test must explicitly grant "shell".
+			List: []config.AgentConfig{{ID: "mia", Home: tmpDir, Skills: []string{"shell"}}},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -540,6 +545,12 @@ func TestApplyExplicitSkillCommand_OneShot(t *testing.T) {
 	agent := al.GetRegistry().GetDefaultAgent()
 	if agent == nil {
 		t.Fatal("expected default agent")
+	}
+	// ADR-072 D5: absence of a grant list denies every skill now, so this
+	// test must explicitly grant "finance-news" — it used to resolve under
+	// the old "no allowlist = unrestricted" default.
+	if agent.ContextBuilder != nil {
+		agent.ContextBuilder.WithSkillAllowlist([]string{"finance-news"})
 	}
 
 	t.Run("with_message", func(t *testing.T) {

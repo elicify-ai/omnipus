@@ -163,7 +163,7 @@ function ActivityRow({
           {/* surface="panel" (Fix 2, user-approved 2026-07-16): this panel is
               the designated home for the background/noisy step detail the
               thread hides by default — its policy INVERTS to show
-              everything except load_tool (shouldRenderToolCallInPanel in
+              everything except ToolSearch (shouldRenderToolCallInPanel in
               toolVisibility.ts), instead of ToolCallBadge's normal
               thread-scoped shouldRenderToolCall gate. */}
           {steps.map((step, idx) =>

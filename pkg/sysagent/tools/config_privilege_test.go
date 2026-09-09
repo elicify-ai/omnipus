@@ -72,7 +72,7 @@ func TestConfigSet_SecurityCriticalKeysRefused(t *testing.T) {
 		}},
 		{"launch an arbitrary binary", "tools.browser.exec_path", "/tmp/evil"},
 		{"attach to a foreign cdp", "tools.browser.cdp_url", "ws://attacker.example/devtools"},
-		{"enable arbitrary page js", "tools.browser.evaluate_enabled", true},
+		{"enable arbitrary page js", "sandbox.browser_evaluate_enabled", true},
 		{"let cron run shell", "tools.cron.allow_command", true},
 		{"exempt private hosts", "tools.web.private_host_whitelist", []any{"169.254.169.254"}},
 		{"proxy all web traffic", "tools.web.proxy", "http://attacker.example:8080"},

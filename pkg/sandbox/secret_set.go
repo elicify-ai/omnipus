@@ -41,7 +41,37 @@ var SecretFilesRelative = fspolicy.SecretEntriesRelative
 // with no work dir to compare against. This is what a BOOT-time carve-out must
 // iterate; using the combined list there strips `agents/` and `workspaces/`
 // wholesale and makes every agent's own working directory unreachable.
-var SecretEntriesAlwaysRelative = fspolicy.SecretEntriesAlways
+//
+// # It is BOTH context-free lists, and the omission was a real bug
+//
+// This aliased fspolicy.SecretEntriesAlways alone until ADR-072 D10.3.
+// SecretEntriesAlwaysPathOnly (`skills`) had been added as a THIRD list
+// (ADR-072 D10.1) and nothing updated this alias, so DefaultChildPolicy —
+// this variable's only consumer — granted a spawned child full RWX on
+// $OMNIPUS_HOME/skills while every other context-free secret was carved out.
+// Its own test asserted that grant as CORRECT, which is how it stayed
+// invisible.
+//
+// Not exploitable when it was found (DefaultChildPolicy has no production
+// caller yet; see its own "production wiring is NOT yet active" note), which
+// is precisely why it is fixed now rather than left to be discovered by the
+// v0.3 change that wires it up.
+//
+// The distinction fspolicy draws between its two context-free lists is about
+// which CONSUMERS read them — pkg/tools/shell.go's literal-text guard and the
+// app-layer carve-out list read only SecretEntriesAlways — and this is
+// neither of those: it is a KERNEL carve-out, where both lists apply
+// identically. Same reasoning as fspolicy.SecretPathsAlways, which unions the
+// two for the same reason.
+//
+// A fresh slice, not an append onto fspolicy's own backing array: appending
+// to a package-level slice from another package can write into that slice's
+// spare capacity and silently mutate it for every other reader.
+var SecretEntriesAlwaysRelative = func() []string {
+	out := make([]string, 0, len(fspolicy.SecretEntriesAlways)+len(fspolicy.SecretEntriesAlwaysPathOnly))
+	out = append(out, fspolicy.SecretEntriesAlways...)
+	return append(out, fspolicy.SecretEntriesAlwaysPathOnly...)
+}()
 
 // SecretPaths returns the context-free part of the set — the entries no agent
 // may reach in any shape.

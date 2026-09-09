@@ -972,10 +972,22 @@ func TestCreateAgent_WithToolsCfg(t *testing.T) {
 	// constraint 6) — createAgent's strict decode (decodeAgentCreateVariant,
 	// DisallowUnknownFields, independent of ValidateInbound) rejects a stray
 	// "default_policy" key inside tools_cfg.builtin with 400, so it must not
-	// appear here. The caller-supplied "policies" map is merged on top of the
-	// seeded deny-all baseline (coreagent.NewCustomAgentToolsCfg), which is
-	// what keeps the resulting agent's tool-policy coverage complete even
-	// though only 3 tools are named below.
+	// appear here.
+	//
+	// CONTRACT CHANGE (2026-09-02): the policies map below used to name only
+	// the 3 tools this test cares about, relying on createAgent merging them
+	// onto the deny-seeded baseline. That merge ran BEFORE
+	// config.ValidateToolPolicyCoverage, so a caller-side gap could never be
+	// observed on this path — a live UAT round created agents with tools
+	// omitted, and with a literal "*" key, and got 201 for both. A submitted
+	// map is now validated for completeness and key legitimacy before any
+	// merge, so the caller enumerates the whole static catalog. The claims
+	// below are unchanged: the caller's values win, and a tool left at deny
+	// stays denied.
+	reqPolicies := fullBuiltinPolicyMap("deny")
+	reqPolicies["read_file"] = "allow"
+	reqPolicies["search_web"] = "allow"
+	reqPolicies["fetch_url"] = "allow"
 	body := `{
 		"name": "Research Bot",
 		"type": "Main",
@@ -985,11 +997,7 @@ func TestCreateAgent_WithToolsCfg(t *testing.T) {
 		"icon": "magnifying-glass",
 		"tools_cfg": {
 			"builtin": {
-				"policies": {
-					"read_file": "allow",
-					"search_web": "allow",
-					"fetch_url": "allow"
-				}
+				"policies": ` + mustPolicyJSON(t, reqPolicies) + `
 			},
 			"mcp": {
 				"servers": [{"id": "my-server"}]
@@ -1025,14 +1033,12 @@ func TestCreateAgent_WithToolsCfg(t *testing.T) {
 	assert.Equal(t, "magnifying-glass", savedAgent.Icon)
 	require.NotNil(t, savedAgent.Tools, "tools config must be persisted")
 	policies := savedAgent.Tools.Builtin.Policies
-	// The caller's sparse overrides win...
+	// The caller's explicit allow entries win...
 	assert.Equal(t, config.ToolPolicyAllow, policies["read_file"])
 	assert.Equal(t, config.ToolPolicyAllow, policies["search_web"])
 	assert.Equal(t, config.ToolPolicyAllow, policies["fetch_url"])
-	// ...merged on top of the seeded deny-all baseline (coreagent.
-	// NewCustomAgentToolsCfg), so an unrelated tool the caller never
-	// mentioned is still explicitly covered (deny), and bash specifically
-	// stays denied (CRIT-001/FR-B12) since the caller did not override it.
+	// ...and every other tool the caller enumerated at deny is persisted
+	// explicitly at deny — bash specifically (CRIT-001/FR-B12).
 	assert.Equal(t, config.ToolPolicyDeny, policies["bash"])
 
 	// config.json itself must carry no agents.list content — agents are
@@ -1759,7 +1765,17 @@ func TestUpdateAgentTools_LegacyModeAloneCoverageGapRejected(t *testing.T) {
 	api.HandleAgents(w, r)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "coverage")
+	// The rejection reason is unchanged — mode+visible alone names only two
+	// tools, so it does not cover the static catalog. As of 2026-09-02 the
+	// message comes from the caller-side submitted-map check
+	// (config.ValidateSubmittedToolPolicyMap), which runs before the older
+	// roster-wide coverage guard and names the missing tools explicitly, so the
+	// wording moved from "coverage gap" to "is incomplete — N static builtin
+	// tool(s) have no explicit policy entry".
+	assert.Contains(t, w.Body.String(), "no explicit policy entry",
+		"body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "bash",
+		"the 400 must name tools the legacy shape failed to cover")
 }
 
 // TestUpdateAgentTools_PoliciesWinsOverLegacyModeVisible verifies that a

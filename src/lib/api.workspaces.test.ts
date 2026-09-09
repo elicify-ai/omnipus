@@ -841,3 +841,98 @@ describe('setTaskDependencies', () => {
     expect(url1).not.toBe(url2)
   })
 })
+
+// ── createWorkspaceMount / mountSkillsDisclosure (ADR-072 D1.2, FR-074/074a) ────
+//
+// `skills_count`/`skills_grants_message`/`skills_threshold_warning` are real,
+// committed fields on WorkspaceMountCreateResponse
+// (contracts/components/schemas/WorkspaceMountCreateResponse.yaml), populated
+// by pkg/gateway/rest_workspace_mounts.go::mountToCreateResponse from
+// pkg/skills/mount_threshold.go::EvaluateMountSkillsDisclosure.
+// createWorkspaceMount validates the response through the standard schema-
+// checked request<T>() path like every other endpoint; mountSkillsDisclosure()
+// reads the validated fields directly off the real WorkspaceMountCreateResponse
+// (no raw-body access). These tests exercise that path against a real (mocked)
+// HTTP response, matching the fetchSkills/last_invoked tests above.
+
+describe('createWorkspaceMount / mountSkillsDisclosure', () => {
+  it('returns the ordinary WorkspaceMountCreateResponse fields untouched when the backend sends no skills disclosure', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      makeJsonResponse({ name: 'client-repo', host_path: '/Users/operator/code/client-repo', status: 'ok' }, 201),
+    )
+
+    const { createWorkspaceMount, mountSkillsDisclosure } = await import('./api')
+    const result = await createWorkspaceMount('ws-1', { name: 'client-repo', host_path: '/Users/operator/code/client-repo' })
+
+    expect(result.name).toBe('client-repo')
+    expect(result.host_path).toBe('/Users/operator/code/client-repo')
+    expect(mountSkillsDisclosure(result)).toBeNull()
+  })
+
+  it('merges a skills disclosure (grants message, no threshold warning) from the raw response', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      makeJsonResponse(
+        {
+          name: 'client-repo',
+          host_path: '/Users/operator/code/client-repo',
+          status: 'ok',
+          skills_count: 3,
+          skills_grants_message: "This mount's skills directory grants 3 skills as auto-loadable agent instructions.",
+        },
+        201,
+      ),
+    )
+
+    const { createWorkspaceMount, mountSkillsDisclosure } = await import('./api')
+    const result = await createWorkspaceMount('ws-1', { name: 'client-repo', host_path: '/Users/operator/code/client-repo' })
+
+    const disclosure = mountSkillsDisclosure(result)
+    expect(disclosure).not.toBeNull()
+    expect(disclosure?.count).toBe(3)
+    expect(disclosure?.grantsMessage).toContain('grants 3 skills')
+    expect(disclosure?.thresholdWarning).toBeNull()
+  })
+
+  it('merges the threshold warning too when the mount exceeds the configured count', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      makeJsonResponse(
+        {
+          name: 'monorepo',
+          host_path: '/Users/operator/code/monorepo',
+          status: 'ok',
+          skills_count: 5000,
+          skills_grants_message: "This mount's skills directory grants 5000 skills as auto-loadable agent instructions.",
+          skills_threshold_warning: 'This mount would contribute 5000 skills — well beyond a plausible hand-authored collection (threshold: 500).',
+        },
+        201,
+      ),
+    )
+
+    const { createWorkspaceMount, mountSkillsDisclosure } = await import('./api')
+    const result = await createWorkspaceMount('ws-1', { name: 'monorepo', host_path: '/Users/operator/code/monorepo' })
+
+    const disclosure = mountSkillsDisclosure(result)
+    expect(disclosure?.count).toBe(5000)
+    expect(disclosure?.thresholdWarning).toContain('threshold: 500')
+  })
+
+  it('still surfaces the existing broad-grant warning field untouched (FR-7.4/FR-7.6, unrelated mechanism)', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      makeJsonResponse(
+        {
+          name: 'operator',
+          host_path: '/Users/operator',
+          status: 'ok',
+          warning: 'mounting "/Users/operator" is a broad grant.',
+        },
+        201,
+      ),
+    )
+
+    const { createWorkspaceMount, mountSkillsDisclosure } = await import('./api')
+    const result = await createWorkspaceMount('ws-1', { name: 'operator', host_path: '/Users/operator' })
+
+    expect(result.warning).toBe('mounting "/Users/operator" is a broad grant.')
+    expect(mountSkillsDisclosure(result)).toBeNull()
+  })
+})

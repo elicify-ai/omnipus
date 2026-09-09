@@ -41,6 +41,7 @@ import { RateLimitIndicator } from './RateLimitIndicator'
 import { GoalIndicator } from './GoalIndicator'
 import { GoalPillTray } from './GoalPillTray'
 import { GoalThreadTailCards } from './GoalThreadTailCards'
+import { AskUserQuestionThreadTail } from './AskUserQuestionCard'
 import { JudgeVerdictThreadCard } from './JudgeVerdictThreadCard'
 import { ActivityBar } from './ActivityBar'
 import { AgentPicker } from './composer/AgentPicker'
@@ -513,7 +514,7 @@ function replayPartStatus(status: 'running' | 'success' | 'error' | 'cancelled')
  * own `isError` field is the closest available proxy. Every tool this
  * project's registered live tool UIs render OTHER than through
  * GenericToolCall (Fallback)/BashOutputUI never self-hides regardless of
- * tool name (only load_tool/delegate/bash are ever hidden — see
+ * tool name (only ToolSearch/delegate/bash are ever hidden — see
  * shouldRenderToolCall's switch), so calling shouldRenderToolCall uniformly
  * for every tool name here is accurate for those surfaces too, without
  * needing to special-case them.
@@ -927,7 +928,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // path below passes `!!part.isError`, and the actual render for this same
   // `tc` uses `tc.status === 'error'` — but this one was left on it, so a
   // failed tool call with status:'error' and no `error` string (e.g. a
-  // failed load_tool) computed isError:false here while the row itself
+  // failed ToolSearch) computed isError:false here while the row itself
   // (whose own visibility gate reads `tc.status === 'error'` directly)
   // still rendered — producing a ghost ThinkingIndicator ABOVE the visible
   // failed row (see hasVisibleToolCalls/showEmptyPlaceholder below).
@@ -1669,9 +1670,16 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // window (isConnected:false with reconnectPhase still null — "Connecting to
   // gateway..."), leaves the composer disabled; see tests/e2e/chat.spec.ts "(f)
   // queue-on-disconnect" and ChatScreen.outbound-queue.test.tsx for regression coverage.
+  // askuserquestion-tool-spec v3 US-1 S1: the composer is LOCKED while an
+  // AskUserQuestion card is pending — free-form answering happens through
+  // the card, never the chat box; Cancel (always present on the card)
+  // unlocks. Terminal cards (answered/cancelled) release the lock.
+  const askLocked = useChatStore((s) => s.pendingAsk?.status === 'pending')
+
   const inputEnabled =
     !agentRemoved &&
     !isReplaying &&
+    !askLocked &&
     !(reconnectPhase === 'gave_up') &&
     (isConnected || reconnectPhase === 'reconnecting' || reconnectPhase === 'slow')
 
@@ -3041,6 +3049,13 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
               (newly compiled, awaiting the user's chat confirmation). Renders
               nothing when no queued pills exist. */}
           <GoalThreadTailCards />
+
+          {/* AskUserQuestion card — askuserquestion-tool-spec v3 (ADR-074
+              D4b): the flat, tabbed question zone (pending) or the collapsed
+              answer record (just-resolved), rendered at the thread tail.
+              While pending, the composer below is locked (see
+              OmnipusComposer's askLocked). */}
+          <AskUserQuestionThreadTail />
 
           {/* Composer — centered, ChatGPT-style floating layout. The context
               row and ActivityBar pills render bare on the shell (above /

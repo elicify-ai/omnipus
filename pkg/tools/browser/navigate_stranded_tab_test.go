@@ -63,7 +63,7 @@ func TestNavigate_FailedLoad_DoesNotStrandTheTabOnTheTarget(t *testing.T) {
 
 	ssrf := security.NewSSRFChecker([]string{"127.0.0.1"})
 	registry := tools.NewToolRegistry()
-	mgr, err := RegisterTools(registry, cfg, ssrf, false, t.TempDir(), true)
+	mgr, err := registerToolsForTest(t, registry, cfg, ssrf, false, t.TempDir(), true)
 	require.NoError(t, err)
 	t.Cleanup(mgr.Shutdown)
 
@@ -74,7 +74,7 @@ func TestNavigate_FailedLoad_DoesNotStrandTheTabOnTheTarget(t *testing.T) {
 
 	// THE security property: whatever the diagnosis, the tab must no longer
 	// be sitting on the target where a follow-up tool call could read it.
-	tabCtx, err := mgr.Session(defaultSessionID)
+	tabCtx, err := mgr.Session(testSessionID)
 	require.NoError(t, err)
 	readCtx, cancel := context.WithTimeout(tabCtx, 10*time.Second)
 	defer cancel()
@@ -96,7 +96,7 @@ func TestOpenTab_FailedLoad_DoesNotStrandTheTabOnTheTarget(t *testing.T) {
 
 	ssrf := security.NewSSRFChecker([]string{"127.0.0.1"})
 	registry := tools.NewToolRegistry()
-	mgr, err := RegisterTools(registry, cfg, ssrf, false, t.TempDir(), true)
+	mgr, err := registerToolsForTest(t, registry, cfg, ssrf, false, t.TempDir(), true)
 	require.NoError(t, err)
 	t.Cleanup(mgr.Shutdown)
 
@@ -105,7 +105,7 @@ func TestOpenTab_FailedLoad_DoesNotStrandTheTabOnTheTarget(t *testing.T) {
 	require.NotNil(t, result)
 	require.True(t, result.IsError, "a stalled load must report an error; got: %s", result.ForLLM)
 
-	tabCtx, err := mgr.Session(defaultSessionID)
+	tabCtx, err := mgr.Session(testSessionID)
 	require.NoError(t, err)
 	readCtx, cancel := context.WithTimeout(tabCtx, 10*time.Second)
 	defer cancel()

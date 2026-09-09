@@ -124,18 +124,17 @@ func TestBrowserToolConfig_EnvKeys_NoDoublePrefix(t *testing.T) {
 		"OMNIPUS_TOOLS_BROWSER_HEADLESS":             "",
 		"OMNIPUS_TOOLS_BROWSER_CDP_URL":              "",
 		"OMNIPUS_TOOLS_BROWSER_PAGE_TIMEOUT":         "",
-		"OMNIPUS_TOOLS_BROWSER_MAX_TABS":             "",
 		"OMNIPUS_TOOLS_BROWSER_PERSIST_SESSION":      "",
 		"OMNIPUS_TOOLS_BROWSER_PROFILE_DIR":          "",
 		"OMNIPUS_TOOLS_BROWSER_EXEC_PATH":            "",
-		"OMNIPUS_TOOLS_BROWSER_MAX_TOTAL_TABS":       "",
-		"OMNIPUS_TOOLS_BROWSER_EVALUATE_ENABLED":     "",
 		"OMNIPUS_TOOLS_BROWSER_LIVE_VIEW_ENABLED":    "",
 		"OMNIPUS_TOOLS_BROWSER_TAKE_CONTROL_ENABLED": "",
 		"OMNIPUS_TOOLS_BROWSER_WEBRTC_ENABLED":       "",
 		"OMNIPUS_TOOLS_BROWSER_PREFER_PACKAGED":      "",
 		"OMNIPUS_TOOLS_BROWSER_TRUST_PATH_CHROME":    "",
 		"OMNIPUS_TOOLS_BROWSER_WEBRTC_STUN_SERVER":   "",
+		"OMNIPUS_TOOLS_BROWSER_LEASE_WAIT":           "",
+		"OMNIPUS_TOOLS_BROWSER_ACTIONABILITY_GATE":   "",
 	}
 
 	seen := map[string]bool{}
@@ -216,14 +215,14 @@ func TestBrowserToolConfig_EnvOverride_ActuallyOverridesJSON(t *testing.T) {
 	// config.go's documented precedence (env.Parse runs after JSON load,
 	// SetDefaultsForZeroValuesOnly is not set so env unconditionally
 	// overwrites).
-	configJSON := `{"version":1,"tools":{"browser":{"trust_path_chrome":true,"headless":true,"max_tabs":9,"webrtc_enabled":true}}}`
+	configJSON := `{"version":1,"tools":{"browser":{"trust_path_chrome":true,"headless":true,"page_timeout":9,"webrtc_enabled":true}}}`
 	if err := writeTestConfigFile(t, configPath, configJSON); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
 	t.Setenv("OMNIPUS_TOOLS_BROWSER_TRUST_PATH_CHROME", "false")
 	t.Setenv("OMNIPUS_TOOLS_BROWSER_HEADLESS", "false")
-	t.Setenv("OMNIPUS_TOOLS_BROWSER_MAX_TABS", "42")
+	t.Setenv("OMNIPUS_TOOLS_BROWSER_PAGE_TIMEOUT", "42")
 	t.Setenv("OMNIPUS_TOOLS_BROWSER_WEBRTC_ENABLED", "false")
 
 	cfg, err := LoadConfig(configPath)
@@ -241,10 +240,10 @@ func TestBrowserToolConfig_EnvOverride_ActuallyOverridesJSON(t *testing.T) {
 			"Headless=true: env var OMNIPUS_TOOLS_BROWSER_HEADLESS=false did not override JSON true (B2b regression)",
 		)
 	}
-	if cfg.Tools.Browser.MaxTabs != 42 {
+	if cfg.Tools.Browser.PageTimeoutSec != 42 {
 		t.Errorf(
-			"MaxTabs=%d: env var OMNIPUS_TOOLS_BROWSER_MAX_TABS=42 did not override JSON 9 (B2b regression)",
-			cfg.Tools.Browser.MaxTabs,
+			"PageTimeoutSec=%d: env var OMNIPUS_TOOLS_BROWSER_PAGE_TIMEOUT=42 did not override JSON 9 (B2b regression)",
+			cfg.Tools.Browser.PageTimeoutSec,
 		)
 	}
 	if cfg.Tools.Browser.WebRTCEnabled {

@@ -80,7 +80,7 @@ func TestRecallConversation_RealRegistration_ReachesEvictedTurns(t *testing.T) {
 	windowBefore := agent.Sessions.GetHistory(sessionKey)
 	require.Equal(t, len(history), len(windowBefore), "history must start unevicted")
 
-	_, ok = al.windowTrim(agent, sessionKey)
+	_, ok = al.windowTrim(agent, "", sessionKey)
 	require.True(t, ok, "windowTrim must succeed")
 
 	windowAfter := agent.Sessions.GetHistory(sessionKey)

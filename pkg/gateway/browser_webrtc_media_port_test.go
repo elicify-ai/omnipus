@@ -22,6 +22,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"net"
 	"os"
@@ -31,6 +32,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg/agent"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -294,8 +297,8 @@ func TestHandleWebRTCOffer_MediaPortFallback_TellsTheViewerInThePanel(t *testing
 	handler.mediaPortFallback = &mediaPortFallbackState{configured: 50000, bound: 50003, lastProbed: 50003}
 	handler.mediaConnMu.Unlock()
 
-	mgr, ok := al.BrowserManagerForAgent(defaultAgent.ID)
-	require.True(t, ok)
+	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
+	require.Equal(t, agent.BrowserResolveOK, outcome)
 	var encoderCalls int32
 	cs, err := browser.NewCaptureSessionWithDeps(nil, defaultAgent.ID, &fakeRelay{},
 		fakeEncoderStarter(&encoderCalls, nil), nil)

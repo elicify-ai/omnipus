@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AskUserQuestion Card</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --bg: #0A0A0B;
+    --surface-2: #1A1A1F;
+    --text: #E2E8F0;
+    --secondary: #B8C2D0;
+    --muted: #7C8798;
+    --accent: #D4AF37;
+    --accent-dim: rgba(212,175,55,.10);
+    --line: #232329;
+    --good: #6EE7A0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: 'Inter', -apple-system, sans-serif; font-size: 14px; line-height: 1.55;
+  }
+  .stage { max-width: 1180px; margin: 0 auto; padding: 40px 24px 80px; display: grid; grid-template-columns: minmax(0, 620px) minmax(0, 1fr); gap: 48px; }
+  @media (max-width: 980px) { .stage { grid-template-columns: 1fr; } }
+  .side-title {
+    font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 14px;
+  }
+  h1 { font-family: 'Outfit', sans-serif; font-size: 26px; font-weight: 700; margin: 0 0 6px; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 28px; max-width: 54ch; }
+
+  /* ---- chat context (matches MessageItem.tsx: user = subtle bubble, assistant = transparent) ---- */
+  .chat { display: flex; flex-direction: column; gap: 4px; }
+  .msg { display: flex; gap: 10px; margin: 8px 0; }
+  .avatar { flex: 0 0 28px; height: 28px; border-radius: 50%; background: var(--surface-2); display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--accent); font-family: 'Outfit', sans-serif; font-weight: 600; }
+  .msg.user { justify-content: flex-end; }
+  .msg.user .mbody { background: var(--surface-2); border-radius: 12px 12px 4px 12px; padding: 10px 14px; max-width: 80%; color: var(--secondary); font-size: 13.5px; }
+  .msg.agent .mbody { padding: 4px 0 0; max-width: 88%; color: var(--secondary); font-size: 13.5px; }
+
+  /* ---- the flat question zone ---- */
+  .aq {
+    margin: 6px 0 0 38px;              /* aligns under the agent avatar gutter */
+    padding: 10px 0 4px;
+    border-top: 1px solid var(--line); /* hairlines, not a box */
+    border-bottom: 1px solid var(--line);
+  }
+  .aq-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .aq-head .label {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  .aq-head .label b { color: var(--accent); font-weight: 500; }
+
+  /* tabs: one question visible at a time */
+  .tabs { display: flex; gap: 6px; margin-left: auto; }
+  .tab {
+    font: inherit; font-family: 'JetBrains Mono', monospace; font-size: 11px;
+    background: transparent; border: 0; border-bottom: 2px solid transparent;
+    color: var(--muted); padding: 2px 6px 4px; cursor: pointer;
+  }
+  .tab:hover { color: var(--secondary); }
+  .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .tab.done { color: var(--good); }
+  .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  .aq-qtext { font-size: 14.5px; font-weight: 500; margin: 0 0 12px; color: var(--text); }
+
+  .ctx { border-left: 2px solid var(--line); padding: 2px 0 2px 12px; margin: 0 0 12px; font-size: 12.5px; color: var(--secondary); }
+  .ctx .ctx-label {
+    font-family: 'JetBrains Mono', monospace; font-size: 9.5px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--muted); display: block; margin-bottom: 5px;
+  }
+  .ctx ul { margin: 0; padding-left: 16px; }
+  .ctx li { margin-bottom: 3px; }
+
+  /* options: flat rows, hairline dividers, no boxes */
+  .opts { display: flex; flex-direction: column; }
+  .opt {
+    display: flex; gap: 12px; align-items: flex-start; text-align: left; width: 100%;
+    background: transparent; border: 0; border-radius: 6px;
+    padding: 9px 8px; cursor: pointer; color: var(--text); font: inherit;
+  }
+  .opt:hover { background: var(--accent-dim); }
+  .opt:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .opt.selected { background: var(--accent-dim); }
+  .radio { flex: 0 0 13px; height: 13px; margin-top: 3px; border-radius: 50%; border: 1.5px solid var(--muted); }
+  .opt.selected .radio { border-color: var(--accent); background: radial-gradient(circle at center, var(--accent) 0 3.5px, transparent 4.5px); }
+  .opt .ol { font-weight: 500; font-size: 13.5px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .opt .od { font-size: 12px; color: var(--muted); margin-top: 1px; }
+  .badge {
+    font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--accent);
+  }
+  .badge::before { content: "· "; color: var(--muted); }
+  .freetext { padding: 6px 8px 2px; }
+  .freetext input {
+    width: 100%; background: transparent; border: 0; border-bottom: 1px dashed var(--line);
+    padding: 6px 2px; color: var(--text); font: inherit; font-size: 13px;
+  }
+  .freetext input::placeholder { color: var(--muted); }
+  .freetext input:focus { outline: none; border-bottom: 1px solid var(--accent); }
+
+  .countdown {
+    display: flex; align-items: center; gap: 6px; margin-top: 10px;
+    font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--muted);
+  }
+  .countdown .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); animation: pulse 2s infinite; }
+  @keyframes pulse { 50% { opacity: .3; } }
+  @media (prefers-reduced-motion: reduce) { .countdown .dot { animation: none; } }
+
+  .aq-foot { display: flex; align-items: center; gap: 14px; margin-top: 14px; }
+  .btn { font: inherit; font-size: 13px; font-weight: 500; border-radius: 8px; padding: 7px 18px; cursor: pointer; }
+  .btn-primary { background: var(--accent); color: #1a1503; border: 0; }
+  .btn-primary:disabled { opacity: .35; cursor: not-allowed; }
+  .btn-text { background: transparent; color: var(--muted); border: 0; padding: 7px 4px; }
+  .btn-text:hover { color: var(--secondary); }
+  .foot-hint { margin-left: auto; font-size: 11px; color: var(--muted); font-family: 'JetBrains Mono', monospace; }
+
+  /* blocked composer */
+  .composer {
+    margin: 18px 0 0 38px; display: flex; gap: 10px; align-items: center;
+    background: var(--surface-2); border-radius: 12px; padding: 10px 14px; opacity: .5;
+  }
+  .composer input { flex: 1; background: transparent; border: 0; color: var(--muted); font: inherit; }
+  .composer-note {
+    margin-left: 38px; text-align: center; font-size: 11px; color: var(--muted); margin-top: 6px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* right column states */
+  .state-block { margin-bottom: 36px; }
+  .answered { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 10px 0; }
+  .answered .row { display: flex; gap: 12px; align-items: baseline; margin: 5px 0; font-size: 13px; }
+  .answered .q { color: var(--muted); flex: 1; }
+  .answered .a { color: var(--good); font-weight: 500; white-space: nowrap; }
+  .answered .a.def { color: var(--accent); }
+  .answered .head { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+  .answered .head .label { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  .check { color: var(--good); }
+
+  .txt-degrade {
+    background: #0d1a12; border-radius: 12px; padding: 14px 16px;
+    font-size: 13px; color: #cfe9d8; white-space: pre-wrap;
+  }
+  .txt-degrade .wa-head { font-size: 11px; color: #7fae90; margin-bottom: 8px; font-family: 'JetBrains Mono', monospace; letter-spacing: .1em; text-transform: uppercase; }
+  .note { font-size: 12px; color: var(--muted); margin-top: 10px; max-width: 46ch; }
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <!-- LEFT: pending state, flat + tabbed -->
+  <div>
+    <h1>AskUserQuestion — flat &amp; tabbed</h1>
+    <p class="sub">v2 after review: no card box — hairline-delimited zone matching the chat's transparent assistant messages; one question visible at a time via tabs (scales to 10 without scrolling).</p>
+
+    <div class="chat">
+      <div class="msg user"><div class="mbody">/goal be better with customer emails</div></div>
+      <div class="msg agent">
+        <div class="avatar">M</div>
+        <div class="mbody">Before I lock in what "done" means, I need two answers — and one thing I'll assume unless you say otherwise.</div>
+      </div>
+
+      <!-- flat question zone -->
+      <div class="aq" role="group" aria-label="Questions from Mia">
+        <div class="aq-head">
+          <span class="label"><b>Mia</b> needs your input</span>
+          <div class="tabs" role="tablist">
+            <button class="tab active" role="tab" data-p="1" aria-selected="true">1 Scope</button>
+            <button class="tab" role="tab" data-p="2" aria-selected="false">2 Criteria</button>
+            <button class="tab" role="tab" data-p="3" aria-selected="false">3 Sending</button>
+          </div>
+        </div>
+
+        <!-- Q1 -->
+        <div class="panel active" data-panel="1">
+          <p class="aq-qtext">Which emails should this goal cover?</p>
+          <div class="opts" data-q="1">
+            <button class="opt" type="button">
+              <span class="radio"></span>
+              <span><span class="ol">Only unanswered customer emails <span class="badge">Recommended</span></span>
+              <span class="od">The 14 currently waiting — the smallest goal that solves today's problem.</span></span>
+            </button>
+            <button class="opt" type="button">
+              <span class="radio"></span>
+              <span><span class="ol">All customer email, ongoing</span>
+              <span class="od">A standing quality bar for every future reply, not just the backlog.</span></span>
+            </button>
+            <div class="freetext"><input type="text" placeholder="Something else — type your own answer…"></div>
+          </div>
+        </div>
+
+        <!-- Q2 with context -->
+        <div class="panel" data-panel="2">
+          <p class="aq-qtext">Do these acceptance criteria capture what you mean by "better"?</p>
+          <div class="ctx">
+            <span class="ctx-label">Proposed criteria — what the Judge will hold the work to</span>
+            <ul>
+              <li>Every question the customer asked is answered in the reply</li>
+              <li>Tone stays apologetic about delays without promising dates we can't commit to</li>
+              <li>Each reply proposes one concrete next step</li>
+            </ul>
+          </div>
+          <div class="opts" data-q="2">
+            <button class="opt" type="button">
+              <span class="radio"></span>
+              <span><span class="ol">Yes, exactly this <span class="badge">Recommended</span></span>
+              <span class="od">Lock these three in.</span></span>
+            </button>
+            <button class="opt" type="button">
+              <span class="radio"></span>
+              <span><span class="ol">Close, but adjust</span>
+              <span class="od">Tell me what to change below.</span></span>
+            </button>
+            <div class="freetext"><input type="text" placeholder="Something else — type your own answer…"></div>
+          </div>
+        </div>
+
+        <!-- Q3 default-safe -->
+        <div class="panel" data-panel="3">
+          <p class="aq-qtext">Should I draft replies for you to review, or send them directly?</p>
+          <div class="opts" data-q="3">
+            <button class="opt" type="button">
+              <span class="radio"></span>
+              <span><span class="ol">Draft only — I review before anything sends <span class="badge">Recommended</span></span>
+              <span class="od">Nothing leaves without your eyes on it.</span></span>
+            </button>
+            <button class="opt" type="button">
+              <span class="radio"></span>
+              <span><span class="ol">Send directly</span>
+              <span class="od">Faster, but replies go out unreviewed.</span></span>
+            </button>
+            <div class="freetext"><input type="text" placeholder="Something else — type your own answer…"></div>
+          </div>
+          <div class="countdown"><span class="dot"></span>No answer in 27:41 → "Draft only" is chosen automatically</div>
+        </div>
+
+        <div class="aq-foot">
+          <button class="btn btn-primary" disabled id="submit">Answer</button>
+          <button class="btn btn-text">Cancel</button>
+          <span class="foot-hint" id="progress">0 / 3 answered</span>
+        </div>
+      </div>
+
+      <div class="composer">
+        <span>🔒</span>
+        <input type="text" disabled placeholder="Answer the questions above to continue…">
+      </div>
+      <div class="composer-note">chat input is locked while questions are pending — Cancel to unlock</div>
+    </div>
+  </div>
+
+  <!-- RIGHT: states -->
+  <div>
+    <div class="state-block">
+      <p class="side-title">After answering — collapsed record</p>
+      <div class="answered">
+        <div class="head"><span class="check">✓</span><span class="label">Answered · Mia's questions</span></div>
+        <div class="row"><span class="q">Which emails should this goal cover?</span><span class="a">Only unanswered</span></div>
+        <div class="row"><span class="q">Do these criteria capture "better"?</span><span class="a">Yes, exactly this</span></div>
+        <div class="row"><span class="q">Draft or send directly?</span><span class="a def">Draft only · auto (30 min)</span></div>
+      </div>
+      <p class="note">Collapses to a flat question → answer record between the same hairlines. Auto-defaulted answers are marked so they're never mistaken for a human choice.</p>
+    </div>
+
+    <div class="state-block">
+      <p class="side-title">On WhatsApp / Telegram — plain text, as ruled</p>
+      <div class="txt-degrade"><span class="wa-head">WhatsApp · Mia</span>Before I lock in the goal, one question:
+
+Which emails should this goal cover?
+
+1. Only unanswered customer emails (recommended)
+2. All customer email, ongoing
+3. Something else — just type it
+
+Reply with a number or your own answer.</div>
+    </div>
+
+    <div class="state-block">
+      <p class="side-title">What changed after your review</p>
+      <p class="note">— The card box is gone: the zone is delimited by two hairlines and sits flush in the thread, matching the assistant's transparent messages (validated against MessageItem.tsx — assistant bubbles are bg-transparent).<br><br>
+      — Tabbed, one question at a time: short-label tabs (number + word), answered tabs turn green with the count in the footer ("2 / 3 answered") — ten questions take the same vertical space as one.<br><br>
+      — Answering a question auto-advances to the next unanswered tab; Answer enables when all are done.<br><br>
+      — Options are flat rows with a hover/selected tint only — no borders; free text is an underline, not a box.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+  const answered = {};
+  const tabs = document.querySelectorAll('.tab');
+  const panels = document.querySelectorAll('.panel');
+  function show(p) {
+    tabs.forEach(t => { const on = t.dataset.p === p; t.classList.toggle('active', on); t.setAttribute('aria-selected', on); });
+    panels.forEach(pl => pl.classList.toggle('active', pl.dataset.panel === p));
+  }
+  tabs.forEach(t => t.addEventListener('click', () => show(t.dataset.p)));
+  function refresh() {
+    const n = Object.keys(answered).length;
+    document.getElementById('progress').textContent = n + ' / 3 answered';
+    document.getElementById('submit').disabled = n < 3;
+    tabs.forEach(t => t.classList.toggle('done', !!answered[t.dataset.p]));
+  }
+  function advance(from) {
+    for (const p of ['1','2','3']) if (!answered[p]) { show(p); return; }
+  }
+  document.querySelectorAll('.opts').forEach(g => {
+    const q = g.dataset.q;
+    g.querySelectorAll('.opt').forEach(btn => btn.addEventListener('click', () => {
+      g.querySelectorAll('.opt').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+      answered[q] = true; refresh(); setTimeout(() => advance(q), 250);
+    }));
+    const ft = g.querySelector('.freetext input');
+    if (ft) ft.addEventListener('input', () => {
+      if (ft.value.trim()) { g.querySelectorAll('.opt').forEach(b => b.classList.remove('selected')); answered[q] = true; }
+      else if (!g.querySelector('.opt.selected')) delete answered[q];
+      refresh();
+    });
+  });
+</script>
+</body>
+</html>

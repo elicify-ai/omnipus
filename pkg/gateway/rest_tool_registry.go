@@ -158,9 +158,17 @@ func (a *restAPI) HandleToolsRegistry(w http.ResponseWriter, r *http.Request) {
 // FR-028, FR-086: effective_policy for SPA badge rendering.
 // Gap 3: manifest_tier tags each tool as "full" (always-callable), "compressed"
 // (lazy — listed in manifest, loaded on demand via the `tools` infra tool), or
-// "infra" (always-callable discovery tool `tools` that drives the manifest
-// mechanism itself). Infra tools are force-included even when FilterToolsByPolicy
-// would drop them for a deny-default agent, mirroring the loop's runtime force-include.
+// "infra" (the discovery tool `tools` that drives the manifest mechanism
+// itself). The infra tool's effective_policy is resolved through the SAME
+// FilterToolsByPolicy call as every other tool — it is seeded "allow" as real
+// policy data for every agent (pkg/coreagent/core.go), so it is present here
+// when actually allowed and correctly absent when an operator has denied it.
+// There used to be a second pass here that unconditionally force-included
+// infra tools with a hardcoded "allow" regardless of what FilterToolsByPolicy
+// resolved, mirroring a runtime force-allow that also existed in the agent
+// loop and gateway approval gate. Both were CLAUDE.md hard-constraint-6
+// violations (a hardcoded allow with no real policy data behind it) and have
+// been removed — this panel now shows the tool's true effective policy.
 func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Request, agentID string) {
 	cfg := a.agentLoop.GetConfig()
 
@@ -220,9 +228,6 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 		allTools := agentInstance.Tools.GetAll()
 		filtered, policyMap := tools.FilterToolsByPolicy(allTools, agentType, policyCfg)
 
-		// Track which tools are already included so infra force-include can dedup.
-		included := make(map[string]struct{}, len(filtered))
-
 		for _, t := range filtered {
 			name := t.Name()
 			// This fallback is provably dead today: FilterToolsByPolicy always
@@ -252,28 +257,6 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 				EffectivePolicy:  gen.AgentToolsResponseToolsEffectivePolicy(effectivePolicy),
 				ManifestTier:     tier,
 			})
-			included[name] = struct{}{}
-		}
-
-		// Force-include infra tools that FilterToolsByPolicy may have dropped for a
-		// deny-default agent. At runtime the agent loop always makes the `tools`
-		// infra tool callable when registered, regardless of policy. The panel must
-		// reflect this so operators can see the complete callable surface.
-		for _, t := range allTools {
-			name := t.Name()
-			if _, alreadyIncluded := included[name]; alreadyIncluded {
-				continue
-			}
-			if tools.ToolManifestTier(name) != tools.ManifestInfra {
-				continue
-			}
-			configuredPolicy := resolveConfiguredPolicy(name, toolsCfg, cfg.Sandbox.ToolPolicies)
-			toolEntries = append(toolEntries, toolsEntry{
-				Name:             name,
-				ConfiguredPolicy: gen.AgentToolsResponseToolsConfiguredPolicy(configuredPolicy),
-				EffectivePolicy:  gen.AgentToolsResponseToolsEffectivePolicy("allow"),
-				ManifestTier:     gen.AgentToolsResponseToolsManifestTierInfra,
-			})
 		}
 	}
 
@@ -294,6 +277,41 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 	builtinPolicies := make(map[string]gen.AgentToolsResponseConfigBuiltinPolicies, len(respPolicies))
 	for k, v := range respPolicies {
 		builtinPolicies[k] = gen.AgentToolsResponseConfigBuiltinPolicies(v)
+	}
+	// CLAUDE.md hard constraint 6 — complete the reported map over the FULL
+	// static builtin catalog, so this response is a valid request body for
+	// PUT /api/v1/agents/{id}/tools.
+	//
+	// That PUT (and PUT /agents/{id} with tools_cfg, and POST /agents) now
+	// rejects an incomplete builtin.policies map with 400, because the map it
+	// receives REPLACES the agent's own map wholesale and a hole in it silently
+	// drops that agent's tightening in favour of the global ceiling at
+	// resolution time (pkg/tools/compositor.go's "one side is enough" merge).
+	// The SPA builds its PUT body by editing exactly the map this handler
+	// returns (src/components/agents/ToolsAndPermissions.tsx's cfgToValue →
+	// valueToCfg round-trip, which spreads the hydrated map and overwrites one
+	// key). So if this response reported only the agent's own, possibly-sparse
+	// stored map, a single per-tool toggle on any agent whose stored map
+	// predates a catalog addition — or whose map was emptied by the malformed-
+	// body defect this change also fixes — would round-trip an incomplete map
+	// and be rejected. Reporting the resolved CONFIGURED policy for every known
+	// tool keeps the read/modify/write cycle closed without weakening the
+	// write-side check.
+	//
+	// The fill value is the same resolveConfiguredPolicy the per-tool entries
+	// above use (agent entry first, then the global ceiling), so nothing here
+	// invents a policy: it reports what the agent already resolves to today. A
+	// name with no entry on EITHER side resolves to "deny" — fail-closed,
+	// never "allow", matching the compositor's own no-match disposition.
+	for toolName := range buildKnownBuiltinToolNames() {
+		if _, ok := builtinPolicies[toolName]; ok {
+			continue
+		}
+		configured := resolveConfiguredPolicy(toolName, toolsCfg, cfg.Sandbox.ToolPolicies)
+		if configured == "" {
+			configured = string(config.ToolPolicyDeny)
+		}
+		builtinPolicies[toolName] = gen.AgentToolsResponseConfigBuiltinPolicies(configured)
 	}
 	agentTypeVal := gen.AgentToolsResponseAgentType(wireAgentType)
 

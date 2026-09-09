@@ -25,6 +25,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/askuser"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
@@ -46,12 +47,13 @@ import (
 // FilterToolsByPolicy uses at defs-assembly time — so the gateway exec gate and
 // the loop's sent-defs view can never drift. It builds the resolver inputs (the
 // sandbox global floor + the agent's builtin policy) from cfg. The primitive
-// encapsulates, in order: (1) infra force-allow (load_tool → allow,
-// unconditional — infra tools are registration-gated, not policy-gated, so they
-// stay executable for EVERY agent including deny-by-default Ava/Mia/Ray, or
-// every lazy tool becomes unreachable at exec time), (2) the scope gate, and
-// (3) global×agent strictest-wins (deny > ask > allow). The tools that load_tool
-// *loads* stay independently policy-gated when they are actually called.
+// encapsulates, in order: (1) the scope gate, and (2) global×agent
+// strictest-wins (deny > ask > allow). ToolSearch resolves through this same
+// merge as every other static builtin tool — it is seeded "allow" as real,
+// explicit data for every agent (pkg/coreagent/core.go), not a code-level
+// force-allow (there used to be one here; it was a CLAUDE.md hard-constraint-6
+// violation and has been removed). The tools that ToolSearch *loads* stay
+// independently policy-gated when they are actually called.
 //
 // BEHAVIOR CHANGE (intentional): this does NOT preserve the OLD gateway exec
 // gate verdict byte-for-byte. The old gateway resolved policy by EXACT-MATCH
@@ -76,12 +78,11 @@ import (
 // policy snapshot from the registry; both paths funnel through
 // tools.EffectiveToolPolicy so they agree on the wildcard-aware verdict.
 func resolveApprovalToolPolicy(cfg *config.Config, toolName, agentID string) string {
-	if tools.ToolManifestTier(toolName) == tools.ManifestInfra {
-		return "allow"
-	}
 	if cfg == nil {
-		// No config to build a floor from: an infra tool was already handled
-		// above; everything else defaults to interactive approval.
+		// No config to build a floor from: no seeded policy data of any kind
+		// (CLAUDE.md hard constraint 6 — no code-level fallback), so this
+		// defaults to interactive approval rather than a language-level allow
+		// or deny.
 		return "ask"
 	}
 	// No default-policy fallback (CLAUDE.md hard constraint 6): only explicit
@@ -171,6 +172,8 @@ type replayFrameDecoder struct { // not-wire-format: decode-only test assertion 
 	TaskID       string           `json:"task_id,omitempty"`
 	PlanID       string           `json:"plan_id,omitempty"`
 	PerCriterion []map[string]any `json:"per_criterion,omitempty"`
+	// AskUserQuestionFrame decoder slot (spec v3 §0.6 replay reconstruction).
+	Card map[string]any `json:"card,omitempty"`
 }
 
 // WSHandler handles the /api/v1/chat/ws WebSocket endpoint for bi-directional
@@ -196,6 +199,12 @@ type WSHandler struct {
 	// approvalRegV2 is the Central Tool Registry approval registry (FR-016, FR-070).
 	// Injected at boot by the gateway after construction.  Nil until then.
 	approvalRegV2 *approvalRegistryV2
+
+	// askUserReg is the AskUserQuestion pending registry (askuserquestion-
+	// tool-spec v3; pkg/askuser). Injected at boot alongside approvalRegV2.
+	// Nil until then — handleAskUserAnswer and emitSessionState's
+	// pending_asks snapshot degrade gracefully.
+	askUserReg *askuser.Registry
 
 	// devicePairingRegistry tracks in-flight device pairing requests awaiting operator approval.
 	devicePairingRegistry *devicePairingRegistry
@@ -1114,6 +1123,27 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 				continue
 			}
 			h.subscribePairingInterest(wc, f.ChannelId, f.Active)
+		case string(generated.WsFrameTypeAskUserAnswer):
+			// AskUserQuestion card submission/cancel (askuserquestion-tool-
+			// spec v3 §3): bridge to askuser.Registry.Submit / CancelByUser.
+			// Full semantic validation (ownership, membership, arity,
+			// first-valid-wins) is the registry's; the schema gate above
+			// (wsFrameSchemaName → AskUserAnswerFrame) bounds the shape.
+			var f generated.AskUserAnswerFrame
+			if err := json.Unmarshal(data, &f); err != nil {
+				slog.Warn("ws: malformed ask_user_answer frame", "error", err)
+				wc.inboundDropped.Add(1)
+				continue
+			}
+			if f.CardId == "" || f.SessionId == "" {
+				wc.inboundDropped.Add(1)
+				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+					Type:    string(generated.WsFrameTypeError),
+					Message: "ask_user_answer requires card_id and session_id",
+				})
+				continue
+			}
+			h.handleAskUserAnswer(wc, f)
 		default:
 			slog.Debug("ws: unknown frame type ignored", "type", peek.Type, "chat_id", chatID)
 		}
@@ -1137,6 +1167,8 @@ func wsFrameSchemaName(frameType string) string {
 		return "SessionCloseFrame"
 	case string(generated.WsFrameTypeWhatsappPairingSubscribe):
 		return "WhatsAppPairingSubscribeFrame"
+	case string(generated.WsFrameTypeAskUserAnswer):
+		return "AskUserAnswerFrame"
 	case string(generated.WsFrameTypePing):
 		return "PingFrame"
 	// ADR-038 finding #3: the 4 browser-live client→server frame types.
@@ -2689,7 +2721,12 @@ func (h *WSHandler) handleAttachSession(
 		// agent.AgentLoop.IsSubTurnActiveForSpawnCall's doc comment.
 		isSpanActive = h.agentLoop.IsSubTurnActiveForSpawnCall
 	}
-	framesEmitted, replayErr := streamReplay(ctx, attachID, entries, rs, emitFn, mediaStore, h.toolStore, isSpanActive)
+	// askuserquestion-tool-spec v3 §0.6: hand replay the session's terminal
+	// (answered/cancelled) AskUserQuestion record, if any, so the collapsed
+	// card is reconstructed on cold history load and the §0.2 resume message
+	// never renders as a raw JSON bubble — see streamReplay's terminalAsk doc.
+	terminalAsk := loadTerminalAskRecord(store, attachID)
+	framesEmitted, replayErr := streamReplay(ctx, attachID, entries, rs, emitFn, mediaStore, h.toolStore, isSpanActive, terminalAsk)
 
 	durationMS := time.Since(replayStart).Milliseconds()
 
@@ -2937,6 +2974,30 @@ func sendConnGenFrame(wc *wsConn, frameType string, frame any) {
 		return
 	}
 	sendRawFrameBytes(wc, frameType, data)
+}
+
+// broadcastRaw fans one pre-marshaled frame out to every connected WS client
+// (single-user model — every connection is the one account, so no per-account
+// scoping). Best-effort: a connection whose send buffer is full drops the
+// frame (logged with the caller-supplied message/attrs, counted on
+// wc.droppedFrames) and must recover from the next reconnect snapshot.
+// Shared by broadcastAskUserCard and broadcastToolApprovalRequired, which
+// each keep their own frame construction and drop-log identity.
+func (h *WSHandler) broadcastRaw(raw []byte, dropLogMsg string, dropLogAttrs ...any) {
+	h.mu.Lock()
+	conns := make([]*wsConn, 0, len(h.sessions))
+	for _, wc := range h.sessions {
+		conns = append(conns, wc)
+	}
+	h.mu.Unlock()
+	for _, wc := range conns {
+		select {
+		case wc.sendCh <- raw:
+		default:
+			slog.Warn(dropLogMsg, dropLogAttrs...)
+			wc.droppedFrames.Add(1)
+		}
+	}
 }
 
 // sendRawFrameBytes routes pre-marshaled frame bytes to the connection's send channel.
@@ -3199,12 +3260,13 @@ type openSpanEntry struct {
 //
 //   - agent_switched → class (a). Built at this file's ToolExecEnd case
 //     (below, evtSID := p.SessionID from agent.ToolExecEndPayload) immediately
-//     after a successful hand_off/return_to_default tool_call_result — the
-//     IDENTICAL payload and session-id source as tool_call_result, which is
-//     already verified class (a). A delegated child can invoke hand_off on
-//     its own session exactly as a root turn can, so evtSID is the child's own
-//     producing session whenever that happens, distinct from the routing key.
-//     Stamped alongside tool_call_result above.
+//     after a successful switch_agent tool_call_result (ADR-071 D4 merged
+//     hand_off/return_to_default into this one tool) — the IDENTICAL payload
+//     and session-id source as tool_call_result, which is already verified
+//     class (a). A delegated child can invoke switch_agent on its own session
+//     exactly as a root turn can, so evtSID is the child's own producing
+//     session whenever that happens, distinct from the routing key. Stamped
+//     alongside tool_call_result above.
 //
 //   - task_status_changed → class (b). Its only non-test construction site is
 //     `TaskStatusChangedFrame{..., SessionId: p.SessionID, ...}` (this file's
@@ -3878,7 +3940,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				producingSIDForResult = producingSID
 			}
 			sendConnGenFrame(wc, string(generated.WsFrameTypeToolCallResult), resultF)
-			// When the handoff tool succeeds, notify the frontend to switch agents.
+			// When switch_agent succeeds, notify the frontend to switch agents.
 			// Use evtSID (the session ID from the payload) to key the lookup, not chatID.
 			//
 			// ADR-057 FR-089 (W5 audit): agent_switched is class (a), not
@@ -3886,48 +3948,81 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			// comment pre-audit) — it is derived from THIS SAME
 			// ToolExecEndPayload, at the exact call site whose tool_call_result
 			// sibling is already verified class (a): a delegated child can
-			// invoke hand_off/return_to_default on its OWN session exactly as a
-			// root turn can, so evtSID here is the CHILD's own producing
-			// session whenever the hand_off ran inside a sub-turn, distinct
-			// from the routing key placed in SessionId below. Reuses
+			// invoke switch_agent on its OWN session exactly as a root turn
+			// can, so evtSID here is the CHILD's own producing session
+			// whenever switch_agent ran inside a sub-turn, distinct from the
+			// routing key placed in SessionId below. Reuses
 			// producingSIDForResult computed above rather than re-deriving it,
 			// since both frames answer the identical "does this ToolExecEnd's
 			// producer differ from its routing key" question.
-			if p.Tool == "hand_off" && status == "success" {
-				if activeAgent, ok := h.agentLoop.GetSessionActiveAgent(evtSID); ok {
-					agentName, _ := h.agentLoop.GetRegistry().GetAgentName(activeAgent)
-					// Use generated.AgentSwitchedFrame (contract-first migration).
-					switchF := generated.AgentSwitchedFrame{
-						Type:      string(generated.WsFrameTypeAgentSwitched),
-						SessionId: evtSID,
-					}
-					if activeAgent != "" {
-						switchF.AgentId = &activeAgent
-					}
-					if agentName != "" {
-						switchF.Message = &agentName
-					}
-					if producingSIDForResult != "" {
-						pid := producingSIDForResult
-						switchF.ProducingSessionId = &pid
-					}
-					sendConnGenFrame(wc, string(generated.WsFrameTypeAgentSwitched), switchF)
-				}
-			}
-			if p.Tool == "return_to_default" && status == "success" {
+			//
+			// ADR-071 §5.2.1/§5.2.2: this used to be TWO exact-string
+			// branches (p.Tool == "hand_off" and p.Tool == "return_to_default"),
+			// one per retired tool. D4 merged both into one tool name with no
+			// arguments in ToolExecEndPayload to distinguish which branch ran
+			// (agent.ToolExecEndPayload carries no tool-arguments field).
+			//
+			// The semantic is NOT re-derived from the resulting agent id
+			// (§5.2.2 decision A's original approach: comparing the
+			// session's post-switch active agent against the registry's
+			// default agent id) — that comparison misreports an explicit
+			// switch_agent(target:"<id>") that happens to name the CURRENT
+			// default agent as a return-to-default, since the resulting
+			// AgentID is identical in both cases. Instead this reads the
+			// tool's own toDefault intent back via GetLastSwitchToDefault,
+			// populated synchronously by onHandoffFrontend (pkg/agent/loop.go)
+			// from tools.HandoffEvent.ToDefault before this ToolExecEnd event
+			// is even emitted, keyed the same way GetSessionActiveAgent is.
+			if p.Tool == "switch_agent" && status == "success" {
 				defaultAgent := h.agentLoop.GetRegistry().GetDefaultAgent()
 				var defaultName string
 				if defaultAgent != nil {
 					defaultName = defaultAgent.Name
 				}
-				// Use generated.AgentSwitchedFrame (contract-first migration).
+				activeAgent, activeOk := h.agentLoop.GetSessionActiveAgent(evtSID)
+				toDefault, sawToDefault := h.agentLoop.GetLastSwitchToDefault(evtSID)
+				if !activeOk {
+					// After a SUCCESSFUL switch this is an invariant
+					// violation, not a normal path (§5.2.2) — WARN rather
+					// than silently emitting nothing, so this is
+					// distinguishable in logs from the exact regression
+					// this section exists to prevent. Still emit a frame
+					// below (defaulting to the "returned to default" shape)
+					// rather than dropping it — the sibling
+					// return_to_default branch never had this guard and
+					// always emitted.
+					slog.Warn("websocket: switch_agent succeeded but no active agent found for session",
+						"session_id", evtSID)
+				}
+				if !sawToDefault {
+					// Should not happen on the success path — onHandoffFrontend
+					// stores this before Execute returns, strictly before this
+					// event fires. Fall back to the old id-comparison so a
+					// frame still emits (best-effort) rather than silently
+					// dropping, and make the anomaly visible.
+					slog.Warn("websocket: switch_agent succeeded but no toDefault record found for session; falling back to id comparison",
+						"session_id", evtSID)
+					toDefault = !activeOk || activeAgent == "" || (defaultAgent != nil && activeAgent == defaultAgent.ID)
+				}
 				switchF := generated.AgentSwitchedFrame{
 					Type:      string(generated.WsFrameTypeAgentSwitched),
 					SessionId: evtSID,
-					// AgentId omitted (nil ptr) = return to default agent
 				}
-				if defaultName != "" {
-					switchF.Message = &defaultName
+				if activeOk && activeAgent != "" && !toDefault {
+					// Named-target switch.
+					agentName, _ := h.agentLoop.GetRegistry().GetAgentName(activeAgent)
+					switchF.AgentId = &activeAgent
+					if agentName != "" {
+						switchF.Message = &agentName
+					}
+				} else {
+					// Returned to default (or the active-agent lookup was
+					// unavailable — best-effort default shape per the WARN
+					// above). AgentId omitted (nil ptr) = return to default
+					// agent.
+					if defaultName != "" {
+						switchF.Message = &defaultName
+					}
 				}
 				if producingSIDForResult != "" {
 					pid := producingSIDForResult
@@ -4248,6 +4343,21 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				gid := p.GoalID
 				goalF.GoalId = &gid
 			}
+			// ADR-074 D5.2 / FR-011: the compiled criteria breakdown rides the
+			// `queued` (pending-confirm) emission so the SPA's echo card can
+			// itemize exactly what will run (commands verbatim). Optional on
+			// the wire — absent (nil) on every other emission.
+			setGoalStatusCriteria(&goalF, p.Criteria)
+			// ADR-080 D-STATEMENT/D-DOD: the restated goal statement and the
+			// Definition-of-Done breakdown ride the SAME `queued` emission as
+			// Criteria above — both optional on the wire, absent on every
+			// other emission (goal_loop.go's emitGoalStatusFrameWithCriteriaAndDoD
+			// only ever populates them on the pending-confirm push).
+			if p.Definition != "" {
+				def := p.Definition
+				goalF.Definition = &def
+			}
+			setGoalStatusDoD(&goalF, p.DoD)
 			sendConnGenFrame(wc, string(generated.WsFrameTypeGoalStatus), goalF)
 		case agent.EventKindLoopStatusChanged:
 			// ADR-049 D6/D7: a session's `/loop` status changed (set, run

@@ -35,7 +35,6 @@ func seedChainRecord(t *testing.T, lc *session.LifecycleStore, sessionID, parent
 		ParentDurableKey: parentDurableKey,
 		WorkspaceID:      "ws-1",
 		AgentID:          "worker",
-		LaunchProfile:    session.LaunchProfileSpecialist,
 	}); err != nil {
 		t.Fatalf("seed lifecycle record %s failed: %v", sessionID, err)
 	}

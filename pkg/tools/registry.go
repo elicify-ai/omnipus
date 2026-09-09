@@ -1,7 +1,8 @@
 // Package tools implements the Tool interface, the central ToolRegistry, and
 // the full catalog of builtin tools available to Omnipus agents — the
-// unified bash tool (ADR-036), delegate/hand_off (agent-to-agent delegation),
-// filesystem, session, web, memory, messaging, skills, and MCP-backed tools.
+// unified bash tool (ADR-036), delegate/switch_agent (agent-to-agent
+// delegation, ADR-071 D4), filesystem, session, web, memory, messaging,
+// skills, and MCP-backed tools.
 // ToolRegistry (this file) is the single registration/dispatch point every
 // agent's tool loop calls through; Tool (base.go) is the interface every
 // tool implements; the compositor (compositor.go) applies per-agent
@@ -439,6 +440,31 @@ func (r *ToolRegistry) Execute(ctx context.Context, name string, args map[string
 	return r.ExecuteWithContext(ctx, name, args, "", "", nil)
 }
 
+// retiredToolCanonicalNames maps a tool name retired by a rename to its
+// current, callable replacement name. It exists SOLELY to give a caller
+// (an LLM using a stale/hallucinated name, or an operator's old
+// muscle-memory) an actionable "renamed to X" error instead of a bare
+// "not found" — it is never registered as a tool, never appears in
+// AllStaticToolNames/InfraManifestToolNames/any manifest or policy surface,
+// and a call using the retired name still does not execute anything.
+//
+// This is deliberately NOT a dispatch-time alias (i.e. Get/Execute do not
+// silently resolve the old name and run the new tool): ADR-071's
+// "Alternatives Considered" §8.D rejected keeping a retired tool name
+// permanently callable alongside its replacement ("the permanent-dual-key
+// pattern ADR-036 §3.6 explicitly refused... it would leave three tool
+// identities for one capability"), and ADR-036 §3.6 itself states "No
+// permanent dual-key backward compatibility" as an explicit operator
+// decision. Both apply equally to a single retired/replacement pair. The
+// SPA's own legacy-name handling (humanizeToolName.ts, toolVisibility.ts)
+// is intentionally display-only for the same reason: it makes an
+// ALREADY-PERSISTED pre-rename transcript render correctly, it does not
+// make a NEW call to the old name succeed.
+var retiredToolCanonicalNames = map[string]string{
+	// ADR-071 D1: load_tool -> ToolSearch (2026-08-28).
+	"load_tool": "ToolSearch",
+}
+
 // ExecuteWithContext executes a tool with channel/chatID context and optional async callback.
 // If the tool implements AsyncExecutor and a non-nil callback is provided,
 // ExecuteAsync is called instead of Execute — the callback is a parameter,
@@ -467,6 +493,15 @@ func (r *ToolRegistry) ExecuteWithContext(
 
 	tool, ok := r.Get(name)
 	if !ok {
+		if canonical, retired := retiredToolCanonicalNames[name]; retired {
+			logger.WarnCF("tool", "Tool call used a retired name",
+				map[string]any{
+					"tool":      name,
+					"canonical": canonical,
+				})
+			return ErrorResult(fmt.Sprintf("tool %q was renamed to %q — call %q instead", name, canonical, canonical)).
+				WithError(fmt.Errorf("tool %q was renamed to %q", name, canonical))
+		}
 		logger.ErrorCF("tool", "Tool not found",
 			map[string]any{
 				"tool": name,
@@ -806,7 +841,7 @@ const (
 	//
 	// REVERSED (ADR-040, 2026-07-12): this constant is no longer passed at the
 	// production call site (pkg/agent/subturn.go's spawnSubTurn now calls
-	// CloneExcept(tools.ExcludedHandoff) only — see that call site's own
+	// CloneExcept(tools.ExcludedSwitchAgent) only — see that call site's own
 	// comment). FR-H-006's registry-level "one level only for general
 	// subagents" block pre-empted the per-workspace delegation trust-graph
 	// (ADR-037) from ever running for nested delegation, silently overriding
@@ -819,9 +854,13 @@ const (
 	// legitimately needs to omit `delegate` from a cloned registry; it is
 	// simply no longer applied unconditionally to every child sub-turn.
 	ExcludedDelegate ExcludedTool = "delegate"
-	// ExcludedHandoff is the agent-switch tool. Excluded from child registries to
-	// prevent sub-turns from hijacking the active agent session (FR-H-006).
-	ExcludedHandoff ExcludedTool = "hand_off"
+	// ExcludedSwitchAgent is the agent-switch tool. Excluded from child
+	// registries to prevent sub-turns from hijacking the active agent
+	// session (FR-H-006). Renamed from ExcludedHandoff (ADR-071 D4, which
+	// merged hand_off + return_to_default into switch_agent) — the constant
+	// identity tracks the tool it excludes, matching ExcludedDelegate's
+	// naming convention.
+	ExcludedSwitchAgent ExcludedTool = "switch_agent"
 )
 
 // CloneExcept creates an independent copy of the registry omitting the named tools.
@@ -829,10 +868,11 @@ const (
 // certain tools. The version counter is reset to 0 in the clone as it is a new
 // independent registry.
 //
-// The canonical production call site is now CloneExcept(ExcludedHandoff) only
-// (pkg/agent/subturn.go's spawnSubTurn) — a child sub-turn must never be able
-// to hijack the active agent session via hand_off, but CAN delegate onward to
-// a grandchild, governed instead by the per-workspace delegation trust-graph's
+// The canonical production call site is now CloneExcept(ExcludedSwitchAgent)
+// only (pkg/agent/subturn.go's spawnSubTurn) — a child sub-turn must never be
+// able to hijack the active agent session via switch_agent, but CAN delegate
+// onward to a grandchild, governed instead by the per-workspace delegation
+// trust-graph's
 // mode/depth gate. This reverses the prior "a child sub-turn must never be
 // able to delegate to a grandchild" rule that used to live here: see
 // ADR-040 (docs/internal/architecture/ADR-040-fr-h-006-nested-delegation-reversal.md)

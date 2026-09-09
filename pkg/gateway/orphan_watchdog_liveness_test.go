@@ -490,9 +490,28 @@ func TestOrphanWatchdog_PermanentlyStuckDelegate_ForceFiresInterruptedPastCeilin
 
 	al.UnsubscribeEvents(sub.ID)
 	<-fwdDone
-	// unblock is deliberately never closed — the gated goroutine remains
-	// blocked for the rest of the test process; harmless at process exit and
-	// consistent with modeling a permanently wedged tool call.
+
+	// The watchdog's force-fire above is a synthetic websocket frame only —
+	// it never cancels the real sub-turn, so the gated goroutine parked in
+	// orphan_gate_tool is still running. A stale comment here used to claim
+	// leaving `unblock` closed was "harmless at process exit"; that's wrong
+	// under `go test`, which runs a whole package in one process — the
+	// leaked goroutine's slog writes (DelegateTool.transitionLifecycle) hit
+	// the process-wide slog default and can race a LATER test's captured-log
+	// buffer read (this raced TestHandleOnboardingProbeProvider_EmptyModelsWarns
+	// under -race). Release the gate and wait for real exit before returning.
+	close(unblock)
+	asyncDone := make(chan struct{})
+	go func() {
+		defer close(asyncDone)
+		delegateTool.WaitForAsyncTasks()
+	}()
+	select {
+	case <-asyncDone:
+	case <-time.After(15 * time.Second):
+		t.Fatal("BLOCKED: gated delegate goroutine did not finish within 15s of releasing the gate " +
+			"past the reschedule ceiling — the permanently-stuck delegate was never actually reaped")
+	}
 }
 
 // drainAllFrames non-blockingly drains every currently-queued raw frame

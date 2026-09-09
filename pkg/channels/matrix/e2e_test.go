@@ -54,6 +54,7 @@ import (
 	"maunium.net/go/mautrix/crypto/cryptohelper"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
+
 	// Pure-Go SQLite driver (modernc.org/sqlite). Registers the "sqlite"
 	// database/sql driver used by the dbutil "sqlite" dialect below. This
 	// avoids the cgo-tagged mattn/go-sqlite3 registration path that ships

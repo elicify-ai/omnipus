@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // KernelDeniedPathsFor is DeniedPathsFor rendered at the granularity a KERNEL
@@ -92,7 +93,15 @@ func KernelDeniedPathsFor(home, workDir string) ([]string, error) {
 			// Not re-admitted — DeniedPathsFor already denied the whole root.
 			continue
 		}
-		siblings, err := siblingsOutsideOwnBranch(root, cleanWork)
+		// isProperDescendant answers by filesystem IDENTITY; the chain walk
+		// below is LEXICAL. Re-anchor the root into the spelling that is a
+		// lexical ancestor of the work dir before walking. See chainRootFor.
+		chainRoot, err := chainRootFor(root, cleanWork)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"fspolicy: cannot anchor %q against work dir %q: %w", root, cleanWork, err)
+		}
+		siblings, err := siblingsOutsideOwnBranch(chainRoot, cleanWork)
 		if err != nil {
 			return nil, fmt.Errorf(
 				"fspolicy: cannot enumerate %q to separate the caller's own tree from the others: %w", root, err)
@@ -204,13 +213,23 @@ func KernelDeniedNodesFor(home, workDir string) []string {
 			// deny on top would be redundant.
 			continue
 		}
-		rel, err := filepath.Rel(root, cleanWork)
-		if err != nil {
+		// Same identity-vs-lexical hazard as KernelDeniedPathsFor: re-anchor
+		// before computing a relative chain. This function has no error
+		// return, so an unanchorable root degrades to denying writes on the
+		// root NODE alone — narrower than the full chain, and never the
+		// upward walk that a `..`-bearing relative path would produce.
+		chainRoot, anchorErr := chainRootFor(root, cleanWork)
+		if anchorErr != nil {
+			out = append(out, root)
 			continue
 		}
-		current := root
+		components, relErr := descendingComponents(chainRoot, cleanWork)
+		if relErr != nil {
+			out = append(out, chainRoot)
+			continue
+		}
+		current := chainRoot
 		out = append(out, current)
-		components := splitPathComponents(rel)
 		// The final component IS the work dir, which must stay operable.
 		for i := 0; i < len(components)-1; i++ {
 			current = filepath.Join(current, components[i])
@@ -218,6 +237,99 @@ func KernelDeniedNodesFor(home, workDir string) []string {
 		}
 	}
 	return out
+}
+
+// chainRootFor returns the spelling of root that is a LEXICAL ancestor of
+// workDir, so a caller can safely walk down from it with filepath.Rel.
+//
+// # The bug this exists to make impossible
+//
+// The callers decide "is workDir inside root?" with isProperDescendant, which
+// answers by FILESYSTEM IDENTITY (os.SameFile) and therefore says yes even when
+// the two paths are spelled differently — which they routinely are. WorkDir
+// arrives symlink-resolved (fspolicy.EffectiveFSPolicy calls realpath on it),
+// while root is built from $OMNIPUS_HOME exactly as the operator wrote it. On
+// macOS /tmp is a firmlink to /private/tmp, so an $OMNIPUS_HOME of
+// /tmp/omnipus-home yields root=/tmp/omnipus-home/agents and
+// workDir=/private/tmp/omnipus-home/agents/self.
+//
+// filepath.Rel of those two is "../../../private/tmp/omnipus-home/agents/self".
+// Walking that chain does not descend — it ASCENDS, one ReadDir per "..", and
+// the callers deny every entry they meet on the way. MEASURED on Darwin 25.5.0
+// against the real product path, with $OMNIPUS_HOME=/tmp/omnipus-uat-home: the
+// rendered Seatbelt profile grew from ~50 KB to 663 KB / 12,184 deny rules and
+// contained
+//
+//	(deny file-read* (subpath "/bin"))     (deny file-read* (subpath "/usr"))
+//	(deny file-read* (subpath "/System"))  (deny file-read* (subpath "/private/var"))
+//	(deny file-write* (literal "/"))       (deny file-write* (literal "/private"))
+//
+// i.e. the secret set had swallowed the entire filesystem. Every child then
+// failed with EPERM on paths the same profile plainly allowed a few lines
+// earlier — "sh: ls: command not found", "Error opening /private/var/select/sh",
+// and "getcwd: cannot access parent directories" on every single invocation.
+// The blanket (allow file-read*) of the ADR-062 open model does not save it:
+// per the measured precedence table in seatbelt_profile.go, an UNFILTERED
+// blanket allow never overrides a filtered deny, in either order.
+//
+// Nothing reported any of this. The profile rendered, sandbox-exec accepted it,
+// and the boot log said the sandbox was active.
+//
+// # The rule
+//
+// Prefer the declared spelling; fall back to the symlink-resolved one; refuse
+// if neither is a lexical ancestor. Refusing is the fail-closed direction: the
+// callers turn it into "deny this root wholesale" (KernelDeniedPathsFor's error
+// contract) or "deny the root node only" (KernelDeniedNodesFor), never into an
+// upward walk.
+func chainRootFor(root, workDir string) (string, error) {
+	if isLexicalAncestor(root, workDir) {
+		return root, nil
+	}
+	resolved, err := filepath.EvalSymlinks(root)
+	if err == nil && isLexicalAncestor(resolved, workDir) {
+		return resolved, nil
+	}
+	return "", fmt.Errorf(
+		"work dir is inside the root by filesystem identity but neither the declared spelling %q "+
+			"nor its resolved form is a lexical ancestor of %q (a relative walk would ascend out of the root)",
+		root, workDir)
+}
+
+// isLexicalAncestor reports whether dir is a strict prefix DIRECTORY of p,
+// comparing path text only. Both arguments must already be cleaned.
+func isLexicalAncestor(dir, p string) bool {
+	if dir == "" || p == "" || dir == p {
+		return false
+	}
+	sep := string(filepath.Separator)
+	if dir == sep {
+		return strings.HasPrefix(p, sep) && len(p) > 1
+	}
+	return strings.HasPrefix(p, dir+sep)
+}
+
+// descendingComponents returns the path components leading from root DOWN to
+// workDir, refusing any chain that would step outside root.
+//
+// The ".." check is the backstop for chainRootFor: even if a future caller
+// forgets to anchor, or a path form nobody anticipated slips through, this
+// function fails rather than handing back a chain that walks up to "/". A deny
+// list is a security control, and one that silently grows to cover the whole
+// filesystem is not a stricter control — it is a broken one.
+func descendingComponents(root, workDir string) ([]string, error) {
+	rel, err := filepath.Rel(root, workDir)
+	if err != nil {
+		return nil, fmt.Errorf("relate %q to %q: %w", workDir, root, err)
+	}
+	components := splitPathComponents(rel)
+	for _, c := range components {
+		if c == ".." {
+			return nil, fmt.Errorf(
+				"relative path %q from %q to %q escapes the root; refusing to walk upward", rel, root, workDir)
+		}
+	}
+	return components, nil
 }
 
 // siblingsOutsideOwnBranch returns every entry under root that is NOT on the
@@ -231,14 +343,17 @@ func KernelDeniedNodesFor(home, workDir string) []string {
 //
 // workDir MUST be a proper descendant of root; the caller checks that.
 func siblingsOutsideOwnBranch(root, workDir string) ([]string, error) {
-	rel, err := filepath.Rel(root, workDir)
+	// descendingComponents, not a bare filepath.Rel: a chain containing ".."
+	// makes this loop ReadDir its way UP to "/" and deny every entry of every
+	// directory on the way. See chainRootFor for the measured consequences.
+	components, err := descendingComponents(root, workDir)
 	if err != nil {
-		return nil, fmt.Errorf("relate %q to %q: %w", workDir, root, err)
+		return nil, err
 	}
 
 	var out []string
 	current := root
-	for _, onChain := range splitPathComponents(rel) {
+	for _, onChain := range components {
 		entries, readErr := os.ReadDir(current)
 		if readErr != nil {
 			// A chain component that does not exist yet (a workspace whose

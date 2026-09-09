@@ -18,6 +18,14 @@ import (
 // gateway.log. shouldLogExplicitCeilingWarn is the throttle gate split out
 // from clampParallelExplicit specifically so this can be tested with a fake
 // clock, without depending on capturing real logger output.
+//
+// NOTE ON SCOPE, since the surrounding machinery changed underneath this test:
+// the AUTO-DETECT path this warning used to sit beside is deleted (there is no
+// longer a computed default). The EXPLICIT path is untouched —
+// clampParallelExplicit still honours any operator value in full and still
+// warns loudly above physicalConcurrencySafetyCeiling rather than lowering it,
+// which is the ADR-037 rule this whole throttle exists to serve. This test and
+// its subject are unchanged deliberately.
 func TestShouldLogExplicitCeilingWarn_Throttles(t *testing.T) {
 	old := lastExplicitCeilingWarnNano.Load()
 	lastExplicitCeilingWarnNano.Store(0)

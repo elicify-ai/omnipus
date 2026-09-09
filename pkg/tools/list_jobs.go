@@ -208,7 +208,8 @@ func (t *ListJobsTool) Category() ToolCategory { return CategoryTasks }
 // lives in the operator documentation, never here.
 func (t *ListJobsTool) Description() string {
 	return "List your own outstanding background work: plans you own, subagents you delegated, " +
-		"and standalone tasks assigned to or created by you. Read-only, and a best-effort " +
+		"and standalone tasks assigned to or created by you.\n" +
+		"Read-only, and a best-effort " +
 		"near-snapshot taken while work is changing — never a transactional one. An id is " +
 		"meaningful only paired with its kind. actionable=false means the row is informational " +
 		"only and that kind's action tools will not accept its id. attention=caller means the row " +

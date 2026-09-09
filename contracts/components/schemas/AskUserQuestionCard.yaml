@@ -1,0 +1,142 @@
+title: AskUserQuestionCard
+description: >
+  One AskUserQuestion card (askuserquestion-tool-spec v3, ADR-074 D4b): the
+  durable pending/terminal record of a parked question set, as rendered by
+  the SPA card. Carried by AskUserQuestionFrame (live push) and
+  SessionStateFrame.pending_asks (reconnect snapshot). Backed by
+  pkg/askuser.PendingSet. Canonical copy lives inline in
+  contracts/asyncapi.yaml components.schemas (AsyncAPI does not resolve
+  cross-file $ref for its own codegen) — this file exists for the
+  Constraint #8 5-step process and the machine-synced inboundschemas copy
+  (gen-contracts step 5); the HAND-synced pair is {this file, the asyncapi
+  inline copy}.
+type: object
+required:
+  - card_id
+  - session_id
+  - agent_id
+  - status
+  - created_at
+  - questions
+additionalProperties: false
+properties:
+  card_id:
+    type: string
+    minLength: 1
+  session_id:
+    type: string
+    minLength: 1
+    description: Transcript session id the set is parked on (session-scoped).
+  agent_id:
+    type: string
+    description: Agent that asked — names the card's "needs your input" header.
+  status:
+    type: string
+    enum:
+      - pending
+      - answered
+      - cancelled
+  created_at:
+    type: string
+    format: date-time
+  default_safe_at:
+    type: string
+    format: date-time
+    description: >
+      When the set carries at least one default_safe question: the instant
+      those questions auto-resolve to their recommendation (created_at +
+      the fixed 30 minutes). Drives the countdown line.
+  auto_resolved:
+    type: array
+    items:
+      type: string
+    maxItems: 10
+    description: >
+      Headers of default_safe questions the server has already
+      resolved-pending-submit (US-3 S2) — reconnect hydration marks them
+      selected + auto.
+  questions:
+    type: array
+    minItems: 1
+    maxItems: 10
+    items:
+      type: object
+      required:
+        - header
+        - question
+        - options
+      additionalProperties: false
+      properties:
+        header:
+          type: string
+          minLength: 1
+          maxLength: 16
+        question:
+          type: string
+          minLength: 1
+          maxLength: 500
+        options:
+          type: array
+          minItems: 2
+          maxItems: 6
+          items:
+            type: object
+            required:
+              - label
+            additionalProperties: false
+            properties:
+              label:
+                type: string
+                minLength: 1
+                maxLength: 80
+              description:
+                type: string
+                maxLength: 200
+        multi_select:
+          type: boolean
+        recommended:
+          type: string
+          maxLength: 80
+          description: Label of the recommended option (badged, listed first, never pre-selected).
+        default_safe:
+          type: boolean
+        context:
+          type: string
+          maxLength: 4000
+          description: >
+            Raw markdown, display-only — the SPA renders it through the
+            sanitized chat markdown pipeline (hostile markdown must stay
+            inert, spec US-4/FR-7).
+  answers:
+    type: array
+    maxItems: 10
+    description: >
+      Populated when status != pending — the collapsed record renders from
+      THIS record (spec §0.6), never by parsing the resume message.
+    items:
+      type: object
+      required:
+        - header
+        - question
+        - auto_default
+      additionalProperties: false
+      properties:
+        header:
+          type: string
+          minLength: 1
+          maxLength: 16
+        question:
+          type: string
+          minLength: 1
+          maxLength: 500
+        selected:
+          type: array
+          items:
+            type: string
+            maxLength: 80
+          maxItems: 6
+        free_text:
+          type: string
+          maxLength: 2000
+        auto_default:
+          type: boolean

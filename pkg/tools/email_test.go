@@ -271,6 +271,49 @@ func TestReplyTool_ThreadsToOriginalSender(t *testing.T) {
 	}
 }
 
+// TestReplyTool_PrefersReplyToOverFrom verifies: when the original message
+// carries a Reply-To header, the reply is addressed there instead of From —
+// the address the sender (list mail, ticketing system, no-reply@ sender)
+// explicitly asked replies to go to.
+func TestReplyTool_PrefersReplyToOverFrom(t *testing.T) {
+	ft := newFakeTransport(email.Message{
+		UID: 7, From: "no-reply@list.example.com", ReplyTo: "discuss@list.example.com",
+		Subject: "Weekly digest", MessageID: "<digest@list.example.com>",
+	})
+	res := NewReplyTool(EmailTransports{"ws_test": ft}).Execute(context.Background(), map[string]any{
+		"uid": float64(7), "body": "Thanks for the digest",
+	})
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.ForLLM)
+	}
+	if len(ft.sent) != 1 {
+		t.Fatalf("expected one send, got %d", len(ft.sent))
+	}
+	if got := ft.sent[0].To; got != "discuss@list.example.com" {
+		t.Fatalf("reply must go to Reply-To when present, got %q", got)
+	}
+	if !strings.Contains(res.ForLLM, `"to":"discuss@list.example.com"`) {
+		t.Fatalf("result must echo the Reply-To address actually used, got %+v", res)
+	}
+}
+
+// TestReplyTool_FallsBackToFromWhenNoReplyTo verifies that with no Reply-To
+// header, the reply still goes to From as before (regression guard).
+func TestReplyTool_FallsBackToFromWhenNoReplyTo(t *testing.T) {
+	ft := newFakeTransport(email.Message{
+		UID: 8, From: "alice@x.com", Subject: "Hi", MessageID: "<h@x.com>",
+	})
+	res := NewReplyTool(EmailTransports{"ws_test": ft}).Execute(context.Background(), map[string]any{
+		"uid": float64(8), "body": "hello",
+	})
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.ForLLM)
+	}
+	if got := ft.sent[0].To; got != "alice@x.com" {
+		t.Fatalf("reply must fall back to From when no Reply-To, got %q", got)
+	}
+}
+
 func TestReplyTool_AlreadyRePrefixed(t *testing.T) {
 	ft := newFakeTransport(email.Message{UID: 9, From: "a@x.com", Subject: "Re: Hi"})
 	res := NewReplyTool(

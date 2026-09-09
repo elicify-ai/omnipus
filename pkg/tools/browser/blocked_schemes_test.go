@@ -40,6 +40,10 @@ func TestBlockedSchemesRejectedRegardlessOfSSRF(t *testing.T) {
 		url    string
 		scheme string
 	}{
+		// file:// carries its own, more useful refusal (FR-019) — it names
+		// serve_web and the /preview/ route rather than stopping at "blocked".
+		// Asserted in full by TestValidateURL_FileScheme_NamesServeWeb; here
+		// it only has to still be BLOCKED.
 		{"file:///etc/passwd", "file"},
 		{"javascript:alert(1)", "javascript"},
 		{"data:text/html,<h1>xss</h1>", "data"},

@@ -656,7 +656,19 @@ func resolveGoType(ps *schema, propName string, isRequired bool, allSchemas map[
 				subTag := buildTag(subKey, subRequired, subProp)
 				fields = append(fields, fmt.Sprintf("%s %s %s", toPascalCase(subKey), subType, subTag))
 			}
-			return "struct{ " + strings.Join(fields, "; ") + " }", nil
+			inline := "struct{ " + strings.Join(fields, "; ") + " }"
+			// An OPTIONAL inline object must be a pointer: `omitempty` on a
+			// struct VALUE is inert (encoding/json never treats a struct as
+			// empty), so a value-typed optional object always marshals — as
+			// an all-zero object that then fails the SPA's strict zod schema
+			// for the frame (required sub-fields empty), dropping the whole
+			// payload. Pointer + omitempty gives real absence. (Found by
+			// ADR-074 D5.2's GoalStatusFrame.criteria items, whose optional
+			// per-kind check/behavior payloads hit exactly this.)
+			if !isRequired {
+				return "*" + inline, nil
+			}
+			return inline, nil
 		}
 		// Empty object with no additionalProperties — use map[string]any as a safe fallback
 		return "map[string]any", nil

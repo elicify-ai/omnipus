@@ -1302,11 +1302,63 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 		sessionType = session.SessionTypeChat
 	}
 
+	// The chat's own workspace, when the caller is in one. Validated BEFORE
+	// the session is minted so a bad id costs nothing on disk.
+	//
+	// U2: this field exists because the SPA's "Open browser" launcher creates
+	// its session here, and the live browser panel resolves which workspace's
+	// browser (and whose live logins) to show by reading the workspace off the
+	// attaching chat session's own meta, server-side (ADR-075 FR-016/FR-017).
+	// Before this, the launcher sent agent_id and nothing else, so the session
+	// it handed the panel named no workspace at all; an agent on more than one
+	// workspace's team was refused under FR-033 and advised to "open this panel
+	// from a chat that belongs to the workspace you mean" — which is precisely
+	// where the click had come from. The route named the workspace; the session
+	// simply never carried it.
+	//
+	// Membership is deliberately NOT checked here. This is a preference, not a
+	// grant: browser.ResolveBrowsingKeyForAgent honours it only when the agent
+	// really is on that workspace's team and otherwise falls through to the
+	// plain membership ladder, so stamping a workspace the agent is not on
+	// cannot open that workspace's browser. What IS checked is existence — a
+	// session stamped with a workspace that is not there would be a binding
+	// nothing can ever resolve, and silently keeping it would reproduce the
+	// same "refused with no explanation" shape from the other direction.
+	workspaceID := ""
+	if req.WorkspaceId != nil {
+		workspaceID = strings.TrimSpace(*req.WorkspaceId)
+	}
+	if workspaceID != "" {
+		if err := validateEntityID(workspaceID); err != nil {
+			jsonErr(w, http.StatusBadRequest, "invalid workspace_id")
+			return
+		}
+		if _, wsErr := readWorkspaceFile(a.homePath, workspaceID); wsErr != nil {
+			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("workspace %q not found", workspaceID))
+			return
+		}
+	}
+
 	meta, err := store.NewSession(sessionType, "webchat", agentID)
 	if err != nil {
 		slog.Error("rest: create session", "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not create session: %v", err))
 		return
+	}
+	if workspaceID != "" {
+		wsCopy := workspaceID
+		if setErr := store.SetMeta(meta.ID, session.MetaPatch{WorkspaceID: &wsCopy}); setErr != nil {
+			// Not fatal to the create — the session exists and is usable as a
+			// chat. But it is fatal to the binding, and a panel that then
+			// refuses would look like the original bug, so say so loudly
+			// rather than returning a session that quietly lost its workspace.
+			slog.Warn("rest: create session: could not stamp workspace",
+				"session_id", meta.ID, "workspace_id", workspaceID, "error", setErr)
+		} else if refreshed, getErr := store.GetMeta(meta.ID); getErr == nil && refreshed != nil {
+			// Return what was actually persisted, so the caller's own
+			// workspace_id echo is the stamp and not the request.
+			meta = refreshed
+		}
 	}
 	jsonCreated(w, unifiedMetaToGenSession(meta))
 }
@@ -2640,6 +2692,18 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusUnprocessableEntity, "name is required")
 		return
 	}
+	// ADR-071 §5.1.3 part 2: "default" (case-insensitive) is reserved — it is
+	// the switch_agent target sentinel that always means "the configured
+	// default agent". Rejecting it at the create boundary makes the id/name
+	// collision impossible going forward, rather than merely documented (the
+	// part 3 upgrade-time WARN below covers agents that predate this check).
+	// Create's id is always a fresh uuid.New().String() (never operator-
+	// chosen), so only the name half of this rule is reachable here.
+	if strings.EqualFold(name, tools.SwitchAgentDefaultTarget) {
+		jsonErr(w, http.StatusBadRequest,
+			fmt.Sprintf("agent name %q is reserved — it collides with switch_agent's target:%q sentinel", name, tools.SwitchAgentDefaultTarget))
+		return
+	}
 	// subagent_3p executor.cli_path: required (spec §9.2), whitespace-only
 	// rejected. The schema requires the `executor` object itself to be
 	// present for this variant, but its nested cli/cli_path properties are
@@ -2797,6 +2861,37 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// has no tools_cfg property at all (toolsCfgIn stays nil), so it always
 	// falls through to the seeded baseCfg — matching "the runner has its own
 	// tools" (field matrix).
+	//
+	// CLAUDE.md hard constraint 6 — validate the CALLER'S OWN map FIRST, before
+	// the deny-seeded baseline below is allowed to paper over it.
+	//
+	// This check has to happen here, and not (only) via the
+	// config.ValidateToolPolicyCoverage guard further down, because of the
+	// merge that follows: the handler starts from the fully-enumerated
+	// coreagent.NewCustomAgentToolsCfg() seed and copies the caller's entries
+	// ON TOP of it. A tool the caller omitted is therefore silently backfilled
+	// from the seed before the coverage check ever runs, so that check can
+	// structurally never observe a caller-side gap on this path — it was dead
+	// code for POST /agents. Reproduced live (UAT 2026-09-02, batch 3 S48 /
+	// batch 4 S83): a create omitting `bash` entirely returned 201, and a
+	// create carrying a literal "*" key returned 201 with the wildcard stored
+	// inertly alongside the real entries, because the merge loop copied every
+	// caller key verbatim with no check that it names a real tool.
+	//
+	// Only runs when the caller actually submitted a builtin policy map. A
+	// request with no tools_cfg at all (or a tools_cfg carrying only `mcp`)
+	// legitimately falls through to the server-generated, complete, deny-seeded
+	// baseline — that is not a caller gap, and subagent_3p has no tools_cfg on
+	// the wire at all.
+	if toolsCfgIn != nil && toolsCfgIn.BuiltinPolicies != nil {
+		if defects := config.ValidateSubmittedToolPolicyMap(
+			toolsCfgIn.BuiltinPolicies, buildKnownBuiltinToolNames(),
+		); !defects.Empty() {
+			jsonErr(w, http.StatusBadRequest,
+				"tools_cfg.builtin.policies "+defects.String())
+			return
+		}
+	}
 	baseCfg := coreagent.NewCustomAgentToolsCfg()
 	if toolsCfgIn != nil {
 		builtin := config.AgentBuiltinToolsCfg{
@@ -3229,6 +3324,17 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	if !decodeAndValidate(w, r, "AgentUpdateRequest", &req, validateEnabled) {
 		return
 	}
+	// ADR-071 §5.1.3 part 2: "default" (case-insensitive) is reserved — see
+	// the identical check in createAgent for the full rationale. An agent's
+	// id is never editable via PUT (it comes from the URL path, matched
+	// against cfg.Agents.List above), so only the name half is reachable
+	// here too; a pre-existing agent literally id'd "default" is covered by
+	// the boot-time WARN (part 3), not this rejection.
+	if req.Name != nil && strings.EqualFold(strings.TrimSpace(*req.Name), tools.SwitchAgentDefaultTarget) {
+		jsonErr(w, http.StatusBadRequest,
+			fmt.Sprintf("agent name %q is reserved — it collides with switch_agent's target:%q sentinel", strings.TrimSpace(*req.Name), tools.SwitchAgentDefaultTarget))
+		return
+	}
 	// Timestamp applied to the persisted agent on every successful save.
 	now := time.Now().UTC()
 	// Validate any custom deny patterns in shell_policy — each must be a valid Go regexp.
@@ -3558,6 +3664,24 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// on) never reaches either, so without a rebuild the two ladders would
 	// keep disagreeing exactly as this bug fix set out to close.
 	var defaultAgentIDChanged bool
+	// CLAUDE.md hard constraint 6 — same caller-side completeness check
+	// createAgent performs, for the same reason: a tools_cfg.builtin sent here
+	// REPLACES the agent's builtin policy map wholesale, so an incomplete map
+	// silently drops the agent's own tightening for every omitted tool and
+	// leaves it inheriting the (typically permissive) global ceiling at
+	// resolution time. config.ValidateToolPolicyCoverage below cannot catch
+	// that: it counts a tool as covered when EITHER side has an entry, and the
+	// seeded global map covers the whole catalog. Reproduced live (UAT
+	// 2026-09-02, batch 4 S83): a PUT omitting `stop_plan` returned 200.
+	if req.ToolsCfg != nil && req.ToolsCfg.Builtin != nil {
+		if defects := config.ValidateSubmittedToolPolicyMap(
+			req.ToolsCfg.Builtin.Policies, buildKnownBuiltinToolNames(),
+		); !defects.Empty() {
+			jsonErr(w, http.StatusBadRequest,
+				"tools_cfg.builtin.policies "+defects.String())
+			return
+		}
+	}
 	if req.ToolsCfg != nil {
 		toolsCoverageMutate = func(c *config.Config) {
 			// Search by ID against the FRESHLY-fetched clone — never the
@@ -3924,8 +4048,21 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// uses the new window" — AgentInstance resolves and CACHES its window at
 	// construction (instance.go), so a bare config swap would leave the
 	// running instance on the old window until a restart.
+	//
+	// req.Skills != nil (ADR-072 Finding A): ContextBuilder.skillAllowed
+	// (pkg/agent/context.go) reads from a skillAllowlist snapshot installed
+	// ONCE at agent-instance construction (instance.go's
+	// contextBuilder.WithSkillAllowlist(agentCfg.Skills)). Like Soul, a
+	// Skills-only edit is persisted to config above but never reaches the
+	// running instance without a rebuild — grantPredicateFor (skill.go)
+	// re-reads config live per-call so list_skills reflects the change
+	// immediately, but the Skill tool and the /<skill> path (both gated via
+	// skillAllowed) would keep serving the stale allowlist durably until some
+	// unrelated field forced a reload. Folding Skills into needsReload keeps
+	// both paths in sync via the same fastAgentUpsert rebuild Soul already
+	// uses.
 	contextWindowOverrideChanged := req.ContextWindowOverride != nil || clearsContextWindowOverride
-	needsReload := req.Soul != nil || defaultAgentIDChanged || contextWindowOverrideChanged
+	needsReload := req.Soul != nil || defaultAgentIDChanged || contextWindowOverrideChanged || req.Skills != nil
 	var reloadWarning string
 	if needsReload {
 		reloadWarning = a.fastAgentUpsert(id)
@@ -4111,7 +4248,31 @@ func (a *restAPI) getConfig(w http.ResponseWriter) {
 	// Redact any top-level field names that look like credentials.
 	redactSensitiveFields(m)
 
+	// Strip internal-only bookkeeping keys from the wire.
+	sanitizeConfigForWire(m)
+
 	jsonOK(w, m)
+}
+
+// wireExcludedConfigFields is the single place listing top-level config.json
+// keys that are internal-only bookkeeping: they stay on disk but must never
+// cross the wire. Current entries:
+//
+//   - seeded_skill_grants (judgment-first spec US-4 S6 / R2-04): records which
+//     one-shot allowlist migrations have run on THIS install (ADR-074 D4) —
+//     an implementation detail of the boot seed, not operator-facing config.
+var wireExcludedConfigFields = []string{
+	"seeded_skill_grants",
+}
+
+// sanitizeConfigForWire strips every wireExcludedConfigFields key from a
+// decoded config map before it is served. Used by getConfig; any future
+// endpoint that serves the raw config map must call it too, so the excluded
+// list lives in exactly one place.
+func sanitizeConfigForWire(m map[string]any) {
+	for _, k := range wireExcludedConfigFields {
+		delete(m, k)
+	}
 }
 
 // redactSensitiveFields recursively redacts map values whose keys contain
@@ -4234,6 +4395,17 @@ func (a *restAPI) credentialStoreReady() error {
 // producer side has a single definition.
 func channelCredKey(channelID, field string) string {
 	return "channel_" + channelID + "_" + field
+}
+
+// mcpEnvCredKey returns the canonical credential-store key for one MCP
+// server's env var secret. MUST stay identical to
+// pkg/sysagent/tools/mcp.go's mcpEnvCredKey ("mcp_<server>_<envKey>") — the
+// two packages independently produce and resolve refs under the same key
+// space (add_mcp_server / addMCPServer both write; pkg/mcp.ResolveServerEnvRefs
+// reads regardless of which path created the ref), so the format cannot
+// diverge between them.
+func mcpEnvCredKey(serverName, envKey string) string {
+	return "mcp_" + serverName + "_" + envKey
 }
 
 // removeStoredCredential removes refName from the credential store. A missing
@@ -4737,6 +4909,21 @@ func (a *restAPI) listSkills(w http.ResponseWriter) {
 			skill.ArgumentHint = &hint
 		}
 
+		// LastInvoked (optional, ADR-072 D3.1): the most recent time this skill
+		// was requested by name through the Skill tool's load path, sourced from
+		// the real audit trail (pkg/audit.Logger.LastInvokedForSkill — both
+		// "loaded" and "denied" load outcomes count, matching that function's
+		// own documented contract). a.auditor is nil only in unit-test fixtures
+		// that construct restAPI without an audit logger; found is false when
+		// the skill has never been invoked by name or no audit history exists,
+		// in which case the field is correctly left unset rather than guessed.
+		if a.auditor != nil {
+			if invokedAt, found := a.auditor.LastInvokedForSkill(id); found {
+				ts := invokedAt
+				skill.LastInvoked = &ts
+			}
+		}
+
 		result = append(result, skill)
 	}
 	jsonOK(w, result)
@@ -5077,6 +5264,17 @@ func (a *restAPI) deleteSkill(w http.ResponseWriter, name string) {
 		jsonErr(w, http.StatusForbidden, "built-in skills cannot be removed")
 		return
 	}
+	// a.homePath (OMNIPUS_HOME) is the correct root here: ADR-046 FR-009 made
+	// install_skill target the fixed, install-wide GLOBAL skills directory
+	// ($OMNIPUS_HOME/skills, see pkg/agent.globalSkillsDir), not a per-agent
+	// workspace — so this installer's root must be a.homePath (which resolves
+	// to that same $OMNIPUS_HOME/skills once "skills" is joined on below),
+	// not any individual agent's Workspace. Routing this through a specific
+	// agent's workspace (as an earlier version of this handler did, before
+	// ADR-046) would point the installer at a directory install_skill no
+	// longer writes into, so every delete would 404 on a skill that
+	// demonstrably exists.
+	//
 	// Inject the SSRF checker (SEC-24) so that any outbound HTTP calls made by
 	// the installer (e.g. future hash verification against a registry) are
 	// protected. a.ssrfChecker is nil when SSRF is disabled; the constructor
@@ -7180,9 +7378,21 @@ func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
 			entry.EnvFile = &ef
 		}
 		// env/headers: return KEYS ONLY — values may be secrets (Authorization, API keys).
-		if len(srv.Env) > 0 {
-			keys := make([]string, 0, len(srv.Env))
+		// Union srv.Env (legacy plaintext) with srv.EnvRefs (credential-store-backed,
+		// the path add_mcp_server/addMCPServer route every new secret through) — a
+		// server added via either of those only ever populates EnvRefs, so reading
+		// srv.Env alone (BUG 2) made such a server appear to have NO environment
+		// configuration at all. A key present in both is reported once.
+		if len(srv.Env) > 0 || len(srv.EnvRefs) > 0 {
+			keySet := make(map[string]struct{}, len(srv.Env)+len(srv.EnvRefs))
 			for k := range srv.Env {
+				keySet[k] = struct{}{}
+			}
+			for k := range srv.EnvRefs {
+				keySet[k] = struct{}{}
+			}
+			keys := make([]string, 0, len(keySet))
+			for k := range keySet {
 				keys = append(keys, k)
 			}
 			sort.Strings(keys)
@@ -7291,6 +7501,38 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Duplicate-name pre-check, BEFORE any credential-store write (mirrors the
+	// add_mcp_server tool fix, pkg/sysagent/tools/mcp.go): without this, a name
+	// collision was only discovered inside the config-write closure below,
+	// AFTER every env value had already been written to the credential store
+	// under mcp_<name>_<key> — silently overwriting the existing server's live
+	// credentials with the (rejected) request's values. This read is a
+	// snapshot, not a lock — the in-closure check further down stays as the
+	// authoritative concurrency guard for the race window between this check
+	// and the write.
+	if _, exists := a.agentLoop.MCPServersSnapshot()[req.Name]; exists {
+		jsonErr(w, http.StatusConflict, fmt.Sprintf("mcp server %q already exists", req.Name))
+		return
+	}
+	// Route env secrets into the encrypted credential store instead of
+	// writing them into config.json in plaintext — the same mechanism
+	// add_mcp_server (the tool) already uses (mcpEnvCredKey, "mcp_<name>_<key>").
+	// A partial failure here (some keys stored, one fails) leaves orphaned but
+	// harmless credential entries and no config write — no dangling ref is
+	// possible.
+	var envRefs map[string]string
+	if req.Env != nil && len(*req.Env) > 0 {
+		envRefs = make(map[string]string, len(*req.Env))
+		for key, value := range *req.Env {
+			credKey := mcpEnvCredKey(req.Name, key)
+			if _, err := a.storeCredential(credKey, value); err != nil {
+				slog.Error("rest: add mcp server: store env credential", "server", req.Name, "env_key", key, "error", err)
+				jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not store env credential %q: %v", key, err))
+				return
+			}
+			envRefs[key] = credKey
+		}
+	}
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		tools, _ := m["tools"].(map[string]any)
 		if tools == nil {
@@ -7332,8 +7574,13 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		if req.Args != nil && len(*req.Args) > 0 {
 			entry["args"] = *req.Args
 		}
-		if req.Env != nil && len(*req.Env) > 0 {
-			entry["env"] = *req.Env
+		// Env is deliberately never persisted here — envRefs (credential-store
+		// references, resolved to real values only in memory at connect time by
+		// pkg/mcp.ResolveServerEnvRefs) is the only place a value from this
+		// request's env lands. This keeps addMCPServer's on-disk shape
+		// identical to add_mcp_server's (the tool).
+		if len(envRefs) > 0 {
+			entry["env_refs"] = envRefs
 		}
 		if req.EnvFile != nil && *req.EnvFile != "" {
 			entry["env_file"] = *req.EnvFile
@@ -7345,6 +7592,17 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}); err != nil {
 		if strings.Contains(err.Error(), "already exists") {
+			// Race-guard fired: a same-named server was created concurrently,
+			// between the pre-check above and this write. Roll back any env
+			// credentials this (rejected) request wrote above — leaving them
+			// in place would hijack the credentials of the server that won
+			// the race, exactly the bug this fix closes.
+			for envKey, credKey := range envRefs {
+				if delErr := a.removeStoredCredential(credKey); delErr != nil {
+					slog.Warn("rest: add mcp server: name-collision race — failed to roll back env credential",
+						"server", req.Name, "env_key", envKey, "cred_key", credKey, "error", delErr)
+				}
+			}
 			jsonErr(w, http.StatusConflict, err.Error())
 			return
 		}
@@ -7423,6 +7681,12 @@ func (a *restAPI) deleteMCPServer(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 	found := false
+	// removedEnvRefs captures the outgoing entry's EnvRefs (credential-store
+	// keys, mcp_<name>_<envKey>) so they can be cleaned up AFTER the config
+	// write succeeds — mirrors remove_mcp_server's (the tool) own ordering:
+	// deleting the credential entries before the config write is confirmed
+	// would risk destroying secrets for a removal that then fails to persist.
+	var removedEnvRefs map[string]string
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		tools, _ := m["tools"].(map[string]any)
 		if tools == nil {
@@ -7436,7 +7700,15 @@ func (a *restAPI) deleteMCPServer(w http.ResponseWriter, r *http.Request, id str
 		if servers == nil {
 			return nil
 		}
-		if _, exists := servers[id]; exists {
+		if existing, exists := servers[id]; exists {
+			// Round-trip through the typed struct to pull out EnvRefs cleanly
+			// (mirrors patchMCPServer's own existing-entry round-trip).
+			if raw, mErr := json.Marshal(existing); mErr == nil {
+				var current config.MCPServerConfig
+				if uErr := json.Unmarshal(raw, &current); uErr == nil {
+					removedEnvRefs = current.EnvRefs
+				}
+			}
 			delete(servers, id)
 			found = true
 		}
@@ -7449,6 +7721,21 @@ func (a *restAPI) deleteMCPServer(w http.ResponseWriter, r *http.Request, id str
 	if !found {
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("mcp server %q not found", id))
 		return
+	}
+	// Config write succeeded — clean up any credential-store entries this
+	// server's env values were stored under (BUG 2 fix). Without this, every
+	// server added via add_mcp_server/addMCPServer (which only ever populate
+	// EnvRefs, never plaintext Env) left its secrets permanently orphaned in
+	// the credential store on delete — remove_mcp_server (the tool) already
+	// does this cleanup; the REST path did not. Best-effort: a cleanup
+	// failure does not undo the already-committed config removal, it only
+	// means an orphaned credential-store entry survives under a name nothing
+	// references any more.
+	for envKey, credKey := range removedEnvRefs {
+		if err := a.removeStoredCredential(credKey); err != nil {
+			slog.Warn("rest: delete mcp server: failed to delete env credential",
+				"server", id, "env_key", envKey, "cred_key", credKey, "error", err)
+		}
 	}
 	// Config write succeeded — reconcile the live manager so the removed server is
 	// actually disconnected (DisconnectServer) and its tools evicted from the
@@ -7507,6 +7794,23 @@ func (a *restAPI) testMCPServer(w http.ResponseWriter, r *http.Request, id strin
 		jsonOK(w, gen.McpServerTestResponse{
 			Success: false,
 			Message: fmt.Sprintf("env_file: %s", err.Error()),
+		})
+		return
+	}
+	// Resolve any credential-store env refs the same way production
+	// reconciliation does (pkg/agent/loop_mcp.go's reconcileLocked) — a
+	// server added via add_mcp_server carries EnvRefs, not literal Env, so
+	// without this the throwaway test connection would spawn the process
+	// with its secrets missing and report a misleading failure.
+	if a.credStore != nil {
+		resolvedSrv, err = mcp.ResolveServerEnvRefs(resolvedSrv, a.credStore.Get)
+	} else {
+		resolvedSrv, err = mcp.ResolveServerEnvRefs(resolvedSrv, nil)
+	}
+	if err != nil {
+		jsonOK(w, gen.McpServerTestResponse{
+			Success: false,
+			Message: fmt.Sprintf("env credential reference: %s", err.Error()),
 		})
 		return
 	}
@@ -7643,6 +7947,9 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 		}
 
 		// Merge only the fields that the caller provided (non-nil pointer).
+		// req.Env is handled separately, below the transport-consistency
+		// validation, so a validation failure never leaves an orphaned
+		// credential-store write behind (see the Env block's own comment).
 		if req.Enabled != nil {
 			current.Enabled = *req.Enabled
 		}
@@ -7654,9 +7961,6 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 		}
 		if req.Args != nil {
 			current.Args = *req.Args
-		}
-		if req.Env != nil {
-			current.Env = *req.Env
 		}
 		if req.EnvFile != nil {
 			current.EnvFile = *req.EnvFile
@@ -7674,6 +7978,38 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 		if (current.Type == "sse" || current.Type == "http") && strings.TrimSpace(current.Command) != "" {
 			mcpPatchValidationMsg = "sse/http servers must not set a command"
 			return fmt.Errorf("validation: %s", mcpPatchValidationMsg)
+		}
+
+		// Route env secrets into the encrypted credential store instead of
+		// writing them into config.json in plaintext (BUG 2 fix) — the same
+		// mechanism add_mcp_server (the tool) and addMCPServer already use.
+		// Placed AFTER the transport-consistency validation above so a
+		// request that fails validation never reaches a credential-store
+		// write in the first place — no rollback needed.
+		//
+		// Collision handling: the credential key is deterministic
+		// (mcpEnvCredKey == "mcp_<name>_<key>"), so storing a new literal
+		// value for a key that was already ref-backed simply overwrites that
+		// same credential-store entry in place — the new literal value wins,
+		// exactly as add_mcp_server's description promises, and nothing is
+		// orphaned. Each key provided in this PATCH's env is deleted from
+		// current.Env (it is superseded by its ref) — env keys NOT mentioned
+		// in this PATCH, and any pre-existing EnvRefs entries for other keys,
+		// are left untouched.
+		if req.Env != nil && len(*req.Env) > 0 {
+			if current.EnvRefs == nil {
+				current.EnvRefs = make(map[string]string, len(*req.Env))
+			}
+			for key, value := range *req.Env {
+				credKey := mcpEnvCredKey(id, key)
+				if _, credErr := a.storeCredential(credKey, value); credErr != nil {
+					return fmt.Errorf("store env credential %q: %w", key, credErr)
+				}
+				current.EnvRefs[key] = credKey
+				if current.Env != nil {
+					delete(current.Env, key)
+				}
+			}
 		}
 
 		// Rebuild the map entry from the updated struct so the JSON shape is
@@ -7854,6 +8190,37 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 		return
 	}
 
+	// CLAUDE.md hard constraint 6 — a body carrying no `builtin` object at all
+	// is REJECTED, never treated as "replace the agent's policy map with
+	// nothing".
+	//
+	// This endpoint fully replaces the agent's builtin tools config on persist
+	// (see the updateConfigJSONLocked closure below). Before this guard, a body
+	// missing the required `builtin` wrapper — e.g. {"policies": {...}}, the
+	// shape a client that assumed a PATCH-style partial update would send —
+	// left builtinPolicies nil, and the persist closure then wrote
+	// `"tools": {"builtin": {}, "mcp": {}}`: a completely empty policy map,
+	// with a 200 OK and no indication anything was wrong.
+	//
+	// That empty state does NOT fail closed. Runtime resolution is a
+	// strictest-wins merge where one side is enough
+	// (pkg/tools/compositor.go's resolveEffectivePolicyWith), so every tool
+	// then resolved to the GLOBAL ceiling value alone — mostly "allow". The
+	// coverage guard further down could not catch it either, because
+	// config.ValidateToolPolicyCoverage counts a tool as covered when either
+	// the global map or the agent map has an entry, and the seeded global map
+	// covers the entire static catalog on a default install. Reproduced live
+	// (UAT 2026-09-02, batch 2): an agent explicitly policied `bash: deny` and
+	// `list_providers: deny` executed BOTH successfully after one such
+	// malformed request. This is the one defect of the three that failed in
+	// the ALLOW direction, so it is rejected here at the earliest possible
+	// point, before any normalization can make a partial body look valid.
+	if req.Builtin == nil {
+		jsonErr(w, http.StatusBadRequest,
+			"builtin.policies is required: this endpoint replaces the agent's complete tool-policy map, "+
+				"so a body with no \"builtin\" object is rejected rather than persisted as an empty policy")
+		return
+	}
 	// Extract builtin fields. There is no default_policy field on the wire
 	// any more (CLAUDE.md hard constraint 6).
 	var builtinPolicies map[string]string
@@ -7893,6 +8260,23 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 			jsonErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("invalid policy %q for tool %q", p, name))
 			return
 		}
+	}
+
+	// CLAUDE.md hard constraint 6 — the resolved map (after the legacy
+	// mode/visible conversion above) IS this agent's prospective complete
+	// per-agent policy map, because the persist closure below replaces
+	// Tools.Builtin wholesale. Reject an incomplete map, or one carrying a
+	// wildcard/unrecognized key, right here — the coverage guard further down
+	// cannot see either defect (the seeded global ceiling covers the whole
+	// catalog, so it reports zero gaps for any agent-side map, empty included).
+	// This also gives the documented 400 for the legacy mode="explicit" +
+	// visible[] shape sent alone, exactly as
+	// contracts/components/schemas/AgentToolsUpdateRequest.yaml describes.
+	if defects := config.ValidateSubmittedToolPolicyMap(
+		builtinPolicies, buildKnownBuiltinToolNames(),
+	); !defects.Empty() {
+		jsonErr(w, http.StatusBadRequest, "builtin.policies "+defects.String())
+		return
 	}
 
 	// Validate MCP server IDs reference configured servers. Computed before
@@ -8037,9 +8421,23 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 	// pipeline wired) as a no-op, so a non-nil error here is always a genuine
 	// reload failure. This is a fail-open authorization path — returning 200
 	// while the rebuild is still queued means a tool freshly bumped to
-	// "deny"/"ask" keeps executing as "allow" for the duration — so the
-	// confirmed bool below also surfaces an unconfirmed (timed-out) reload as
-	// a warning rather than silently claiming success.
+	// "deny"/"ask" keeps executing as "allow" for the duration.
+	//
+	// UAT batch3 S67 (docs/internal/qa/uat-report-full-tool-catalog-batch3-2026-09-02.md,
+	// finding #4): before this fix, an unconfirmed-but-error-free reload
+	// (confirmed=false, err=nil) fell through to a 200 with only a
+	// server-side Warn log — a caller had no way to know the tool-policy
+	// tightening they just requested (e.g. create_skill allow/deny -> ask)
+	// might not be enforced yet, and a tool call dispatched immediately
+	// after could still run under the STALE, more permissive snapshot. This
+	// mirrors waitForReload's OWN documented incident ("Persisted-but-not-
+	// live is a real, caller-visible state and it has to surface as one") —
+	// putToolPolicies (the global tool-policy PUT) already treats an
+	// unconfirmed reload as a hard failure via triggerReloadAndWait; this
+	// per-agent endpoint used the richer Outcome variant specifically to
+	// distinguish the two cases, then silently discarded the distinction.
+	// Now both variants agree: an unconfirmed reload is never reported as a
+	// plain, unqualified success.
 	if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
 		slog.Error("agent tools update: reload failed — in-memory policy not updated",
 			"agent_id", agentID, "error", err)
@@ -8056,8 +8454,21 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 			"config saved but in-memory reload failed; restart the gateway or retry")
 		return
 	} else if !confirmed {
-		slog.Warn("rest: agent tools update: reload did not confirm within the poll window; "+
+		slog.Error("rest: agent tools update: reload did not confirm within the poll window; "+
 			"in-memory tool policy may not yet reflect the new config", "agent_id", agentID)
+		if auditLogger := a.agentLoop.AuditLogger(); auditLogger != nil {
+			if auditErr := audit.EmitSecuritySettingChange(
+				r.Context(), auditLogger, "agent.tools_policy",
+				map[string]any{"agent_id": agentID, "saved": true},
+				map[string]any{"agent_id": agentID, "reload_error": "reload did not confirm within the poll window"},
+			); auditErr != nil {
+				slog.Error("rest: audit emit agent tools reload unconfirmed", "error", auditErr)
+			}
+		}
+		jsonErr(w, http.StatusServiceUnavailable,
+			"config saved but the in-memory reload did not confirm within the wait window; "+
+				"the new tool policy may not be enforced yet — retry or restart the gateway")
+		return
 	}
 	// Use HandleAgentToolsRegistry so the PUT response emits `tools` (not
 	// `effective_tools`) — both paths must share the same wire shape to match

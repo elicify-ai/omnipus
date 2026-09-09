@@ -22,6 +22,55 @@ func resetRetentionLoop() {
 	retentionLoopStarted = sync.Once{}
 }
 
+// startRetentionSweepLoopAndWaitForExit launches the retention-sweep
+// goroutine exactly like production's startRetentionSweepLoop, but returns a
+// cleanup function that cancels ctx AND WAITS (with a 1s deadline) for the
+// goroutine to actually observe the cancellation and return, instead of the
+// fire-and-forget `defer cancel()` every test here used to do.
+//
+// Why this matters: cancel() only closes ctx.Done() — it does not block
+// until a goroutine selecting on that channel has woken up, checked it, and
+// returned. Every test in this file mutates the PACKAGE-LEVEL
+// retentionSweepFn/retentionTaskRunSweepFn vars for the duration of its own
+// run and restores them via t.Cleanup. A `defer cancel()` that does not wait
+// leaves a real window, however short, where THIS test's goroutine is still
+// alive (and can still fire one more tick, reading whatever
+// retentionSweepFn/retentionTaskRunSweepFn happen to be set to AT THAT
+// MOMENT) after this test function has returned — including during a LATER,
+// unrelated test's own run, corrupting its call-count/cutoff assertions.
+// This is exactly what caused go-race's real, reproducible failure in
+// TestRetentionSweep_InvokesTaskRunPruneWithSessionCutoff (a different test
+// in this same package, which touches retentionTaskRunSweepFn directly and
+// has no goroutine of its own to race against — the leak came from here).
+//
+// resetRetentionLoop() must be called by the caller BEFORE this, exactly as
+// before — this helper only changes how the loop's exit is confirmed.
+func startRetentionSweepLoopAndWaitForExit(
+	t *testing.T,
+	ctx context.Context,
+	cancel context.CancelFunc,
+	store *session.UnifiedStore,
+	getCfg func() *config.Config,
+	tickInterval time.Duration,
+) {
+	t.Helper()
+	done := make(chan struct{})
+	retentionLoopStarted.Do(func() {
+		go func() {
+			defer close(done)
+			runRetentionSweepLoop(ctx, store, getCfg, tickInterval)
+		}()
+	})
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(1 * time.Second):
+			t.Fatal("retention-sweep goroutine did not exit within 1s of context cancellation")
+		}
+	})
+}
+
 // newTestStore builds a *session.UnifiedStore backed by a temp directory.
 func newTestStore(t *testing.T) *session.UnifiedStore {
 	t.Helper()
@@ -73,9 +122,7 @@ func TestRetentionSweep_NightlyGoroutineTicks(t *testing.T) {
 	t.Cleanup(func() { retentionSweepFn = orig })
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	startRetentionSweepLoop(ctx, store, enabledCfg(7), tick)
+	startRetentionSweepLoopAndWaitForExit(t, ctx, cancel, store, enabledCfg(7), tick)
 
 	deadline := time.After(time.Duration(want+2) * tick * 2)
 	for {
@@ -140,9 +187,7 @@ func TestRetentionSweep_SkipsWhenDisabled(t *testing.T) {
 	t.Cleanup(func() { retentionSweepFn = orig })
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	startRetentionSweepLoop(ctx, store, disabledCfg(), tick)
+	startRetentionSweepLoopAndWaitForExit(t, ctx, cancel, store, disabledCfg(), tick)
 
 	time.Sleep(tick * 5)
 
@@ -171,9 +216,7 @@ func TestRetentionSweep_ContinuesAfterError(t *testing.T) {
 	t.Cleanup(func() { retentionSweepFn = orig })
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	startRetentionSweepLoop(ctx, store, enabledCfg(7), tick)
+	startRetentionSweepLoopAndWaitForExit(t, ctx, cancel, store, enabledCfg(7), tick)
 
 	deadline := time.After(tick * 10)
 	for {
@@ -214,9 +257,7 @@ func TestRetentionSweep_PanicRecovery(t *testing.T) {
 	t.Cleanup(func() { retentionSweepFn = orig })
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	startRetentionSweepLoop(ctx, store, enabledCfg(7), tick)
+	startRetentionSweepLoopAndWaitForExit(t, ctx, cancel, store, enabledCfg(7), tick)
 
 	deadline := time.After(tick * 10)
 	for {
@@ -250,12 +291,11 @@ func TestRetentionSweep_MutexSharedWithOnDemand(t *testing.T) {
 	t.Cleanup(func() { retentionSweepFn = orig })
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	// Acquire the shared mutex before starting the loop so the first tick blocks.
 	retentionSweepMu.Lock()
 
-	startRetentionSweepLoop(ctx, store, enabledCfg(7), tick)
+	startRetentionSweepLoopAndWaitForExit(t, ctx, cancel, store, enabledCfg(7), tick)
 
 	// Wait for at least two tick intervals; the goroutine should be blocked on
 	// the mutex and must not have called retentionSweepFn.

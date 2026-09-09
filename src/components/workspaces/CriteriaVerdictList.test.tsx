@@ -16,6 +16,7 @@ function makeCriterion(overrides: Partial<AcceptanceCriterion> = {}): Acceptance
   return {
     id: 'crit-1',
     kind: 'check',
+    judgment: 'boolean',
     text: 'Tests pass',
     author: { kind: 'user', id: 'alice' },
     status: 'pending',
@@ -121,6 +122,79 @@ describe('CriteriaVerdictList — per-criterion met/unmet + judge reason', () =>
     expect(screen.getByText('Check A')).toBeInTheDocument()
     expect(screen.getByText('Check B')).toBeInTheDocument()
   })
+
+  it('renders the reason at criterion-text size, not 10px muted (ADR-074 D5.3)', () => {
+    const criteria = [makeCriterion({ id: 'crit-1', status: 'unmet' })]
+    const verdicts = [
+      makeVerdict({
+        per_criterion: [{ criterion_id: 'crit-1', met: false, reason: 'the verdict statement' }],
+      }),
+    ]
+    render(<CriteriaVerdictList criteria={criteria} verdicts={verdicts} />)
+    const reason = screen.getByTestId('verdict-reason')
+    expect(reason).toHaveTextContent('the verdict statement')
+    // The old rendering forced 10px; criterion-text size means NO explicit
+    // font-size override below the list's text-xs.
+    expect(reason.className).not.toMatch(/text-\[10px\]/)
+  })
+
+  it('renders no reason line for an id-less criterion even when verdicts exist (explicit absence handling)', () => {
+    const criteria = [makeCriterion({ id: undefined, status: 'unmet' })]
+    const verdicts = [
+      makeVerdict({
+        per_criterion: [{ criterion_id: 'crit-1', met: false, reason: 'someone else reason' }],
+      }),
+    ]
+    render(<CriteriaVerdictList criteria={criteria} verdicts={verdicts} />)
+    expect(screen.queryByTestId('verdict-reason')).toBeNull()
+    expect(screen.queryByTestId('verdict-evidence-quote')).toBeNull()
+  })
+})
+
+describe('CriteriaVerdictList — evidence quote (ADR-074 D7 / US-5)', () => {
+  it('renders a non-empty evidence_quote as an inert quoted line under the reason', () => {
+    const hostile = '--- PASS: TestX <img src=x onerror="alert(1)"> **not markdown**'
+    const criteria = [makeCriterion({ id: 'crit-1', status: 'met' })]
+    const verdicts = [
+      makeVerdict({
+        per_criterion: [
+          { criterion_id: 'crit-1', met: true, reason: 'tests pass', evidence_quote: hostile },
+        ],
+      }),
+    ]
+    render(<CriteriaVerdictList criteria={criteria} verdicts={verdicts} />)
+    const quote = screen.getByTestId('verdict-evidence-quote')
+    // Inert: the hostile payload appears as literal TEXT — never parsed as
+    // HTML or markdown (no img element materializes).
+    expect(quote).toHaveTextContent('<img src=x onerror="alert(1)">')
+    expect(quote.querySelector('img')).toBeNull()
+    expect(quote.textContent).toContain('**not markdown**')
+  })
+
+  it('renders NO quote line when evidence_quote is absent (pre-D7 / old-soul verdicts)', () => {
+    const criteria = [makeCriterion({ id: 'crit-1', status: 'unmet' })]
+    const verdicts = [
+      makeVerdict({
+        per_criterion: [{ criterion_id: 'crit-1', met: false, reason: 'fail-closed reason' }],
+      }),
+    ]
+    render(<CriteriaVerdictList criteria={criteria} verdicts={verdicts} />)
+    expect(screen.getByTestId('verdict-reason')).toBeInTheDocument()
+    expect(screen.queryByTestId('verdict-evidence-quote')).toBeNull()
+  })
+
+  it('renders NO quote line when evidence_quote is the empty string (fail-closed verdicts)', () => {
+    const criteria = [makeCriterion({ id: 'crit-1', status: 'unmet' })]
+    const verdicts = [
+      makeVerdict({
+        per_criterion: [
+          { criterion_id: 'crit-1', met: false, reason: 'nothing to quote', evidence_quote: '' },
+        ],
+      }),
+    ]
+    render(<CriteriaVerdictList criteria={criteria} verdicts={verdicts} />)
+    expect(screen.queryByTestId('verdict-evidence-quote')).toBeNull()
+  })
 })
 
 describe('CriteriaVerdictList — evidence viewer expand (US-11 AS-4)', () => {
@@ -195,5 +269,49 @@ describe('CriteriaVerdictList — evidence viewer expand (US-11 AS-4)', () => {
     render(<CriteriaVerdictList criteria={criteria} evidence={evidence} />)
     fireEvent.click(screen.getByRole('button', { name: /expand evidence/i }))
     expect(screen.getByTestId('evidence-policy-denied')).toBeInTheDocument()
+  })
+})
+
+// ADR-080 D-DOD: the Judge scores `criteria ∪ dod` as one judged set, so a
+// caller rendering a goal's judged criteria passes its DoD too — grouped
+// separately, under a distinct "Definition of Done" subheading.
+describe('CriteriaVerdictList — Definition of Done (ADR-080 D-DOD)', () => {
+  it('renders dod items grouped under a distinct "Definition of Done" subheading', () => {
+    const criteria = [makeCriterion({ id: 'crit-1', text: 'the outcome is achieved' })]
+    const dod = [makeCriterion({ id: 'dod-1', text: 'no secrets appear in the output' })]
+    render(<CriteriaVerdictList criteria={criteria} dod={dod} />)
+
+    expect(screen.getByText('the outcome is achieved')).toBeInTheDocument()
+    const dodGroup = screen.getByTestId('criteria-verdict-dod')
+    expect(dodGroup).toHaveTextContent('Definition of Done')
+    expect(dodGroup).toHaveTextContent('no secrets appear in the output')
+  })
+
+  it('gives each dod item its own per-criterion verdict, same as a regular criterion', () => {
+    const dod = [makeCriterion({ id: 'dod-1', text: 'lints clean', status: 'unmet' })]
+    const verdicts = [
+      makeVerdict({
+        per_criterion: [{ criterion_id: 'dod-1', met: false, reason: 'golangci-lint reported 2 issues' }],
+      }),
+    ]
+    render(<CriteriaVerdictList criteria={[]} dod={dod} verdicts={verdicts} />)
+    expect(screen.getByTestId('criteria-verdict-dod')).toHaveTextContent('golangci-lint reported 2 issues')
+  })
+
+  it('renders nothing when both criteria and dod are empty', () => {
+    const { container } = render(<CriteriaVerdictList criteria={[]} dod={[]} />)
+    expect(container.firstChild).toBeNull()
+  })
+
+  it('renders the dod group even when criteria is empty (dod-only judged set)', () => {
+    const dod = [makeCriterion({ id: 'dod-1', text: 'the floor gate is satisfied' })]
+    render(<CriteriaVerdictList criteria={[]} dod={dod} />)
+    expect(screen.getByTestId('criteria-verdict-dod')).toBeInTheDocument()
+    expect(screen.queryByRole('list')).toBeInTheDocument()
+  })
+
+  it('omits the dod group entirely when dod is not passed (Task callers unaffected)', () => {
+    render(<CriteriaVerdictList criteria={[makeCriterion()]} />)
+    expect(screen.queryByTestId('criteria-verdict-dod')).not.toBeInTheDocument()
   })
 })

@@ -140,10 +140,13 @@ func (t *RememberTool) Description() string {
 	return "Save something worth keeping for later: a decision, a useful fact or reference, or a " +
 		"lesson learned. Use this whenever you learn something you — or a teammate agent — will " +
 		"likely need again in a future conversation. By DEFAULT the memory is SHARED with your " +
-		"workspace team, so every agent working in this workspace can recall it; set room='private' " +
-		"only for notes meant just for you. category must be one of: 'key_decision' (a decision that " +
-		"was made), 'reference' (useful reference information), or 'lesson_learned' (something to do " +
-		"differently next time)."
+		"workspace team, so every agent working in this workspace can recall it — but ONLY when this " +
+		"turn is actually running inside a workspace; outside a workspace there is no team room to " +
+		"share into and the note is saved privately no matter what room you ask for. Set room='private' " +
+		"for notes meant just for you. The result text always states which room the note actually " +
+		"landed in, so check it rather than assuming 'shared' succeeded. category must be one of: " +
+		"'key_decision' (a decision that was made), 'reference' (useful reference information), or " +
+		"'lesson_learned' (something to do differently next time)."
 }
 
 func (t *RememberTool) Parameters() map[string]any {
@@ -164,7 +167,9 @@ func (t *RememberTool) Parameters() map[string]any {
 				"enum": []string{"private", "shared"},
 				"description": "Who can see this memory: 'shared' = your whole workspace team (the " +
 					"default — use it whenever a teammate agent might need this), 'private' = only you. " +
-					"Leave unset to use the default (shared).",
+					"Leave unset to use the default (shared) — but sharing only happens when this turn " +
+					"is inside a workspace; with no workspace on the turn, 'shared' silently falls back " +
+					"to a private note (the result text will say so).",
 			},
 		},
 		"required": []string{"content", "category"},
@@ -209,16 +214,43 @@ func (t *RememberTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 			t.logAudit(agentID, sessionID, "error_io", category, content)
 			return ErrorResult(fmt.Sprintf("remember: %v", err))
 		}
-	} else {
-		// Fallback for plain MemoryAccess stores (e.g., test doubles).
-		if err := t.store.AppendLongTerm(content, category); err != nil {
-			t.logAudit(agentID, sessionID, "error_io", category, content)
-			return ErrorResult(fmt.Sprintf("remember: %v", err))
-		}
+
+		t.logAudit(agentID, sessionID, "ok", category, content)
+		// Echo the room the note ACTUALLY landed in — a resolved scope of
+		// "shared" with no workspace on this turn silently falls back to a
+		// private write inside the store (see resolveWriteRoom in
+		// pkg/agent/memory.go), and a bare "ok" would leave the caller
+		// believing the note was shared when it was not.
+		return SilentResult(rememberOutcomeMessage(scope, workspaceID))
+	}
+
+	// Fallback for plain MemoryAccess stores (e.g., test doubles) that don't
+	// support room-aware routing at all — there is no room to report.
+	if err := t.store.AppendLongTerm(content, category); err != nil {
+		t.logAudit(agentID, sessionID, "error_io", category, content)
+		return ErrorResult(fmt.Sprintf("remember: %v", err))
 	}
 
 	t.logAudit(agentID, sessionID, "ok", category, content)
 	return SilentResult("ok")
+}
+
+// rememberOutcomeMessage builds the LLM-facing confirmation for a
+// RoomMemoryWriter write, stating the room the note actually landed in.
+// scope is the resolved room passed to AppendLongTermToRoom
+// ("private" or "shared"); workspaceID is the turn's workspace, empty when
+// this turn has no workspace. A resolved scope of "shared" with an empty
+// workspaceID is exactly the case RoomMemoryWriter's own implementation
+// (pkg/agent's MemoryStore.resolveWriteRoom) silently falls back to
+// private for — there is no shared room to resolve without a workspace.
+func rememberOutcomeMessage(scope, workspaceID string) string {
+	if scope == "shared" && workspaceID == "" {
+		return "ok — saved as a PRIVATE note: this turn has no workspace, so there is no team room to share into"
+	}
+	if scope == "shared" {
+		return "ok — saved to your workspace team's shared memory"
+	}
+	return "ok — saved as a private note"
 }
 
 // checkRateLimit returns the rate-limit decision for the (agent, caller)
@@ -350,7 +382,7 @@ func (t *RecallMemoryTool) Parameters() map[string]any {
 			},
 			"limit": map[string]any{
 				"type":        "number",
-				"description": "Maximum number of results (default 20, max 50).",
+				"description": "Maximum number of results (default 20, max 50 — a value over 50 is rejected with an error).",
 			},
 			"room": map[string]any{
 				"type": "string",
@@ -377,6 +409,12 @@ func (t *RecallMemoryTool) Execute(ctx context.Context, args map[string]any) *To
 		case int:
 			limit = v
 		}
+	}
+	// The schema documents "max 50" but nothing previously enforced it —
+	// reject rather than silently pass an out-of-range limit through to the
+	// store (matching the house style used elsewhere, e.g. search_web's count).
+	if limit > 50 {
+		return ErrorResult("recall_memory: limit must be at most 50")
 	}
 
 	roomParam, _ := args["room"].(string)
@@ -415,8 +453,10 @@ func (t *RecallMemoryTool) Execute(ctx context.Context, args map[string]any) *To
 	// Recall also spans retrospectives (past reflections), not just long-term
 	// memories. A retro-search failure is non-fatal — it must not drop the
 	// long-term hits already gathered.
+	retroSearchFailed := false
 	if rt, ok := t.store.(RetroSearcher); ok {
 		if retros, rerr := rt.SearchRetros(query, limit); rerr != nil {
+			retroSearchFailed = true
 			slog.Warn("recall_memory: retro search failed; returning long-term hits only",
 				"component", "tool", "error", rerr)
 		} else {
@@ -424,7 +464,15 @@ func (t *RecallMemoryTool) Execute(ctx context.Context, args map[string]any) *To
 		}
 	}
 
-	return formatRecallResult(entries)
+	result := formatRecallResult(entries)
+	if retroSearchFailed {
+		// A swallowed retro-search failure must be visible to the caller,
+		// not just the server log — otherwise the LLM reads a normal-looking
+		// result and has no way to know retrospectives were silently missing.
+		result.ForLLM = "[note: retrospective search failed; results below include long-term memories only]\n\n" +
+			result.ForLLM
+	}
+	return result
 }
 
 func formatRecallResult(entries []MemoryEntry) *ToolResult {
@@ -489,14 +537,23 @@ func (t *RetrospectiveTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *RetrospectiveTool) Category() ToolCategory { return CategoryMemory }
 func (t *RetrospectiveTool) Description() string {
 	return "At the end of a productive session, record what went well and what to improve next " +
-		"time — but only after the user has reviewed and confirmed the summary. The retrospective " +
-		"is saved to memory and can be found later with recall_memory."
+		"time — but only after the user has reviewed and confirmed the recap and the two lists below. " +
+		"The retrospective is saved to memory and can be found later with recall_memory. " +
+		"Retrospectives are ALWAYS private, unlike remember (which defaults to shared with your " +
+		"workspace team) — there is no room parameter here and no way to share a retrospective with " +
+		"teammates. Writes here share the SAME rate-limit bucket as the remember tool: heavy use of " +
+		"one reduces the budget left for the other."
 }
 
 func (t *RetrospectiveTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
+			"recap": map[string]any{
+				"type": "string",
+				"description": "Optional short recap of the session, confirmed with the user before " +
+					"saving. Leave unset to save without a recap.",
+			},
 			"went_well": map[string]any{
 				"type": "array",
 				"items": map[string]any{
@@ -519,6 +576,8 @@ func (t *RetrospectiveTool) Parameters() map[string]any {
 func (t *RetrospectiveTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	wentWell := extractStringSlice(args["went_well"])
 	needsImprovement := extractStringSlice(args["needs_improvement"])
+	recap, _ := args["recap"].(string)
+	recap = strings.TrimSpace(recap)
 
 	if len(wentWell) == 0 && len(needsImprovement) == 0 {
 		return ErrorResult("retrospective: at least one of went_well or needs_improvement must be non-empty")
@@ -537,7 +596,7 @@ func (t *RetrospectiveTool) Execute(ctx context.Context, args map[string]any) *T
 		Timestamp:        time.Now().UTC(),
 		Trigger:          "joined",
 		Fallback:         false,
-		Recap:            "",
+		Recap:            recap,
 		WentWell:         wentWell,
 		NeedsImprovement: needsImprovement,
 	}

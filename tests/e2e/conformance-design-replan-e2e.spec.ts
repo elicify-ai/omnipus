@@ -239,7 +239,7 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
   // with this plan's round-1: a sibling plan's supervision turn repeatedly
   // timing out over real HTTP (`net/http: request canceled
   // (Client.Timeout...)`) and re-arming its wake every ~30s for several
-  // minutes, and an unrelated agent turn retrying a denied load_tool call
+  // minutes, and an unrelated agent turn retrying a denied ToolSearch call
   // every few seconds for the same window — genuine, external LLM/CPU
   // contention on the shard, not anything introduced by plan_engine.go's own
   // dispatch/judge/supervision logic (unchanged by the commits under test).

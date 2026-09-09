@@ -212,10 +212,29 @@ func (sc *SSRFChecker) SetResolver(r Resolver) {
 	sc.resolver = r
 }
 
-// AllowGatewayOrigin scopes a single, exact gateway host:port pair as an SSRF
-// exception (FR-018, ADR-044 D2). It exists so the agent's built-in browser
-// can reach the gateway's OWN preview URL (`http://localhost:<port>/preview/…`,
-// the literal form `serve_web` emits when `gateway.public_url` is unset)
+// requiredGatewayOriginPathPrefix is the only path the gateway-origin SSRF
+// exception permits (ADR-073). Before ADR-073 the exception matched on
+// host:port alone, which — since it is evaluated before every other SSRF
+// check, including the loopback CIDR block — let the agent's browser reach
+// ANY path on the gateway's own origin, not just the /preview/ surface the
+// exception exists for. That included the gateway's own internal REST API
+// (e.g. /api/v1/config), which an agent could reach via browser_navigate
+// even when explicitly denied the read_file/http tools that would otherwise
+// be needed to read it, and — because a human's browser session to the live
+// preview panel can carry standing gateway auth — potentially as an
+// authenticated admin request. web_serve never needs the browser to reach
+// anything outside /preview/: dev-mode servers are reverse-proxied through
+// it (see rest_preview.go's proxyDevRequest) rather than navigated to
+// directly, by design. Scoping the exception to this prefix closes that gap
+// with no loss of legitimate function for either static or dev-mode
+// previews.
+const requiredGatewayOriginPathPrefix = "/preview/"
+
+// AllowGatewayOrigin scopes a single, exact gateway host:port pair, AND the
+// /preview/ path prefix on it (ADR-073), as an SSRF exception (FR-018,
+// ADR-044 D2). It exists so the agent's built-in browser can reach the
+// gateway's OWN preview URL (`http://localhost:<port>/preview/…`, the
+// literal form `serve_web` emits when `gateway.public_url` is unset)
 // without opening blanket loopback access to arbitrary local ports — the
 // naive "allow localhost" the ADR explicitly rejects.
 //
@@ -286,16 +305,18 @@ func (sc *SSRFChecker) CloneWithGatewayOrigin(host string, port int) *SSRFChecke
 
 // isAllowedGatewayOrigin reports whether rawURL's literal (pre-resolution)
 // host:port exactly matches the gateway origin configured via
-// AllowGatewayOrigin. Fails closed: if no gateway origin has been
-// configured, or rawURL carries no explicit port, or the port doesn't
-// match, this always returns false and CheckURL falls through to the full
-// SSRF path.
+// AllowGatewayOrigin, AND rawURL's path starts with
+// requiredGatewayOriginPathPrefix (ADR-073). Fails closed: if no gateway
+// origin has been configured, rawURL carries no explicit port, the port
+// doesn't match, or the path isn't under /preview/, this always returns
+// false and CheckURL falls through to the full SSRF path.
 //
-// The match is on host:port only, NOT scheme: both http:// and https:// to the
-// configured gateway host:port are accepted. This is intentional and harmless —
-// a scheme mismatch against a plain-HTTP loopback gateway simply fails at the
-// transport layer, and the exception exists only so the agent can reach its own
-// gateway's preview origin, which is a single host:port regardless of scheme.
+// The host:port match is on host:port only, NOT scheme: both http:// and
+// https:// to the configured gateway host:port are accepted. This is
+// intentional and harmless — a scheme mismatch against a plain-HTTP loopback
+// gateway simply fails at the transport layer, and the exception exists only
+// so the agent can reach its own gateway's preview origin, which is a single
+// host:port regardless of scheme.
 func (sc *SSRFChecker) isAllowedGatewayOrigin(rawURL string) bool {
 	sc.gwMu.RLock()
 	gwHost, gwPort := sc.gatewayHost, sc.gatewayPort
@@ -315,18 +336,43 @@ func (sc *SSRFChecker) isAllowedGatewayOrigin(rawURL string) bool {
 	}
 
 	host = strings.ToLower(host)
-	if host == gwHost {
-		return true
+	hostMatches := host == gwHost
+	if !hostMatches {
+		// Accept the resolved-loopback literal forms as equivalent to a
+		// configured "localhost" gateway host (r4 OBS-003) — but ONLY when the
+		// configured host is itself "localhost". This does not generalize to an
+		// arbitrary configured host, so it can never be used to smuggle in a
+		// blanket loopback allowance for a non-localhost gateway origin.
+		hostMatches = gwHost == "localhost" && (host == "127.0.0.1" || host == "::1")
 	}
-	// Accept the resolved-loopback literal forms as equivalent to a
-	// configured "localhost" gateway host (r4 OBS-003) — but ONLY when the
-	// configured host is itself "localhost". This does not generalize to an
-	// arbitrary configured host, so it can never be used to smuggle in a
-	// blanket loopback allowance for a non-localhost gateway origin.
-	if gwHost == "localhost" && (host == "127.0.0.1" || host == "::1") {
-		return true
+	if !hostMatches {
+		return false
 	}
-	return false
+
+	// ADR-073: host:port alone is not enough — the exception exists only for
+	// the preview surface, not the whole gateway origin (which includes the
+	// internal REST API). Require the path to actually be under /preview/.
+	return strings.HasPrefix(extractPath(rawURL), requiredGatewayOriginPathPrefix)
+}
+
+// extractPath returns rawURL's path component (query string and fragment
+// stripped), or "" if rawURL has no path at all (e.g. a bare "host:port" or
+// "host:port?query"). Mirrors stripURLToAuthority's manual, allocation-light
+// parsing style rather than pulling in net/url for this narrow use.
+func extractPath(rawURL string) string {
+	u := rawURL
+	if idx := strings.Index(u, "://"); idx != -1 {
+		u = u[idx+3:]
+	}
+	idx := strings.IndexByte(u, '/')
+	if idx == -1 {
+		return ""
+	}
+	path := u[idx:]
+	if qIdx := strings.IndexAny(path, "?#"); qIdx != -1 {
+		path = path[:qIdx]
+	}
+	return path
 }
 
 // CheckIP verifies that an IP address is not in a private/reserved range.

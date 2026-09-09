@@ -58,12 +58,22 @@ func TestSkillAllowlist_PerAgent_DefaultDeny(t *testing.T) {
 		}
 	})
 
-	t.Run("nil allowlist is unrestricted (back-compat)", func(t *testing.T) {
+	// ADR-072 D5: absence of a grant list means NO skills, matching the
+	// shipped contract (Agent.yaml's "opt-in, default none" — absence of the
+	// field and an empty array are semantically identical). This replaces the
+	// pre-ADR-072 "nil allowlist is unrestricted" behavior, which was the
+	// exact inversion D5 exists to remove: "no list ⇒ unrestricted" punished
+	// the specific operator who set an allowlist while rewarding the one who
+	// never configured one at all.
+	t.Run("nil allowlist denies everything (ADR-072 D5)", func(t *testing.T) {
 		cb := NewContextBuilder(workspace) // no WithSkillAllowlist → nil
 		for _, name := range []string{"summarize", "plan", "daily-briefing"} {
-			if _, ok := cb.ResolveSkillName(name); !ok {
-				t.Errorf("with no allowlist, %q must resolve (unrestricted)", name)
+			if _, ok := cb.ResolveSkillName(name); ok {
+				t.Errorf("with no allowlist configured, %q must NOT resolve (ADR-072 D5 default-none)", name)
 			}
+		}
+		if names := cb.ListSkillNames(); len(names) != 0 {
+			t.Fatalf("with no allowlist configured, ListSkillNames must show no registry skills, got %v", names)
 		}
 	})
 

@@ -166,6 +166,7 @@ func TestClaim_AdjudicatesExactlyOnce_G1(t *testing.T) {
 	}
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
 	emptyCriteria := ""
 	if err := store.SetMeta(sid, session.MetaPatch{GoalCriteriaJSON: &emptyCriteria}); err != nil {
 		t.Fatal(err)
@@ -200,6 +201,7 @@ func TestNoClaim_NoAdjudication_FR101(t *testing.T) {
 	}
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
 	emptyCriteria := ""
 	if err := store.SetMeta(sid, session.MetaPatch{GoalCriteriaJSON: &emptyCriteria}); err != nil {
 		t.Fatal(err)
@@ -322,6 +324,7 @@ func TestBareClaim_FirstFreeSecondCosts_G4(t *testing.T) {
 	}
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
 	emptyCriteria := ""
 	if err := store.SetMeta(sid, session.MetaPatch{GoalCriteriaJSON: &emptyCriteria}); err != nil {
 		t.Fatal(err)
@@ -372,6 +375,7 @@ func TestWaitingOnUser_PauseNoRoundNoVerdictIdleSuppressed_G5(t *testing.T) {
 	}
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
 	emptyCriteria := ""
 	if err := store.SetMeta(sid, session.MetaPatch{GoalCriteriaJSON: &emptyCriteria}); err != nil {
 		t.Fatal(err)
@@ -429,6 +433,7 @@ func TestStrayClaimAfterClear_Inert_N12(t *testing.T) {
 	}
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
 	al.clearGoal(sid, store, "cleared by user")
 	cp := metJudgeProvider("x")
 	judgeInst.Provider = cp
@@ -798,6 +803,7 @@ func TestBareClaim_RoundAdvancePersistFailure_Aborts_M3Sibling(t *testing.T) {
 	}
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
 	emptyCriteria := ""
 	if err := store.SetMeta(sid, session.MetaPatch{GoalCriteriaJSON: &emptyCriteria}); err != nil {
 		t.Fatal(err)

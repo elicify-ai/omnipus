@@ -3,9 +3,11 @@ package googlechat
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -378,5 +380,55 @@ func TestGoogleChatEvent_Parsing(t *testing.T) {
 	json.Unmarshal(event.Message, &msg)
 	if msg.Text != "Hello bot!" {
 		t.Errorf("Message.Text = %q, want Hello bot!", msg.Text)
+	}
+}
+
+// TestSpaceResourceName pins the fix for the send_message double-prefix bug:
+// processEvent (above) sets an INBOUND message's ChatID to event.Space.Name,
+// which is always already "spaces/<id>" per Google's own API — so that is
+// this channel's native chat_id format, and it is what an agent sees via
+// ToolChatID(ctx) for its current Google Chat conversation. Forwarding that
+// same already-prefixed value into send_message's chat_id argument for a
+// proactive/out-of-band send (the tool's documented use case) hit
+// sendBotMessage/StartTyping's endpoint construction, which used to add
+// "spaces/" again unconditionally — producing a malformed, always-404
+// ".../spaces/spaces/<id>/..." resource name. spaceResourceName normalizes
+// to exactly one prefix regardless of which form the caller supplies,
+// matching how send_message already tolerates a raw/unprefixed chat_id for
+// every other channel.
+func TestSpaceResourceName(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"already-prefixed (the channel's own native format) is not doubled", "spaces/AAAA", "spaces/AAAA"},
+		{"bare space id gets the prefix added once", "AAAA", "spaces/AAAA"},
+		{"empty input still gets a well-formed (if empty) resource name", "", "spaces/"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := spaceResourceName(tc.input); got != tc.want {
+				t.Errorf("spaceResourceName(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSpaceResourceName_EndpointNeverDoublePrefixed proves the fix at the
+// exact call-site shape sendBotMessage/StartTyping use: building the
+// messages endpoint from an already-prefixed chat_id (the value send_message
+// would receive when an agent forwards its current turn's chat_id) must
+// yield exactly one "spaces/" segment, never "spaces/spaces/".
+func TestSpaceResourceName_EndpointNeverDoublePrefixed(t *testing.T) {
+	for _, chatID := range []string{"spaces/AAAA", "AAAA"} {
+		endpoint := fmt.Sprintf("%s/%s/messages", googleChatAPIBase, spaceResourceName(chatID))
+		want := googleChatAPIBase + "/spaces/AAAA/messages"
+		if endpoint != want {
+			t.Errorf("endpoint for chat_id %q = %q, want %q", chatID, endpoint, want)
+		}
+		if strings.Contains(endpoint, "spaces/spaces/") {
+			t.Errorf("endpoint for chat_id %q is double-prefixed: %q", chatID, endpoint)
+		}
 	}
 }

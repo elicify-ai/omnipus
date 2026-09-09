@@ -111,9 +111,9 @@ func (r *recordingActivator) filtered(want string) []context.Context {
 
 // newManagerWithRecordedActivation builds a fake-tab manager whose tab
 // activation is recorded rather than dispatched to real CDP.
-func newManagerWithRecordedActivation(t *testing.T, maxTabs int) (*BrowserManager, *recordingActivator) {
+func newManagerWithRecordedActivation(t *testing.T) (*BrowserManager, *recordingActivator) {
 	t.Helper()
-	m := newTestManagerWithFakeTabs(t, maxTabs)
+	m := newTestManagerWithFakeTabs(t)
 	rec := &recordingActivator{}
 	m.tabFocusFn = rec.fn
 	return m, rec
@@ -124,24 +124,24 @@ func newManagerWithRecordedActivation(t *testing.T, maxTabs int) (*BrowserManage
 // zero activations are recorded, which is exactly the state that let the
 // encoder's chrome.tabs.query keep resolving the previous tab.
 func TestSwitchTab_ActivatesNewTabInChrome(t *testing.T) {
-	m, rec := newManagerWithRecordedActivation(t, 5)
+	m, rec := newManagerWithRecordedActivation(t)
 
-	_, err := m.Session(DefaultSessionID)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
-	_, err = m.OpenTab(DefaultSessionID)
+	_, err = m.OpenTab(testSessionID)
 	require.NoError(t, err)
-	_, err = m.OpenTab(DefaultSessionID)
+	_, err = m.OpenTab(testSessionID)
 	require.NoError(t, err)
 
 	// Resolve the context of the tab we are about to switch to, so the
 	// assertion below proves the RIGHT tab was activated — not merely that
 	// some activation happened.
 	m.mu.Lock()
-	wantCtx := m.sessions[DefaultSessionID].tabs[1].ctx
+	wantCtx := m.sessions[testSessionID].tabs[1].ctx
 	m.mu.Unlock()
 
 	before := len(rec.calls())
-	_, err = m.SwitchTab(DefaultSessionID, 1)
+	_, err = m.SwitchTab(testSessionID, 1)
 	require.NoError(t, err)
 
 	calls := rec.calls()
@@ -159,7 +159,7 @@ func TestSwitchTab_ActivatesNewTabInChrome(t *testing.T) {
 // stale active-tab notion in Chrome and could re-bind to the old tab — the
 // original bug, merely narrowed to a race window.
 func TestSwitchTab_ActivatesBeforeNotifyingTabsChanged(t *testing.T) {
-	m := newTestManagerWithFakeTabs(t, 5)
+	m := newTestManagerWithFakeTabs(t)
 
 	var mu sync.Mutex
 	var order []string
@@ -178,16 +178,16 @@ func TestSwitchTab_ActivatesBeforeNotifyingTabsChanged(t *testing.T) {
 		mu.Unlock()
 	})
 
-	_, err := m.Session(DefaultSessionID)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
-	_, err = m.OpenTab(DefaultSessionID)
+	_, err = m.OpenTab(testSessionID)
 	require.NoError(t, err)
 
 	mu.Lock()
 	order = nil // ignore setup-time callbacks; only the switch matters
 	mu.Unlock()
 
-	_, err = m.SwitchTab(DefaultSessionID, 0)
+	_, err = m.SwitchTab(testSessionID, 0)
 	require.NoError(t, err)
 
 	mu.Lock()
@@ -204,21 +204,21 @@ func TestSwitchTab_ActivatesBeforeNotifyingTabsChanged(t *testing.T) {
 // only the WebRTC capture's own tab resolution degrades. A failure here must
 // never turn a successful switch into an error the user sees.
 func TestSwitchTab_ActivationFailureIsNonFatal(t *testing.T) {
-	m, rec := newManagerWithRecordedActivation(t, 5)
+	m, rec := newManagerWithRecordedActivation(t)
 	rec.err = errors.New("bringToFront exploded")
 
-	_, err := m.Session(DefaultSessionID)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
-	_, err = m.OpenTab(DefaultSessionID)
+	_, err = m.OpenTab(testSessionID)
 	require.NoError(t, err)
 
-	tab, err := m.SwitchTab(DefaultSessionID, 1)
+	tab, err := m.SwitchTab(testSessionID, 1)
 	require.NoError(t, err, "a failed tab activation must not fail the switch itself")
 	assert.Equal(t, 1, tab.Index)
 	assert.True(t, tab.Active)
 
 	// The authoritative server-side state must still reflect the switch.
-	tabs, activeIdx, err := m.ListTabs(DefaultSessionID)
+	tabs, activeIdx, err := m.ListTabs(testSessionID)
 	require.NoError(t, err)
 	assert.Equal(t, 1, activeIdx)
 	assert.True(t, tabs[1].Active)
@@ -228,13 +228,13 @@ func TestSwitchTab_ActivationFailureIsNonFatal(t *testing.T) {
 // switch must not touch Chrome at all. Activating on a rejected switch would
 // steal focus toward a tab the caller never successfully selected.
 func TestSwitchTab_DoesNotActivateOnLookupFailure(t *testing.T) {
-	m, rec := newManagerWithRecordedActivation(t, 5)
+	m, rec := newManagerWithRecordedActivation(t)
 
-	_, err := m.Session(DefaultSessionID)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
 	before := len(rec.calls())
 
-	_, err = m.SwitchTab(DefaultSessionID, 99)
+	_, err = m.SwitchTab(testSessionID, 99)
 	require.Error(t, err)
 	_, err = m.SwitchTab("never-opened", 0)
 	require.Error(t, err)
@@ -250,26 +250,26 @@ func TestSwitchTab_DoesNotActivateOnLookupFailure(t *testing.T) {
 // activation hook is the same trick TestSetTabsChangedFunc uses — if the lock
 // were held, this test would hang rather than fail.
 func TestSwitchTab_ActivatesUnderNoManagerLock(t *testing.T) {
-	m := newTestManagerWithFakeTabs(t, 5)
+	m := newTestManagerWithFakeTabs(t)
 
 	var reentered atomic.Bool
 	m.tabFocusFn = func(context.Context, ...chromedp.Action) error {
 		// Would deadlock if SwitchTab held m.mu across the activation.
-		if _, _, err := m.ListTabs(DefaultSessionID); err == nil {
+		if _, _, err := m.ListTabs(testSessionID); err == nil {
 			reentered.Store(true)
 		}
 		return nil
 	}
 
-	_, err := m.Session(DefaultSessionID)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
-	_, err = m.OpenTab(DefaultSessionID)
+	_, err = m.OpenTab(testSessionID)
 	require.NoError(t, err)
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = m.SwitchTab(DefaultSessionID, 1)
+		_, _ = m.SwitchTab(testSessionID, 1)
 	}()
 
 	select {
@@ -285,17 +285,17 @@ func TestSwitchTab_ActivatesUnderNoManagerLock(t *testing.T) {
 // chromedp: in production that is a guaranteed PageTimeout stall for a tab
 // that cannot be brought to front anyway.
 func TestSwitchTab_SkipsActivationForDeadContext(t *testing.T) {
-	m, rec := newManagerWithRecordedActivation(t, 5)
+	m, rec := newManagerWithRecordedActivation(t)
 
 	dead, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	before := len(rec.calls())
-	m.activateTabInChrome(dead, DefaultSessionID, 0)
+	m.activateTabInChrome(dead, testSessionID, 0)
 	assert.Len(t, rec.calls(), before, "a canceled tab context must be skipped, not dispatched to CDP")
 
 	// A nil context must be equally inert.
-	m.activateTabInChrome(nil, DefaultSessionID, 0)
+	m.activateTabInChrome(nil, testSessionID, 0)
 	assert.Len(t, rec.calls(), before, "a nil tab context must be skipped")
 }
 

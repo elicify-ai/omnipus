@@ -7,6 +7,7 @@ package systools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -489,4 +490,427 @@ func TestProviderConfigure_APIBaseValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ---- test_provider: honest-about-no-network-call regression coverage ----
+
+// TestProviderTest_NoFakeLatencyField is a regression test for the bug where
+// test_provider's success response carried a hardcoded "latency_ms": 0 that
+// read as a real connection-latency measurement despite the tool making zero
+// network calls (it only checks whether the credential store resolves an
+// API key ref). The field must be gone entirely — not zero, absent — so no
+// caller can mistake it for a measurement.
+func TestProviderTest_NoFakeLatencyField(t *testing.T) {
+	cfg := &config.Config{Providers: []*config.ModelConfig{
+		{Provider: "anthropic", Model: "anthropic/claude-3-5-haiku", APIKeyRef: "anthropic_API_KEY"},
+	}}
+	deps, store, _ := newProviderTestDeps(t, cfg)
+	require.NoError(t, store.Set("anthropic_API_KEY", "sk-ant-test"))
+
+	res := NewProviderTestTool(deps).Execute(context.Background(), map[string]any{
+		"name": "anthropic",
+	})
+	require.False(t, res.IsError, "test_provider should succeed: %s", res.ForLLM)
+
+	m := unmarshalProviderResult(t, res.ForLLM)
+	if _, present := m["latency_ms"]; present {
+		t.Errorf("test_provider response still contains latency_ms — this tool makes no network call "+
+			"and never measured anything: %s", res.ForLLM)
+	}
+}
+
+// TestProviderTest_DescriptionDiscloseNoNetworkCall proves the tool's own
+// Description() text — the only signal an LLM caller has before invoking it
+// — explicitly discloses that it performs no live connectivity check, so a
+// revoked/expired/wrong key is not mistaken for "ok" meaning "reachable".
+func TestProviderTest_DescriptionDiscloseNoNetworkCall(t *testing.T) {
+	deps, _, _ := newProviderTestDeps(t, &config.Config{})
+	desc := NewProviderTestTool(deps).Description()
+
+	if strings.Contains(strings.ToLower(desc), "test a provider connection") {
+		t.Errorf("Description() still uses the old misleading phrasing implying a live connection test: %q", desc)
+	}
+	if !strings.Contains(desc, "Does NOT contact the provider") {
+		t.Errorf("Description() must explicitly disclose that no network call is made: %q", desc)
+	}
+	if !strings.Contains(desc, "list_models") {
+		t.Errorf("Description() should point callers wanting a real connectivity check at list_models: %q", desc)
+	}
+}
+
+// TestProviderTest_DescriptionDisclosesLocalAlwaysOK is a regression test:
+// the description must state that local providers always report ok
+// without a key, and that a failed check is a normal result (status=error),
+// not a tool-level error.
+func TestProviderTest_DescriptionDisclosesLocalAlwaysOK(t *testing.T) {
+	deps, _, _ := newProviderTestDeps(t, &config.Config{})
+	desc := NewProviderTestTool(deps).Description()
+
+	if !strings.Contains(desc, "always report ok") {
+		t.Errorf("Description() must disclose that local providers always report ok without a key: %q", desc)
+	}
+	if !strings.Contains(desc, "status=\"error\"") {
+		t.Errorf("Description() must disclose that a failed check is a normal result carrying status=error, "+
+			"not a tool error: %q", desc)
+	}
+}
+
+// ---- catalog membership replaces the hardcoded cloud/local allow-lists ----
+
+// TestProviderConfigure_WideCatalogProviderConfigures is a regression test:
+// the ~10-name hardcoded cloudProviders allow-list rejected ~200 real
+// catalog providers by omission (the api_key-required gate simply never
+// fired for them, which was itself a bug — but before this fix, a caller
+// following the OLD map's vocabulary had no way to know these ids were even
+// valid providers at all, since nothing validated membership). This proves
+// two providers absent from the old hardcoded map — xai and togetherai —
+// are recognized as real, known catalog providers and configure normally.
+func TestProviderConfigure_WideCatalogProviderConfigures(t *testing.T) {
+	for _, name := range []string{"xai", "togetherai"} {
+		t.Run(name, func(t *testing.T) {
+			cfg := &config.Config{}
+			deps, store, _ := newProviderTestDeps(t, cfg)
+
+			res := NewProviderConfigureTool(deps).Execute(context.Background(), map[string]any{
+				"name":    name,
+				"api_key": "sk-test-" + name,
+			})
+			require.False(t, res.IsError, "%s should be a known catalog provider and configure: %s", name, res.ForLLM)
+
+			v, err := store.Get(name + "_API_KEY")
+			require.NoError(t, err)
+			require.Equal(t, "sk-test-"+name, v)
+
+			require.Len(t, cfg.Providers, 1)
+			require.Equal(t, name, cfg.Providers[0].Provider)
+		})
+	}
+}
+
+// TestProviderConfigure_LegacyAliasIdsRejected is a regression test:
+// "bedrock" and "gemini" were accepted by the old hardcoded
+// cloudProviders map even though neither is a real catalog id (the real ids
+// are "amazon-bedrock" and "google") — so a caller using the tool's own
+// implied vocabulary got a fabricated "connected" status for a provider
+// that then failed everywhere else (e.g. list_models: "no API base URL
+// configured"). Both must now be rejected outright as unknown ids, and the
+// real catalog ids must be accepted.
+func TestProviderConfigure_LegacyAliasIdsRejected(t *testing.T) {
+	cases := []struct {
+		name      string
+		wantError bool
+	}{
+		{"bedrock", true},
+		{"gemini", true},
+		{"amazon-bedrock", false},
+		{"google", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{}
+			deps, _, _ := newProviderTestDeps(t, cfg)
+
+			res := NewProviderConfigureTool(deps).Execute(context.Background(), map[string]any{
+				"name":    tc.name,
+				"api_key": "sk-test",
+			})
+			if tc.wantError {
+				require.True(t, res.IsError, "%q is not a real catalog id and must be rejected: %s", tc.name, res.ForLLM)
+				m := unmarshalProviderResult(t, res.ForLLM)
+				errBlock, _ := m["error"].(map[string]any)
+				require.Equal(t, "UNKNOWN_PROVIDER", errBlock["code"])
+			} else {
+				require.False(t, res.IsError, "%q is the real catalog id and must be accepted: %s", tc.name, res.ForLLM)
+			}
+		})
+	}
+}
+
+// TestProviderConfigure_UnknownProviderRejected verifies a name that is not
+// in the catalog at all (never was, under any alias) is rejected.
+func TestProviderConfigure_UnknownProviderRejected(t *testing.T) {
+	cfg := &config.Config{}
+	deps, _, _ := newProviderTestDeps(t, cfg)
+
+	res := NewProviderConfigureTool(deps).Execute(context.Background(), map[string]any{
+		"name":    "totally-not-a-real-provider",
+		"api_key": "sk-test",
+	})
+	require.True(t, res.IsError)
+	m := unmarshalProviderResult(t, res.ForLLM)
+	errBlock, _ := m["error"].(map[string]any)
+	require.Equal(t, "UNKNOWN_PROVIDER", errBlock["code"])
+}
+
+// ---- configure_provider no longer fabricates status/models, and
+// surfaces a reload failure instead of swallowing it ----
+
+// TestProviderConfigure_NoFakeStatusFields is a regression test:
+// the response previously carried a hardcoded status:"connected" and
+// models_available:[] despite Execute making zero network calls. Neither
+// field must appear any more.
+func TestProviderConfigure_NoFakeStatusFields(t *testing.T) {
+	cfg := &config.Config{}
+	deps, _, _ := newProviderTestDeps(t, cfg)
+
+	res := NewProviderConfigureTool(deps).Execute(context.Background(), map[string]any{
+		"name": "anthropic", "api_key": "sk-ant-test",
+	})
+	require.False(t, res.IsError, "%s", res.ForLLM)
+
+	m := unmarshalProviderResult(t, res.ForLLM)
+	if _, present := m["status"]; present {
+		t.Errorf("configure_provider response still contains a fabricated 'status' field: %s", res.ForLLM)
+	}
+	if _, present := m["models_available"]; present {
+		t.Errorf("configure_provider response still contains a fabricated 'models_available' field: %s", res.ForLLM)
+	}
+	require.Equal(t, true, m["api_key_stored"], "api_key_stored should reflect the key just stored")
+	require.Equal(t, "anthropic", m["name"])
+}
+
+// TestProviderConfigure_PublishWarningOnReloadFailure is a regression test:
+// a ReloadFunc error was previously discarded with `_ =
+// t.deps.ReloadFunc()`, so a caller had no way to know the provider was not
+// actually live yet. It must now surface as publish_warning, mirroring
+// create_agent/update_agent/delete_agent, while the call still reports
+// success (the key really was stored).
+func TestProviderConfigure_PublishWarningOnReloadFailure(t *testing.T) {
+	cfg := &config.Config{}
+	deps, _, _ := newProviderTestDeps(t, cfg)
+	deps.ReloadFunc = func() error { return fmt.Errorf("reload boom") }
+
+	res := NewProviderConfigureTool(deps).Execute(context.Background(), map[string]any{
+		"name": "anthropic", "api_key": "sk-ant-test",
+	})
+	require.False(t, res.IsError, "a reload failure must not turn a real success into a tool error: %s", res.ForLLM)
+
+	m := unmarshalProviderResult(t, res.ForLLM)
+	warning, _ := m["publish_warning"].(string)
+	require.NotEmpty(t, warning, "expected publish_warning naming the reload failure")
+	require.Contains(t, warning, "reload boom")
+}
+
+// TestProviderConfigure_DescriptionDisclosesNoNetworkCall proves the
+// description no longer promises a connection status it never measures.
+func TestProviderConfigure_DescriptionDisclosesNoNetworkCall(t *testing.T) {
+	deps, _, _ := newProviderTestDeps(t, &config.Config{})
+	desc := NewProviderConfigureTool(deps).Description()
+
+	if !strings.Contains(desc, "Does NOT contact the provider") {
+		t.Errorf("Description() must disclose that configure_provider never contacts the provider: %q", desc)
+	}
+	if !strings.Contains(desc, "amazon-bedrock") || !strings.Contains(desc, "google") {
+		t.Errorf("Description() should name the correct catalog ids for the two known alias traps: %q", desc)
+	}
+}
+
+// ---- list_providers reports a real status and sees Provider-field-only entries ----
+
+// TestProviderList_StatusReflectsCredentialPresence is a regression test:
+// Status was a hardcoded literal "configured" for every entry
+// regardless of whether a key was actually stored. It must now be
+// key_present when the credential resolves and no_credentials otherwise.
+func TestProviderList_StatusReflectsCredentialPresence(t *testing.T) {
+	cfg := &config.Config{Providers: []*config.ModelConfig{
+		{Provider: "anthropic", Model: "anthropic/claude", APIKeyRef: "anthropic_API_KEY"},
+		{Provider: "openrouter", Model: "openrouter/auto"}, // no ref at all
+	}}
+	deps, store, _ := newProviderTestDeps(t, cfg)
+	require.NoError(t, store.Set("anthropic_API_KEY", "sk-ant"))
+
+	res := NewProviderListTool(deps).Execute(context.Background(), nil)
+	require.False(t, res.IsError, "%s", res.ForLLM)
+
+	m := unmarshalProviderResult(t, res.ForLLM)
+	providers, _ := m["providers"].([]any)
+	require.Len(t, providers, 2)
+
+	status := map[string]string{}
+	for _, p := range providers {
+		pm, _ := p.(map[string]any)
+		name, _ := pm["name"].(string)
+		s, _ := pm["status"].(string)
+		status[name] = s
+		if _, present := pm["models_available"]; present {
+			t.Errorf("list_providers entry for %q still carries the fabricated models_available field", name)
+		}
+	}
+	require.Equal(t, "key_present", status["anthropic"], "anthropic has a resolvable key")
+	require.Equal(t, "no_credentials", status["openrouter"], "openrouter has no ref at all")
+}
+
+// TestProviderList_SeesProviderFieldOnlyEntry is a regression test:
+// an entry written by configure_provider for a brand-new provider
+// carries an explicit Provider field but a bare (non-slash) Model field —
+// providerFromModelRef(m.Model) alone can't see it and used to skip it
+// entirely. list_providers must use providerNameOf (Provider-field-first)
+// so a provider configured this way is not invisible to its own sibling
+// tool.
+func TestProviderList_SeesProviderFieldOnlyEntry(t *testing.T) {
+	cfg := &config.Config{Providers: []*config.ModelConfig{
+		{Provider: "cohere", Model: "cohere"}, // bare Model, exactly what configure_provider writes
+	}}
+	deps, _, _ := newProviderTestDeps(t, cfg)
+
+	res := NewProviderListTool(deps).Execute(context.Background(), nil)
+	require.False(t, res.IsError, "%s", res.ForLLM)
+
+	m := unmarshalProviderResult(t, res.ForLLM)
+	providers, _ := m["providers"].([]any)
+	require.Len(t, providers, 1, "provider with a bare Model field must still be visible")
+	pm, _ := providers[0].(map[string]any)
+	require.Equal(t, "cohere", pm["name"])
+}
+
+// TestProviderConfigureThenList_EndToEnd is a regression test: a
+// provider configured via configure_provider (which appends a
+// Provider-field-only entry for a brand-new provider) must be visible
+// afterwards via list_providers — this was the original defect: success,
+// then absent from its own sibling list.
+func TestProviderConfigureThenList_EndToEnd(t *testing.T) {
+	cfg := &config.Config{}
+	deps, _, _ := newProviderTestDeps(t, cfg)
+
+	configureRes := NewProviderConfigureTool(deps).Execute(context.Background(), map[string]any{
+		"name": "xai", "api_key": "sk-xai-test",
+	})
+	require.False(t, configureRes.IsError, "%s", configureRes.ForLLM)
+
+	listRes := NewProviderListTool(deps).Execute(context.Background(), nil)
+	require.False(t, listRes.IsError, "%s", listRes.ForLLM)
+	m := unmarshalProviderResult(t, listRes.ForLLM)
+	providers, _ := m["providers"].([]any)
+	names := map[string]bool{}
+	for _, p := range providers {
+		pm, _ := p.(map[string]any)
+		name, _ := pm["name"].(string)
+		names[name] = true
+	}
+	require.True(t, names["xai"], "xai configured via configure_provider must appear in list_providers")
+}
+
+// ---- list_models description discloses the live network call ----
+
+// TestListModels_DescriptionDisclosesLiveCall is a regression test:
+// the description previously read like a config read even though Execute
+// issues a real HTTP GET per configured provider. It must now disclose the
+// live call, the warnings field, and that it doubles as the connectivity
+// check test_provider points callers to.
+func TestListModels_DescriptionDisclosesLiveCall(t *testing.T) {
+	deps, _, _ := newProviderTestDeps(t, &config.Config{})
+	desc := NewModelsListTool(deps).Description()
+
+	if !strings.Contains(desc, "live") {
+		t.Errorf("Description() must disclose that this makes a live call: %q", desc)
+	}
+	if !strings.Contains(desc, "warnings") {
+		t.Errorf("Description() must document the warnings response field: %q", desc)
+	}
+	if !strings.Contains(desc, "default_model") {
+		t.Errorf("Description() must document the default_model response field: %q", desc)
+	}
+	if !strings.Contains(desc, "test_provider") {
+		t.Errorf("Description() should cross-reference test_provider, which points callers here: %q", desc)
+	}
+}
+
+// ---- nil-CredStore safety + test_provider UNKNOWN_PROVIDER parity ----
+//
+// configure_provider and test_provider both called t.deps.CredStore.Get(ref)
+// unguarded, unlike list_providers (which already guarded it). Deps.CredStore
+// is nil in some test/scaffolding contexts, and configure_provider{name:
+// "ollama"} with no api_key (legal for a local provider) still reaches the
+// unguarded Get — a real, reachable nil-deref, not just a theoretical one.
+
+// TestProviderConfigure_NilCredStoreLocalProviderNoPanic is the exact
+// reachable scenario: a local provider configured with no api_key skips the
+// CredStore.Set call entirely but still falls into the api_key_stored
+// resolution branch, which used to deref a nil CredStore unconditionally.
+func TestProviderConfigure_NilCredStoreLocalProviderNoPanic(t *testing.T) {
+	cfg := &config.Config{}
+	deps, _, _ := newProviderTestDeps(t, cfg)
+	deps.CredStore = nil // simulate an unwired test/scaffolding Deps
+
+	require.NotPanics(t, func() {
+		res := NewProviderConfigureTool(deps).Execute(context.Background(), map[string]any{
+			"name": "ollama",
+		})
+		require.False(t, res.IsError, "configure_provider for a local provider should not fail: %s", res.ForLLM)
+		m := unmarshalProviderResult(t, res.ForLLM)
+		require.Equal(t, false, m["api_key_stored"], "no key was provided and CredStore is nil, so nothing resolves")
+	})
+}
+
+// TestProviderConfigure_NilCredStoreWithAPIKeyNoPanic covers the same nil
+// CredStore with an api_key supplied — the Set call is guarded separately
+// from the Get-based api_key_stored resolution this fix targets, but the
+// whole call path must still not panic.
+func TestProviderConfigure_NilCredStoreWithAPIKeyNoPanic(t *testing.T) {
+	cfg := &config.Config{}
+	deps, _, _ := newProviderTestDeps(t, cfg)
+	deps.CredStore = nil
+
+	require.NotPanics(t, func() {
+		NewProviderConfigureTool(deps).Execute(context.Background(), map[string]any{
+			"name": "ollama", "api_key": "does-not-matter-locally",
+		})
+	})
+}
+
+// TestProviderTest_NilCredStoreNoPanic verifies test_provider does not panic
+// when CredStore is nil, for both a local provider (no key needed, must
+// report ok) and a cloud provider (no key resolves, must report error, not
+// an IsError tool failure).
+func TestProviderTest_NilCredStoreNoPanic(t *testing.T) {
+	cfg := &config.Config{}
+	deps, _, _ := newProviderTestDeps(t, cfg)
+	deps.CredStore = nil
+
+	require.NotPanics(t, func() {
+		res := NewProviderTestTool(deps).Execute(context.Background(), map[string]any{"name": "ollama"})
+		require.False(t, res.IsError, "%s", res.ForLLM)
+		m := unmarshalProviderResult(t, res.ForLLM)
+		require.Equal(t, "ok", m["status"], "local provider should still be ok with a nil CredStore")
+	})
+
+	require.NotPanics(t, func() {
+		res := NewProviderTestTool(deps).Execute(context.Background(), map[string]any{"name": "openai"})
+		require.False(t, res.IsError, "%s", res.ForLLM)
+		m := unmarshalProviderResult(t, res.ForLLM)
+		require.Equal(t, "error", m["status"], "cloud provider with nil CredStore must report error, not panic")
+	})
+}
+
+// TestProviderTest_UnknownProviderRejected is a regression test: test_provider
+// used to discard catalogProviderLocality's `known` return value, so a
+// typo'd/unknown provider name fell through to a generic "credentials not
+// found" message instead of the clear UNKNOWN_PROVIDER error
+// configure_provider already gives for the identical case.
+func TestProviderTest_UnknownProviderRejected(t *testing.T) {
+	cfg := &config.Config{}
+	deps, _, _ := newProviderTestDeps(t, cfg)
+
+	res := NewProviderTestTool(deps).Execute(context.Background(), map[string]any{
+		"name": "totally-not-a-real-provider",
+	})
+	require.True(t, res.IsError, "expected an UNKNOWN_PROVIDER tool error, got success: %s", res.ForLLM)
+	m := unmarshalProviderResult(t, res.ForLLM)
+	errBlock, _ := m["error"].(map[string]any)
+	require.Equal(t, "UNKNOWN_PROVIDER", errBlock["code"])
+}
+
+// TestProviderTest_LegacyAliasRejected proves test_provider now agrees with
+// configure_provider on the "bedrock"/"gemini" legacy-alias case (the real
+// catalog ids are "amazon-bedrock"/"google") instead of silently reporting a
+// generic credentials-not-found error for an id that was never real.
+func TestProviderTest_LegacyAliasRejected(t *testing.T) {
+	cfg := &config.Config{}
+	deps, _, _ := newProviderTestDeps(t, cfg)
+
+	res := NewProviderTestTool(deps).Execute(context.Background(), map[string]any{"name": "bedrock"})
+	require.True(t, res.IsError, "expected UNKNOWN_PROVIDER for legacy alias 'bedrock': %s", res.ForLLM)
+	m := unmarshalProviderResult(t, res.ForLLM)
+	errBlock, _ := m["error"].(map[string]any)
+	require.Equal(t, "UNKNOWN_PROVIDER", errBlock["code"])
 }

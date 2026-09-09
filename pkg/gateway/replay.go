@@ -18,6 +18,7 @@ import (
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/askuser"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -80,7 +81,23 @@ func streamReplay(
 	mediaStore media.MediaStore,
 	toolStore *toolResultStore,
 	isSpanActive func(parentSpawnCallID string) bool,
+	terminalAsk *askuser.PendingSet,
 ) (framesEmitted int, err error) {
+	// terminalAsk is the session's persisted TERMINAL (answered/cancelled)
+	// AskUserQuestion record from UnifiedMeta's PendingAskJSON (see
+	// loadTerminalAskRecord), or nil. askuserquestion-tool-spec v3 §0.6: the
+	// collapsed card on history reload renders from THIS record — not from
+	// the tool_call/tool_result pair (which holds only the park-time
+	// "pending" stub) and not from parsing the resume message — so replay
+	// reconstructs it into an ask_user_question frame (the same frame the
+	// live terminal emission sent, mirroring how judge_verdict entries are
+	// rebuilt above). A still-PENDING record is never passed here (and is
+	// defensively dropped below): the live pending card is the registry's to
+	// deliver via session_state's pending_asks snapshot.
+	if terminalAsk != nil && terminalAsk.Status == askuser.StatusPending {
+		terminalAsk = nil
+	}
+	terminalAskEmitted := false
 	// isSpanActive lets a caller (handleAttachSession, wired to
 	// agent.AgentLoop.IsSubTurnActiveForSpawnCall) tell replay that a given
 	// spawn/delegate ToolCall's real sub-turn is STILL genuinely running,
@@ -276,6 +293,37 @@ func streamReplay(
 		// Update the running fallback agent ID.
 		if entry.AgentID != "" {
 			lastSeenAgentID = entry.AgentID
+		}
+
+		// AskUserQuestion resume messages (spec v3 §0.2) — the persisted
+		// user-role `Answers to your questions (card_id=<id>): {...}` turn
+		// opener — are NEVER replayed as a raw replay_message: the §0.2
+		// presentation rule says the SPA renders the resume message AS the
+		// collapsed answer record, never as raw JSON, and the collapsed
+		// record itself is reconstructed here from the terminal registry/
+		// session-meta record (§0.6), which makes simple suppression of the
+		// raw bubble correct — the card frame emitted in its place IS the
+		// render of this message. When the resume message's card id matches
+		// the terminal record, the reconstructed card frame is emitted at
+		// this exact position, so the collapsed record lands where the
+		// resume happened in the thread. A resume message with NO matching
+		// terminal record (an older set — PendingAskJSON holds only the
+		// latest, so an earlier set's record is overwritten by the next
+		// CreatePending) is still suppressed: raw JSON must never render,
+		// and its park-time tool_call/tool_result stub remains in the
+		// stream as the historical trace. Resume entries are plain inbound
+		// user messages (dispatched via PublishInbound) and carry no tool
+		// calls, so skipping the whole entry loses nothing else.
+		if entry.Role == "user" {
+			if cardID, isResume := askuser.ParseResumeCardID(entry.Content); isResume {
+				if terminalAsk != nil && !terminalAskEmitted && terminalAsk.CardID == cardID {
+					terminalAskEmitted = true
+					if err2 := emitFrame(buildAskUserQuestionFrame(terminalAsk)); err2 != nil {
+						return framesEmitted, err2
+					}
+				}
+				continue
+			}
 		}
 
 		// FR-I-002: emit replay_message for non-empty content.
@@ -583,6 +631,20 @@ func streamReplay(
 		}
 	}
 
+	// A terminal AskUserQuestion record with no matching resume message in
+	// the replayed entries still gets its collapsed card, appended at the
+	// end of the stream: a set cancelled via session Stop dispatches no
+	// resume turn at all (CancelOnSessionStop), a resume dispatch can fail
+	// after the terminal persist, and an incremental (since-cursor) replay
+	// may have filtered the resume entry out. Re-sending the same terminal
+	// card on a later incremental replay is idempotent — the SPA stores the
+	// card verbatim per session.
+	if terminalAsk != nil && !terminalAskEmitted {
+		if err2 := emitFrame(buildAskUserQuestionFrame(terminalAsk)); err2 != nil {
+			return framesEmitted, err2
+		}
+	}
+
 	// When the transcript contained duplicate tool_call_ids, surface a one-shot
 	// replay_warning frame before the done frame so the SPA can toast the operator.
 	// The full counts still live in done.Stats for diagnostics; this frame is the
@@ -628,6 +690,47 @@ func streamReplay(
 		return framesEmitted, err2
 	}
 	return framesEmitted, nil
+}
+
+// buildAskUserQuestionFrame wraps a terminal AskUserQuestion record in the
+// same ask_user_question frame shape the live terminal emission broadcast
+// (askUserCardSink → broadcastAskUserCard), so replay parity with a live
+// collapse is exact. The delay argument to toAskUserCard is irrelevant for a
+// terminal card — default_safe_at is only materialized while Status is
+// pending — so the production constant is passed unconditionally.
+func buildAskUserQuestionFrame(set *askuser.PendingSet) generated.AskUserQuestionFrame {
+	return generated.AskUserQuestionFrame{
+		Type: string(generated.WsFrameTypeAskUserQuestion),
+		Card: toAskUserCard(set, askuser.DefaultSafeDelay),
+	}
+}
+
+// loadTerminalAskRecord reads the session's persisted AskUserQuestion record
+// (UnifiedMeta.PendingAskJSON, spec v3 §0.3/M-R2-1) and returns it when — and
+// only when — it is TERMINAL (answered/cancelled): that record is what the
+// §0.6 collapsed card renders from on history reload, and streamReplay
+// reconstructs it into the frame stream. A pending record returns nil (the
+// live registry delivers those via session_state's pending_asks snapshot); a
+// missing or corrupt record returns nil with a warning — replay proceeds
+// without the collapsed card rather than aborting the whole attach.
+func loadTerminalAskRecord(store *session.UnifiedStore, sessionID string) *askuser.PendingSet {
+	if store == nil {
+		return nil
+	}
+	meta, err := store.GetMeta(sessionID)
+	if err != nil || meta == nil || meta.PendingAskJSON == "" {
+		return nil
+	}
+	var set askuser.PendingSet
+	if uerr := json.Unmarshal([]byte(meta.PendingAskJSON), &set); uerr != nil {
+		slog.Warn("replay: corrupt pending_ask record — skipping collapsed-card reconstruction",
+			"session_id", sessionID, "error", uerr)
+		return nil
+	}
+	if set.Status == askuser.StatusPending {
+		return nil
+	}
+	return &set
 }
 
 // buildMediaFrame returns a generated.MediaFrame reconstructed from a
@@ -1136,16 +1239,25 @@ func toJudgeVerdictFrame(v task.JudgeVerdict) generated.JudgeVerdictFrame {
 	// so start from a non-nil, empty slice rather than appending onto a nil
 	// one.
 	f.PerCriterion = make([]struct {
-		CriterionId string `json:"criterion_id"`
-		Met         bool   `json:"met"`
-		Reason      string `json:"reason"`
+		CriterionId   string  `json:"criterion_id"`
+		EvidenceQuote *string `json:"evidence_quote,omitempty"`
+		Met           bool    `json:"met"`
+		Reason        string  `json:"reason"`
 	}, 0, len(v.PerCriterion))
 	for _, c := range v.PerCriterion {
+		// ADR-074 D7: optional + empty-safe — an empty quote (fail-closed /
+		// pre-D7 verdicts) stays absent from the wire, never "".
+		var quote *string
+		if c.EvidenceQuote != "" {
+			q := c.EvidenceQuote
+			quote = &q
+		}
 		f.PerCriterion = append(f.PerCriterion, struct {
-			CriterionId string `json:"criterion_id"`
-			Met         bool   `json:"met"`
-			Reason      string `json:"reason"`
-		}{CriterionId: c.CriterionID, Met: c.Met, Reason: c.Reason})
+			CriterionId   string  `json:"criterion_id"`
+			EvidenceQuote *string `json:"evidence_quote,omitempty"`
+			Met           bool    `json:"met"`
+			Reason        string  `json:"reason"`
+		}{CriterionId: c.CriterionID, EvidenceQuote: quote, Met: c.Met, Reason: c.Reason})
 	}
 	return f
 }

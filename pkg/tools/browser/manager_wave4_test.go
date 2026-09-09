@@ -2,7 +2,6 @@ package browser
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -113,78 +112,11 @@ func TestSSRFURLCheckByBrowserManager(t *testing.T) {
 // BDD Scenario Outline: Tab limit enforcement
 // Dataset: Tab Limit Enforcement rows 1–6
 
-func TestTabCounter_Limits(t *testing.T) {
-	// Traces to: wave4-whatsapp-browser-spec.md Dataset: Tab Limit Enforcement rows 1–6
-
-	tests := []struct {
-		name      string
-		maxTabs   int
-		openTabs  int
-		wantAllow bool
-	}{
-		// Dataset row 1 — limit 5, 0 open: allow
-		{name: "5 limit, 0 open: allow", maxTabs: 5, openTabs: 0, wantAllow: true},
-		// Dataset row 2 — limit 5, 4 open: allow
-		{name: "5 limit, 4 open: allow", maxTabs: 5, openTabs: 4, wantAllow: true},
-		// Dataset row 3 — limit 5, 5 open: deny (at limit)
-		{name: "5 limit, 5 open: deny", maxTabs: 5, openTabs: 5, wantAllow: false},
-		// Dataset row 4 — limit 5, 6 open: deny (above limit, defensive)
-		{name: "5 limit, 6 open: deny", maxTabs: 5, openTabs: 6, wantAllow: false},
-		// Dataset row 5 — limit 1, 0 open: allow
-		{name: "1 limit, 0 open: allow", maxTabs: 1, openTabs: 0, wantAllow: true},
-		// Dataset row 6 — limit 1, 1 open: deny
-		{name: "1 limit, 1 open: deny", maxTabs: 1, openTabs: 1, wantAllow: false},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			// Verify the tab limit logic directly:
-			// AcquireTab denies when m.tabCount >= m.cfg.MaxTabs (and MaxTabs > 0)
-			atOrOverLimit := tc.openTabs >= tc.maxTabs
-			if tc.wantAllow {
-				assert.False(t, atOrOverLimit,
-					"openTabs=%d should be under maxTabs=%d", tc.openTabs, tc.maxTabs)
-			} else {
-				assert.True(t, atOrOverLimit,
-					"openTabs=%d should be at or over maxTabs=%d", tc.openTabs, tc.maxTabs)
-			}
-		})
-	}
-}
-
 // --- TestMaxTabsExceeded_AcquireTabReturnsError ---
 // Traces to: wave4-whatsapp-browser-spec.md line 776 (Scenario: Maximum tabs exceeded)
 // BDD: Given max_tabs: 3 and 3 tabs open,
 // When a 4th browser_navigate with new_tab: true is called,
 // Then error: "maximum concurrent tabs (3) reached."
-
-func TestMaxTabsExceeded_SessionReturnsError(t *testing.T) {
-	// Traces to: wave4-whatsapp-browser-spec.md line 776 (Scenario: Maximum tabs exceeded)
-	cfg, err := DefaultConfig()
-	require.NoError(t, err)
-	cfg.MaxTabs = 3
-
-	// Bypass browser launch by pre-filling sessions map to capacity
-	ssrf := security.NewSSRFChecker(nil)
-	m, err := NewBrowserManager(cfg, ssrf)
-	require.NoError(t, err)
-	m.started = true
-	// Simulate 3 existing sessions (each a one-tab browsing context) at the
-	// MaxTabs cap — ADR-041 generalizes MaxTabs to a total-tab-count cap
-	// across every browsing context (totalTabCountLocked), so 3 one-tab
-	// sessions still exercise the exact same limit-enforcement path.
-	for i := range 3 {
-		m.sessions[fmt.Sprintf("tab-%d", i)] = &sessionEntry{
-			tabs:      []*tabEntry{{ctx: context.Background(), cancel: func() {}}},
-			activeIdx: 0,
-		}
-	}
-
-	_, sessionErr := m.Session("new-tab")
-	require.Error(t, sessionErr)
-	assert.Contains(t, sessionErr.Error(), "maximum concurrent tabs")
-	assert.Contains(t, sessionErr.Error(), "3")
-}
 
 // --- TestPageTimeoutConfig ---
 // Traces to: wave4-whatsapp-browser-spec.md line 997 (Test #6: TestPageTimeoutConfig)
@@ -219,7 +151,7 @@ func TestBrowserConfigParsing(t *testing.T) {
 	assert.False(t, cfg.Enabled, "browser disabled by default (deny-by-default per CLAUDE.md)")
 	assert.True(t, cfg.Headless, "browser headless by default per FR-009")
 	assert.Equal(t, 30*time.Second, cfg.PageTimeout, "default page timeout 30s per FR-013")
-	assert.Equal(t, 5, cfg.MaxTabs, "default max tabs 5 per FR-013")
+	assert.Equal(t, leaseWaitTimeout, cfg.LeaseWait, "default write-lease wait per FR-023")
 	assert.False(t, cfg.PersistSession, "session persistence disabled by default (explicit non-behavior)")
 	assert.Contains(t, cfg.ProfileDir, ".omnipus", "profile dir under ~/.omnipus per FR-018")
 	assert.Contains(t, cfg.ProfileDir, "browser", "profile dir under browser subdirectory")

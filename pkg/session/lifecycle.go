@@ -104,25 +104,6 @@ var terminalLifecycleStates = map[LifecycleState]bool{ //nolint:gochecknoglobals
 // states (completed/failed/cancelled/timed_out).
 func IsTerminalLifecycleState(s LifecycleState) bool { return terminalLifecycleStates[s] }
 
-// LaunchProfile is the delegate launch profile (ADR-053 §Contract Surface —
-// Delegate action set). utility = visibility=outcome, steering=none,
-// child_messaging=progress_only (fire-and-collect, maps today's one-shot
-// spawn). specialist = visibility=checkpoints, steering=parent_and_human,
-// child_messaging=full (a 3P child on this profile still degrades to
-// fire-and-collect, D5).
-type LaunchProfile string
-
-const (
-	LaunchProfileUtility    LaunchProfile = "utility"
-	LaunchProfileSpecialist LaunchProfile = "specialist"
-)
-
-// IsValidLaunchProfile reports whether p is one of the two published launch
-// profiles.
-func IsValidLaunchProfile(p LaunchProfile) bool {
-	return p == LaunchProfileUtility || p == LaunchProfileSpecialist
-}
-
 // OwnerScopeKind discriminates LifecycleRecord.OwnerScopeID's meaning (N-9 —
 // a bare oneOf of untagged strings has no discriminator, so this mirrors the
 // generated SessionLifecycleRecordOwnerScopeKind split). The domain string
@@ -177,9 +158,10 @@ func (n *NeedsInput) Expired(now time.Time) bool {
 
 // LifecycleRecord is the durable, per-generation session-lifecycle record
 // (ADR-053 §Contract Surface — SessionLifecycleRecord). Field shapes mirror
-// the generated pkg/api/generated.SessionLifecycleRecord one-for-one so a
-// caller mapping this disk record onto the wire type (delegate.status,
-// DoD-11) never has to reconcile diverging field names.
+// the generated pkg/api/generated.SessionLifecycleRecord one-for-one (minus
+// the retired launch_profile field, removed by the ADR-053 Amendment — see
+// that ADR) so a caller mapping this disk record onto the wire type
+// (delegate.status, DoD-11) never has to reconcile diverging field names.
 //
 // not-wire-format: internal disk record; a caller (pkg/tools/delegate.go)
 // maps it onto generated.SessionLifecycleRecord at the tool-result boundary.
@@ -199,11 +181,10 @@ type LifecycleRecord struct {
 	// correction on the named plan.
 	OwnsPlanID string `json:"owns_plan_id,omitempty"`
 
-	GoalRef       string        `json:"goal_ref,omitempty"`
-	WorkspaceID   string        `json:"workspace_id"`
-	AgentID       string        `json:"agent_id"`
-	Is3P          bool          `json:"is_3p"`
-	LaunchProfile LaunchProfile `json:"launch_profile"`
+	GoalRef     string `json:"goal_ref,omitempty"`
+	WorkspaceID string `json:"workspace_id"`
+	AgentID     string `json:"agent_id"`
+	Is3P        bool   `json:"is_3p"`
 
 	// ParentAgentID is the id of the agent that DELEGATED this session into
 	// existence — the CALLER of `delegate.run`, captured at mint time from
@@ -476,9 +457,6 @@ func (s *LifecycleStore) persistLocked(rec *LifecycleRecord) error {
 	}
 	if !IsValidOwnerScopeKind(rec.OwnerScopeKind) {
 		return fmt.Errorf("session: lifecycle: invalid owner_scope_kind %q", rec.OwnerScopeKind)
-	}
-	if rec.LaunchProfile != "" && !IsValidLaunchProfile(rec.LaunchProfile) {
-		return fmt.Errorf("session: lifecycle: invalid launch_profile %q", rec.LaunchProfile)
 	}
 
 	prev, found, err := s.tail(rec.SessionID)

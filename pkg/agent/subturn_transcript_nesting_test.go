@@ -70,6 +70,21 @@ import (
 func TestSpawnSubTurn_MultiStepChild_StampsParentSpawnCallIDOnOwnNarration(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
+		// CLAUDE.md hard constraint 6 (no default-policy fallback): this bare
+		// config carries no per-agent tool policy, so every tool -- including
+		// ToolSearch, which the scripted child below calls 4 times -- resolves
+		// through the real compositor with NO entry on either side and fails
+		// closed to deny (pkg/tools/compositor.go). Before the ToolSearch
+		// policy-seeding fix (release/v0.1.1, "seed ToolSearch as real allow
+		// data for every agent, remove hardcoded bypasses"), ToolSearch had an
+		// unconditional code-level force-allow independent of any seeded
+		// data, which is exactly what let this test's scripted ToolSearch
+		// calls succeed with a config this bare. That bypass is gone by
+		// design; this global ceiling grant is the real, seeded replacement
+		// for it, scoped to only the one tool this test actually exercises.
+		Sandbox: config.OmnipusSandboxConfig{
+			ToolPolicies: map[string]string{"ToolSearch": "allow"},
+		},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
@@ -121,7 +136,7 @@ func TestSpawnSubTurn_MultiStepChild_StampsParentSpawnCallIDOnOwnNarration(t *te
 
 	// 5-round scripted child: 4 rounds of narration+tool-call (drives
 	// appendIntermediateAssistantTranscript once per round), then a final
-	// narration-only round (drives appendAssistantTranscript). "load_tool" is
+	// narration-only round (drives appendAssistantTranscript). "ToolSearch" is
 	// ScopeCore and allowed by default policy resolution with no extra
 	// config — mirrors the established raySeq pattern in
 	// subturn_delegate_nesting_test.go.
@@ -130,25 +145,25 @@ func TestSpawnSubTurn_MultiStepChild_StampsParentSpawnCallIDOnOwnNarration(t *te
 		&providers.LLMResponse{
 			Content: "Step 1: let me check what tools I have available.",
 			ToolCalls: []providers.ToolCall{
-				{ID: "child-call-1", Name: "load_tool", Arguments: loadToolArgs},
+				{ID: "child-call-1", Name: "ToolSearch", Arguments: loadToolArgs},
 			},
 		},
 		&providers.LLMResponse{
 			Content: "Step 2: searching for the first source now.",
 			ToolCalls: []providers.ToolCall{
-				{ID: "child-call-2", Name: "load_tool", Arguments: loadToolArgs},
+				{ID: "child-call-2", Name: "ToolSearch", Arguments: loadToolArgs},
 			},
 		},
 		&providers.LLMResponse{
 			Content: "Step 3: found something, digging deeper.",
 			ToolCalls: []providers.ToolCall{
-				{ID: "child-call-3", Name: "load_tool", Arguments: loadToolArgs},
+				{ID: "child-call-3", Name: "ToolSearch", Arguments: loadToolArgs},
 			},
 		},
 		&providers.LLMResponse{
 			Content: "Step 4: cross-checking a second source.",
 			ToolCalls: []providers.ToolCall{
-				{ID: "child-call-4", Name: "load_tool", Arguments: loadToolArgs},
+				{ID: "child-call-4", Name: "ToolSearch", Arguments: loadToolArgs},
 			},
 		},
 		&providers.LLMResponse{
@@ -209,7 +224,7 @@ func TestSpawnSubTurn_MultiStepChild_StampsParentSpawnCallIDOnOwnNarration(t *te
 			assistantEntries = append(assistantEntries, e)
 		}
 		for _, tc := range e.ToolCalls {
-			if tc.Tool == "load_tool" {
+			if tc.Tool == "ToolSearch" {
 				toolCallEntries = append(toolCallEntries, e)
 			}
 		}
@@ -239,7 +254,7 @@ func TestSpawnSubTurn_MultiStepChild_StampsParentSpawnCallIDOnOwnNarration(t *te
 	require.Len(t, toolCallEntries, 4)
 	for _, e := range toolCallEntries {
 		for _, tc := range e.ToolCalls {
-			if tc.Tool != "load_tool" {
+			if tc.Tool != "ToolSearch" {
 				continue
 			}
 			assert.Equal(t, spawnCallID, string(tc.ParentToolCallID),

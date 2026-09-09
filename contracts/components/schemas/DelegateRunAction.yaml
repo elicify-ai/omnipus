@@ -8,15 +8,13 @@ description: >
   criteria + engine-injected child identity from the target agent, ADR-032)
   is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4);
   only `snapshot` here is subject to `snapshot_max_bytes`/
-  `snapshot_max_refs`. Illegal `launch_profile`/`child_messaging`/
-  `steering` combinations are rejected at the handler (not schema-
-  expressible beyond the enum itself) — see `launch_profile`'s
-  description for the two published legal profiles.
+  `snapshot_max_refs`. Steering is always available for a direct
+  delegation — there is no longer a launch-profile choice gating it
+  (see ADR-053 Amendment).
 required:
   - action
   - target_agent_id
   - task
-  - launch_profile
 additionalProperties: false
 properties:
   action:
@@ -40,21 +38,6 @@ properties:
     maxLength: 100
     description: Human-readable label for the spawned span (subagent_start.task_label).
     example: "Log anomaly scan"
-  launch_profile:
-    type: string
-    enum:
-      - utility
-      - specialist
-    description: >
-      `utility` — visibility=outcome, steering=none, child_messaging=
-      progress_only (fire-and-collect; maps today's one-shot spawn).
-      `specialist` — visibility=checkpoints, steering=parent_and_human,
-      child_messaging=full (collaborating native worker; a 3P child on
-      this profile degrades to fire-and-collect, D5). The full
-      illegal-combo legality table (e.g. visibility=outcome with
-      child_messaging=full) is enforced at the handler, not by this
-      enum alone.
-    example: "specialist"
   wait:
     type: boolean
     description: >

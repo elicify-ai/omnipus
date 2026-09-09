@@ -63,6 +63,7 @@ function makeCallbacks() {
     onTabs: vi.fn(),
     onWebRTCAnswer: vi.fn(),
     onWebRTCState: vi.fn(),
+    onVideoHealth: vi.fn(),
     onError: vi.fn(),
     onConnected: vi.fn(),
     onDisconnected: vi.fn(),

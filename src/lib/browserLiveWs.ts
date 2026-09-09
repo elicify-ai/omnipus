@@ -26,6 +26,7 @@ import type {
   BrowserTabActionFrame,
   BrowserViewportFrame,
   BrowserTabsFrame,
+  BrowserVideoHealthFrame,
   BrowserWebRTCAnswerFrame,
   BrowserWebRTCOfferFrame,
   BrowserWebRTCStateFrame,
@@ -42,6 +43,7 @@ type BrowserServerFrame =
   | BrowserTabsFrame
   | BrowserWebRTCAnswerFrame
   | BrowserWebRTCStateFrame
+  | BrowserVideoHealthFrame
   | ErrorFrame
 
 export interface BrowserLiveWsCallbacks { // not-wire-format: SPA-only callback interface passed to BrowserLiveWsConnection's constructor. Never serialized to or from the gateway.
@@ -58,6 +60,12 @@ export interface BrowserLiveWsCallbacks { // not-wire-format: SPA-only callback 
    * also reads `available`/`has_audio` directly to decide whether to call
    * the machine's `start()`. */
   onWebRTCState: (frame: BrowserWebRTCStateFrame) => void
+  /** Issue #674 — health of the SHARED capture feeding every viewer:
+   * `lost` / `recovering` (with `attempt`/`max_attempts`) / `recovered` /
+   * `unrecoverable`. Pushed the instant the gateway knows, so the panel
+   * states the real reason instead of waiting out its first-frame timeout.
+   * Distinct from `onWebRTCState`, which is about THIS viewer's signalling. */
+  onVideoHealth: (frame: BrowserVideoHealthFrame) => void
   /** Fires for both server-sent `error` frames and local transport errors (create/send/reconnect-exhausted). */
   onError: (message: string) => void
   onConnected?: () => void
@@ -123,6 +131,7 @@ export function parseBrowserFrame(data: unknown): BrowserServerFrame | null {
     frame.type === 'browser_tabs' ||
     frame.type === 'browser_webrtc_answer' ||
     frame.type === 'browser_webrtc_state' ||
+    frame.type === 'browser_video_health' ||
     frame.type === 'error'
   ) {
     return frame
@@ -231,6 +240,54 @@ export function translateBrowserErrorMessage(raw: string): string {
   return raw
 }
 
+/**
+ * Issue #674 — turns a `browser_video_health` frame into the sentence the
+ * panel shows, or `null` when there is nothing to say.
+ *
+ * Why the panel needs this at all: the gateway learns the capture's video
+ * feed died within microseconds, but the SPA used to learn only by
+ * exhausting FIRST_FRAME_TIMEOUT_MS (45s). That constant is NOT the bug and
+ * must not be shortened — its value was derived after a live incident where
+ * a healthy-but-slow cold start showed a red error and then connected fine.
+ * The fix is that the deadline stops being the only source of news.
+ *
+ * `recovered` returns null: the panel's job then is to stop showing an
+ * error, not to show a different one.
+ *
+ * `detail` is appended VERBATIM (matching translateWebRTCFallbackReason's
+ * "Reported cause:" convention) rather than pattern-matched into friendlier
+ * prose — a cause we do not recognise is exactly the case where the raw text
+ * matters most, and it is already whitespace-collapsed, credential-redacted
+ * and length-bounded server-side.
+ */
+export function describeVideoHealth(frame: BrowserVideoHealthFrame | null | undefined): string | null {
+  if (!frame || frame.state === 'recovered') return null
+  const detail = frame.detail?.trim()
+  const withCause = (headline: string) => (detail ? `${headline} Reported cause: ${detail}` : headline)
+
+  switch (frame.state) {
+    case 'lost':
+      return withCause("The live browser's video stopped. Reconnecting automatically…")
+    case 'recovering': {
+      // Stating the bound is the point: an unbounded spinner and a bounded
+      // retry look identical to a user, and only one of them is going to end.
+      const attempt = frame.attempt ?? 0
+      const max = frame.max_attempts ?? 0
+      const progress = attempt > 0 && max > 0 ? ` (attempt ${attempt} of ${max})` : ''
+      return withCause(`The live browser's video stopped. Reconnecting${progress}…`)
+    }
+    case 'unrecoverable': {
+      const max = frame.max_attempts ?? 0
+      const attempts = max > 0 ? ` after ${max} attempts` : ''
+      return withCause(
+        `The live browser could not restart its video${attempts}. Retry, or reload the page if it keeps failing.`,
+      )
+    }
+    default:
+      return null
+  }
+}
+
 export class BrowserLiveWsConnection {
   private ws: WebSocket | null = null
   private readonly sessionId: string
@@ -291,6 +348,8 @@ export class BrowserLiveWsConnection {
         this.callbacks.onWebRTCAnswer(frame)
       } else if (frame.type === 'browser_webrtc_state') {
         this.callbacks.onWebRTCState(frame)
+      } else if (frame.type === 'browser_video_health') {
+        this.callbacks.onVideoHealth(frame)
       } else {
         // D5 fix (Site 2) — this was an unconditional raw pass-through of
         // the server's ErrorFrame.message (protocol-internal Go strings like

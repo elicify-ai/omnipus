@@ -1,0 +1,68 @@
+[rec] codec gate ON: /av01|av1/i hard=false
+[rec] launching chrome (headless=true) profile=/var/folders/rw/h_fqz_990kj3pnxsl9qf1v9w0000gn/T/msespike-Xh3bbV
+[rec] CHROME_PID=31052
+[rec] connected: Chrome/151.0.7922.77
+[rec] attached page about:blank
+[ev] gate-installed {"ev":"gate-installed","re":"/av01|av1/i","hard":false,"wall":1554,"session":"B2BB4AB5BA4483B171C78315B5F0212B"}
+[ev] shim {"ev":"shim","t":0,"scope":"window","url":"about:blank","hasMS":true,"hasMMS":false,"wall":1555,"session":"B2BB4AB5BA4483B171C78315B5F0212B"}
+[rec] navigating -> https://www.youtube.com/watch?v=aqz-KE-bpKQ
+[ev] gate-installed {"ev":"gate-installed","re":"/av01|av1/i","hard":false,"wall":2192,"session":"B2BB4AB5BA4483B171C78315B5F0212B"}
+[ev] shim {"ev":"shim","t":0,"scope":"window","url":"https://www.youtube.com/watch?v=aqz-KE-bpKQ","hasMS":true,"hasMMS":false,"wall":2192,"session":"B2BB4AB5BA4483B171C78315B5F0212B"}
+[ev] gate {"ev":"gate","api":"decodingInfo","arg":"video/mp4; codecs=\"av01.0.12M.08\"","verdict":false,"wall":4374,"session":"B2BB4AB5BA4483B171C78315B5F0212B"}
+[ev] gate {"ev":"gate","api":"MediaSource.isTypeSupported","arg":"video/mp4; codecs=av01.0.05M.08","verdict":false,"wall":4415,"session":"B2BB4AB5BA4483B171C78315B5F0212B"}
+[ev] gate {"ev":"gate","api":"MediaSource.isTypeSupported","arg":"video/mp4; codecs=\"av01.0.13M.08\"","verdict":false,"wall":4418,"session":"B2BB4AB5BA4483B171C78315B5F0212B"}
+[ev] gate {"ev":"gate","api":"MediaSource.isTypeSupported","arg":"video/mp4; codecs=\"av01.0.12M.08\"","verdict":false,"wall":4418,"session":"B2BB4AB5BA4483B171C78315B5F0212B"}
+[ev] gate {"ev":"gate","api":"MediaSource.isTypeSupported","arg":"video/mp4; codecs=\"av01.0.09M.08\"","verdict":false,"wall":4419,"session":"B2BB4AB5BA4483B171C78315B5F0212B"}
+[ev] gate {"ev":"gate","api":"MediaSource.isTypeSupported","arg":"video/mp4; codecs=\"av01.0.08M.08\"","verdict":false,"wall":4419,"session":"B2BB4AB5BA4483B171C78315B5F0212B"}
+[ev] gate {"ev":"gate","api":"MediaSource.isTypeSupported","arg":"video/mp4; codecs=\"av01.0.04M.08\"","verdict":false,"wall":4419,"session":"B2BB4AB5BA4483B171C78315B5F0212B"}
+[ev] gate {"ev":"gate","api":"MediaSource.isTypeSupported","arg":"video/mp4; codecs=\"av01.0.01M.08\"","verdict":false,"wall":4420,"session":"B2BB4AB5BA4483B171C78315B5F0212B"}
+[ev] gate {"ev":"gate","api":"MediaSource.isTypeSupported","arg":"video/mp4; codecs=\"av01.0.00M.08\"","verdict":false,"wall":4421,"session":"B2BB4AB5BA4483B171C78315B5F0212B"}
+[ev] gate {"ev":"gate","api":"MediaSource.isTypeSupported","arg":"video/mp4; codecs=\"av01.0.00M.08\"","verdict":false,"wall":4421,"session":"B2BB4AB5BA4483B171C78315B5F0212B"}
+[ev] duration {"ev":"duration","t":2354,"value":635,"wall":4532,"session":"B2BB4AB5BA4483B171C78315B5F0212B"}
+[ev] addSourceBuffer {"ev":"addSourceBuffer","t":2354,"sb":1,"ms":1,"mime":"audio/webm; codecs=\"opus\"","impl":"MediaSource","wall":4547,"session":"B2BB4AB5BA4483B171C78315B5F0212B"}
+[ev] addSourceBuffer {"ev":"addSourceBuffer","t":2354,"sb":2,"ms":1,"mime":"video/webm; codecs=\"vp09.00.51.08.01.01.01.01.00\"","impl":"MediaSource","wall":4566,"session":"B2BB4AB5BA4483B171C78315B5F0212B"}
+[ev] duration {"ev":"duration","t":2512,"ms":1,"value":634.601,"wall":4686,"session":"B2BB4AB5BA4483B171C78315B5F0212B"}
+[rec] attached iframe 
+[ev] gate-installed {"ev":"gate-installed","re":"/av01|av1/i","hard":false,"wall":4997,"session":"E151091854766DB27A92D7827171FCBF"}
+[ev] shim {"ev":"shim","t":0,"scope":"window","url":"https://accounts.google.com/ServiceLogin?service=youtube&uilel=3&passive=true&continue=https%3A%2F%2Fwww.youtube.com%2Fsignin%3Faction_handle_signin%3Dtrue%26app%3Ddesktop%26hl%
+[src] t=0s rs=1 640x360 buf=[[0,4.03]] aBytes=0 appends=38 MB=0.34
+[ev] gate-installed {"ev":"gate-installed","re":"/av01|av1/i","hard":false,"wall":5745,"session":"B2BB4AB5BA4483B171C78315B5F0212B"}
+[ev] shim {"ev":"shim","t":0,"scope":"window","url":"about:blank","hasMS":true,"hasMMS":false,"wall":5746,"session":"B2BB4AB5BA4483B171C78315B5F0212B"}
+[rec] attached service_worker https://www.youtube.com/sw.js
+[ev] gate-installed {"ev":"gate-installed","re":"/av01|av1/i","hard":false,"wall":6440,"session":"B2BB4AB5BA4483B171C78315B5F0212B"}
+[ev] shim {"ev":"shim","t":0,"scope":"window","url":"about:blank","hasMS":true,"hasMMS":false,"wall":6441,"session":"B2BB4AB5BA4483B171C78315B5F0212B"}
+[src] t=0.844s rs=4 640x360 buf=[[0,20]] aBytes=16327 appends=41 MB=1.03
+[src] t=1.847s rs=4 640x360 buf=[[0,20]] aBytes=30255 appends=41 MB=1.03
+[src] t=2.85s rs=4 640x360 buf=[[0,20]] aBytes=44317 appends=41 MB=1.03
+[src] t=3.852s rs=4 640x360 buf=[[0,20]] aBytes=58140 appends=41 MB=1.03
+[src] t=4.854s rs=4 640x360 buf=[[0,32.73]] aBytes=72567 appends=165 MB=1.87
+[src] t=5.856s rs=4 640x360 buf=[[0,34.43]] aBytes=87548 appends=176 MB=1.92
+[src] t=6.861s rs=4 640x360 buf=[[0,34.43]] aBytes=104339 appends=176 MB=1.92
+[src] t=7.863s rs=4 640x360 buf=[[0,34.43]] aBytes=122955 appends=176 MB=1.92
+[src] t=8.865s rs=4 640x360 buf=[[0,34.43]] aBytes=142373 appends=176 MB=1.92
+[src] t=9.868s rs=4 640x360 buf=[[0,34.43]] aBytes=160169 appends=176 MB=1.92
+[src] t=10.87s rs=4 640x360 buf=[[0,34.43]] aBytes=176482 appends=176 MB=1.92
+[src] t=11.873s rs=4 640x360 buf=[[0,34.43]] aBytes=194216 appends=176 MB=1.92
+[src] t=12.876s rs=4 640x360 buf=[[0,34.43]] aBytes=212503 appends=176 MB=1.92
+[src] t=13.878s rs=4 640x360 buf=[[0,34.43]] aBytes=230594 appends=176 MB=1.92
+[src] t=14.88s rs=4 640x360 buf=[[0,48.07]] aBytes=247288 appends=324 MB=2.78
+[src] t=15.883s rs=4 640x360 buf=[[0,48.07]] aBytes=262877 appends=324 MB=2.78
+[src] t=16.886s rs=4 640x360 buf=[[0,48.07]] aBytes=278836 appends=324 MB=2.78
+[src] t=17.887s rs=4 640x360 buf=[[0,48.07]] aBytes=293932 appends=324 MB=2.78
+[src] t=18.889s rs=4 640x360 buf=[[0,59.1]] aBytes=309814 appends=414 MB=3.28
+[src] t=19.89s rs=4 640x360 buf=[[0,59.1]] aBytes=324383 appends=414 MB=3.28
+[src] t=20.892s rs=4 854x480 buf=[[0,59.1]] aBytes=340511 appends=414 MB=3.28
+[src] t=21.903s rs=4 854x480 buf=[[0,59.1]] aBytes=357804 appends=414 MB=3.28
+[src] t=22.906s rs=4 854x480 buf=[[0,59.1]] aBytes=374201 appends=414 MB=3.28
+[src] t=23.909s rs=4 854x480 buf=[[0,59.1]] aBytes=391244 appends=414 MB=3.28
+[src] t=24.912s rs=4 854x480 buf=[[0,60]] aBytes=405035 appends=453 MB=3.52
+[src] t=25.913s rs=4 854x480 buf=[[0,60]] aBytes=419480 appends=453 MB=3.52
+[src] t=26.915s rs=4 854x480 buf=[[0,60]] aBytes=434860 appends=453 MB=3.52
+[src] t=27.917s rs=4 854x480 buf=[[0,60]] aBytes=450555 appends=453 MB=3.52
+[src] t=28.92s rs=4 854x480 buf=[[0,60]] aBytes=467543 appends=453 MB=3.52
+[src] t=29.932s rs=4 854x480 buf=[[0,60]] aBytes=486048 appends=453 MB=3.52
+[src] t=30.934s rs=4 854x480 buf=[[0,60]] aBytes=502767 appends=453 MB=3.52
+[src] t=31.936s rs=4 854x480 buf=[[0,60]] aBytes=519498 appends=453 MB=3.52
+
+[rec] DONE appends=453 bytes=3690900 (3.52 MB) missing=0
+[rec] manifest -> /private/tmp/claude-501/-Users-danielpiatkowski-AI-Agent-Workspace-omnipus-repo/8831d598-bc7d-4ea5-ba95-012aa131be37/scratchpad/spike-mse/out/yt-vp9b/manifest.json

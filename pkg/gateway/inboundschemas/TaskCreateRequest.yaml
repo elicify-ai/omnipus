@@ -126,11 +126,13 @@ properties:
   criteria:
     type: array
     items:
-      $ref: ./AcceptanceCriterion.yaml
+      $ref: ./AcceptanceCriterionInput.yaml
     description: >
       Optional initial acceptance criteria (Definition of Done, ADR-049
       D2/D5/FR-3). Agent tool paths reject a create with zero criteria;
-      human/UI creation may leave this empty (soft tier).
+      human/UI creation may leave this empty (soft tier). Items use the
+      authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind`
+      may be omitted and is inferred server-side from the payload.
   max_attempts:
     type: integer
     minimum: 1

@@ -22,11 +22,15 @@ package tools
 // two-line version fell two (now five) entries behind.
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
+	"github.com/stretchr/testify/require"
 )
 
 // TestSecretGuardPatterns_CoverEverySecretEntryAlways is the coupling test.
@@ -82,6 +86,29 @@ func TestSecretGuardPatterns_CaseInsensitive(t *testing.T) {
 	}
 }
 
+// TestSecretGuardPatterns_OrdinaryCommandsMentioningSkills is ADR-072 D10
+// Part A / D10.1's false-positive regression (spec test #22, T7f): "skills"
+// was added to fspolicy's path-denial vocabulary (SecretEntriesAlwaysPathOnly)
+// but deliberately kept OUT of SecretEntriesAlways, so it must never reach
+// buildSecretGuardPatterns. An ordinary command that merely mentions the word
+// "skills" — with no path into $OMNIPUS_HOME/skills at all — must stay
+// permitted.
+func TestSecretGuardPatterns_OrdinaryCommandsMentioningSkills(t *testing.T) {
+	for _, command := range []string{
+		`grep -r "skills" .`,
+		`git commit -m "add skills"`,
+		"ls ~/projects/skills-demo",
+		"npm run build:skills",
+		"echo I have many skills",
+	} {
+		if reason := applyDenyPatterns(command, defaultDenyPatterns, nil); reason != "" {
+			t.Errorf("ordinary command %q mentioning \"skills\" was blocked (%q) — "+
+				"the shell text guard must not have gained a skills entry (ADR-072 D10.1)",
+				command, reason)
+		}
+	}
+}
+
 // TestSecretGuardPatterns_GeneratedFromLiveSecretSet is a narrower, more
 // direct pin on the mechanism itself (not just the outcome above): every
 // compiled pattern in secretGuardPatterns must actually originate from the
@@ -101,4 +128,56 @@ func TestSecretGuardPatterns_GeneratedFromLiveSecretSet(t *testing.T) {
 			t.Errorf("secretGuardPatterns[%d] = %q, want %q (generated from %q)", i, got, want, name)
 		}
 	}
+}
+
+// TestSecretGuard_SkillsPathDeniedNotTextGuarded is ADR-072 D10 Part A /
+// D10.1's split, asserted end-to-end through the real command guard (spec
+// test #30d, T7f): a command naming a REAL path under $OMNIPUS_HOME/skills is
+// still refused — by inTurnSecretSet's path-based check, NOT by the
+// literal-text guard — while a command that merely mentions the WORD
+// "skills", with no such path, is not.
+//
+// It is also the regression for the CHILD half of D10.3's app/kernel split.
+// D10.3 removed $OMNIPUS_HOME/skills from the app layer's carve-out roots so
+// the in-process file tools could gate a skill's instruction FILE instead of
+// its whole directory — and `bash` must not inherit that narrowing, because
+// it is a spawned child: POSIX kernel rulesets still deny it the whole
+// directory, and on Windows this guard is the only enforcement that exists.
+// So this must keep passing via fspolicy.CoversChildOnlySecretPath even
+// though fspolicy.IsCarveOut no longer answers it. A whole-directory refusal
+// here alongside a file-level gate in ResolvePath is the intended, documented
+// asymmetry, not a contradiction.
+func TestSecretGuard_SkillsPathDeniedNotTextGuarded(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+
+	skillFile := filepath.Join(home, "skills", "plan-spec", "SKILL.md")
+	require.NoError(t, os.MkdirAll(filepath.Dir(skillFile), 0o755))
+	require.NoError(t, os.WriteFile(skillFile, []byte("# plan-spec"), 0o600))
+
+	work := filepath.Join(home, "agents", "me")
+	require.NoError(t, os.MkdirAll(work, 0o755))
+	workAbs, err := filepath.EvalSymlinks(work)
+	require.NoError(t, err)
+
+	tool, err := NewExecToolWithConfig(workAbs, true, nil)
+	require.NoError(t, err)
+
+	guard := func(cmd string) string {
+		return tool.guardCommand(context.Background(), cmd, workAbs)
+	}
+
+	t.Run("a real path into the skills registry is refused", func(t *testing.T) {
+		require.NotEmpty(t, guard("cat "+skillFile),
+			"a real path under $OMNIPUS_HOME/skills must be refused (path-denied, ADR-072 D10 Part A)")
+		require.NotEmpty(t, guard("cat $OMNIPUS_HOME/skills/plan-spec/SKILL.md"),
+			"the $OMNIPUS_HOME-relative spelling of the same file must get the same verdict")
+	})
+
+	t.Run("the bare word is not text-guarded", func(t *testing.T) {
+		require.Empty(t, guard(`grep -r "skills" .`),
+			"an ordinary command mentioning \"skills\" with no path must not be blocked")
+		require.Empty(t, guard(`git commit -m "add skills"`),
+			"an ordinary command mentioning \"skills\" with no path must not be blocked")
+	})
 }

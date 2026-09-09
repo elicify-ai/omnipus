@@ -272,7 +272,7 @@ func TestLifecycleParentIndex_EnsureWarmRetriesAfterFailure(t *testing.T) {
 	require.NoError(t, s.Persist(&LifecycleRecord{
 		SessionID: "child-x", State: LifecycleQueued,
 		OwnerScopeKind: OwnerScopeHuman, ParentDurableKey: "parent-x",
-		WorkspaceID: "ws-1", AgentID: "ray", LaunchProfile: LaunchProfileUtility,
+		WorkspaceID: "ws-1", AgentID: "ray",
 	}))
 
 	// The retry must succeed now — a failed warm must never be latched
@@ -290,7 +290,7 @@ func TestLifecycleParentIndex_EnsureWarmRetriesAfterFailure(t *testing.T) {
 	require.NoError(t, s.Persist(&LifecycleRecord{
 		SessionID: "child-y", State: LifecycleQueued,
 		OwnerScopeKind: OwnerScopeHuman, ParentDurableKey: "parent-x",
-		WorkspaceID: "ws-1", AgentID: "ava", LaunchProfile: LaunchProfileUtility,
+		WorkspaceID: "ws-1", AgentID: "ava",
 	}))
 	recs2, err := s.List(LifecycleFilter{ParentDurableKey: "parent-x"})
 	require.NoError(t, err)
@@ -317,7 +317,7 @@ func TestLifecycleParentIndex_EnsureWarmMissingDirectoryIsNotAnError(t *testing.
 	require.NoError(t, s.Persist(&LifecycleRecord{
 		SessionID: "child-z", State: LifecycleQueued,
 		OwnerScopeKind: OwnerScopeHuman, ParentDurableKey: "parent-x",
-		WorkspaceID: "ws-1", AgentID: "ray", LaunchProfile: LaunchProfileUtility,
+		WorkspaceID: "ws-1", AgentID: "ray",
 	}))
 	recs2, err := s.List(LifecycleFilter{ParentDurableKey: "parent-x"})
 	require.NoError(t, err)
