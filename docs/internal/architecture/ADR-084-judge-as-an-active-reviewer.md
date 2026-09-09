@@ -1,6 +1,6 @@
 # ADR-084 — The Judge is an active reviewer, not a passive one
 
-- **Status:** Proposed (revision 6 — D4's residual-risk acceptance narrowed, D10's confinement scope widened; no decision withdrawn) — 2026-09-09
+- **Status:** Proposed (revision 7 — claim-triggered, off the critical path; see §8. Earlier: revision 6 — D4's residual-risk acceptance narrowed, D10's confinement scope widened; no decision withdrawn) — 2026-09-09
   - *Revision 5 — four claims about the code corrected; decisions unchanged.*
   - *Revision 4 — greenfield, migration removed by operator directive.*
 - **Amends:** the un-ADR'd judge fix-wave in commit `02214f5c` (2026-09-09, "fix GX-E") — `planArtifactCheck`, the rung-1.5 dispatch, and the working-tree diff feed. *(Revision 1 wrongly attributed this to ADR-082, which is about UI-independent turns and session-bound streaming and says nothing about the Judge.)*
@@ -310,3 +310,67 @@ form contradicted the decision it implemented.
 injection surface and D10's four closures. Revision 6 narrows one acceptance to what the controls
 deliver, widens one closure to what its mechanism governs, and names three bounds the decisions
 imply. It withdraws nothing.
+
+## 8. Revision 7 — the Judge is claim-triggered and runs after delivery
+
+### Operator direction (verbatim, 2026-09-09)
+
+> so yes the judge should run after delivery, when the working llm pauses we only have to repost the goal like the ralph loop is doing it so it continues
+
+> yes lets make the claim a tool call and only run the judge at the end on completion
+
+### Why: four harnesses, no counterexample
+
+Research into how comparable systems decide a goal is done (`openclaw/openclaw` @ `4a2bc10d`, `NousResearch/hermes-agent` @ `9e6c4100`, Claude Code's shipped tool schemas @ 2.1.266, `OpenHands/software-agent-sdk`) found a sharp and unanimous distribution:
+
+| System | Who decides completion | Verifier tools | On the user's critical path |
+|---|---|---|---|
+| OpenClaw | the acting agent (`update_goal`, status enum `complete`/`blocked`) | none — there is no judge | no judge at all |
+| Hermes | separate judge, `DEFAULT_JUDGE_TIMEOUT = 30.0` s | **none** | **no — runs after delivery** |
+| Claude Code | the acting agent (`TodoWriteInput.status`), plus the human reading it | n/a | no completion judge exists |
+| OpenHands | a critic; cheap deterministic ones first, LLM one is a single `/classify` call | none | inline but one call |
+
+- **Multi-minute verification is normal.** **Tool-using verification is normal.** A **tool-using LLM verifier on the user's synchronous critical path has zero precedent** in the sample.
+- The only inline LLM judge found anywhere is OpenClaw's command-safety reviewer: `DEFAULT_EXEC_REVIEWER_TIMEOUT_MS = 30_000`, `EXEC_REVIEWER_MAX_TOKENS = 360`, temperature 0, **no tools**, and on timeout it fails open to `ask` (`buildReviewerTimeoutDecision`) rather than stalling.
+- Hermes refuses to make the user wait even 10–40 s: its gateway hook is documented "Run the goal judge after a gateway turn (AFTER delivery)" with the reason inline — the call "would block Discord heartbeats".
+- The heavyweight tool-using reviewers that do exist (Hermes `/review`, Claude Code's `/code-review` at its deepest tier) are **always** background, cancellable, or in the cloud. Hermes states the invariant outright: "self-improvement work must never block a user-facing turn."
+- Where minutes are spent, it is on **deterministic execution of the project's own tests** (`agent/verify/runner.py`, `DEFAULT_PHASE_TIMEOUT = 600.0`), user-invoked — the user asked to wait.
+
+Revision 6's design — a tool-using Judge, up to 420 s per attempt, synchronous inside the operator's chat turn — is the one shape nobody ships.
+
+### D12 — Completion is claimed by a tool call, not by a text marker
+
+Today a claim is prose: a `[goal:evidence] <what you verified>` line immediately followed by `GOAL_STATUS: met`, recovered by `pkg/agent/task_completion_signal.go::parseGoalStatusMarker` with fenced-code exclusion, last-occurrence-wins, and an unrecognised value treated as no claim. The machinery is careful precisely because the input is unreliable, and the G-4 bare-claim bounce exists to absorb the common failure of claiming without evidence.
+
+A new tool — working name `goal_claim` — replaces detection with arrival:
+
+- Arguments: `status` (enum: `met` | `blocked` | `waiting_on_user`) and `evidence` (required, non-empty, for `status: met`).
+- A claim of `met` with no evidence is **rejected by the schema at the call**, not bounced after the fact. The G-4 bounce economics are retired for the tool path.
+- Identification is no longer pattern matching: either the call arrived or it did not. No fenced-code rule, no last-one-wins, no positional adjacency requirement.
+- Per Constraint #6 / ADR-077 it is a static builtin: an entry in `coreagent::allStaticToolNames`, a seeded default in `pkg/config/defaults.go`, and per-agent seeding.
+- **The text markers keep working**, unchanged, as a fallback for a model that types them anyway. They are no longer the primary signal. `parseGoalStatusMarker` is not deleted.
+
+### D13 — The Judge runs only on a completion claim, and only after delivery
+
+- **A claim is the sole trigger.** `status: met` (by tool call or by the fallback marker) is what starts an adjudication.
+- **It runs after the answer has been delivered to the operator**, not inside the turn they are waiting on. The Hermes precedent is exact.
+- **Silence is not a claim.** The claimless adjudication fired by the 60 s quiet window (`goal_triggers.go`'s "goal idle settle: firing claimless adjudication after quiet window") is **removed**. A stalled or quiet agent is a *pause*, and the answer to a pause is to re-post the goal so work continues — the Ralph-loop behaviour the keeper already implements. No Judge call, no round consumed.
+- **`waiting_on_user` parks with no adjudication and no round consumed**, as today.
+- Because adjudication is now rare and off the critical path, D1's tool-using Judge costs the operator no latency. The operator's direction that the Judge reason with common sense and read files is **unchanged and preserved**; only its trigger and its position move.
+
+### D14 — Deterministic evidence first (adopted from Hermes)
+
+Where a criterion is decidable by running something, the command's exit code is the verdict and the Judge is not called for it. This is Hermes's `_check_gates()` → `judge_goal()` ordering, whose documentation states the principle: "Gates run before the judge. If any gate fails, the judge is not called — a red gate is deterministic evidence the goal isn't done." It generalises D5a's one-way veto from artifact checks to any criterion carrying a check.
+
+### Consequences of revision 7
+
+- The 420 s ceiling stops being operator-visible latency and becomes background cost. **FR-086 (what the operator sees during a long adjudication) is answered by construction** — they see their answer, and a verdict arrives afterwards.
+- The withholding-loop non-termination (revision 6's F22 / FR-020a) is materially reduced: adjudications now happen on claims, not on every quiet window, so the pathological "a different criterion is unverifiable each round, forever" loop loses its clock.
+- D9's budget work stays, but its urgency drops: a 30 s-class inline call no longer bounds the design, because there is no inline call.
+- The spec's §M legacy-rubric analysis is unaffected — it concerns what a rubric declares, not when the Judge runs.
+
+### Open, for the spec to resolve
+
+1. Whether a claim also runs the cheap deterministic gates first (D14) or whether gates run continuously as evidence accrues.
+2. What the operator sees when a background adjudication overturns a claim — the verdict must be visible without being intrusive.
+3. Whether a second claim arriving while an adjudication is in flight supersedes it or is refused.
