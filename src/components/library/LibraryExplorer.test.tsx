@@ -42,6 +42,13 @@ vi.mock('@/lib/api', async (importOriginal) => {
     searchVault: vi.fn(),
     searchFiles: vi.fn(),
     libraryDownloadUrl: vi.fn((wsId: string, path: string) => `/api/v1/library/${wsId}/download?path=${path}`),
+    // HP-1 fix (defect-list-html-preview-2026-09-08.md): LibraryPreviewPane's
+    // PREVIEW_TOKEN_MINTER now resolves to the real mintLibraryPreviewToken
+    // when its mintPreviewToken prop is omitted (as this file's renders all
+    // do). No test here currently opens an .html entry, so this mock is never
+    // called today — it is here so one that does in the future doesn't fall
+    // into the exact `...actual` trap the comment above already warns about.
+    mintLibraryPreviewToken: vi.fn(),
   }
 })
 

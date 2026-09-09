@@ -218,6 +218,9 @@ import {
   // (contract-first #8).
   ViewResult as ViewResultSchema,
   KnowledgeBaseViews as KnowledgeBaseViewsSchema,
+  // HP-1 fix (defect-list-html-preview-2026-09-08.md) — the mint client for
+  // the sandboxed HTML/SVG preview frame (ADR-067 §10.3, spec FR-003f):
+  LibraryPreviewTokenResponse as LibraryPreviewTokenResponseSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -513,6 +516,10 @@ import type {
   LibraryRenameRequest,
   LibraryUploadResponse,
   LibraryTransferRequest,
+  // HP-1 fix (defect-list-html-preview-2026-09-08.md) — mint client for the
+  // sandboxed HTML/SVG preview frame (ADR-067 §10.3, spec FR-003f):
+  LibraryPreviewTokenRequest,
+  LibraryPreviewTokenResponse,
   // ADR-067 stage 2 — the knowledge-base read surface (contract-first #8):
   KnowledgeBaseInfo,
   KnowledgeOutline,
@@ -4861,6 +4868,27 @@ export function copyLibraryEntry(body: LibraryTransferRequest): Promise<LibraryE
     '/library/copy',
     { method: 'POST', body: JSON.stringify(body) },
     LibraryEntrySchema as ZodType<LibraryEntry>,
+  )
+}
+
+/**
+ * Mint a short-lived preview token (POST /library/preview-token, spec
+ * FR-003f) so the sandboxed HTML/SVG preview frame — an opaque-origin
+ * document that can send neither the session cookie nor an Authorization
+ * header — can load itself and its relative subresources (ADR-067 §10.3).
+ * Minting is authenticated and never widens access: the caller must already
+ * be able to read `body.path`, and the token is confined to one workspace and
+ * one path (FR-003b/FR-003i). No workspace_id in the route, matching the
+ * existing /library/move and /library/copy shape — see LibraryPreviewPane's
+ * `PREVIEW_TOKEN_MINTER`, the sole production caller.
+ */
+export function mintLibraryPreviewToken(
+  body: LibraryPreviewTokenRequest,
+): Promise<LibraryPreviewTokenResponse> {
+  return request<LibraryPreviewTokenResponse>(
+    '/library/preview-token',
+    { method: 'POST', body: JSON.stringify(body) },
+    LibraryPreviewTokenResponseSchema as ZodType<LibraryPreviewTokenResponse>,
   )
 }
 

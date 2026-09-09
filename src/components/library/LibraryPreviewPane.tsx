@@ -43,7 +43,7 @@ import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { X, SpinnerGap, ShieldWarning, ArrowClockwise, WarningCircle } from '@phosphor-icons/react'
 import { QueryErrorState } from '@/components/shared/QueryErrorState'
-import { fetchLibraryContent, libraryDownloadUrl, libraryQueryKeys } from '@/lib/api'
+import { fetchLibraryContent, libraryDownloadUrl, libraryQueryKeys, mintLibraryPreviewToken } from '@/lib/api'
 import type { LibraryEntry } from '@/lib/api'
 import type {
   LibraryPreviewTokenRequest,
@@ -71,28 +71,36 @@ export const LIBRARY_ICON_BTN =
 
 /**
  * Mints a preview token (`POST /api/v1/library/preview-token`,
- * LibraryPreviewTokenRequest/Response). Injected rather than imported so the
- * pane does not have to reach past its own file for the one call it cannot
- * make yet — see PREVIEW_TOKEN_MINTER below.
+ * LibraryPreviewTokenRequest/Response). Injected as a prop rather than called
+ * directly so tests can substitute a stub without mocking `@/lib/api` —
+ * production's real implementation is `mintLibraryPreviewToken`, assigned
+ * below to PREVIEW_TOKEN_MINTER.
  */
 export type MintLibraryPreviewToken = (
   request: LibraryPreviewTokenRequest,
 ) => Promise<LibraryPreviewTokenResponse>
 
 /**
- * THE MINT CLIENT DOES NOT EXIST YET. `POST /api/v1/library/preview-token` is
- * wave-3 backend work (spec FR-003f); its request/response schemas are already
- * in `contracts/` and generated above, but no `src/lib/api.ts` wrapper calls
- * them, and this file does not own `api.ts`.
+ * HP-1 fix (defect-list-html-preview-2026-09-08.md): the production minter.
+ * `POST /api/v1/library/preview-token` has been complete and correct
+ * end-to-end since wave 3 (spec FR-003f) — the backend, the isolation CSP
+ * (ADR-067 §10.3) and the generated request/response types all shipped; the
+ * only missing piece was this file's own wiring, which left every HTML
+ * preview permanently rendering the "preview unavailable" state below even
+ * though the endpoint worked. `mintLibraryPreviewToken` (`src/lib/api.ts`) is
+ * a thin wrapper over that endpoint using the generated
+ * LibraryPreviewTokenRequest/Response types — no hand-written wire type, no
+ * contract change.
  *
- * Until it lands this is `null`, and every HTML preview renders the explicit
- * "preview unavailable" state below — NEVER a blank or broken frame, which is
- * the failure mode FR-003c/FR-003n exist to prevent. When the wrapper ships,
- * this constant becomes that function and nothing else in the SPA changes:
- * no consumer passes it, so no consumer has to be edited. Tests inject their
- * own via the `mintPreviewToken` prop.
+ * This constant is still the injection seam, not a direct import at the call
+ * site: production gets this function, and tests substitute their own via
+ * the `mintPreviewToken` prop (including explicit `null`, to exercise the
+ * "preview unavailable" state deliberately). A regression test
+ * (`LibraryPreviewPane.test.tsx`, "uses the production preview-token minter
+ * when no override is passed") fails if this constant is ever set back to
+ * `null` or reassigned to anything other than `mintLibraryPreviewToken`.
  */
-const PREVIEW_TOKEN_MINTER: MintLibraryPreviewToken | null = null
+const PREVIEW_TOKEN_MINTER: MintLibraryPreviewToken = mintLibraryPreviewToken
 
 export interface LibraryPreviewPaneProps {
   workspaceId: string
@@ -469,9 +477,14 @@ function LibraryHtmlFrame({
   }, [token])
 
   if (mint === null) {
+    // Production never reaches this branch (PREVIEW_TOKEN_MINTER is always
+    // mintLibraryPreviewToken, HP-1 fix) — it only fires when a caller passes
+    // `mintPreviewToken={null}` explicitly, e.g. to deliberately disable HTML
+    // preview. The copy reflects that: it is a disabled feature, not a
+    // missing endpoint (the endpoint has shipped since ADR-067 wave 3).
     return (
       <PreviewUnavailable
-        detail="Omnipus could not get a preview link for this page. Rendering it needs the isolated preview endpoint, which this build does not serve yet."
+        detail="HTML preview is disabled for this file. Rendering it needs the isolated preview endpoint, which is not enabled here."
         testId="library-html-preview-unavailable"
       />
     )

@@ -30,6 +30,15 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchLibraryContent: vi.fn(),
     putLibraryContent: vi.fn(),
     libraryDownloadUrl: vi.fn((wsId: string, path: string) => `/api/v1/library/${wsId}/download?path=${path}`),
+    // HP-1 regression guard (defect-list-html-preview-2026-09-08.md): mocked
+    // here — rather than left as `actual` — so that a test which omits the
+    // `mintPreviewToken` prop never fires a real network call, AND so the
+    // "uses the production minter by default" guard test below can assert
+    // this exact function is what LibraryPreviewPane's PREVIEW_TOKEN_MINTER
+    // constant resolves to. If PREVIEW_TOKEN_MINTER is ever hardcoded back to
+    // `null` (or wired to anything other than the real `mintLibraryPreviewToken`
+    // import), that guard test fails because this mock is never called.
+    mintLibraryPreviewToken: vi.fn(),
   }
 })
 
@@ -68,12 +77,13 @@ vi.mock('./preview/LibraryPdfPreview', () => ({
   },
 }))
 
-import { fetchLibraryContent, putLibraryContent } from '@/lib/api'
+import { fetchLibraryContent, putLibraryContent, mintLibraryPreviewToken } from '@/lib/api'
 import { LibraryPreviewPane } from './LibraryPreviewPane'
 import type { MintLibraryPreviewToken } from './LibraryPreviewPane'
 
 const mockedFetchContent = vi.mocked(fetchLibraryContent)
 const mockedPutContent = vi.mocked(putLibraryContent)
+const mockedMintLibraryPreviewToken = vi.mocked(mintLibraryPreviewToken)
 
 function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
@@ -492,10 +502,15 @@ describe('LibraryPreviewPane — the untrusted-content boundary (US-2 AS-4 / FR-
 })
 
 describe('LibraryPreviewPane — preview unavailable, never a blank frame (FR-003c/FR-003n)', () => {
-  it('says so plainly when no preview-token minter is wired (the shipping state today)', async () => {
+  it('says so plainly when the minter is explicitly disabled', async () => {
     mockedFetchContent.mockResolvedValue(makeContent({ path: 'report.html', content: HTML_MARKUP }))
 
-    renderPane(htmlEntry())
+    // Explicit `null` override — e.g. a future caller that deliberately wants
+    // to disable HTML preview rather than the historical HP-1 defect, where
+    // production silently got `null` because nothing was wired at all (see
+    // the "uses the production preview-token minter" test below for that
+    // regression guard).
+    renderPane(htmlEntry(), { mint: null })
 
     const notice = await screen.findByTestId('library-html-preview-unavailable')
     expect(notice).toHaveTextContent(/preview unavailable/i)
@@ -504,9 +519,8 @@ describe('LibraryPreviewPane — preview unavailable, never a blank frame (FR-00
     // — a blank pane the reader cannot distinguish from a page that rendered
     // nothing.
 
-    // A3/Issue 1: the "no minter wired" state is a real, intentional build
-    // state (PREVIEW_TOKEN_MINTER is `null` until the wave-3 preview-token
-    // endpoint ships, FR-003f) — it must render this notice AND the
+    // A3/Issue 1: the "no minter wired" state is a real, intentional state a
+    // caller can still reach on purpose — it must render this notice AND the
     // untrusted-content boundary ABOVE it, exactly once each, never the
     // boundary twice. `queryAllByTestId` (not `getByTestId`/`findByTestId`,
     // which only assert "at least one" by throwing on zero but say nothing
@@ -516,6 +530,50 @@ describe('LibraryPreviewPane — preview unavailable, never a blank frame (FR-00
     // Dies on: a second `<UntrustedContentBoundary/>` mount anywhere in the
     // pane's tree for an html entry (e.g. one rendered per html-handling
     // branch instead of once in the shared pane chrome).
+  })
+
+  // HP-1 regression guard (defect-list-html-preview-2026-09-08.md). The
+  // defect was NOT that the "preview unavailable" state existed (that part
+  // was, and remains, correct — see the test above) — it was that PRODUCTION
+  // reached it permanently, because `PREVIEW_TOKEN_MINTER` was hardcoded
+  // `null` while every test in this file injected its own working stub via
+  // the `mintPreviewToken` prop. No test ever exercised what an omitted prop
+  // actually resolved to, so CI stayed green while the feature was dead for
+  // every real user.
+  //
+  // This test renders the pane exactly the way its one production consumer
+  // (LibraryExplorer.tsx) does — no `mintPreviewToken` prop at all — and
+  // proves the pane falls through to the real `mintLibraryPreviewToken`
+  // wrapper from `@/lib/api` (mocked at the top of this file), not to `null`.
+  it('uses the production preview-token minter when no override prop is passed', async () => {
+    mockedFetchContent.mockResolvedValue(makeContent({ path: 'report.html', content: HTML_MARKUP }))
+    mockedMintLibraryPreviewToken.mockResolvedValue(makeToken())
+
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <LibraryPreviewPane
+          workspaceId="ws-1"
+          entry={htmlEntry()}
+          onClose={vi.fn()}
+          onDownload={vi.fn()}
+          // No mintPreviewToken prop — this is the production call shape.
+        />
+      </QueryClientProvider>,
+    )
+
+    const frame = await screen.findByTestId('library-html-preview-frame')
+    expect(frame).toHaveAttribute('src', makeToken().url)
+    expect(screen.queryByTestId('library-html-preview-unavailable')).toBeNull()
+    expect(mockedMintLibraryPreviewToken).toHaveBeenCalledWith({
+      workspace_id: 'ws-1',
+      path: 'report.html',
+      scope: 'file',
+    })
+    // Dies on: reverting `PREVIEW_TOKEN_MINTER` in LibraryPreviewPane.tsx to
+    // `null` (the pane falls to "preview unavailable" and
+    // mockedMintLibraryPreviewToken is never called), or wiring it to
+    // anything other than the imported `mintLibraryPreviewToken` (this mock
+    // is then never invoked either).
   })
 
   it('offers a retry that re-mints when minting fails', async () => {
