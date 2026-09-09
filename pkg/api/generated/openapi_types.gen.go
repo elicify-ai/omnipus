@@ -12311,7 +12311,7 @@ type LibraryBinaryContentRequest struct {
 
 	// ExpectVersion Same contract as LibraryContentRequest.expect_version (ADR-083 EMB-001/EMB-007, founder ruling N2) — MANDATORY BY SERVER POLICY on every binary save, no exemption. This is the door the annotated-PDF editor saves through: it has no JSON read on its own path, so it captures the bare token from the ETag header of the GET .../download response its raw fetch already holds, and replaces it from this write's own response before a second save in the same session. Absent or empty is refused with 400; a stale token is refused with 409 (LibraryConflictError); the RFC-quoted wire form is a shape error, refused with 400 and never 409.
 	// NOT YET in this schema's "required" list — deliberately, and temporarily, for the same reason as LibraryContentRequest's expect_version: the PDF annotation editor's save call (LibraryPdfPreview.tsx) does not send this field today, and flipping it to required here breaks that caller's TypeScript compilation before EMB-007c's loader/header plumbing lands. The next wave MUST add expect_version to this schema's "required" array in the SAME commit that migrates that caller.
-	ExpectVersion *string `json:"expect_version,omitempty"`
+	ExpectVersion string `json:"expect_version"`
 
 	// Path Workspace-relative path of the file to write, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints). Same validation as LibraryContentRequest.path.
 	Path string `json:"path"`
@@ -12347,7 +12347,7 @@ type LibraryContentRequest struct {
 
 	// ExpectVersion The version token the caller last read for this file (ADR-083 EMB-001/EMB-007, founder ruling N2) — the bare, UNQUOTED value of the ETag response header GET .../content or GET .../download most recently returned for this path, or the token echoed back by a previous PUT to this same endpoint. MANDATORY BY SERVER POLICY, with no exemption: a request with no expect_version, or an empty one, is refused with 400 rather than treated as "overwrite unconditionally". The write is refused with 409 (LibraryConflictError) when the file's current token no longer matches, so a change made by another writer since the caller's last read is never silently discarded. Sending the RFC-quoted wire form (with surrounding quotes) instead of the bare token is a shape error and is refused with 400, never 409, so it can never be mistaken for a genuine conflict. The comparison and the write happen inside one acquisition of the same lock the agent write path takes.
 	// NOT YET in this schema's "required" list — deliberately, and temporarily. Flipping it to required breaks TypeScript compilation for every existing caller in the same change (the PDF annotation editor's save call, the plain-text editor's save call, and their test fixtures), because none of them sends this field today (EMB-007c names the callers). That migration is out of scope for the contract-only change that introduced this field. The next wave MUST add expect_version to this schema's "required" array in the SAME commit that updates every caller to send it — see EMB-007c for the exact call sites — so the schema and its callers never disagree about whether the field is optional.
-	ExpectVersion *string `json:"expect_version,omitempty"`
+	ExpectVersion string `json:"expect_version"`
 
 	// Path Workspace-relative path of the file to write, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints).
 	Path string `json:"path"`

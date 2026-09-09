@@ -484,12 +484,13 @@ var libraryWriteRaceHook func()
 // (EMB-007b/EMB-007c): a client that forgot to strip the quotes off the
 // header it read gets an actionable error it can fix, not a conflict that
 // looks genuine and can never be cleared.
-func requireLibraryExpectVersion(w http.ResponseWriter, expectVersion *string) (bare string, ok bool) {
-	if expectVersion == nil {
-		jsonErr(w, http.StatusBadRequest, "expect_version is required")
-		return "", false
-	}
-	v := strings.TrimSpace(*expectVersion)
+// expectVersion is a VALUE, not a pointer: expect_version is `required` in
+// LibraryContentRequest / LibraryBinaryContentRequest, so the generated type
+// cannot express absence. An omitted field therefore decodes to "" and lands in
+// the same branch as an explicitly empty one — which is correct, because both
+// mean the caller did not tell us which version it believes it is replacing.
+func requireLibraryExpectVersion(w http.ResponseWriter, expectVersion string) (bare string, ok bool) {
+	v := strings.TrimSpace(expectVersion)
 	if v == "" {
 		jsonErr(w, http.StatusBadRequest, "expect_version is required")
 		return "", false

@@ -10,6 +10,7 @@ additionalProperties: false
 required:
   - path
   - content
+  - expect_version
 properties:
   path:
     type: string

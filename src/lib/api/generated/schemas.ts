@@ -4297,7 +4297,7 @@ export const LibraryContentResponse = z.object({
 export const LibraryContentRequest = z.object({
   path: z.string().min(1),
   content: z.string().max(10485760),
-  expect_version: z.string().min(1).optional(),
+  expect_version: z.string().min(1),
 });
 export const LibraryConflictError = z.object({
   error: z.string().min(1),
@@ -4309,7 +4309,7 @@ export const LibraryConflictError = z.object({
 export const LibraryBinaryContentRequest = z.object({
   path: z.string().min(1),
   content_base64: z.string().min(1),
-  expect_version: z.string().min(1).optional(),
+  expect_version: z.string().min(1),
 });
 export const uploadLibraryFiles_Body = z
   .object({ files: z.array(z.instanceof(File)) })

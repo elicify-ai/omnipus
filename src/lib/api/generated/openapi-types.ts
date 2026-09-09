@@ -4395,7 +4395,7 @@ export interface components {
              *     NOT YET in this schema's "required" list — deliberately, and temporarily. Flipping it to required breaks TypeScript compilation for every existing caller in the same change (the PDF annotation editor's save call, the plain-text editor's save call, and their test fixtures), because none of them sends this field today (EMB-007c names the callers). That migration is out of scope for the contract-only change that introduced this field. The next wave MUST add expect_version to this schema's "required" array in the SAME commit that updates every caller to send it — see EMB-007c for the exact call sites — so the schema and its callers never disagree about whether the field is optional.
              * @example v1:9f2a7c40
              */
-            expect_version?: string;
+            expect_version: string;
         };
         /**
          * LibraryBinaryContentRequest
@@ -4417,7 +4417,7 @@ export interface components {
              *     NOT YET in this schema's "required" list — deliberately, and temporarily, for the same reason as LibraryContentRequest's expect_version: the PDF annotation editor's save call (LibraryPdfPreview.tsx) does not send this field today, and flipping it to required here breaks that caller's TypeScript compilation before EMB-007c's loader/header plumbing lands. The next wave MUST add expect_version to this schema's "required" array in the SAME commit that migrates that caller.
              * @example v1:9f2a7c40
              */
-            expect_version?: string;
+            expect_version: string;
         };
         /**
          * LibraryConflictError

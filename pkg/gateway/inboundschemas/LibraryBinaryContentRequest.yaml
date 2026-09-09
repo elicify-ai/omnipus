@@ -15,6 +15,7 @@ additionalProperties: false
 required:
   - path
   - content_base64
+  - expect_version
 properties:
   path:
     type: string
