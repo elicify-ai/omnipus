@@ -233,6 +233,22 @@ export type ChatMessage = Message & {
    * equivalent explicit exclusion, never by a UI render branch.
    */
   closedBySteer?: boolean
+  /**
+   * Operator-reported UX fix (2026-09-08 — a `/goal` activation left the
+   * user staring at a generic thinking indicator for 17 minutes with no
+   * sign the goal had registered). Set ONLY on the synthetic `role:
+   * 'system'` marker message the `case 'goal_status'` reducer inserts the
+   * first time it sees an `active` frame for this goal_id — never on an
+   * ordinary system banner (help text, `/new`, etc.), which carries no
+   * goal_id at all. Purely a render-time discriminator (MessageItem.tsx /
+   * ChatScreen.tsx's `SystemMessage`/`VirtualSystemMessageRow`) so the
+   * `data-testid="goal-ack-line"` e2e hook lands on exactly this message
+   * and not on every system banner. Never serialized to the wire — the
+   * marker message itself is entirely SPA-synthesized, not a persisted
+   * transcript entry (see the `case 'goal_status'` doc comment for the
+   * durability tradeoff this implies).
+   */
+  goalAckGoalId?: string
 }
 
 // Client-side truncation sentinel — parallel to server TruncatedResult/ToolResultRef shapes.
@@ -1745,6 +1761,117 @@ function mergeGoalPillFrame(
     dod: stored.dod,
     definition: stored.definition,
   }
+}
+
+// ── Goal acknowledgement line (operator-reported UX fix, 2026-09-08) ──────
+//
+// Repro: `/goal <text>` activates INSTANTLY (ADR-081 D1, zero LLM calls
+// before the working agent's first request), but the user saw nothing
+// confirming that — just the generic rotating thinking indicator — for as
+// long as 17 minutes in the reported case, while a tool call had actually
+// failed off-screen. Fix: render one quiet line, "Goal set. Working out
+// what done looks like.", at the goal's chronological position the FIRST
+// time the store observes an `active` goal_status frame for a given
+// goal_id — driven entirely by that real server-pushed frame, never an
+// optimistic client-side guess (see the case 'goal_status' handler below).
+//
+// Durability tradeoff (flagged per the wave brief rather than faked): this
+// line is a client-synthesized `ChatMessage`, NOT a persisted transcript
+// entry — pkg/agent/goal_loop.go (which owns the instant-activation call
+// site) is out of this wave's scope, so there is no backend anchor writing
+// it into the session's JSONL the way the goal record card itself is
+// anchored (pkg/agent/goal_record_wiring.go's anchorGoalRecordInTranscript).
+// It still survives an ordinary page reload: EmitGoalStatusRehydrate
+// (pkg/agent/goal_record_wiring.go, extended by this same wave) now
+// re-emits the SAME `active` frame on every WS re-attach — including a
+// full page reload's fresh attach — for as long as the goal stays active,
+// whether or not its record has been written yet (previously it only
+// covered the record-populated case). Since insertion below is idempotent
+// (keyed by a deterministic `goal-ack-<goal_id>` message id), that rehydrate
+// re-arrival reconstructs this exact line after a reload rather than a
+// second one appearing. What it does NOT survive: a session whose local
+// message history is cleared/never-loaded before any reattach happens for
+// this goal (there is no transcript entry to replay it from at all in that
+// case) — the cheapest durable alternative, if that gap ever matters in
+// practice, is a small addition to goal_loop.go's activateInstantGoal (out
+// of scope here) that anchors a plain (non-tool-call) transcript entry the
+// same way the record card is anchored, so a cold REST/replay load also
+// reconstructs it with no live frame required.
+const GOAL_ACK_LINE_TEXT = 'Goal set. Working out what done looks like.'
+
+/** Deterministic id for one goal's ack-line marker message — doubles as the
+ * de-dup key (a message already present at this id means the line has
+ * already been shown for this goal_id, live or rehydrated) so the handler
+ * below never inserts a second one. */
+function goalAckMessageId(goalId: string): string {
+  return `goal-ack-${goalId}`
+}
+
+/**
+ * Finds the message id the goal-ack line should render immediately after —
+ * the most recent user message that actually issued this goal (so the line
+ * lands at "the goal's chronological position in the thread", not just
+ * tacked onto whatever is currently last). Two matching strategies, tried
+ * in order: (1) a user message containing the frame's own `condition` text
+ * verbatim — this is what the persisted transcript carries, since the
+ * gateway records the RAW inbound `/goal <condition>` message before any
+ * command-rewrite touches it (mirrors pkg/agent/loop.go's scheduled-run
+ * comment "mirroring the interactive websocket path"); (2) defensively, the
+ * most recent user message that starts with the `/goal` command literal,
+ * in case the condition text was normalized/trimmed differently than the
+ * frame's copy. Returns null when neither matches (falls back to appending
+ * at the current tail — correct for the live case, where nothing has
+ * happened after the command yet).
+ */
+function findGoalCommandAnchorId(
+  order: readonly string[],
+  byId: Record<string, ChatMessage>,
+  condition: string,
+): string | null {
+  const trimmedCondition = condition.trim()
+  for (let i = order.length - 1; i >= 0; i--) {
+    const m = byId[order[i]]
+    if (!m || m.role !== 'user') continue
+    const content = m.content ?? ''
+    if (trimmedCondition && content.includes(trimmedCondition)) return m.id
+    if (/^\s*\/goal\b/i.test(content)) return m.id
+  }
+  return null
+}
+
+/**
+ * Builds the {messagesById, messageOrder} patch that inserts the goal-ack
+ * marker for `goalFrame` into bucket `b`, or returns null when no insertion
+ * is needed (no goal_id on the frame — a legacy/compat emission — the
+ * frame's state is not `active`, or the marker for this goal_id already
+ * exists). Split out of the `case 'goal_status'` handler so the insertion
+ * logic has a single, independently-reasoned-about home.
+ */
+function buildGoalAckInsertion(
+  b: SessionChatState,
+  goalFrame: GoalStatusFrame,
+): Pick<SessionChatState, 'messagesById' | 'messageOrder'> | null {
+  if (goalFrame.state !== 'active' || !goalFrame.goal_id) return null
+  const ackId = goalAckMessageId(goalFrame.goal_id)
+  if (b.messagesById[ackId]) return null // already shown for this goal — idempotent, never duplicate.
+
+  const ackMessage: ChatMessage = {
+    id: ackId,
+    role: 'system',
+    status: 'done',
+    content: GOAL_ACK_LINE_TEXT,
+    timestamp: new Date().toISOString(),
+    goalAckGoalId: goalFrame.goal_id,
+  }
+  const messagesById = { ...b.messagesById, [ackId]: ackMessage }
+  const anchorId = findGoalCommandAnchorId(b.messageOrder, b.messagesById, goalFrame.condition)
+  const messageOrder = anchorId
+    ? (() => {
+        const idx = b.messageOrder.indexOf(anchorId)
+        return [...b.messageOrder.slice(0, idx + 1), ackId, ...b.messageOrder.slice(idx + 1)]
+      })()
+    : [...b.messageOrder, ackId]
+  return { messagesById, messageOrder }
 }
 
 export const useChatStore = create<ChatStore>((set, get) => {
@@ -5741,9 +5868,19 @@ export const useChatStore = create<ChatStore>((set, get) => {
             if (pillKey !== '_default') {
               delete merged['_default']
             }
+            // Operator-reported UX fix (2026-09-08): the goal-ack line — see
+            // buildGoalAckInsertion's doc comment above for the full design
+            // (why this frame, why idempotent-by-goal_id, and the durability
+            // tradeoff vs. a persisted transcript anchor). Applied in the
+            // SAME withBucket pass as the pill-map update above (one set()
+            // call) rather than a second withBucket, so a reattach that
+            // fires both the pill update and the first-ever ack insertion
+            // renders as one atomic state transition, not two.
+            const ackInsertion = buildGoalAckInsertion(b, goalFrame)
             return {
               goalStatus: goalFrame,
               goalPills: evictGoalPillsOverCap(merged),
+              ...ackInsertion,
             }
           })
           break
