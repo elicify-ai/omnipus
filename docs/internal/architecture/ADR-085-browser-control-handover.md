@@ -1,6 +1,6 @@
 # ADR-085 — The operator takes the browser wheel without the turn being cancelled
 
-- **Status:** Proposed (revision 3, after spec-authoring review) — 2026-09-09
+- **Status:** Proposed (revision 4, after the spec grill — see §7) — 2026-09-09
 - **Relates to:** ADR-038 D6 / ADR-075 (the control-deferral gate), ADR-039/040/041 (live view, implicit control), ADR-061 (WebRTC is the only video path), ADR-057 FR-011 (a delegated child has its own transcript session), ADR-077 / Constraint #6 (per-tool policy entries)
 - **Spec:** `docs/internal/specs/browser-control-handover-spec.md`
 
@@ -164,3 +164,75 @@ So as written the "visible waiting surface" would be invisible until a reload �
 
 - **D2.3's cross-tab-set coverage** has an exact existing carrier, `turnState.routingSessionID` (root-inherited per ADR-057 FR-011), but it sits behind a **closed consumer set** enforced by `routing_session_id_consumer_set_adr057_test.go`. Using it is a deliberate allowlist amendment, made in the open, not an incidental read.
 - **D2.2's per-turn attempt bound** has no carrier in the tool layer (`pkg/tools/base.go` has no turn id). The counter lives on `turnState`, modelled on `pkg/agent/tool_denial.go::turnDenialLedger`.
+
+## 7. Revision 4 — corrections found while grilling the spec
+
+Four corrections, all verified in code at `0b7d4933`. Three amend decisions (D4, D5, D10); one is a
+mis-citation in §6 itself. The spec (`docs/internal/specs/browser-control-handover-spec.md`)
+implements the corrected form.
+
+### R4-a — D4's release must fire on OPERATOR-ORIGINATED prompts only (amends D4)
+
+R3-c correctly said the release "must be applied where prompts converge on the session, not on one
+transport". Read literally that means `bus.MessageBus.PublishInbound`, and **that is not safe**: it is
+the convergence point for synthetic traffic too. `pkg/agent/async_notifier.go` publishes a
+`bus.InboundMessage` on the `"system"` channel for **every background tool or delegate completion**,
+and `pkg/agent/loop.go` re-injects goal-loop follow-ups with
+`Sender.CanonicalID == goalLoopFollowUpSenderID`. A release wired at the bus therefore means a
+delegate finishing in the background **hands the browser back while the operator is typing a password
+into it** — reintroducing, through the release path, exactly the exposure D5 exists to close.
+
+**Correction.** The release fires from one shared helper invoked at the **four operator-originated
+publish sites**: `pkg/gateway/websocket.go` (webchat), `pkg/gateway/sse.go`,
+`pkg/gateway/ws_ask_user.go::DispatchResume` (for a genuine human answer only — an auto-defaulted,
+timed-out card is not a prompt), and `pkg/channels/base.go::HandleMessage`. It is never invoked from
+the bus, from the async notifier, or from the goal loop. The partition is pinned by a structural test
+so a publish site added later must classify itself deliberately. Heartbeat, cron and task runs never
+construct an `InboundMessage`, so they are excluded already. See spec FR-029 / FR-029a.
+
+**Attribution, also under-specified in D4.** "audited with the acting user, not the holder" presumes
+a carrier that mostly does not exist: `bus.InboundMessage.GatewayUserID` is set **only** on the
+webchat WS path (and the question-card resume), and its own doc comment records that
+"channel/task/scheduled inbound messages never set this field". For a channel-originated prompt the
+audit records `Sender.CanonicalID` as the **actor** and leaves the user field **empty** — a platform
+handle is not a gateway principal. The holder is recorded only as the *prior* holder, never as the
+actor. See spec FR-030.
+
+### R4-b — D4's release is not sufficient on its own: a held wheel must expire (amends D4)
+
+D3 and D4 together make the operator's next prompt the **only** release. D4's ghost rule voids a
+holder who has left `LiveView.viewers`; an **attached but idle** holder is not a ghost. Under R4-a a
+cron or heartbeat turn is deliberately not a prompt. The consequence is that an operator who takes
+the wheel and closes their laptop **permanently disables every scheduled browser turn on that
+session**, with no expiry, no visible state and nothing to recover — a product-level hole rather than
+an implementation detail.
+
+**Correction.** A hold with no viewer input and no attach/detach activity for a configured idle
+window (`tools.browser.control_idle_release`, shipped default 900 seconds; `0` disables) is released
+server-side and audited as `browser_control_idle_release`, with an operator-visible line. D7's
+handover-pending state expires on the same timer, for the same reason. See spec FR-031a.
+
+### R4-c — R3-a cites a section that does not exist (corrects §6, not a decision)
+
+R3-a says the biconditional is "ADR-075 §14 rule 3". **ADR-075 has no §14.** The rule is a *spec*
+rule and lives in `docs/internal/specs/browser-workspace-ownership-spec.md` — **§14.2 Rules, rule 3**
+(the per-tool table), with **FR-019a** and **AC5** carrying it and **§12 A17** carrying its reasoning
+— and is **restated** in `docs/internal/specs/browser-agent-capability-spec.md`. D5's three-way
+correction therefore amends **two spec documents in the same commit**, not an ADR section. Nothing
+about the substance of R3-a changes; only where the edit lands. `browser_handle_dialog` stays exempt
+from both gates on A17's original reasoning. See spec FR-035a.
+
+### R4-d — D10's audit field set names a turn id that does not exist (amends D10)
+
+D10 requires the deferral record to carry "session id, **turn id**, viewer id, user, tab set, and the
+tool that was deferred". There is **no turn id in the tool context** — `pkg/tools/base.go` exposes
+`ToolCallID`, `ToolTranscriptSessionID`, `ToolSessionKey` and `ToolAgentID` and nothing else. This is
+the same absence R3-d records for the attempt counter, applied to the audit record.
+
+**Correction.** Turn id is dropped from the field set and replaced by the **root chat session id**,
+which is already being routed to the tool layer for D2.3's coverage fix, is stable across a whole
+delegation subtree, and answers the question an auditor asks ("which conversation was blocked?").
+`ToolCallID` is recorded alongside it to pin the individual call. **The record is also emitted from
+the wrong place in D10 as written:** it must come from the deferral path in `pkg/tools/browser`, not
+from the take handler in `pkg/gateway/browser_ws.go` — at take time no tool has deferred yet and the
+handler cannot know which one later will. See spec FR-061.
