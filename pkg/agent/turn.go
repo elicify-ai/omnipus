@@ -308,6 +308,41 @@ type turnState struct {
 	// CLI/automation clients can detect failure without parsing message content.
 	turnFailed bool
 
+	// goalNarrowMisses is ADR-081 D3's bounded-escape counter (the D3
+	// amendment, 2026-09-08): the number of CONSECUTIVE LLM requests this
+	// turn for which evaluateGoalForcing (loop.go) has offered the narrowed
+	// {set_goal[, AskUserQuestion]} first-move door while the base predicate
+	// (goalTurnRecordState) still held. It is bumped once per narrowed
+	// offering, BEFORE that request's outcome is known — a request that
+	// instead finds the record already written (a prior request's set_goal
+	// succeeded) or that parks the turn (a genuine AskUserQuestion card)
+	// never reaches the bump, because goalTurnRecordState/the turn-ending
+	// park short-circuit evaluateGoalForcing first. Once the counter exceeds
+	// goalForcingMaxNarrowAttempts, evaluateGoalForcing arms
+	// goalNarrowEscaped instead of narrowing that (and every later) request.
+	// Zero value is correct: each turnState is fresh per turn generation, so
+	// there is nothing to reset between turns.
+	goalNarrowMisses int
+	// goalNarrowEscaped is true once ADR-081 D3's bounded escape has fired
+	// for this turn — evaluateGoalForcing then offers the FULL tool surface
+	// for the remainder of the turn even though the base predicate may still
+	// hold (a persistently empty record against a model that keeps failing
+	// or ignoring the narrowed pair). This is the fix for the real-world
+	// defect reproduced 2026-09-08: a /goal set at 11:54:48Z narrowed
+	// iteration 1 to {set_goal, AskUserQuestion}; the model's AskUserQuestion
+	// call FAILED schema validation ("unexpected property \"recommended\""
+	// inside an option); because narrowing used to apply to iteration 1
+	// ONLY, iteration 2 got the full tool surface back with the record still
+	// empty, and the agent ran ToolSearch/write_file×5/bash/serve_web/
+	// browser_navigate for ~17 minutes before finally calling set_goal at
+	// 12:12:26Z — the post-turn correction (checkGoalLoopAfterTurn,
+	// goal_loop.go) never got a chance to run because the turn never ended.
+	// Narrowing now persists across iterations while the predicate holds;
+	// this flag is the escape valve so a persistently-failing model cannot
+	// wedge the turn in the narrowed pair for its whole MaxIterations
+	// budget instead. Never cleared once set.
+	goalNarrowEscaped bool
+
 	// Back-reference to the owning AgentLoop (set for SubTurns only, used for hard abort cascade)
 	al *AgentLoop
 
@@ -1405,6 +1440,34 @@ func (ts *turnState) markTurnFailed() {
 	ts.mu.Lock()
 	ts.turnFailed = true
 	ts.mu.Unlock()
+}
+
+// noteGoalNarrowAttempt bumps ADR-081 D3's bounded-escape counter
+// (goalNarrowMisses, see its doc comment) for one more narrowed first-move
+// offering this turn and returns the running total, so the caller
+// (evaluateGoalForcing, loop.go) can compare it against
+// goalForcingMaxNarrowAttempts.
+func (ts *turnState) noteGoalNarrowAttempt() int {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.goalNarrowMisses++
+	return ts.goalNarrowMisses
+}
+
+// armGoalNarrowEscape permanently releases ADR-081 D3's narrowed first-move
+// door for the rest of this turn (see goalNarrowEscaped's doc comment).
+func (ts *turnState) armGoalNarrowEscape() {
+	ts.mu.Lock()
+	ts.goalNarrowEscaped = true
+	ts.mu.Unlock()
+}
+
+// goalNarrowIsEscaped reports whether armGoalNarrowEscape has already fired
+// this turn.
+func (ts *turnState) goalNarrowIsEscaped() bool {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.goalNarrowEscaped
 }
 
 // SetFinalContent records the final assistant response on the turnState so
