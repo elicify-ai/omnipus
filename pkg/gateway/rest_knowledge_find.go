@@ -72,6 +72,11 @@ const (
 	// vaultSearchSnippetRadius is how many bytes of context to keep on each side
 	// of the matched term in a snippet.
 	vaultSearchSnippetRadius = 90
+	// vaultSearchMaxQueryLength is the contract's query maxLength bound
+	// (contracts/components/schemas/VaultSearchRequest.yaml). Enforced
+	// unconditionally in the handler — see the I3 comment at the point of
+	// use, in handleKnowledgeVaultSearch.
+	vaultSearchMaxQueryLength = 1024
 )
 
 func (a *restAPI) handleKnowledgeVaultSearch(w http.ResponseWriter, r *http.Request, workspaceID string) {
@@ -82,6 +87,30 @@ func (a *restAPI) handleKnowledgeVaultSearch(w http.ResponseWriter, r *http.Requ
 	query := strings.TrimSpace(req.Query)
 	if query == "" {
 		jsonErr(w, http.StatusBadRequest, "query is required")
+		return
+	}
+	// I3 (2026-09-09 code review): the contract's query maxLength:1024
+	// (contracts/components/schemas/VaultSearchRequest.yaml) is enforced
+	// HERE, unconditionally — decodeAndValidate's schema pass above only
+	// runs when gateway.validate_inbound is true (default false), so in a
+	// default install the declared bound was purely decorative. Left
+	// unenforced, an over-long query reaches
+	// knowledgefind.Find->Index.SearchFiltered->prefixSearchTokens, which
+	// tokenises with NO cap, builds a huge conjunction across every prose
+	// field, and on zero hits falls back to one bleve PrefixQuery PER TOKEN
+	// PER prose field — repeated once per declared record type plus notes
+	// plus attachments (vaultSearchRecords/vaultSearchAttachments), and each
+	// returned note then re-scans with vaultSearchQueryTerms's strings.Index
+	// for every one of those tokens. Unlike the sibling file-search endpoint
+	// (rest_library_files_search.go, MV-11), this endpoint takes no walk
+	// semaphore at all — the request-body size cap and the 60 req/min
+	// per-workspace rate limiter are the only other bounds — so this length
+	// check is the sole defence against that cost. Follows the sibling's own
+	// fix for the identical gap (rest_library_files_search.go's
+	// fileSearchMaxQueryLength check, F4).
+	if len(query) > vaultSearchMaxQueryLength {
+		jsonErr(w, http.StatusBadRequest,
+			fmt.Sprintf("query must not exceed %d characters", vaultSearchMaxQueryLength))
 		return
 	}
 	if strings.TrimSpace(req.CollectionId) == "" {
@@ -267,13 +296,12 @@ func buildVaultSearchResult(ctx context.Context, env vaultprops.FindEnv, collect
 
 	// VIEWS — name/label match over the loaded view set. No index needed, so it
 	// is answered whatever the text index's state.
-	viewHits, viewsComplete := vaultSearchViewHits(env, query, limit)
+	viewHits, viewsComplete, viewReason := vaultSearchViewHits(env, query, limit)
 	out.Views = append(out.Views, viewHits...)
 	if !viewsComplete {
 		out.Complete = false
-		if out.CompleteReason == nil {
-			reason := "views: the result limit was reached before every saved view could be checked"
-			out.CompleteReason = &reason
+		if out.CompleteReason == nil && viewReason != "" {
+			out.CompleteReason = &viewReason
 		}
 	}
 
@@ -494,14 +522,40 @@ func runVaultSearchFind(ctx context.Context, env vaultprops.FindEnv, query, reco
 // (it is the query's own scope), so it is stamped directly rather than re-read.
 func vaultSearchRecords(ctx context.Context, env vaultprops.FindEnv, query string, limit int) ([]gen.VaultSearchRecordHit, bool, string) {
 	out := []gen.VaultSearchRecordHit{}
+	complete := true
+	reason := ""
+
+	// I6 (2026-09-09 code review): env.SchemaReport — the record-type schema
+	// FILES that failed to even parse — used to be discarded one layer down
+	// (vaultprops.OpenFindEnv threw away records.LoadSchemas' *SchemaLoadReport
+	// entirely), so a rejected schema could never surface here at all.
+	// env.Schemas.Types() below names only the record types that DID load; a
+	// type whose schema file is broken is invisible to that loop — exactly the
+	// twin defect vaultSearchViewHits had for a broken view file. The fix is
+	// the same: any schema load rejection makes the records group, and
+	// therefore the whole answer, incomplete UNCONDITIONALLY — not only when
+	// the broken file's declared type happens to match this query, because a
+	// file this endpoint could not even read is one it cannot truthfully say
+	// would not have matched.
+	if env.SchemaReport != nil && !env.SchemaReport.OK() {
+		complete = false
+		if rejTypes := env.SchemaReport.RejectedTypes(); len(rejTypes) > 0 {
+			reason = fmt.Sprintf(
+				"records: %d record-type schema file(s) failed to load and could not be searched (%s)",
+				len(env.SchemaReport.Rejections), strings.Join(rejTypes, ", "))
+		} else {
+			reason = fmt.Sprintf(
+				"records: %d record-type schema file(s) failed to load and could not be searched",
+				len(env.SchemaReport.Rejections))
+		}
+	}
+
 	if env.Schemas == nil {
-		return out, true, ""
+		return out, complete, reason
 	}
 	types := env.Schemas.Types()
 	sort.Strings(types)
 
-	complete := true
-	reason := ""
 	seen := map[string]bool{}
 	for idx, rt := range types {
 		if len(out) >= limit {
@@ -635,7 +689,8 @@ func vaultSearchRecordHit(recordType string, row *gen.VaultFindRow) gen.VaultSea
 
 // vaultSearchViewHits returns the saved views whose name or label matches the
 // query, case-insensitively, ordered by name and capped at limit, plus
-// whether every view in scope was actually CHECKED against the query.
+// whether every view in scope was actually CHECKED against the query, and —
+// when not — why.
 //
 // F1 (2026-09-08 code review): the scan used to break at `limit` with no
 // completeness signal at all — views sorted after the cap point were never
@@ -644,20 +699,53 @@ func vaultSearchRecordHit(recordType string, row *gen.VaultFindRow) gen.VaultSea
 // NextCursor already means "the corpus was fully covered, just paginated"),
 // this is a local, unpaginated scan: stopping partway through it is a real
 // coverage gap over the view set, not a page boundary.
-func vaultSearchViewHits(env vaultprops.FindEnv, query string, limit int) ([]gen.VaultSearchViewHit, bool) {
+//
+// I6 (2026-09-09 code review): env.ViewReport — the set of view FILES that
+// failed to even PARSE — was never consulted here. env.Views.Views() below is
+// only the successfully-loaded set (records.LoadViews already separates the
+// two); a views/broken.yaml that fails to parse was silently absent from both
+// the hit list AND the completeness verdict, so a vault with one broken view
+// file still got a bare "its index was complete at query time." A file this
+// endpoint could not even read is a file it cannot truthfully say does not
+// match the query, so any load rejection makes the views group — and
+// therefore the whole answer — incomplete UNCONDITIONALLY, not only when the
+// broken file's own (possibly unreadable) name happens to match: the whole
+// point of the finding is that a caller has no way to know whether it would
+// have. rest_knowledge_view.go:261-262 already reads this same ViewReport for
+// exactly this purpose (a rejected-but-named view); this is the search
+// surface's analogue.
+func vaultSearchViewHits(env vaultprops.FindEnv, query string, limit int) ([]gen.VaultSearchViewHit, bool, string) {
 	out := []gen.VaultSearchViewHit{}
+	complete := true
+	reason := ""
+	if env.ViewReport != nil && !env.ViewReport.OK() {
+		complete = false
+		if names := env.ViewReport.RejectedNames(); len(names) > 0 {
+			reason = fmt.Sprintf(
+				"views: %d saved view file(s) failed to load and could not be checked against the query (%s)",
+				len(env.ViewReport.Rejections), strings.Join(names, ", "))
+		} else {
+			reason = fmt.Sprintf(
+				"views: %d saved view file(s) failed to load and could not be checked against the query",
+				len(env.ViewReport.Rejections))
+		}
+	}
 	if env.Views == nil {
-		return out, true
+		return out, complete, reason
 	}
 	needle := strings.ToLower(strings.TrimSpace(query))
 	if needle == "" {
-		return out, true
+		return out, complete, reason
 	}
 	views := env.Views.Views()
 	sort.Slice(views, func(i, j int) bool { return views[i].Name() < views[j].Name() })
 	for _, v := range views {
 		if len(out) >= limit {
-			return out, false
+			complete = false
+			if reason == "" {
+				reason = "views: the result limit was reached before every saved view could be checked"
+			}
+			return out, false, reason
 		}
 		name := v.Name()
 		label := v.DisplayLabel()
@@ -675,7 +763,7 @@ func vaultSearchViewHits(env vaultprops.FindEnv, query string, limit int) ([]gen
 		}
 		out = append(out, hit)
 	}
-	return out, true
+	return out, complete, reason
 }
 
 // ---------------------------------------------------------------------------

@@ -249,6 +249,116 @@ func TestVaultSearch_ViewsCompleteWhenBothFitUnderTheLimit(t *testing.T) {
 		"both matching views fit under the limit and were actually checked — the verdict must stay complete")
 }
 
+// buildVaultSearchVaultBrokenView seeds a vault whose views/ directory holds
+// ONE view file that fails to even PARSE, plus an ordinary note (I6,
+// 2026-09-09 code review). The broken file declares no `name:` key, which
+// records.ParseView rejects as RejectViewMissingName — a genuine LOAD
+// failure, distinct from rest_knowledge_view_test.go's "broken.yaml" fixture
+// (which parses fine and is refused only at SERVE time, for being disabled).
+// No schema/record fixture is needed here at all: the point being pinned is
+// that env.ViewReport — populated regardless of whether any record type is
+// even declared — must be consulted by the search surface, the same way
+// rest_knowledge_view.go already consults it for one named view.
+func buildVaultSearchVaultBrokenView(t *testing.T) (*restAPI, string, string) {
+	t.Helper()
+	api, ws := buildLibraryTestAPI(t)
+	vault := filepath.Join(workDir(api, ws), "vault")
+	makeKnowledgeBase(t, vault, "Broken-view vault")
+
+	writeNote(t, vault, ".omnipus-vault/views/broken.yaml", "label: Broken\nlayout: table\n")
+	writeNote(t, vault, "notes/hello.md", "# Hello\n\nquibblewatt is mentioned here and nowhere else.\n")
+
+	realVault, err := filepath.EvalSymlinks(vault)
+	require.NoError(t, err)
+	indexKnowledgeBase(t, api.homePath, realVault)
+
+	return api, ws, collectionIDOf(t, api, ws, "vault")
+}
+
+// TestVaultSearch_ViewLoadFailureMakesResultIncomplete is I6 (2026-09-09 code
+// review): vaultSearchViewHits iterated env.Views.Views() — the
+// successfully-PARSED set only — with no way to learn that a views/ file
+// existed but failed to load at all, so a broken view file was silently
+// invisible to both the hit list AND the completeness verdict. The response
+// asserted "Searched the whole of this knowledge base; its index was
+// complete at query time" even though a view file in that very knowledge
+// base was never even readable enough to check against the query — a false
+// completeness claim the endpoint makes EXPLICITLY, in its own response
+// text. env.ViewReport (pkg/vaultprops/find_env.go) already carried this
+// information and is already read by the sibling view-result endpoint
+// (rest_knowledge_view.go) for exactly this purpose; this pins that the
+// search surface now reads it too.
+func TestVaultSearch_ViewLoadFailureMakesResultIncomplete(t *testing.T) {
+	api, ws, colID := buildVaultSearchVaultBrokenView(t)
+
+	w := vaultFindPost(t, api, ws, map[string]any{
+		"query": "quibblewatt", "collection_id": colID,
+	})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	resp := decodeJSON[gen.VaultSearchResponse](t, w)
+
+	require.Len(t, resp.Notes, 1, "the ordinary note must still be found normally")
+	assert.Empty(t, resp.Views, "the broken view file can never appear as a hit — it never parsed")
+	assert.False(t, resp.Complete,
+		"a saved view file that failed to load means the views group was never actually checked "+
+			"against the query — the verdict must not claim completeness")
+	require.NotNil(t, resp.CompleteReason, "an incomplete verdict must carry a reason")
+	assert.Contains(t, *resp.CompleteReason, "views:",
+		"the reason must specifically name the views load failure — got: %s", *resp.CompleteReason)
+	require.NotNil(t, resp.Statement)
+	assert.NotEqual(t, vaultSearchCompleteStatement, *resp.Statement,
+		"the render-ready statement must not claim the search covered everything when a view file "+
+			"in this very knowledge base never even loaded")
+}
+
+// buildVaultSearchVaultBrokenSchema seeds a vault whose records/ directory
+// holds ONE record-type schema file that fails to even PARSE, plus an
+// ordinary note (I6's "one layer down" half, 2026-09-09 code review). The
+// broken file declares no `type:` key, which records.LoadSchemas rejects as
+// RejectMissingType — a genuine LOAD failure. Before this fix,
+// vaultprops.OpenFindEnv discarded records.LoadSchemas' *SchemaLoadReport
+// entirely, so this rejection could not surface anywhere at all.
+func buildVaultSearchVaultBrokenSchema(t *testing.T) (*restAPI, string, string) {
+	t.Helper()
+	api, ws := buildLibraryTestAPI(t)
+	vault := filepath.Join(workDir(api, ws), "vault")
+	makeKnowledgeBase(t, vault, "Broken-schema vault")
+
+	writeNote(t, vault, ".omnipus-vault/records/broken.yaml", "schema_version: 1\nproperties:\n  foo: { type: text }\n")
+	writeNote(t, vault, "notes/hello.md", "# Hello\n\nquibblewatt is mentioned here and nowhere else.\n")
+
+	realVault, err := filepath.EvalSymlinks(vault)
+	require.NoError(t, err)
+	indexKnowledgeBase(t, api.homePath, realVault)
+
+	return api, ws, collectionIDOf(t, api, ws, "vault")
+}
+
+// TestVaultSearch_SchemaLoadFailureMakesRecordsIncomplete is I6's "one layer
+// down" half: env.SchemaReport is now threaded through vaultprops.FindEnv
+// (previously discarded outright), and vaultSearchRecords must consult it —
+// a record-type schema that never loaded is a record type this endpoint
+// cannot truthfully say does not match the query, so the verdict must not
+// claim completeness.
+func TestVaultSearch_SchemaLoadFailureMakesRecordsIncomplete(t *testing.T) {
+	api, ws, colID := buildVaultSearchVaultBrokenSchema(t)
+
+	w := vaultFindPost(t, api, ws, map[string]any{
+		"query": "quibblewatt", "collection_id": colID,
+	})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	resp := decodeJSON[gen.VaultSearchResponse](t, w)
+
+	require.Len(t, resp.Notes, 1, "the ordinary note must still be found normally")
+	assert.Empty(t, resp.Records, "a broken schema file declares no usable type, so it never yields a record hit")
+	assert.False(t, resp.Complete,
+		"a record-type schema file that failed to load means that type was never even declared, "+
+			"let alone searched — the verdict must not claim completeness")
+	require.NotNil(t, resp.CompleteReason, "an incomplete verdict must carry a reason")
+	assert.Contains(t, *resp.CompleteReason, "records:",
+		"the reason must specifically name the records/schema load failure — got: %s", *resp.CompleteReason)
+}
+
 // TestVaultSearchFind_ErrorIsLogged is F10 (2026-09-08 code review):
 // runVaultSearchFind discarded knowledgefind.Find's error with NO log line
 // at all — an operator watching for a recurring index fault saw nothing,

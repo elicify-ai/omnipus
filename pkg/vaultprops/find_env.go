@@ -29,11 +29,22 @@ import (
 // needs more than the loader interface carries: EffectiveParts on the
 // SavedView, unit_property on the schema, and the load report so a view that
 // was REJECTED can be reported by its rejection rather than as "unknown".
+//
+// SchemaReport is the twin of ViewReport for the record-type schema load
+// (I6, 2026-09-09 code review): records.LoadSchemas' *SchemaLoadReport used
+// to be discarded entirely here, so a record-type schema file that failed to
+// parse was invisible to every consumer of FindEnv — not merely absent from
+// Schemas (which only ever held the successfully-loaded set), but with no
+// way for a caller to even learn that part of the corpus did not load. It is
+// carried through for the same reason ViewReport is: a caller must be able
+// to tell "no record types declared" apart from "some record-type schema
+// could not be read", exactly as it must for views.
 type FindEnv struct {
-	Deps       knowledgefind.Deps
-	Schemas    *records.SchemaSet
-	Views      *records.ViewSet
-	ViewReport *records.ViewLoadReport
+	Deps         knowledgefind.Deps
+	Schemas      *records.SchemaSet
+	SchemaReport *records.SchemaLoadReport
+	Views        *records.ViewSet
+	ViewReport   *records.ViewLoadReport
 }
 
 // OpenFindEnv opens everything one evaluation needs and returns a cleanup
@@ -58,7 +69,7 @@ func OpenFindEnv(ctx context.Context, home string, col knowledge.ScopedCollectio
 		return FindEnv{}, closeAll, err
 	}
 
-	schemas, _, err := records.LoadSchemas(root.Path())
+	schemas, schemaReport, err := records.LoadSchemas(root.Path())
 	if err != nil {
 		return FindEnv{}, closeAll, fmt.Errorf("loading record schemas: %w", err)
 	}
@@ -169,8 +180,9 @@ func OpenFindEnv(ctx context.Context, home string, col knowledge.ScopedCollectio
 			ResolveNear: resolveNear,
 			Epoch:       epoch,
 		},
-		Schemas:    schemas,
-		Views:      views,
-		ViewReport: viewReport,
+		Schemas:      schemas,
+		SchemaReport: schemaReport,
+		Views:        views,
+		ViewReport:   viewReport,
 	}, closeAll, nil
 }

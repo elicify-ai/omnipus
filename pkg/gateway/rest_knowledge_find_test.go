@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -231,6 +232,45 @@ func TestVaultSearch_EmptyQueryIsBadRequest(t *testing.T) {
 
 	w := vaultFindPost(t, api, ws, map[string]any{"query": "   ", "collection_id": colID})
 	assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+}
+
+// TestVaultSearch_QueryBoundEnforcedRegardlessOfValidateInbound is I3
+// (2026-09-09 code review): the contract's query maxLength:1024
+// (contracts/components/schemas/VaultSearchRequest.yaml) was declared but
+// enforced NOWHERE — decodeAndValidate's schema pass only runs when
+// gateway.validate_inbound is true, and that flag DEFAULTS FALSE
+// (buildLibraryTestAPI leaves it at that zero value), so the declared bound
+// was purely decorative in a default install. The handler itself only ever
+// checked query for emptiness. Left unenforced, an over-long query reaches
+// knowledgefind.Find with no tokenisation cap, and — unlike the sibling
+// file-search endpoint (rest_library_files_search.go's F4 fix, which this
+// test mirrors) — this endpoint takes no walk semaphore at all, so the
+// length bound is the ONLY defence against the cost that follows.
+func TestVaultSearch_QueryBoundEnforcedRegardlessOfValidateInbound(t *testing.T) {
+	t.Run("a query over the 1024-char cap is rejected 400 at the validate_inbound default", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+		require.False(t, api.agentLoop.GetConfig().Gateway.ValidateInbound,
+			"this test must exercise the unvalidated default, not the schema-validated path")
+
+		w := vaultFindPost(t, api, ws, map[string]any{
+			"query":         strings.Repeat("a", vaultSearchMaxQueryLength+1),
+			"collection_id": "kb_0000000000000000",
+		})
+		assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	})
+
+	t.Run("a query exactly at the 1024-char cap is not rejected for length", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+
+		w := vaultFindPost(t, api, ws, map[string]any{
+			"query":         strings.Repeat("a", vaultSearchMaxQueryLength),
+			"collection_id": "kb_0000000000000000",
+		})
+		// An unknown collection_id is an empty-but-complete 200 (US-9/FR-053),
+		// never a 400 — proving the cap is exactly 1024, not lower, and that
+		// this request cleared the length check to reach that path.
+		assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	})
 }
 
 // TestVaultSearch_OutOfScopeCollectionIsEmptyNotError — a collection_id this
