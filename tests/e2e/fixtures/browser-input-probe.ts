@@ -414,12 +414,14 @@ export async function runBrowserInputProbe(page: Page, testInfo: TestInfo, mode:
     const html = fixtureHTML(expectedEvents, nonce);
     fs.writeFileSync(path.join(fixtureDir, 'index.html'), html);
     await selectAgent(page, process.env.BROWSER_PROBE_AGENT_NAME || /Jim/i);
+    console.log(`[${label}] agent selected`);
     let previewURL: URL;
     if (direct) {
       previewURL = direct.preview;
       const served = await page.request.get(previewURL.href, { timeout: 15_000, maxRedirects: 0, headers: { 'Cache-Control': 'no-cache' } });
       expect(served.ok(), 'existing preview serves the fresh fixture').toBe(true);
       expect(await served.text(), 'served fixture contains this run’s exact event plan and nonce').toContain(`const expected=${JSON.stringify(expectedEvents)}, nonce=${nonce};`);
+      console.log(`[${label}] setup ready`);
       const openBrowser = page.getByRole('button', { name: 'Open browser', exact: true });
       await expect(openBrowser).toBeVisible({ timeout: 15_000 });
       await openBrowser.click({ timeout: 15_000 });
@@ -428,10 +430,16 @@ export async function runBrowserInputProbe(page: Page, testInfo: TestInfo, mode:
     } else {
       await chatInput(page).fill(`Prepare this browser test yourself. You may first use ToolSearch to load exactly serve_web and browser_navigate. Then call serve_web with path "${relative}" and no command, followed by browser_navigate to exactly its returned preview URL. Do not click, type, or use unrelated tools. Only after both tools succeed, reply with exactly SOAK_READY_${nonce} and nothing else. If any step fails, reply SOAK_SETUP_FAILED with the reason and never include the success marker.`);
       await chatInput(page).press('Enter');
-      const reply = assistantMessages(page).last().locator('.prose-sm').last();
-      await expect(reply).toContainText(new RegExp(`SOAK_READY_${nonce}|SOAK_SETUP_FAILED`), { timeout: 240_000 });
+      // Finalized messages render markdown directly in the text body, without
+      // the live renderer's .prose-sm wrapper. Keep every top-level markdown
+      // block so a separate denial paragraph cannot be hidden by a ready line.
+      const reply = assistantMessages(page).last()
+        .locator(':scope > div > div.text-sm.leading-relaxed')
+        .locator(':scope > p, :scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6, :scope > ul, :scope > ol, :scope > blockquote, :scope > hr, :scope > pre, :scope > .overflow-x-auto, :scope > .rounded.overflow-hidden');
+      await expect.poll(async () => (await reply.allTextContents()).join('\n'), { timeout: 240_000 }).toMatch(new RegExp(`SOAK_READY_${nonce}|SOAK_SETUP_FAILED`));
       await expect(page.locator('[data-testid="stop-btn"]')).not.toBeVisible({ timeout: 60_000 });
-      await expect(reply).toHaveText(`SOAK_READY_${nonce}`, { timeout: 5_000 });
+      await expect(reply).toHaveText([`SOAK_READY_${nonce}`], { timeout: 5_000 });
+      console.log(`[${label}] setup ready`);
       await expect(watchLiveButton(page)).toBeVisible({ timeout: 15_000 });
       await watchLiveButton(page).click({ timeout: 15_000 });
       await expect(browserLivePanel(page)).toBeVisible();
@@ -448,6 +456,7 @@ export async function runBrowserInputProbe(page: Page, testInfo: TestInfo, mode:
     await address.press('Enter');
     await expect(browserLiveVideo(page)).toBeVisible({ timeout: 90_000 });
     await expect.poll(() => browserLiveVideo(page).evaluate(el => (el as HTMLVideoElement).readyState), { timeout: 45_000 }).toBeGreaterThanOrEqual(2);
+    console.log(`[${label}] initial video ready`);
     // Let initial layout/offer convergence finish before the timed acceptance
     // window; this delay is not counted as idle stability or input latency.
     await page.waitForTimeout(3_000);
@@ -541,6 +550,7 @@ export async function runBrowserInputProbe(page: Page, testInfo: TestInfo, mode:
     expect(state.count).toBe(expectedEvents.length);
     expect(state.held).toBe(0);
     expect(latencies).toHaveLength(CLICK_COUNT);
+    console.log(`[${label}] measurement done`);
     const ordered = [...latencies].sort((a, b) => a - b);
     const p95 = ordered[Math.ceil(.95 * CLICK_COUNT) - 1];
     console.log(`[${label}] input complete: ${timing.mixedElapsedMs.toFixed(1)}ms, ${latencies.length} clicks, ${state.count}/${expectedEvents.length} exact events, p95=${p95.toFixed(3)}ms, target<=${MAX_P95_MS}ms`);
