@@ -253,7 +253,7 @@ func TestLiveDocumentInitializationRetainsItsOriginalWork(t *testing.T) {
 					}
 					return previous(ctx, timeout, actions...)
 				}
-				go func() { f.watch.initialize(); close(initialized); f.watch.processEvents() }()
+				go func() { f.watch.initialize(true); close(initialized); f.watch.processEvents() }()
 				<-entered
 				var newer CaptureFrameState
 				switch scenario {
@@ -383,7 +383,7 @@ func TestLiveDocumentLateInitializationCannotReplaceEarlierNavigation(t *testing
 		require.NoError(t, err)
 		require.NotNil(t, work)
 		pending := f.cs.FrameState()
-		f.watch.initialize()
+		f.watch.initialize(true)
 		go f.watch.processEvents()
 		close(f.paint)
 		synctest.Wait()

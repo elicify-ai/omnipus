@@ -1624,7 +1624,7 @@ func (lv *LiveView) attach(
 	listenCtx, cancel := context.WithCancel(tabCtx)
 	lv.listenCtx = listenCtx
 	lv.stopListen = cancel
-	lv.installDocumentWatchLocked(listenCtx, tabCtx)
+	lv.installDocumentWatchLocked(listenCtx, tabCtx, true)
 
 	// ADR-038 finding #2: watch for this tab context dying WITHOUT going
 	// through detach() first — e.g. BrowserManager.Shutdown() canceling
@@ -1706,7 +1706,9 @@ func (lv *LiveView) onTabsChanged(tabs []Tab, activeIdx int) {
 	}
 
 	if needsRebind {
-		lv.rebindWatch(newCtx)
+		// A real tab change already scheduled its measured refresh above. Do
+		// not let listener discovery start a second competing transition.
+		lv.rebindWatch(newCtx, !activeTabChanged)
 	}
 }
 
@@ -1850,7 +1852,7 @@ func (lv *LiveView) reapplyViewportPass(tabCtx context.Context, w, h int, scale 
 // fixes existed to close no longer exist, and the fixes (along with the
 // self-correcting retry loop) are gone with them. The replacement document
 // watch schedules asynchronous discovery; no CDP call runs under lv.mu.
-func (lv *LiveView) rebindWatch(newCtx context.Context) {
+func (lv *LiveView) rebindWatch(newCtx context.Context, initializePicture bool) {
 	lv.mu.Lock()
 	if !lv.hasEpochLocked() || lv.tabCtx == newCtx {
 		lv.mu.Unlock()
@@ -1862,7 +1864,7 @@ func (lv *LiveView) rebindWatch(newCtx context.Context) {
 	listenCtx, cancel := context.WithCancel(newCtx)
 	lv.listenCtx = listenCtx
 	lv.stopListen = cancel
-	lv.installDocumentWatchLocked(listenCtx, newCtx)
+	lv.installDocumentWatchLocked(listenCtx, newCtx, initializePicture)
 	lv.mu.Unlock()
 
 	// Cancel the OLD watch after installing the new one, under no lock — the

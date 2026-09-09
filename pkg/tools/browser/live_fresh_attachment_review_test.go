@@ -200,7 +200,7 @@ func TestLiveDeathWatcherRetainsOriginalSource(t *testing.T) {
 				installReplacement()
 				var nextTarget context.Context
 				nextTarget, cancelNext = chromedp.NewContext(context.Background())
-				lv.rebindWatch(nextTarget)
+				lv.rebindWatch(nextTarget, true)
 			case "pending_capture_same_watch":
 				installReplacement()
 			case "new_generation_same_capture":

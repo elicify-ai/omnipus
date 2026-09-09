@@ -87,7 +87,7 @@ func TestLiveView_RebindWatch_NoFalseDeathBroadcast(t *testing.T) {
 	newTabCtx, newCancel := chromedp.NewContext(context.Background())
 	defer newCancel()
 
-	lv.rebindWatch(newTabCtx)
+	lv.rebindWatch(newTabCtx, true)
 
 	// Give the REAL background watcher goroutine (started by attach() for
 	// the old epoch) every opportunity to misfire before asserting it

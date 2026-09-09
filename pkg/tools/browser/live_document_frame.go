@@ -55,8 +55,9 @@ type liveDocumentWork struct {
 }
 
 // Called under lv.mu. Listener registration does no browser I/O; initial
-// frame discovery runs asynchronously.
-func (lv *LiveView) installDocumentWatchLocked(listenCtx, targetCtx context.Context) {
+// frame discovery runs asynchronously. A tab-switch refresh already owns its
+// picture transition, so that replacement watch discovers metadata only.
+func (lv *LiveView) installDocumentWatchLocked(listenCtx, targetCtx context.Context, initializePicture bool) {
 	lv.documentWatch = nil
 	if lv.mgr == nil || chromedp.FromContext(targetCtx) == nil {
 		return
@@ -66,7 +67,7 @@ func (lv *LiveView) installDocumentWatchLocked(listenCtx, targetCtx context.Cont
 	lv.documentWatch = w
 	chromedp.ListenTarget(ctx, w.enqueue)
 	go func() {
-		w.initialize()
+		w.initialize(initializePicture)
 		w.processEvents()
 	}()
 }
@@ -123,13 +124,13 @@ func (w *liveDocumentWatch) active() bool {
 	return err == nil && active == w.target
 }
 
-func (w *liveDocumentWatch) initialize() {
+func (w *liveDocumentWatch) initialize(initializePicture bool) {
 	ctx, cancel := context.WithTimeout(w.ctx, documentPaintTimeout)
 	defer cancel()
 	w.mu.Lock()
 	var work *liveDocumentWork
 	var beginErr error
-	if w.work == nil {
+	if initializePicture && w.work == nil {
 		work, beginErr = w.beginLocked("")
 	}
 	w.mu.Unlock()
@@ -291,7 +292,7 @@ func (lv *LiveView) beginInputDocument(targetCtx context.Context) (*liveDocument
 	lv.mu.Lock()
 	w := lv.documentWatch
 	if w != nil && w.failed.Load() && lv.listenCtx != nil {
-		lv.installDocumentWatchLocked(lv.listenCtx, targetCtx)
+		lv.installDocumentWatchLocked(lv.listenCtx, targetCtx, true)
 		w = lv.documentWatch
 	}
 	lv.mu.Unlock()
