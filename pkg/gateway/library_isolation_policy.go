@@ -133,7 +133,7 @@ func buildLibraryIsolationPolicy(sources []string) string {
 // and a preview whose policy disagreed with the origin CORS enforces would be
 // a defect with no symptom on two engines out of three.
 //
-// WHY A LOOPBACK BIND YIELDS THREE SOURCES, not one. The preview <iframe>'s
+// WHY A LOOPBACK BIND YIELDS TWO SOURCES, not one. The preview <iframe>'s
 // src is a RELATIVE path, so it resolves against whatever the reader typed in
 // the address bar. The seeded default binds 127.0.0.1, and people open the SPA
 // at localhost — the same socket, a spelling nobody thinks about. Measured on
@@ -143,18 +143,30 @@ func buildLibraryIsolationPolicy(sources []string) string {
 // ordinary reason imaginable, which is the hazard `'self'` exists to cover on
 // the other two engines and cannot cover here.
 //
+// AND WHY IT IS TWO RATHER THAN THE THREE §10.3 ORIGINALLY LISTED. The third
+// spelling was `[::1]`, and CSP cannot express it — see
+// libraryIsolationHostIsCSPExpressible. It was removed on 2026-09-09 rather
+// than re-spelled because there is no spelling that works.
+//
 // IT IS A SMALL WIDENING, AND SAYING OTHERWISE WOULD BE FALSE. This comment
 // claimed "not a widening" until adversarial review disproved it on
 // 2026-08-23 with a live socket test, so the honest statement is:
 //
 // The gateway binds ONE address. On the seeded default that is 127.0.0.1 —
 // IPv4 ONLY (gateway.go builds "host:port" from cfg.Gateway.Host, default
-// pkg/config/defaults.go's "127.0.0.1"). We nevertheless name localhost and
-// [::1]. Nothing stops another unprivileged local process from binding
+// pkg/config/defaults.go's "127.0.0.1"). We nevertheless name localhost.
+// Nothing stops another unprivileged local process from binding
 // [::1]:<our port>, and "localhost" resolves to BOTH families, so a browser
-// doing happy-eyeballs may reach that socket first. Those two sources are
-// therefore not guaranteed to be us, and they appear in img-src and frame-src
-// — two of the seven measured egress vectors.
+// doing happy-eyeballs may reach that socket first. That source is therefore
+// not guaranteed to be us, and it appears in img-src and frame-src — two of
+// the seven measured egress vectors.
+//
+// AN EXPLICIT `http://[::1]:<port>` USED TO SIT BESIDE IT AND NO LONGER DOES
+// (2026-09-09, defect HP-2). It never granted anything: CSP has no syntax for
+// an IPv6 host, so every engine discarded it — Chromium and WebKit after
+// logging one console error PER DIRECTIVE, six per preview, which is noise
+// that hid the real violation errors underneath it. See
+// libraryIsolationHostIsCSPExpressible for the grammar and the measurement.
 //
 // WHY WE ACCEPT IT. Exploiting it needs code already running on the operator's
 // machine, which can read their files directly and needs no help from a
@@ -170,9 +182,13 @@ func buildLibraryIsolationPolicy(sources []string) string {
 // A non-loopback origin gets exactly one source and no aliases at all.
 //
 // Returns nil — which collapses the policy to the pre-amendment `'self'` form
-// — for an empty origin (a 0.0.0.0 or :: bind with no gateway.public_url) and
-// for an origin that does not parse as scheme://host. Both are reported by
-// freezeLibraryIsolationPolicy's WARN, never silently.
+// — for an empty origin (a 0.0.0.0 or :: bind with no gateway.public_url), for
+// an origin that does not parse as scheme://host, for a host that is not one
+// concrete host, and (since 2026-09-09) for a NON-LOOPBACK IPv6 origin, whose
+// single source CSP cannot express. All four are reported by
+// freezeLibraryIsolationPolicy's WARN, never silently. An IPv6 LOOPBACK origin
+// does NOT return nil and does NOT warn: its canonical spelling is dropped but
+// its two expressible loopback aliases still stand.
 func libraryIsolationSources(canonicalOrigin string) []string {
 	trimmed := strings.TrimSpace(canonicalOrigin)
 	if trimmed == "" {
@@ -214,18 +230,38 @@ func libraryIsolationSources(canonicalOrigin string) []string {
 	canonical := u.Scheme + "://" + u.Host
 
 	hostname := u.Hostname()
+
+	// EMIT ONLY WHAT CSP CAN SPELL. An IPv6 host has no host-source spelling at
+	// all (libraryIsolationHostIsCSPExpressible), so the canonical origin is
+	// DROPPED when it is one. Dropped, not escaped: there is nothing to escape
+	// it to — every candidate form was measured rejected, and a rejected source
+	// grants exactly what no source grants while costing one console error per
+	// directive.
+	var sources []string
+	if libraryIsolationHostIsCSPExpressible(hostname) {
+		sources = append(sources, canonical)
+	}
+
 	if !libraryIsolationHostIsLoopback(hostname) {
-		return []string{canonical}
+		// nil for a non-loopback IPv6 origin: nothing expressible is left, so
+		// the policy collapses to 'self' and freezeLibraryIsolationPolicy
+		// WARNs. That is a DELIBERATE addition to the WARN's causes
+		// (2026-09-09) and not a side effect — the previous behaviour emitted
+		// one source every browser discarded, which is the same rendering
+		// degradation with nothing in the log to notice it by.
+		return sources
 	}
 
 	// Fixed order, canonical first, so the built policy is byte-stable across
 	// calls and across processes with the same config (MV-13).
-	sources := []string{canonical}
-	for _, alias := range []string{"127.0.0.1", "localhost", "::1"} {
+	//
+	// "::1" IS NOT IN THIS LIST AND MUST NOT BE RE-ADDED — see
+	// libraryIsolationHostIsCSPExpressible. An IPv6 loopback canonical origin
+	// still reaches here and still gets both of these: they are the other
+	// spellings a reader may have typed for this same gateway, and unlike the
+	// canonical one they are expressible.
+	for _, alias := range []string{"127.0.0.1", "localhost"} {
 		host := alias
-		if strings.Contains(alias, ":") {
-			host = "[" + alias + "]"
-		}
 		if port := u.Port(); port != "" {
 			host += ":" + port
 		}
@@ -237,11 +273,6 @@ func libraryIsolationSources(canonicalOrigin string) []string {
 	return sources
 }
 
-// libraryIsolationHostIsLoopback reports whether a hostname denotes this
-// machine over the loopback interface. "localhost" is matched by name because
-// it is a name, not an address; everything else is decided by net.IP, so the
-// whole of 127.0.0.0/8 and ::1 are covered rather than the two spellings
-// somebody happened to think of.
 // libraryIsolationHostIsConcrete reports whether hostname names exactly ONE
 // host and is therefore safe to emit as a CSP host-source.
 //
@@ -267,6 +298,62 @@ func libraryIsolationHostIsConcrete(hostname string) bool {
 	return true
 }
 
+// libraryIsolationHostIsCSPExpressible reports whether hostname can be written
+// as a CSP host-source AT ALL. It is a separate question from
+// libraryIsolationHostIsConcrete's, and merging the two would blur two
+// different reasons behind one boolean: "*" is refused because it names many
+// hosts (a security reason); an IPv6 literal is refused because CSP has no
+// syntax for it (a grammar reason).
+//
+// CSP3 §2.3.1's grammar is
+//
+//	host-source = [ scheme-part "://" ] host-part [ ":" port-part ] [ path-part ]
+//	host-part   = "*" / [ "*." ] 1*host-char *( "." 1*host-char ) [ "." ]
+//	host-char   = ALPHA / DIGIT / "-"
+//
+// — no colons and no brackets, so an IPv6 address has no spelling in it. The
+// port separator is the only colon the production admits, which is why a
+// bracketed literal is not merely unusual but unparseable.
+//
+// THIS IS MEASURED, NOT DEDUCED (2026-09-09, defect HP-2). One policy per
+// candidate spelling, served over a real socket and read out of the console:
+// `http://[::1]:5177`, `http://::1:5177`, `http://[0:0:0:0:0:0:0:1]:5177`,
+// `http://%5B::1%5D:5177` and `http://[::1]` were ALL rejected by Chromium 149
+// and WebKit 26.5 — "contains an invalid source … It will be ignored", one
+// error per directive — and silently ignored by Firefox 151, with
+// `http://127.0.0.1:5177` and `http://localhost:5177` accepted in the same
+// header as the positive control. Confirmed functionally the same day: a
+// document whose img-src named ONLY `http://[::1]:8200` could not load an image
+// from `http://[::1]:8200` on any of the three engines. So no form of the
+// source grants anything, and there is nothing to fix by re-spelling it.
+//
+// THE KNOWN LIMITATION THIS LEAVES, stated rather than dropped. A reader who
+// reaches the gateway at `http://[::1]:<port>` cannot be named in this policy.
+// They are still covered by `'self'` — measured on all three engines: a
+// document served from `http://[::1]:8200` under `img-src 'self'` loads its own
+// subresources normally. What they do not get is the WebKit fallback the
+// 2026-08-23 amendment added, so an IPv6-loopback reader on Safari sees the
+// pre-amendment behaviour: inside an FR-005b attribute-sandboxed frame, the
+// preview's external script and stylesheet are refused. Reaching the gateway by
+// any spelling CSP can express — `localhost`, `127.0.0.1`, a DNS name — avoids
+// it. Recorded in §10.3 and in ADR-067's amendment as well as here.
+//
+// The test is "contains a colon" rather than `net.IP.To4() == nil`, because
+// `::ffff:127.0.0.1` IS an IPv4 address to Go (To4 returns non-nil) and still
+// has no CSP spelling. url.URL.Hostname() has already stripped any brackets, so
+// a colon at this point means an IPv6 literal and nothing else.
+func libraryIsolationHostIsCSPExpressible(hostname string) bool {
+	return !strings.Contains(hostname, ":")
+}
+
+// libraryIsolationHostIsLoopback reports whether a hostname denotes this
+// machine over the loopback interface. "localhost" is matched by name because
+// it is a name, not an address; everything else is decided by net.IP, so the
+// whole of 127.0.0.0/8 and ::1 are covered rather than the two spellings
+// somebody happened to think of.
+//
+// Loopback-ness and CSP-expressibility are independent: ::1 is loopback and is
+// NOT expressible. Answering one of those questions never answers the other.
 func libraryIsolationHostIsLoopback(hostname string) bool {
 	if strings.EqualFold(hostname, "localhost") {
 		return true
@@ -350,15 +437,22 @@ func freezeLibraryIsolationPolicy(canonicalOrigin string) {
 		"library preview: no usable canonical gateway origin — previews will render "+
 			"without their stylesheets and scripts in Safari (other browsers are "+
 			"unaffected). Set gateway.public_url to the URL the BROWSER reaches, or "+
-			"give gateway.host a concrete address instead of a wildcard bind",
+			"give gateway.host a concrete address instead of a wildcard bind. An IPv6 "+
+			"literal does not count: CSP's host-source grammar has no syntax for one, "+
+			"so name a DNS host that resolves to it instead",
 		map[string]any{
-			// The raw value matters: this fires for THREE different causes — an
-			// empty origin (wildcard bind, no public_url), an unparseable one,
-			// and a non-concrete host such as a wildcard. Telling every operator
-			// to "set public_url" is wrong for the second and third, where
-			// public_url or host is set but malformed. The value shows which.
+			// The raw value matters: this fires for FOUR different causes — an
+			// empty origin (wildcard bind, no public_url), an unparseable one, a
+			// non-concrete host such as a wildcard, and (added 2026-09-09) a
+			// NON-LOOPBACK IPv6 origin, which CSP cannot express. Telling every
+			// operator to "set public_url" is wrong for the last three, where
+			// public_url or host is set and is simply not usable here. The value
+			// shows which.
+			//
+			// An IPv6 LOOPBACK origin is deliberately NOT among them: it keeps
+			// its two expressible aliases, so it never reaches this branch.
 			"canonical_origin": canonicalOrigin,
-			"fix":              "gateway.public_url (or a concrete gateway.host)",
+			"fix":              "gateway.public_url (or a concrete, non-IPv6 gateway.host)",
 		})
 }
 

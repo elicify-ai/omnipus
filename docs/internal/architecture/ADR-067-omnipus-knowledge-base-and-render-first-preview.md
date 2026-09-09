@@ -503,6 +503,39 @@ proxy (`gateway.public_url`).
 > a workaround: CSP3 §6.7.2 matches a host-source against the **request URL** and never consults
 > the document origin, so it cannot be re-broken by this class of bug.
 
+> **AMENDED 2026-09-09 — `[::1]` is removed from the loopback alias set, and no IPv6 host is
+> ever named (defect HP-2).** The decision above named **three** loopback spellings. The third
+> was invalid and had never worked.
+>
+> **CSP has no syntax for an IPv6 host.** CSP3 §2.3.1: `host-char = ALPHA / DIGIT / "-"` — no
+> brackets, and no colon except the port separator. **Measured 2026-09-09**, five candidate
+> spellings (bracketed, bare, fully expanded, percent-encoded, portless), one policy each, served
+> over a real socket: every one discarded, by Chromium 149 and WebKit 26.5 with *"contains an
+> invalid source … It will be ignored"* logged **once per directive** — six console errors on
+> every preview — and by Firefox 151 silently. `http://127.0.0.1:5177` and
+> `http://localhost:5177` in the same header were accepted, so the probe could tell valid from
+> invalid. Confirmed functionally the same day: a document whose `img-src` named **only**
+> `http://[::1]:8200` could not load an image from `http://[::1]:8200` on any engine.
+>
+> **Nothing is lost by removing it.** A source every engine discards grants exactly what no
+> source grants. What it cost was real: during the HP-1 investigation the genuine
+> blocked-resource violations sat below six of these decoys and were nearly missed.
+>
+> **The known limitation, recorded rather than dropped.** A reader who reaches the gateway at
+> `http://[::1]:<port>` **cannot be named in this policy**, and no spelling would let us name
+> them. They remain covered by `'self'` — measured on all three engines. What they do not get is
+> the WebKit fallback this amendment's parent decision added, so an IPv6-loopback reader **on
+> Safari** sees the pre-amendment behaviour inside an FR-005b attribute-sandboxed frame: the
+> preview's external script and stylesheet are refused. Reaching the gateway by any spelling CSP
+> can express — `localhost`, `127.0.0.1`, a DNS name — avoids it.
+>
+> **One WARN cause is added.** A **non-loopback** IPv6 canonical origin now yields no source at
+> all and takes the empty/degraded path *with its WARN*, where it previously emitted one source
+> the browser silently discarded — the same rendering degradation with nothing in the log to
+> notice it by. An IPv6 **loopback** origin does not warn: its two expressible aliases still
+> stand. Substitution rules and the full measurement:
+> `docs/internal/specs/adr-067-knowledge-base-and-preview-spec.md` §10.3.
+
 **Both mechanisms are required.** Measured: with source directives but no `sandbox`,
 `window.open` still reached the external origin on every engine — no CSP directive covers
 popup navigation. With `sandbox` but no source directives, five of seven vectors escaped.

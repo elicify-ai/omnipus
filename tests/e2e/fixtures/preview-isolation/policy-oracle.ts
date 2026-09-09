@@ -227,14 +227,43 @@ function isLoopbackHost(hostname: string): boolean {
 }
 
 /**
+ * Whether a hostname can be written as a CSP host-source AT ALL — §10.3's
+ * 2026-09-09 amendment (defect HP-2).
+ *
+ * It cannot, if it is an IPv6 literal. CSP3 §2.3.1's grammar is
+ * `host-part = "*" / [ "*." ] 1*host-char *( "." 1*host-char ) [ "." ]` with
+ * `host-char = ALPHA / DIGIT / "-"` — no colons, no brackets, the port
+ * separator being the only colon the production admits.
+ *
+ * Measured 2026-09-09: `http://[::1]:5177`, `http://::1:5177`,
+ * `http://[0:0:0:0:0:0:0:1]:5177`, `http://%5B::1%5D:5177` and `http://[::1]`
+ * are ALL rejected by Chromium 149 and WebKit 26.5 ("contains an invalid
+ * source … It will be ignored", one console error per directive) and silently
+ * ignored by Firefox 151, while `http://127.0.0.1:5177` and
+ * `http://localhost:5177` in the same header are accepted.
+ *
+ * NOTE the asymmetry with Go, and do not "fix" it: `new URL(…).hostname`
+ * KEEPS the brackets for an IPv6 literal (`"[::1]"`) where Go's
+ * `url.URL.Hostname()` strips them. The colon test is correct for both, which
+ * is why it is a colon test and not a bracket test.
+ */
+function isCSPExpressibleHost(hostname: string): boolean {
+  return !hostname.includes(":");
+}
+
+/**
  * §10.3's `${GATEWAY_ORIGIN}` — a space-separated list of CSP host-sources.
  *
- * Non-loopback: one entry. Loopback: all three spellings, same scheme and port,
- * CANONICAL FIRST and then the remaining two in the fixed order `127.0.0.1`,
- * `localhost`, `[::1]`, skipping the one already emitted. The order is part of
+ * Non-loopback: one entry. Loopback: both expressible spellings, same scheme
+ * and port, CANONICAL FIRST and then the remaining one. The order is part of
  * the contract, not a detail — MV-13 asserts one identical string on every
  * response, so a list whose order varied would break it without breaking any
  * page.
+ *
+ * An IPv6 host is never emitted, in either case (`isCSPExpressibleHost`). A
+ * non-loopback IPv6 origin therefore yields NO source and takes §10.3's Empty
+ * row; an IPv6 loopback origin is dropped from its own list but keeps its two
+ * expressible aliases — the one place "canonical first" has an exception.
  */
 export function gatewayOriginSources(
   canonicalOrigin = gatewayCanonicalOrigin(),
@@ -249,12 +278,15 @@ export function gatewayOriginSources(
     return [];
   }
   const canonical = `${url.protocol}//${url.host}`;
-  if (!isLoopbackHost(url.hostname)) return [canonical];
 
-  const sources = [canonical];
-  for (const alias of ["127.0.0.1", "localhost", "::1"]) {
-    const host = alias.includes(":") ? `[${alias}]` : alias;
-    const candidate = `${url.protocol}//${host}${url.port ? `:${url.port}` : ""}`;
+  const sources: string[] = [];
+  if (isCSPExpressibleHost(url.hostname)) sources.push(canonical);
+  if (!isLoopbackHost(url.hostname)) return sources;
+
+  // "::1" is NOT in this list and must not be re-added — see
+  // isCSPExpressibleHost.
+  for (const alias of ["127.0.0.1", "localhost"]) {
+    const candidate = `${url.protocol}//${alias}${url.port ? `:${url.port}` : ""}`;
     if (candidate !== canonical) sources.push(candidate);
   }
   return sources;

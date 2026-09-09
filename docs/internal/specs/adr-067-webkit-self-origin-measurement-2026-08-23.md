@@ -102,6 +102,20 @@ Live `Content-Security-Policy`, captured off the wire per rig:
 - **Bad-`public_url` rig** — `host=127.0.0.1` with `public_url=https://preview.example.com`: the
   policy names that origin, which is not the one the browser is on.
 
+> **CORRECTION 2026-09-09 (defect HP-2) — the captured header above is left VERBATIM because it
+> is what the binary served that day, but one of its three loopback sources never worked.**
+> `http://[::1]:6791` is not a valid CSP host-source: CSP3 §2.3.1's `host-char` production is
+> `ALPHA / DIGIT / "-"`, so an IPv6 host has no spelling at all. Chromium and WebKit discard it
+> and log *"contains an invalid source … It will be ignored"* **once per source directive** — six
+> console errors on every preview; Firefox discards it silently. Re-measured 2026-09-09 across
+> five candidate spellings on Chromium 149, Firefox 151 and WebKit 26.5, with the IPv4 and
+> `localhost` sources in the same header as the positive control.
+>
+> **This does not invalidate the results below.** The rigs that passed did so through
+> `http://127.0.0.1:6791` and `http://localhost:6791`, both valid and both still emitted; the
+> `[::1]` entry contributed nothing to any cell. The alias is removed as of 2026-09-09 — see
+> §10.3's amendment in `adr-067-knowledge-base-and-preview-spec.md`.
+
 Results (`preview-isolation.spec.ts`, 13 tests; `preview-svg.spec.ts`, 16 tests):
 
 | rig | webkit | chromium | firefox |

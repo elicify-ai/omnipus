@@ -74,16 +74,21 @@ const previewFixtureCanonicalOrigin = "http://127.0.0.1:8080"
 
 // previewFixtureSources is what §10.3's ${GATEWAY_ORIGIN} expands to for that
 // origin — a space-separated SOURCE LIST, not one origin. The host is loopback,
-// so §10.3's table calls for all three loopback spellings, the canonical one
-// first and then the remaining two in the fixed order 127.0.0.1, localhost,
-// [::1].
+// so §10.3's table calls for both loopback spellings, the canonical one first
+// and then the remaining one.
+//
+// TWO, not the three §10.3 listed before 2026-09-09: `http://[::1]:8080` was
+// removed by defect HP-2 because CSP3 §2.3.1's host-char production
+// (ALPHA / DIGIT / "-") has no syntax for an IPv6 host, so every engine
+// discarded that source — Chromium and WebKit after logging one console error
+// per directive, six per preview.
 //
 // It is written here as a LITERAL, derived by hand from §10.3's table, and that
 // is the whole point of it. A test that asked the production code which sources
-// it chose would agree with whatever it chose — one origin instead of three, a
+// it chose would agree with whatever it chose — one origin instead of two, a
 // different order, or "" (the degraded case), which would silently make every
 // comparison in this package pass against the unmodified pre-2026-08-23 string.
-const previewFixtureSources = "http://127.0.0.1:8080 http://localhost:8080 http://[::1]:8080"
+const previewFixtureSources = "http://127.0.0.1:8080 http://localhost:8080"
 
 // freezePreviewPolicyForTest pins previewFixtureCanonicalOrigin as the
 // gateway's canonical origin for one test, restoring the previous value
@@ -103,10 +108,10 @@ func freezePreviewPolicyForTest(t *testing.T) {
 	t.Helper()
 	freezeLibraryIsolationPolicyForTest(t, previewFixtureCanonicalOrigin)
 	require.Equal(t, previewFixtureSources, strings.Join(libraryIsolationPolicySources(), " "),
-		"§10.3's substitution table: a loopback canonical origin expands to all three "+
-			"loopback spellings, canonical first. These oracles compare against a hand-derived "+
-			"list; if the derivation changed, re-derive it from §10.3 rather than weakening "+
-			"the comparisons")
+		"§10.3's substitution table: a loopback canonical origin expands to both of its "+
+			"expressible loopback spellings, canonical first. These oracles compare against a "+
+			"hand-derived list; if the derivation changed, re-derive it from §10.3 rather than "+
+			"weakening the comparisons")
 }
 
 // specIsolationPolicyTemplate extracts §10.3's fenced policy TEMPLATE from the

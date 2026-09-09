@@ -39,6 +39,7 @@ package gateway
 // here vacuous, which is the false-green shape this suite is audited against.
 
 import (
+	"net/url"
 	"strings"
 	"testing"
 
@@ -96,10 +97,13 @@ func policyDirectives(t *testing.T, policy string) (names []string, values map[s
 // libraryIsolationTestSources is a loopback source list of the shape §10.3's
 // table produces, written out rather than computed so the assertions below do
 // not agree with whatever libraryIsolationSources happens to return.
+//
+// TWO spellings, not the three §10.3 listed before 2026-09-09: `[::1]` was
+// removed by defect HP-2 because CSP has no syntax for an IPv6 host at all.
+// See TestLibraryIsolationSources_NeverEmitsAnIPv6HostSource.
 var libraryIsolationTestSources = []string{
 	"http://127.0.0.1:5000",
 	"http://localhost:5000",
-	"http://[::1]:5000",
 }
 
 // --- 0. The extractor can actually fail ------------------------------------
@@ -290,7 +294,7 @@ func TestLibraryIsolationSources(t *testing.T) {
 		// resolves against whatever they typed. Measured on all three engines:
 		// naming only 127.0.0.1 blocks every subresource when the browser
 		// reached the same socket as localhost.
-		name:   "a loopback bind names all three of its own spellings",
+		name:   "a loopback bind names both of its expressible spellings",
 		origin: "http://127.0.0.1:5000",
 		want:   libraryIsolationTestSources,
 	}, {
@@ -299,16 +303,39 @@ func TestLibraryIsolationSources(t *testing.T) {
 		want: []string{
 			"http://localhost:5000",
 			"http://127.0.0.1:5000",
-			"http://[::1]:5000",
 		},
 	}, {
-		name:   "an IPv6 loopback literal expands the same way",
+		// HP-2 (2026-09-09). The canonical spelling is an IPv6 literal, which
+		// CSP cannot express, so it is DROPPED FROM ITS OWN LIST — the one
+		// place §10.3's "canonical origin first" rule has an exception. The
+		// aliases still stand: they are other spellings of the same gateway,
+		// they ARE expressible, and a reader who typed one of them is still
+		// carried on WebKit.
+		name:   "an IPv6 loopback literal is dropped but keeps its expressible aliases",
 		origin: "http://[::1]:5000",
 		want: []string{
-			"http://[::1]:5000",
 			"http://127.0.0.1:5000",
 			"http://localhost:5000",
 		},
+	}, {
+		// Go calls ::ffff:127.0.0.1 an IPv4 address (To4() != nil) AND a
+		// loopback one, yet its URL host spelling still carries colons and is
+		// no more expressible than ::1. This case is why the predicate asks
+		// "does the hostname contain a colon" rather than "what family is it".
+		name:   "an IPv4-mapped IPv6 literal is dropped the same way",
+		origin: "http://[::ffff:127.0.0.1]:5000",
+		want: []string{
+			"http://127.0.0.1:5000",
+			"http://localhost:5000",
+		},
+	}, {
+		// A non-loopback IPv6 origin has nothing expressible left, so it takes
+		// §10.3's Empty row and freezeLibraryIsolationPolicy WARNs. Before
+		// HP-2 it emitted one source every browser discarded — the same
+		// rendering degradation with nothing in the log to notice it by.
+		name:   "a non-loopback IPv6 origin yields no source and degrades loudly",
+		origin: "https://[2001:db8::1]:5000",
+		want:   nil,
 	}, {
 		// 127.0.0.0/8 is loopback in full, not just the one address everybody
 		// types — decided by net.IP rather than by the two spellings somebody
@@ -319,7 +346,6 @@ func TestLibraryIsolationSources(t *testing.T) {
 			"http://127.0.0.2:5000",
 			"http://127.0.0.1:5000",
 			"http://localhost:5000",
-			"http://[::1]:5000",
 		},
 	}, {
 		name:   "a non-loopback LAN address is named alone",
@@ -358,18 +384,75 @@ func TestLibraryIsolationSources(t *testing.T) {
 // here names.
 // NOTE: this asserts scheme and port only, which is NOT the same as proving
 // the aliases are this gateway — adversarial review showed a foreign process
-// can bind [::1]:<port> while we listen on 127.0.0.1 alone. The accepted
-// residual is documented at libraryIsolationSources. Do not rename this test
-// to claim more than it checks.
+// can bind [::1]:<port> while we listen on 127.0.0.1 alone, and "localhost"
+// resolves to both families. The accepted residual is documented at
+// libraryIsolationSources. Do not rename this test to claim more than it
+// checks.
 func TestLibraryIsolationSources_AliasesShareSchemeAndPort(t *testing.T) {
 	sources := libraryIsolationSources("http://127.0.0.1:5000")
-	require.Len(t, sources, 3)
+	require.Len(t, sources, 2)
 	for _, source := range sources {
 		assert.True(t, strings.HasPrefix(source, "http://"),
 			"%s changed scheme — an alias must be the same gateway, reachable the same way", source)
 		assert.True(t, strings.HasSuffix(source, ":5000"),
 			"%s changed port — an alias must be the same listener", source)
 	}
+}
+
+// TestLibraryIsolationSources_NeverEmitsAnIPv6HostSource is defect HP-2's
+// regression guard, written as a PROPERTY over every origin shape the resolver
+// accepts rather than as another table of expected strings.
+//
+// WHY THE PROPERTY AND NOT A TABLE. The table above would go green again if
+// somebody re-added `[::1]` to the alias list and to the expectations in one
+// edit — which is exactly how the defect shipped in the first place. This
+// asserts the reason the alias was wrong, so it fails on any re-introduction
+// whatever the expectations say.
+//
+// WHY IT IS WRONG. CSP3 §2.3.1: `host-char = ALPHA / DIGIT / "-"`. An IPv6
+// host has no host-source spelling, so the browser DISCARDS the source —
+// Chromium and WebKit after logging "contains an invalid source … It will be
+// ignored" ONCE PER DIRECTIVE, six times per preview, which is what buried the
+// genuine violation errors during the HP-1 investigation. Measured 2026-09-09
+// on Chromium 149, Firefox 151 and WebKit 26.5, across five candidate
+// spellings (bracketed, bare, fully expanded, percent-encoded, portless), with
+// `http://127.0.0.1:5177` and `http://localhost:5177` in the same header as
+// the positive control. Nothing is lost by removing it: a source every engine
+// discards grants exactly what no source grants.
+func TestLibraryIsolationSources_NeverEmitsAnIPv6HostSource(t *testing.T) {
+	origins := []string{
+		"http://127.0.0.1:5000",
+		"http://localhost:5000",
+		"http://127.0.0.2:5000",
+		"http://[::1]:5000",
+		"http://[::ffff:127.0.0.1]:5000",
+		"https://[2001:db8::1]:5000",
+		"https://[fe80::1]",
+		"https://omnipus.acme.com",
+	}
+
+	emitted := 0
+	for _, origin := range origins {
+		for _, source := range libraryIsolationSources(origin) {
+			emitted++
+			u, err := url.Parse(source)
+			require.NoError(t, err, "origin %q produced %q, which is not even a URL", origin, source)
+			assert.NotContains(t, u.Hostname(), ":",
+				"origin %q produced %q — CSP3 §2.3.1's host-char is ALPHA/DIGIT/\"-\", so an "+
+					"IPv6 host is discarded by every engine and costs one console error per "+
+					"directive (defect HP-2). No spelling of it works, so it must not be "+
+					"emitted at all", origin, source)
+			assert.NotContains(t, source, "[",
+				"origin %q produced %q — a bracketed IPv6 literal is not a CSP host-source",
+				origin, source)
+		}
+	}
+
+	// Positive control. Without it, a resolver that returned nothing for every
+	// origin would satisfy every assertion above while disabling the whole
+	// 2026-08-23 amendment.
+	require.Positive(t, emitted,
+		"no source was emitted for ANY origin — the assertions above passed having checked nothing")
 }
 
 // --- 4. The frozen value ----------------------------------------------------
@@ -449,6 +532,47 @@ func TestFreezeLibraryIsolationPolicy_WildcardBindDegradesVisibly(t *testing.T) 
 	state := libraryIsolationFrozen.Load()
 	require.NotNil(t, state)
 	assert.Empty(t, state.sources)
+}
+
+// TestFreezeLibraryIsolationPolicy_IPv6OriginTakesTheDocumentedBranch pins
+// WHICH IPv6 cases degrade-and-warn and which do not, because defect HP-2's
+// fix moved that line and a WARN set that drifts is a WARN set nobody trusts.
+//
+// freezeLibraryIsolationPolicy warns exactly when the source list is empty, so
+// asserting the frozen sources IS asserting the WARN branch — there is no
+// second condition between them.
+//
+//	non-loopback IPv6 → NO sources → collapsed policy → WARN.  NEW in 2026-09-09.
+//	                    Before HP-2 it emitted one source every browser
+//	                    discarded: the same rendering degradation, silently.
+//	loopback IPv6     → TWO sources → substituted policy → NO warn.  UNCHANGED
+//	                    in warning terms; only the inert [::1] entry is gone.
+func TestFreezeLibraryIsolationPolicy_IPv6OriginTakesTheDocumentedBranch(t *testing.T) {
+	t.Run("a non-loopback IPv6 origin degrades and therefore warns", func(t *testing.T) {
+		freezeLibraryIsolationPolicyForTest(t, "https://[2001:db8::1]:5000")
+
+		state := libraryIsolationFrozen.Load()
+		require.NotNil(t, state)
+		assert.Empty(t, state.sources,
+			"CSP cannot express an IPv6 host, so there is no source to name — and an empty "+
+				"source list is exactly freezeLibraryIsolationPolicy's WARN condition")
+		assert.Equal(t, buildLibraryIsolationPolicy(nil), libraryIsolationPolicy(),
+			"the degraded case must be §10.3's collapsed form, not a fourth policy shape")
+		assert.NotContains(t, libraryIsolationPolicy(), "://",
+			"no host source may survive: the previous behaviour served an invalid one")
+	})
+
+	t.Run("an IPv6 loopback origin keeps its aliases and therefore does not warn", func(t *testing.T) {
+		freezeLibraryIsolationPolicyForTest(t, "http://[::1]:5000")
+
+		state := libraryIsolationFrozen.Load()
+		require.NotNil(t, state)
+		assert.Equal(t, []string{"http://127.0.0.1:5000", "http://localhost:5000"}, state.sources,
+			"the canonical IPv6 spelling is dropped, but the two expressible spellings of the "+
+				"SAME gateway remain — so this case must NOT join the WARN set")
+		assert.NotContains(t, libraryIsolationPolicy(), "[",
+			"no bracketed IPv6 literal may reach the served policy")
+	})
 }
 
 // TestLibraryIsolationSources_NonConcreteHostFailsClosed pins the one way a

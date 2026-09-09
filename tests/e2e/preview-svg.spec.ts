@@ -808,8 +808,9 @@ test.describe('ADR-067 §10.4 — .svg on the inline allow-list, and type confus
    *   • a placeholder never survives into a served policy;
    *   • the empty case collapses `'self' ${GATEWAY_ORIGIN}` to `'self'` with NO
    *     double space anywhere — the failure that is invisible in both strings;
-   *   • otherwise every derived source appears, and a loopback bind yields all
-   *     three spellings.
+   *   • otherwise every derived source appears, and a loopback bind yields both
+   *     of its CSP-expressible spellings (`[::1]` is not one of them — §10.3's
+   *     2026-09-09 amendment).
    */
   test('the policy oracle substituted §10.3\'s placeholder, and says which case it took', () => {
     const canonical = gatewayCanonicalOrigin();

@@ -844,16 +844,61 @@ cleanly.
 |---|---|
 | **Base value** | `middleware.CanonicalGatewayOrigin(cfg)` — the boot-frozen origin **the browser actually reaches**, as `scheme://host[:port]`, no trailing slash and no path. It is the same resolver CORS, the WebSocket `CheckOrigin` check and `web_serve`'s preview URLs already use, so a reverse-proxy deployment that sets `gateway.public_url` is correct here for free |
 | **Non-loopback host** | One entry: the canonical origin, substituted literally into each of the six directives carrying the placeholder, and nowhere else |
-| **Loopback host** (`127.0.0.1`, `localhost`, `[::1]`) | **All three spellings**, same scheme and port, **canonical origin first** and then the remaining two in the fixed order `127.0.0.1`, `localhost`, `[::1]`, skipping the one already emitted. For a default install (`127.0.0.1:5000`): `http://127.0.0.1:5000 http://localhost:5000 http://[::1]:5000` |
+| **Loopback host** (`127.0.0.1`, `localhost`) | **Both spellings**, same scheme and port, **canonical origin first** and then the remaining one, skipping the one already emitted. For a default install (`127.0.0.1:5000`): `http://127.0.0.1:5000 http://localhost:5000` |
+| **IPv6 host** (any, `[::1]` included) | **Never emitted** — CSP has no syntax for one (see the 2026-09-09 amendment below). A non-loopback IPv6 origin therefore yields **no** source and takes the **Empty** row, WARN included. An IPv6 *loopback* origin keeps its two expressible aliases above and does NOT warn; the canonical spelling is simply absent from its own list, which is the one place the "canonical origin first" rule has an exception |
 | **Empty** | The placeholder **and the single space preceding it** are removed, collapsing `'self' ${GATEWAY_ORIGIN}` to `'self'` — which reproduces the pre-amendment string exactly, byte for byte. **No double space, ever.** One WARN MUST be logged, naming `gateway.public_url` as the fix and Safari as the symptom |
 
 **Why the loopback aliases, and why they are not a widening.** `127.0.0.1` and `localhost` are the
 same socket and a user picks between them without thinking; a host-source match is textual, so
 naming one and being reached by the other blocks every subresource — measured, on all three
 engines. The seeded default binds `127.0.0.1`, so without the aliases a user who types
-`localhost:5000` would get an unstyled, inert preview on Safari. They grant nothing new: all three
-name the gateway itself, which `'self'` already permits at top level, and none of them is
+`localhost:5000` would get an unstyled, inert preview on Safari. They grant nothing new: both
+name the gateway itself, which `'self'` already permits at top level, and neither is
 reachable from outside the machine.
+
+> **AMENDED 2026-09-09 — `[::1]` is removed from the alias set, and no IPv6 host is ever emitted.**
+> The rules above previously called for **three** loopback spellings, the third being
+> `http://[::1]:<port>`. That source was invalid and had never worked.
+>
+> **CSP has no syntax for an IPv6 host.** CSP3 §2.3.1's grammar is
+> `host-part = "*" / [ "*." ] 1*host-char *( "." 1*host-char ) [ "." ]` with
+> `host-char = ALPHA / DIGIT / "-"` — no colons, no brackets. The only colon the production
+> admits is the port separator.
+>
+> **Measured, not deduced (2026-09-09, defect HP-2).** One policy per candidate spelling, served
+> over a real socket, console read per engine: `http://[::1]:5177`, `http://::1:5177`,
+> `http://[0:0:0:0:0:0:0:1]:5177`, `http://%5B::1%5D:5177` and `http://[::1]` were **all** rejected
+> by Chromium 149 and WebKit 26.5 — *"contains an invalid source … It will be ignored"*, **one
+> console error per directive** — and silently ignored by Firefox 151. `http://127.0.0.1:5177` and
+> `http://localhost:5177` in the same header were accepted, so the probe could tell the two apart.
+> Functionally confirmed the same day: a document whose `img-src` named **only**
+> `http://[::1]:8200` could not load an image from `http://[::1]:8200` on any of the three engines.
+>
+> **What it cost.** Six console errors on **every** preview, one per source directive. During the
+> HP-1 investigation the genuine blocked-resource violations sat below those six decoys and were
+> nearly missed. Noise that hides signal is a defect in its own right.
+>
+> **What it never bought.** Nothing. A source every engine discards grants exactly what no source
+> grants. Removing it does not narrow the policy by one byte of real permission — it removes a
+> byte that was already inert.
+>
+> **The known limitation, stated rather than dropped.** A reader who reaches the gateway at
+> `http://[::1]:<port>` **cannot be named in this policy**, and there is no spelling that would let
+> us name them. They are still covered by `'self'` — measured on all three engines: a document
+> served from `http://[::1]:8200` under `img-src 'self'` loads its own subresources normally. What
+> they do not get is the WebKit fallback this section's 2026-08-23 amendment exists to provide, so
+> an IPv6-loopback reader **on Safari** sees the pre-amendment behaviour: inside an FR-005b
+> attribute-sandboxed frame the preview's external script and stylesheet are refused. Reaching the
+> gateway by any spelling CSP can express — `localhost`, `127.0.0.1`, a DNS name — avoids it.
+>
+> **The WARN gains one cause.** A **non-loopback** IPv6 canonical origin now yields no source at
+> all and takes the Empty row, WARN included, where it previously emitted one source the browser
+> discarded — the same rendering degradation with nothing in the log to notice it by. An IPv6
+> *loopback* origin does **not** warn: its two expressible aliases still stand.
+>
+> **The policy template itself did not change.** `${GATEWAY_ORIGIN}` is a substitution rule, not a
+> literal; the fenced string above is byte-for-byte what it was. MV-13's oracle is unaffected in
+> shape and continues to read this section.
 
 **`connect-src` stays `'none'` and MUST NOT gain the origin.** FR-006 forbids `fetch`, XHR,
 `sendBeacon` and WebSocket to **any** origin, the gateway's included, and that is measured rather
