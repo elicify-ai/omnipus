@@ -397,12 +397,11 @@ func (al *AgentLoop) afterGoalRecordWrite(sessionID, recordJSON, diffSummary str
 }
 
 // EmitGoalStatusRehydrate re-emits ONE goal_status event for sessionID
-// carrying its CURRENT persisted definition/criteria/dod — reusing the SAME
-// emission call afterGoalRecordWrite (above) uses — when (and only when)
-// the session carries an active, non-terminal goal with a registered
-// record. No-op (returns false, no event emitted) when there is no active
-// goal, no record yet (D1's legal transient empty-record state), the
-// record fails to parse, or the session/store cannot be resolved.
+// carrying its CURRENT persisted state — reusing the SAME emission call
+// afterGoalRecordWrite (above) uses — whenever the session carries an
+// active, non-terminal goal, WITH or WITHOUT a registered record. No-op
+// (returns false, no event emitted) when there is no active goal at all, or
+// the store/session cannot be resolved.
 //
 // Item 14 (review-round-1, ADR-081): a WS reattach (SPA reload/reconnect)
 // has no rehydration path for a goal's already-registered record —
@@ -413,7 +412,22 @@ func (al *AgentLoop) afterGoalRecordWrite(sessionID, recordJSON, diffSummary str
 // after replay + hydration complete, so the reattaching connection (already
 // registered for live-event forwarding earlier in that same function) sees
 // exactly the event it would have seen had it never disconnected. Cheap:
-// one GetMeta read, only on attach, only when a record genuinely exists.
+// one GetMeta read, only on attach.
+//
+// SPA goal-ack-line fix (2026-09-08, frontend wave GX-C): originally this
+// returned false outright for the D1 legal-transient empty-record window
+// (activation has happened but the working agent has not called `set_goal`
+// yet) — the exact window the operator's reported "17 minutes of a silent
+// spinner" bug lives in. A reload during that window used to get NO
+// goal_status frame at all on reattach, so the SPA's goal-acknowledgement
+// line (chat.ts's `case 'goal_status'` — inserted the first time an
+// `active` frame is observed for a goal_id) never reconstructed. Emitting
+// the SAME criteria-less frame `activateInstantGoal` (goal_loop.go) emits
+// at the moment of activation — never inventing state, just re-publishing
+// what is already durably persisted in meta.GoalCondition/GoalID — closes
+// that gap: every reattach while the goal is active, empty record or not,
+// now reproduces exactly the live event stream a connection that never
+// dropped would have seen.
 func (al *AgentLoop) EmitGoalStatusRehydrate(sessionID string) bool {
 	store := al.ResolveSessionStore(sessionID)
 	if store == nil {
@@ -423,12 +437,23 @@ func (al *AgentLoop) EmitGoalStatusRehydrate(sessionID string) bool {
 	if err != nil || meta == nil {
 		return false
 	}
-	if meta.GoalCondition == "" || meta.GoalCriteriaJSON == "" {
-		// No active goal, or the D1 legal-transient empty-record state
-		// (nothing registered yet to rehydrate) — a genuinely terminal goal
-		// also reads GoalCondition == "" (clearGoal empties it), so this
-		// same check excludes terminal goals for free.
+	if meta.GoalCondition == "" {
+		// No active goal — a genuinely terminal/cleared goal also reads
+		// GoalCondition == "" (clearGoal empties it), so this excludes
+		// terminal goals for free.
 		return false
+	}
+	if meta.GoalCriteriaJSON == "" {
+		// D1 legal-transient empty-record state: activated, but the working
+		// agent has not written a record yet. Re-emit the SAME criteria-less
+		// frame activateInstantGoal itself emits at activation — this is
+		// what lets the SPA's goal-ack line (and the goal-aware thinking
+		// indicator) survive a reload that lands inside this window.
+		al.emitGoalStatusFrame(
+			sessionID, meta.GoalID, meta.GoalCondition, meta.GoalRoundsUsed, meta.GoalMaxRounds,
+			meta.GoalLatestReason, goalPillActive,
+		)
+		return true
 	}
 	g := loadCompiledGoal(meta.GoalCriteriaJSON)
 	if g == nil {

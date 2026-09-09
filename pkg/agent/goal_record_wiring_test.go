@@ -407,18 +407,52 @@ func TestEmitGoalStatusRehydrate_RegisteredGoal_DeliversRecordCarryingFrame(t *t
 	}
 }
 
-// TestEmitGoalStatusRehydrate_NoRecord_IsANoOp proves the D1 legal-transient
-// empty-record state (active goal, GoalCriteriaJSON still empty — the
-// working agent hasn't called set_goal yet) is correctly a no-op: nothing
-// to rehydrate, so nothing is emitted.
-func TestEmitGoalStatusRehydrate_NoRecord_IsANoOp(t *testing.T) {
+// TestEmitGoalStatusRehydrate_NoRecord_StillReemitsActivationFrame proves
+// the D1 legal-transient empty-record state (active goal, GoalCriteriaJSON
+// still empty — the working agent hasn't called set_goal yet) is NOT a
+// no-op (2026-09-08 fix, frontend wave GX-C): a reload landing inside this
+// window still gets a criteria-less `active` goal_status frame — the SAME
+// shape activateInstantGoal itself emits at activation — so the SPA's
+// goal-acknowledgement line (chat.ts's case 'goal_status') and goal-aware
+// thinking indicator survive a reload that happens before any record has
+// been written. Before this fix EmitGoalStatusRehydrate returned false here
+// and nothing at all reached a reattaching connection during exactly the
+// window the operator's "17 minutes of a silent spinner" bug report
+// covers.
+func TestEmitGoalStatusRehydrate_NoRecord_StillReemitsActivationFrame(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
 	setActiveGoalRecordless(t, store, sid, "goal-rehydrate-2", "build a game") // GoalCriteriaJSON left empty
 
-	if ok := al.EmitGoalStatusRehydrate(sid); ok {
-		t.Fatal("EmitGoalStatusRehydrate must be a no-op (false) when no record has been registered yet")
+	collector, cleanup := newEventCollector(t, al)
+	defer cleanup()
+
+	if ok := al.EmitGoalStatusRehydrate(sid); !ok {
+		t.Fatal("EmitGoalStatusRehydrate must report true for an active goal even with no record registered yet")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var payloads []GoalStatusChangedPayload
+	for time.Now().Before(deadline) {
+		payloads = goalStatusPayloadsFor(collector, sid)
+		if len(payloads) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(payloads) != 1 {
+		t.Fatalf("EmitGoalStatusRehydrate must emit exactly ONE goal_status frame, got %d", len(payloads))
+	}
+	got := payloads[0]
+	if got.State != goalPillActive {
+		t.Fatalf("rehydrate frame state = %q, want %q", got.State, goalPillActive)
+	}
+	if got.GoalID != "goal-rehydrate-2" {
+		t.Fatalf("rehydrate frame goal_id = %q, want %q", got.GoalID, "goal-rehydrate-2")
+	}
+	if len(got.Criteria) != 0 || len(got.DoD) != 0 {
+		t.Fatalf("rehydrate frame for an unregistered record must carry NO criteria/dod, got criteria=%d dod=%d", len(got.Criteria), len(got.DoD))
 	}
 }
 

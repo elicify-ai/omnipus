@@ -269,6 +269,23 @@ export interface SetGoalCallInput {
   verboseChatEnabled: boolean
 }
 
+/**
+ * True when `result` (in any of the three shapes `unwrapSetGoalResultEnvelope`
+ * normalizes) carries a truthy `unchanged` field — a `set_goal` call that
+ * submitted an IDENTICAL duplicate of the already-registered record (a
+ * separate wave adds this field to `tools.SetGoalResultPayload`; handled
+ * defensively here regardless of exact landing order — CO-ORDINATION note
+ * in this wave's brief). The operator's reported repro showed THREE
+ * identical goal cards stacked in the thread from three such duplicate
+ * calls; this is the field a caller checks to suppress the extra ones.
+ * `unchanged` absent (older backend, or a genuinely new/changed record) is
+ * simply `false` here — exactly today's behavior, no opt-in required.
+ */
+export function isUnchangedSetGoalResult(result: unknown): boolean {
+  const o = unwrapSetGoalResultEnvelope(result)
+  return isRecord(o) && o.unchanged === true
+}
+
 export function classifySetGoalCall(input: SetGoalCallInput): SetGoalPresentation {
   const params = isRecord(input.args) ? input.args : undefined
   if (shouldRenderToolCall('set_goal', params, input.verboseChatEnabled, input.isError)) {
@@ -277,6 +294,10 @@ export function classifySetGoalCall(input: SetGoalCallInput): SetGoalPresentatio
   if (input.isRunning) return 'hidden'
   if (input.isError) return 'failed'
   if (input.result === null || input.result === undefined) return 'hidden'
+  // 2026-09-08 co-ordination fix: a duplicate call that changed nothing
+  // renders NO card at all — not even the minimal 'chip' — same as a
+  // still-running call. See isUnchangedSetGoalResult's doc comment.
+  if (isUnchangedSetGoalResult(input.result)) return 'hidden'
   return parseSetGoalResult(input.result) ? 'card' : 'chip'
 }
 
