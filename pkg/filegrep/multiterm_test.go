@@ -148,3 +148,90 @@ func TestFileGrep_MatchAllWords_ContextAroundRepresentativeLine(t *testing.T) {
 		t.Errorf("ContextAfter = %v, want [\"middle line\"]", h.ContextAfter)
 	}
 }
+
+// TestFileGrep_MatchAllWords_NameMatchesBinaryFileByIndependentWords pins
+// review finding I2: nameMatch must honour MatchAllWords by testing each
+// query word INDEPENDENTLY against the name, never the whole, unsplit query
+// as one literal. Binary content (FR-005) is name-matchable ONLY, which
+// makes this the SPA Library search bar's exact failure mode — it always
+// sends match_all_words:true — a two-word query like "quarterly report"
+// against "quarterly-report-2026.pdf" previously matched nothing at all,
+// because lineMatch looked for the literal substring "quarterly report"
+// (with a space) and the file's own separator is a hyphen.
+func TestFileGrep_MatchAllWords_NameMatchesBinaryFileByIndependentWords(t *testing.T) {
+	fsys := buildFS(map[string]string{
+		"quarterly-report-2026.pdf": "binary\x00content, never scanned",
+		"unrelated-invoice.pdf":     "binary\x00content, never scanned",
+	})
+	res := mustSearch(t, oneRoot(fsys), Options{Query: "quarterly report", MatchAllWords: true})
+
+	if len(res.Hits) != 1 {
+		t.Fatalf("expected exactly one name hit, got %d: %+v", len(res.Hits), res.Hits)
+	}
+	h := res.Hits[0]
+	if h.Path != "quarterly-report-2026.pdf" {
+		t.Fatalf("hit path = %q, want quarterly-report-2026.pdf", h.Path)
+	}
+	if h.Kind != KindName {
+		t.Fatalf("hit kind = %q, want name — binary content is never scanned (FR-005), so this "+
+			"can ONLY be a name match", h.Kind)
+	}
+	if res.Stats.FilesSkippedBinary != 2 {
+		t.Fatalf("Stats.FilesSkippedBinary = %d, want 2 (both files are binary; content never scanned)",
+			res.Stats.FilesSkippedBinary)
+	}
+}
+
+// TestFileGrep_MatchAllWords_NameMatchRequiresEveryWordToo is the negative
+// half of I2's fix: a name containing only ONE of the two words must still
+// not match, exactly like the collapsed CONTENT case already requires
+// (TestFileGrep_MatchAllWords_RequiresEveryWord).
+func TestFileGrep_MatchAllWords_NameMatchRequiresEveryWordToo(t *testing.T) {
+	fsys := buildFS(map[string]string{
+		"report-only.pdf":            "binary\x00data",
+		"investment-only.pdf":        "binary\x00data",
+		"both-investment-report.pdf": "binary\x00data",
+	})
+	res := mustSearch(t, oneRoot(fsys), Options{Query: "investment report", MatchAllWords: true})
+	if len(res.Hits) != 1 {
+		t.Fatalf("expected exactly one hit (both-investment-report.pdf), got %d: %+v", len(res.Hits), res.Hits)
+	}
+	if res.Hits[0].Path != "both-investment-report.pdf" {
+		t.Fatalf("hit = %q, want both-investment-report.pdf — a name matching only ONE query "+
+			"word must not be a hit", res.Hits[0].Path)
+	}
+}
+
+// TestFileGrep_MatchAllWords_MatchCountIsNeverSilentlyCapped pins review
+// finding L13: MatchCount must report the TRUE number of matching lines,
+// never a number silently frozen at Limits.MatchesPerFile. Before this fix,
+// the collapsed-mode line counter stopped incrementing at MatchesPerFile and
+// flush() assigned that frozen value as the reported MatchCount —
+// Stats.HitsCappedPerFile recorded THAT capping happened, but the number
+// itself was still wrong (a file with 200 matching lines reported
+// match_count: 50 with no field-level trace of the discrepancy).
+func TestFileGrep_MatchAllWords_MatchCountIsNeverSilentlyCapped(t *testing.T) {
+	const trueMatchingLines = 12
+	var body string
+	for i := 0; i < trueMatchingLines; i++ {
+		body += "The investment report is discussed again in this paragraph.\n"
+	}
+	fsys := buildFS(map[string]string{"repeated.md": body})
+
+	res := mustSearch(t, oneRoot(fsys), Options{
+		Query: "investment report", MatchAllWords: true,
+		Limits: Limits{MatchesPerFile: 3}, // deliberately far below the true count
+	})
+	if len(res.Hits) != 1 {
+		t.Fatalf("expected ONE collapsed hit, got %d: %+v", len(res.Hits), res.Hits)
+	}
+	if got := res.Hits[0].MatchCount; got != trueMatchingLines {
+		t.Errorf("MatchCount = %d, want %d — the TRUE count, not frozen at MatchesPerFile=3",
+			got, trueMatchingLines)
+	}
+	if res.Stats.HitsCappedPerFile != 0 {
+		t.Errorf("Stats.HitsCappedPerFile = %d, want 0 — MatchesPerFile bounds per-line HIT "+
+			"proliferation in the non-collapsed mode; the collapsed mode's line-count "+
+			"reporting is never capped and must not touch this stat", res.Stats.HitsCappedPerFile)
+	}
+}

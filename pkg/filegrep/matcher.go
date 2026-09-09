@@ -206,7 +206,38 @@ func (m *matcher) lineMatch(line []byte) (int, bool) {
 	return i, true
 }
 
+// nameMatch reports whether name matches the query, honoring
+// Options.MatchAllWords the same way content scanning does (review finding
+// I2). When MatchAllWords split the query into two or more words (m.words
+// populated — see compile's own doc comment), a name matches only when
+// EVERY word is present somewhere in it, each checked INDEPENDENTLY via the
+// word's own matcher — never by testing the whole, unsplit query as one
+// literal.
+//
+// Before this fix, nameMatch always delegated to lineMatch with the
+// original, unsplit query — so a query like "quarterly report" (two words,
+// MatchAllWords true, exactly what the SPA's Library file search bar always
+// sends) looked for the literal substring "quarterly report", space
+// included. A file named "quarterly-report-2026.pdf" contains both words
+// but joins them with a hyphen, not a space, so the whole-literal test
+// failed and the file produced NO hit at all. Per-word independent
+// substring matching sidesteps any separator entirely — each word
+// ("quarterly", "report") is checked on its own, so it matches regardless
+// of whether the name joins its words with a hyphen, underscore, dot, or
+// nothing. This is the ONLY name-matchable path for a binary file (FR-005:
+// binary content is never scanned), so before this fix a second query word
+// made every binary file (image, pdf, docx, xlsx, …) match strictly WORSE
+// than a one-word query — never better.
 func (m *matcher) nameMatch(name string) bool {
+	if len(m.words) >= 2 {
+		nameBytes := []byte(name)
+		for _, w := range m.words {
+			if _, ok := w.lineMatch(nameBytes); !ok {
+				return false
+			}
+		}
+		return true
+	}
 	_, ok := m.lineMatch([]byte(name))
 	return ok
 }

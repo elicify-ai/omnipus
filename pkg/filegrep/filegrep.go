@@ -146,6 +146,20 @@ const (
 	// PerFileContentCap is the per-file scan cap (4 MiB). Exceeding it is a
 	// per-file remainder skip counted in Stats, NOT a request truncation.
 	PerFileContentCap int64 = 4 << 20
+	// maxLineBytes bounds how much of a single line readBoundedLine will
+	// ever retain in memory (review finding C1). Deliberately set equal to
+	// PerFileContentCap rather than some independent number: a line longer
+	// than the entire per-file content cap is already, by definition, a
+	// file this package would skip the remainder of once PerFileContentCap
+	// is reached — so this bound can never reject a line the existing
+	// per-file cap would otherwise have accepted, it only makes the
+	// rejection happen BEFORE the whole line is allocated instead of after.
+	// Typed as int, not int64: it bounds an in-memory []byte length
+	// (len() is int), unlike PerFileContentCap which bounds a running
+	// int64 byte-count total — the explicit conversion documents that this
+	// is a deliberate, safe narrowing (4<<20 fits int on every platform Go
+	// runs, including 32-bit), not an accidental truncation.
+	maxLineBytes = int(PerFileContentCap)
 	// ExcerptCapBytes bounds one excerpt window (MV-6).
 	ExcerptCapBytes = 512
 	// binarySniffBytes is how much of a file decides binary-vs-text (NUL rule).
@@ -313,6 +327,27 @@ type Stats struct {
 	// unlike a missing one this is NOT the routine case and is worth
 	// surfacing.
 	IgnoreFilesUnreadable int
+	// FilesSkippedLongLine counts a file whose content scan was abandoned
+	// because a single LINE (no '\n' seen, or one absurdly far away) grew
+	// past maxLineBytes before ever terminating (review finding C1).
+	// bufio.Reader.ReadBytes('\n') — the code this replaced — accumulates
+	// without any limit until it sees the delimiter or EOF, so a file with
+	// no newline anywhere (a single-line JSON export, a minified bundle, a
+	// base64 blob, a CR-only-line-ending CSV) was read ENTIRELY into memory
+	// before either the global Bytes budget or PerFileContentCap ever got a
+	// chance to reject it — both bounds were evaluated strictly AFTER the
+	// whole oversized line already existed as one contiguous allocation.
+	// readBoundedLine (scanFile's replacement reader) instead caps how much
+	// of any single line it will ever retain at maxLineBytes, so this
+	// counter's mere existence is proof memory stayed bounded rather than
+	// scaling with the file's true (possibly attacker- or
+	// synced-host-folder-controlled) size. Like FilesSkippedFileCap, this
+	// is a per-file remainder skip — any hits already found earlier in the
+	// same file are kept (see scanFile's flush() call at the tooLong
+	// branch) — never a request-level truncation, and never silent: an
+	// invisible skip is this package's own definition of a defect (see
+	// FilesSkippedBinary's and IgnoreFilesUnreadable's comments above).
+	FilesSkippedLongLine int
 }
 
 // Result is one search answer.
@@ -593,6 +628,15 @@ func (s *state) countHitsCappedPerFile() {
 func (s *state) countSkippedBinary() {
 	s.mu.Lock()
 	s.res.Stats.FilesSkippedBinary++
+	s.mu.Unlock()
+}
+
+// countSkippedLongLine records finding C1: a file's content scan was
+// abandoned because a single line grew past maxLineBytes before ever
+// terminating.
+func (s *state) countSkippedLongLine() {
+	s.mu.Lock()
+	s.res.Stats.FilesSkippedLongLine++
 	s.mu.Unlock()
 }
 
@@ -1054,6 +1098,85 @@ func pathOrDot(p string) string {
 	return path.Clean(p)
 }
 
+// readBoundedLine reads one line from br, never retaining more than
+// maxLineBytes of it in memory regardless of how far away the next '\n' or
+// EOF actually is (review finding C1). This replaces the previous
+// br.ReadBytes('\n'), whose accumulate-until-delimiter-or-EOF contract has
+// NO line-length bound at all: a 600 MiB file with no newline anywhere was
+// read as one 600 MiB allocation before either the global Bytes budget or
+// PerFileContentCap ever got a chance to reject it. readBoundedLine instead
+// reads in the underlying bufio.Reader's own fixed-size internal-buffer
+// chunks (ReadSlice never returns more than that buffer's capacity per
+// call — scanFile constructs br with a 64 KiB buffer) and stops COPYING
+// once the accumulated total would exceed maxLineBytes; bytes beyond that
+// point are still drained from the reader (so the next call starts cleanly
+// on the following line) but never appended to the returned slice, so
+// memory use is bounded by maxLineBytes plus one buffer's worth of
+// in-flight chunk, never by the true line length.
+//
+// Return values:
+//   - line is the (possibly incomplete, when tooLong) line content actually
+//     retained, with its terminating '\n' included exactly as ReadBytes
+//     would have returned it — trimmed by the caller exactly as before.
+//   - consumed is the TOTAL number of bytes read off br for this line,
+//     including any bytes dropped because tooLong — the caller charges this
+//     to Stats.BytesScanned so the byte-budget accounting stays honest
+//     about actual I/O even when most of an oversized line's bytes were
+//     never retained.
+//   - tooLong is true when the true line exceeded maxLineBytes. The caller
+//     (scanFile) is expected to treat this as "this file's content scan
+//     could not safely continue" — it does NOT attempt to match against
+//     the truncated prefix in `line`, because a match verdict computed
+//     against less than the true line would be exactly the "silent
+//     truncation into a wrong answer" this fix exists to avoid (a match
+//     positioned past the retained prefix would be silently missed, and a
+//     caller has no way to tell "no match" from "match past the cut").
+//     Stats.FilesSkippedLongLine records that this happened; see its doc
+//     comment for why it is a per-file remainder skip, not a request
+//     truncation.
+//   - err mirrors bufio.Reader.ReadBytes: nil when the delimiter was found,
+//     io.EOF when the file ended without one, or a genuine I/O error.
+func readBoundedLine(br *bufio.Reader, maxLineBytes int) (line []byte, consumed int64, tooLong bool, err error) {
+	for {
+		chunk, e := br.ReadSlice('\n')
+		consumed += int64(len(chunk))
+		// room can never go negative: len(line) is only ever grown by
+		// exactly `take` below, which is itself clamped to room — so
+		// len(line) <= maxLineBytes is a loop invariant, not merely the
+		// common case.
+		room := maxLineBytes - len(line)
+		take := len(chunk)
+		if take > room {
+			take = room
+			tooLong = true
+		}
+		if take > 0 {
+			// ReadSlice's return value aliases the reader's internal
+			// buffer and is invalidated by the next Read/ReadSlice call,
+			// so it must be copied — append onto a nil/growing line does
+			// exactly that.
+			line = append(line, chunk[:take]...)
+		}
+		switch e {
+		case nil:
+			// Delimiter found within this chunk: done, whether or not the
+			// line turned out to be oversized.
+			return line, consumed, tooLong, nil
+		case bufio.ErrBufferFull:
+			// No delimiter yet anywhere in the reader's internal buffer:
+			// more of this same line remains — keep reading chunks. This
+			// is the case that matters for C1: a line with no '\n' at all
+			// drives this branch repeatedly, and each iteration only ever
+			// grows `line` up to maxLineBytes total, never further.
+			continue
+		default:
+			// io.EOF (file ends mid-line, no trailing '\n') or a genuine
+			// read error: whatever was accumulated is final.
+			return line, consumed, tooLong, e
+		}
+	}
+}
+
 // scanFile scans one file's content on behalf of the worker pool. It
 // buffers this file's own hits locally (fileHits) — including resolving
 // ContextBefore/ContextAfter, which never cross a file boundary — and only
@@ -1105,15 +1228,22 @@ func (s *state) scanFile(ctx, scanCtx context.Context, job scanJob) error {
 	// gated on every word having matched SOMEWHERE in the file by EOF.
 	collapsed := len(s.m.words) >= 2
 	var (
-		fileBytes   int64
-		lineNo      int
-		before      []string // ring of up to contextN previous lines, each pre-capped
-		fileHits    []Hit
-		pending     []int // indices into fileHits awaiting up to contextN after-lines
-		perFile     int   // this file's own match count (MatchesPerFile cap) — legacy mode only
-		wordFound   []bool
-		matchLines  int // collapsed mode: how many lines matched at least one word
-		linesCapped bool
+		fileBytes int64
+		lineNo    int
+		before    []string // ring of up to contextN previous lines, each pre-capped
+		fileHits  []Hit
+		pending   []int // indices into fileHits awaiting up to contextN after-lines
+		perFile   int   // this file's own match count (MatchesPerFile cap) — legacy mode only
+		wordFound []bool
+		// matchLines is collapsed mode's TRUE, uncapped count of how many
+		// lines matched at least one word (finding L13) — it feeds
+		// Hit.MatchCount directly and must never stop short of the real
+		// total. Unlike perFile (below), incrementing it is not gated by
+		// MatchesPerFile: the collapsed branch never allocates a Hit per
+		// matching line and never stops scanning early, so there is no
+		// work or output-budget reason to cap the count itself, only a
+		// reporting-accuracy reason NOT to.
+		matchLines int
 	)
 	if collapsed {
 		wordFound = make([]bool, len(s.m.words))
@@ -1168,21 +1298,36 @@ func (s *state) scanFile(ctx, scanCtx context.Context, job scanJob) error {
 			}
 			return err
 		}
-		line, rerr := br.ReadBytes('\n')
-		if len(line) > 0 {
-			trimmed := bytes.TrimRight(line, "\r\n")
+		line, consumed, tooLong, rerr := readBoundedLine(br, maxLineBytes)
+		if consumed > 0 {
 			lineNo++
-			fileBytes += int64(len(line))
-			if s.addBytesScanned(int64(len(line))) {
+			fileBytes += consumed
+			if s.addBytesScanned(consumed) {
 				if ferr := flush(); ferr != nil {
 					return ferr
 				}
 				return budgetError{ReasonMaxBytes}
 			}
+			if tooLong {
+				// Finding C1: this line alone grew past maxLineBytes before
+				// terminating (no '\n' within the bound, and none of the
+				// budgets above fired first). Matching against the
+				// retained-but-truncated prefix in `line` would risk
+				// exactly the "silent truncation into a wrong answer" this
+				// fix exists to prevent — see readBoundedLine's own doc
+				// comment — so this file's remainder is abandoned here
+				// instead, honestly counted via FilesSkippedLongLine. Any
+				// hits already found on EARLIER lines in this file are
+				// still kept, via flush(), exactly like the PerFileContentCap
+				// remainder-skip immediately below.
+				s.countSkippedLongLine()
+				return flush()
+			}
 			if fileBytes > PerFileContentCap {
 				s.countFileCapSkip()
 				return flush() // per-file remainder skip, counted — not a truncation
 			}
+			trimmed := bytes.TrimRight(line, "\r\n")
 			if s.m.contextN > 0 {
 				appendAfter(trimmed)
 			}
@@ -1194,15 +1339,22 @@ func (s *state) scanFile(ctx, scanCtx context.Context, job scanJob) error {
 				// Hit (excerpt + context); every line after that only
 				// updates wordFound/matchLines, exactly like the reference
 				// engine folds repeated matches into one row (KB-6a).
+				//
+				// Finding L13: matchLines increments UNCONDITIONALLY, with
+				// no MatchesPerFile cap — see its own var-block comment for
+				// why capping it was wrong (it fed Hit.MatchCount directly,
+				// so capping the counter silently capped the REPORTED
+				// number: a file with 200 matching lines reported
+				// match_count: 50, with HitsCappedPerFile as the only
+				// trace that the number was short of the truth, and the
+				// wrong number itself uncorrected). This branch never
+				// allocates more than the one representative Hit and never
+				// stops scanning, so there is no bound to enforce here —
+				// MatchesPerFile's actual job (bounding per-line Hit
+				// proliferation) is still enforced below, in the
+				// non-collapsed branch, exactly as before.
 				if pos, ok := s.m.wordMatch(trimmed, wordFound); ok {
-					if !linesCapped {
-						if matchLines >= s.lim.MatchesPerFile {
-							linesCapped = true
-							s.countHitsCappedPerFile()
-						} else {
-							matchLines++
-						}
-					}
+					matchLines++
 					if len(fileHits) == 0 {
 						h := Hit{
 							Path:    job.reported,
