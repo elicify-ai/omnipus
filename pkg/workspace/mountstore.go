@@ -151,36 +151,48 @@ func (m Mount) Validate() error {
 //     seen: that ENTRY is dropped with a WARN, the rest are kept. Dropping one
 //     bad entry fails closed for that entry without silently disarming mounts
 //     an operator legitimately created.
-func loadMountStore(home, id string) ([]Mount, bool) {
+//
+// The third return, droppedInvalid, reports whether ok=true still hid
+// something: at least one recorded entry failed Mount.Validate or repeated an
+// earlier name and was dropped. Before this existed, ok=true was the ONLY
+// signal a caller had, and it was true both for "this workspace recorded no
+// such mounts" and for "this workspace recorded mounts that were silently
+// discarded" — indistinguishable from the outside (I4, 2026-09 code review:
+// rest_library_files_search.go's files/search endpoint answered a complete,
+// non-truncated 200 while two thirds of a workspace's recorded mounts had
+// been dropped here and never opened). droppedInvalid is always false
+// alongside ok=false — an unreadable/malformed record cannot know whether IT
+// would have dropped anything.
+func loadMountStore(home, id string) (mounts []Mount, ok bool, droppedInvalid bool) {
 	path, err := MountStorePath(home, id)
 	if err != nil {
 		logger.WarnCF("workspace", "mount store: refusing to read a record for an unsafe workspace id", map[string]any{
 			"workspace_id": id, "error": err.Error(),
 		})
-		return nil, false
+		return nil, false, false
 	}
 	data, err := os.ReadFile(path) // gosec rationale (out of gosec scope; kept as documentation): path is built from a safeID-checked id under the store dir
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, true
+			return nil, true, false
 		}
 		logger.WarnCF("workspace", "mount store: unreadable record — treating this workspace as having no mounts", map[string]any{
 			"workspace_id": id, "path": path, "error": err.Error(),
 		})
-		return nil, false
+		return nil, false, false
 	}
 	var rec mountStoreRecord
 	if err := json.Unmarshal(data, &rec); err != nil {
 		logger.WarnCF("workspace", "mount store: malformed record — treating this workspace as having no mounts", map[string]any{
 			"workspace_id": id, "path": path, "error": err.Error(),
 		})
-		return nil, false
+		return nil, false, false
 	}
 	if rec.WorkspaceID != "" && rec.WorkspaceID != id {
 		logger.WarnCF("workspace", "mount store: record's workspace_id disagrees with its filename — refusing to grant from it", map[string]any{
 			"workspace_id": id, "path": path, "recorded_workspace_id": rec.WorkspaceID,
 		})
-		return nil, false
+		return nil, false, false
 	}
 
 	out := make([]Mount, 0, len(rec.Mounts))
@@ -190,21 +202,23 @@ func loadMountStore(home, id string) ([]Mount, bool) {
 			logger.WarnCF("workspace", "mount store: dropping an invalid mount entry", map[string]any{
 				"workspace_id": id, "path": path, "name": m.Name, "host_path": m.HostPath, "error": err.Error(),
 			})
+			droppedInvalid = true
 			continue
 		}
 		if _, dup := seen[m.Name]; dup {
 			logger.WarnCF("workspace", "mount store: dropping a duplicate mount name", map[string]any{
 				"workspace_id": id, "path": path, "name": m.Name,
 			})
+			droppedInvalid = true
 			continue
 		}
 		seen[m.Name] = struct{}{}
 		out = append(out, m)
 	}
 	if len(out) == 0 {
-		return nil, true
+		return nil, true, droppedInvalid
 	}
-	return out, true
+	return out, true, droppedInvalid
 }
 
 // saveMountStore atomically persists mounts for workspace id, under the same

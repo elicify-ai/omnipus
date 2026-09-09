@@ -358,7 +358,26 @@ func MountStatus(m Mount) string {
 // unreadable file, malformed JSON, id mismatch); a workspace that simply has
 // no mounts returns (nil, true). Individual entries failing Mount.Validate are
 // dropped with a WARN rather than trusted — see loadMountStore.
+//
+// This two-value shape cannot tell "no mounts recorded" apart from "some
+// mounts were recorded but dropped" — both return ok=true. Most callers only
+// ever act on the surviving mounts, for which that distinction is
+// irrelevant. A caller whose own correctness answer depends on having opened
+// EVERY recorded mount (e.g. a "did this search cover the whole workspace?"
+// claim) needs LoadMountsWithDropStatus instead.
 func LoadMounts(home, id string) ([]Mount, bool) {
+	mounts, ok, _ := loadMountStore(home, id)
+	return mounts, ok
+}
+
+// LoadMountsWithDropStatus is LoadMounts plus the one bit LoadMounts cannot
+// express: droppedInvalid is true when ok=true but at least one recorded
+// mount entry was silently dropped by loadMountStore (it failed
+// Mount.Validate, or repeated an earlier entry's name). Added for I4
+// (2026-09 code review): a caller that reports "I searched everything" needs
+// to know when that is false even though ok itself is true. See
+// loadMountStore's own doc comment for the full failure-mode table.
+func LoadMountsWithDropStatus(home, id string) (mounts []Mount, ok bool, droppedInvalid bool) {
 	return loadMountStore(home, id)
 }
 
@@ -447,7 +466,7 @@ func CreateMount(home, id, name, rawHostPath string) (Mount, string, error) {
 		return Mount{}, "", fmt.Errorf("workspace: create mount: load workspace %s: %w", id, err)
 	}
 
-	existing, ok := loadMountStore(home, id)
+	existing, ok, _ := loadMountStore(home, id)
 	if !ok {
 		// The store exists but could not be parsed. Appending to it would
 		// silently discard whatever the operator had recorded, so refuse
@@ -526,7 +545,7 @@ func DeleteMount(home, id, name string) error {
 		return fmt.Errorf("workspace: delete mount: load workspace %s: %w", id, err)
 	}
 
-	mounts, ok := loadMountStore(home, id)
+	mounts, ok, _ := loadMountStore(home, id)
 	if !ok {
 		return fmt.Errorf("workspace: delete mount: mount store for %s is unreadable or malformed", id)
 	}

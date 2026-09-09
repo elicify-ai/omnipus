@@ -9,6 +9,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -190,23 +191,51 @@ func (a *restAPI) handleLibraryFilesSearch(w http.ResponseWriter, r *http.Reques
 	roots, closeRoots, rootLost, buildErr := buildFileSearchRoots(a.homePath, workspaceID, libRoot, rel)
 	defer closeRoots()
 	if buildErr != nil {
-		// StatDir just confirmed rel resolves inside the confined root; a
-		// failure constructing this handler's OWN fs.FS for it this soon
-		// after can only be a root going away in the gap between the two
-		// (a mount's target volume detaching, etc.) — FR-021: visible as
-		// root_lost, never a quiet empty result.
-		logger.WarnCF("rest", "files search: root unreachable building search roots",
-			map[string]any{"workspace_id": workspaceID, "path": rel, "error": buildErr.Error()})
+		// L8 (2026-09-09 code review): StatDir just confirmed rel resolves
+		// inside the confined root, but that does NOT mean every buildErr
+		// from here on is "a root going away in the gap between the two" —
+		// buildFileSearchRoots also returns errors from workspace.SafeWorkDir
+		// and fspolicy.EffectiveFSPolicy (building this request's own
+		// carve-out guard) and fs.Sub, none of which are a root disappearing.
+		// Conflating them meant a SECURITY-POLICY construction failure was
+		// logged as "root unreachable" — a wrong diagnosis for whoever reads
+		// the log. errFileSearchRootUnreachable marks the one class that
+		// really is a root going away (an os.OpenRoot failure); everything
+		// else is a construction/policy failure and is logged as such. The
+		// caller-visible answer is the same honest refusal either way (zero
+		// hits, truncated:true) — root_lost remains the closest documented
+		// wire reason for "this search did not run to completion and the
+		// gap is not a normal empty result" (FR-021); the contract has no
+		// separate enum value for a policy-construction failure, so this
+		// fix stays internal (log attribution + the error classification
+		// itself) rather than changing the wire response.
+		if errors.Is(buildErr, errFileSearchRootUnreachable) {
+			logger.WarnCF("rest", "files search: root unreachable building search roots",
+				map[string]any{"workspace_id": workspaceID, "path": rel, "error": buildErr.Error()})
+		} else {
+			logger.WarnCF("rest", "files search: failed to construct search roots (policy or setup failure, not a root loss)",
+				map[string]any{"workspace_id": workspaceID, "path": rel, "error": buildErr.Error()})
+		}
 		jsonOK(w, emptyFileSearchResponse(opts))
 		return
 	}
 
 	result, searchErr := filegrepSearchFn(r.Context(), roots, opts)
 	if searchErr != nil {
-		// filegrep.Search's error return is reserved for a bad pattern
-		// (regex compile) — every other outcome, including every budget
-		// stop and a lost root, is expressed in Result instead.
-		jsonErr(w, http.StatusBadRequest, "invalid regex pattern: "+searchErr.Error())
+		// filegrep.Search's error return is reserved for a bad pattern —
+		// either a regex compile failure OR a malformed include_globs/
+		// exclude_globs entry (pkg/filegrep/filegrep.go's validateGlobs) —
+		// every other outcome, including every budget stop and a lost root,
+		// is expressed in Result instead. L9 (2026-09-09 code review): both
+		// used to be reported here as "invalid regex pattern", which
+		// misdirects a caller who mistyped a GLOB to the wrong field
+		// entirely; the underlying message still rode along, so it misled
+		// rather than hid the cause, but a glob problem should say glob.
+		if isFileSearchGlobError(searchErr) {
+			jsonErr(w, http.StatusBadRequest, "invalid glob pattern: "+searchErr.Error())
+		} else {
+			jsonErr(w, http.StatusBadRequest, "invalid regex pattern: "+searchErr.Error())
+		}
 		return
 	}
 
@@ -227,6 +256,35 @@ func (a *restAPI) handleLibraryFilesSearch(w http.ResponseWriter, r *http.Reques
 		resp.TruncatedReason = &reason
 	}
 	jsonOK(w, resp)
+}
+
+// errFileSearchRootUnreachable marks a buildFileSearchRoots failure as a
+// genuine "the root went away between StatDir and here" case — an
+// os.OpenRoot call failing on the work tree or an explicitly-scoped mount's
+// target (a detached volume, a renamed folder). L8 (2026-09-09 code review):
+// buildFileSearchRoots also fails for reasons that are NOT a root going
+// away — workspace.SafeWorkDir on a malformed id, fspolicy.EffectiveFSPolicy
+// building this request's own security-carve-out guard, and fs.Sub scoping
+// into a subdirectory — and those must never be reported (even internally)
+// as "the folder became unreadable". See buildFileSearchRoots' call sites
+// for which failures are wrapped with this and which are not.
+var errFileSearchRootUnreachable = errors.New("files search: root became unreachable")
+
+// isFileSearchGlobError reports whether searchErr is filegrep's own
+// validateGlobs failure rather than a regex compile failure. L9 (2026-09-09
+// code review): filegrep.Search's single error return covers two distinct
+// causes — a malformed include_globs/exclude_globs entry
+// (pkg/filegrep/filegrep.go's validateGlobs, message shape "filegrep: %s
+// contains an invalid pattern %q") and a bad regexp.Compile pattern — and
+// this REST layer previously labeled both "invalid regex pattern". filegrep
+// exports no distinguishing sentinel/type for the two (it is owned and
+// frozen separately, ADR-081 phase 0), so this recognizes validateGlobs'
+// one stable, always-present prefix instead of guessing from the message's
+// tail, which is caller-supplied and therefore not safe to key off of.
+func isFileSearchGlobError(err error) bool {
+	msg := err.Error()
+	return strings.HasPrefix(msg, "filegrep: include_globs contains an invalid pattern") ||
+		strings.HasPrefix(msg, "filegrep: exclude_globs contains an invalid pattern")
 }
 
 // validateFileSearchGlobs enforces the contract's include_globs/
@@ -384,6 +442,15 @@ func fileSearchResponseFromResult(result filegrep.Result) gen.FileSearchResponse
 	resp.Stats.FilesSkippedBinary = &filesSkippedBinary
 	ignoreFilesUnreadable := result.Stats.IgnoreFilesUnreadable
 	resp.Stats.IgnoreFilesUnreadable = &ignoreFilesUnreadable
+	// Finding C1 (pkg/filegrep, 2026-09-09): a file whose content scan was
+	// abandoned because a single line grew past the engine's per-line cap
+	// (the fix for an OOM: a newline-free file used to be read entirely
+	// into memory) is a whole file silently not fully searched — the same
+	// "answered complete when it wasn't" shape I4 fixes for a dropped
+	// mount, just at file granularity instead of root granularity. Surfaced
+	// the same optional, backward-compatible way as its siblings above.
+	filesSkippedLongLine := result.Stats.FilesSkippedLongLine
+	resp.Stats.FilesSkippedLongLine = &filesSkippedLongLine
 
 	return resp
 }
@@ -518,13 +585,15 @@ func emptyFileSearchResponse(opts filegrep.Options) gen.FileSearchResponse {
 // own-tree exception keeps the workspace's own files searchable while every
 // OTHER workspace's work tree stays denied — the same posture a re-rooted
 // workspace turn gets from pkg/tools.
-// The bool return (rootLost) is F2/F3's honesty signal (2026-09-08 code
-// review): true when the FULL set of roots this workspace should have
+// The bool return (rootLost) is F2/F3/I4's honesty signal (2026-09-08/09
+// code review): true when the FULL set of roots this workspace should have
 // searched could not be built — the mount store was unreadable/malformed
-// (F2), or an individual mount's target could not be opened (F3) — even
-// though the function itself still succeeds with whatever roots it COULD
-// open, so a broken mount never takes a whole-workspace search offline
-// (see the doc above). Without this signal the caller's response reported
+// (F2), an individual mount's target could not be opened (F3), or the mount
+// store silently DROPPED a recorded entry that failed Mount.Validate() or
+// duplicated a name while still reporting ok=true (I4) — even though the
+// function itself still succeeds with whatever roots it COULD open, so a
+// broken mount never takes a whole-workspace search offline (see the doc
+// above). Without this signal the caller's response reported
 // truncated:false — indistinguishable from "nothing matched" — while up to
 // two thirds of the corpus was silently never opened. root_lost's own
 // documented meaning already covers exactly this ("the walk root or a
@@ -559,7 +628,7 @@ func buildFileSearchRoots(homePath, workspaceID string, libRoot *library.Root, r
 	if _, target, _, ok := libRoot.MountAt(rel); ok {
 		mr, mErr := os.OpenRoot(target)
 		if mErr != nil {
-			return nil, closeAll, false, fmt.Errorf("open mount root: %w", mErr)
+			return nil, closeAll, false, fmt.Errorf("open mount root: %w: %w", errFileSearchRootUnreachable, mErr)
 		}
 		opened = append(opened, mr)
 		// Guarded at the mount's own root, then narrowed: fs.Sub prefixes
@@ -593,7 +662,7 @@ func buildFileSearchRoots(homePath, workspaceID string, libRoot *library.Root, r
 
 	wr, err := os.OpenRoot(workDirPath)
 	if err != nil {
-		return nil, closeAll, false, fmt.Errorf("open work root: %w", err)
+		return nil, closeAll, false, fmt.Errorf("open work root: %w: %w", errFileSearchRootUnreachable, err)
 	}
 	opened = append(opened, wr)
 	wfs := tools.GuardCarveOuts(workDirPath, wr.FS(), policy)
@@ -615,7 +684,7 @@ func buildFileSearchRoots(homePath, workspaceID string, libRoot *library.Root, r
 
 	rootLost := false
 	if rel == "" {
-		mounts, ok := workspace.LoadMounts(homePath, workspaceID)
+		mounts, ok, droppedInvalid := workspace.LoadMountsWithDropStatus(homePath, workspaceID)
 		if !ok {
 			// F2: the mount store exists but could not be read/parsed, or its
 			// workspace_id disagreed with the filename — loadMountStore
@@ -625,8 +694,35 @@ func buildFileSearchRoots(homePath, workspaceID string, libRoot *library.Root, r
 			// scope a caller asked for.
 			rootLost = true
 		}
+		if droppedInvalid {
+			// I4 (2026-09-09 code review): loadMountStore silently drops any
+			// recorded entry that fails Mount.Validate() or duplicates an
+			// earlier name, yet still returns ok=true for the entries that
+			// survive (pkg/workspace/mountstore.go). Before this, ok=true
+			// gave this handler no way to tell "this workspace has no such
+			// mounts" apart from "this workspace's mounts.json named more
+			// mounts than were actually opened" — a search that never
+			// touched a dropped mount still answered truncated:false,
+			// byte-identical to a complete search of every recorded mount.
+			// LoadMountsWithDropStatus's third return closes exactly that
+			// gap; it already WARNs with the offending entry's own name/
+			// host_path, so only the honesty signal is added here.
+			logger.WarnCF("rest", "files search: mount store dropped at least one recorded mount, search is incomplete",
+				map[string]any{"workspace_id": workspaceID})
+			rootLost = true
+		}
 		for _, m := range mounts {
 			if m.Name == "" || m.HostPath == "" {
+				// Defence in depth: loadMountStore's own Mount.Validate()
+				// already guarantees LoadMounts(WithDropStatus) never
+				// returns an entry shaped like this, so this branch should
+				// be unreachable. If it ever fires anyway, the mount is
+				// still skipped rather than searched — I4's same reasoning
+				// applies: skipped is not searched, so the caller must
+				// still learn the scope was not fully covered.
+				logger.WarnCF("rest", "files search: mount has empty name or host_path, skipping",
+					map[string]any{"workspace_id": workspaceID, "mount": m.Name})
+				rootLost = true
 				continue
 			}
 			mr, mErr := os.OpenRoot(m.HostPath)

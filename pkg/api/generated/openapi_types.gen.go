@@ -11472,6 +11472,9 @@ type FileSearchResponse struct {
 		// FilesSkippedBinary Finding F-A: files whose content was never scanned because their first 8 KiB contained a NUL byte (FR-005 — binary files are name-matchable, never content-scanned). Such a file IS still counted in files_visited (it was reached and name-checked); this is what makes that count honest rather than silently implying every visited file's content was searched. Left optional for the same backward-compatibility reason as dirs_visited above.
 		FilesSkippedBinary *int `json:"files_skipped_binary,omitempty"`
 
+		// FilesSkippedLongLine Finding C1: files whose content scan was abandoned because a single line (no newline seen, or one absurdly far away) grew past the engine's per-line cap before ever terminating — a file with no newline anywhere (a single-line JSON export, a minified bundle, a base64 blob) used to be read entirely into memory before any budget could reject it. Such a file IS still counted in files_visited (it was reached and name-checked, and any hits found earlier in the same file before the cap was hit are kept); this is what makes that count honest rather than silently implying the whole file was scanned. Left optional for the same backward-compatibility reason as dirs_visited above.
+		FilesSkippedLongLine *int `json:"files_skipped_long_line,omitempty"`
+
 		// FilesSkippedPerFileCap Files whose content remainder was skipped at the per-file byte cap.
 		FilesSkippedPerFileCap int `json:"files_skipped_per_file_cap"`
 

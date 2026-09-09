@@ -13,6 +13,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -26,6 +27,7 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/filegrep"
+	"github.com/elicify-ai/omnipus/pkg/library"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -564,4 +566,125 @@ func TestLibraryFilesSearch_HealthyMultiMountSearchNeverReportsRootLost(t *testi
 	assert.False(t, resp.Truncated,
 		"a fully healthy work tree + mount search must not be flagged root_lost")
 	require.Len(t, resp.Hits, 2, "both the work tree and the mount must be searched")
+}
+
+// TestLibraryFilesSearch_DroppedInvalidMountEntryReportsRootLost is I4
+// (2026-09-09 code review): loadMountStore (pkg/workspace/mountstore.go)
+// silently DROPS any recorded mount entry that fails Mount.Validate() or
+// repeats an earlier name, yet still returns ok=true for the entries that
+// survive. Before this fix, workspace.LoadMounts gave buildFileSearchRoots
+// no way to tell "this workspace has no such mounts" apart from "this
+// workspace's mounts.json named more mounts than were actually opened" — a
+// mounts.json with one healthy mount and one corrupt entry searched only the
+// healthy mount and answered truncated:false, byte-identical to a complete
+// search of every recorded mount, even though the corrupt one was never
+// opened at all. This proves the dropped entry is now surfaced as root_lost
+// (the same signal F2/F3 already use for a store-level or open-level
+// failure), while the work tree and the surviving valid mount are still
+// both searched.
+func TestLibraryFilesSearch_DroppedInvalidMountEntryReportsRootLost(t *testing.T) {
+	api, ws := buildLibraryTestAPI(t)
+	require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(workDir(api, ws), "report.md"), []byte("x"), 0o600))
+
+	goodMountDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(goodMountDir, "report-2.md"), []byte("x"), 0o600))
+
+	storePath, err := workspace.MountStorePath(api.homePath, ws)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(storePath), 0o700))
+	raw := map[string]any{
+		"workspace_id": ws,
+		"mounts": []map[string]any{
+			{"name": "goodmount", "host_path": goodMountDir},
+			// Fails Mount.Validate: a name containing a path separator is not
+			// a single path segment (see ValidateMountName) — dropped by
+			// loadMountStore with a WARN, never trusted.
+			{"name": "bad/name", "host_path": "/tmp"},
+		},
+	}
+	data, err := json.MarshalIndent(raw, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(storePath, data, 0o600))
+
+	w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", `{"query":"report"}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	resp := decodeJSON[gen.FileSearchResponse](t, w)
+
+	require.True(t, resp.Truncated,
+		"a mount dropped from the store during validation must be surfaced as root_lost, never counted as a complete search")
+	require.NotNil(t, resp.TruncatedReason)
+	assert.Equal(t, gen.RootLost, *resp.TruncatedReason)
+
+	require.Len(t, resp.Hits, 2,
+		"the work tree and the surviving valid mount must still both be searched — a dropped entry must not take the whole search offline")
+}
+
+// TestBuildFileSearchRoots_DistinguishesRootLossFromPolicyFailure is L8
+// (2026-09-09 code review): buildFileSearchRoots' caller-facing comment
+// claimed a buildErr "can only be a root going away", but the function
+// actually returns errors from several sources — workspace.SafeWorkDir,
+// fspolicy.EffectiveFSPolicy (the carve-out guard itself), os.OpenRoot, and
+// fs.Sub — and only an os.OpenRoot failure is a genuine "the root
+// disappeared between StatDir and here" case. A security-policy or
+// workspace-id construction failure is a different kind of problem and must
+// not be classified (even internally) as a missing folder. This proves the
+// two classes are actually distinguishable via errFileSearchRootUnreachable,
+// using two REAL failures (a removed directory; an unsafe workspace id) —
+// not a stubbed error.
+func TestBuildFileSearchRoots_DistinguishesRootLossFromPolicyFailure(t *testing.T) {
+	t.Run("a work root that vanished after StatDir is a genuine root-loss error", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+		libRoot, err := library.OpenRoot(api.homePath, ws)
+		require.NoError(t, err)
+		defer func() { _ = libRoot.Close() }()
+
+		require.NoError(t, os.RemoveAll(workDir(api, ws)),
+			"simulate the work tree disappearing between StatDir and buildFileSearchRoots opening its own independent os.Root")
+
+		_, closeRoots, rootLost, buildErr := buildFileSearchRoots(api.homePath, ws, libRoot, "")
+		defer closeRoots()
+
+		require.Error(t, buildErr)
+		assert.False(t, rootLost,
+			"buildErr and rootLost are reported through different channels — rootLost is F2/F3/I4's own per-mount signal")
+		assert.True(t, errors.Is(buildErr, errFileSearchRootUnreachable),
+			"an os.OpenRoot failure on the work root must classify as root-unreachable: %v", buildErr)
+	})
+
+	t.Run("an invalid workspace id fails workspace-dir construction, not root loss", func(t *testing.T) {
+		home := t.TempDir()
+
+		_, closeRoots, rootLost, buildErr := buildFileSearchRoots(home, "../escape", nil, "")
+		defer closeRoots()
+
+		require.Error(t, buildErr)
+		assert.False(t, rootLost)
+		assert.False(t, errors.Is(buildErr, errFileSearchRootUnreachable),
+			"a workspace-id construction failure must NOT be classified as a root going away: %v", buildErr)
+	})
+}
+
+// TestLibraryFilesSearch_BadGlobSaysGlobNotRegex is L9 (2026-09-09 code
+// review, REST half only — pkg/filegrep itself already reports the right
+// underlying cause via validateGlobs): filegrep.Search's single error return
+// covers both a malformed regex query AND a malformed include_globs/
+// exclude_globs entry, and this handler previously labeled BOTH "invalid
+// regex pattern". The underlying filegrep message rode along (so it misled
+// rather than hid the real cause), but a caller who mistyped a glob was
+// pointed at the wrong field. "a[b" is doublestar's own canonical invalid-
+// pattern example (an unterminated character class).
+func TestLibraryFilesSearch_BadGlobSaysGlobNotRegex(t *testing.T) {
+	api, ws := buildLibraryTestAPI(t)
+	require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+
+	body, err := json.Marshal(map[string]any{"query": "x", "include_globs": []string{"a[b"}})
+	require.NoError(t, err)
+	w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", string(body))
+
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "invalid glob pattern",
+		"a bad include_globs entry must be reported as a glob problem: %s", w.Body.String())
+	assert.NotContains(t, w.Body.String(), "invalid regex pattern",
+		"a glob error must not be mislabeled as a regex error: %s", w.Body.String())
 }

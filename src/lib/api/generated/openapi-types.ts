@@ -7117,6 +7117,8 @@ export interface components {
                 files_skipped_binary?: number;
                 /** @description Finding F-E: a .gitignore/.ignore file the walk found but could NOT read (permission denied, an I/O error) — as opposed to one simply not existing, which is the routine, uncounted case. When nonzero, at least one directory's filtering did not apply the rules that file would have added (it degrades to "no additional rules from this file", same as a missing one). Left optional for the same backward-compatibility reason as dirs_visited above. */
                 ignore_files_unreadable?: number;
+                /** @description Finding C1: files whose content scan was abandoned because a single line (no newline seen, or one absurdly far away) grew past the engine's per-line cap before ever terminating — a file with no newline anywhere (a single-line JSON export, a minified bundle, a base64 blob) used to be read entirely into memory before any budget could reject it. Such a file IS still counted in files_visited (it was reached and name-checked, and any hits found earlier in the same file before the cap was hit are kept); this is what makes that count honest rather than silently implying the whole file was scanned. Left optional for the same backward-compatibility reason as dirs_visited above. */
+                files_skipped_long_line?: number;
             };
         };
         /**

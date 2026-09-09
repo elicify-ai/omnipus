@@ -881,6 +881,7 @@ type FileSearchResponse = {
     files_filtered_glob?: number | undefined;
     files_skipped_binary?: number | undefined;
     ignore_files_unreadable?: number | undefined;
+    files_skipped_long_line?: number | undefined;
   };
 };
 type FileSearchHit = {
@@ -4439,6 +4440,7 @@ export const FileSearchResponse: z.ZodType<FileSearchResponse> = z.object({
     files_filtered_glob: z.number().int().optional(),
     files_skipped_binary: z.number().int().optional(),
     ignore_files_unreadable: z.number().int().optional(),
+    files_skipped_long_line: z.number().int().optional(),
   }),
 });
 export const VaultSearchRequest = z.object({
