@@ -7,6 +7,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -490,6 +491,372 @@ func TestSetGoalTool_UpdateDiffs(t *testing.T) {
 		}
 		if !strings.Contains(updateRes.ForLLM, "injected-diff-summary") {
 			t.Fatalf("result should carry the injected DiffFn's output verbatim: %q", updateRes.ForLLM)
+		}
+	})
+}
+
+// TestSetGoalTool_RegisterExistingRecordNormalisesToUpdate is fix-wave GX-B
+// rule (a) (DEFECT 2, operator evidence 2026-09-08): set_goal let a goal be
+// registered many times — mode:register only ever guarded the OPPOSITE
+// direction (mode:update with no record). A mode:register call that arrives
+// after a record already exists for this goal is never a new goal — it is
+// steered into mode:update, reusing the update path (diff seam,
+// mergeCriterionKindFromOld) unchanged. The result must report the mode
+// that was ACTUALLY applied ("update"), so the SPA renders a revision card
+// instead of a second new-goal card.
+func TestSetGoalTool_RegisterExistingRecordNormalisesToUpdate(t *testing.T) {
+	const sessionID = "session_goal_reregister"
+	const agentID = "mia"
+
+	access := newFakeGoalRecordAccess()
+	access.condition[sessionID] = "an active goal"
+	tool := newSetGoalTool(access)
+
+	registerRes := tool.Execute(setGoalCtx(sessionID, agentID), map[string]any{
+		"definition": "Ship a tetris game.",
+		"criteria": []any{
+			map[string]any{"text": "tetris pieces rotate correctly", "judgment": "boolean"},
+		},
+	})
+	if registerRes.IsError {
+		t.Fatalf("initial register failed: %s", registerRes.ForLLM)
+	}
+
+	var gotOld, gotNew string
+	tool.SetDiffFn(func(oldRecordJSON, newRecordJSON string) string {
+		gotOld = oldRecordJSON
+		gotNew = newRecordJSON
+		return "injected-diff-summary"
+	})
+
+	// A SECOND mode:register call — explicitly "register", not "update" —
+	// on a goal that already has a record: the operator's own reproduction
+	// (two register calls for the same goal, one immediately after another).
+	secondRes := tool.Execute(setGoalCtx(sessionID, agentID), map[string]any{
+		"mode":       "register",
+		"definition": "Ship a tetris + snake game.",
+		"criteria": []any{
+			map[string]any{"text": "tetris pieces rotate correctly", "judgment": "boolean"},
+			map[string]any{"text": "snake grows on eating food", "judgment": "boolean"},
+		},
+	})
+	if secondRes.IsError {
+		t.Fatalf("register-with-existing-record must not be rejected: %s", secondRes.ForLLM)
+	}
+	var payload struct {
+		Mode string `json:"mode"`
+		Diff string `json:"diff"`
+	}
+	if err := json.Unmarshal([]byte(secondRes.ForLLM), &payload); err != nil {
+		t.Fatalf("result does not parse: %v (%q)", err, secondRes.ForLLM)
+	}
+	if payload.Mode != "update" {
+		t.Fatalf("the applied mode must be reported as update (a revision), got %q", payload.Mode)
+	}
+	if payload.Diff != "injected-diff-summary" {
+		t.Fatalf("the update diff seam must have run, got diff=%q", payload.Diff)
+	}
+	if gotOld == "" || gotNew == "" {
+		t.Fatal("the injected DiffFn must have been called with both sides")
+	}
+	if access.writes != 2 {
+		t.Fatalf("want 2 writes (the register, then the normalised update), got %d", access.writes)
+	}
+}
+
+// TestSetGoalTool_DuplicateSubmissionIsNoOp is fix-wave GX-B rule (b): an
+// update (real, or normalised from a re-register above) whose content is
+// semantically identical to the record already on disk is a no-op — no
+// write, no diff, and the result carries unchanged:true so the SPA can
+// suppress a second card. Operator evidence: two set_goal(mode:register)
+// calls in the SAME model response, byte-identical definition/criteria
+// text but DIFFERENT criterion ids (this tool's schema has no id input —
+// the model mints a fresh one every call), produced two goal cards for a
+// goal that had not actually changed.
+func TestSetGoalTool_DuplicateSubmissionIsNoOp(t *testing.T) {
+	const sessionID = "session_goal_dup"
+	const agentID = "mia"
+
+	criteriaArg := func() []any {
+		return []any{
+			map[string]any{"text": "tetris pieces rotate correctly", "judgment": "boolean"},
+			map[string]any{"text": "snake grows on eating food", "judgment": "boolean"},
+		}
+	}
+
+	newRegisteredAccess := func(t *testing.T) (*fakeGoalRecordAccess, *SetGoalTool) {
+		t.Helper()
+		access := newFakeGoalRecordAccess()
+		access.condition[sessionID] = "an active goal"
+		tool := newSetGoalTool(access)
+		res := tool.Execute(setGoalCtx(sessionID, agentID), map[string]any{
+			"definition": "Ship a tetris + snake game.",
+			"criteria":   criteriaArg(),
+		})
+		if res.IsError {
+			t.Fatalf("initial register failed: %s", res.ForLLM)
+		}
+		return access, tool
+	}
+
+	t.Run("byte-identical duplicate register is a no-op", func(t *testing.T) {
+		access, tool := newRegisteredAccess(t)
+		beforeRecord := access.record[sessionID]
+		beforeWrites := access.writes
+
+		diffCalled := false
+		tool.SetDiffFn(func(string, string) string { diffCalled = true; return "should not be used" })
+
+		res := tool.Execute(setGoalCtx(sessionID, agentID), map[string]any{
+			"mode":       "register",
+			"definition": "Ship a tetris + snake game.",
+			"criteria":   criteriaArg(),
+		})
+		if res.IsError {
+			t.Fatalf("duplicate submission must not error: %s", res.ForLLM)
+		}
+		var payload struct {
+			Mode      string `json:"mode"`
+			Unchanged bool   `json:"unchanged"`
+		}
+		if err := json.Unmarshal([]byte(res.ForLLM), &payload); err != nil {
+			t.Fatalf("result does not parse: %v (%q)", err, res.ForLLM)
+		}
+		if !payload.Unchanged {
+			t.Fatalf("want unchanged:true on a byte-identical duplicate, got payload %+v", payload)
+		}
+		if payload.Mode != "update" {
+			t.Fatalf("applied mode must still be reported as update, got %q", payload.Mode)
+		}
+		if access.writes != beforeWrites {
+			t.Fatalf("must not write on a duplicate submission: writes went from %d to %d", beforeWrites, access.writes)
+		}
+		if access.record[sessionID] != beforeRecord {
+			t.Fatal("the record on disk must be byte-identical to before the duplicate call")
+		}
+		if diffCalled {
+			t.Fatal("the diff seam must not run for a no-op duplicate")
+		}
+	})
+
+	t.Run("identical but reordered criteria is also a no-op", func(t *testing.T) {
+		access, tool := newRegisteredAccess(t)
+		beforeWrites := access.writes
+
+		reordered := []any{
+			map[string]any{"text": "snake grows on eating food", "judgment": "boolean"},
+			map[string]any{"text": "tetris pieces rotate correctly", "judgment": "boolean"},
+		}
+		res := tool.Execute(setGoalCtx(sessionID, agentID), map[string]any{
+			"mode":       "update",
+			"definition": "Ship a tetris + snake game.",
+			"criteria":   reordered,
+		})
+		if res.IsError {
+			t.Fatalf("reordered-but-identical submission must not error: %s", res.ForLLM)
+		}
+		var payload struct {
+			Unchanged bool `json:"unchanged"`
+		}
+		if err := json.Unmarshal([]byte(res.ForLLM), &payload); err != nil {
+			t.Fatalf("result does not parse: %v (%q)", err, res.ForLLM)
+		}
+		if !payload.Unchanged {
+			t.Fatal("reordered-but-otherwise-identical criteria must still be treated as unchanged")
+		}
+		if access.writes != beforeWrites {
+			t.Fatalf("must not write for a reordered-but-identical submission: writes went from %d to %d", beforeWrites, access.writes)
+		}
+	})
+
+	t.Run("genuinely different content is a real update, not a no-op", func(t *testing.T) {
+		access, tool := newRegisteredAccess(t)
+		beforeWrites := access.writes
+
+		// The operator's THIRD call: mode:register again, but this time a
+		// real revision (a different definition) — must NOT be swallowed
+		// as a duplicate.
+		res := tool.Execute(setGoalCtx(sessionID, agentID), map[string]any{
+			"mode":       "register",
+			"definition": "Ship a tetris + snake + asteroids game.",
+			"criteria":   criteriaArg(),
+		})
+		if res.IsError {
+			t.Fatalf("genuinely different submission must not error: %s", res.ForLLM)
+		}
+		var payload struct {
+			Mode      string `json:"mode"`
+			Unchanged bool   `json:"unchanged"`
+		}
+		if err := json.Unmarshal([]byte(res.ForLLM), &payload); err != nil {
+			t.Fatalf("result does not parse: %v (%q)", err, res.ForLLM)
+		}
+		if payload.Unchanged {
+			t.Fatal("a genuinely different definition must not be reported as unchanged")
+		}
+		if payload.Mode != "update" {
+			t.Fatalf("want mode update, got %q", payload.Mode)
+		}
+		if access.writes != beforeWrites+1 {
+			t.Fatalf("want exactly one new write, went from %d to %d", beforeWrites, access.writes)
+		}
+	})
+}
+
+// TestSetGoalTool_SupersededCriteriaHistory is fix-wave GX-B "fix 5b"
+// (operator-ratified, 2026-09-08 evidence): a judge verdict was rendered
+// against one criteria set, then a real set_goal update REPLACED that set
+// 55 seconds later — leaving the verdict referencing criteria that exist
+// nowhere. A REAL, content-changing update must preserve the outgoing set
+// in a bounded on-record history; a no-op duplicate must append nothing.
+func TestSetGoalTool_SupersededCriteriaHistory(t *testing.T) {
+	const sessionID = "session_goal_superseded"
+	const agentID = "mia"
+
+	t.Run("register then update: previous set retrievable, current set is the new one", func(t *testing.T) {
+		access := newFakeGoalRecordAccess()
+		access.condition[sessionID] = "an active goal"
+		tool := newSetGoalTool(access)
+
+		registerRes := tool.Execute(setGoalCtx(sessionID, agentID), map[string]any{
+			"definition": "Ship a tetris game.",
+			"criteria": []any{
+				map[string]any{"text": "tetris pieces rotate correctly", "judgment": "boolean"},
+			},
+		})
+		if registerRes.IsError {
+			t.Fatalf("register failed: %s", registerRes.ForLLM)
+		}
+		var afterRegister setGoalRecord
+		if err := json.Unmarshal([]byte(access.record[sessionID]), &afterRegister); err != nil {
+			t.Fatalf("register record does not parse: %v", err)
+		}
+		if len(afterRegister.SupersededCriteria) != 0 {
+			t.Fatalf("a first-ever register must not create history: %+v", afterRegister.SupersededCriteria)
+		}
+
+		updateRes := tool.Execute(setGoalCtx(sessionID, agentID), map[string]any{
+			"mode":       "update",
+			"definition": "Ship a tetris + snake game.",
+			"criteria": []any{
+				map[string]any{"text": "tetris pieces rotate correctly", "judgment": "boolean"},
+				map[string]any{"text": "snake grows on eating food", "judgment": "boolean"},
+			},
+		})
+		if updateRes.IsError {
+			t.Fatalf("update failed: %s", updateRes.ForLLM)
+		}
+		var afterUpdate setGoalRecord
+		if err := json.Unmarshal([]byte(access.record[sessionID]), &afterUpdate); err != nil {
+			t.Fatalf("update record does not parse: %v", err)
+		}
+
+		// The CURRENT set is the new one.
+		if len(afterUpdate.Criteria) != 2 {
+			t.Fatalf("current criteria set should be the NEW 2-item set, got %d items", len(afterUpdate.Criteria))
+		}
+
+		// The PREVIOUS (outgoing) set is retrievable from history.
+		if len(afterUpdate.SupersededCriteria) != 1 {
+			t.Fatalf("want exactly one superseded entry, got %d", len(afterUpdate.SupersededCriteria))
+		}
+		superseded := afterUpdate.SupersededCriteria[0]
+		if len(superseded.Criteria) != 1 || superseded.Criteria[0].Text != "tetris pieces rotate correctly" {
+			t.Fatalf("superseded entry should carry the OUTGOING (pre-update) criteria set: %+v", superseded.Criteria)
+		}
+		if superseded.SupersededAt.IsZero() {
+			t.Fatal("superseded entry must carry a non-zero timestamp")
+		}
+	})
+
+	t.Run("a no-op duplicate appends nothing to history", func(t *testing.T) {
+		access := newFakeGoalRecordAccess()
+		access.condition[sessionID] = "an active goal"
+		tool := newSetGoalTool(access)
+
+		criteriaArg := []any{
+			map[string]any{"text": "tetris pieces rotate correctly", "judgment": "boolean"},
+		}
+		registerRes := tool.Execute(setGoalCtx(sessionID, agentID), map[string]any{
+			"definition": "Ship a tetris game.",
+			"criteria":   criteriaArg,
+		})
+		if registerRes.IsError {
+			t.Fatalf("register failed: %s", registerRes.ForLLM)
+		}
+
+		dupRes := tool.Execute(setGoalCtx(sessionID, agentID), map[string]any{
+			"mode":       "register",
+			"definition": "Ship a tetris game.",
+			"criteria":   criteriaArg,
+		})
+		if dupRes.IsError {
+			t.Fatalf("duplicate submission must not error: %s", dupRes.ForLLM)
+		}
+		var payload struct {
+			Unchanged bool `json:"unchanged"`
+		}
+		if err := json.Unmarshal([]byte(dupRes.ForLLM), &payload); err != nil {
+			t.Fatalf("result does not parse: %v (%q)", err, dupRes.ForLLM)
+		}
+		if !payload.Unchanged {
+			t.Fatal("expected the duplicate to be reported as unchanged")
+		}
+
+		var rec setGoalRecord
+		if err := json.Unmarshal([]byte(access.record[sessionID]), &rec); err != nil {
+			t.Fatalf("record does not parse: %v", err)
+		}
+		if len(rec.SupersededCriteria) != 0 {
+			t.Fatalf("a no-op duplicate must append NOTHING to the superseded history, got %d entries", len(rec.SupersededCriteria))
+		}
+	})
+
+	t.Run("history is capped at the last 5 revisions", func(t *testing.T) {
+		access := newFakeGoalRecordAccess()
+		access.condition[sessionID] = "an active goal"
+		tool := newSetGoalTool(access)
+
+		res := tool.Execute(setGoalCtx(sessionID, agentID), map[string]any{
+			"definition": "Ship revision 0.",
+			"criteria": []any{
+				map[string]any{"text": "criterion revision 0", "judgment": "boolean"},
+			},
+		})
+		if res.IsError {
+			t.Fatalf("initial register failed: %s", res.ForLLM)
+		}
+
+		// 6 more content-changing updates — 7 revisions total, so the
+		// history (which never records the very first register) should cap
+		// at maxSupersededCriteriaHistory (5) entries, dropping the oldest.
+		for i := 1; i <= 6; i++ {
+			res := tool.Execute(setGoalCtx(sessionID, agentID), map[string]any{
+				"mode":       "update",
+				"definition": fmt.Sprintf("Ship revision %d.", i),
+				"criteria": []any{
+					map[string]any{"text": fmt.Sprintf("criterion revision %d", i), "judgment": "boolean"},
+				},
+			})
+			if res.IsError {
+				t.Fatalf("update %d failed: %s", i, res.ForLLM)
+			}
+		}
+
+		var rec setGoalRecord
+		if err := json.Unmarshal([]byte(access.record[sessionID]), &rec); err != nil {
+			t.Fatalf("record does not parse: %v", err)
+		}
+		if len(rec.SupersededCriteria) != maxSupersededCriteriaHistory {
+			t.Fatalf("want history capped at %d, got %d", maxSupersededCriteriaHistory, len(rec.SupersededCriteria))
+		}
+		// The oldest entries (revisions 0 and 1) must have been dropped —
+		// the retained window is revisions 1..5 (i.e. text "criterion
+		// revision 1" through "criterion revision 5"), since 6 total
+		// supersede events (0→1, 1→2, ..., 5→6) get capped to the last 5.
+		oldestRetained := rec.SupersededCriteria[0].Criteria[0].Text
+		if oldestRetained != "criterion revision 1" {
+			t.Fatalf("oldest RETAINED entry should be revision 1 (revision 0 dropped), got %q", oldestRetained)
 		}
 	})
 }
