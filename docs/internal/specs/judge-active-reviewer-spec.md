@@ -1905,8 +1905,14 @@ Five properties this change makes materially worse and which nothing above bound
   render for an unrecognised `outcome` string — would never be reached. **FR-072, which mandates
   `additionalProperties: false` on every copy, is what generates that `.strict()`, so this spec
   guarantees the failure it is trying to avoid.**
-  - **W3 MUST make the choice explicitly and state it in the schema description.** Exactly two are
-    available, and both are legitimate:
+  - **OPERATOR DECISION (2026-09-09): option (i) — accept the drop. "older apps we can ignore."**
+    New frames are dropped by client builds that predate this change until they reload; no
+    mitigation is built, `additionalProperties: false` stays on every copy (FR-072 is unchanged),
+    and no compatibility shim is added. W3 records this decision verbatim in the schema
+    description rather than re-deciding it. The two options below are retained only as the
+    rationale for why the decision was needed; **(ii) is not to be implemented.**
+  - **W3 MUST record the decision in the schema description.** The two options that were
+    available, and both were legitimate:
     - **(i) Accept the drop during rollout.** New frames are dropped by old clients until they
       reload. State it, and state the variant exposure: the OSS binary embeds its own SPA so client
       and server ship together and the window is a page reload; the **SaaS** variant serves the app
