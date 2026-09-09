@@ -1,6 +1,6 @@
 # ADR-084 — The Judge is an active reviewer, not a passive one
 
-- **Status:** Proposed (revision 7 — claim-triggered, off the critical path; see §8. Earlier: revision 6 — D4's residual-risk acceptance narrowed, D10's confinement scope widened; no decision withdrawn) — 2026-09-09
+- **Status:** Proposed (revision 7 — claim-triggered, off the critical path, evidence-tiered for all task kinds; see §8. Earlier: revision 6 — D4's residual-risk acceptance narrowed, D10's confinement scope widened; no decision withdrawn) — 2026-09-09
   - *Revision 5 — four claims about the code corrected; decisions unchanged.*
   - *Revision 4 — greenfield, migration removed by operator directive.*
 - **Amends:** the un-ADR'd judge fix-wave in commit `02214f5c` (2026-09-09, "fix GX-E") — `planArtifactCheck`, the rung-1.5 dispatch, and the working-tree diff feed. *(Revision 1 wrongly attributed this to ADR-082, which is about UI-independent turns and session-bound streaming and says nothing about the Judge.)*
@@ -358,9 +358,26 @@ A new tool — working name `goal_claim` — replaces detection with arrival:
 - **`waiting_on_user` parks with no adjudication and no round consumed**, as today.
 - Because adjudication is now rare and off the critical path, D1's tool-using Judge costs the operator no latency. The operator's direction that the Judge reason with common sense and read files is **unchanged and preserved**; only its trigger and its position move.
 
-### D14 — Deterministic evidence first (adopted from Hermes)
+### D14 — Evidence before judgement, for every kind of task (revised)
 
-Where a criterion is decidable by running something, the command's exit code is the verdict and the Judge is not called for it. This is Hermes's `_check_gates()` → `judge_goal()` ordering, whose documentation states the principle: "Gates run before the judge. If any gate fails, the judge is not called — a red gate is deterministic evidence the goal isn't done." It generalises D5a's one-way veto from artifact checks to any criterion carrying a check.
+> **Operator correction, 2026-09-09:** *"the whole exit code mechanism again i'm not a fan of, it works only for coding — the mechanism must be primary done for all kind of tasks not only coding"*
+
+The first draft of D14 adopted Hermes's shell gates literally: a criterion carries a command, the exit code is the verdict. **That was a bad borrow.** Hermes is a coding harness, so `pytest` and `tsc` are the natural evidence there. Omnipus is a general-purpose agent: goals are as often "email the supplier and get a quote", "book the flight", "research three competitors", "produce the board deck" as they are "make the tests pass". A shell exit code decides none of those, and making it the primary path would bias goal authoring toward coding-shaped criteria — the same incentive defect revision 6 found in the clause splitter (§7 F4), arriving through a different door.
+
+**The general principle is not "run a command". It is: prefer evidence the system already holds over asking a model to opine.** Restated for any task:
+
+**Tier 1 — the agent's own tool-call record (free, universal, primary).** Every tool call in the turn is already persisted with its arguments, its result and its success (`session.ToolCall{Tool, Parameters, Result, Status}`; see the ADR-066 emptying note in §7 for a caveat about mid-turn rewrites). That record is the general form of Hermes's evidence ledger, which is deliberately passive — its own docstring: *"never runs a suite, never blocks completion"* — but generalised past shell to **every** tool this product has. A criterion of the shape "the supplier was emailed" is answerable from the fact that the mail tool returned success with that recipient; "a calendar hold exists" from the event id the calendar tool returned; "the page was published" from the publish call's response. No shell, no exit codes, no new machinery — the evidence is a by-product of the work.
+
+**Tier 2 — a cheap targeted check, where one exists and is meaningful (optional, never required).** A file exists and is non-empty; a document has the sections the criterion names; a URL returns 200; a record is present in the store the agent wrote to. `judge.go::planArtifactCheck`'s existing file test is one instance of this tier, not the definition of it. A shell command is **one possible check among several**, available when a goal genuinely is about code — never the assumed shape.
+
+**Tier 3 — the Judge, with file access and common sense (D1, unchanged).** Everything that is genuinely a judgement: whether the deck is persuasive, whether the research is thorough, whether the tone is right, whether "cutting-edge UI" was achieved. This is the operator's stated reason for the Judge to exist and it is untouched.
+
+**Two constraints that follow, and are binding:**
+
+- **A criterion MUST NOT be required to carry a check.** Tiers 1 and 2 are opportunistic: the system uses them when the evidence happens to be decisive, and falls through to the Judge otherwise. Requiring a machine-checkable form would push `set_goal` toward criteria that are easy to check rather than criteria that are right — the failure this ADR exists to avoid, inverted.
+- **The veto direction stays one-way (D5a).** A tier-1 or tier-2 fact that *contradicts* a `met` claim (the mail tool returned an error, the named file is absent) blocks it. A fact that is merely *consistent* with the claim does not establish it — the Judge still decides whether the criterion is satisfied.
+
+Hermes's ordering principle is kept and generalised: cheap, certain evidence is consulted before the expensive uncertain judgement, and evidence that already disproves the claim means the Judge is never called for that criterion.
 
 ### Consequences of revision 7
 
