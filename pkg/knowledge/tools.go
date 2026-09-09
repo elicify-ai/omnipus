@@ -1809,6 +1809,7 @@ func toReadLinks(in []ResolvedLink, backlinks bool) []ReadLink {
 			Form:       l.Raw,
 			Alias:      l.Alias,
 			Heading:    l.Heading,
+			Embed:      l.Embed,
 			Resolved:   l.State == ResolveResolved,
 			Reason:     string(l.Reason),
 			Ambiguous:  l.Ambiguous,

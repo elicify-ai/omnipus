@@ -149,6 +149,19 @@ func TestEditNote_RefusesAnEvictedNoteInsteadOfWritingBackAStub(t *testing.T) {
 // FINDING 3 — the reserved-location guard, on EVERY write op.
 // ---------------------------------------------------------------------------
 
+// veEmbedTargetRelPath is the fixed, always-valid embed target both write-
+// guard tests below create at the collection root before running
+// veWriteOps's table — see opEmbed's row for why it must be a REAL file
+// outside every reserved directory and every symlinked path under test.
+const veEmbedTargetRelPath = "EmbedTarget.md"
+
+// veEmbedTarget writes veEmbedTargetRelPath into root, unconditionally, for
+// every op in the table (harmless for the five that never reference it).
+func veEmbedTarget(t *testing.T, root string) {
+	t.Helper()
+	a4Note(t, root, veEmbedTargetRelPath, "---\nstatus: draft\n---\nA stable embed target.\n")
+}
+
 // veWriteOp is one knowledge_edit op plus the arguments that make it do real work.
 // `create` is the only one that must NOT find a file already there, so the
 // table carries that difference rather than a second table.
@@ -183,6 +196,19 @@ func veWriteOps(t *testing.T) []veWriteOp {
 		}},
 		{op: opReplaceBody, extraFor: func(v string) map[string]any {
 			return map[string]any{"body": "planted by an agent\n", "expect_version": v}
+		}},
+		// embed's OWN target (EMB-098) must resolve inside the collection AND
+		// exist, so — unlike opLink's "Somewhere Else" above — this cannot
+		// name an arbitrary string: it names veEmbedTargetRelPath, a fixed
+		// note both callers of this table (the reserved-location and the
+		// in-collection-symlink tests) create at the collection ROOT before
+		// running it, deliberately outside every reserved directory and
+		// every symlinked path under test — so embed's OWN containment/
+		// existence check never fires here and the row exercises the SAME
+		// guard (on `path`) every other op's row exercises, not a different
+		// one on `target`.
+		{op: opEmbed, extraFor: func(v string) map[string]any {
+			return map[string]any{"target": veEmbedTargetRelPath, "section": "Refs", "expect_version": v}
 		}},
 	}
 	covered := make([]string, 0, len(all))
@@ -232,6 +258,7 @@ func TestKnowledgeEdit_EveryWriteOpRefusesAReservedLocation(t *testing.T) {
 				home, ws, root := a4Fixture(t, "kb")
 				deps, audit := a4Deps(home)
 				tool := veTool(deps)
+				veEmbedTarget(t, root)
 
 				rel := dir + "/victim.md"
 				const before = "---\nstatus: draft\n---\nOperator content.\n"
@@ -308,6 +335,7 @@ func TestKnowledgeEdit_EveryWriteOpRefusesAPathReachedThroughAnInCollectionSymli
 			home, ws, root := veSymlinkFixture(t)
 			deps, audit := a4Deps(home)
 			tool := veTool(deps)
+			veEmbedTarget(t, root)
 
 			const before = "---\nstatus: draft\n---\nOperator content.\n"
 			realNote := filepath.Join(root, "Archive", "Target.md")

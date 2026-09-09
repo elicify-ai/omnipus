@@ -68,6 +68,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -86,11 +87,18 @@ const (
 	opAppendSection = "append_section"
 	opLink          = "link"
 	opReplaceBody   = "replace_body"
+	// opEmbed is US-11 / EMB-095: agent-authored embedded content. It is an
+	// OPERATION on this tool, not a new tool name — see this const block's
+	// own header ("every one of these is equally acceptable to an operator
+	// who has granted knowledge_edit") and EMB-096 (the tool-policy diff for
+	// this op is zero lines, in both the global ceiling and every per-agent
+	// seed — TestKnowledgeToolPolicy_CatalogueUnchangedByEmbedOp pins it).
+	opEmbed = "embed"
 )
 
 // knowledgeEditOps lists the accepted ops, in the order they are documented —
 // used to render "supported ops are ..." in a refusal.
-var knowledgeEditOps = []string{opCreate, opSetProperty, opAppendSection, opLink, opReplaceBody}
+var knowledgeEditOps = []string{opCreate, opSetProperty, opAppendSection, opLink, opReplaceBody, opEmbed}
 
 // knowledgeEditRedirect names the EXACT refusal for an op that belongs to a
 // different tool by construction (C-A: writes bytes into a file the caller
@@ -125,6 +133,46 @@ var editArgNames = []string{
 	"heading", "level", "once",
 	"anchor", "line_range",
 	"target", "alias", "section", "relation",
+	// embed (US-11). 'view', 'target_heading' and 'target_block' are the
+	// embed's OWN fragment modifiers — named distinctly from 'heading'
+	// (append_section's destination heading) and from 'section' (link's and
+	// embed's shared destination-section argument) because both of those
+	// already exist and mean the OPPOSITE thing: 'heading' names a heading
+	// on the note BEING WRITTEN; 'target_heading' names one on the note
+	// BEING EMBEDDED (EMB-101). 'page' is accepted but always refused today
+	// — reserved for the deferred PDF-page-fragment kind (US-12/EMB-105),
+	// never silently ignored in the meantime (see execEmbed).
+	"view", "target_heading", "target_block", "width", "page",
+}
+
+// editOpArgs is the CLOSED, PER-OPERATION argument set each op actually
+// reads — enforced in ADDITION to, not instead of, the global sweep above
+// (editArgNames, via unknownArgs in Execute). The two catch different
+// mistakes:
+//
+//   - editArgNames catches a MISSPELLED or invented field name shared by no
+//     op at all (e.g. "bodyy" for "body") — a shape no operation would ever
+//     read.
+//   - editOpArgs catches a field name that is a genuine argument of a
+//     DIFFERENT op, sent to one that does not read it — e.g. op="link"
+//     given 'width' (embed's argument), or op="embed" given 'body'
+//     (create/append_section/replace_body's argument). Both pass the
+//     global sweep, because both names are legitimate members of
+//     editArgNames; only the per-operation set catches them (EMB-100).
+//
+// Every entry always includes "op", "collection" and "path" (every op reads
+// them) and "expect_version" (every op but create — see execCreate's own
+// header comment on why create alone omits it).
+var editOpArgs = map[string][]string{
+	opCreate:        {"op", "collection", "path", "template", "title", "body", "frontmatter"},
+	opSetProperty:   {"op", "collection", "path", "expect_version", "property", "value", "list_op"},
+	opAppendSection: {"op", "collection", "path", "expect_version", "heading", "level", "once", "body"},
+	opLink:          {"op", "collection", "path", "expect_version", "target", "alias", "section", "relation"},
+	opReplaceBody:   {"op", "collection", "path", "expect_version", "anchor", "line_range", "body"},
+	opEmbed: {
+		"op", "collection", "path", "expect_version",
+		"target", "section", "view", "target_heading", "target_block", "width", "page",
+	},
 }
 
 // EditTool is knowledge_edit.
@@ -147,11 +195,13 @@ func (t *EditTool) Name() string { return "knowledge_edit" }
 func (t *EditTool) Description() string {
 	return "Write ONE named file in a knowledge base: create a note (optionally from a " +
 		"template), set a frontmatter property (a single value or a whole list), add or " +
-		"remove one list item, append a section, link to another note, or replace part of " +
-		"a note's body by anchor text or line range. Never touches a second file, never " +
-		"renames or deletes anything, and never changes what OTHER notes mean — use " +
-		"knowledge_restructure or knowledge_configure for those. Every write after the first on a " +
-		"note requires the version token knowledge_read returned."
+		"remove one list item, append a section, link to another note, embed a picture, " +
+		"PDF, note, or a saved data view under a heading (the correct notation is written " +
+		"for you, after checking the target exists), or replace part of a note's body by " +
+		"anchor text or line range. Never touches a second file, never renames or deletes " +
+		"anything, and never changes what OTHER notes mean — use knowledge_restructure or " +
+		"knowledge_configure for those. Every write after the first on a note requires the " +
+		"version token knowledge_read returned."
 }
 
 // Scope classifies the tool for per-agent visibility filtering.
@@ -255,10 +305,12 @@ func (t *EditTool) Parameters() map[string]any {
 					"replace, as an alternative to anchor.",
 			},
 
-			// link
+			// link, embed
 			"target": map[string]any{
-				"type":        "string",
-				"description": "link: the note to link to, by name or path.",
+				"type": "string",
+				"description": "link: the note to link to, by name or path. embed: the note, " +
+					"picture, PDF or data file to embed, by path relative to the collection " +
+					"root — checked to exist before anything is written.",
 			},
 			"alias": map[string]any{
 				"type":        "string",
@@ -267,12 +319,46 @@ func (t *EditTool) Parameters() map[string]any {
 			"section": map[string]any{
 				"type": "string",
 				"description": "link: heading to put a body wikilink under. Ignored when " +
-					"'relation' is given.",
+					"'relation' is given. embed: heading to put the embed under; created if " +
+					"absent.",
 			},
 			"relation": map[string]any{
 				"type": "string",
 				"description": "link: a relation property name to record the link on, instead " +
 					"of inserting a wikilink in the body.",
+			},
+
+			// embed (US-11). At most one of view/target_heading/target_block.
+			"view": map[string]any{
+				"type": "string",
+				"description": "embed: which saved view of a data file (a .base target) to " +
+					"show, by its display label exactly as knowledge_describe reports it. " +
+					"Refused if the target is not a data file or the label does not match " +
+					"an existing view.",
+			},
+			"target_heading": map[string]any{
+				"type": "string",
+				"description": "embed: show only this heading's section of the embedded note. " +
+					"Names a heading ON THE EMBED TARGET, not on the note being written — see " +
+					"'heading', which is append_section's unrelated destination heading. " +
+					"Refused if the target is not a note or names no such heading.",
+			},
+			"target_block": map[string]any{
+				"type": "string",
+				"description": "embed: show only the block anchored with this ID in the " +
+					"embedded note (without the leading '^'). Names a block ON THE EMBED " +
+					"TARGET. Applies only when the target is a note.",
+			},
+			"width": map[string]any{
+				"type": "string",
+				"description": "embed: display width for a picture, as digits ('400') or " +
+					"digits×digits ('400x300'). Applies only when the target is a picture; " +
+					"refused otherwise.",
+			},
+			"page": map[string]any{
+				"type": "string",
+				"description": "embed: reserved for a future PDF page-fragment embed. NOT " +
+					"supported yet — refused if given, on every target kind.",
 			},
 		},
 		"required": []string{"op", "path"},
@@ -300,6 +386,17 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 			"unknown argument(s) %s; accepted: %s",
 			strings.Join(unknown, ", "), strings.Join(editArgNames, ", ")))
 	}
+	// EMB-100: a SECOND sweep, narrower than the one above. `ok` gates this
+	// on a RECOGNISED op only — an empty/garbage op has no entry in
+	// editOpArgs and must still fall through to refuseOp's own "unsupported
+	// op"/redirect messaging below, not this generic one.
+	if allowed, ok := editOpArgs[op]; ok {
+		if foreign := unknownArgs(args, allowed); len(foreign) > 0 {
+			return t.deps.refuse(authorOp, target, nil, fmt.Sprintf(
+				"%s does not read %s; %s accepts: %s",
+				op, strings.Join(foreign, ", "), op, strings.Join(allowed, ", ")))
+		}
+	}
 	switch op {
 	case opCreate:
 		return t.execCreate(ctx, target, args)
@@ -311,6 +408,8 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 		return t.execLink(ctx, target, args)
 	case opReplaceBody:
 		return t.execReplaceBody(ctx, target, args)
+	case opEmbed:
+		return t.execEmbed(ctx, target, args)
 	default:
 		return t.refuseOp(target, op)
 	}
@@ -761,6 +860,256 @@ func (t *EditTool) execReplaceBody(ctx context.Context, target mutationTarget, a
 }
 
 // ---------------------------------------------------------------------------
+// embed (US-11, EMB-095..EMB-102) — "put the correct notation for me, after
+// checking it will not be a broken embed forever."
+//
+// This is the one op in the file that reads a SECOND path (the embed
+// target) without writing to it — every other op's containment story is
+// entirely about `path`, the file being written. embed's target is read-
+// only: its existence and, for a heading/view fragment, its own headings or
+// views are CHECKED, never modified. The blast-radius rule in this file's
+// header ("knowledge_edit writes ONLY the file named in `path`") still
+// holds — the target is read, not written.
+// ---------------------------------------------------------------------------
+
+// embedPictureExts is the extension-only picture classifier this write path
+// uses to decide whether 'width' applies (EMB-030). It deliberately does
+// not attempt the full eleven-kind classification the reader uses — this
+// tool only ever needs to distinguish "picture" (accepts width) from
+// everything else, and an extension is all a note-editing tool has to go
+// on (there is no server-sniffed media type available here, matching the
+// spec's Conservative Type Design note on the reader's own classifier).
+var embedPictureExts = map[string]bool{
+	".png": true, ".jpg": true, ".jpeg": true, ".gif": true,
+	".webp": true, ".svg": true, ".bmp": true, ".avif": true,
+}
+
+func isPictureTarget(rel string) bool {
+	return embedPictureExts[strings.ToLower(path.Ext(rel))]
+}
+
+func isDataFileTarget(rel string) bool {
+	return strings.EqualFold(path.Ext(rel), ".base")
+}
+
+// embedWidthPattern is EMB's own data constraint: "A size given after `|`
+// in an embed MUST match ^\d+(x\d+)?$ to be read as a size; anything else
+// is display text." Written here so a malformed width is refused at write
+// time rather than silently becoming caption text the caller never asked
+// for (the "must not accept an argument it does not act on" prohibition).
+var embedWidthPattern = regexp.MustCompile(`^\d+(x\d+)?$`)
+
+// embedTargetHeadings reads an embed target's headings via the SAME
+// bounded-memory scanner links.go's own extraction uses (ScanNote), rather
+// than loading the whole file into memory — this validates a file the
+// write never otherwise touches, and FR-034a's "the note is never held in
+// memory" property applies to it exactly as it does to the note actually
+// being written.
+func embedTargetHeadings(fsys LinkFS, resolvedPath string) ([]Heading, error) {
+	f, err := fsys.Open(resolvedPath)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	scan, err := ScanNote(f)
+	if err != nil {
+		return nil, err
+	}
+	return scan.Headings, nil
+}
+
+// embedInsertEdit returns an edit that inserts one embed notation line
+// under the named section, creating the section if absent (EMB-097) — the
+// write half of US-11, sharing insertUnderSection with AddWikilink rather
+// than a second insertion mechanism.
+func embedInsertEdit(notation, section string) NoteEdit {
+	return func(src []byte) ([]byte, error) {
+		return insertUnderSection(src, notation, section, 2)
+	}
+}
+
+// composeEmbedNotation writes the exact syntax an embed of target,
+// optionally fragmented by view/heading/block and optionally sized, is
+// spelled as — "the link syntax is written for you", carried over from the
+// retired knowledge_link's own principle. fragment is empty when the
+// caller named no view/target_heading/target_block.
+func composeEmbedNotation(target, fragment, width string) string {
+	s := "![[" + target
+	if fragment != "" {
+		s += "#" + fragment
+	}
+	if width != "" {
+		s += "|" + width
+	}
+	return s + "]]"
+}
+
+func (t *EditTool) execEmbed(ctx context.Context, target mutationTarget, args map[string]any) *tools.ToolResult {
+	rel, err := cleanNoteArg(stringArg(args["path"]))
+	if err != nil {
+		return t.deps.refuse(AuthorOpEdit, target, nil, err.Error())
+	}
+
+	embedTarget := strings.TrimSpace(stringArg(args["target"]))
+	if embedTarget == "" {
+		return t.deps.refuse(AuthorOpEdit, target, []string{rel}, "'target' is required")
+	}
+	embedRel, cErr := cleanNoteArg(embedTarget)
+	if cErr != nil {
+		return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+			fmt.Sprintf("embed: the target %q is not inside this collection", embedTarget))
+	}
+
+	section := strings.TrimSpace(stringArg(args["section"]))
+	if section == "" {
+		return t.deps.refuse(AuthorOpEdit, target, []string{rel}, "'section' is required")
+	}
+
+	view := strings.TrimSpace(stringArg(args["view"]))
+	targetHeading := strings.TrimSpace(stringArg(args["target_heading"]))
+	targetBlock := strings.TrimSpace(stringArg(args["target_block"]))
+	width := strings.TrimSpace(stringArg(args["width"]))
+	page := strings.TrimSpace(stringArg(args["page"]))
+
+	// 'page' (a PDF page fragment, US-12/EMB-105) is a DEFERRED kind: no
+	// renderer or notation form exists for it yet. Refusing beats writing
+	// notation nothing can check and a reader would treat as a plain,
+	// unfragmented embed — silently different from what was asked for.
+	if page != "" {
+		return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+			"embed: 'page' (a PDF page fragment) is not supported yet")
+	}
+	fragmentArgs := 0
+	for _, v := range []string{view, targetHeading, targetBlock} {
+		if v != "" {
+			fragmentArgs++
+		}
+	}
+	if fragmentArgs > 1 {
+		return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+			"embed: give at most one of 'view', 'target_heading', 'target_block'")
+	}
+
+	// Contained AND EXISTS (EMB-098). A broken embed found later by a
+	// reader — the failure US-11 exists to prevent — is exactly what
+	// skipping this and only checking the STRING would produce.
+	root, rErr := NewCollectionRoot(OSLinkFS(), target.collection.Root())
+	if rErr != nil {
+		return t.deps.refuse(AuthorOpEdit, target, []string{rel}, fmt.Sprintf("embed: %v", rErr))
+	}
+	resolved, pErr := root.ResolveContainedNoSymlink(OSLinkFS(), embedRel)
+	if pErr != nil {
+		return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+			fmt.Sprintf("embed: the target %q is not inside this collection", embedTarget))
+	}
+	info, statErr := OSLinkFS().Lstat(resolved)
+	if statErr != nil || info.IsDir() {
+		return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+			fmt.Sprintf("embed: %q does not exist in this knowledge base", embedTarget))
+	}
+
+	isPicture := isPictureTarget(embedRel)
+	isDataFile := isDataFileTarget(embedRel)
+	isNote := IsMarkdownPath(embedRel)
+
+	if width != "" && !isPicture {
+		return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+			fmt.Sprintf("embed: 'width' only applies to a picture; %q is not one", embedTarget))
+	}
+	if width != "" && !embedWidthPattern.MatchString(width) {
+		return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+			fmt.Sprintf("embed: 'width' must look like '400' or '400x300', got %q", width))
+	}
+	if view != "" && !isDataFile {
+		return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+			fmt.Sprintf("embed: 'view' only applies to a data file (.base); %q is not one", embedTarget))
+	}
+	if targetHeading != "" && !isNote {
+		return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+			fmt.Sprintf("embed: 'target_heading' only applies to a note; %q is not one", embedTarget))
+	}
+	if targetBlock != "" && !isNote {
+		return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+			fmt.Sprintf("embed: 'target_block' only applies to a note; %q is not one", embedTarget))
+	}
+
+	fragment := ""
+	switch {
+	case view != "":
+		set, _, lerr := t.loadSchemas(target)
+		if lerr != nil {
+			return t.deps.refuse(AuthorOpEdit, target, []string{rel}, fmt.Sprintf("embed: %v", lerr))
+		}
+		views, _, verr := records.LoadViews(target.collection.Root(), set)
+		if verr != nil {
+			return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+				fmt.Sprintf("embed: loading this collection's saved views: %v", verr))
+		}
+		var labels []string
+		var matched *records.SavedView
+		for _, v := range views.Views() {
+			if v.Def.Source == nil || normalizeRel(strings.TrimSpace(*v.Def.Source)) != normalizeRel(embedRel) {
+				continue
+			}
+			labels = append(labels, v.DisplayLabel())
+			if matched == nil && v.DisplayLabel() == view {
+				matched = v
+			}
+		}
+		if matched == nil {
+			listing := "no views are defined for it"
+			if len(labels) > 0 {
+				listing = "views: " + strings.Join(labels, ", ")
+			}
+			return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+				fmt.Sprintf("embed: no view %q in %s; %s", view, embedTarget, listing))
+		}
+		fragment = matched.DisplayLabel()
+	case targetHeading != "":
+		headings, hErr := embedTargetHeadings(OSLinkFS(), resolved)
+		if hErr != nil {
+			return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+				fmt.Sprintf("embed: reading %q: %v", embedTarget, hErr))
+		}
+		want := matchSectionQuery(targetHeading)
+		found := false
+		for _, h := range headings {
+			if h.Text == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+				readSectionRefusalText(embedTarget, targetHeading, headings))
+		}
+		fragment = want
+	case targetBlock != "":
+		fragment = "^" + strings.TrimPrefix(targetBlock, "^")
+	}
+
+	notation := composeEmbedNotation(embedRel, fragment, width)
+
+	expect := strings.TrimSpace(stringArg(args["expect_version"]))
+	res, weErr := EditNote(OSLinkFS(), target.collection, EditNoteRequest{
+		RelPath: rel, Edits: []NoteEdit{embedInsertEdit(notation, section)}, ExpectVersion: expect,
+		Now: t.deps.now(), Audit: t.deps.Audit, Actor: target.actor(), Lock: target.lock,
+	})
+	if weErr != nil {
+		return knowledgeEditFailure(AuthorOpEdit, weErr)
+	}
+	var indexWarning string
+	if res.Changed {
+		indexWarning = refreshIndexesForNote(ctx, t.deps.Home, target.col.Root, res.RelPath)
+	}
+	return tools.NewToolResult(RenderEdit(EditData{
+		Op: opEmbed, Path: res.RelPath, Version: res.Version,
+		Target: embedRel, Notation: notation, Section: section, Changed: res.Changed,
+		IndexWarning: indexWarning,
+	}))
+}
+
+// ---------------------------------------------------------------------------
 // Compact-text rendering (FR-072) — no JSON document, ever
 // ---------------------------------------------------------------------------
 
@@ -777,6 +1126,18 @@ type EditData struct {
 	Heading  string
 	Target   string
 	Relation string
+	// Notation is the exact embed markdown text op=embed composed and
+	// wrote (US-11) — e.g. "![[Tasks.base#Needs Daniel]]". Empty for every
+	// other op.
+	Notation string
+	// Section is op=embed's destination heading — the section the
+	// notation was inserted under. A DELIBERATELY separate field from
+	// Heading (append_section's own heading argument), even though the two
+	// render similarly: the two ops read differently-named arguments for
+	// it (EMB-101's target_heading/target_block vs heading are the same
+	// distinction one level down, on the embed TARGET rather than the
+	// destination).
+	Section string
 	// SchemaNote is knowledgeEditGovernance.Note() (G3) — empty when a
 	// schema governed the write (nothing further to say) or the op never
 	// resolves one (append_section, replace_body, a body-only link); a
@@ -829,6 +1190,8 @@ func RenderEdit(d EditData) string {
 		}
 	case opReplaceBody:
 		fmt.Fprintf(&b, "REPLACE_BODY (%s)\n", changedWord(d.Changed))
+	case opEmbed:
+		fmt.Fprintf(&b, "EMBED %s under %q (%s)\n", d.Notation, d.Section, changedWord(d.Changed))
 	}
 	if d.SchemaNote != "" {
 		fmt.Fprintf(&b, "%s\n", d.SchemaNote)

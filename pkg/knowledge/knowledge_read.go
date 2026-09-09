@@ -114,9 +114,20 @@ type ReadLink struct {
 	// to print.
 	From string
 	// Form is the link exactly as written (ResolvedLink.Raw).
-	Form       string
-	Alias      string
-	Heading    string
+	Form  string
+	Alias string
+	// Heading is the "#…" fragment as written — a heading on a markdown
+	// target, OR (EMB-020, when Embed is true and To/Target names a data
+	// file) a saved view's display label. renderReadLinks decides which
+	// word to print it under; this field carries the raw text either way.
+	Heading string
+	// Embed reports whether this was written "![[x]]" rather than "[[x]]"
+	// — EMB-020: knowledge_read MUST mark an embed as an embed, exactly as
+	// the reader surface already does. Projected straight from
+	// ResolvedLink.Link.Embed, which toReadLinks used to drop entirely
+	// (founder decision D-B — the agent surface owes the same honesty the
+	// reader does).
+	Embed      bool
 	Resolved   bool
 	Reason     string
 	Ambiguous  bool
@@ -268,6 +279,26 @@ func renderReadBody(b *strings.Builder, d ReadData) {
 	}
 }
 
+// renderReadLinks prints the LINKS/BACKLINKS section — including EMB-020's
+// three agent-surface obligations, all of which are ADDITIVE over the
+// unmarked, pre-existing rendering for an ordinary (non-embed) link:
+//
+//  1. an embed is marked "(embed)" (or "(unresolved embed)"), so an agent
+//     summarising a note can tell a shown-in-place embed from an ordinary
+//     reference — founder decision D-B, the same honesty the reader
+//     surface already gives a person;
+//  2. an unresolved embed still carries its Reason exactly as an ordinary
+//     unresolved link does — no separate code path, just the same "%s —
+//     %s" tail, now reachable with the embed tag alongside it;
+//  3. a data-view fragment prints as `view "Label"`, never as `#Label` —
+//     "#Label" reads as a heading, which a .base target's fragment never
+//     is (a view's display label, per EMB, "MUST NEVER be reconstructed by
+//     the reader" — this only ever echoes back what the edge already
+//     names, never invents one).
+//
+// An ORDINARY link (Embed false) is rendered BYTE-IDENTICALLY to before
+// this change: tag stays "", so the switch's non-embed branches are
+// untouched.
 func renderReadLinks(b *strings.Builder, label string, links []ReadLink, backlinks bool) {
 	fmt.Fprintf(b, "%s (%d)", label, len(links))
 	if len(links) == 0 {
@@ -280,19 +311,35 @@ func renderReadLinks(b *strings.Builder, label string, links []ReadLink, backlin
 		if backlinks {
 			arrow, peer = "<-", l.From
 		}
+		tag := ""
+		if l.Embed {
+			tag = "embed"
+		}
 		switch {
 		case !l.Resolved:
-			fmt.Fprintf(b, "  %s (unresolved) %s", arrow, l.Form)
+			unresolvedTag := "unresolved"
+			if tag != "" {
+				unresolvedTag = "unresolved " + tag
+			}
+			fmt.Fprintf(b, "  %s (%s) %s", arrow, unresolvedTag, l.Form)
 			if l.Reason != "" {
 				fmt.Fprintf(b, " — %s", l.Reason)
 			}
 		default:
-			fmt.Fprintf(b, "  %s %s", arrow, peer)
+			if tag != "" {
+				fmt.Fprintf(b, "  %s (%s) %s", arrow, tag, peer)
+			} else {
+				fmt.Fprintf(b, "  %s %s", arrow, peer)
+			}
 			if l.Alias != "" {
 				fmt.Fprintf(b, " %q", l.Alias)
 			}
 			if l.Heading != "" {
-				fmt.Fprintf(b, " #%s", l.Heading)
+				if l.Embed && isDataFileTarget(peer) {
+					fmt.Fprintf(b, " view %q", l.Heading)
+				} else {
+					fmt.Fprintf(b, " #%s", l.Heading)
+				}
 			}
 		}
 		if l.Ambiguous && len(l.Candidates) > 0 {
