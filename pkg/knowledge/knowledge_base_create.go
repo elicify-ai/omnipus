@@ -228,6 +228,11 @@ func (t *CreateBaseTool) Execute(ctx context.Context, args map[string]any) *tool
 		switch {
 		case errors.Is(err, ErrAlreadyKnowledgeBase):
 			return refuse(fmt.Sprintf("%q already exists", rel))
+		case errors.Is(err, ErrNestedKnowledgeBase):
+			return refuse(fmt.Sprintf(
+				"%q is inside an existing knowledge base; a knowledge base cannot be created inside another one — "+
+					"choose a location that is not already part of a knowledge base, or use knowledge_edit's create op "+
+					"to add a note inside the existing one instead", rel))
 		case errors.Is(err, ErrMarkerInvalid):
 			return refuse(fmt.Sprintf("invalid knowledge base name: %v", err))
 		case errors.Is(err, ErrOutsideCollection):

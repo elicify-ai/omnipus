@@ -71,6 +71,28 @@ var (
 	// ErrAlreadyKnowledgeBase is returned by CreateInWorkspace when the target
 	// folder already carries an Omnipus marker.
 	ErrAlreadyKnowledgeBase = errors.New("knowledge: folder is already an Omnipus knowledge base")
+
+	// ErrNestedKnowledgeBase is returned by CreateInWorkspace when the
+	// target's PARENT — or any ancestor above it, up to and including the
+	// workspace root — already carries a knowledge base marker. This is
+	// deliberately a DIFFERENT sentinel from ErrAlreadyKnowledgeBase: "you
+	// are inside one" (this) and "this IS one" (that) are different
+	// conditions, and callers (the REST handler, the agent tool) need to
+	// tell them apart to report the right thing.
+	//
+	// Why this is refused at all (WL-4,
+	// docs/internal/defect-list-wikilink-rendering-2026-09-08.md): a nested
+	// knowledge base has ambiguous ownership of the notes beneath it — two
+	// collections would each claim the same files, two indexes would scan
+	// them, and Detect resolves any one folder to AT MOST one collection, so
+	// a nested pair is undefined behaviour, not merely untidy.
+	//
+	// Scope: this refuses NEW nesting only, at creation time. A knowledge
+	// base that is already nested on an existing install — because nothing
+	// stopped it before this check existed — is untouched by
+	// CreateInWorkspace; migrating or flattening such pre-existing data is a
+	// separate, undecided product question, out of scope for this check.
+	ErrNestedKnowledgeBase = errors.New("knowledge: parent location is already inside an Omnipus knowledge base")
 )
 
 // Marker is a knowledge base's identity as stored at its root, in

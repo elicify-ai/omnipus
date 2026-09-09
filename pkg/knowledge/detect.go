@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -350,6 +351,40 @@ func CreateInWorkspace(home, workspaceID, relPath string, m Marker) (*Collection
 	if _, statErr := r.Stat(filepath.ToSlash(cleaned) + "/" + MarkerDirName); statErr == nil {
 		return nil, fmt.Errorf("%w: %s", ErrAlreadyKnowledgeBase, filepath.Join(workDir, cleaned))
 	}
+
+	// WL-4 (docs/internal/defect-list-wikilink-rendering-2026-09-08.md):
+	// refuse creating a knowledge base ANYWHERE inside an existing one, not
+	// only AT one (the check just above). Walk from the target's PARENT up
+	// to the workspace root itself (inclusive) looking for an enclosing
+	// marker. This is the ONE place that check lives — both
+	// handleLibraryCreateVault (pkg/gateway/rest_library.go) and the
+	// knowledge_base_create agent tool call this function rather than
+	// duplicating creation logic, so putting the rule here is what makes
+	// both surfaces inherit it instead of drifting apart.
+	//
+	// The walk goes entirely through r, the *os.Root already opened at
+	// workDir: os.Root resolves symlinks but refuses any resolution that
+	// would leave workDir, so an ancestor directory that is (or contains) a
+	// symlink can never make this walk escape the workspace's own work
+	// tree — the same containment guarantee the rest of this function
+	// relies on, not a second, string-based one.
+	ancestorRel := path.Dir(filepath.ToSlash(cleaned))
+	if ancestorRel == "." {
+		ancestorRel = ""
+	}
+	enclosingRel, nested, ancErr := ancestorKnowledgeBase(r, ancestorRel)
+	if ancErr != nil {
+		return nil, fmt.Errorf("knowledge: create in workspace: check for an enclosing knowledge base: %w", ancErr)
+	}
+	if nested {
+		enclosingAbs := workDir
+		if enclosingRel != "" {
+			enclosingAbs = filepath.Join(workDir, filepath.FromSlash(enclosingRel))
+		}
+		return nil, fmt.Errorf("%w: %s is inside knowledge base %s",
+			ErrNestedKnowledgeBase, filepath.Join(workDir, cleaned), enclosingAbs)
+	}
+
 	if err := r.MkdirAll(cleaned, 0o755); err != nil {
 		return nil, fmt.Errorf("knowledge: create knowledge base folder: %w", err)
 	}
@@ -357,6 +392,86 @@ func CreateInWorkspace(home, workspaceID, relPath string, m Marker) (*Collection
 		return nil, err
 	}
 	return OpenCollection(filepath.Join(workDir, filepath.FromSlash(cleaned)))
+}
+
+// ancestorKnowledgeBase is the WL-4 ancestor walk behind CreateInWorkspace's
+// nesting refusal. startRel is a slash-separated directory relative to r's
+// own root ("" meaning r's root itself) — normally the target's PARENT
+// directory. It walks upward through startRel and every ancestor above it,
+// up to and including r's root, and reports the first one that already
+// carries a knowledge base marker.
+//
+// found is false, with relOfEnclosing == "", when none of startRel's
+// ancestors (r's own root included) is a knowledge base. found is true with
+// relOfEnclosing == "" specifically when r's ROOT ITSELF (the workspace's
+// work tree) is the enclosing knowledge base — a real if unusual case worth
+// naming precisely rather than folding into "not found".
+//
+// An ancestor that does not exist on disk yet (CreateInWorkspace's own
+// MkdirAll can create several levels at once, so a deep new path's
+// intermediate directories may not exist before this call) holds no marker
+// by definition, so the walk simply continues past it rather than erroring.
+func ancestorKnowledgeBase(r *os.Root, startRel string) (relOfEnclosing string, found bool, err error) {
+	dir := startRel
+	for {
+		has, statErr := dirHasKnowledgeBaseMarker(r, dir)
+		if statErr != nil {
+			return "", false, statErr
+		}
+		if has {
+			return dir, true, nil
+		}
+		if dir == "" {
+			return "", false, nil
+		}
+		dir = path.Dir(dir)
+		if dir == "." {
+			dir = ""
+		}
+	}
+}
+
+// dirHasKnowledgeBaseMarker reports whether dir (slash-separated, relative to
+// r, "" meaning r's own root) itself carries an Omnipus or Obsidian marker
+// DIRECTORY — the same directory-listing verdict DetectUsing computes at the
+// top level (FR-020, FR-021), reused here so "is this folder a knowledge
+// base" means exactly one thing everywhere in this package.
+//
+// It lists dir's entries via r (an *os.Root), never opening a marker's own
+// contents and never resolving a path outside r's root: a directory read
+// through os.Root reports each entry's type from the directory listing
+// itself, the same as os.ReadDir, so a marker name that is actually a
+// symlink is reported as a symlink, not followed and not counted as a
+// directory (mirrors DetectUsing's own no-symlink-following guarantee,
+// FR-044).
+func dirHasKnowledgeBaseMarker(r *os.Root, dir string) (bool, error) {
+	name := dir
+	if name == "" {
+		name = "."
+	}
+	f, err := r.Open(name)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("knowledge: open %q while checking for an enclosing knowledge base: %w", dir, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	entries, err := f.ReadDir(-1)
+	if err != nil {
+		return false, fmt.Errorf("knowledge: list %q while checking for an enclosing knowledge base: %w", dir, err)
+	}
+	var d Detection
+	for _, e := range entries {
+		switch e.Name() {
+		case MarkerDirName:
+			d.HasOmnipusMarker = e.IsDir()
+		case ObsidianMarkerDirName:
+			d.HasObsidianMarker = e.IsDir()
+		}
+	}
+	return d.IsKnowledgeBase(), nil
 }
 
 // realPath resolves p to an absolute, symlink-free, cleaned path. It mirrors

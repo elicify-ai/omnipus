@@ -20,6 +20,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // detectRecordingFS is a DetectFS that delegates directory listing to the real
@@ -531,6 +533,112 @@ func TestKnowledgeBase_SecondMountIsRefusedNotMerged(t *testing.T) {
 		if isWithinOrEqual(second.Root(), dir) {
 			t.Errorf("resolution listed %q, inside the OTHER collection %q (FR-026)", dir, second.Root())
 		}
+	}
+}
+
+// --- WL-4 (defect-list-wikilink-rendering-2026-09-08.md) --------------------
+
+// TestCreateInWorkspace_RefusesNestedKnowledgeBase_DirectParent.
+//
+// Oracle: WL-4 — "nothing prevents creating a knowledge base INSIDE another
+// knowledge base ... This must be blocked". Direct nesting: the target's
+// immediate PARENT already carries the marker.
+func TestCreateInWorkspace_RefusesNestedKnowledgeBase_DirectParent(t *testing.T) {
+	home := t.TempDir()
+	const wsID = "ws-alpha"
+
+	outer, err := CreateInWorkspace(home, wsID, "outer", Marker{DisplayName: "Outer"})
+	if err != nil {
+		t.Fatalf("create outer knowledge base: %v", err)
+	}
+	before := treeOf(t, outer.Root())
+
+	_, err = CreateInWorkspace(home, wsID, "outer/inner", Marker{DisplayName: "Inner"})
+	if !errors.Is(err, ErrNestedKnowledgeBase) {
+		t.Fatalf("CreateInWorkspace(outer/inner) error = %v, want ErrNestedKnowledgeBase", err)
+	}
+	if errors.Is(err, ErrAlreadyKnowledgeBase) {
+		t.Errorf("nested-parent refusal must be ErrNestedKnowledgeBase, not ErrAlreadyKnowledgeBase — %q and %q "+
+			"are different conditions and callers need to tell them apart", "you are inside one", "this IS one")
+	}
+	// Compared against the WORK-TREE path (workspace.WorkDir, lexically
+	// joined, not symlink-resolved) rather than outer.Root() (which IS
+	// resolved, via OpenCollection's realPath): on macOS the two differ
+	// textually (/var/folders/... vs. its /private resolution) even though
+	// they name the same directory, and CreateInWorkspace's own error
+	// message is built from the unresolved workDir.
+	outerWorkPath := filepath.Join(workspace.WorkDir(home, wsID), "outer")
+	msg := err.Error()
+	if !strings.Contains(msg, filepath.Join(outerWorkPath, "inner")) || !strings.Contains(msg, outerWorkPath) {
+		t.Errorf("error message %q should name both the refused target %q and the enclosing knowledge base %q",
+			msg, filepath.Join(outerWorkPath, "inner"), outerWorkPath)
+	}
+
+	// The refusal created nothing under the outer collection.
+	after := treeOf(t, outer.Root())
+	if strings.Join(before, "\n") != strings.Join(after, "\n") {
+		t.Errorf("refused nested create still changed the outer collection.\nbefore: %v\nafter:  %v", before, after)
+	}
+	if isKB, kbErr := IsKnowledgeBase(filepath.Join(outer.Root(), "inner")); kbErr == nil && isKB {
+		t.Errorf("outer/inner was detected as a knowledge base after a refused create")
+	}
+}
+
+// TestCreateInWorkspace_RefusesNestedKnowledgeBase_Grandparent.
+//
+// Oracle: WL-4's ancestor walk must not stop at the immediate parent — it
+// climbs "up from the target's parent to the workspace root". Here the
+// immediate parent ("outer/plain-subfolder") is an ordinary folder with no
+// marker of its own, but the GRANDPARENT ("outer") is a knowledge base. The
+// intermediate folder is deliberately never created ahead of time, so this
+// also proves the walk tolerates an ancestor that does not exist on disk yet.
+func TestCreateInWorkspace_RefusesNestedKnowledgeBase_Grandparent(t *testing.T) {
+	home := t.TempDir()
+	const wsID = "ws-alpha"
+
+	outer, err := CreateInWorkspace(home, wsID, "outer", Marker{DisplayName: "Outer"})
+	if err != nil {
+		t.Fatalf("create outer knowledge base: %v", err)
+	}
+
+	_, err = CreateInWorkspace(home, wsID, "outer/plain-subfolder/inner", Marker{DisplayName: "Inner"})
+	if !errors.Is(err, ErrNestedKnowledgeBase) {
+		t.Fatalf("CreateInWorkspace(outer/plain-subfolder/inner) error = %v, want ErrNestedKnowledgeBase", err)
+	}
+
+	if _, statErr := os.Stat(filepath.Join(outer.Root(), "plain-subfolder")); statErr == nil {
+		t.Errorf("refused deep-nested create still created outer/plain-subfolder")
+	} else if !os.IsNotExist(statErr) {
+		t.Errorf("stat outer/plain-subfolder: unexpected error %v", statErr)
+	}
+}
+
+// TestCreateInWorkspace_AllowsSiblingKnowledgeBase is the WL-4 NEGATIVE case:
+// the ancestor check must not over-block. A knowledge base created alongside
+// an existing one — sharing a parent that is NOT itself a knowledge base —
+// is unrelated to it and must still succeed.
+func TestCreateInWorkspace_AllowsSiblingKnowledgeBase(t *testing.T) {
+	home := t.TempDir()
+	const wsID = "ws-alpha"
+
+	if _, err := CreateInWorkspace(home, wsID, "projects/kb-one", Marker{DisplayName: "One"}); err != nil {
+		t.Fatalf("create first sibling knowledge base: %v", err)
+	}
+	// "projects/" itself is an ordinary folder (no marker), so a second
+	// knowledge base next to the first, under the same plain parent, must be
+	// allowed — this is a sibling relationship, not nesting.
+	second, err := CreateInWorkspace(home, wsID, "projects/kb-two", Marker{DisplayName: "Two"})
+	if err != nil {
+		t.Fatalf("CreateInWorkspace(sibling) = %v, want success — a sibling knowledge base is not nested (WL-4 must not over-block)", err)
+	}
+	if isKB, kbErr := IsKnowledgeBase(second.Root()); kbErr != nil || !isKB {
+		t.Errorf("IsKnowledgeBase(sibling) = %v, %v; want true, nil", isKB, kbErr)
+	}
+
+	// Also allowed at the workspace root: a knowledge base with no enclosing
+	// marker anywhere above it at all.
+	if _, err := CreateInWorkspace(home, wsID, "top-level-kb", Marker{DisplayName: "Top"}); err != nil {
+		t.Errorf("CreateInWorkspace(top-level, unrelated to the others) = %v, want success", err)
 	}
 }
 

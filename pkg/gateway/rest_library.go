@@ -978,6 +978,8 @@ func (a *restAPI) handleLibraryCreateVault(w http.ResponseWriter, r *http.Reques
 		switch {
 		case errors.Is(err, knowledge.ErrAlreadyKnowledgeBase):
 			jsonErr(w, http.StatusConflict, "an entry already exists at that path")
+		case errors.Is(err, knowledge.ErrNestedKnowledgeBase):
+			jsonErr(w, http.StatusConflict, "that location is inside an existing knowledge base — a knowledge base cannot be created inside another one")
 		case errors.Is(err, knowledge.ErrMarkerInvalid):
 			jsonErr(w, http.StatusBadRequest, "invalid knowledge base name")
 		case errors.Is(err, knowledge.ErrOutsideCollection):

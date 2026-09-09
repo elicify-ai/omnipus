@@ -124,6 +124,37 @@ func TestCreateBase_RefusesWhenAlreadyAKnowledgeBase(t *testing.T) {
 	_ = workDir
 }
 
+// TestCreateBase_RefusesWhenNestedInsideAKnowledgeBase is WL-4
+// (defect-list-wikilink-rendering-2026-09-08.md) exercised through the
+// AGENT-TOOL front door: knowledge_base_create must inherit the ancestor
+// check from CreateInWorkspace, not just the REST handler. Unlike
+// TestCreateBase_RefusesWhenAlreadyAKnowledgeBase (whose target path already
+// exists and so is caught by the tool's OWN pre-CreateInWorkspace collision
+// check), "Outer/Inner" does not exist yet, so this genuinely reaches
+// CreateInWorkspace's new ErrNestedKnowledgeBase branch.
+func TestCreateBase_RefusesWhenNestedInsideAKnowledgeBase(t *testing.T) {
+	home := a4Home(t)
+	ws := a4Workspace(t, home)
+	deps, rec := a4Deps(home)
+	tool := NewCreateBaseTool(deps)
+
+	_, cerr := CreateInWorkspace(home, ws, "Outer", Marker{DisplayName: "Outer"})
+	require.NoError(t, cerr)
+
+	res := tool.Execute(a4Ctx("mia", ws), map[string]any{"name": "Inner", "parent_path": "Outer"})
+	require.True(t, res.IsError)
+	assert.Contains(t, res.ForLLM, "inside an existing knowledge base")
+	assert.NotContains(t, res.ForLLM, "already exists",
+		"a nested refusal must not read like a collision refusal — they are different conditions")
+
+	workDir, err := workspace.SafeWorkDir(home, ws)
+	require.NoError(t, err)
+	assert.NoDirExists(t, filepath.Join(workDir, "Outer", "Inner"))
+
+	require.Len(t, rec.refusals(), 1)
+	assert.Contains(t, rec.refusals()[0].Reason, "inside an existing knowledge base")
+}
+
 // TestCreateBase_RefusesEmptyOrInvalidName covers the name-shape refusals a
 // model could plausibly send: empty, ".", "..", and a name containing a
 // path separator (which would otherwise silently compose a nested path the
