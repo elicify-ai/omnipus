@@ -15,7 +15,9 @@ func (lv *LiveView) dispatchInputCommand(ctx, targetCtx context.Context, viewerI
 	switch in.Kind {
 	case "mouse_move", "mouse_down", "mouse_up", "wheel":
 		if in.HasXY && in.CaptureWidth > 0 && in.CaptureHeight > 0 {
+			in.observeTiming("mapping_start")
 			rx, ry, ok := lv.rescaleToCSSViewport(ctx, in.X, in.Y, in.CaptureWidth, in.CaptureHeight)
+			in.observeTiming("mapping_done")
 			if !ok {
 				if err := ctx.Err(); err != nil {
 					return realInputError("browser live: input canceled: %w", err)

@@ -15,6 +15,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -55,14 +56,15 @@ const browserWSMaxMessageBytes = 64 * 1024
 // carries far less than chat's wsConn (no replay divert, no session
 // tracking) — this socket does exactly one thing: relay one live browser.
 type browserWSConn struct { // not-wire-format: internal connection bookkeeping, never marshaled.
-	conn         *websocket.Conn
-	sendCh       chan browserOutboundFrame
-	doneCh       chan struct{}
-	closeOnce    sync.Once
-	latestMu     sync.Mutex
-	latestWakeCh chan struct{}
-	latestSlots  [browserLatestKindCount]browserLatestFrame
-	latestNext   int
+	inputTimingSequence atomic.Uint64
+	conn                *websocket.Conn
+	sendCh              chan browserOutboundFrame
+	doneCh              chan struct{}
+	closeOnce           sync.Once
+	latestMu            sync.Mutex
+	latestWakeCh        chan struct{}
+	latestSlots         [browserLatestKindCount]browserLatestFrame
+	latestNext          int
 }
 
 func (c *browserWSConn) close() {
@@ -649,9 +651,10 @@ const maxDeviceScaleFactor = 3.0
 // == one viewer == at most one attached (agent, session) live view at a
 // time.
 type BrowserWSHandler struct {
-	agentLoop     *agent.AgentLoop
-	allowedOrigin string
-	upgrader      websocket.Upgrader
+	inputTimingEnabled bool // read once at handler construction, never changed live
+	agentLoop          *agent.AgentLoop
+	allowedOrigin      string
+	upgrader           websocket.Upgrader
 
 	// activeConns tracks in-flight ServeHTTP goroutines so Wait() can block
 	// until all connections have fully torn down (test cleanup, mirroring
@@ -739,8 +742,9 @@ type BrowserWSHandler struct {
 // sockets can never disagree on CORS/origin policy.
 func newBrowserWSHandler(agentLoop *agent.AgentLoop, allowedOrigin string) *BrowserWSHandler {
 	return &BrowserWSHandler{
-		agentLoop:     agentLoop,
-		allowedOrigin: allowedOrigin,
+		inputTimingEnabled: os.Getenv("OMNIPUS_BROWSER_INPUT_TIMING") == "1",
+		agentLoop:          agentLoop,
+		allowedOrigin:      allowedOrigin,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: wsCheckOrigin(allowedOrigin),
 		},
@@ -1080,6 +1084,10 @@ func (h *BrowserWSHandler) readLoop(
 
 	for {
 		_, data, err := conn.ReadMessage()
+		var receivedAt time.Time
+		if h.inputTimingEnabled {
+			receivedAt = time.Now()
+		}
 		if err != nil {
 			if !websocket.IsCloseError(err,
 				websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) {
@@ -1138,7 +1146,7 @@ func (h *BrowserWSHandler) readLoop(
 			// duration. See browserConnWorkQueue and beginAttach.
 			h.dispatchAttach(wc, &state, viewerID, userID, data, cfg)
 		case string(generated.WsFrameTypeBrowserInput):
-			h.dispatchBrowserCommand(wc, &state, viewerID, userID, data, typ.Type, cfg)
+			h.dispatchBrowserCommand(wc, &state, viewerID, userID, data, typ.Type, cfg, receivedAt)
 		case string(generated.WsFrameTypeBrowserControl):
 			h.dispatchBrowserCommand(wc, &state, viewerID, userID, data, typ.Type, cfg)
 		case string(generated.WsFrameTypeBrowserTabAction):
@@ -1424,7 +1432,11 @@ func (h *BrowserWSHandler) handleInput(wc *browserWSConn, state *browserConnStat
 	h.handleInputContext(attachment.ctx, wc, state, attachment, viewerID, data)
 }
 
-func (h *BrowserWSHandler) handleInputContext(ctx context.Context, wc *browserWSConn, state *browserConnState, attachment browserAttachmentSnapshot, viewerID string, data []byte) {
+func (h *BrowserWSHandler) handleInputContext(ctx context.Context, wc *browserWSConn, state *browserConnState, attachment browserAttachmentSnapshot, viewerID string, data []byte, timing ...*browserInputTiming) {
+	var probe *browserInputTiming
+	if len(timing) > 0 {
+		probe = timing[0]
+	}
 	runBrowserConnWorkHook(workKindInput)
 	// Use the identity captured when this command was admitted. A replacement
 	// attachment cancels this lifetime before any new identity is published.
@@ -1442,8 +1454,17 @@ func (h *BrowserWSHandler) handleInputContext(ctx context.Context, wc *browserWS
 
 	in := browserInputFrameToLiveInput(frame)
 	in.SourceContext = attachment.ctx
-
-	if err := mgr.Live().InputContext(ctx, panelSessionID, viewerID, in); err != nil {
+	if probe != nil {
+		in.Timing = &browser.LiveInputTimingObserver{Observe: probe.mark}
+	}
+	inputErr := mgr.Live().InputContext(ctx, panelSessionID, viewerID, in)
+	if probe != nil {
+		probe.outcome = "completed"
+		if inputErr != nil {
+			probe.outcome = "failed"
+		}
+	}
+	if err := inputErr; err != nil {
 		if commandWasSuperseded(ctx, attachment) {
 			return
 		}

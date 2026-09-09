@@ -247,6 +247,16 @@ type LiveInput struct {
 	// (scroll deltas, not positions) or for key/text kinds (no coordinates
 	// at all).
 	CaptureWidth, CaptureHeight float64
+
+	// Timing is an optional in-process diagnostic observer. It receives
+	// fixed stage names only, never input contents, and must not block or reenter.
+	Timing *LiveInputTimingObserver
+}
+
+// LiveInputTimingObserver is local diagnostic state, never serialized. A pointer
+// keeps LiveInput comparable and separates the observer from retained key state.
+type LiveInputTimingObserver struct { // not-wire-format: callback for local measurements only.
+	Observe func(stage string)
 }
 
 // StatusSink receives a live-view lifecycle notification for one attached

@@ -30,6 +30,7 @@ type browserCommand struct { // not-wire-format: queued execution closure with a
 	move       bool
 	navigation bool
 	run        func(context.Context)
+	onDiscard  func()
 }
 
 func (q *browserCommandQueue) submit(wg *sync.WaitGroup, job browserCommand) bool {
@@ -83,24 +84,36 @@ func (q *browserCommandQueue) drain(wg *sync.WaitGroup) {
 
 func (q *browserCommandQueue) close() {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	q.closed = true
+	jobs := q.jobs
 	q.jobs = nil
 	if q.activeCancel != nil {
 		q.activeCancel()
 	}
+	q.mu.Unlock()
+	notifyDiscardedBrowserCommands(jobs)
 }
 
 func (q *browserCommandQueue) discard() {
 	q.mu.Lock()
-	defer q.mu.Unlock()
+	jobs := q.jobs
 	q.jobs = nil
 	if q.activeCancel != nil {
 		q.activeCancel()
 	}
+	q.mu.Unlock()
+	notifyDiscardedBrowserCommands(jobs)
 }
 
-func (h *BrowserWSHandler) dispatchBrowserCommand(wc *browserWSConn, state *browserConnState, viewerID, userID string, data []byte, typ string, cfg *config.Config) {
+func notifyDiscardedBrowserCommands(jobs []browserCommand) {
+	for _, job := range jobs {
+		if job.onDiscard != nil {
+			job.onDiscard()
+		}
+	}
+}
+
+func (h *BrowserWSHandler) dispatchBrowserCommand(wc *browserWSConn, state *browserConnState, viewerID, userID string, data []byte, typ string, cfg *config.Config, arrival ...time.Time) {
 	attachment := state.commandAttachment()
 	var in generated.BrowserInputFrame
 	if typ == string(generated.WsFrameTypeBrowserInput) {
@@ -109,10 +122,26 @@ func (h *BrowserWSHandler) dispatchBrowserCommand(wc *browserWSConn, state *brow
 			return
 		}
 	}
+	var received time.Time
+	if len(arrival) > 0 {
+		received = arrival[0]
+	}
+	var probe *browserInputTiming
+	if h.inputTimingEnabled {
+		probe = newBrowserInputTiming(true, &wc.inputTimingSequence, in, received)
+	}
+	if probe != nil {
+		probe.mark("queue_submit")
+	}
 	job := browserCommand{
 		move:       in.Kind == "mouse_move",
 		navigation: in.Kind == "navigate" || in.Kind == "navigate_back" || in.Kind == "reload",
 		run: func(ctx context.Context) {
+			if probe != nil {
+				probe.mark("queue_started")
+				defer probe.finish()
+			}
+
 			if attachment.ctx.Err() != nil {
 				return
 			}
@@ -124,7 +153,7 @@ func (h *BrowserWSHandler) dispatchBrowserCommand(wc *browserWSConn, state *brow
 			}
 			switch typ {
 			case string(generated.WsFrameTypeBrowserInput):
-				h.handleInputContext(commandCtx, wc, state, attachment, viewerID, data)
+				h.handleInputContext(commandCtx, wc, state, attachment, viewerID, data, probe)
 			case string(generated.WsFrameTypeBrowserControl):
 				h.handleControlContext(commandCtx, wc, state, attachment, viewerID, userID, data, cfg)
 			case string(generated.WsFrameTypeBrowserTabAction):
@@ -132,7 +161,14 @@ func (h *BrowserWSHandler) dispatchBrowserCommand(wc *browserWSConn, state *brow
 			}
 		},
 	}
+	if probe != nil {
+		job.onDiscard = func() { probe.outcome = "queue_discarded"; probe.finish() }
+	}
 	if !state.commands.submit(&h.activeConns, job) {
+		if probe != nil {
+			probe.outcome = "queue_rejected"
+			probe.finish()
+		}
 		failBrowserInput(wc, state, viewerID, "Browser input overloaded; reconnect and retry.")
 	}
 }

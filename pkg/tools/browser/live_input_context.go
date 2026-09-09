@@ -77,6 +77,7 @@ func (r *LiveViewRegistry) InputContext(ctx context.Context, sessionID, viewerID
 }
 
 func (lv *LiveView) dispatchInputContext(caller context.Context, viewerID string, in LiveInput) error {
+	in.observeTiming("live_entry")
 	if inputSourceEnded(in.SourceContext) {
 		return realInputError("browser live: input source canceled: %w", in.SourceContext.Err())
 	}
@@ -114,16 +115,20 @@ func (lv *LiveView) dispatchInputContext(caller context.Context, viewerID string
 	lv.mu.Unlock()
 	defer func() { stop(); cancel(); lv.mu.Lock(); delete(state.requests, request); lv.mu.Unlock() }()
 	if lv.mgr != nil {
+		in.observeTiming("tab_gate_wait")
 		release, err := lv.mgr.acquireLiveTabCommand(ctx, lv.sessionID)
 		if err != nil {
 			return realInputError("browser live: input canceled while waiting for tab operation: %w", err)
 		}
 		defer release()
+		in.observeTiming("tab_gate_acquired")
 	}
+	in.observeTiming("input_gate_wait")
 	if err := acquireInputGate(ctx, state.gate); err != nil {
 		return realInputError("browser live: input canceled while queued: %w", err)
 	}
 	defer func() { <-state.gate }()
+	in.observeTiming("input_gate_acquired")
 	if err := caller.Err(); err != nil {
 		return realInputError("browser live: input canceled: %w", err)
 	}
@@ -188,6 +193,7 @@ func (lv *LiveView) dispatchInputContext(caller context.Context, viewerID string
 	if !allowed {
 		return inputRateLimitError(in.Kind)
 	}
+	in.observeTiming("admission_done")
 	err := lv.dispatchInputCommand(ctx, targetCtx, viewerID, in)
 	if err != nil && releasing {
 		// A release rejected before command delivery (for example, unavailable
@@ -265,7 +271,9 @@ func (lv *LiveView) dispatchTrackedInput(ctx, targetCtx context.Context, viewerI
 	case *input.DispatchKeyEventParams:
 		a.Modifiers = input.Modifier(modifiers)
 	}
+	in.observeTiming("cdp_start")
 	err = lv.runCDP(ctx, inputRemaining(ctx), action)
+	in.observeTiming("cdp_done")
 	// Only an explicit protocol rejection proves a press was not accepted.
 	// Other transport failures have uncertain delivery; remember the possible
 	// hold for cleanup without replaying the press or typed content.
@@ -609,4 +617,10 @@ func (a historyBackInputAction) Do(ctx context.Context) error {
 		*a.didNavigate = true
 	}
 	return page.NavigateToHistoryEntry(entries[index-1].ID).Do(ctx)
+}
+
+func (in *LiveInput) observeTiming(stage string) {
+	if in.Timing != nil && in.Timing.Observe != nil {
+		in.Timing.Observe(stage)
+	}
 }

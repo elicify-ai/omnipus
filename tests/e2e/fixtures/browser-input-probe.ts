@@ -5,6 +5,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomInt } from 'node:crypto';
+import { localClockOffsetBounds } from './browser-input-timing';
 import { browserRuntimeTarget } from '../../browser-runtime-target';
 import { expect, type Page, type TestInfo } from '@playwright/test';
 import { assistantMessages, browserLiveFrame, browserLivePanel, browserLiveVideo, chatInput, selectAgent, watchLiveButton } from './selectors';
@@ -27,7 +28,7 @@ type StatsRow = { pc: number; id: string; type: string; [key: string]: unknown }
 type StatsSnapshot = { label: string; at: number; rows: StatsRow[]; errors: string[]; receivers: Array<Record<string, unknown>>; transceivers: Array<{ pc: number; kind: string; direction: RTCRtpTransceiverDirection; currentDirection: RTCRtpTransceiverDirection | null }> };
 type ClickStages = {
   count: number; armedAt: number; pointerAt?: number;
-  sends: Array<{ route: string; kind: string; attemptedAt: number; returnedAt?: number; succeeded?: boolean }>;
+  sends: Array<{ route: string; kind: string; attemptedAt: number; returnedAt?: number; succeeded?: boolean; captureId?: string; captureGeneration?: number }>;
   presentation?: Record<string, number>;
 };
 type LatencyEvidence = { clicks: ClickStages[]; stats: StatsSnapshot[]; audioOverrides: number };
@@ -66,6 +67,8 @@ async function installLatencyDiagnostics(page: Page, videoOnly = false): Promise
         try { frame = JSON.parse(payload) as Record<string, unknown>; } catch { /* Non-JSON transport messages carry no input timing. */ }
         if (frame && (frame.kind === 'mouse_down' || frame.kind === 'mouse_up')) {
           entry = { route, kind: frame.kind, attemptedAt: performance.now() };
+          if (typeof frame.capture_id === 'string' && /^[a-f0-9]{64}$/.test(frame.capture_id)) entry.captureId = frame.capture_id;
+          if (typeof frame.capture_generation === 'number' && Number.isSafeInteger(frame.capture_generation) && frame.capture_generation > 0) entry.captureGeneration = frame.capture_generation;
           current.sends.push(entry);
         }
       }
@@ -77,7 +80,7 @@ async function installLatencyDiagnostics(page: Page, videoOnly = false): Promise
     WebSocket.prototype.send = function (data: unknown) { observeSend('websocket', data, () => Reflect.apply(wsSend, this, [data])); };
     const dcSend = RTCDataChannel.prototype.send;
     RTCDataChannel.prototype.send = function (data: unknown) { observeSend('datachannel', data, () => Reflect.apply(dcSend, this, [data])); };
-    const fields = ['timestamp', 'kind', 'mediaType', 'transportId', 'codecId', 'packetsReceived', 'packetsLost', 'bytesReceived', 'jitter', 'jitterBufferDelay', 'jitterBufferTargetDelay', 'jitterBufferMinimumDelay', 'jitterBufferEmittedCount', 'totalDecodeTime', 'framesDecoded', 'framesDropped', 'framesPerSecond', 'totalProcessingDelay', 'nackCount', 'pliCount', 'currentRoundTripTime', 'totalRoundTripTime', 'roundTripTime', 'roundTripTimeMeasurements', 'responsesReceived', 'availableIncomingBitrate', 'state', 'nominated', 'selectedCandidatePairId', 'totalSamplesReceived', 'totalSamplesDuration', 'totalAudioEnergy', 'audioLevel', 'concealedSamples', 'silentConcealedSamples', 'concealmentEvents', 'insertedSamplesForDeceleration', 'removedSamplesForAcceleration'];
+    const fields = ['localCandidateId', 'remoteCandidateId', 'address', 'port', 'protocol', 'candidateType', 'tcpType', 'dtlsState', 'timestamp', 'kind', 'mediaType', 'transportId', 'codecId', 'packetsReceived', 'packetsLost', 'bytesReceived', 'jitter', 'jitterBufferDelay', 'jitterBufferTargetDelay', 'jitterBufferMinimumDelay', 'jitterBufferEmittedCount', 'totalDecodeTime', 'framesDecoded', 'framesDropped', 'framesPerSecond', 'totalProcessingDelay', 'nackCount', 'pliCount', 'currentRoundTripTime', 'totalRoundTripTime', 'roundTripTime', 'roundTripTimeMeasurements', 'responsesReceived', 'availableIncomingBitrate', 'state', 'nominated', 'selectedCandidatePairId', 'totalSamplesReceived', 'totalSamplesDuration', 'totalAudioEnergy', 'audioLevel', 'concealedSamples', 'silentConcealedSamples', 'concealmentEvents', 'insertedSamplesForDeceleration', 'removedSamplesForAcceleration'];
     (window as ProbeWindow).__omnipusLatency = {
       begin(count) { current = { count, armedAt: performance.now(), sends: [] }; clicks.push(current); },
       pointer(at) { if (current) current.pointerAt = at; },
@@ -97,7 +100,7 @@ async function installLatencyDiagnostics(page: Page, videoOnly = false): Promise
             const report = await pc.getStats();
             report.forEach(raw => {
               const row = raw as Record<string, unknown>;
-              if (!['inbound-rtp', 'remote-inbound-rtp', 'candidate-pair', 'transport'].includes(String(row.type))) return;
+              if (!['inbound-rtp', 'remote-inbound-rtp', 'candidate-pair', 'transport', 'local-candidate', 'remote-candidate'].includes(String(row.type))) return;
               const selected: StatsRow = { pc: index, id: String(row.id), type: String(row.type) };
               for (const field of fields) selected[field] = row[field] ?? null;
               snapshot.rows.push(selected);
@@ -150,13 +153,26 @@ function cyclePlan(index: number) {
   return { zone, key, events };
 }
 
-function fixtureHTML(expectedEvents: number[], nonce: number): string {
+export function fixtureHTML(expectedEvents: number[], nonce: number, timingEnabled = false): string {
   return `<!doctype html><meta charset="utf-8"><title>Omnipus exact input soak</title>
 <style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#f0f}canvas{display:block;width:100%;height:100%}</style>
 <canvas id="probe"></canvas><script>
 const expected=${JSON.stringify(expectedEvents)}, nonce=${nonce};
 const canvas=document.getElementById('probe'), ctx=canvas.getContext('2d');
 let count=0, hash=0, last=0, held=0, firstError=0;
+const timingEnabled=${JSON.stringify(timingEnabled)}, timingEvents=[];
+function clockBracket(){return {before:performance.now(),wallMs:Date.now(),after:performance.now()}}
+const timingClockAtLoad=timingEnabled?clockBracket():null;
+if(timingEnabled)window.__omnipusInputTiming={
+ nonce,timeOrigin:performance.timeOrigin,clockAtLoad:timingClockAtLoad,clockAfterLastEvent:null,
+ snapshot(offset=0,limit=100){
+  if(!Number.isInteger(offset)||offset<0||!Number.isInteger(limit)||limit<1||limit>100)throw Error('Invalid timing chunk');
+  return {nonce,timeOrigin:this.timeOrigin,clockAtLoad:this.clockAtLoad,clockAfterLastEvent:this.clockAfterLastEvent,total:timingEvents.length,offset,state:{count,hash,last,held,firstError},
+   columns:['count','code','trusted','handlerAt','wallClockMs','wallBracketEndAt','paintRequestedAt','paintCommandsCompletedAt'],
+   rows:timingEvents.slice(offset,offset+limit).map(e=>[e.count,e.code,e.trusted,e.handlerAt,e.wallClockMs,e.wallBracketEndAt,e.paintRequestedAt,e.paintCommandsCompletedAt])};
+ }
+};
+
 function bits(value,size){return Array.from({length:size},(_,i)=>(value>>>i)&1)}
 function paint(){
  const w=canvas.width=innerWidth,h=canvas.height=innerHeight;
@@ -171,16 +187,22 @@ function paint(){
  ctx.fillStyle='#246b35';ctx.fillRect(w*.51,h*.82,w*.44,h*.12);
  ctx.fillStyle='#fff';ctx.fillText('LEFT',w*.2,h*.9);ctx.fillText('RIGHT',w*.65,h*.9);
 }
-function record(code,trusted){
+function record(code,trusted,clock){
  if(!trusted)code=255;
  if(!firstError && expected[count]!==code) firstError=count+1;
- count++;hash=(Math.imul(hash,257)+code)>>>0;last=code;paint();
+ count++;hash=(Math.imul(hash,257)+code)>>>0;last=code;
+ const paintRequestedAt=timingEnabled?performance.now():0;
+ paint();
+ if(timingEnabled && timingEvents.length<expected.length){
+  timingEvents.push({count,code,trusted,handlerAt:clock.before,wallClockMs:clock.wallMs,wallBracketEndAt:clock.after,paintRequestedAt,paintCommandsCompletedAt:performance.now()});
+  if(count===expected.length)window.__omnipusInputTiming.clockAfterLastEvent=clockBracket();
+ }
 }
-addEventListener('mousedown',e=>{held|=1;record(e.button===0?1+(e.clientX>=innerWidth/2):255,e.isTrusted)});
-addEventListener('mouseup',e=>{held&=~1;record(e.button===0?3+(e.clientX>=innerWidth/2):255,e.isTrusted)});
-addEventListener('click',e=>record(e.button===0?5+(e.clientX>=innerWidth/2):255,e.isTrusted));
-addEventListener('keydown',e=>{e.preventDefault();const bit=e.code==='ArrowLeft'?2:e.code==='ArrowRight'?4:0;held|=bit;record(e.repeat?255:bit===2?7:bit===4?9:255,e.isTrusted)});
-addEventListener('keyup',e=>{e.preventDefault();const bit=e.code==='ArrowLeft'?2:e.code==='ArrowRight'?4:0;held&=~bit;record(bit===2?8:bit===4?10:255,e.isTrusted)});
+addEventListener('mousedown',e=>{const at=timingEnabled?clockBracket():null;held|=1;record(e.button===0?1+(e.clientX>=innerWidth/2):255,e.isTrusted,at)});
+addEventListener('mouseup',e=>{const at=timingEnabled?clockBracket():null;held&=~1;record(e.button===0?3+(e.clientX>=innerWidth/2):255,e.isTrusted,at)});
+addEventListener('click',e=>{const at=timingEnabled?clockBracket():null;record(e.button===0?5+(e.clientX>=innerWidth/2):255,e.isTrusted,at)});
+addEventListener('keydown',e=>{const at=timingEnabled?clockBracket():null;e.preventDefault();const bit=e.code==='ArrowLeft'?2:e.code==='ArrowRight'?4:0;held|=bit;record(e.repeat?255:bit===2?7:bit===4?9:255,e.isTrusted,at)});
+addEventListener('keyup',e=>{const at=timingEnabled?clockBracket():null;e.preventDefault();const bit=e.code==='ArrowLeft'?2:e.code==='ArrowRight'?4:0;held&=~bit;record(bit===2?8:bit===4?10:255,e.isTrusted,at)});
 addEventListener('resize',paint);paint();
 </script>`;
 }
@@ -362,7 +384,10 @@ function directFixturePreparation(preview: string | undefined, directory: string
 }
 
 export async function runBrowserInputProbe(page: Page, testInfo: TestInfo, mode: 'soak' | 'latency' | 'latency-video-only'): Promise<void> {
-  testInfo.setTimeout(mode === 'soak' ? 32 * 60_000 : 8 * 60_000);
+  const targetTimingEnabled = process.env.BROWSER_PROBE_TARGET_TIMING === '1';
+  const timingHoldMs = Number(process.env.BROWSER_PROBE_TARGET_TIMING_HOLD_MS ?? 0);
+  if (!Number.isSafeInteger(timingHoldMs) || timingHoldMs < 0 || timingHoldMs > 300_000 || (timingHoldMs > 0 && !targetTimingEnabled)) throw new Error('Target timing hold requires timing enabled and duration0..300000ms');
+  testInfo.setTimeout((mode === 'soak' ? 32 * 60_000 : 8 * 60_000) + timingHoldMs);
   const mixedDuration = mode === 'soak' ? PHASE_MS : CLICK_COUNT * 500;
   const diagnostic = mode !== 'soak';
   const videoOnly = mode === 'latency-video-only';
@@ -382,6 +407,11 @@ export async function runBrowserInputProbe(page: Page, testInfo: TestInfo, mode:
   const idleSamples: Array<{ at: number; count: number; hash: number }> = [];
   const clicks: Array<{ index: number; at: number; latencyMs: number }> = [];
   const timing: { idleStart?: number; idleEnd?: number; mixedStart?: number; mixedEnd?: number; idleElapsedMs?: number; mixedElapsedMs?: number } = {};
+  const viewerClockBrackets: Array<{ label: string; before: number; wallMs: number; after: number; timeOrigin: number }> = [];
+  const bracketViewerClock = async (label: string) => {
+    const clock = await page.evaluate(() => ({ before: performance.now(), wallMs: Date.now(), after: performance.now(), timeOrigin: performance.timeOrigin }));
+    viewerClockBrackets.push({ label, ...clock });
+  };
   let baselineWire = 0;
   page.on('pageerror', error => pageErrors.push(error.message));
   page.on('websocket', socket => {
@@ -399,6 +429,7 @@ export async function runBrowserInputProbe(page: Page, testInfo: TestInfo, mode:
   let state: PixelState = { count: 0, hash: 0, last: 0, held: 0, firstError: 0, nonce };
   if (diagnostic) await installLatencyDiagnostics(page, videoOnly);
   try {
+    if (targetTimingEnabled && !diagnostic) throw new Error('Target timing is a latency diagnostic only');
     await page.goto(origin.href);
     const response = await page.request.get(new URL('/api/v1/workspaces', origin).href);
     expect(response.ok(), 'authenticated workspace discovery').toBe(true);
@@ -411,7 +442,7 @@ export async function runBrowserInputProbe(page: Page, testInfo: TestInfo, mode:
     const direct = directFixturePreparation(process.env.BROWSER_PROBE_PREVIEW_URL, process.env.BROWSER_PROBE_FIXTURE_DIR, origin, workspaceWork);
     const fixtureDir = direct?.directory ?? path.join(workspaceWork, relative);
     fs.mkdirSync(fixtureDir, { recursive: true });
-    const html = fixtureHTML(expectedEvents, nonce);
+    const html = fixtureHTML(expectedEvents, nonce, targetTimingEnabled);
     fs.writeFileSync(path.join(fixtureDir, 'index.html'), html);
     await selectAgent(page, process.env.BROWSER_PROBE_AGENT_NAME || /Jim/i);
     console.log(`[${label}] agent selected`);
@@ -498,6 +529,7 @@ export async function runBrowserInputProbe(page: Page, testInfo: TestInfo, mode:
       await persistScreenshot(page, testInfo, 'before-input.png');
       await captureRTCStats(page, 'before-input');
     }
+    if (targetTimingEnabled) await bracketViewerClock('before-input');
     const mixedStart = performance.now();
     timing.mixedStart = Date.now();
     console.log(`[${label}] input phase started: ${CLICK_COUNT} clicks, ${expectedEvents.length} exact events, target${mixedDuration}ms`);
@@ -568,14 +600,42 @@ export async function runBrowserInputProbe(page: Page, testInfo: TestInfo, mode:
         diagnostics = await page.evaluate(() => (window as ProbeWindow).__omnipusLatency!.evidence());
       } catch (error) { diagnosticsError = String(error); }
     }
+    let viewerClockError: string | null = null;
+    if (targetTimingEnabled) {
+      try { await bracketViewerClock('after-input'); }
+      catch { viewerClockError = 'Viewer clock read failed'; }
+    }
     const rtcDeltas = receiverDeltas(diagnostics);
     const evidenceName = mode === 'soak' ? 'soak-evidence.json' : videoOnly ? 'latency-video-only-evidence.json' : 'latency-evidence.json';
     const file = testInfo.outputPath(evidenceName);
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify({ mode, nonce, expectedEventCount: expectedEvents.length, finalExpected: state, timing, clicks, latenciesMs: latencies, p95Ms, thresholdMs: MAX_P95_MS, diagnostics, diagnosticsError, rtcDeltas, idleSamples, wire, pageErrors, unsupported: ['audio content', 'native macOS app', 'remote network/TURN path'] }, null, 2));
+    fs.writeFileSync(file, JSON.stringify({ mode, nonce, expectedEventCount: expectedEvents.length, finalExpected: state, timing, clicks, latenciesMs: latencies, p95Ms, thresholdMs: MAX_P95_MS, targetTimingEnabled, targetTimingExtraction: targetTimingEnabled ? 'pending authorized browser_evaluate after measurement' : 'disabled', viewerClockBrackets: viewerClockBrackets.map(clock => ({ ...clock, wallMinusMonotonicBounds: localClockOffsetBounds(clock) })), viewerClockError, timingCaveats: ['canvas command completion is not physical paint', 'cross-clock offsets require pre/post bracket bounds; never assume equal time origins', 'target timing adds synchronous performance reads and array writes; sampling overhead is retained separately'], diagnostics, diagnosticsError, rtcDeltas, idleSamples, wire, pageErrors, unsupported: ['audio content', 'native macOS app', 'remote network/TURN path'] }, null, 2));
     console.log(`[${label}] evidence persisted: ${file}; clicks=${latencies.length}, p95=${p95Ms === null ? 'unavailable' : p95Ms.toFixed(3)}ms`);
     if (diagnostic) console.log(`[${label}] receiver deltas: ${JSON.stringify(rtcDeltas)}; statsError=${diagnosticsError ?? 'none'}`);
     await testInfo.attach(evidenceName, { path: file, contentType: 'application/json' });
+    if (targetTimingEnabled && timingHoldMs > 0 && latencies.length === CLICK_COUNT) {
+      // browser_evaluate cooperatively defers while a viewer owns control.
+      // Escape releases it locally without forwarding a key into the target.
+      let controlReleaseError: string | null = null;
+      try {
+        const releaseStart = wire.length;
+        await browserLiveFrame(page).press('Escape', { timeout: 5000 });
+        await expect.poll(() => wire.slice(releaseStart).some(event => event.type === 'browser_status' && event.state === 'released'), { timeout: 5000 }).toBe(true);
+      } catch { controlReleaseError = 'Postmeasurement control release was not confirmed'; }
+      const releaseFile = testInfo.outputPath('target-timing-release');
+      const holdStarted = performance.now();
+      fs.writeFileSync(testInfo.outputPath('target-timing-ready.json'), JSON.stringify({ nonce, releaseFile, controlReleaseError, maxHoldMs: timingHoldMs, note: 'Postmeasurement only; extract snapshot chunks0/100/200 before writing nonce to releaseFile' }), { flag: 'wx' });
+      console.log(`[${label}] target timing extraction ready: nonce=${nonce}, releaseFile=${releaseFile}`);
+      let released = false;
+      while (performance.now() - holdStarted < timingHoldMs) {
+        if (fs.existsSync(releaseFile) && fs.readFileSync(releaseFile, 'utf8').trim() === String(nonce)) { released = true; break; }
+        await page.waitForTimeout(Math.min(500, Math.max(0, timingHoldMs - (performance.now() - holdStarted))));
+      }
+      fs.writeFileSync(testInfo.outputPath('target-timing-hold.json'), JSON.stringify({ nonce, released, elapsedMs: performance.now() - holdStarted, measuredWindowUnaffected: true }));
+      // Extraction availability is recorded separately; never replace an
+      // already-thrown pixel/latency failure with a postmeasurement hold timeout.
+      if (!released) console.log(`[${label}] target timing hold expired; extraction remains unverified`);
+    }
     if (diagnostic && latencies.length === CLICK_COUNT) {
       expect(diagnosticsError, 'latency instrumentation must remain readable').toBeNull();
       expect(diagnostics?.clicks, 'one outbound/presentation trace per click').toHaveLength(CLICK_COUNT);

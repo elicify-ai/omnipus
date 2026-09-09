@@ -42,11 +42,15 @@ func TestSharedMediaMuxGatewayOwnership(t *testing.T) {
 	// Reserve then release local ports, matching the existing media-port tests.
 	udp, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	require.NoError(t, err)
-	udpPort := udp.LocalAddr().(*net.UDPAddr).Port
+	udpAddr, ok := udp.LocalAddr().(*net.UDPAddr)
+	require.True(t, ok, "UDP listener must expose a UDP address")
+	udpPort := udpAddr.Port
 	require.NoError(t, udp.Close())
 	tcp, err := net.Listen("tcp4", "127.0.0.1:0")
 	require.NoError(t, err)
-	tcpPort := tcp.Addr().(*net.TCPAddr).Port
+	tcpAddr, ok := tcp.Addr().(*net.TCPAddr)
+	require.True(t, ok, "TCP listener must expose a TCP address")
+	tcpPort := tcpAddr.Port
 	require.NoError(t, tcp.Close())
 	cfg := &config.Config{}
 	cfg.Tools.Browser.WebRTCMediaUDPPort = udpPort

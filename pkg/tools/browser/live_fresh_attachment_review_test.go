@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	"github.com/stretchr/testify/require"
 )
@@ -28,9 +30,41 @@ func TestFreshLiveAttachmentFirstSwitchRecapturesMeasuredTarget(t *testing.T) {
 	require.NotEqual(t, firstID, secondID)
 	_, exists := m.live.lookup(testSessionID)
 	require.False(t, exists, "fixture must not prime a live-view baseline before the fresh attachment")
+	lv := m.live.view(testSessionID)
+	// Install the protocol fixture before attachment starts asynchronous discovery.
+	executor := liveInputExecutor(func(_ context.Context, method string, _, result any) error {
+		switch method {
+		case "Page.getFrameTree":
+			fixtureValue[*page.GetFrameTreeReturns](result).FrameTree = &page.FrameTree{Frame: &cdp.Frame{ID: "main", LoaderID: "loaded"}}
+		case "Page.createIsolatedWorld":
+			fixtureValue[*page.CreateIsolatedWorldReturns](result).ExecutionContextID = 71
+		case "Runtime.evaluate":
+		default:
+			return fmt.Errorf("unexpected browser protocol command %s", method)
+		}
+		return nil
+	})
+	lv.runCDP = func(ctx context.Context, _ time.Duration, actions ...chromedp.Action) error {
+		for _, action := range actions {
+			switch measured := action.(type) {
+			case viewportFrameGeometryAction:
+				if chromedp.FromContext(ctx) != chromedp.FromContext(first) {
+					return fmt.Errorf("measurement reached a different target")
+				}
+				*measured.width, *measured.height, *measured.scale = 913, 617, 1.25
+			case documentPaintAction, chromedp.ActionFunc:
+				if err := action.Do(cdp.WithExecutor(ctx, executor)); err != nil {
+					return err
+				}
+			default:
+				return fmt.Errorf("unexpected browser action %T", action)
+			}
+		}
+		return nil
+	}
 	_, err = m.live.AttachContext(context.Background(), testSessionID, "fresh-viewer", nil, nil, nil)
 	require.NoError(t, err)
-	lv, exists := m.live.lookup(testSessionID)
+	lv, exists = m.live.lookup(testSessionID)
 	require.True(t, exists)
 	cs, err := NewCaptureSessionWithDeps(m, "fresh-view", &adapterRelay{nextToken: 40}, fakeEncoderStarter(new(int32), nil), nil)
 	require.NoError(t, err)
@@ -53,19 +87,7 @@ func TestFreshLiveAttachmentFirstSwitchRecapturesMeasuredTarget(t *testing.T) {
 		}
 	}, func() {})
 	require.NoError(t, err)
-	lv.runCDP = func(ctx context.Context, _ time.Duration, actions ...chromedp.Action) error {
-		if chromedp.FromContext(ctx) != chromedp.FromContext(first) {
-			return fmt.Errorf("measurement reached a different target")
-		}
-		for _, action := range actions {
-			measured, ok := action.(viewportFrameGeometryAction)
-			if !ok {
-				return fmt.Errorf("unexpected browser action %T", action)
-			}
-			*measured.width, *measured.height, *measured.scale = 913, 617, 1.25
-		}
-		return nil
-	}
+
 	_, err = m.SwitchTab(testSessionID, 0)
 	require.NoError(t, err)
 	select {
