@@ -238,15 +238,22 @@ func TestGoalTurn_NarrowingPredicateAndSurface(t *testing.T) {
 		}
 	})
 
-	t.Run("iteration_not_1_never_narrows_or_injects", func(t *testing.T) {
+	t.Run("iteration_not_1_still_narrows_while_record_empty", func(t *testing.T) {
+		// D3 AMENDMENT (2026-09-08): the old [G-M7] rule — narrow on
+		// iteration 1 ONLY — is retired. A narrowed call that FAILS (tool-arg
+		// validation error, policy denial at execution, or an error result)
+		// neither registers nor parks, so the base predicate is still true on
+		// iteration 2, and the door must stay narrowed (see
+		// TestGoalForcing_NarrowingPersistsAcrossIterations for the full
+		// multi-iteration table covering the real-world defect this fixes).
 		store8, sid8 := newGoalTestSession(t, al, agentInst.ID)
 		setActiveGoalRecordless(t, store8, sid8, "goal-8", "an iteration-2 goal")
 		ts := &turnState{agent: agentInst, channel: "webchat", opts: processOptions{
 			TranscriptStore: store8, TranscriptSessionID: sid8, Channel: "webchat",
 		}}
 		d := al.evaluateGoalForcing(ts, 2, agentInst.Tools.GetAll())
-		if d.layer1 || d.rubric {
-			t.Fatalf("iteration != 1 must never narrow or inject the rubric (D3 [G-M7]), got %+v", d)
+		if !d.layer1 || !d.rubric {
+			t.Fatalf("iteration != 1 with the record still empty must still narrow and inject the rubric, got %+v", d)
 		}
 	})
 }

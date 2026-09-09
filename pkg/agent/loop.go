@@ -8427,10 +8427,11 @@ func isMessagingChannel(channel string) bool {
 const goalForcingWebChannel = "webchat"
 
 // goalTurnRecordState reads sessionID's current goal state via
-// ts.opts.TranscriptStore — the single read both evaluateGoalForcing
-// (iteration==1 only) and the mid-turn rubric-note budget estimate
-// (goalRubricNoteForBudget, every iteration) share, so the two can never
-// disagree about what "the record is still empty" means. holds is
+// ts.opts.TranscriptStore — the single read both evaluateGoalForcing (every
+// iteration since the D3 amendment, 2026-09-08 — no longer iteration==1
+// only) and the mid-turn rubric-note budget estimate (goalRubricNoteForBudget,
+// every iteration) share, so the two can never disagree about what "the
+// record is still empty" means. holds is
 // ADR-081 D3's base predicate: an active goal (GoalCondition set) whose
 // compiled record is still empty (GoalCriteriaJSON unset) — the transient
 // window between instant activation (D1) and the working agent's own
@@ -8527,28 +8528,71 @@ type goalForcingDecision struct {
 	narrowed []tools.Tool
 }
 
+// goalForcingMaxNarrowAttempts bounds ADR-081 D3's narrowed first-move door
+// (the D3 amendment, 2026-09-08): once a turn has offered the narrowed
+// {set_goal[, AskUserQuestion]} pair this many CONSECUTIVE times without
+// either a successful set_goal write or a genuinely parked AskUserQuestion
+// card, evaluateGoalForcing releases the door (full tool surface, WARN
+// logged) instead of narrowing again — see goalNarrowEscaped's doc comment
+// on turnState (turn.go) for the exact counting rule and the real-world
+// defect (11:54:48Z→12:12:26Z, a 17-minute wedged turn) this escape exists
+// to prevent. N=3: enough for a model to recover from one transient
+// schema-validation slip (the observed defect) or two, without letting a
+// persistently broken/uncooperative model consume the whole MaxIterations
+// budget stuck in the narrowed pair — the post-turn nudge ladder
+// (checkGoalLoopAfterTurn, goal_loop.go D6c) is the backstop once this fires.
+const goalForcingMaxNarrowAttempts = 3
+
 // evaluateGoalForcing computes goalForcingDecision for the CURRENT LLM
-// request (ADR-081 D3 as amended 2026-09-07, spec FR-007/009/010; C-3's
-// negative rows, grill M1): the predicate deliberately consults ONLY
-// iteration and persisted session state — never opts.UserInitiated or
-// sender identity, since a card-resume turn (human-answered or
-// auto-submitted) and a keeper nudge turn are goal turns exactly like a
-// fresh activation turn.
+// request (ADR-081 D3 as amended 2026-09-07, further amended 2026-09-08 —
+// see goalForcingMaxNarrowAttempts; spec FR-007/009/010; C-3's negative
+// rows, grill M1): the predicate deliberately consults ONLY iteration
+// (logging only — see below), persisted session state, and this turn's own
+// narrow-attempt/escape counters — never opts.UserInitiated or sender
+// identity, since a card-resume turn (human-answered or auto-submitted) and
+// a keeper nudge turn are goal turns exactly like a fresh activation turn.
+//
+// D3 AMENDMENT (2026-09-08): narrowing used to apply to the turn's FIRST LLM
+// request ONLY (iteration==1), on the theory that the narrowed pair's own
+// two outcomes (register or park) never leave a second request with the
+// predicate still true in the same turn. That theory missed a third
+// outcome: a narrowed call that FAILS (tool-arg validation error, policy
+// denial at execution, or an error result) neither registers nor parks, so
+// the predicate is STILL true on iteration 2 — and used to get the FULL
+// unnarrowed tool surface back while the goal record stayed empty. Real
+// evidence: a /goal set at 11:54:48Z narrowed iteration 1; the model's
+// AskUserQuestion call failed schema validation ("unexpected property
+// \"recommended\"" inside an option); iteration 2 onward ran unnarrowed —
+// ToolSearch, write_file×5, bash, serve_web, browser_navigate — for ~17
+// minutes before the agent finally called set_goal at 12:12:26Z, because the
+// turn never ended for the post-turn correction to catch it. The door now
+// stays narrowed for EVERY request while the predicate holds — iteration is
+// no longer a gate, only a log field — bounded by goalForcingMaxNarrowAttempts
+// so a persistently-failing model cannot wedge the turn instead.
 func (al *AgentLoop) evaluateGoalForcing(
 	ts *turnState, iteration int, policyFiltered []tools.Tool,
 ) goalForcingDecision {
 	var d goalForcingDecision
-	if iteration != 1 {
-		// D3 [G-M7]: evaluated on the turn's FIRST LLM request only — the
-		// narrowed pair's own two outcomes (register or park) never leave a
-		// second request with the predicate still true in the SAME turn; a
-		// turn that doesn't register on its first move is followed up by a
-		// fresh keeper/immediate nudge turn (D6c / D3 amendment item 3), not
-		// a later request in this one.
-		return d
-	}
 	holds, meta := goalTurnRecordState(ts)
 	if !holds {
+		// Covers both "not a goal turn at all" and "a PRIOR request's
+		// set_goal already wrote the record" — goalTurnRecordState reads
+		// persisted state fresh on every call, so a successful write between
+		// iteration N and N+1 is what naturally releases the door here; no
+		// escape-counter bookkeeping is needed for this branch.
+		return d
+	}
+	if ts.goalNarrowIsEscaped() {
+		// The bounded escape already fired earlier this turn (see
+		// goalForcingMaxNarrowAttempts) — stay released for the rest of the
+		// turn even though the base predicate still holds. Do not re-arm:
+		// the rubric note (D4) keeps nudging, but the tool surface is not
+		// narrowed again.
+		d.rubric = true
+		d.sessionID = ts.opts.TranscriptSessionID
+		d.goalID = meta.GoalID
+		d.questionRoundsUsed = meta.GoalQuestionRoundsUsed
+		d.isWebchat = ts.channel == goalForcingWebChannel
 		return d
 	}
 	d.rubric = true
@@ -8570,8 +8614,10 @@ func (al *AgentLoop) evaluateGoalForcing(
 		// D3: "if set_goal itself is policy-denied, do NO narrowing and log
 		// WARN" — checked specifically for set_goal, independent of whether
 		// AskUserQuestion alone would have made the intersection non-empty.
+		// This request is NOT counted as a narrowed attempt (it was never
+		// narrowed) and does not advance goalNarrowMisses.
 		logger.WarnCF("agent", "goal: narrowing skipped — set_goal is policy-denied for this agent",
-			map[string]any{"component": "goal", "session_id": d.sessionID, "goal_id": d.goalID, "agent_id": ts.agent.ID})
+			map[string]any{"component": "goal", "session_id": d.sessionID, "goal_id": d.goalID, "agent_id": ts.agent.ID, "iteration": iteration})
 		return d
 	}
 
@@ -8583,7 +8629,28 @@ func (al *AgentLoop) evaluateGoalForcing(
 	// choice forcing, so there is no reason to skip it off-web anymore —
 	// only the ask door is origin-gated.
 	includeAsk := d.isWebchat && askAllowed && d.questionRoundsUsed < 1
-	d.narrowed = goalForcingNarrowTools(policyFiltered, includeAsk)
+	narrowed := goalForcingNarrowTools(policyFiltered, includeAsk)
+
+	// Bounded escape (goalForcingMaxNarrowAttempts): this request is about
+	// to become another CONSECUTIVE narrowed offering. Count it BEFORE
+	// deciding whether to actually narrow — a request that instead exits
+	// above (record already written, or the escape already armed) never
+	// reaches this bump, so the counter only ever measures genuine
+	// narrowed-but-unresolved attempts. Once the count exceeds the bound,
+	// this (and every later) request in the turn gets the FULL surface
+	// instead.
+	attempt := ts.noteGoalNarrowAttempt()
+	if attempt > goalForcingMaxNarrowAttempts {
+		ts.armGoalNarrowEscape()
+		logger.WarnCF("agent", "goal: bounded escape — releasing the narrowed first-move door after repeated unresolved narrowed requests",
+			map[string]any{
+				"component": "goal", "session_id": d.sessionID, "goal_id": d.goalID,
+				"attempts": attempt - 1, "max_attempts": goalForcingMaxNarrowAttempts, "iteration": iteration,
+			})
+		return d
+	}
+
+	d.narrowed = narrowed
 	d.layer1 = true
 	// askOffered is recomputed from the ACTUAL narrowed slice rather than
 	// trusted from includeAsk alone, so it can never disagree with what
@@ -8598,6 +8665,7 @@ func (al *AgentLoop) evaluateGoalForcing(
 		map[string]any{
 			"component": "goal", "session_id": d.sessionID, "goal_id": d.goalID,
 			"ask_offered": d.askOffered, "channel": ts.channel, "is_webchat": d.isWebchat,
+			"iteration": iteration, "attempt": attempt,
 		})
 	return d
 }
@@ -8629,15 +8697,20 @@ func (al *AgentLoop) bumpGoalQuestionRoundsUsed(d goalForcingDecision) {
 
 // goalRubricNoteForBudget re-derives buildGoalRubricInjectionNote's input
 // from persisted session state (ADR-081 D4, midturn_budget.go's
-// ephemeralSystemNoteTokens) WITHOUT the iteration==1 gate
-// evaluateGoalForcing applies: mid-turn budget checks only ever run AFTER
-// this turn's own first request has already been assembled and sent, so by
-// the time this executes the predicate would already be false on any
-// request the injection itself actually fires for. Evaluating the base
-// predicate here regardless (rather than threading iteration through the
-// mid-turn call chain) is a deliberately conservative over-estimate on
-// iteration ≥ 2 — never an under-estimate — matching how every OTHER
-// ephemeral note in that enumeration is measured.
+// ephemeralSystemNoteTokens). Before the 2026-09-08 D3 amendment,
+// evaluateGoalForcing's own rubric flag was gated to the turn's first
+// request only (iteration==1), while mid-turn budget checks run AFTER that
+// first request is already assembled and sent — so this function
+// deliberately ignored that gate and re-evaluated the base predicate
+// unconditionally, a conservative OVER-estimate on iteration ≥ 2 (never an
+// under-estimate). Since the amendment, evaluateGoalForcing's rubric flag is
+// no longer iteration-gated either (it tracks goalTurnRecordState across the
+// whole turn, exactly like this function) — so the two now normally AGREE
+// rather than this one merely over-estimating. This function is kept
+// re-deriving independently rather than threading evaluateGoalForcing's
+// per-request decision through the mid-turn call chain (matching how every
+// OTHER ephemeral note in that enumeration is measured), and remains safe
+// either way: it can only ever match or over-estimate, never under-count.
 func (al *AgentLoop) goalRubricNoteForBudget(ts *turnState) string {
 	holds, _ := goalTurnRecordState(ts)
 	isWebchat := ts != nil && ts.channel == goalForcingWebChannel
