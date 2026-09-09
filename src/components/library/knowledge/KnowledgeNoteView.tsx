@@ -77,6 +77,7 @@ import {
   type KnowledgeGraphLoader,
 } from './KnowledgeBacklinks'
 import { WIKILINK_RE, type EmbedResolution, type KbLinkResolution } from '../preview/knowledgeMarkdown'
+import { libraryEntryExt } from '../preview/libraryPreviewKind'
 
 /**
  * The note's ancestor folders, DEEPEST FIRST, ending with the work-tree root
@@ -225,11 +226,27 @@ function findMatchingEmbedEdges(
   return graph.edges.filter((e) => edgeMatchesEmbedKey(e, target, heading, block))
 }
 
+/** ADR-083 EMB-039: `heading_found` is meaningful ONLY for a markdown target
+ *  carrying a heading fragment — it is false BY CONSTRUCTION for a `.base`
+ *  target (where the fragment is a view label, not a heading) and for a
+ *  block reference. Consulting it outside that gate renders the "no such
+ *  heading" marker across every dashboard embed. */
+function isMarkdownTarget(path: string): boolean {
+  const ext = libraryEntryExt(path)
+  return ext === 'md' || ext === 'markdown'
+}
+
 /**
  * The core of the embed resolver: given a graph answer already known to have
  * loaded (loading/graph_unavailable are handled by the caller, one level up,
  * because they are facts about the REQUEST, not about any one embed), decide
  * what this specific embed's evidence supports.
+ *
+ * `outlineForMissingHeading` answers EMB-016/EMB-038 for the one case that
+ * needs a second fact: a markdown target whose named heading the graph says
+ * it did NOT find. It is looked up only then — never speculatively — and its
+ * absence (still loading, or the fetch failed) degrades to the reason with
+ * no heading list rather than blocking the verdict.
  */
 function resolveEmbedAgainstGraph(
   graph: KnowledgeGraphResponse,
@@ -238,6 +255,8 @@ function resolveEmbedAgainstGraph(
   block: string | undefined,
   toWorkspacePath: (p: string) => string,
   downloadUrl: (workspacePath: string) => string,
+  workspaceId: string,
+  outlineForMissingHeading: (collectionPath: string) => string[] | undefined,
 ): EmbedResolution {
   const matches = findMatchingEmbedEdges(graph, target, heading, block)
 
@@ -290,6 +309,21 @@ function resolveEmbedAgainstGraph(
     }
   }
 
+  // ADR-083 EMB-035/EMB-038/EMB-039 (US-4, consumed here for transclusion,
+  // US-7): a markdown target's named heading may not exist even though the
+  // FILE does. Gated strictly on markdown + a heading fragment + no block —
+  // heading_found is false BY CONSTRUCTION for a `.base` target (its
+  // fragment is a view label) and for a block reference, and consulting it
+  // there would mark every dashboard embed "no such heading".
+  if (heading && !block && isMarkdownTarget(edge.to_path) && edge.heading_found === false) {
+    const available = outlineForMissingHeading(edge.to_path)
+    const reason =
+      available && available.length > 0
+        ? `no heading "${heading}" in this note — headings that do exist: ${available.join(', ')}`
+        : `no heading "${heading}" in this note`
+    return { state: 'unresolved', reason }
+  }
+
   const backendCandidates = edge.candidates ?? []
   const backendAmbiguous = edge.ambiguous === true && backendCandidates.length > 0
   const ambiguous = matchAmbiguous || backendAmbiguous
@@ -298,6 +332,8 @@ function resolveEmbedAgainstGraph(
     state: 'resolved',
     path: edge.to_path,
     url: downloadUrl(toWorkspacePath(edge.to_path)),
+    workspaceId,
+    workspacePath: toWorkspacePath(edge.to_path),
     ...(ambiguous
       ? { ambiguous: true, candidates: backendAmbiguous ? backendCandidates : matchAlternates }
       : {}),
@@ -419,6 +455,46 @@ export function KnowledgeNoteView({
     [workspaceId, toWorkspacePath],
   )
 
+  // ADR-083 EMB-038: an outline fetch for a target note ONLY when its named
+  // heading was reported not found, and exactly once per distinct target —
+  // never in advance, and never for the dominant case (heading found, or no
+  // heading asked for at all). Mirrors the ancestor-dirs `useQueries` pattern
+  // above for the same reason: a bounded, per-item set of independent fetches
+  // rather than one query re-keyed on a list.
+  const missingHeadingTargets = useMemo(() => {
+    const graph = linksQuery.data
+    if (!graph) return [] as string[]
+    const set = new Set<string>()
+    for (const e of graph.edges) {
+      if (e.embed !== true) continue
+      if (e.resolution === 'unresolved') continue
+      if (!e.heading || e.block) continue
+      if (e.heading_found !== false) continue
+      if (!isMarkdownTarget(e.to_path)) continue
+      set.add(e.to_path)
+    }
+    return Array.from(set)
+  }, [linksQuery.data])
+
+  const missingHeadingOutlineQueries = useQueries({
+    queries: missingHeadingTargets.map((collectionPath) => ({
+      queryKey: ['library', 'knowledge', 'outline', workspaceId, 'embed-heading-check', collectionPath],
+      queryFn: () => loadOutline({ workspaceId, path: toWorkspacePath(collectionPath) }),
+      enabled: collectionId !== undefined,
+      retry: false,
+      refetchOnWindowFocus: false,
+    })),
+  })
+
+  const outlineForMissingHeading = useMemo(() => {
+    const map = new Map<string, string[]>()
+    missingHeadingTargets.forEach((collectionPath, i) => {
+      const headings = missingHeadingOutlineQueries[i]?.data?.headings
+      if (headings) map.set(collectionPath, headings.map((h) => h.text))
+    })
+    return (collectionPath: string): string[] | undefined => map.get(collectionPath)
+  }, [missingHeadingTargets, missingHeadingOutlineQueries])
+
   const navigate = useMemo(
     () =>
       onOpenNote
@@ -523,8 +599,15 @@ export function KnowledgeNoteView({
           reason: 'the knowledge base returned no link information for this note',
         }
       }
-      return resolveEmbedAgainstGraph(graph, target, heading, block, toWorkspacePath, (p) =>
-        toAbsoluteEmbedUrl(libraryDownloadUrl(workspaceId, p)),
+      return resolveEmbedAgainstGraph(
+        graph,
+        target,
+        heading,
+        block,
+        toWorkspacePath,
+        (p) => toAbsoluteEmbedUrl(libraryDownloadUrl(workspaceId, p)),
+        workspaceId,
+        outlineForMissingHeading,
       )
     }
   }, [
@@ -537,6 +620,7 @@ export function KnowledgeNoteView({
     contentHasWikilinkNotation,
     toWorkspacePath,
     workspaceId,
+    outlineForMissingHeading,
   ])
 
   return (

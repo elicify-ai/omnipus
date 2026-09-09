@@ -67,6 +67,49 @@ export interface BasePreviewLoaders {
   loadViewResult?: (workspaceId: string, collectionId: string, view: string) => Promise<ViewResult>
 }
 
+/**
+ * ADR-083 EMB-040/EMB-043/EMB-046/EMB-047/EMB-048/EMB-049 — the extra
+ * behaviour a `.base` embed inside a knowledge-base note needs that a plain
+ * full-screen open of the file never did: a specific view chosen up front
+ * (never `views[0]` by luck), a caption when the note author didn't name one,
+ * a switcher hidden until the reader actually wants it, and links resolved
+ * against the REAL note-reading link graph rather than this one view's own
+ * loaded rows (WL-1 — a view's own resolver can only ever answer `resolved`
+ * or `unknown`, never `unresolved`, so a target that plainly does not exist
+ * in the collection still renders as merely "unverified").
+ *
+ * Omitting this prop entirely (the pane's own usage) is unaffected byte for
+ * byte (EMB-028): no fetch, no state and no non-embed render path reads it.
+ */
+export interface BasePreviewEmbedOptions {
+  /** The server's own slug (never reconstructed) for the view this embed
+   *  resolved to. Selected on mount and whenever it changes; a reader may
+   *  still switch tabs afterward when showViewSwitcher is true — that is a
+   *  local UI choice, never written back (EMB-047's "an embed is not the
+   *  vault"; there is nothing here TO write back to). */
+  viewName: string
+  /** Shown when the embed did not choose the view itself (EMB-043) — the
+   *  note wrote no fragment, so the first view was picked automatically and
+   *  the reader is told so, in place of a silent choice. */
+  caption?: string
+  /** EMB-043's other half: false renders no tab list at all (nothing to
+   *  switch to when the note author expressed no preference). True renders
+   *  the real, existing view switcher — the tab row already built for the
+   *  full pane — visually hidden until pointer hover or keyboard focus
+   *  enters the embed (EMB-046's "controls appear on hover and on focus, not
+   *  at rest"); it is REAL functionality being gated, not decoration. */
+  showViewSwitcher: boolean
+  /** EMB-048: resolve a cell's `[[wikilink]]` against the note reader's own
+   *  link graph instead of this view's own loaded rows. Omit to keep the
+   *  view's own row-scoped resolver (never `unresolved`, only `resolved` or
+   *  `unknown`) — the pre-embed default. */
+  resolveWikilink?: (target: string, heading?: string) => KbLinkResolution
+  /** Paired with resolveWikilink — the reader's own address builder, so a
+   *  resolved cell link opens through the SAME address the rest of the note
+   *  uses rather than one this view derives from its own collection root. */
+  linkHref?: (collectionPath: string, heading?: string) => string | undefined
+}
+
 export interface BasePreviewProps extends BasePreviewLoaders {
   workspaceId: string
   entry: LibraryEntry
@@ -80,6 +123,9 @@ export interface BasePreviewProps extends BasePreviewLoaders {
    * identically either way.
    */
   variant?: LibraryPreviewVariant
+  /** Present only for an inline embed that already resolved to a specific
+   *  view — see BasePreviewEmbedOptions. Absent everywhere else. */
+  embed?: BasePreviewEmbedOptions
   /**
    * Open another file in place, WORKSPACE-relative (KB-8a — mirrors
    * LibraryPreviewPane's own `onOpenNote` contract exactly, the same address
@@ -151,15 +197,19 @@ export function BasePreview({
   loadBaseViews = fetchKnowledgeBaseViews,
   loadViewResult = fetchKnowledgeViewResult,
   variant = 'pane',
+  embed,
   onOpenNote,
 }: BasePreviewProps) {
   // The ONE layout switch (EMB-028) — every state below still renders
   // through whichever of these two class strings is active; nothing about
-  // WHICH state renders, or what it fetches, reads `variant` at all.
+  // WHICH state renders, or what it fetches, reads `variant` at all. `embed`
+  // additionally opts the container into `group`, the hook the hidden-until-
+  // hover tab list below hangs off (EMB-046) — harmless when there is no
+  // such tab list to reveal (embed.showViewSwitcher === false).
   const containerClass =
-    variant === 'inline'
+    (variant === 'inline'
       ? `flex ${INLINE_PREVIEW_BOX_CLASS} flex-col overflow-hidden rounded-md border border-[var(--color-border)]`
-      : 'flex h-full min-h-0 flex-col'
+      : 'flex h-full min-h-0 flex-col') + (embed ? ' group' : '')
   // ── 1. Which views this .base owns, and where they run ────────────────────
   const viewsQuery = useQuery({
     queryKey: ['library', workspaceId, 'knowledge', 'base-views', entry.path],
@@ -173,9 +223,12 @@ export function BasePreview({
   const collectionId = answer?.collection_id
   const collectionRoot = answer?.collection_root
 
-  // Selected tab, by slug so it survives a refetch; reset per file.
-  const [selectedSlug, setSelectedSlug] = useState<string | undefined>(undefined)
-  useEffect(() => setSelectedSlug(undefined), [entry.path])
+  // Selected tab, by slug so it survives a refetch; reset per file. An embed
+  // seeds the view it already resolved (ADR-083 EMB-040) instead of always
+  // starting at views[0] — the same reset effect re-seeds it if the file (or
+  // the embed's own resolved view) changes under an already-mounted embed.
+  const [selectedSlug, setSelectedSlug] = useState<string | undefined>(embed?.viewName)
+  useEffect(() => setSelectedSlug(embed?.viewName), [entry.path, embed?.viewName])
   const selected = views.find((v) => v.name === selectedSlug) ?? views[0]
 
   // code-review finding #9 — the escape hatch for the "no views" dead end:
@@ -233,8 +286,10 @@ export function BasePreview({
   )
 
   const linkHref = useMemo(
-    () => (collectionRelativePath: string) => libraryNoteHref(workspaceId, toWorkspacePath(collectionRelativePath)),
-    [workspaceId, toWorkspacePath],
+    () =>
+      embed?.linkHref ??
+      ((collectionRelativePath: string) => libraryNoteHref(workspaceId, toWorkspacePath(collectionRelativePath))),
+    [workspaceId, toWorkspacePath, embed?.linkHref],
   )
 
   const onOpenPath = useMemo(
@@ -246,7 +301,13 @@ export function BasePreview({
   // view's own rows — never `unresolved`, which this view cannot honestly
   // claim about the whole collection.
   const result = resultQuery.data
+  // ADR-083 EMB-048/WL-1: an embed's own `resolveWikilink` (the note reader's
+  // real link graph) takes over completely when supplied — never merged with
+  // the row-scoped fallback below, which can only ever answer `resolved` or
+  // `unknown` and therefore renders a genuinely broken link as merely
+  // unverified.
   const resolveWikilink = useMemo(() => {
+    if (embed?.resolveWikilink) return embed.resolveWikilink
     if (!result) return undefined
     return (target: string): KbLinkResolution => {
       const match = result.rows.find(
@@ -254,7 +315,7 @@ export function BasePreview({
       )
       return match ? { state: 'resolved', path: match.path } : { state: 'unknown' }
     }
-  }, [result])
+  }, [result, embed?.resolveWikilink])
 
   // ── States before a result can render ─────────────────────────────────────
   // Every one renders inside the SAME `base-preview` container, so "the base
@@ -362,19 +423,50 @@ export function BasePreview({
   }
 
   return (
-    <div className={containerClass} data-testid="base-preview" data-variant={variant}>
+    <div
+      className={containerClass}
+      data-testid="base-preview"
+      data-variant={variant}
+      {...(embed
+        ? {
+            title:
+              'Links in this embedded view resolve against this note’s own links and may render differently from the same view opened in the Library.',
+          }
+        : {})}
+    >
       {answer !== undefined && answer.unloadable_count > 0 && (
         <UnloadableNotice count={answer.unloadable_count} />
       )}
 
-      {/* View tabs — the wireframe's tablist; first view selected by default.
-          `name` is the server's slug, used verbatim as both the React key and
-          the fetch address, so two tabs can never share either. */}
-      <div
-        role="tablist"
-        aria-label="Views"
-        className="flex shrink-0 gap-0.5 overflow-x-auto border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-1.5"
-      >
+      {/* EMB-043: the embed chose no view itself — say so, and offer nothing
+          to switch to (there is no tab list at all in this branch). */}
+      {embed?.caption !== undefined && (
+        <p
+          data-testid="base-preview-embed-caption"
+          className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1 text-[11px] text-[var(--color-muted)]"
+        >
+          {embed.caption}
+        </p>
+      )}
+
+      {/* View tabs — the wireframe's tablist; first view selected by default
+          (or the embed's own resolved view, EMB-040). `name` is the server's
+          slug, used verbatim as both the React key and the fetch address, so
+          two tabs can never share either. Inside an embed with a switcher to
+          offer, the whole row is hidden until pointer hover or keyboard
+          focus reaches it (EMB-046) — real, existing tab-switching, gated,
+          not decoration. */}
+      {(embed === undefined || embed.showViewSwitcher) && (
+        <div
+          role="tablist"
+          aria-label="Views"
+          data-testid="base-preview-tablist"
+          className={`flex shrink-0 gap-0.5 overflow-x-auto border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-1.5 ${
+            embed
+              ? 'opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100'
+              : ''
+          }`}
+        >
         {views.map((v) => {
           const active = v.name === selected?.name
           return (
@@ -407,7 +499,8 @@ export function BasePreview({
             </button>
           )
         })}
-      </div>
+        </div>
+      )}
 
       {/* Body: the selected view's evaluated result. */}
       <div className="flex-1 overflow-auto bg-[var(--color-surface-0)]">

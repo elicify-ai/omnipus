@@ -672,3 +672,149 @@ describe('KnowledgeNoteView — the embed resolver (ADR-083 EMB-011 through EMB-
     })
   })
 })
+
+describe('KnowledgeNoteView — transclusion heading honesty (ADR-083 EMB-035/EMB-038/EMB-039)', () => {
+  const KB_INFO = {
+    'notes/vault': info({ root_path: 'notes/vault', is_knowledge_base: true, collection_id: COLLECTION }),
+  }
+
+  function renderEmbedNote(opts: { content: string; loadGraph: KnowledgeGraphLoader; loadOutline?: KnowledgeOutlineLoader }) {
+    const loadOutline = opts.loadOutline ?? vi.fn().mockResolvedValue(outline())
+    const loadInfo = detectionOf(KB_INFO)
+    return renderView({ loadOutline, loadInfo, loadGraph: opts.loadGraph, content: opts.content })
+  }
+
+  it('reports "no such heading" and lists the headings that DO exist, fetching the target’s outline exactly once (EMB-016/EMB-038)', async () => {
+    const loadOutline = vi.fn(async ({ path }: { workspaceId: string; path: string }) => {
+      if (path === 'notes/vault/target-note.md') {
+        return outline({
+          path: 'notes/vault/target-note.md',
+          headings: [
+            { level: 1, text: 'Intro', slug: 'intro' },
+            { level: 1, text: 'Setup', slug: 'setup' },
+          ],
+        })
+      }
+      return outline()
+    }) as unknown as KnowledgeOutlineLoader
+
+    const loadGraph = vi.fn(async (req: { kind: string }) =>
+      req.kind === 'links'
+        ? graph({
+            kind: 'links',
+            nodes: [{ path: 'target-note.md', exists: true }],
+            edges: [
+              embedEdge({
+                to_path: 'target-note.md',
+                link_text: 'target-note.md',
+                heading: 'Missing',
+                heading_found: false,
+                resolution: 'exact_path',
+              }),
+            ],
+          })
+        : graph(),
+    ) as unknown as KnowledgeGraphLoader
+
+    // Inline-mixed (other words share the paragraph) so this stays on the
+    // already-covered CollectionLink/UnresolvedLink fallback path rather
+    // than the rich transclusion mount — this describe block is about the
+    // RESOLVER's verdict, not about what a standalone mount then fetches.
+    renderEmbedNote({ content: '![[target-note.md#Missing]] and more text', loadGraph, loadOutline })
+
+    await waitFor(() => {
+      const el = screen.getByTestId('markdown-link')
+      expect(el.getAttribute('data-kb-unresolved')).toBe('true')
+      const detail = el.getAttribute('title') ?? ''
+      expect(detail).toContain('no heading "Missing"')
+      expect(detail).toContain('Intro')
+      expect(detail).toContain('Setup')
+    })
+
+    const targetCalls = (loadOutline as unknown as { mock: { calls: [{ path: string }][] } }).mock.calls.filter(
+      ([r]) => r.path === 'notes/vault/target-note.md',
+    )
+    expect(targetCalls).toHaveLength(1)
+  })
+
+  it('never consults heading_found for a `.base` target — the view label is untouched even when the server sets it false BY CONSTRUCTION (EMB-039)', async () => {
+    const loadGraph = vi.fn(async (req: { kind: string }) =>
+      req.kind === 'links'
+        ? graph({
+            kind: 'links',
+            nodes: [{ path: 'Tasks.base', exists: true }],
+            edges: [
+              embedEdge({
+                to_path: 'Tasks.base',
+                link_text: 'Tasks.base',
+                heading: 'Needs Daniel',
+                heading_found: false,
+                resolution: 'exact_path',
+              }),
+            ],
+          })
+        : graph(),
+    ) as unknown as KnowledgeGraphLoader
+
+    renderEmbedNote({ content: '![[Tasks.base#Needs Daniel]] and more text', loadGraph })
+
+    await waitFor(() => {
+      const el = screen.getByTestId('markdown-link')
+      expect(el.getAttribute('data-kb-state')).toBe('resolved')
+      expect(el.getAttribute('data-kb-unresolved')).not.toBe('true')
+    })
+  })
+
+  it('does not gate on heading_found for a block reference — it is meaningless there by the wire’s own contract (EMB-039)', async () => {
+    const loadGraph = vi.fn(async (req: { kind: string }) =>
+      req.kind === 'links'
+        ? graph({
+            kind: 'links',
+            nodes: [{ path: 'target-note.md', exists: true }],
+            edges: [
+              embedEdge({
+                to_path: 'target-note.md',
+                link_text: 'target-note.md',
+                block: 'abc123',
+                heading_found: false,
+                resolution: 'exact_path',
+              }),
+            ],
+          })
+        : graph(),
+    ) as unknown as KnowledgeGraphLoader
+
+    renderEmbedNote({ content: '![[target-note.md#^abc123]] and more text', loadGraph })
+
+    await waitFor(() => {
+      const el = screen.getByTestId('markdown-link')
+      expect(el.getAttribute('data-kb-state')).toBe('resolved')
+    })
+  })
+
+  it('resolves normally when heading_found is simply absent — the field is not yet required on the wire, and its absence must never read as "not found" (regression pin)', async () => {
+    const loadGraph = vi.fn(async (req: { kind: string }) =>
+      req.kind === 'links'
+        ? graph({
+            kind: 'links',
+            nodes: [{ path: 'target-note.md', exists: true }],
+            edges: [
+              embedEdge({
+                to_path: 'target-note.md',
+                link_text: 'target-note.md',
+                heading: 'Intro',
+                resolution: 'exact_path',
+              }),
+            ],
+          })
+        : graph(),
+    ) as unknown as KnowledgeGraphLoader
+
+    renderEmbedNote({ content: '![[target-note.md#Intro]] and more text', loadGraph })
+
+    await waitFor(() => {
+      const el = screen.getByTestId('markdown-link')
+      expect(el.getAttribute('data-kb-state')).toBe('resolved')
+    })
+  })
+})

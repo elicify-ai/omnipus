@@ -52,12 +52,19 @@
 import { createContext, useContext, useMemo } from 'react'
 import type { ComponentProps, ComponentPropsWithoutRef, ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
+import { useQuery } from '@tanstack/react-query'
+import { SpinnerGap, Warning } from '@phosphor-icons/react'
 // From kbMarkdownBase, NOT from LibraryMarkdownPreview: that file now mounts
 // the stage-2 reading view this module is part of, so importing it here would
 // be a cycle — and `kbMarkdownComponents` is read at module scope below, which
 // is where a cycle crashes instead of merely warning.
 import { kbMarkdownComponents, KB_REHYPE_PLUGINS, KB_REMARK_PLUGINS } from './kbMarkdownBase'
 import { libraryEntryExt, type LibraryPreviewKind } from './libraryPreviewKind'
+import { fetchKnowledgeBaseViews, fetchLibraryContent, fetchLibraryEntries, libraryQueryKeys } from '@/lib/api'
+import { LazyEmbedMount } from './LazyEmbedMount'
+import { matchBaseView } from './baseViewMatch'
+import { sliceTranscludedContent } from './noteTransclusion'
+import { BasePreview, type BasePreviewEmbedOptions } from './BasePreview'
 
 type RemarkPlugins = ComponentProps<typeof ReactMarkdown>['remarkPlugins']
 
@@ -433,6 +440,15 @@ export interface EmbedResolution {
   ambiguous?: boolean
   /** The alternative targets not chosen. Present only when ambiguous. */
   candidates?: string[]
+  /** The workspace the resolved target lives in — present only when
+   *  resolved. A `.base`/markdown inline renderer needs this to query the
+   *  Library and knowledge endpoints itself; it is not derivable from `url`,
+   *  which is already an absolute download link, not a query key. */
+  workspaceId?: string
+  /** WORKSPACE-relative path of the resolved target (ADR-083 dashboards/
+   *  transclusion note: a graph edge's own `path` is COLLECTION-relative —
+   *  see KnowledgeNoteView's `toWorkspacePath`). Present only when resolved. */
+  workspacePath?: string
 }
 
 export interface KbWikilinkOptions {
@@ -518,6 +534,7 @@ export function remarkKbWikilinks(options: KbWikilinkOptions = {}) {
               'data-kb-wikilink': '',
               'data-kb-target': parsed.target,
               ...(parsed.heading ? { 'data-kb-heading': parsed.heading } : {}),
+              ...(parsed.block ? { 'data-kb-block': parsed.block } : {}),
               'data-kb-embed': '',
               'data-kb-embed-kind': kind,
               'data-kb-embed-state': resolution.state,
@@ -526,12 +543,86 @@ export function remarkKbWikilinks(options: KbWikilinkOptions = {}) {
               ...(resolution.outsideRoot ? { 'data-kb-embed-outside-root': '' } : {}),
               ...(resolution.ambiguous ? { 'data-kb-embed-ambiguous': '' } : {}),
               ...(candidates.length > 0 ? { 'data-kb-embed-candidates': candidates.join(', ') } : {}),
+              // ADR-083 Step 2/3 — a `.base` (dashboard) or markdown
+              // (transclusion) embed needs its own workspace query key to
+              // mount a real renderer; see EmbedResolution's own doc.
+              ...(resolution.workspaceId ? { 'data-kb-embed-workspace-id': resolution.workspaceId } : {}),
+              ...(resolution.workspacePath
+                ? { 'data-kb-embed-workspace-path': resolution.workspacePath }
+                : {}),
             },
           },
           children: [{ type: 'text', value: parsed.text }],
         }
       }),
     )
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Divergence 2e — block promotion for dashboards and transclusion
+// (ADR-083 Step 2/Step 3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** True for a resolved `.base` or markdown embed node — the only two kinds
+ *  that mount BLOCK content (a table, another note's own headings and
+ *  paragraphs) rather than an inline picture or a styled span. Everything
+ *  else (image, an unresolved/indeterminate/loading state, a resolved embed
+ *  of a kind with no inline renderer) is unaffected and keeps rendering
+ *  wherever `remarkKbWikilinks` put it. */
+function isPromotableBlockEmbedNode(node: MdNode): boolean {
+  const props = node.data?.hProperties
+  if (!props || props['data-kb-embed'] === undefined) return false
+  const kind = props['data-kb-embed-kind']
+  const state = props['data-kb-embed-state']
+  return (kind === 'base' || kind === 'markdown') && state === 'resolved'
+}
+
+function isBlankTextNode(node: MdNode): boolean {
+  return node.type === 'text' && (node.value ?? '').trim() === ''
+}
+
+function promoteStandaloneEmbeds(parent: MdNode): void {
+  if (!parent.children) return
+  parent.children = parent.children.map((child) => {
+    if (child.type === 'paragraph' && child.children) {
+      const meaningful = child.children.filter((c) => !isBlankTextNode(c))
+      if (meaningful.length === 1 && isPromotableBlockEmbedNode(meaningful[0] as MdNode)) {
+        const embedNode = meaningful[0] as MdNode
+        embedNode.data = {
+          ...embedNode.data,
+          hProperties: {
+            ...(embedNode.data?.hProperties ?? {}),
+            // Marks that THIS occurrence stood alone in its own paragraph —
+            // the only shape a block-level renderer is safe to mount in
+            // (nesting a table inside a <p> the note wrote around inline
+            // text would be invalid HTML). An embed mixed inline with other
+            // words keeps today's link-fallback treatment untouched.
+            'data-kb-embed-standalone': '',
+          },
+        }
+        return embedNode
+      }
+    }
+    promoteStandaloneEmbeds(child)
+    return child
+  })
+}
+
+/**
+ * remark plugin: a `![[Tasks.base#View]]` or `![[Note]]` that is the ONLY
+ * thing in its paragraph is hoisted to replace that paragraph, so its
+ * rendered content sits at block level — a sibling of other paragraphs and
+ * headings — instead of nested inside a `<p>`, which the browser cannot
+ * validly contain block content in and would silently reflow around.
+ *
+ * Runs AFTER `remarkKbWikilinks` (it reads the `data-kb-embed-*` attributes
+ * that plugin already wrote) and is therefore appended per-render alongside
+ * it in `KnowledgeBaseMarkdown`, not in the module-scope base list.
+ */
+export function remarkKbPromoteBlockEmbeds() {
+  return (tree: unknown) => {
+    promoteStandaloneEmbeds(tree as MdNode)
   }
 }
 
@@ -933,6 +1024,318 @@ function EmbedFallback({
   )
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The two rich inline mounts — a saved data view (ADR-083 Step 2, dashboards)
+// and a transcluded note (Step 3). Both are reached ONLY for a STANDALONE,
+// RESOLVED embed (see remarkKbPromoteBlockEmbeds above); an embed mixed
+// inline with other text, or not yet resolved, keeps EmbedFallback's
+// existing treatment. `KbBaseEmbedMount`/`KbTransclusionMount` are thin
+// LazyEmbedMount wrappers ONLY — no query, not even the "which view does
+// this resolve to" lookup, is issued until the embed is near the viewport
+// (EMB-065). The real work (`KbBaseEmbedContent`/`KbTransclusionContent`)
+// lives entirely inside LazyEmbedMount's children, so a forty-embed
+// dashboard issues zero network requests for anything below the fold on
+// first paint — the mount budget is proven once, generically, in
+// LazyEmbedMount's own tests, not re-implemented per kind here.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Matches INLINE_PREVIEW_BOX_CLASS's 28rem (libraryPreviewVariant.ts) — the
+// height BasePreview's own inline box settles to, so mounting causes no
+// reflow at all, not merely "one accepted reflow" (EMB-066).
+const BASE_EMBED_RESERVED_HEIGHT_PX = 448
+// EMB-066's own words: "a transclusion's reserved height is a fixed three
+// lines" — three lines at this reader's body line-height.
+const TRANSCLUSION_RESERVED_HEIGHT_PX = 72
+
+/** EMB-060/N1: every embed inside a transcluded note — whatever kind it is —
+ *  falls back to a link with a stated reason, NEVER `indeterminate` (the
+ *  could-not-be-checked marker EMB-060 explicitly forbids here) and NEVER
+ *  `resolved`. A resolver that never resolves is what makes a second level
+ *  of transclusion structurally UNREACHABLE rather than merely undetected:
+ *  remarkKbWikilinks only ever emits a promotable, rich-renderable node when
+ *  `resolution.state === 'resolved'`, so a nested note's own embeds can
+ *  never produce one — there is nothing for a loop detector or a depth cap
+ *  to catch, because there is no second level for either to reach. */
+function nestedTranscludedEmbedResolver(): EmbedResolution {
+  return {
+    state: 'unresolved',
+    reason: 'embeds inside a transcluded note are shown as links — open the note itself to see them',
+  }
+}
+
+function EmbedMountPlaceholder() {
+  return (
+    <div
+      data-testid="kb-embed-mount-loading"
+      aria-hidden="true"
+      className="flex items-center justify-center gap-2 rounded-md border border-[var(--color-border)] px-3 py-6 text-xs text-[var(--color-muted)]"
+    >
+      <SpinnerGap size={14} className="animate-spin" /> Loading…
+    </div>
+  )
+}
+
+function EmbedMountError({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  return (
+    <div
+      data-testid="kb-embed-mount-error"
+      className="flex flex-col items-center gap-2 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 px-3 py-6 text-center text-xs text-[var(--color-warning)]"
+    >
+      <Warning size={16} />
+      <span>{message}</span>
+      {onRetry && (
+        <button type="button" onClick={onRetry} className="text-[11px] underline underline-offset-2">
+          Retry
+        </button>
+      )}
+    </div>
+  )
+}
+
+function dirnameOf(path: string): string {
+  const i = path.lastIndexOf('/')
+  return i <= 0 ? '' : path.slice(0, i)
+}
+
+/** ADR-083 Step 2 — a `![[Data.base#View]]` standing alone in its paragraph.
+ *  Resolves the VIEW inside the already-resolved FILE: fetches this file's
+ *  own directory listing to get a full `LibraryEntry` (a graph edge carries
+ *  neither `size`, `modified_at` nor `is_text_editable`, all required by
+ *  `BasePreview`'s prop — there is no single-entry GET, so the parent
+ *  directory's listing is the one endpoint that already returns them) and
+ *  this file's views, matches the written fragment against the server's
+ *  display labels (EMB-040/EMB-041), and mounts the SAME `BasePreview` the
+ *  full pane uses (EMB-027) — never a second renderer. */
+function KbBaseEmbedMount({
+  workspaceId,
+  workspacePath,
+  viewFragment,
+}: {
+  workspaceId: string
+  workspacePath: string
+  viewFragment?: string
+}) {
+  // EMB-065: no fetch of any kind — not even the "which view does this
+  // resolve to" lookup — starts until the embed is near the viewport. The
+  // actual work lives in KbBaseEmbedContent, mounted only as LazyEmbedMount's
+  // children; this outer component's only job is deciding WHEN.
+  return (
+    <LazyEmbedMount reservedHeight={BASE_EMBED_RESERVED_HEIGHT_PX} className="my-3 block">
+      <KbBaseEmbedContent workspaceId={workspaceId} workspacePath={workspacePath} viewFragment={viewFragment} />
+    </LazyEmbedMount>
+  )
+}
+
+function KbBaseEmbedContent({
+  workspaceId,
+  workspacePath,
+  viewFragment,
+}: {
+  workspaceId: string
+  workspacePath: string
+  viewFragment?: string
+}) {
+  const ctx = useContext(KnowledgeLinkContext)
+  const parentDir = useMemo(() => dirnameOf(workspacePath), [workspacePath])
+
+  const entriesQuery = useQuery({
+    queryKey: libraryQueryKeys.entries(workspaceId, parentDir, false),
+    queryFn: () => fetchLibraryEntries(workspaceId, parentDir, false),
+    staleTime: 30_000,
+  })
+  // EMB-045: the SAME query key BasePreview's own internal fetch uses once
+  // mounted below, so N embeds of one file — and this resolving lookup
+  // alongside them — share ONE network request via the query cache, not one
+  // fetch each.
+  const viewsQuery = useQuery({
+    queryKey: ['library', workspaceId, 'knowledge', 'base-views', workspacePath],
+    queryFn: () => fetchKnowledgeBaseViews(workspaceId, workspacePath),
+    staleTime: 10_000,
+    refetchOnWindowFocus: false,
+  })
+
+  if (entriesQuery.isLoading || viewsQuery.isLoading) return <EmbedMountPlaceholder />
+
+  const entry = entriesQuery.data?.find((e) => e.path === workspacePath)
+  if (entriesQuery.isError || !entry) {
+    return (
+      <EmbedMountError message="Could not read this file's details." onRetry={() => void entriesQuery.refetch()} />
+    )
+  }
+  if (viewsQuery.isError || !viewsQuery.data) {
+    return (
+      <EmbedMountError
+        message="Could not read this base file's views."
+        onRetry={() => void viewsQuery.refetch()}
+      />
+    )
+  }
+
+  const match = matchBaseView(viewsQuery.data.views, viewFragment)
+
+  if (match.kind === 'not_found') {
+    const labels = viewsQuery.data.views.map((v) => v.label)
+    return (
+      <div
+        data-testid="kb-base-embed-missing-view"
+        className="rounded-md border border-dashed border-[var(--color-warning)]/50 px-3 py-3 text-xs text-[var(--color-warning)]"
+      >
+        {viewFragment ? `No view named "${viewFragment}" in ${entry.name}.` : `${entry.name} declares no views.`}
+        {labels.length > 0 && <> Views that do exist: {labels.join(', ')}.</>}
+      </div>
+    )
+  }
+
+  if (match.kind === 'ambiguous') {
+    return (
+      <div
+        data-testid="kb-base-embed-ambiguous-view"
+        className="rounded-md border border-dashed border-[var(--color-warning)]/50 px-3 py-3 text-xs text-[var(--color-warning)]"
+      >
+        The view label "{match.label}" matches more than one view in {entry.name} — rename one to make this
+        embed unambiguous. Matches: {match.matches.map((v) => v.name).join(', ')}.
+      </div>
+    )
+  }
+
+  const embed: BasePreviewEmbedOptions = {
+    viewName: match.view.name,
+    showViewSwitcher: !match.chosenByDefault,
+    ...(match.chosenByDefault
+      ? { caption: `Showing "${match.view.label}" — the first available view; this embed did not choose one.` }
+      : {}),
+    ...(ctx.resolveWikilink ? { resolveWikilink: ctx.resolveWikilink } : {}),
+    ...(ctx.linkHref ? { linkHref: ctx.linkHref } : {}),
+  }
+
+  return (
+    <BasePreview
+      workspaceId={workspaceId}
+      entry={entry}
+      variant="inline"
+      embed={embed}
+      {...(ctx.onNavigate ? { onOpenNote: (p: string) => ctx.onNavigate?.(p) } : {})}
+    />
+  )
+}
+
+/** ADR-083 Step 3 — a `![[Note]]` / `![[Note#Heading]]` / `![[Note#^block]]`
+ *  standing alone in its paragraph. Fetches the SAME content request the
+ *  full-screen preview uses (so a note already open costs nothing extra,
+ *  EMB-059), slices it CLIENT-SIDE, and renders the slice through the SAME
+ *  composition — with `resolveEmbedUrl` replaced by a resolver that NEVER
+ *  resolves (EMB-060/N1). `resolveWikilink` is deliberately OMITTED for the
+ *  nested pass: the outer note's link-graph answer only covers the OUTER
+ *  note's own outbound edges, so reusing it here would read absence-from-a-
+ *  different-note's-edges as "this note does not exist" — a confidently
+ *  wrong answer of exactly the kind this whole feature refuses. Plain links
+ *  inside the transcluded note render `unknown` (honestly unverified)
+ *  instead, and stay navigable via the same `linkHref`/`onNavigate`. */
+function KbTransclusionMount({
+  workspaceId,
+  workspacePath,
+  collectionPath,
+  heading,
+  block,
+}: {
+  workspaceId: string
+  workspacePath: string
+  /** Collection-relative — the transcluded note's OWN relative-link base,
+   *  distinct from `workspacePath` (the fetch address). */
+  collectionPath: string
+  heading?: string
+  block?: string
+}) {
+  // EMB-065: the content fetch itself does not start until the embed is near
+  // the viewport — see KbBaseEmbedMount's identical note above.
+  return (
+    <LazyEmbedMount reservedHeight={TRANSCLUSION_RESERVED_HEIGHT_PX} className="my-3 block">
+      <KbTransclusionContent
+        workspaceId={workspaceId}
+        workspacePath={workspacePath}
+        collectionPath={collectionPath}
+        heading={heading}
+        block={block}
+      />
+    </LazyEmbedMount>
+  )
+}
+
+function KbTransclusionContent({
+  workspaceId,
+  workspacePath,
+  collectionPath,
+  heading,
+  block,
+}: {
+  workspaceId: string
+  workspacePath: string
+  collectionPath: string
+  heading?: string
+  block?: string
+}) {
+  const ctx = useContext(KnowledgeLinkContext)
+  const contentQuery = useQuery({
+    queryKey: libraryQueryKeys.content(workspaceId, workspacePath),
+    queryFn: () => fetchLibraryContent(workspaceId, workspacePath),
+  })
+
+  if (contentQuery.isLoading) return <EmbedMountPlaceholder />
+  if (contentQuery.isError || !contentQuery.data) {
+    return <EmbedMountError message="Could not read this note." onRetry={() => void contentQuery.refetch()} />
+  }
+
+  const raw = contentQuery.data
+  if (raw.is_text !== true || raw.too_large === true || raw.content === undefined) {
+    return <EmbedMountError message="This note is too large to show inline." />
+  }
+
+  const sliced = sliceTranscludedContent(raw.content, heading, block)
+
+  // EMB-062: a stated empty region — never blank space, never a failure
+  // marker. Checked before "not found" so a genuinely empty note (no
+  // fragment asked for) never falls through to the wrong message.
+  if (sliced.found && sliced.text.trim() === '') {
+    return (
+      <div
+        data-testid="kb-transclusion-empty"
+        className="rounded-md border border-dashed border-[var(--color-border)] px-3 py-4 text-xs text-[var(--color-muted)]"
+      >
+        This note is empty.
+      </div>
+    )
+  }
+
+  if (!sliced.found) {
+    return (
+      <div
+        data-testid="kb-transclusion-not-found"
+        className="rounded-md border border-dashed border-[var(--color-warning)]/50 px-3 py-4 text-xs text-[var(--color-warning)]"
+      >
+        {block
+          ? `No block anchored "${block}" was found in this note.`
+          : `No heading "${heading}" was found in this note.`}
+      </div>
+    )
+  }
+
+  return (
+    <div
+      data-testid="kb-transclusion"
+      className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]/40 px-4 py-3"
+    >
+      <KnowledgeBaseMarkdown
+        content={sliced.text}
+        notePath={collectionPath}
+        {...(ctx.onNavigate ? { onNavigate: ctx.onNavigate } : {})}
+        {...(ctx.onHeadingLink ? { onHeadingLink: ctx.onHeadingLink } : {})}
+        {...(ctx.linkHref ? { linkHref: ctx.linkHref } : {})}
+        resolveEmbedUrl={nestedTranscludedEmbedResolver}
+      />
+    </div>
+  )
+}
+
 /**
  * The KB `a` slot — the only replaced entry in the components map.
  *
@@ -951,6 +1354,7 @@ function KnowledgeMarkdownLink(
     'data-kb-wikilink'?: string
     'data-kb-target'?: string
     'data-kb-heading'?: string
+    'data-kb-block'?: string
     'data-kb-embed'?: string
     'data-kb-embed-kind'?: string
     'data-kb-embed-state'?: string
@@ -959,6 +1363,9 @@ function KnowledgeMarkdownLink(
     'data-kb-embed-outside-root'?: string
     'data-kb-embed-ambiguous'?: string
     'data-kb-embed-candidates'?: string
+    'data-kb-embed-standalone'?: string
+    'data-kb-embed-workspace-id'?: string
+    'data-kb-embed-workspace-path'?: string
   },
 ) {
   const { href, children } = props
@@ -993,6 +1400,40 @@ function KnowledgeMarkdownLink(
     }
 
     if (isEmbed) {
+      // ADR-083 Step 2/Step 3 — a `.base` or markdown embed that stood ALONE
+      // in its own paragraph (remarkKbPromoteBlockEmbeds marked it
+      // `data-kb-embed-standalone`) and resolved to a real file mounts the
+      // rich block renderer instead of the link fallback below. Everything
+      // else — mixed inline with other text, unresolved, indeterminate,
+      // loading, graph_unavailable — keeps the existing treatment untouched.
+      const standalone = props['data-kb-embed-standalone'] !== undefined
+      const embedKind = props['data-kb-embed-kind']
+      const embedState = props['data-kb-embed-state']
+      const embedWorkspaceId = props['data-kb-embed-workspace-id']
+      const embedWorkspacePath = props['data-kb-embed-workspace-path']
+      if (standalone && embedState === 'resolved' && embedWorkspaceId && embedWorkspacePath) {
+        if (embedKind === 'base') {
+          return (
+            <KbBaseEmbedMount
+              workspaceId={embedWorkspaceId}
+              workspacePath={embedWorkspacePath}
+              viewFragment={heading}
+            />
+          )
+        }
+        if (embedKind === 'markdown') {
+          return (
+            <KbTransclusionMount
+              workspaceId={embedWorkspaceId}
+              workspacePath={embedWorkspacePath}
+              collectionPath={props['data-kb-embed-path'] ?? target}
+              heading={heading}
+              block={props['data-kb-block']}
+            />
+          )
+        }
+      }
+
       return (
         <EmbedFallback
           target={target}
@@ -1143,7 +1584,14 @@ export function KnowledgeBaseMarkdown({
   ...link
 }: KnowledgeBaseMarkdownProps) {
   const remarkPlugins = useMemo(
-    () => [...KB_BASE_REMARK_PLUGINS, [remarkKbWikilinks, { resolveEmbedUrl }]] as RemarkPlugins,
+    () =>
+      [
+        ...KB_BASE_REMARK_PLUGINS,
+        [remarkKbWikilinks, { resolveEmbedUrl }],
+        // Runs AFTER remarkKbWikilinks — it reads the data-kb-embed-* shape
+        // that plugin just wrote (ADR-083 Step 2/3 block promotion).
+        remarkKbPromoteBlockEmbeds,
+      ] as RemarkPlugins,
     [resolveEmbedUrl],
   )
   const linkValue = useMemo<KnowledgeLinkContextValue>(
