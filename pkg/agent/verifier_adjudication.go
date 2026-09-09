@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -769,42 +770,124 @@ var unjudgeableEscalateFn = func(unitKey, criterionID string) {
 	)
 }
 
-// --- Workspace diff evidence feed (G-3/G-15, FR-144) ------------------------
+// --- Workspace diff evidence feed (G-3/G-15, FR-144; fix GX-E) -------------
 //
-// resolveVerifierDiffText returns the write-set-scoped workspace diff text for
-// the prose Judge's user message (the real file changes, not a transcript
-// window alone). It opens the Phase-1 git evidence repo at the work-under-
-// review's work/ dir and reads AttemptDiff. Best-effort throughout: an unbound
-// goal (no WorkspaceID), a nested user repo, an unborn HEAD, or any gitevidence
-// error returns "" — the Judge degrades to machine evidence + transcript
-// window + claim, never a hard failure (mirrors windowText's own contract).
-func (al *AgentLoop) resolveVerifierDiffText(in JudgeCriteriaInput) string {
+// Operator correction (fix GX-E, 2026-09): THE WORKING TREE IS GROUND TRUTH.
+// A commit is an audit/progress artifact, never a precondition for the Judge
+// to see real evidence — the prior AttemptDiff(nil)-based design could
+// report "(no workspace diff available)" purely because nothing had been
+// committed yet, even with the worker's files sitting right there on disk
+// (verified against a real operator run: the evidence repo's first commit
+// landed 112s AFTER the verdict that complained no diff was available).
+// resolveVerifierDiffText now reads gitevidence.Repo.DiffWorkingTree, which
+// walks the LIVE filesystem directly and never depends on any commit having
+// happened — correct from a completely unborn HEAD.
+
+// verifierDiffBoundaryMu guards verifierDiffBoundaryHashMap.
+var verifierDiffBoundaryMu sync.Mutex //nolint:gochecknoglobals // process-wide seam, see the doc comment below.
+
+// verifierDiffBoundaryHashMap tracks, per adjudication unit (verifierUnitID),
+// the commit hash as of the end of the last COMPLETED round — the "from"
+// side of the NEXT round's cumulative working-tree diff (fix GX-E-3: a round
+// with several intermediate commits — or none at all — must still show its
+// FULL cumulative work, not just the single latest commit AttemptDiff(nil)
+// used to report). Advanced only by advanceVerifierDiffBoundary (called from
+// JudgeCriteria, judge.go, after a non-Unavailable runVerifierAdjudication),
+// never by resolveVerifierDiffText itself — see that function's own doc
+// comment for why a retried call must still see the same cumulative diff,
+// not a spuriously-narrower one.
+//
+//nolint:gochecknoglobals // process-wide seam, see above.
+var verifierDiffBoundaryHashMap = make(map[string]string)
+
+// verifierDiffBoundary returns unitID's recorded boundary commit hash (""
+// when never yet observed) and whether one has ever been recorded.
+func verifierDiffBoundary(unitID string) (hash string, had bool) {
+	verifierDiffBoundaryMu.Lock()
+	defer verifierDiffBoundaryMu.Unlock()
+	hash, had = verifierDiffBoundaryHashMap[unitID]
+	return hash, had
+}
+
+// advanceVerifierDiffBoundary records headHash as unitID's new cumulative-
+// diff start boundary, once a round has genuinely completed (fix GX-E-3). A
+// no-op for an empty unitID. An empty headHash (workspace unreachable, or a
+// real but still-unborn HEAD) is recorded too — "no commit yet" is itself a
+// meaningful boundary state (distinct from "never observed", hadBoundary),
+// and every SUBSEQUENT round's DiffWorkingTree call still walks the live
+// working tree regardless of what this hash is, so recording "" here never
+// hides uncommitted work.
+func advanceVerifierDiffBoundary(unitID, headHash string) {
+	if unitID == "" {
+		return
+	}
+	verifierDiffBoundaryMu.Lock()
+	defer verifierDiffBoundaryMu.Unlock()
+	verifierDiffBoundaryHashMap[unitID] = headHash
+}
+
+// resolveVerifierDiffText returns the write-set-scoped, CUMULATIVE workspace
+// diff text for the prose Judge's user message (the real file changes,
+// committed or not — not a transcript window alone), and the commit hash
+// HEAD resolved to at read time (headHash — "" when the repo is unreachable
+// or HEAD is genuinely unborn). The caller (JudgeCriteria, judge.go) advances
+// the per-unit diff boundary to headHash ONLY once the round genuinely
+// completes; see advanceVerifierDiffBoundary's own doc comment for why this
+// function itself must never do that (a retried call after an Unavailable
+// judge round must still see the SAME cumulative diff).
+//
+// Best-effort like the pre-fix contract: an unbound goal (no WorkspaceID), no
+// OMNIPUS_HOME, an invalid workspace id, or a nested user repo (MIN-6)
+// returns diffText="" — the Judge degrades to machine evidence + transcript
+// window + claim, never a hard failure. A gitevidence read error also
+// degrades to "" (logged at WARN) — but, per the operator correction above,
+// this is now the ONLY class of "" outcome: a workspace that is reachable
+// but has NEVER been committed to no longer reads as unavailable —
+// DiffWorkingTree("", nil) still walks the real working tree and reports
+// whatever is actually on disk.
+func (al *AgentLoop) resolveVerifierDiffText(in JudgeCriteriaInput) (diffText, headHash string) {
 	wsID := strings.TrimSpace(in.WorkspaceID)
 	if wsID == "" {
-		return "" // unbound chat goal — no work-under-review workspace to diff
+		return "", "" // unbound chat goal — no work-under-review workspace to diff
 	}
 	home := config.OmnipusHomeDir()
 	if home == "" {
-		return ""
+		return "", ""
 	}
 	dir, err := workspace.SafeWorkDir(home, wsID)
 	if err != nil {
-		return "" // invalid workspace id — not a diff-feed concern
+		return "", "" // invalid workspace id — not a diff-feed concern
 	}
 	repo, err := gitevidence.Open(dir)
 	if err != nil {
 		// Nested user repo (ErrNestedRepo) or any other Open error: the git
 		// layer degrades for this workspace (MIN-6). Logged at WARN inside
 		// gitevidence.Open/EnsureWorkDir already; here it is a silent skip.
-		return ""
+		return "", ""
 	}
-	ev, err := repo.AttemptDiff(nil) // unscoped: the whole latest boundary commit
+	head, err := repo.Head() // "" (nil error) is a legitimate unborn HEAD, not a failure
+	if err != nil {
+		logger.WarnCF("agent", "verifier: could not resolve workspace HEAD for diff evidence",
+			map[string]any{"workspace_id": wsID, "error": err.Error()})
+		return "", ""
+	}
+
+	boundary, hadBoundary := verifierDiffBoundary(verifierUnitID(in))
+	fromHash := ""
+	if hadBoundary {
+		fromHash = boundary
+	}
+	// Deliberately NOT short-circuited when fromHash == head: HEAD not having
+	// moved does not mean the working tree hasn't — uncommitted edits made
+	// since the last round are exactly the case fix GX-E-3 exists to surface
+	// (a commit is an audit artifact, never the evidence path).
+	ev, err := repo.DiffWorkingTree(fromHash, nil)
 	if err != nil {
 		logger.WarnCF("agent", "verifier: could not read workspace diff evidence",
 			map[string]any{"workspace_id": wsID, "error": err.Error()})
-		return ""
+		return "", head
 	}
-	return renderDiffEvidence(ev)
+	return renderDiffEvidence(ev), head
 }
 
 // resolveGoalScopedDiffEmpty is ADR-081 D6a/FR-014b's GOAL-SCOPED variant of
@@ -889,29 +972,67 @@ func (al *AgentLoop) resolveGoalScopedDiffEmpty(sessionID, workspaceID string) b
 	return ev == nil || len(ev.Files) == 0
 }
 
-// renderDiffEvidence formats a DiffEvidence as the concise text block the prose
-// Judge consumes. Empty (no files / unborn HEAD) → "". The patch text is
-// capped per-file so a single huge diff cannot blow the verifier's context.
+// renderDiffEvidence formats a DiffEvidence as the concise text block the
+// prose Judge consumes. ev == nil (the ONLY "" outcome, fix GX-E: the
+// evidence layer itself could not be read — see resolveVerifierDiffText's own
+// doc comment) → "" so buildJudgeUserContent's "(no workspace diff available
+// for this adjudication)" sentinel fires. ev != nil but ev.Files empty (a
+// real DiffWorkingTree call that found the working tree genuinely
+// UNCHANGED against the boundary) renders an explicit "no changes found"
+// sentence instead — never "", so it can never be confused with the
+// evidence-layer-unavailable case above (operator correction point 4: "no
+// changes were made" must not read as "evidence is unavailable").
+//
+// Two caps bound total prompt growth (fix GX-E-3: a CUMULATIVE working-tree
+// diff can span far more files than the old single-commit AttemptDiff ever
+// did): diffPatchCap (16 KiB) truncates any ONE file's patch text; once the
+// running total across all files would exceed diffTotalCap (128 KiB),
+// remaining files are still NAMED (so the Judge knows what else changed) but
+// their patch bodies are omitted.
 func renderDiffEvidence(ev *gitevidence.DiffEvidence) string {
-	if ev == nil || len(ev.Files) == 0 {
+	if ev == nil {
 		return ""
 	}
 	var sb strings.Builder
+	if len(ev.Files) == 0 {
+		fmt.Fprintf(&sb,
+			"(workspace diff evidence WAS collected — from %q to %q — and found NO file changes; "+
+				"this means no work landed in the workspace since that boundary, not that evidence is unavailable)\n",
+			ev.FromHash, ev.ToHash)
+		return sb.String()
+	}
 	fmt.Fprintf(&sb, "(from %q to %q; %d of %d changed paths in scope)\n",
 		ev.FromHash, ev.ToHash, ev.Matched, ev.Total)
+	total := 0
+	omitted := 0
 	for _, f := range ev.Files {
 		patch := f.Patch
 		if len(patch) > diffPatchCap {
 			patch = patch[:diffPatchCap] + "\n…[diff truncated]"
 		}
+		if total+len(patch) > diffTotalCap {
+			omitted++
+			fmt.Fprintf(&sb, "--- %s (%s) --- [patch omitted: cumulative diff exceeds %d bytes]\n", f.Path, f.Kind, diffTotalCap)
+			continue
+		}
+		total += len(patch)
 		fmt.Fprintf(&sb, "--- %s (%s) ---\n%s\n", f.Path, f.Kind, patch)
+	}
+	if omitted > 0 {
+		fmt.Fprintf(&sb, "…[%d file(s) above had their patch body omitted for size]\n", omitted)
 	}
 	return sb.String()
 }
 
-// diffPatchCap bounds each file's unified-diff text fed to the prose Judge, so
-// one very large change cannot crowd out the rest of the evidence.
+// diffPatchCap bounds each file's diff text fed to the prose Judge, so one
+// very large change cannot crowd out the rest of the evidence.
 const diffPatchCap = 16 * 1024
+
+// diffTotalCap bounds the TOTAL patch bytes fed to the prose Judge across
+// every file in one adjudication (fix GX-E-3): a per-round CUMULATIVE diff
+// can span far more files than the old single-commit AttemptDiff ever did,
+// so the per-file cap alone no longer bounds total prompt growth.
+const diffTotalCap = 128 * 1024
 
 // --- The verifier turn itself (ADR-052 FR-011) ------------------------------
 
@@ -982,9 +1103,29 @@ func (al *AgentLoop) runVerifierAdjudication(
 		recordVerifierAvailabilityOutcome(unitID, unavailable)
 	}()
 
+	// Fix GX-E-4 (observability): the verifier attempt's wall-clock duration
+	// and how many judge-unavailability retry iterations it consumed, in ONE
+	// structured line — before this, the only way to infer duration was
+	// subtracting the session's created_at from the judgeCallTimeout log
+	// line, and iteration count was not logged at all. Runs as a defer (over
+	// named returns, so it always observes the final `unavailable`/`reason`)
+	// so it fires on EVERY exit path — success, fail-closed, or give-up
+	// alike. No criterion/claim/user content, just timing and counters.
+	startedAt := time.Now()
+	iterations := 0
+	defer func() {
+		logger.InfoCF("agent", "verifier: adjudication attempt finished",
+			map[string]any{
+				"unit_id": unitID, "scope": in.Scope, "iterations": iterations,
+				"duration_ms": time.Since(startedAt).Milliseconds(),
+				"unavailable": unavailable,
+			})
+	}()
+
 	windowText := al.resolveVerifierWindowText(in)
 
 	for attempt := 0; ; attempt++ {
+		iterations = attempt + 1
 		if ctx.Err() != nil {
 			return nil, "", "", true, ctx.Err().Error(), nil
 		}
