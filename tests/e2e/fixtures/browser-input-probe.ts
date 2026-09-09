@@ -348,6 +348,19 @@ async function waitUntil(page: Page, deadline: number) {
   while (performance.now() < deadline) await page.waitForTimeout(Math.min(1_000, Math.max(0, deadline - performance.now())));
 }
 
+function directFixturePreparation(preview: string | undefined, directory: string | undefined, origin: URL, workspaceWork: string): { preview: URL; directory: string } | undefined {
+  if (preview === undefined && directory === undefined) return undefined;
+  if (!preview || !directory) throw new Error('BROWSER_PROBE_PREVIEW_URL and BROWSER_PROBE_FIXTURE_DIR must be supplied together');
+  const url = new URL(preview);
+  if (url.origin !== origin.origin || !url.pathname.startsWith('/preview/') || url.username || url.password || url.search || url.hash) throw new Error('Direct fixture preview must use the designated runtime preview origin without credentials, query or fragment');
+  if (!path.isAbsolute(directory)) throw new Error('BROWSER_PROBE_FIXTURE_DIR must be absolute');
+  const resolved = fs.realpathSync(directory);
+  if (!resolved.startsWith(workspaceWork + path.sep) || !fs.statSync(resolved).isDirectory()) throw new Error('Direct fixture directory must be strictly inside the selected workspace work directory');
+  const index = path.join(resolved, 'index.html');
+  if (fs.lstatSync(index, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error('Direct fixture index must not be a symbolic link');
+  return { preview: url, directory: resolved };
+}
+
 export async function runBrowserInputProbe(page: Page, testInfo: TestInfo, mode: 'soak' | 'latency' | 'latency-video-only'): Promise<void> {
   testInfo.setTimeout(mode === 'soak' ? 32 * 60_000 : 8 * 60_000);
   const mixedDuration = mode === 'soak' ? PHASE_MS : CLICK_COUNT * 500;
@@ -395,20 +408,40 @@ export async function runBrowserInputProbe(page: Page, testInfo: TestInfo, mode:
     const relative = `browser-soak-${nonce}-${Date.now()}`;
     const workspaceWork = fs.realpathSync(path.join(runtimeHome, 'workspaces', workspace.id, 'work'));
     if (!workspaceWork.startsWith(runtimeHome + path.sep)) throw new Error('Runtime work directory escapes the isolated home');
-    const fixtureDir = path.join(workspaceWork, relative);
+    const direct = directFixturePreparation(process.env.BROWSER_PROBE_PREVIEW_URL, process.env.BROWSER_PROBE_FIXTURE_DIR, origin, workspaceWork);
+    const fixtureDir = direct?.directory ?? path.join(workspaceWork, relative);
     fs.mkdirSync(fixtureDir, { recursive: true });
-    fs.writeFileSync(path.join(fixtureDir, 'index.html'), fixtureHTML(expectedEvents, nonce));
-    await selectAgent(page, /Jim/i);
-    await chatInput(page).fill(`Use only these two tools yourself, in order: serve_web with path "${relative}" and no command; then browser_navigate to exactly its returned preview URL. Do not click, type, or call any other tool. Reply exactly SOAK_READY_${nonce} after both succeed.`);
-    await chatInput(page).press('Enter');
-    await expect(assistantMessages(page).last()).toContainText(`SOAK_READY_${nonce}`, { timeout: 240_000 });
-    await expect(page.locator('[data-testid="stop-btn"]')).not.toBeVisible({ timeout: 60_000 });
-    await watchLiveButton(page).click();
-    await expect(browserLivePanel(page)).toBeVisible();
+    const html = fixtureHTML(expectedEvents, nonce);
+    fs.writeFileSync(path.join(fixtureDir, 'index.html'), html);
+    await selectAgent(page, process.env.BROWSER_PROBE_AGENT_NAME || /Jim/i);
+    let previewURL: URL;
+    if (direct) {
+      previewURL = direct.preview;
+      const served = await page.request.get(previewURL.href, { timeout: 15_000, maxRedirects: 0, headers: { 'Cache-Control': 'no-cache' } });
+      expect(served.ok(), 'existing preview serves the fresh fixture').toBe(true);
+      expect(await served.text(), 'served fixture contains this run’s exact event plan and nonce').toContain(`const expected=${JSON.stringify(expectedEvents)}, nonce=${nonce};`);
+      const openBrowser = page.getByRole('button', { name: 'Open browser', exact: true });
+      await expect(openBrowser).toBeVisible({ timeout: 15_000 });
+      await openBrowser.click({ timeout: 15_000 });
+      await expect.poll(() => wire.some(event => event.direction === 'received' && event.type === 'browser_status' && event.state === 'attached'), { timeout: 45_000 }).toBe(true);
+      await expect.poll(() => browserLiveVideo(page).evaluate(element => (element as HTMLVideoElement).readyState), { timeout: 45_000 }).toBeGreaterThanOrEqual(2);
+    } else {
+      await chatInput(page).fill(`Prepare this browser test yourself. You may first use ToolSearch to load exactly serve_web and browser_navigate. Then call serve_web with path "${relative}" and no command, followed by browser_navigate to exactly its returned preview URL. Do not click, type, or use unrelated tools. Only after both tools succeed, reply with exactly SOAK_READY_${nonce} and nothing else. If any step fails, reply SOAK_SETUP_FAILED with the reason and never include the success marker.`);
+      await chatInput(page).press('Enter');
+      const reply = assistantMessages(page).last().locator('.prose-sm').last();
+      await expect(reply).toContainText(new RegExp(`SOAK_READY_${nonce}|SOAK_SETUP_FAILED`), { timeout: 240_000 });
+      await expect(page.locator('[data-testid="stop-btn"]')).not.toBeVisible({ timeout: 60_000 });
+      await expect(reply).toHaveText(`SOAK_READY_${nonce}`, { timeout: 5_000 });
+      await expect(watchLiveButton(page)).toBeVisible({ timeout: 15_000 });
+      await watchLiveButton(page).click({ timeout: 15_000 });
+      await expect(browserLivePanel(page)).toBeVisible();
+      const initialAddress = page.getByRole('textbox', { name: 'Address bar' });
+      await expect(initialAddress).toHaveValue(/\/preview\//, { timeout: 30_000 });
+      previewURL = new URL(await initialAddress.inputValue());
+      if (previewURL.origin !== origin.origin || !previewURL.pathname.startsWith('/preview/')) throw new Error('Fixture did not use the designated runtime preview origin');
+    }
+    await expect(browserLivePanel(page)).toBeVisible({ timeout: 15_000 });
     const address = page.getByRole('textbox', { name: 'Address bar' });
-    await expect(address).toHaveValue(/\/preview\//, { timeout: 30_000 });
-    const previewURL = new URL(await address.inputValue());
-    if (previewURL.origin !== origin.origin || !previewURL.pathname.startsWith('/preview/')) throw new Error('Fixture did not use the designated runtime preview origin');
     // Exercise the real panel's navigation path too, then start the soak only
     // after the authored zero-event picture has actually reached its video.
     await address.fill(previewURL.href);
