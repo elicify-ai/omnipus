@@ -1,6 +1,6 @@
 # ADR-084 — The Judge is an active reviewer, not a passive one
 
-- **Status:** Proposed (revision 2, after adversarial review) — 2026-09-09
+- **Status:** Proposed (revision 3, after spec-authoring review) — 2026-09-09
 - **Amends:** the un-ADR'd judge fix-wave in commit `02214f5c` (2026-09-09, "fix GX-E") — `planArtifactCheck`, the rung-1.5 dispatch, and the working-tree diff feed. *(Revision 1 wrongly attributed this to ADR-082, which is about UI-independent turns and session-bound streaming and says nothing about the Judge.)*
 - **Relates to:** ADR-052 (verifier adjudication, FR-039 reproducibility), ADR-055 (PlanSupervisor, the skills-allowlist gap), ADR-057 FR-011 (delegated children own their sessions), ADR-074 D7 (`evidence_quote`), ADR-077 / Constraint #6 (tool policy), Constraint #8 (contract-first wire formats)
 - **Prerequisites:** issue #688 (configurable judge timeout) **and** D9's investigation bounds, **and** D10's capability closures. None of D1 ships before all three.
@@ -152,3 +152,33 @@ A criterion naming a path that does not exist is `unmet` (D5a's veto). A path th
 - Granting the Judge any write, shell, network or delegation capability. Never.
 - Changing SEC-26's budget mechanism (D9 notes its interaction; it does not change it).
 - The browser control handover (ADR-085).
+
+## 6. Revision 3 — corrections found while writing the spec
+
+Spec authoring re-verified every claim in revision 2 and found eight further errors. They are corrected here; `docs/internal/specs/judge-active-reviewer-spec.md` implements the corrected form and records the evidence in its §0.
+
+### R3-a — D6's frozen rubric list is half missing (blocker)
+
+Hashing every historical `JudgeDefaultRubric` body yields **four** distinct texts, not the two revision 2 names. It omits `89297b51` (2026-07-21) — which was live for roughly six and a half weeks and therefore covers essentially the entire existing install population — and `3eff293a` (the current text). Shipping D6 as written would WARN and strand exactly the installs the migration exists to rescue. The frozen list is all four, each pinned with its commit and a hash.
+
+### R3-b — D2c's `source` cannot live inside `evidence_quote` (blocker)
+
+`evidence_quote` is `type: string, maxLength: 500` under `additionalProperties: false`, persisted (`pkg/task/verdict.go::CriterionVerdict.EvidenceQuote`), replayed (`pkg/gateway/replay.go`) and rendered by three existing vitest cases. Turning it into an object breaks every verdict already on disk. The discriminator is a **new sibling optional field** (`evidence_source`), added through Constraint #8's five steps alongside `outcome` and `provenance`.
+
+### R3-c — D9.3 is wrong about round accounting (blocker)
+
+Revision 2 said reclassifying a post-progress timeout as `unable_to_verify` makes it "consume a round". It does not: `JudgeCriteria`'s `noteNonVerdict` → `withheld` → `JudgeCriteriaResult{Unavailable: true}` → `runGoalAdjudication`'s `Unavailable` branch logs "round not consumed". The honest bound already exists and is different: `UnableToVerifyMaxRerunsDefault` = 3, so an honest failure arrives within K+1 adjudications rather than one.
+
+Two further consequences revision 2 missed: relabelling alone does **not** break out of `runVerifierAdjudication`'s `judgeBackoffWait` + `continue` retry loop, so the loop must be exited explicitly; and a withheld **prose** criterion discards the whole adjudication including the tool-using LLM call already spent — a cost D9 must account for now that those calls are expensive.
+
+### R3-d — Five mechanism errors
+
+| # | Revision 2 said | Reality |
+|---|---|---|
+| C4 | D1a reaches descendant sessions via the ADR-057 parent index. | `UnifiedStore.parentIndex` exposes only `ChildCount`. The durable transitive walker already exists: `pkg/agent/goal_triggers.go::goalDescendantSessionIDs`. Use it. |
+| C5 | D10 adds an `mcp_*: deny` wildcard to the Judge's seed. | That would **panic** through `denyAllThenOverride` → `validateOverrideKeys`. The MCP closure needs a different mechanism. |
+| C6 | D10 pins read confinement for the verifier turn. | `readRestrict` is baked in at `pkg/agent/instance.go::NewAgentInstance` from global `AgentDefaults`; it cannot be a seeded per-agent field. The pin must happen where the instance is constructed for the verifier turn. |
+| C7 | D5 demotes the artifact check to evidence. | As written it double-classifies every artifact criterion and silently defeats the K bound. The demotion must remove the criterion from the deterministic rung exactly once. |
+| C8 | D2b, D2c and D5a are enforced "at the parser". | `parseJudgeResponse` sees neither tool results nor check outcomes. Only D2b (empty quote) can live there; D2c's grounding and D5a's veto need the enclosing adjudication, which holds both. |
+
+None of these change the decisions. They change where and how each is enforced, and R3-a and R3-c change what the ADR claims the system does today.
