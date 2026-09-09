@@ -1135,8 +1135,37 @@ not once it parses arbitrary PDFs from disk and from agents, next to the session
 Starting list, on every SPA shell response:
 
 ```
-default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' stun: turn: turns:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
+default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' stun: turn: turns:; frame-src 'self' https://www.youtube-nocookie.com; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
 ```
+
+> **AMENDED 2026-09-09 — `frame-src` carries the video allow-list, and this block is now the
+> *shipped default* rather than the only string served (ADR-083 D-C / D9, EMB-079 / EMB-081).**
+>
+> `frame-src` was `'self'` alone. It now also carries the allow-listed external video hosts, whose
+> shipped default is the single entry `https://www.youtube-nocookie.com` — the only external source
+> anywhere in this policy. The list is an operator configuration key
+> (`gateway.video_embed_hosts`), so the served string genuinely varies: an operator who empties the
+> key gets `frame-src 'self'` back, with no external host anywhere in the policy and every video
+> embed in a note rendering as a plain link.
+>
+> **The line above stays the byte-for-byte oracle, and it is the DEFAULT install's line.**
+> `TestSpaServedWithCSP` still reads it out of this document and still requires exactly one literal
+> policy line here. `TestSpaCsp_OperatorCanDeclineTheHost` carries the other half in one body: the
+> default install's served header equals this line, and an emptied install's header both differs
+> from it and contains no external host. Neither half is worth anything alone — "the emptied
+> setting yields no external host" passes just as well on a build where the host was never added.
+>
+> **What did NOT change, and is asserted rather than asserted-in-prose.** `img-src` is untouched, so
+> there is no provider thumbnail and the click-to-play placeholder is drawn from local assets only —
+> which is the point: an eagerly-loaded player frame contacts the provider for every embed on a page
+> before the reader has chosen to watch anything. `frame-ancestors 'none'` is untouched: this change
+> governs what the SPA may frame **outward**, not what may frame the SPA **inward**, and the two
+> directives share this string and nothing else. `TestSpaCsp_FrameAncestorsAndImgSrcUnchanged` pins
+> both byte for byte and E2E test A6 is re-run verbatim, because an argument is not a measurement.
+>
+> The **isolated preview** policy in §10.3 (`pkg/gateway/library_isolation_policy.go`) is **not**
+> touched by this and must not be: putting the video host there would open agent-generated HTML
+> previews to third-party framing — a far larger blast radius than showing a video in a note.
 
 **This is a proposal, not a measurement.** Unlike §10.3, no experiment stands behind it. Its
 assumptions, each with the symptom if wrong: no inline bootstrap script (white screen at boot);

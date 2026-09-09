@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // spaContentSecurityPolicy is the ADR-067 §10.7 policy for the SPA shell
@@ -135,6 +136,29 @@ import (
 //	                                      (test A5): a `js` code block renders its
 //	                                      text with zero WebAssembly console
 //	                                      hits.
+//	the SPA frames nothing off-origin   → AMENDED 2026-09-09 (ADR-083 D-C/D9).
+//	                                      `frame-src` is no longer 'self' alone:
+//	                                      it carries the allow-listed video
+//	                                      hosts, whose shipped default is the
+//	                                      single entry
+//	                                      https://www.youtube-nocookie.com. This
+//	                                      is the ONLY external source in the
+//	                                      whole policy and it is a CONFIG KEY
+//	                                      (gateway.video_embed_hosts) an
+//	                                      operator can empty — see
+//	                                      spaCSPForVideoHosts below for why the
+//	                                      string is built rather than written,
+//	                                      and video_embed_hosts.go for the
+//	                                      allow-list itself. `img-src` is
+//	                                      deliberately UNCHANGED: there is no
+//	                                      provider thumbnail, so the
+//	                                      click-to-play placeholder is drawn
+//	                                      locally. MEASURED 2026-09-09
+//	                                      (Chromium 151, tests A7/A8): a frame
+//	                                      to the allow-listed host reports zero
+//	                                      frame-src violations, and one to a
+//	                                      non-allow-listed video host is still
+//	                                      refused.
 //	nothing embeds the SPA              → any embedding surface goes blank.
 //	                                      MEASURED 2026-09-05 (test A6): HOLDS,
 //	                                      with a caveat worth reading. The
@@ -156,8 +180,21 @@ import (
 //	                                      anything this handler serves — extend
 //	                                      A6 to prove that rather than assuming
 //	                                      it.
-const spaContentSecurityPolicy = "default-src 'self'; script-src 'self'; " +
+//
+// The literal below is the policy with NO external frame host — the base every
+// served string is derived from. `spaContentSecurityPolicy` (the shipped
+// default, and ADR-067 §10.7's byte-for-byte oracle) is this string plus the
+// default video allow-list; see spaCSPForVideoHosts.
+const spaBaseContentSecurityPolicy = "default-src 'self'; script-src 'self'; " +
 	"worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; " +
+	// img-src IS THE ONE DIRECTIVE ADR-083 D-C FORBIDS TOUCHING, and it is
+	// worth stating why here rather than only in the ADR. Adding the video
+	// provider's image host would let the placeholder use the provider's own
+	// thumbnail — which is a network contact with that provider, for every
+	// embed on the page, before the reader has chosen to watch anything. That
+	// is precisely the contact click-to-play exists to prevent, so the
+	// placeholder is drawn LOCALLY and this directive stays same-origin.
+	// TestSpaCsp_FrameAncestorsAndImgSrcUnchanged asserts it byte for byte.
 	"img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; " +
 	// connect-src carries the ICE SCHEMES as well as 'self'. Not a wildcard:
 	// ordinary HTTP and WebSocket egress stays pinned to the gateway, and only
@@ -172,6 +209,65 @@ const spaContentSecurityPolicy = "default-src 'self'; script-src 'self'; " +
 	// "capture/encoder/ICE" error frame, with nothing anywhere naming CSP.
 	"connect-src 'self' stun: turn: turns:; frame-src 'self'; object-src 'none'; base-uri 'none'; " +
 	"form-action 'self'; frame-ancestors 'none'"
+
+// spaCSPFrameSrcSelfOnly is the substring spaCSPForVideoHosts edits.
+const spaCSPFrameSrcSelfOnly = "frame-src 'self';"
+
+// spaCSPForVideoHosts returns the SPA policy with the allow-listed video hosts
+// appended to `frame-src` (ADR-083 EMB-079).
+//
+// WHY THE POLICY IS BUILT AND NOT WRITTEN. EMB-081 makes the allow-list an
+// operator configuration key, so the served string genuinely varies per
+// install: the default carries one external host, and an operator who empties
+// the key must get a policy with none. A second hand-written literal for that
+// case is the drift this whole file is annotated against — and it is the exact
+// shape TestSpaCsp_WasmPolicyDiffersByExactlyTheKeyword already exists to
+// prevent for the worker policy.
+//
+// WHAT IS NOT TOUCHED, and why the two are genuinely uncoupled. This function
+// edits `frame-src`, which governs what the SPA may frame OUTWARD. It does not
+// go near `frame-ancestors 'none'`, which governs what may frame the SPA
+// INWARD — FR-006b's compensating control for the preview policy's own
+// `frame-src 'self'`, documented at the top of this file. The two directives
+// share this string and nothing else: no browser derives one from the other,
+// and permitting an outward frame source grants an embedder nothing. That is
+// an argument, though, and an argument is not a measurement — test A6 is
+// re-run verbatim, and TestSpaCsp_FrameAncestorsAndImgSrcUnchanged asserts the
+// directive byte for byte, because those are what actually prove it.
+//
+// It PANICS when the directive it edits is absent, for the same reason
+// withWasmCompilation does: a strings.Replace that matches nothing would boot
+// happily and serve a policy silently missing the video host, whose only
+// symptom is a blank frame the reader still offers a play control for.
+func spaCSPForVideoHosts(hosts []string) string {
+	if !strings.Contains(spaBaseContentSecurityPolicy, spaCSPFrameSrcSelfOnly) {
+		panic("gateway: the SPA base policy no longer contains " + spaCSPFrameSrcSelfOnly +
+			" — the video-embed allow-list cannot be rendered into it, and every allow-listed " +
+			"video would be refused by a policy that still claims to permit it. Update " +
+			"spaCSPForVideoHosts together with spaBaseContentSecurityPolicy.")
+	}
+	sources := videoEmbedFrameSources(hosts)
+	if len(sources) == 0 {
+		return spaBaseContentSecurityPolicy
+	}
+	return strings.Replace(
+		spaBaseContentSecurityPolicy,
+		spaCSPFrameSrcSelfOnly,
+		"frame-src 'self' "+strings.Join(sources, " ")+";",
+		1)
+}
+
+// spaContentSecurityPolicy is the SHIPPED-DEFAULT policy — the base plus
+// DefaultVideoEmbedHosts.
+//
+// It remains ADR-067 §10.7's byte-for-byte oracle and the string
+// TestSpaServedWithCSP compares the served header against on a default install.
+// An install whose operator has narrowed or emptied the allow-list serves a
+// DIFFERENT string, and TestSpaCsp_OperatorCanDeclineTheHost asserts both halves
+// of that in one body: the default matches §10.7's line, the emptied one does
+// not and carries no external host. Either half alone would pass on a build
+// where the host was never added.
+var spaContentSecurityPolicy = spaCSPForVideoHosts(DefaultVideoEmbedHosts)
 
 // pdfJSWorkerPath is the ONE embedded file whose response carries
 // spaPdfWorkerContentSecurityPolicy instead of spaContentSecurityPolicy.
@@ -257,6 +353,15 @@ const pdfJSWorkerPath = pdfJSAssetPathPrefix + "pdf.worker.min.mjs"
 // cookie access and no ambient authority, and it already runs the full
 // JavaScript decoders over the same input. The marginal capability is
 // "compile three files we shipped".
+//
+// AMENDED 2026-09-09 (ADR-083 EMB-079). This var is now the SHIPPED-DEFAULT
+// worker policy; the handler derives the served one per response from the live
+// allow-list, via spaPoliciesFor, so an operator who empties
+// gateway.video_embed_hosts gets a worker policy with no external frame source
+// too. The video host reaching this string at all is INTENDED and inert — the
+// worker frames nothing — but "exactly the allow-listed hosts and nothing else"
+// is a claim about BOTH strings, so TestSpaPdfWorkerCsp_InheritsTheFrameHost
+// asserts the served header on both paths rather than assuming one.
 var spaPdfWorkerContentSecurityPolicy = withWasmCompilation(spaContentSecurityPolicy)
 
 // withWasmCompilation returns policy with 'wasm-unsafe-eval' added to its
@@ -296,15 +401,72 @@ const pdfJSAssetPathPrefix = "pdfjs/"
 //go:embed all:spa
 var spaFS embed.FS
 
+// spaPolicyPair is one resolved allow-list rendered into both served policies.
+//
+// Both strings are derived from the same host list in the same step, so the
+// worker's policy can never lag the document's by a directive — the failure
+// TestSpaPdfWorkerCsp_InheritsTheFrameHost pins.
+type spaPolicyPair struct {
+	key      string
+	document string
+	worker   string
+}
+
+// spaPolicyCache holds the most recently rendered pair.
+//
+// The allow-list is read per RESPONSE, not frozen at boot (ADR-083 A-14: an
+// operator who empties the key mid-session must not leave open pages offering a
+// play control the policy now blocks). Rebuilding two strings on every asset
+// request would be pure waste, and the value changes about as often as
+// config.json does, so one cached pair keyed by the joined host list gives the
+// live read for free. atomic.Pointer, not a mutex: readers never block, and a
+// racing double-render costs one redundant string build and nothing else —
+// both racers compute the same bytes from the same input.
+var spaPolicyCache atomic.Pointer[spaPolicyPair]
+
+// spaPoliciesFor returns the document and PDF-worker policies for hosts.
+func spaPoliciesFor(hosts []string) (document, worker string) {
+	key := strings.Join(hosts, " ")
+	if cached := spaPolicyCache.Load(); cached != nil && cached.key == key {
+		return cached.document, cached.worker
+	}
+	doc := spaCSPForVideoHosts(hosts)
+	pair := &spaPolicyPair{key: key, document: doc, worker: withWasmCompilation(doc)}
+	spaPolicyCache.Store(pair)
+	return pair.document, pair.worker
+}
+
+// videoEmbedHostsFunc reports the currently configured video-embed allow-list.
+//
+// It is a FUNCTION rather than a slice so the handler reads the live value; a
+// slice captured at construction would freeze the policy at boot and make
+// gateway.video_embed_hosts a restart-gated key that nothing says is
+// restart-gated. A nil func means "the shipped default", which is what the
+// fixture-driven tests and any caller with no config in hand get.
+type videoEmbedHostsFunc func() []string
+
+// resolveHosts is the one place a nil accessor becomes the shipped default, so
+// no caller can accidentally serve an EMPTY allow-list — the operator-declined
+// state — merely by having no config to consult.
+func (f videoEmbedHostsFunc) resolveHosts() []string {
+	if f == nil {
+		return DefaultVideoEmbedHosts
+	}
+	return f()
+}
+
 // newSPAHandler returns an http.Handler that serves the embedded SPA,
 // or nil if no SPA was embedded at build time.
-func newSPAHandler() http.Handler {
+//
+// videoHosts supplies the live video-embed allow-list (ADR-083 EMB-081); pass
+// nil for the shipped default.
+func newSPAHandler(videoHosts videoEmbedHostsFunc) http.Handler {
 	sub, err := fs.Sub(spaFS, "spa")
 	if err != nil {
 		// No embedded SPA - return nil to signal gateway to skip registration
 		return nil
 	}
-	return newSPAHandlerFor(sub)
+	return newSPAHandlerFor(sub, videoHosts)
 }
 
 // newSPAHandlerFor builds the SPA-serving handler over an arbitrary filesystem.
@@ -312,7 +474,7 @@ func newSPAHandler() http.Handler {
 // (pdfJSWorkerPath) that carries spaPdfWorkerContentSecurityPolicy — can be
 // exercised in tests over a fixture FS, deterministically and without depending
 // on a built SPA embed being present in the binary under test.
-func newSPAHandlerFor(sub fs.FS) http.Handler {
+func newSPAHandlerFor(sub fs.FS, videoHosts videoEmbedHostsFunc) http.Handler {
 	fileServer := http.FileServer(http.FS(sub))
 
 	spaHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -323,7 +485,13 @@ func newSPAHandlerFor(sub fs.FS) http.Handler {
 		// silently makes the effective policy something neither string states.
 		// FR-006b's `frame-ancestors 'none'` is therefore absorbed into the
 		// §10.7 string below rather than sent alongside it.
-		w.Header().Set(headerContentSecurityPolicy, spaContentSecurityPolicy)
+		//
+		// Resolved per response (ADR-083 EMB-081): the allow-list is a live
+		// config key, so the string served is the one the operator has set
+		// right now, and the next page load carries a change without a
+		// restart.
+		documentPolicy, workerPolicy := spaPoliciesFor(videoHosts.resolveHosts())
+		w.Header().Set(headerContentSecurityPolicy, documentPolicy)
 
 		// Try to serve the file directly
 		path := r.URL.Path
@@ -340,7 +508,7 @@ func newSPAHandlerFor(sub fs.FS) http.Handler {
 		// modules — see spaPdfWorkerContentSecurityPolicy for the measurement.
 		// Still exactly one header: Set replaces, never appends.
 		if cleanPath == pdfJSWorkerPath {
-			w.Header().Set(headerContentSecurityPolicy, spaPdfWorkerContentSecurityPolicy)
+			w.Header().Set(headerContentSecurityPolicy, workerPolicy)
 		}
 		if _, err := fs.Stat(sub, cleanPath); err == nil {
 			switch {

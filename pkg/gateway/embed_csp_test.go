@@ -62,10 +62,26 @@ func specSPAPolicy(t *testing.T) string {
 
 // --- test 68 — TestSpaServedWithCSP ----------------------------------------
 
-// spaResponse drives the real SPA handler for one path.
+// spaResponse drives the real SPA handler for one path, on a DEFAULT install.
+//
+// nil is the shipped video-embed allow-list, not an empty one — see
+// videoEmbedHostsFunc.resolveHosts. Tests that need a different allow-list use
+// spaResponseWithHosts below.
 func spaResponse(t *testing.T, target string) *httptest.ResponseRecorder {
 	t.Helper()
-	handler := newSPAHandler()
+	return spaResponseWithHosts(t, target, nil)
+}
+
+// spaResponseWithHosts drives the real SPA handler with an explicit allow-list,
+// so a test can serve the policy an operator who edited
+// gateway.video_embed_hosts would actually receive.
+func spaResponseWithHosts(
+	t *testing.T,
+	target string,
+	hosts videoEmbedHostsFunc,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	handler := newSPAHandler(hosts)
 	require.NotNil(t, handler, "no SPA embedded — every assertion below would be vacuous")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
@@ -89,7 +105,21 @@ func spaFixtureFS() fs.FS {
 // so a test can assert the real routing without depending on the embedded SPA.
 func spaResponseFromFS(t *testing.T, fsys fs.FS, target string) *httptest.ResponseRecorder {
 	t.Helper()
-	handler := newSPAHandlerFor(fsys)
+	return spaResponseFromFSWithHosts(t, fsys, target, nil)
+}
+
+// spaResponseFromFSWithHosts is spaResponseFromFS with an explicit video-embed
+// allow-list, used by the PDF-worker tests: the worker policy is DERIVED from
+// the document policy, so the allow-list has to reach both or one of them is
+// asserted against a value the other never sees.
+func spaResponseFromFSWithHosts(
+	t *testing.T,
+	fsys fs.FS,
+	target string,
+	hosts videoEmbedHostsFunc,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	handler := newSPAHandlerFor(fsys, hosts)
 	require.NotNil(t, handler)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
@@ -177,7 +207,22 @@ func spaCSPFloorViolations(policy string) []string {
 				want.directive+" must be exactly "+want.value+"; got "+directiveOrAbsent(directives, want.directive))
 		}
 	}
-	for _, directive := range []string{"connect-src", "worker-src", "script-src", "default-src"} {
+	// frame-src joined this list on 2026-09-09 (ADR-083 EMB-079). It is no
+	// longer `'self'` alone, so "it is stated" stopped being enough on its own:
+	// the floor now also refuses a wildcard anywhere in it. A wildcard host —
+	// `https://*.youtube-nocookie.com`, or the bare `*` — permits every
+	// sub-domain, including any an attacker can register, and it is exactly the
+	// shape a future "just make the video work" edit reaches for.
+	//
+	// Note what the floor deliberately does NOT do: it does not enumerate the
+	// permitted hosts. The list is an operator config key (EMB-081), so a floor
+	// naming values would fail on any install that legitimately narrowed it.
+	// Which hosts are served is asserted by
+	// TestSpaCsp_FrameSrcAllowListMatchesServedHeader and
+	// TestSpaCsp_OperatorCanDeclineTheHost, against the SERVED response.
+	for _, directive := range []string{
+		"connect-src", "worker-src", "script-src", "default-src", "frame-src",
+	} {
 		value, ok := directives[directive]
 		if !ok {
 			violations = append(violations, directive+" is absent — it must be stated explicitly")
@@ -186,6 +231,14 @@ func spaCSPFloorViolations(policy string) []string {
 		if strings.Contains(value, "*") {
 			violations = append(violations, directive+" is wide open ("+value+")")
 		}
+	}
+	// A frame source over cleartext is a document this origin invites in that
+	// anything on the path may replace. Checked separately from the wildcard
+	// rule so the failure says which of the two happened.
+	if value, ok := directives["frame-src"]; ok && strings.Contains(value, "http://") {
+		violations = append(violations,
+			"frame-src permits a cleartext source ("+value+") — a framed document must be "+
+				"authenticated in transit")
 	}
 	return violations
 }
@@ -255,6 +308,36 @@ func TestSpaCsp_DirectiveFloor(t *testing.T) {
 				name:   "connect-src wide open",
 				policy: strings.Replace(base, "connect-src 'self'", "connect-src *", 1),
 				why:    "MV-25 requires an explicit connect-src; '*' states it and states nothing",
+			},
+			// ADR-083 EMB-079 — the three ways the new frame-src value gets
+			// quietly relaxed. Without these rows the floor would have been
+			// EXTENDED to cover a directive it cannot fail on, which is the
+			// "floor relaxed to accommodate the new value" this test exists to
+			// refuse.
+			{
+				name:   "frame-src wide open",
+				policy: replaceFrameSrc(base, "frame-src *"),
+				why: "a wildcard frame-src permits framing anything at all, which is every " +
+					"external host D-C rules out plus the video one it rules in",
+			},
+			{
+				name:   "frame-src wildcard host",
+				policy: replaceFrameSrc(base, "frame-src 'self' https://*.youtube-nocookie.com"),
+				why: "a wildcard sub-domain permits every name under it, including any an " +
+					"attacker can register — the allow-list is exact hosts or it is not an allow-list",
+			},
+			{
+				name:   "frame-src over cleartext",
+				policy: replaceFrameSrc(base, "frame-src 'self' http://www.youtube-nocookie.com"),
+				why: "a cleartext frame source is a document this origin invites in that anyone " +
+					"on the path can replace",
+			},
+			{
+				name:   "frame-src dropped",
+				policy: replaceFrameSrc(base, ""),
+				why: "with frame-src absent the policy falls back to default-src 'self', which " +
+					"looks stricter and is: the video host stops working with no directive " +
+					"anywhere naming why",
 			},
 		}
 

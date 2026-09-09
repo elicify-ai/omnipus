@@ -1039,7 +1039,7 @@ func TestSessionCookie_IsSameSiteStrict(t *testing.T) {
 // freezing it before a headed three-engine run. This test asserts only the
 // framing control, which is a measured requirement in its own right.
 func TestSpaShell_RefusesFraming(t *testing.T) {
-	handler := newSPAHandler()
+	handler := newSPAHandler(nil)
 	require.NotNil(t, handler,
 		"the embedded SPA must be present — skipping here would make this assertion vacuous")
 

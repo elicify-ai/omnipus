@@ -5893,6 +5893,21 @@ type httpHandlerRegistrar interface {
 
 // --- App State ---
 
+// videoEmbedHosts returns the allow-list this install advertises to the reader.
+//
+// The nil-agent-loop branch resolves to the SHIPPED DEFAULT rather than to an
+// empty list, and that choice is deliberate: it is exactly what
+// newSPAHandler(nil) puts in the served Content-Security-Policy when it has no
+// config either. Answering "none" here while the policy says "one host" would
+// manufacture the drift EMB-080 forbids — out of a defensive nil check, in the
+// one code path where nothing else would notice.
+func (a *restAPI) videoEmbedHosts() []string {
+	if a.agentLoop == nil {
+		return ResolveVideoEmbedHosts(nil)
+	}
+	return ResolveVideoEmbedHosts(a.agentLoop.GetConfig())
+}
+
 // HandleState handles GET/PATCH /api/v1/state (onboarding state).
 func (a *restAPI) HandleState(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -5907,6 +5922,21 @@ func (a *restAPI) HandleState(w http.ResponseWriter, r *http.Request) {
 		}
 		resp := map[string]any{
 			"onboarding_complete": complete,
+			// ADR-083 CW-3 / EMB-080 — the video-embed allow-list the READER
+			// uses to decide whether to draw a play control at all.
+			//
+			// It is resolved by the SAME function that renders the served
+			// Content-Security-Policy's frame-src sources
+			// (ResolveVideoEmbedHosts), because the two must be equal: a
+			// reader offering a play control for a host the policy refuses
+			// gives a control that does nothing, and a policy permitting a
+			// host the reader will not draw gives a feature nobody can reach.
+			//
+			// ALWAYS PRESENT, and `[]` when the operator has declined the
+			// external host — never absent. The reader has to tell "this
+			// installation says no" from "the server did not answer", and an
+			// omitted field collapses the two into the same undefined.
+			"video_embed_hosts": a.videoEmbedHosts(),
 		}
 		if lastRun != nil {
 			resp["last_doctor_run"] = lastRun.Format(time.RFC3339)

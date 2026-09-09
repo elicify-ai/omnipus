@@ -5295,7 +5295,15 @@ func setupAndStartServices(
 	// Serve the embedded SPA (Sovereign Deep UI) as the default handler.
 	// API routes registered above take priority; anything else serves the SPA.
 	// If no SPA was embedded at build time, skip registration (UI not available).
-	if spaHandler := newSPAHandler(); spaHandler != nil {
+	// The allow-list accessor is a closure over the LIVE config (ADR-083
+	// EMB-081): gateway.video_embed_hosts is read per response, so an operator
+	// who empties it stops the external frame source reaching the served policy
+	// on the next page load rather than at the next restart. The same resolver
+	// feeds GET /api/v1/state, which is what keeps the browser's list and the
+	// browser's policy equal (EMB-080).
+	if spaHandler := newSPAHandler(func() []string {
+		return ResolveVideoEmbedHosts(agentLoop.GetConfig())
+	}); spaHandler != nil {
 		runningServices.ChannelManager.RegisterHTTPHandler("/", spaHandler)
 	} else {
 		fmt.Println("Note: No embedded SPA (run 'pnpm build' in web/frontend to enable UI)")

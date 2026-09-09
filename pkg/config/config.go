@@ -3379,6 +3379,44 @@ type GatewayConfig struct {
 	// slot, not a role-less entry in Users[]. Nil means no CLI token has been
 	// minted yet.
 	CLIToken *TokenEntry `json:"cli_token,omitempty" env:"-"`
+
+	// VideoEmbedHosts is the allow-list of hostnames a knowledge-base note may
+	// frame a video from (ADR-083 D-C / D9, EMB-075 / EMB-081). It is the ONLY
+	// external content this application permits anywhere, and it appears in two
+	// places that must agree: the `frame-src` directive of the SPA's own
+	// Content-Security-Policy (pkg/gateway/embed.go) and the `video_embed_hosts`
+	// field of GET /api/v1/state, which is how the reader decides whether to
+	// draw a play control at all. Both are derived from this one value by
+	// gateway.ResolveVideoEmbedHosts, so they cannot drift — if they did, the
+	// symptom would be a blank frame or a play control that does nothing, with
+	// nothing anywhere naming the cause.
+	//
+	// THREE-STATE, and the distinction is load-bearing:
+	//
+	//	nil (key absent)      → the SHIPPED DEFAULT applies (exactly one host).
+	//	                        This is what an install upgraded across this
+	//	                        change sees, and it resolves identically to a
+	//	                        fresh install rather than silently turning the
+	//	                        feature off.
+	//	&[]string{}           → the operator DECLINED the external host. No
+	//	                        external frame source reaches the served policy
+	//	                        and every video embed renders as a plain link.
+	//	&[]string{"host", …}  → exactly those hosts.
+	//
+	// It is a POINTER for that middle state alone: `omitempty` on a bare
+	// []string drops an empty slice on marshal, so an operator's explicit "off"
+	// would be rewritten back to absent — i.e. back to the default — the next
+	// time the gateway saved config.json. Silently re-adding an external host
+	// an operator removed is exactly the failure this shape prevents.
+	//
+	// Read LIVE, not restart-gated (matching PreviewEnabled's precedent above):
+	// the policy is built per response, so the next page load carries the new
+	// value, and the reader re-reads the same list on the app-state query's own
+	// schedule. Entries that are not syntactically valid hostnames are DROPPED
+	// with a warning rather than concatenated into a header — see
+	// gateway.ResolveVideoEmbedHosts, which is the single validator both
+	// surfaces use.
+	VideoEmbedHosts *[]string `json:"video_embed_hosts,omitempty" env:"-"`
 }
 
 type ToolDiscoveryConfig struct {

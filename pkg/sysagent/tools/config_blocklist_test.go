@@ -100,6 +100,7 @@ func TestValidateConfigKey_NamedEscalationsRefused(t *testing.T) {
 		{"gateway.users", "mint itself an API bearer credential"},
 		{"gateway.trust_xff", "spoof the client IP auth rate limiting keys on"},
 		{"gateway.public_url", "widen the CSP/CORS/WS origin"},
+		{"gateway.video_embed_hosts", "add a third-party frame source to the SPA's own CSP"},
 		{"gateway.tool_approval_timeout", "defeat the human approval gate"},
 		{"gateway.tool_approval_max_pending", "defeat the human approval gate"},
 		{"gateway.auth_mismatch_log_level", "silence failed-auth logging"},

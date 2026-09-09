@@ -61,6 +61,15 @@ const (
 	// GatewayPreviewEnabled gates /preview/ and serve_web. Read live — it is
 	// deliberately NOT in RestartGatedKeys (ADR-044, FR-006/FR-007).
 	GatewayPreviewEnabled ConfigKey = "gateway.preview_enabled"
+	// GatewayVideoEmbedHosts is the external-video frame allow-list (ADR-083
+	// D9, EMB-081). It is a CSP-widening control: every entry becomes a
+	// `frame-src` source in the SPA's own policy, so an agent able to write it
+	// could authorise itself a third-party frame inside the application's own
+	// origin. Blocked for the agent config tool for the same reason
+	// GatewayPublicURL is. Read live — deliberately NOT in RestartGatedKeys:
+	// the policy is rebuilt per response and the reader re-reads the list on
+	// the app-state query's schedule (ADR-083 A-14).
+	GatewayVideoEmbedHosts ConfigKey = "gateway.video_embed_hosts"
 	// GatewayOrphanedTurnGraceSeconds bounds the orphan-foreground-turn
 	// watchdog's grace period (ADR-045). Read live on every WS teardown — it
 	// is deliberately NOT in RestartGatedKeys, matching GatewayPreviewEnabled's
