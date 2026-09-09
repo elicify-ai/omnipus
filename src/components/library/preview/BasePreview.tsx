@@ -57,6 +57,8 @@ import { LibraryCodePreview } from './LibraryCodePreview'
 import { ViewPartsRenderer } from './viewparts/ViewPartsRenderer'
 import { collectionPathToWorkspacePath, libraryNoteHref } from '../knowledge/KnowledgeBacklinks'
 import type { KbLinkResolution } from './knowledgeMarkdown'
+import { INLINE_PREVIEW_BOX_CLASS } from './libraryPreviewVariant'
+import type { LibraryPreviewVariant } from './libraryPreviewVariant'
 
 /** Test seams; production passes nothing and gets the shared clients. */
 export interface BasePreviewLoaders {
@@ -68,6 +70,16 @@ export interface BasePreviewLoaders {
 export interface BasePreviewProps extends BasePreviewLoaders {
   workspaceId: string
   entry: LibraryEntry
+  /**
+   * `pane` (default) fills the Library preview pane's own bounds; `inline`
+   * sizes to a bounded, self-determined box so a `.base` embed (the "saved
+   * view renderer" of ADR-083's US-3) sits in a note's text flow instead of
+   * claiming the pane's height. This is the ONLY thing that differs between
+   * the two — see libraryPreviewVariant.ts (EMB-027/028): every fetch, every
+   * state (the tabs, the escape hatch, the unloadable notice) renders
+   * identically either way.
+   */
+  variant?: LibraryPreviewVariant
   /**
    * Open another file in place, WORKSPACE-relative (KB-8a — mirrors
    * LibraryPreviewPane's own `onOpenNote` contract exactly, the same address
@@ -138,8 +150,16 @@ export function BasePreview({
   loadContent = fetchLibraryContent,
   loadBaseViews = fetchKnowledgeBaseViews,
   loadViewResult = fetchKnowledgeViewResult,
+  variant = 'pane',
   onOpenNote,
 }: BasePreviewProps) {
+  // The ONE layout switch (EMB-028) — every state below still renders
+  // through whichever of these two class strings is active; nothing about
+  // WHICH state renders, or what it fetches, reads `variant` at all.
+  const containerClass =
+    variant === 'inline'
+      ? `flex ${INLINE_PREVIEW_BOX_CLASS} flex-col overflow-hidden rounded-md border border-[var(--color-border)]`
+      : 'flex h-full min-h-0 flex-col'
   // ── 1. Which views this .base owns, and where they run ────────────────────
   const viewsQuery = useQuery({
     queryKey: ['library', workspaceId, 'knowledge', 'base-views', entry.path],
@@ -285,7 +305,7 @@ export function BasePreview({
         }
         if (readable) {
           return (
-            <div className="flex h-full min-h-0 flex-col" data-testid="base-preview-raw">
+            <div className={containerClass} data-testid="base-preview-raw" data-variant={variant}>
               <LibraryCodePreview workspaceId={workspaceId} entry={entry} content={raw.content as string} />
             </div>
           )
@@ -335,14 +355,14 @@ export function BasePreview({
 
   if (stateBody !== undefined) {
     return (
-      <div className="flex h-full min-h-0 flex-col" data-testid="base-preview">
+      <div className={containerClass} data-testid="base-preview" data-variant={variant}>
         {stateBody}
       </div>
     )
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col" data-testid="base-preview">
+    <div className={containerClass} data-testid="base-preview" data-variant={variant}>
       {answer !== undefined && answer.unloadable_count > 0 && (
         <UnloadableNotice count={answer.unloadable_count} />
       )}

@@ -104,6 +104,10 @@ import { LibrarySignaturePad, SIGNATURE_PAD_WIDTH, SIGNATURE_PAD_HEIGHT } from '
 import { buildInkAnnotationEntry } from './pdfInkAnnotation'
 import type { SignatureStroke } from './pdfInkAnnotation'
 import { uint8ArrayToBase64 } from './pdfBinaryEncoding'
+import { pdfWorkerPool } from './pdfWorkerPool'
+import type { PdfWorkerLease } from './pdfWorkerPool'
+import { INLINE_PREVIEW_BOX_CLASS } from './libraryPreviewVariant'
+import type { LibraryPreviewVariant } from './libraryPreviewVariant'
 
 // Type-only: erased at build time, so it does not pull pdfjs-dist into the
 // eager module graph.
@@ -137,6 +141,12 @@ const MAX_PIXEL_RATIO = 2
 interface LibraryPdfPreviewProps {
   workspaceId: string
   entry: LibraryEntry
+  /** `pane` (default) fills the Library preview pane's own bounds; `inline`
+   *  sizes to a bounded, self-determined box so a PDF embed sits in a note's
+   *  text flow instead of claiming the pane's height. Layout only
+   *  (EMB-027/028, libraryPreviewVariant.ts) — worker pooling, Edit mode and
+   *  every other behaviour below are identical on both. */
+  variant?: LibraryPreviewVariant
 }
 
 class PdfAssetError extends Error {}
@@ -292,9 +302,12 @@ interface PlacedSignature {
   pageNumber: number
 }
 
-export function LibraryPdfPreview({ workspaceId, entry }: LibraryPdfPreviewProps) {
+export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane' }: LibraryPdfPreviewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  // 'queued' is EMB-032's visible waiting state — set only when the pool
+  // could not grant a worker slot immediately (pdfWorkerPool's `onQueued`
+  // callback below), never on the common under-ceiling path.
+  const [status, setStatus] = useState<'queued' | 'loading' | 'ready' | 'error'>('loading')
   const [error, setError] = useState<string | null>(null)
   const [pageCount, setPageCount] = useState(0)
   // Distinct from `status === 'ready'`: that flips as soon as the DOCUMENT
@@ -359,6 +372,17 @@ export function LibraryPdfPreview({ workspaceId, entry }: LibraryPdfPreviewProps
     let loadingTask: { destroy: () => Promise<void> } | null = null
     const cancelRender: Array<() => void> = []
 
+    // EMB-032 — the bounded worker pool. `lease` is null until the pool
+    // grants a slot; `releaseLease` is idempotent so it is safe to call from
+    // the worker's own error handler AND again from this effect's cleanup.
+    let lease: PdfWorkerLease | null = null
+    let leaseReleased = false
+    const releaseLease = () => {
+      if (leaseReleased || !lease) return
+      leaseReleased = true
+      lease.release()
+    }
+
     setStatus('loading')
     setError(null)
     setPageCount(0)
@@ -383,6 +407,20 @@ export function LibraryPdfPreview({ workspaceId, entry }: LibraryPdfPreviewProps
 
     void (async () => {
       try {
+        // EMB-032 — wait for a worker-pool slot BEFORE doing any of the work
+        // that slot exists to bound (asset probing, the byte fetch, and the
+        // Worker construction itself). `onQueued` only fires when the
+        // ceiling was actually the reason this document is waiting, so the
+        // common, under-ceiling case never flashes the waiting state.
+        lease = await pdfWorkerPool.acquire(abort.signal, () => {
+          if (!cancelled) setStatus('queued')
+        })
+        if (cancelled) {
+          releaseLease()
+          return
+        }
+        setStatus('loading')
+
         // Assets first: a missing directory must fail with a name, not with a
         // blank page (FR-018b).
         await ensureRuntimeAssets()
@@ -431,6 +469,19 @@ export function LibraryPdfPreview({ workspaceId, entry }: LibraryPdfPreviewProps
           port.addEventListener(
             'error',
             (ev: ErrorEvent) => {
+              // EMB-032 — poisoned-worker eviction. This worker is done for
+              // THIS document only (a worker error rejects only the leases
+              // held on that worker — there is one lease and one worker per
+              // document, never shared); free its pool slot immediately
+              // rather than waiting for unmount, so a queued document is not
+              // starved behind a worker that will never reply, and terminate
+              // it so nothing keeps talking to a dead transport.
+              releaseLease()
+              try {
+                port.terminate()
+              } catch {
+                // Already gone; nothing to do.
+              }
               reject(
                 new Error(
                   `The PDF parsing worker at ${ASSET_BASE}pdf.worker.min.mjs failed to load, ` +
@@ -573,10 +624,26 @@ export function LibraryPdfPreview({ workspaceId, entry }: LibraryPdfPreviewProps
 
         if (!cancelled) setAllPagesRendered(true)
       } catch (err) {
-        if (cancelled) return
-        if (err instanceof DOMException && err.name === 'AbortError') return
+        if (cancelled) {
+          releaseLease()
+          return
+        }
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          releaseLease()
+          return
+        }
         // PDF.js aborts in-flight renders by rejecting; that is not a failure.
-        if (err && typeof err === 'object' && (err as { name?: string }).name === 'RenderingCancelledException') return
+        if (err && typeof err === 'object' && (err as { name?: string }).name === 'RenderingCancelledException') {
+          releaseLease()
+          return
+        }
+        // Every OTHER failure ends this load attempt for good — release the
+        // slot so a queued document is not held behind one that is never
+        // going to finish. The `workerFailed` path above already released
+        // (and terminated) its own worker before this catch is even reached;
+        // calling it again here is the idempotent no-op that makes that
+        // safe regardless of which failure this was.
+        releaseLease()
         setError(err instanceof Error ? err.message : String(err))
         setStatus('error')
       }
@@ -585,6 +652,11 @@ export function LibraryPdfPreview({ workspaceId, entry }: LibraryPdfPreviewProps
     return () => {
       cancelled = true
       abort.abort()
+      // Frees this document's pool slot immediately on unmount (rather than
+      // waiting for the async chain above to notice `cancelled`), so a
+      // component unmounted by lazy-mount's "well outside the viewport"
+      // (EMB-065) does not keep a queued sibling waiting.
+      releaseLease()
       for (const cancel of cancelRender) {
         try {
           cancel()
@@ -844,11 +916,17 @@ export function LibraryPdfPreview({ workspaceId, entry }: LibraryPdfPreviewProps
 
   const canEdit = status === 'ready'
   const readyForFormsAndSignature = allPagesRendered && mode === 'edit'
+  const inline = variant === 'inline'
 
   return (
     <div
-      className="flex flex-1 min-h-0 flex-col overflow-hidden bg-[var(--color-surface-0)]"
+      className={
+        inline
+          ? `flex ${INLINE_PREVIEW_BOX_CLASS} flex-col overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface-0)]`
+          : 'flex flex-1 min-h-0 flex-col overflow-hidden bg-[var(--color-surface-0)]'
+      }
       data-testid="library-pdf-preview"
+      data-variant={variant}
     >
       {/* PDF.js positions every text run absolutely and sizes it from
           --total-scale-factor. These rules are the minimum from pdfjs-dist's
@@ -1066,6 +1144,16 @@ export function LibraryPdfPreview({ workspaceId, entry }: LibraryPdfPreviewProps
               Page {sig.pageNumber} <X size={10} />
             </button>
           ))}
+        </div>
+      )}
+
+      {status === 'queued' && (
+        <div
+          className="flex flex-1 items-center justify-center gap-2 text-sm text-[var(--color-muted)]"
+          data-testid="library-pdf-queued"
+        >
+          <SpinnerGap className="h-4 w-4 animate-spin" aria-hidden />
+          <span>Waiting for a PDF worker to become available…</span>
         </div>
       )}
 
