@@ -76,7 +76,17 @@ func (r *LiveViewRegistry) InputContext(ctx context.Context, sessionID, viewerID
 	return lv.dispatchInputContext(scope, viewerID, in)
 }
 
-func (lv *LiveView) dispatchInputContext(caller context.Context, viewerID string, in LiveInput) error {
+func (lv *LiveView) dispatchInputContext(caller context.Context, viewerID string, in LiveInput) (result error) {
+	// The caller cancels a target-derived context through AfterFunc. That
+	// relay may win the operation timer and turn deadline expiry into Canceled.
+	// Preserve the caller's reason without masking unrelated browser failures.
+	defer func() {
+		if errors.Is(result, context.Canceled) || errors.Is(result, context.DeadlineExceeded) {
+			if callerErr := caller.Err(); callerErr != nil {
+				result = realInputError("browser live: input canceled: %w", callerErr)
+			}
+		}
+	}()
 	in.observeTiming("live_entry")
 	if inputSourceEnded(in.SourceContext) {
 		return realInputError("browser live: input source canceled: %w", in.SourceContext.Err())

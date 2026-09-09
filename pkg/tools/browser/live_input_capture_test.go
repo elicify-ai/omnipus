@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/chromedp/cdproto/input"
@@ -24,6 +25,75 @@ func TestLiveInputTabOperationWaitUsesCallerBudget(t *testing.T) {
 	err = lv.dispatchInputContext(ctx, "viewer", LiveInput{Kind: "text", Text: "obsolete"})
 	if !errors.Is(err, context.DeadlineExceeded) || calls != 0 {
 		t.Fatalf("input bypassed in-flight tab operation: calls=%d err=%v", calls, err)
+	}
+}
+
+// Hide only deadline discovery so the real caller timer expires before the
+// target-derived operation timer. Its Done and Err remain the standard context
+// implementation. This isolates the cancellation relay that races the two
+// nearly-equal timers in TestLiveInputTabOperationWaitUsesCallerBudget.
+type inputCallerWithoutDeadline struct{ context.Context }
+
+func (inputCallerWithoutDeadline) Deadline() (time.Time, bool) { return time.Time{}, false }
+
+func TestLiveInputCallerCancellationIdentitySurvivesRelay(t *testing.T) {
+	for _, gateKind := range []string{"tab", "input"} {
+		for _, deadline := range []bool{false, true} {
+			mode := "manual"
+			if deadline {
+				mode = "deadline"
+			}
+			t.Run(gateKind+"/"+mode, func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					calls := 0
+					lv := newNavigateTestLiveView(t, func(context.Context, time.Duration, ...chromedp.Action) error { calls++; return nil })
+					if gateKind == "tab" {
+						release, err := lv.mgr.acquireLiveTabCommand(context.Background(), lv.sessionID)
+						if err != nil {
+							t.Fatal(err)
+						}
+						defer release()
+					} else {
+						lv.mu.Lock()
+						gate := lv.inputStateLocked().gate
+						lv.mu.Unlock()
+						gate <- struct{}{}
+						defer func() { <-gate }()
+					}
+					caller, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+					defer cancel()
+					expected := context.DeadlineExceeded
+					if !deadline {
+						expected = context.Canceled
+						go func() { time.Sleep(10 * time.Millisecond); cancel() }()
+					}
+					err := lv.dispatchInputContext(inputCallerWithoutDeadline{caller}, "viewer", LiveInput{Kind: "text", Text: "obsolete"})
+					if !errors.Is(err, expected) || calls != 0 {
+						t.Fatalf("caller %s lost at %s gate: calls=%d err=%v, want %v", mode, gateKind, calls, err, expected)
+					}
+					if deadline && errors.Is(err, context.Canceled) {
+						t.Fatalf("deadline was additionally classified as manual cancellation: %v", err)
+					}
+				})
+			})
+		}
+	}
+}
+
+func TestLiveInputCallerCancellationPreservesUnrelatedDispatchError(t *testing.T) {
+	caller, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fault := errors.New("controlled browser transport failure")
+	calls := 0
+	lv := newNavigateTestLiveView(t, func(context.Context, time.Duration, ...chromedp.Action) error {
+		calls++
+		cancel()
+		return fault
+	})
+	picture := installInputTestPicture(t, lv)
+	err := lv.dispatchInputContext(caller, "viewer", inputWithTestPicture(picture, LiveInput{Kind: "text", Text: "one input"}))
+	if !errors.Is(err, fault) || errors.Is(err, context.Canceled) || calls != 1 {
+		t.Fatalf("caller cancellation masked unrelated dispatch failure: calls=%d err=%v", calls, err)
 	}
 }
 

@@ -3139,9 +3139,20 @@ type ReconcileOutcome struct {
 // (see ReconcileOutcome's doc comment) — a click that spawns two new targets
 // where one adopts and the other is stranded reports BOTH.
 func (m *BrowserManager) ReconcileTabs(sessionID string) (ReconcileOutcome, error) {
+	return m.reconcileTabs(sessionID, nil)
+}
+
+func (m *BrowserManager) reconcileTabs(sessionID string, before *clickTabSnapshot) (ReconcileOutcome, error) {
 	infos, tracked, owner, err := m.reconcileTargetSnapshot(sessionID)
 	if err != nil {
 		return ReconcileOutcome{}, err
+	}
+	return m.reconcileListedTabs(sessionID, infos, tracked, owner, before)
+}
+
+func (m *BrowserManager) reconcileListedTabs(sessionID string, infos []*target.Info, tracked map[target.ID]struct{}, owner *sessionEntry, before *clickTabSnapshot) (ReconcileOutcome, error) {
+	if before != nil && owner != before.owner {
+		return ReconcileOutcome{}, errBrowserSessionChanged
 	}
 
 	var out ReconcileOutcome
@@ -3149,16 +3160,20 @@ func (m *BrowserManager) ReconcileTabs(sessionID string) (ReconcileOutcome, erro
 		if info == nil || info.Type != "page" {
 			continue
 		}
-		if _, already := tracked[info.TargetID]; already {
+		report := before == nil || before.reports(info)
+		if _, already := tracked[info.TargetID]; already && (before == nil || !report) {
 			continue
 		}
 		if info.OpenerID == "" {
 			continue // not opened by a page — a top-level target, not ours to adopt
 		}
-		if _, openerIsOurs := tracked[info.OpenerID]; !openerIsOurs {
+		if _, openerIsOurs := tracked[info.OpenerID]; !openerIsOurs && (before == nil || info.OpenerID != before.opener) {
 			continue // opened by a target outside this browsing context
 		}
 		result, aerr := m.adoptTargetForSession(sessionID, info.TargetID, owner)
+		if before != nil && report && aerr == nil && result.Adopted == nil && !result.Unadopted {
+			result, aerr = m.completedClickAdoption(sessionID, before, info.TargetID)
+		}
 		if errors.Is(aerr, errBrowserSessionChanged) {
 			// Earlier results no longer describe the current tab set.
 			return ReconcileOutcome{}, aerr
@@ -3170,6 +3185,14 @@ func (m *BrowserManager) ReconcileTabs(sessionID string) (ReconcileOutcome, erro
 				"error":      aerr.Error(),
 			})
 		}
+		if result.Adopted != nil || result.Unadopted {
+			tracked[info.TargetID] = struct{}{}
+		}
+		// Reconciliation still adopts other owned popups normally; only the
+		// click's report is restricted to its original opener and time window.
+		if !report {
+			continue
+		}
 		// Adopted and Unadopted are set on DISJOINT fields of out — deliberately
 		// NOT an if/else — so a click that opens two new targets where one
 		// adopts and one is stranded reports BOTH signals, regardless of which
@@ -3178,14 +3201,12 @@ func (m *BrowserManager) ReconcileTabs(sessionID string) (ReconcileOutcome, erro
 		case result.Adopted != nil:
 			out.Adopted = true
 			out.NewActive = result.Adopted
-			tracked[info.TargetID] = struct{}{} // avoid reprocessing within this pass
 		case result.Unadopted:
 			out.Unadopted = true
 			if out.Reason == "" {
 				out.Reason = result.Reason // first reason wins — stable across the pass
 			}
 			out.UnadoptedCount++
-			tracked[info.TargetID] = struct{}{} // avoid reprocessing within this pass
 		}
 	}
 	if owner != nil {
