@@ -1,6 +1,7 @@
 # ADR-084 — The Judge is an active reviewer, not a passive one
 
-- **Status:** Proposed (revision 4 — greenfield, migration removed by operator directive) — 2026-09-09
+- **Status:** Proposed (revision 5 — four claims about the code corrected; decisions unchanged) — 2026-09-09
+  - *Revision 4 — greenfield, migration removed by operator directive.*
 - **Amends:** the un-ADR'd judge fix-wave in commit `02214f5c` (2026-09-09, "fix GX-E") — `planArtifactCheck`, the rung-1.5 dispatch, and the working-tree diff feed. *(Revision 1 wrongly attributed this to ADR-082, which is about UI-independent turns and session-bound streaming and says nothing about the Judge.)*
 - **Relates to:** ADR-052 (verifier adjudication, FR-039 reproducibility), ADR-055 (PlanSupervisor, the skills-allowlist gap), ADR-057 FR-011 (delegated children own their sessions), ADR-074 D7 (`evidence_quote`), ADR-077 / Constraint #6 (tool policy), Constraint #8 (contract-first wire formats)
 - **Prerequisites:** issue #688 (configurable judge timeout) **and** D9's investigation bounds, **and** D10's capability closures. None of D1 ships before all three.
@@ -186,3 +187,36 @@ Two further consequences revision 2 missed: relabelling alone does **not** break
 | C8 | D2b, D2c and D5a are enforced "at the parser". | `parseJudgeResponse` sees neither tool results nor check outcomes. Only D2b (empty quote) can live there; D2c's grounding and D5a's veto need the enclosing adjudication, which holds both. |
 
 None of these change the decisions. They change where and how each is enforced, and R3-a and R3-c change what the ADR claims the system does today.
+
+## Revision 5 — corrections found while grilling the spec (2026-09-09)
+
+An adversarial review of `docs/internal/specs/judge-active-reviewer-spec.md` re-verified this ADR's remaining claims about the code against `ab3d5b63`. Four are false. **None changes a decision** — each changes what the ADR asserts the system currently does, and therefore where a control has to be built. The spec implements the corrected form and records the evidence in its §0 (C9 – C15).
+
+### R5-a — §2.1 C3's "`systemAgentSkills` returns `nil`, which its own doc comment defines as **unrestricted**" is stale
+
+`pkg/agent/context.go::skillAllowed`'s doc comment now reads: *"A nil OR empty allowlist denies EVERY name … There is no 'unrestricted' state any more"* (ADR-072 D5). The registry-shelf hole C3 describes was closed before this ADR was written, so D10's skills bullet, as scoped, closes nothing — making the allowlist explicit and non-nil is documentation value.
+
+The genuinely open path is the one that comment names next: `skillAllowed` *"governs the REGISTRY shelf only. The PROJECT shelf (a workspace mount's own skills) is gated separately, by the mount itself"*, via `cb.projectShelf` / `cb.projectShelfResolver`. Since `runVerifierAdjudication` re-roots the Judge into the workspace of the work under review, **a project-shelf skill the worker under review just wrote is loadable by the Judge** — instruction-shaped text arriving through a tool result, outside `buildJudgeUserContent`'s framing, which is exactly the risk D10's skills bullet exists to close. D10's skills closure is therefore `WithProjectShelf(nil)` / `WithProjectShelfResolver(nil)` for the verifier turn (spec FR-059a), with the non-nil allowlist retained for documentation (FR-059). `systemAgentSkills`' own stale doc comment is corrected in the same commit.
+
+### R5-b — D1a over-claims `inspect_session`
+
+`pkg/tools/inspect_session.go::Execute` renders each entry's tool calls as `toolCallSummary{Name, Args, Success}` — a name, a bounded args summary, and a success boolean. **No tool result payload.** That is the same defect as §2 E3 (the transcript renderer stripping tool payloads), sitting in the very tool D1a nominates to reach delegated work.
+
+So D1a's reach is real but narrower than stated: extending the session scope to descendants makes a child's **narration** readable, and nothing more. A delegated child's `write_file` bodies are not reachable through `inspect_session` at all. Consequence for D2c: `session_read` can ground a quote about what a child *said*, never about what a file *contains* — delegated file work is verified by opening the resulting file. The spec makes this a hard rule (FR-014a): a `met` sourced `session_read` on a criterion naming a filesystem path is `unable_to_verify`.
+
+### R5-c — D2c's and D7's shared premise about `session.ToolCall.Result` is false in both directions
+
+D2c states the verifier turn's tool results are *"already on `session.ToolCall.Result`, so this is a substring test, not a re-read"*, and D7 concludes from the same premise that the investigation log is *"derivable from the verifier session's own `session.ToolCall` records — no new capture path"*. Two independent problems:
+
+1. `runVerifierAdjudication` receives only `(content string, callErr error)` from `processTaskDirect`. The per-criterion mapping loop — the placement R3-c/C8 correctly identified — holds no tool results at all. Reaching them from `session.ToolCall` *is* a re-read, not the substring test D2c claims.
+2. `session.ToolCall.Result` is a `map[string]any` that `pkg/agent/empty_in_place.go::recordEmptiedOnTranscript` **overwrites with a recall mark mid-turn** (ADR-066 D5). A long investigation therefore erases the results its own earlier verdicts were grounded in — genuine work becomes `unable_to_verify`, is withheld K rounds, and escalates as persistently-blocked. That is E1's failure reintroduced by E1's fix.
+
+A new in-memory capture path, held for the duration of one adjudication, is therefore **required** rather than avoidable; grounding must not read `session.ToolCall.Result`; and the investigation log should be derived from the same capture, whose `(tool, target, bytes_returned, truncated)` fields grounding needs anyway. Spec FR-030's mechanism clause and FR-068.
+
+### R5-d — D10's read-confinement bullet does not confine reads
+
+D10 says the verifier turn *"pins `restrict = true` for itself"*. R3-d/C6 corrected *where* that pin lives; neither established what it still **does**. Under ADR-063 FR-2.2, `pkg/tools/resolvepath.go::ResolvePath` dispatches out-of-workdir access on the **operation**, explicitly not on `policy.Scope`: `FSOpRead`, `FSOpList` and `FSOpSend` are *"allowed anywhere outside the secret set, independent of `policy.Scope`"*. `ReadFileTool` passes `FSOpRead`, and a shipped test — `pkg/tools/filesystem_docextract_test.go::TestReadFile_DocumentSymlinkEscape_NowExtractsOpenly` — constructs the tool with `restrict=true` and asserts a symlink escape still succeeds.
+
+So the pin as written changes nothing, and §2.1 C4's conclusion ("an unconfined Judge reads every transcript in the install, defeating the `VerifierSessionScopeAllows` lock") remains true **after** D10 as specified. Closing it needs a real mechanism in the shared filesystem gate — a new `fspolicy.FSPolicy.ReadConfined` honoured in `ResolvePath`'s `FSOpRead` branch, set only for System-Agent instances, plus the symlink case — owned by security-lead, with an explicit statement of what does not change for every other agent. Spec FR-060 / FR-060a. Two mechanical notes: `coreagent.IsSystemAgentID` takes a `CoreAgentID`, not a `string`; and confining all System Agents also confines PlanSupervisor, which is intended and must be stated.
+
+**Unchanged by revision 5:** D1, D1a's descendant extension, D2, D2a, D2b, D2c's grounding requirement, D2d, D3, D4, D5, D5a, D6's removal, D7's provenance and log, D8, D9, D10's four closures as *goals*, and D11. Revision 5 corrects four factual premises and relocates two closures; it withdraws nothing.
