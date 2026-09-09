@@ -372,6 +372,18 @@ The first draft of D14 adopted Hermes's shell gates literally: a criterion carri
 
 **Tier 3 — the Judge, with file access and common sense (D1, unchanged).** Everything that is genuinely a judgement: whether the deck is persuasive, whether the research is thorough, whether the tone is right, whether "cutting-edge UI" was achieved. This is the operator's stated reason for the Judge to exist and it is untouched.
 
+**Where shell and exit codes belong (operator clarification, 2026-09-09):**
+
+> *"well we need both — omnipus is also a coding agent, but we need to make sure that exit code criteria are only used on coding tasks"*
+
+Command execution stays, as a **tier-2 instance**, and is confined to coding work **by construction rather than by classification**. Three rules, and no task-type detector anywhere — a classifier guessing "is this a coding goal?" would be a new and silent failure source, and the evidence already answers the question:
+
+1. **Exit-code evidence is admitted only when the working agent itself ran the command.** It is then tier-1 material: a `session.ToolCall` for `bash` with its command, its output and its status, recorded as a by-product of the work. If the agent ran the test suite and it passed, that is evidence; if it never ran one, there is nothing to admit. This makes "only on coding tasks" true automatically — a goal about booking a flight produces no such calls, so no exit code can ever be consulted for it.
+2. **A command is executed for verification only when the criterion explicitly declares one.** The existing structured check field (`task.KindCheck`) is that declaration. It is opt-in, authored deliberately, and it is the only path by which the verification step runs anything. Because a declared check is a deliberate act of authoring, a non-coding goal simply never carries one.
+3. **A shell command MUST NOT be synthesised from a criterion's prose.** This is the rule that keeps the two apart. `judge.go::planArtifactCheck` today builds `test -f && test -s && grep -qF` by pattern-matching criterion text; that is acceptable **only** because a file-existence test is task-agnostic — a slide deck, a report and a source file are all files. Anything beyond existence, size and containment — running a build, a test runner, an arbitrary command inferred from wording like "the tests pass" — MUST NOT be inferred. Infer a file check; never infer an execution.
+
+So the split is: **artifact checks are universal** (any goal can produce a file), **command output is universal when the agent already produced it** (tier 1), and **running a command as verification is coding-shaped and opt-in** (a declared check). Nothing needs to know what kind of task it is looking at.
+
 **Two constraints that follow, and are binding:**
 
 - **A criterion MUST NOT be required to carry a check.** Tiers 1 and 2 are opportunistic: the system uses them when the evidence happens to be decisive, and falls through to the Judge otherwise. Requiring a machine-checkable form would push `set_goal` toward criteria that are easy to check rather than criteria that are right — the failure this ADR exists to avoid, inverted.
