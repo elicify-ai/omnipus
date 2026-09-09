@@ -1,6 +1,6 @@
 # ADR-085 — The operator takes the browser wheel without the turn being cancelled
 
-- **Status:** Proposed (revision 4, after the spec grill — see §7) — 2026-09-09
+- **Status:** Proposed (revision 5, after the second spec grill — see §8) — 2026-09-09
 - **Relates to:** ADR-038 D6 / ADR-075 (the control-deferral gate), ADR-039/040/041 (live view, implicit control), ADR-061 (WebRTC is the only video path), ADR-057 FR-011 (a delegated child has its own transcript session), ADR-077 / Constraint #6 (per-tool policy entries)
 - **Spec:** `docs/internal/specs/browser-control-handover-spec.md`
 
@@ -236,3 +236,168 @@ delegation subtree, and answers the question an auditor asks ("which conversatio
 the wrong place in D10 as written:** it must come from the deferral path in `pkg/tools/browser`, not
 from the take handler in `pkg/gateway/browser_ws.go` — at take time no tool has deferred yet and the
 handler cannot know which one later will. See spec FR-061.
+
+## 8. Revision 5 — corrections found while grilling the spec a second time
+
+Five corrections, all verified in code at `5622756b`. **Three of them are defects revision 4's own
+fixes introduced** — which is the reason they are recorded here in full rather than folded quietly
+into §6 or §7. Two amend decisions (D3, D4); one supplies a mechanism a decision promised and never
+had; one corrects an attribution rule; one corrects a liveness definition. The spec
+(`docs/internal/specs/browser-control-handover-spec.md`) implements the corrected form.
+
+### R5-a — R4-a named a release site that cannot be built (amends D4, corrects §7)
+
+R4-a placed the release helper at four publish sites, one of them
+`pkg/channels/base.go::HandleMessage` calling into `pkg/gateway`. That call cannot exist, for two
+independent reasons:
+
+- **Import direction.** `pkg/gateway/gateway.go` imports `pkg/channels`; nothing under `pkg/channels`
+  imports `pkg/gateway`. A call the other way is an import cycle.
+- **No session identity at that site.** The `bus.InboundMessage` built there carries `Channel`,
+  `InstanceID`, `Sender`, `ChatID`, `Content`, `Media`, `Peer`, `MessageID`, `MediaScope`, `Metadata`
+  and `UserInitiated` — and **not `SessionID`**. The lock is keyed on `PanelTabSetID(chatSessionID)`,
+  and that id is resolved downstream in `pkg/agent`. The helper would have nothing to release
+  against.
+
+**Correction.** Split the decision from the action. The **decision** stays at the publish site,
+carried on a new fail-closed field `bus.InboundMessage.OperatorPrompt bool`, documented in the same
+form as the `UserInitiated` field beside it: set `true` at the operator sites and nowhere else, so a
+publish site added later fails closed. The **action** fires once the message has been resolved to a
+session — `pkg/agent/loop.go::processMessage` — through a **gateway-registered hook**
+(`AgentLoop.SetBrowserWheelReleaseHook`, modelled on the existing `AgentLoop.SetReloadFunc`),
+registered inside `pkg/gateway/browser_ws.go::newBrowserWSHandler`, which is already handed the
+`*agent.AgentLoop`. A gateway implementation is necessary, not merely convenient: the release must
+also push R5-c's frame to the holder's WS connection and emit through `browser_ws.go`'s audit record
+shape, neither of which `pkg/agent` can reach.
+
+`UserInitiated` itself must **not** be reused as the discriminator. It is false on the SSE path
+(`pkg/gateway/sse.go` builds its message without it), so keying on it silently reproduces the same
+stale-lock hole for SSE clients; widening it would change goal/loop origin gating (ADR-049 Gap #8) as
+a side effect of a browser change; and it is *true* on the question-card path, which R5-b now needs
+to be false. Revision 4's refusal to reuse it was correct and stands.
+
+**One more trap, stated because the obvious placement is the wrong one.** §7 asserted that
+"heartbeat, cron and task runs never construct an `InboundMessage`". That is **false**:
+`pkg/agent/loop.go::ProcessDirectWithChannel` builds one with `Sender.CanonicalID == "cron"` and
+hands it straight to `processMessage`. It merely never **publishes** it. The conclusion survives —
+those runs still do not release — but the *reason* does not, and the difference matters: an
+implementer trusting the stated reason could place the release at `processMessage`, the real
+convergence point, and gate it on anything other than `OperatorPrompt`, releasing the wheel on every
+cron fire. The gate is the field, not the location. See spec C7.2 / FR-029 / FR-029a.
+
+### R5-b — A question-card answer or cancel does NOT release the wheel (amends D4, reverses spec A13)
+
+Revision 4 made `ws_ask_user.go::DispatchResume` a conditional release site, gated on that file's
+existing `resumeIsUserInitiated(set)` predicate, so that a timed-out auto-default would not release
+while a real answer would. **The predicate's first branch is
+`if set.Status == askuser.StatusCancelled { return true }`.** It is correct for its own caller — for
+goal/loop origin gating, a human pressing Cancel *is* a human acting — and completely wrong here:
+under revision 4, **clicking Cancel on a question card would have handed the browser to the agent
+while the operator was driving it.**
+
+**Correction (operator-ratified).** A question-card resume never releases the wheel — answer or
+cancel. The release set becomes three sites, not four: `websocket.go`, `sse.go`,
+`channels/base.go`. The no-release set becomes `ws_ask_user.go`, `async_notifier.go`, `loop.go`.
+`resumeIsUserInitiated` stays exactly as it is and MUST NOT be read by this feature.
+
+The decision does not rest on the bug alone. Three independent reasons:
+
+1. **Harm asymmetry.** Releasing mid-drive reinstates the whole D5 exposure — the agent resumes
+   capturing a page a human is typing into. Not releasing costs one deferred round-trip, which is
+   visible to the operator and bounded by the N=3 attempt ceiling.
+2. **A card answer is not an ordinary turn.** `DispatchResume` injects a *synthesised* `resumeText`
+   into a turn that is already parked. The operator composed nothing; D4's rule is about a prompt the
+   operator wrote.
+3. **The composer lock is a reason to keep the two states independent, not to fuse them.** §4 already
+   claims the `AskUserQuestion` lock and the browser lock no longer interact. Making one release the
+   other is the interaction, reintroduced.
+
+The spec's Edge Cases line restoring "the composer lock and the wheel are independent" is part of
+this correction, and the earlier test that asserted a human answer *does* release is replaced rather
+than narrowed.
+
+### R5-c — No server-initiated release ever reached the holder's own panel (amends D4)
+
+Every release the server performs on the holder's behalf was invisible to that holder.
+`LiveView.releaseControl` broadcasts through `snapshotControlSinksExceptLocked(viewerID)`, which
+excludes the acting viewer **by construction**; `ControlSink`'s doc comment states that exclusion as
+an invariant, on the grounds that the acting viewer "already gets an authoritative `browser_status`
+frame as the direct response to its own `browser_control` request". That frame is emitted **only**
+inside `pkg/gateway/browser_ws.go::handleControl`'s `case "release"` — i.e. only as a reply to the
+holder's own request.
+
+So after a prompt release, an idle expiry, a handover clear, a take-control switch-off or a session
+deletion, the panel keeps `isControlling === true` indefinitely. The client clears that state only on
+a server `released` status that never arrives, and `takeWheelIfNeeded`'s first guard is
+`if (controllingRef.current) return` — so **the operator can never re-take while the agent drives.**
+Both parties believe they hold the wheel: the exact state ADR-039/040 exist to prevent, and a
+strictly worse version of it than the one those ADRs fixed, because here the disagreement is between
+the operator and the server rather than between two viewers.
+
+**Correction.** Any release **not** originated by the holder's own `browser_control` frame must
+notify the still-attached former holder directly — an unsolicited
+`browser_status{state:"released"}` pushed to that connection, in addition to the existing broadcast
+to everyone else. It must **not** carry `control_only`: that flag makes the SPA apply only the
+control-ownership axis and return, so a `control_only` frame would look delivered and change nothing.
+`ControlSink`'s doc comment is amended in the same commit, since it currently asserts the opposite as
+an invariant. See spec FR-031b.
+
+### R5-d — D3's "releasing the lock is not a resume" had no mechanism (amends D3)
+
+D3 states that Escape, annotate mode, closing the panel and a WS disconnect "all release the lock
+without resuming anything", and that "the agent must not silently resume driving in that state". As
+specified through revision 4, **nothing implemented that.** Those paths clear `lv.controller`, so the
+gate re-opens on the very next call: with attempts left under the N=3 bound, or on any new turn (a
+cron fire, a heartbeat, a goal follow-up), the agent drives the page the operator walked away from.
+The waiting line meanwhile says "sending a message returns it", which is false the moment the gate
+re-opens.
+
+**Correction.** A **stand-down latch** — a flag on the live view alongside the control lock — is set
+on every transition into a stood-down state (a human take, or an agent handover), consulted by the
+tool gate alongside the lock under the same two-key reachability evaluation, and cleared by exactly
+two things: the operator's next prompt (R5-a's release) and the idle expiry (R4-b's timer). Escape,
+annotate mode, closing the panel and the end of a turn do not clear it.
+
+**One exception, and it is load-bearing:** the latch is **voided** by D4's ghost rule. A holder that
+left `LiveView.viewers` released nothing deliberately, so nothing deliberate is preserved — without
+this, a crashed panel would stand the agent down forever and the ghost rule would be silently
+repealed. The rule that keeps this coherent: *the latch records a deliberate stand-down, and a
+deliberate stand-down requires a deliberate release.*
+
+The alternative considered and rejected was to amend D3 the other way — releasing the lock *does*
+re-open the gate, only the turn is not re-dispatched. Cheaper, but it makes the waiting line lie, and
+the exposure it reopens is D5's. If it is ever taken instead, D3's paragraph, the spec's US-7 AS-5,
+its matching edge case and its BDD scenario must all be deleted in the same pass. Leaving a promise
+with no mechanism is precisely how this defect arose. See spec FR-026a.
+
+### R5-e — R4-b's idle timer measured the wrong thing (amends D4 / corrects §7 R4-b)
+
+R4-b defined the expiring hold as one with "no viewer input and no attach/detach activity" for the
+idle window. **A reading operator produces no input events.** Under that definition, an operator who
+takes the wheel to read a page is released after 900 seconds and the agent resumes driving — and,
+before R5-c, resumes *silently*, with the panel still claiming they are in control. WebRTC is
+streaming to them the whole time and was not counted at all.
+
+**Correction, three parts.**
+
+1. **Liveness.** While a viewer is attached, the window is reset by input, by an attach or detach, by
+   a `BrowserManager.ViewerHeartbeat` stamp (the live panel's WS pong — the existing "somebody is
+   still watching" proof), or by an active media track. A stood-down state with **no attached
+   viewer** — a handover nobody came to, a latch left behind after the operator closed the panel —
+   has no liveness signal by construction, and runs its window from the transition. That is the
+   abandoned-laptop case R4-b was written for, and now the only case it fires on.
+2. **Delivery is eager.** A registry-level sweeper on a coarse tick, not a lazy check inside the tool
+   gate. R4-b requires an operator-visible line on expiry, and a lazy check would never emit it when
+   no agent is running — which is exactly when it matters.
+3. **The existing tab reaper.** `tools.browser.idle_ttl` already reaps idle tabs and whole browsing
+   contexts, and `BrowserManager.ReapIdleSessions` **does not touch any `LiveView`** — so a reaped
+   tab set would leave a live lock, handover flag and latch on a view whose tabs are gone. A tab set
+   whose live view is controlled, handover-pending or latched is exempt from that reaping; a teardown
+   for any other reason routes through the same audited release path.
+
+The sweeper is also what makes `take_control_enabled: false` safe to flip on a running install. §5
+scopes the disabled case as "no take ever succeeds", which is true of a *fresh* install; flipping the
+flag while a wheel is already held leaves the hold in place, and with the panel closed there is then
+no release path at all, because `handleControl`'s `case "release"` is the only other one and it needs
+an attached operator. The sweeper releases such a hold on its next tick and runs regardless of the
+flag — so no config-reload hook is needed. See spec FR-031a / FR-052.

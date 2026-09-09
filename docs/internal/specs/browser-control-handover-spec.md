@@ -2,8 +2,8 @@
 
 **Created**: 2026-09-09
 **Status**: Draft
-**Source of truth**: [`docs/internal/architecture/ADR-085-browser-control-handover.md`](../architecture/ADR-085-browser-control-handover.md) — **revision 3 §6** as read while writing this spec, plus the **revision 4 §7** note this spec's grill produced
-**Branch / base commit**: `feat/adr-081-work-first-goal` @ `0b7d4933`
+**Source of truth**: [`docs/internal/architecture/ADR-085-browser-control-handover.md`](../architecture/ADR-085-browser-control-handover.md) — **revision 5 §8**, which records the corrections this spec's second grill produced (§6 = revision 3, §7 = revision 4 remain as written)
+**Branch / base commit**: `feat/adr-081-work-first-goal` @ `5622756b`
 **Written non-interactively** — every point where the `plan-spec` skill would have stopped for
 operator confirmation is recorded in [Assumptions & Ambiguity Warnings](#assumptions--ambiguity-warnings)
 instead. Nothing below has been ratified by the operator.
@@ -27,6 +27,18 @@ feature.
 R4-c); the release must fire on operator-originated prompts only, and its audit actor is mostly not
 `GatewayUserID` (C7 below — R4-a); a held wheel must expire (FR-031a — R4-b); and D10's audit field
 set names a turn id the tool layer does not have (FR-061 — R4-d).
+
+**A second grill produced five further corrections, recorded on the ADR as §8 (revision 5).** Three
+of them are defects the *first* round of fixes introduced, so nothing in this document should be read
+as settled because it survived one review: R5-a — the release site the first round specified
+(`pkg/channels/base.go` calling a `pkg/gateway` helper) **cannot compile**, and the decision now
+travels on a fail-closed field (C7 below, FR-029); R5-b — a question-card answer or cancel does
+**not** release the wheel, reversing A13 (the predicate the first round prescribed returns `true` on
+**Cancel**, so clicking Cancel would have handed the browser to the agent mid-drive); R5-c — no
+server-initiated release ever reached the holder's own panel, so both parties believed they held the
+wheel (FR-031b); R5-d — D3's "releasing the lock is not a resume" had no mechanism, and now has one
+(FR-026a); R5-e — the idle timer's liveness signal counted the wrong thing and collided with the
+existing tab reaper (FR-031a).
 
 ### C1 — BLOCKER. D5 collides with the §14.2 rule 3 biconditional and three structural tests
 
@@ -118,8 +130,10 @@ the structural `{"deferred": true}` marker `controlledResult` already emits. See
 `LiveView.controller` is a **`viewerID`** (`pkg/tools/browser/live.go`). When the agent calls
 `browser_handover` there may be no attached viewer at all, so there is no viewer id to grant. Worse,
 a holder that is not in `lv.viewers` is precisely the **ghost** that
-`LiveViewRegistry::EnsureControlForInput` is designed to steal from and that D4 declares **void** —
+`LiveViewRegistry::EnsureControlForInput` was designed to steal from and that D4 declares **void** —
 so an agent-initiated handover cannot be expressed as a control-lock holder without contradicting D4.
+(That method is cited here for the *shape* of the ghost, not as a live path: FR-031 records that it
+has no production caller today and that the gate's own ghost rule is implemented separately.)
 
 **Resolution:** model agent-initiated handover as a distinct, explicitly-set state on the live view
 (a handover-pending flag), separate from the viewer control lock. It defers tools like a held lock
@@ -146,24 +160,65 @@ reproduces exactly the stale-lock class D4 exists to close.
 
 **But `PublishInbound` is not a safe place to put the release either, and this is the single most
 dangerous mistake available in this feature.** `MessageBus.PublishInbound` (`pkg/bus/bus.go`) is the
-convergence point for **synthetic** traffic as well as human prompts. There are exactly seven
-non-test call sites:
+convergence point for **synthetic** traffic as well as human prompts. There are exactly **six**
+non-test call sites (`grep -rn "PublishInbound(" --include="*.go" . | grep -v _test.go` returns
+seven lines; the seventh is `pkg/bus/bus.go:86`, the **method declaration**, not a call site):
 
 | Call site | Origin | Releases the wheel? |
 |---|---|---|
 | `pkg/gateway/websocket.go` (webchat `message` handler) | human | **yes** |
 | `pkg/gateway/sse.go` (`POST` chat over SSE) | human | **yes** |
-| `pkg/gateway/ws_ask_user.go::DispatchResume` | human answering a question card (but see FR-029) | **yes, conditionally** |
 | `pkg/channels/base.go::HandleMessage` | human on Telegram / Slack / Discord / … | **yes** |
+| `pkg/gateway/ws_ask_user.go::DispatchResume` | a question-card resume | **no** — see below and A13 |
 | `pkg/agent/async_notifier.go` (`Channel: "system"`) | a background tool or delegate **finishing** | **no** |
 | `pkg/agent/loop.go` (goal-loop follow-up re-injection, `Sender.CanonicalID == goalLoopFollowUpSenderID`) | the engine talking to itself | **no** |
-| `pkg/bus/bus.go` itself (the method) | — | — |
 
 A release fired on *any* inbound message means **a delegate finishing in the background hands the
 browser back while the operator is mid-way through typing a password into it.** That is the exact
 harm D5 exists to prevent, re-introduced through the release path. The release must therefore be
 decided by the **origin of the prompt at its publish site**, never by the bus. See FR-029, FR-029a
 and Ambiguity A3.
+
+> **C7.1 — The question-card row flipped in revision 5, and the reason is a verified predicate bug.**
+> The first round specified `ws_ask_user.go::DispatchResume` as a *conditional* release site, gated
+> on that file's existing `resumeIsUserInitiated(set)`. That predicate's **first branch is
+> `if set.Status == askuser.StatusCancelled { return true }`** (`pkg/gateway/ws_ask_user.go`) — it
+> treats a cancel as user-initiated because, for its own purpose (goal/loop origin gating), a human
+> clicking Cancel *is* a human acting. Wired to the browser release, that means **clicking Cancel on
+> a question card hands the browser to the agent while the operator is driving it.** The operator's
+> ratified decision is therefore that a question-card resume — answer *or* cancel — never releases
+> the wheel. Full reasoning in A13; the release set is three sites, not four.
+
+> **C7.2 — Where the release DECISION lives, and where the release ACTION lives. They are not the
+> same place, and the first round put the action somewhere it cannot exist.**
+> Round 1 required `pkg/channels/base.go::HandleMessage` to call a `pkg/gateway` helper. Two
+> independent reasons that cannot be built:
+> - **Import direction.** `pkg/gateway/gateway.go` imports `pkg/channels`; nothing under
+>   `pkg/channels` imports `pkg/gateway` (`grep -rn "omnipus/pkg/gateway" pkg/channels/` returns
+>   nothing). A call the other way is an import cycle.
+> - **No session identity at that site.** The `bus.InboundMessage` built at `pkg/channels/base.go`
+>   sets `Channel`, `InstanceID`, `Sender`, `ChatID`, `Content`, `Media`, `Peer`, `MessageID`,
+>   `MediaScope`, `Metadata` and `UserInitiated` — and **not `SessionID`**. The lock is keyed on
+>   `PanelTabSetID(chatSessionID)`; that id is resolved downstream in `pkg/agent`. A helper called
+>   there would have nothing to release against.
+>
+> **Resolution (FR-029).** The *decision* stays at the publish site, carried by a new fail-closed
+> field `bus.InboundMessage.OperatorPrompt bool` modelled exactly on `UserInitiated`'s doc contract:
+> set `true` at the three operator sites and **nowhere else**, so a publish site added later fails
+> closed (does not release) rather than open. The *action* is performed once the message has been
+> resolved to a session — in `pkg/agent/loop.go::processMessage` — through a **gateway-registered
+> hook**, because two things the release must do (push the FR-031b frame to the former holder's
+> connection, and emit through `pkg/gateway/browser_ws.go`'s audit record shape) are only reachable
+> from the gateway. `UserInitiated` itself **must not** be reused: `pkg/gateway/sse.go` builds its
+> message without it, so keying on it silently reproduces this same stale-lock hole for SSE, and
+> widening it would change goal/loop origin gating (ADR-049 Gap #8) as a side effect of a browser
+> change.
+>
+> **`processMessage` is the convergence point for cron too, and that is exactly why the gate is the
+> field and not the location.** `pkg/agent/loop.go::ProcessDirectWithChannel` builds a
+> `bus.InboundMessage{… Sender: {CanonicalID: "cron"} …}` and hands it to `processMessage` — it
+> simply never **publishes** it to the bus. Anyone who places the release at `processMessage` and
+> gates it on anything other than `OperatorPrompt` releases the wheel on every cron fire.
 
 ---
 
@@ -178,15 +233,23 @@ and Ambiguity A3.
 | Symbol | Role | Note |
 |---|---|---|
 | `pkg/tools/browser/tools.go::controlledResult` | modifies | The deferral gate. Reason text, and the class split (C1). |
-| `pkg/tools/browser/live.go::LiveViewRegistry.IsControlled` / `.Controller` | calls | Lock read. Process memory only, no persistence, no boot rehydration. |
-| `pkg/tools/browser/live.go::LiveView.takeControl` / `.releaseControl` / `.ensureControlForInput` / `.detach` | extends | Lock lifecycle; `detach` clears on clean close only. Handover-pending flag lands here (C5). |
-| `pkg/tools/browser/register.go::resolveTurn` / `resolveTurnScope` / `resolveTurnTabSet` | modifies | The one path every browser tool starts with; where the root-chat key must also be resolved. |
+| `pkg/tools/browser/live.go::LiveViewRegistry.IsControlled` / `.Controller` | unchanged | Lock read for the **status/presentation** path. Process memory only, no persistence, no boot rehydration. The tool gate stops using them — see the next row (FR-031). |
+| `pkg/tools/browser/live.go::LiveViewRegistry.IsControlledByLiveViewer` | **new** | The tool gate's read: `lv.controller != "" && lv.viewers[lv.controller]`, under `lv.mu`. `IsControlled` is `Controller(sessionID) != ""` and `Controller` returns `lv.controller` unconditionally, so the existing pair cannot express the ghost rule (FR-031). |
+| `pkg/tools/browser/live.go::LiveView.takeControl` / `.releaseControl` / `.ensureControlForInput` / `.detach` | extends | Lock lifecycle; `detach` clears on clean close only. Handover-pending (C5) and the FR-026a stand-down latch land here. |
+| `pkg/tools/browser/live.go::ControlSink` / `.snapshotControlSinksExceptLocked` / `broadcastControl` | modifies | The take/release fan-out. It **excludes the acting viewer by construction**, and `ControlSink`'s doc comment states that as an invariant ("the acting viewer … already gets an authoritative `browser_status` frame as the direct response to its own `browser_control` request"). That is only true for a release the holder itself requested — FR-031b amends both the behaviour and the comment. |
+| `pkg/tools/browser/manager.go::ViewerHeartbeat` / `.ViewerAttached` / `.ViewerDetached` / `.ReapIdleSessions` | calls | Viewer liveness and the existing `idle_ttl` tab reaper. `ViewerHeartbeat` is stamped from the live panel's WS `PongHandler` (`pkg/gateway/browser_ws.go`) — the "somebody is still watching" proof FR-031a's liveness rule needs. `ReapIdleSessions` today does **not** touch any `LiveView`, which is the gap FR-031a closes. |
+| `pkg/tools/browser/register.go::resolveTurn` / `resolveTurnScope` / `resolveTurnTabSet` | unchanged | The one path every browser tool starts with. **It is deliberately NOT the root-chat-id seam** — see the next row and FR-021. |
+| `pkg/tools/base.go` (`ctxKeyTranscriptSessionID` and its `WithTool…` / `ToolTranscriptSessionID` pair) | extends | Gains the root-chat-session-id tool-context key (FR-021). Chosen over changing `ManagerResolver.ManagerFor`'s signature, which would break the interface and every fake in `pkg/tools/browser`'s tests, and would drag `register.go` into three waves at once. |
+| `pkg/bus/types.go::InboundMessage` | modifies | Gains `OperatorPrompt bool` — the fail-closed release discriminator (C7.2, FR-029), modelled on the `UserInitiated` field directly above it. |
+| `pkg/agent/loop.go::processMessage` | extends | Where the inbound message is resolved to a session, and therefore where the release **action** fires — gated on `OperatorPrompt`. Also the convergence point for `ProcessDirectWithChannel`'s cron message, which is why the gate is the field (C7.2). |
+| `pkg/gateway/browser_ws.go::newBrowserWSHandler` | extends | Registers the release hook on the `*agent.AgentLoop` it is already handed. Precedent for a gateway-registered callback on the loop: `pkg/agent/loop.go::AgentLoop.SetReloadFunc`. No `pkg/gateway/gateway.go` edit is required. |
+| `pkg/gateway/websocket.go::WSHandler.resolveSessionConnsLocked` | calls | The only path from a session id to that session's live chat WS connections. The waiting-line frame reaches the thread through it (FR-042); `BrowserWSHandler` holds only an `*agent.AgentLoop` today and must gain the handler reference. |
 | `pkg/tools/browser/manager.go::PanelTabSetID` / `OperatorSessionID` / `focusedTabSet` | calls | Panel-vs-agent tab-set mirror. The D2.3 gap lives in the seam between the first two. |
 | `pkg/tools/browser/audit.go::writeClassBrowserTools` / `readOnlyBrowserTools` / `recordBrowserAction` | modifies | Classification (C1). |
 | `pkg/tools/browser/lease.go::acquireWrite` | unchanged | Must NOT gain capture-class members (C1). |
 | `pkg/gateway/browser_ws.go::handleControl` / `auditControl` / `auditRelease` / `detach` | modifies | Take/release wire path; `TakeControlEnabled` refusal. |
-| `pkg/gateway/websocket.go` / `sse.go` / `ws_ask_user.go` message handlers, `pkg/channels/base.go::HandleMessage` | extends | The four **operator-originated** `PublishInbound` sites; each calls the release helper (C7, FR-029). |
-| `pkg/agent/async_notifier.go`, `pkg/agent/loop.go` (goal follow-up re-injection) | unchanged | The two **synthetic** `PublishInbound` sites. They MUST NOT release (C7, FR-029). |
+| `pkg/gateway/websocket.go` / `sse.go` message handlers, `pkg/channels/base.go::HandleMessage` | extends | The three **operator-originated** `PublishInbound` sites; each sets `OperatorPrompt: true` and nothing else (C7.2, FR-029). |
+| `pkg/gateway/ws_ask_user.go::DispatchResume`, `pkg/agent/async_notifier.go`, `pkg/agent/loop.go` (goal follow-up re-injection) | unchanged | The three **non-releasing** `PublishInbound` sites. They MUST leave `OperatorPrompt` false (C7.1, C7.2, FR-029). `ws_ask_user.go::resumeIsUserInitiated` stays exactly as it is — it is correct for its own caller and MUST NOT be reused here. |
 | `pkg/tools/result.go::ToolResult` | modifies | Gains the structural deferral carrier (FR-012a). Today there is no non-prose channel from a tool to the engine. |
 | `pkg/gateway/replay.go` (`EntryTypeSystem` branch) | modifies | Replay half of the waiting line; today it emits a generic `ReplayMessageFrame` (FR-043a). |
 | `src/store/chat.ts` `case 'goal_status'` / `buildGoalAckInsertion` / `goalAckMessageId` | pattern | The exact precedent for a system-role line synthesized from a frame with a deterministic, idempotent id (FR-044). |
@@ -377,13 +440,17 @@ and see the agent act on the page the operator left behind.
 4. **Given** a different signed-in user sends the message on that session, **When** the release happens,
    **Then** it is recorded against the user who sent the message.
 5. **Given** the operator released the wheel by pressing Escape and then walked away without sending
-   anything, **When** time passes, **Then** the agent does not silently resume driving and the waiting
-   line stays visible.
+   anything, **When** the agent next attempts browser work, **Then** it still defers, the agent does
+   not silently resume driving, and the waiting line stays visible.
 6. **Given** the operator holds the wheel, **When** a background delegate or a scheduled follow-up
    the agent itself produced arrives on that session, **Then** the wheel is **not** released.
-7. **Given** the operator holds the wheel and then stops using it entirely — no input, no attaching
-   or detaching, no message — **When** the idle window elapses, **Then** the system releases the
-   wheel itself, records why, and tells the operator it did.
+7. **Given** the operator has stood the agent down — holding the wheel, having released it without
+   prompting, or having been handed the browser by the agent — **When** the idle window elapses with
+   no proof that anyone is still there, **Then** the system stands the agent back up itself, records
+   why, and tells the operator it did.
+8. **Given** the operator answers or cancels a structured question card while holding the wheel,
+   **When** the resumed turn attempts browser work, **Then** it still defers — answering a card is
+   not a prompt for this purpose.
 
 ### US-8 — A holder who vanished does not lock the agent out (P1)
 
@@ -453,6 +520,9 @@ operator has disabled remote control.
    attempt is refused, no waiting line appears, and no agent defers.
 2. **Given** take-control is disabled, **When** the agent attempts to hand the browser over, **Then**
    the handover does not take effect and the agent is told so.
+3. **Given** an operator holds the wheel on a running install, **When** take-control is switched off
+   on that install, **Then** the hold is given up on its own and the agent can drive again — the
+   feature cannot be left half-on with an agent locked out and no surface to unlock it.
 
 ---
 
@@ -490,11 +560,16 @@ operator has disabled remote control.
 - When a delegated worker drives its own tab set beneath a chat whose wheel was taken, the system
   declines it.
 - When the wheel is taken twice with no release between, the system shows one waiting line, not two.
-- When the operator releases the wheel and sends nothing, the system does not resume the agent.
-- When a background delegate or an engine follow-up produces an inbound message on the session while
-  the wheel is held, the system leaves the wheel exactly where it is.
-- When the wheel is held and nobody touches it for the idle window, the system releases it itself and
-  says so.
+- When the operator releases the wheel and sends nothing, the system does not resume the agent — it
+  keeps declining browser work until a prompt arrives or the idle window elapses.
+- When a background delegate, an engine follow-up, or a question-card answer or cancel produces an
+  inbound message on the session while the agent is stood down, the system leaves the state exactly
+  where it is.
+- When the system itself gives the browser back — an idle expiry, a take-control switch-off, or a
+  session being deleted — it tells the operator's still-open panel, so the panel and the server never
+  disagree about who is driving.
+- When nobody has proved they are still there for the idle window, the system stands the agent back
+  up itself and says so.
 
 ---
 
@@ -506,24 +581,56 @@ operator has disabled remote control.
 - **The agent never touches the browser again.** Expected: nothing declines, the turn runs to a normal
   end, and the waiting line is the only trace of the takeover.
 - **The wheel is taken while a question card is awaiting an answer.** Expected: no interaction while
-  the card is pending — the composer lock and the wheel are independent, and no second suspended
-  state is created. **Answering the card is an operator prompt and releases the wheel** like any
-  other message (FR-029); a card that *times out* into auto-defaults is not, and does not.
+  the card is pending — **the composer lock and the wheel are independent**, and no second suspended
+  state is created. **Answering the card does not release the wheel, and neither does cancelling
+  it** (FR-029, A13). The operator still holds the browser after the resumed turn begins, and the
+  resumed turn's browser attempts defer like any other. The only thing that returns the browser is a
+  message the operator composed, an explicit release, or the idle window.
 - **A background delegate finishes while the operator drives.** Expected: nothing happens to the
   wheel. The result reaches the thread as usual and the operator keeps driving.
-- **The operator takes the wheel and walks away.** Expected: after the idle window the wheel is
-  released server-side, an operator-visible line says so, and the next scheduled or heartbeat turn on
-  that session can drive the browser again (FR-031a).
+- **The operator takes the wheel, keeps the panel open and reads for twenty minutes.** Expected:
+  nothing expires. An attached panel that is still answering the server's keep-alive is proof someone
+  is there, and the idle window is not allowed to hand the agent a page a human is looking at
+  (FR-031a). This is the case the first draft got wrong: it counted only *input*, so a reading
+  operator was silently released after 900 s and the agent resumed capturing their screen.
+- **The operator takes the wheel and walks away — laptop shut, panel gone.** Expected: no proof of
+  life reaches the server, so after the idle window the hold and the stand-down are given up
+  server-side, an operator-visible line says so, and the next scheduled or heartbeat turn on that
+  session can drive the browser again (FR-031a).
 - **Two viewers, one wheel.** Expected: only the holder's takeover declines the agent; the second
   viewer's input still reaches the page and neither declines the agent nor blocks the holder.
-- **Abrupt disconnect of the holder.** Expected: the agent is not declined by the abandoned wheel.
-- **Escape, then the operator walks away.** Expected: the agent does not resume driving on its own;
-  the waiting line stays until a message arrives.
+- **Abrupt disconnect of the holder.** Expected: the agent is not declined by the abandoned wheel,
+  and the stand-down latch goes with it — a holder that vanished never deliberately stood anything
+  down (FR-026a, FR-031).
+- **Escape, then the operator walks away.** Expected: the agent does not resume driving on its own —
+  the stand-down latch keeps declining browser work (FR-026a) — and the waiting line stays until a
+  message arrives or the idle window elapses.
+- **The server gives the browser back while the panel is still open.** Expected: the panel finds out.
+  An idle expiry, a take-control switch-off or a session deletion pushes a `released` status to the
+  former holder's own connection, not just to everyone else (FR-031b). Without this the panel keeps
+  claiming the operator is driving, refuses to re-take, and the agent drives underneath it.
 - **Handover with nobody watching.** Expected: the handover still takes effect and is cleared by the
-  next message, whether or not a panel was ever open.
+  next message, whether or not a panel was ever open. With no viewer there is no liveness signal at
+  all, so the idle window runs from the handover itself (FR-031a).
+- **The tab set is reaped for inactivity while the wheel is held.** Expected: it is not. A tab set
+  whose live view is controlled, handover-pending or stand-down-latched is exempt from `idle_ttl`
+  reaping; if it is reaped anyway (last tab closed by the operator), the reap goes through the same
+  audited release path rather than orphaning a lock on a live view whose tabs are gone (FR-031a).
+- **The session is deleted, or its workspace unmounted, while the wheel is held.** Expected: the
+  hold, the handover-pending state and the stand-down latch are cleared through the same audited
+  path, the still-open panel is told (FR-031b), and the FR-043 transcript write is skipped rather
+  than attempted against a directory that no longer exists (FR-043, FR-050).
 - **Gateway restart while the wheel is held.** Expected: the wheel is lost (it is process memory
-  today and stays so); the agent is not declined after the restart; nothing needs recovering.
-- **Take-control disabled.** Expected: the whole feature is unreachable.
+  today and stays so); the agent is not declined after the restart; nothing needs recovering. **Known
+  and accepted:** the waiting line already written to the transcript is replayed on reload and reads
+  as though the agent were still standing down. It is stale, not wrong — sending a message does
+  return the browser — and no automated surface distinguishes the two states. What the restart must
+  **not** do is suppress a genuine fresh takeover, which is why FR-044's notice id is derived from a
+  timestamp rather than a counter that restarts at zero.
+- **Take-control disabled on a fresh install.** Expected: the whole feature is unreachable.
+- **Take-control switched off while a wheel is held.** Expected: the hold, the handover-pending state
+  and the stand-down latch are given up within one sweeper tick and the panel is told — the feature
+  cannot be left half-on with an agent locked out and the only release path disabled (FR-052).
 
 ---
 
@@ -570,6 +677,15 @@ operator has disabled remote control.
   deliberately NOT in the set** — see FR-061 for why it cannot be, and what carries its role instead.
 - The wheel is never held indefinitely: an idle hold expires server-side (FR-031a). "The operator's
   next prompt" is the *intended* release, not the *only* one.
+- Releasing the lock does **not** re-open the gate. A stand-down latch (FR-026a) outlives the lock and
+  is cleared by exactly two things: the FR-029 prompt release and the FR-031a idle expiry. It is
+  **voided**, never merely cleared, by the FR-031 ghost condition.
+- Every release the holder did not itself request produces exactly **one** unsolicited
+  `browser_status{state:"released"}` on the former holder's own connection (FR-031b), in addition to
+  the existing `control_only` broadcast to everyone else.
+- The release discriminator is a **field**, not a call site: `bus.InboundMessage.OperatorPrompt` is
+  `true` at exactly three non-test assignment sites and `false` everywhere else, including on a
+  zero-valued `InboundMessage` (FR-029, FR-029a).
 
 ---
 
@@ -578,8 +694,15 @@ operator has disabled remote control.
 ### Live browser panel (SPA ↔ gateway WebSocket)
 
 - **Data in**: take/release requests, viewer input, viewport and tab actions.
-- **Data out**: control-state acknowledgements, tab strip, error notices, WebRTC signalling.
-- **Contract**: the existing browser WebSocket channel. This change adds no new frame here.
+- **Data out**: control-state acknowledgements, tab strip, error notices, WebRTC signalling, **and (new
+  in this change) an unsolicited `browser_status{state:"released"}` to a former holder whose wheel the
+  server took back** (FR-031b).
+- **Contract**: the existing browser WebSocket channel and the existing `BrowserStatusFrame` schema.
+  This change adds no new frame **type** here — but it does add a new *direction* of use: today every
+  `state:"released"` frame is a direct reply to that connection's own `browser_control{release}`, and
+  after FR-031b one can arrive unsolicited. The frame must **not** carry `control_only: true` — that
+  flag makes the SPA apply only the control-ownership axis and return, so a `control_only` frame
+  cannot clear the holder's own `isControlling`.
 - **On failure**: a failed take leaves the operator not driving and tells them to retry; a failed
   release forces the local state back to released and tells them to retry. Both behaviours exist today
   and are preserved.
@@ -653,6 +776,13 @@ operator has disabled remote control.
     "browser_control"`. It **MUST NOT** inspect `ForLLM`, `strings.Contains` it, or unmarshal it.
   - `Deferred` MUST be nil on every non-deferred result, so "is this a deferral" is a nil check and
     not a value comparison.
+  - **The field is meaningful only on a SYNCHRONOUS result.** It rides the tool's own `*ToolResult`
+    pointer back through `ToolRegistry.Execute` and `normalizeToolResult` (which mutates in place),
+    exactly as the existing `Err` / `Messages` fields on the same struct do — but a result that
+    reaches the engine by any other route (a background dispatch reconstituted from a stored payload,
+    an async notifier round-trip) has crossed a serialisation boundary that `json:"-"` deliberately
+    strips. No control-gated browser tool is dispatched that way today, and none may be without
+    revisiting FR-013's ledger.
   - **Owning wave: W0** (see the wave plan; `pkg/tools/result.go` was previously unowned and the file
     blocks both W1 and W3).
 - **FR-013**: The turn engine MUST maintain a per-turn count of control-gate deferrals, on
@@ -713,9 +843,24 @@ operator has disabled remote control.
     would turn that assertion red for the wrong reason. Failing closed here would also mean every
     non-chat turn (cron, heartbeat, task) defers forever.
 - **FR-021**: The root chat id MUST be sourced from `pkg/agent/turn.go::turnState.routingSessionID`
-  (ADR-057 FR-011), surfaced to the browser tools through the existing
-  `pkg/tools/browser/register.go::ManagerResolver` seam — `pkg/tools/browser` MUST NOT import
-  `pkg/agent`.
+  (ADR-057 FR-011) and MUST reach the browser tools as a **tool-context key**, not through the
+  `ManagerResolver` interface. `pkg/tools/browser` MUST NOT import `pkg/agent`.
+  - **The seam is `pkg/tools/base.go`**, which already carries `ctxKeyTranscriptSessionID` and its
+    `ToolTranscriptSessionID(ctx)` reader. A sibling key and reader
+    (`WithToolRootChatSessionID` / `ToolRootChatSessionID`) is added there; `pkg/agent` sets it where
+    it already builds the tool context, and `controlledResult` reads it. `controlledResult`'s
+    signature gains a `ctx context.Context` first parameter — it is
+    `controlledResult(mgr *BrowserManager, key BrowsingKey, owner TabOwner, toolName string)` today
+    and its eleven call sites all live in files W1 already owns.
+  - **Why not `ManagerResolver.ManagerFor`, which the first draft named.** Three costs, none of them
+    paid back: it changes an exported interface and therefore every fake implementing it in
+    `pkg/tools/browser`'s test files; the interface is declared in
+    `pkg/tools/browser/register.go`, which W6 must own outright for the `browser_handover`
+    registration, so routing the id through it would put one file in three waves at once; and the
+    root chat id is a property of the **turn**, exactly like `ToolTranscriptSessionID`, not of the
+    manager resolution, so the context key is also the more honest home. This is the resolution of
+    what was an open question in the first draft — the draft named the requirement and left the
+    mechanism unstated, which is a gap, not a choice.
 - **FR-022**: `pkg/agent/routing_session_id_consumer_set_adr057_test.go::TestRoutingSessionID_ConsumerSetIsClosed`
   MUST be amended in the same commit to name the new reader, with the role-B justification recorded
   (C3). Adding the reader without amending the allowlist is a build break, and amending the allowlist
@@ -753,8 +898,45 @@ operator has disabled remote control.
 
 - **FR-025**: The operator's next message MUST run as an ordinary turn. No resume dispatcher, no
   injected page state, no synthetic message, no persisted handover record.
-- **FR-026**: Releasing the wheel (Escape, entering annotate mode, closing the panel, a WS
-  disconnect) MUST NOT resume the agent and MUST NOT retract the waiting line.
+- **FR-026**: Releasing the wheel (Escape, entering annotate mode, closing the panel) MUST NOT resume
+  the agent and MUST NOT retract the waiting line. **The mechanism is FR-026a**, and without it this
+  requirement has no implementation at all: `releaseControl` / `detach` clear `lv.controller`, so
+  `controlledResult`'s gate re-opens on the very next call.
+- **FR-026a**: A **stand-down latch** MUST exist, because ADR-085 D3's "releasing the lock is not a
+  resume" is otherwise unimplemented and unobservable. Concretely:
+  - **State**: a `standDownUntilPrompt bool` on `pkg/tools/browser/live.go::LiveView`, beside
+    `controller` and the FR-047 handover-pending flag, under `lv.mu`.
+  - **Set** on every transition **into** a stood-down state: a successful `takeControl` /
+    `ensureControlForInput` grant to a human viewer, and an FR-047 handover. Setting it is
+    idempotent within one unbroken stand-down (it shares FR-044's "transition into", not "every
+    take").
+  - **Consulted** by `controlledResult` alongside the lock and the handover-pending flag, under the
+    **same FR-020 two-key evaluation** (the resolved tab set and the root chat's panel tab set). A
+    latch on either defers.
+  - **Cleared by exactly two things**: the FR-029 prompt release (across FR-050's whole reachability
+    set) and the FR-031a idle expiry. Not by Escape, not by annotate mode, not by closing the panel,
+    not by the end of a turn, not by a new turn starting.
+  - **Voided — not cleared — by the FR-031 ghost condition.** When the gate finds a holder that has
+    left `lv.viewers`, it voids the hold *and* the latch in the same evaluation. Without this
+    exception FR-026a silently repeals US-8 and reddens
+    `TestControlGate_GhostHolderDoesNotDeferTools`: a crashed panel would stand the agent down
+    forever. The rule that makes this coherent, stated so nobody "simplifies" it away: **the latch
+    records a deliberate stand-down, and a deliberate stand-down requires a deliberate release.** A
+    viewer whose socket died released nothing.
+  - **Scope note.** The grill called for a *session*-scoped latch. It is specified per **tab set**
+    instead, on the `LiveView`, because that is the granularity the gate and the FR-050 clearing set
+    already work at — a session-scoped latch would need its own second reachability model and would
+    not clear correctly for a delegated child's own tab set.
+  - **Why the latch and not the cheaper alternative.** The alternative is to amend D3 so that
+    releasing the lock *does* re-open the gate and only the turn is not re-dispatched — cheaper, but
+    it makes the waiting line lie: the line says "sending a message returns it" while, with attempts
+    left under FR-014's N=3 or on any new turn (cron, heartbeat, a goal follow-up), the agent is
+    already driving the page the operator walked away from. That is the D5 exposure reinstated
+    silently. If that alternative is ever taken instead, US-7 AS-5, the "Escape, then the operator
+    walks away" edge case, the matching BDD scenario and ADR-085 D3's paragraph MUST be deleted in
+    the same pass — leaving a promise with no mechanism is how this defect arose.
+  - **Owning wave: W2** (`live.go`) for the state and clearing; **W1** (`tools.go`) for the gate
+    read.
 - **FR-027**: Re-orientation MUST rely on the existing `pkg/tools/browser/tools.go::ScreenshotTool`
   description, which already reports the tab's current URL and title including a page the operator
   navigated to themselves. No new re-orientation surface MAY be added.
@@ -762,37 +944,72 @@ operator has disabled remote control.
   release it server-side, before the turn begins. It MUST work with the panel closed and with the
   holder's connection gone.
 - **FR-029**: The release MUST fire on an **operator-originated prompt only**, and MUST fire for such
-  a prompt arriving on **any** channel — see C7 and Ambiguity A3. Concretely:
-  - One shared helper, `pkg/gateway.ReleaseBrowserWheelForPrompt(ctx, sessionID, actor)`, does the
-    release and the FR-030 audit. It is the only thing that releases on a prompt.
-  - It is invoked from the **four operator-originated publish sites only**:
-    `pkg/gateway/websocket.go` (webchat `message` handler), `pkg/gateway/sse.go`,
-    `pkg/gateway/ws_ask_user.go::DispatchResume`, and the channel inbound dispatcher
-    (`pkg/channels/base.go::HandleMessage`).
-  - It MUST NOT be invoked from `pkg/bus/bus.go::PublishInbound`, and MUST NOT be reachable from
-    `pkg/agent/async_notifier.go` (background tool/delegate completions, published on the synthetic
-    `"system"` channel) or from `pkg/agent/loop.go`'s goal-loop follow-up re-injection
+  a prompt arriving on **any** channel — see C7, C7.1, C7.2 and Ambiguity A3. The decision is carried
+  on the message; the action happens where the session is known. Concretely:
+  - **The carrier.** `pkg/bus/types.go` gains `InboundMessage.OperatorPrompt bool`, documented in the
+    same fail-closed form as the `UserInitiated` field directly above it: *true ONLY when this
+    message is a prompt the operator composed on this session — the webchat WS `message` handler
+    (`pkg/gateway/websocket.go`), the SSE chat POST (`pkg/gateway/sse.go`), or a channel adapter's
+    inbound dispatch of a real platform sender (`pkg/channels/base.go::HandleMessage`). Every other
+    producer MUST leave it false; it is never set automatically, so a producer added later fails
+    closed (does not release) rather than open.* Like `UserInitiated`, it is internal agent↔channel
+    plumbing — `pkg/bus` is not on the gateway/SPA wire boundary, so Constraint #8 does not apply.
+  - **The three sites that set it**: `pkg/gateway/websocket.go`, `pkg/gateway/sse.go`,
+    `pkg/channels/base.go::HandleMessage`. Nowhere else.
+  - **The three that must not**: `pkg/gateway/ws_ask_user.go::DispatchResume` (see the next bullet),
+    `pkg/agent/async_notifier.go` (background tool/delegate completions on the synthetic `"system"`
+    channel) and `pkg/agent/loop.go`'s goal-loop follow-up re-injection
     (`Sender.CanonicalID == goalLoopFollowUpSenderID`). **A delegate finishing in the background must
-    never hand the browser back while the operator is typing a password into it.** Heartbeat, cron
-    and task runs never construct an `InboundMessage` at all and are therefore already excluded.
-  - `ws_ask_user.go` is a release site **only when the resume is genuinely a human answering**:
-    it MUST reuse that file's existing `resumeIsUserInitiated(set)` predicate, so an auto-defaulted
-    (timed-out) question card does **not** release. This closes the edge case "a question card is
-    pending when the operator takes the wheel": the card and the wheel do not interact while the card
-    is pending, and answering it is an ordinary prompt that releases like any other.
+    never hand the browser back while the operator is typing a password into it.**
+  - **A question-card resume never releases the wheel — answer or cancel.** The first draft made
+    `ws_ask_user.go` a conditional release site gated on its existing `resumeIsUserInitiated(set)`.
+    That predicate begins `if set.Status == askuser.StatusCancelled { return true }`, so **clicking
+    Cancel on a card would have handed the browser to the agent mid-drive.** Beyond the bug, the
+    conflation is wrong on its own terms: `DispatchResume` injects a *synthesised* `resumeText` into
+    a turn that is already parked — the operator composed no message — and the composer lock is a
+    reason to keep the two pending states independent, not to fuse them. Harm asymmetry settles it:
+    releasing mid-drive reinstates the whole D5 exposure, while not releasing costs one deferred
+    round-trip that is visible to the operator and bounded by FR-014's N=3. `resumeIsUserInitiated`
+    MUST be left exactly as it is — it is correct for its own caller (goal/loop origin gating) and
+    MUST NOT be read by this feature. Operator-ratified; see A13.
   - **`bus.InboundMessage.UserInitiated` MUST NOT be reused as the discriminator**, tempting as it
-    is. It is the right *idea* (a fail-closed operator-origin signal, set true only at
-    `websocket.go`, `channels/base.go` and the human branch of `ws_ask_user.go`) but it is **false on
-    the SSE path** (`pkg/gateway/sse.go` constructs its `InboundMessage` without it), so keying on it
-    would silently reproduce the C7 stale-lock hole for SSE clients; and widening it to cover SSE
-    would change goal/loop origin gating (ADR-049 Gap #8) as a side effect of a browser change.
-- **FR-029a**: The set of `PublishInbound` call sites that do **not** call
-  `ReleaseBrowserWheelForPrompt` MUST be pinned by a structural test, because FR-029's correctness is
-  a property of a call-site *set* and a new site added later is invisible otherwise. The test walks
-  every non-test `PublishInbound` call site in the module and asserts the partition is exactly:
-  release = {`websocket.go`, `sse.go`, `ws_ask_user.go`, `channels/base.go`}; no-release =
-  {`async_notifier.go`, `loop.go`}. A new site in either half fails with the reason stated, so the
-  author must classify it deliberately.
+    is. It is the right *idea* but it is **false on the SSE path** (`pkg/gateway/sse.go` constructs
+    its `InboundMessage` without it), so keying on it would silently reproduce the C7 stale-lock hole
+    for SSE clients; widening it to cover SSE would change goal/loop origin gating (ADR-049 Gap #8)
+    as a side effect of a browser change; and it is **true** on the question-card path, which FR-029
+    now needs to be false.
+  - **The action, and where it can actually live.** A helper called from `pkg/channels/base.go` into
+    `pkg/gateway` cannot be built (C7.2: import direction, and no `SessionID` on the message there).
+    Instead:
+    - `pkg/agent/browser_deferral.go` declares
+      `func (al *AgentLoop) SetBrowserWheelReleaseHook(fn func(ctx context.Context, sessionID string, actor ReleaseActor))`,
+      modelled on the existing `pkg/agent/loop.go::AgentLoop.SetReloadFunc` gateway-registered
+      callback. `ReleaseActor` carries the FR-030 attribution fields.
+    - `pkg/agent/loop.go::processMessage` invokes the hook **once**, before the turn begins, **if and
+      only if** `msg.OperatorPrompt` is true and the hook is non-nil. A nil hook is a silent no-op
+      (headless/test builds with no gateway).
+    - `pkg/gateway/browser_ws.go` implements it as
+      `(*BrowserWSHandler).ReleaseBrowserWheelForPrompt`, doing the release across FR-050's
+      reachability set, clearing the FR-026a latch and the FR-047 handover-pending flag, emitting the
+      FR-030 audit record and the FR-031b holder notification. It is registered on the loop inside
+      `pkg/gateway/browser_ws.go::newBrowserWSHandler`, which is already handed the
+      `*agent.AgentLoop` — **no `pkg/gateway/gateway.go` edit is required.**
+    - The hook MUST NOT be invoked from `pkg/bus/bus.go::PublishInbound`.
+  - **`processMessage` also carries cron, and the field is what saves it.**
+    `pkg/agent/loop.go::ProcessDirectWithChannel` builds a `bus.InboundMessage` with
+    `Sender.CanonicalID == "cron"` and calls `processMessage` directly — it never publishes to the
+    bus. It leaves `OperatorPrompt` false, so it never releases. Do **not** re-gate this on "did it
+    come from the bus", on the channel name, or on `UserInitiated`.
+- **FR-029a**: FR-029's correctness is a property of an *assignment* set, so a structural test MUST
+  pin **where `OperatorPrompt` is set**, not where a helper is called — a helper call site can be
+  moved, but the field's truth value is the thing the gate reads. The test walks every non-test
+  assignment to `bus.InboundMessage.OperatorPrompt` in the module and asserts the partition is
+  exactly: sets-true = {`pkg/gateway/websocket.go`, `pkg/gateway/sse.go`, `pkg/channels/base.go`};
+  never-sets = {`pkg/gateway/ws_ask_user.go`, `pkg/agent/async_notifier.go`, `pkg/agent/loop.go`}.
+  It MUST additionally assert the six-site `PublishInbound` census itself (six non-test call sites;
+  `pkg/bus/bus.go`'s own line is the method declaration, not a call), so a **new** publish site
+  cannot appear without classifying itself — a site that sets nothing passes the assignment
+  assertion vacuously. A new site or a new assignment in either half fails with the reason stated.
 - **FR-030**: The release MUST be audited via `pkg/gateway/browser_ws.go::auditRelease`'s record
   shape, naming the **actor who sent the prompt**, never the holder. The actor is resolved in this
   order, and the spec is explicit because the obvious carrier does not exist on most paths:
@@ -807,29 +1024,107 @@ operator has disabled remote control.
   3. The holder is recorded separately, as the *prior* holder. It is **never** used as the actor —
      that is the specific defect this requirement exists to prevent.
 - **FR-031**: A wheel whose holder is no longer in `pkg/tools/browser/live.go::LiveView.viewers` MUST
-  be treated as **void** by the tool gate — the agent MUST NOT defer to a ghost. The existing
-  ghost-steal path MUST stay reachable; its reachable entry point is the exported
-  `pkg/tools/browser/live.go::LiveViewRegistry.EnsureControlForInput`, which delegates to the
-  unexported `lv.ensureControlForInput`. Cite the exported one — the unexported method is not
-  callable from the gateway.
+  be treated as **void** by the tool gate — the agent MUST NOT defer to a ghost. **The gate does not
+  express this today and no existing accessor can be made to.** `IsControlled(sessionID)` is
+  `Controller(sessionID) != ""`, and `Controller` returns `lv.controller` unconditionally; neither
+  consults `lv.viewers`. Therefore:
+  - `pkg/tools/browser/live.go` MUST gain
+    `func (r *LiveViewRegistry) IsControlledByLiveViewer(sessionID string) bool`, returning
+    `lv.controller != "" && lv.viewers[lv.controller] is present`, evaluated under `lv.mu` in one
+    critical section (two separate reads can observe a detach between them).
+  - `pkg/tools/browser/tools.go::controlledResult` MUST call it **instead of** `IsControlled`.
+  - `IsControlled` and `Controller` MUST be left untouched. They are the **status/presentation**
+    reads — `pkg/gateway/browser_ws.go::handleTabAction`'s F3 gate and the panel's own
+    control-ownership display both depend on the current, viewer-blind semantics, and changing them
+    would silently retarget consumers this change has no business retargeting.
+  - The FR-026a latch is voided by the same condition, in the same evaluation.
+  - **The "existing ghost-steal path must stay reachable" clause from the first draft is deleted.**
+    `EnsureControlForInput` has **no production caller**: outside `live.go` it appears only in
+    `pkg/tools/browser/live_notcontroller_test.go` and `shared_control_test.go`. The gateway's input
+    path calls `mgr.Live().Input(...)` directly, and `dispatchInput`'s own comment states input is
+    never gated on a control lock (operator directive, 2026-08-03). It is retained as-is and is
+    **currently test-only**; nothing in this change may be specified as depending on it.
+- **FR-031b**: **Any release the holder did not itself request MUST reach the holder's own panel.**
+  Today it cannot. `releaseControl` broadcasts through
+  `snapshotControlSinksExceptLocked(viewerID)`, which excludes the acting viewer **by construction**,
+  and `ControlSink`'s doc comment states the exclusion as an invariant on the grounds that "the
+  acting viewer … already gets an authoritative `browser_status` frame as the direct response to its
+  own `browser_control` request". That frame is emitted **only** inside
+  `pkg/gateway/browser_ws.go::handleControl`'s `case "release"` — i.e. only as a reply to the
+  holder's own request. So after an FR-029 prompt release, an FR-031a idle expiry, an FR-050
+  handover clear, an FR-052 switch-off or a session deletion, the panel keeps `isControlling === true`
+  forever: FR-057 clears operator-holds-wheel only on a server `released` status that never arrives,
+  and `takeWheelIfNeeded`'s first guard is `if (controllingRef.current) return`, so **the operator can
+  never re-take while the agent drives.** Both parties believe they hold the wheel — the exact state
+  ADR-039/040 exist to prevent. Therefore:
+  - Every server-initiated release MUST push an unsolicited
+    `generated.BrowserStatusFrame{Type: browser_status, State: "released", SessionId: &chatSessionID}`
+    to the still-attached former holder's connection, in addition to the existing
+    `control_only` broadcast to every other viewer.
+  - The frame MUST NOT set `ControlOnly`. The SPA's `if (f.control_only) { setControlledByOther(…);
+    return }` branch applies only the control-ownership axis and returns, so a `control_only` frame
+    cannot clear the holder's own `isControlling` — it would look delivered and change nothing.
+  - A former holder who is no longer attached is a no-op, not an error.
+  - **`ControlSink`'s doc comment MUST be amended in the same commit**, because it currently asserts
+    the opposite as an invariant. The corrected statement: the acting viewer is excluded from the
+    broadcast because it gets its own direct reply *for a release it requested*; a release the server
+    performed on the holder's behalf is delivered to the holder directly by FR-031b instead.
+  - FR-057 MUST name this frame as a clearing trigger (it already names "a server `released` status";
+    the point of this requirement is that such a status now actually arrives).
+  - **Owning wave: W2** throughout (`live.go`, `browser_ws.go`).
 - **FR-031a**: A held wheel MUST expire. Today the operator's next prompt is the **only** release,
   a cron or heartbeat turn is not a prompt (and under FR-029 must not become one), and FR-031's
   ghost rule only voids a holder who has left `lv.viewers` — an attached-but-idle holder is not a
   ghost. So an operator who takes the wheel and closes their laptop **permanently disables every
   scheduled browser turn on that session**, with no expiry, no operator-visible state and nothing to
   recover. Therefore:
-  - A hold with **no viewer input and no attach/detach activity** for
-    `tools.browser.control_idle_release` (Go field `ControlIdleReleaseSec int`, matching the existing
-    `LeaseWaitSec` / `IdleTTLSec` naming in `pkg/config/config.go`'s browser block; shipped default
-    **900** seconds) MUST be released server-side.
+  - **Liveness — what resets the timer.** The first draft said "no viewer input and no attach/detach
+    activity", and that is the wrong signal: **a reading operator produces no input events.** Under
+    it, an operator who takes the wheel and studies the page for 900 seconds is released server-side
+    and the agent resumes screenshotting the page they are still looking at — the D5 exposure,
+    reinstated silently (and, before FR-031b, invisibly). WebRTC is streaming to them the whole time
+    and was not counted either. The timer is reset by **any** of, while a viewer is attached:
+    viewer input; an attach or detach; a `pkg/tools/browser/manager.go::ViewerHeartbeat` stamp (the
+    live panel's WS `PongHandler` calls it — this is the existing "somebody is still watching" proof,
+    pinned by `pkg/tools/browser/viewer_heartbeat_test.go`); or an active WebRTC media track on that
+    view. **At minimum an attached viewer with a live transport resets the timer**, so the window
+    targets the abandoned-laptop case it was written for and nothing else.
+  - **A stood-down state with no attached viewer has no liveness signal at all**, by construction:
+    FR-047 handover-pending raised with nobody watching, and an FR-026a latch left behind after the
+    operator released and closed the panel. For those the window runs unconditionally from the
+    transition that set the state. This is the case that makes the timer load-bearing rather than a
+    belt-and-braces measure, and it is the case H5 exercises.
+  - **Delivery is EAGER, not lazy.** A `LiveViewRegistry`-level sweeper MUST run on a coarse tick
+    (**30 s**; the window is 900 s, so tick precision is irrelevant and a cheap tick is the point),
+    walking the views it owns and expiring any whose window has elapsed. A lazy check folded into
+    `controlledResult` would satisfy the gate but would never fire when no agent is running — and the
+    operator-visible expiry line below is exactly the surface that must appear when nobody is
+    running. `LiveView` gains one `lastControlActivity time.Time` field for this; the registry gains
+    the ticker, started and stopped with the registry's own lifecycle.
+  - The threshold is `tools.browser.control_idle_release` (Go field `ControlIdleReleaseSec int`,
+    matching the existing `LeaseWaitSec` / `IdleTTLSec` naming in `pkg/config/config.go`'s browser
+    block; default **900** seconds). `0` disables expiry, for an operator who genuinely wants an
+    indefinite hold. That is an opt-in, not the shipped default.
   - The release MUST be audited as a distinct outcome, `browser_control_idle_release`, with the
-    former holder recorded and no acting user.
-  - **Handover-pending (FR-047) expires on the same timer**, for the same reason: an agent that hands
-    over to an operator who never arrives must not park the browser for the session's lifetime.
+    former holder recorded and no acting user, and MUST notify the former holder per FR-031b.
+  - **Handover-pending (FR-047) and the FR-026a latch expire on the same timer**, for the same
+    reason: an agent that hands over to an operator who never arrives, or an operator who pressed
+    Escape and left, must not park the browser for the session's lifetime.
   - An operator-visible line MUST be emitted on expiry, on the same surface as FR-041, saying the
     browser has been returned to the agent because it was idle.
-  - `0` disables expiry, for an operator who genuinely wants an indefinite hold. That is an opt-in,
-    not the shipped default.
+  - **The sweeper is also FR-052's mechanism**: on each tick it MUST release any hold,
+    handover-pending state or latch found while `tools.browser.take_control_enabled` is false, and it
+    MUST run regardless of that flag. This is why FR-052 needs no config-reload hook.
+  - **Interaction with the existing `idle_ttl` tab reaper, which the first draft did not address.**
+    `pkg/tools/browser/manager.go::ReapIdleSessions` already tears down tabs and whole browsing
+    contexts after `tools.browser.idle_ttl` and **does not touch any `LiveView`** — so today a reaped
+    tab set would leave a control lock, a handover-pending flag and a latch alive on a view whose
+    tabs no longer exist. Therefore: a tab set whose live view is **controlled, handover-pending or
+    latched MUST be exempt from `idle_ttl` reaping**; and if such a context is torn down for any
+    other reason, the teardown MUST go through the same audited release path (audit record, FR-041
+    line, FR-031b notification) rather than dropping the state on the floor. Exemption is the primary
+    rule because a held wheel is by definition a tab set a human is using; the FR-031a window, not
+    `idle_ttl`, is what bounds it.
 - **FR-032**: Input dispatch MUST stay ungated (operator directive, 2026-08-03).
   `LiveView::dispatchInput` MUST NOT gain a control-lock authorization check. A second viewer driving
   without the wheel MUST neither defer the agent nor be blocked.
@@ -854,6 +1149,24 @@ operator has disabled remote control.
   `readOnlyBrowserTools`' doc comment currently says "the four tools that observe without acting"
   while the map holds **six**; it MUST be corrected as part of this split, not left describing a
   count that was already wrong before this change.
+  > **⚠️ The roster is 11 or 10 depending on which catalog you count, and one literal asserted
+  > against both scopes will redden one test.** `BrowserBuiltinMetadata()` returns **17** tools;
+  > `RegisterTools` registers **16** — `browser_upload_file` is deliberately in the metadata catalog
+  > and deliberately **not** registered (`register.go`'s own comment: "held means unregistered, not
+  > unseeded"; `interact_test.go::TestUploadFile_NotRegistered` pins the absence). The two structural
+  > tests iterate different things: `control_gate_membership_test.go` walks
+  > `BrowserBuiltinMetadata()`, `lease_membership_test.go` walks `registry.GetAll()`. So:
+  > - **Metadata-scoped: 11 action / 3 capture / 3 exempt = 17.** The action roster is exactly
+  >   `writeClassBrowserTools` as it stands today, `browser_upload_file` included.
+  > - **Registry-scoped: 10 action / 3 capture / 3 exempt = 16.** These are FR-036's and FR-037's
+  >   counts, and the ones deliberate-rewrite #3 changes from `10 leased / 6 exempt`.
+  > - **`ControlGatedToolNames()` (FR-016a) returns the METADATA-scoped union — 14 names**, and its
+  >   equality assertion MUST state both sides in that same scope. A name in it that is not
+  >   registered is harmless (the engine short-circuits on a name the model can never call); a
+  >   registered gated name missing from it is the drift the test exists to catch.
+  >
+  > Every count literal added or changed by this feature MUST name its scope in the assertion
+  > message.
 - **FR-035a**: The biconditional lives in two **spec documents**, not in an ADR (see C1's box), and
   both MUST be amended in the same commit as FR-035, or the structural tests and the normative prose
   disagree with no gate catching it:
@@ -878,8 +1191,10 @@ operator has disabled remote control.
   be re-stated as `per-call-audited ⟺ action-class` and MUST fail if a capture-class tool emits a
   `browser_action` row.
 - **FR-038**: `pkg/tools/browser/control_gate_membership_test.go` MUST assert the full three-way
-  partition against the registered catalog, with every member of each class named in a literal roster
-  and a stated reason, and MUST fail on a registered tool that belongs to no class.
+  partition against the **metadata catalog** (`BrowserBuiltinMetadata()`, 17 tools — that is what the
+  file already iterates, despite its local variable being named `registered`), with every member of
+  each class named in a literal roster and a stated reason, and MUST fail on a catalog tool that
+  belongs to no class. Counts: **11 / 3 / 3**. The registry-scoped counterpart is FR-036's.
 - **FR-039**: A deferred `browser_screenshot` MUST produce **none** of its three sinks: no JPEG under
   the turn's working directory via `tools.ResolvePath`, no MediaStore entry created by
   `pkg/tools/normalization.go::normalizeToolResult` from a returned data URL, and no
@@ -894,9 +1209,36 @@ operator has disabled remote control.
   authored contract-first per Constraint #8: schema under `contracts/components/schemas/`, referenced
   from `contracts/asyncapi.yaml`, regenerated by `scripts/gen-contracts.sh`, generated artifacts
   committed in the same commit, and consumed only through the generated Go/TS types and Zod schema.
+  - **The emitter seam MUST be named, because it crosses two handlers and three producers.** The take
+    happens in `pkg/gateway/browser_ws.go::handleControl` on a `*BrowserWSHandler` / `*browserWSConn`,
+    while chat frames reach a thread through
+    `pkg/gateway/websocket.go::WSHandler.resolveSessionConnsLocked(originChatID, sessionID)` on a
+    different handler. `BrowserWSHandler` today holds only an `*agent.AgentLoop` (see its struct) and
+    has no path to the chat connections. It MUST gain the `*WSHandler` reference, supplied at
+    `newBrowserWSHandler` time, and deliver through `resolveSessionConnsLocked("", sessionID)`.
+  - **One emitter, three producers.** The same line is raised from three places — the take
+    (`browser_ws.go`, W2), `browser_handover` (`pkg/tools/browser`, W6) and the FR-031a idle sweeper
+    (`live.go`, W2) — and two of them are in a package that MUST NOT import `pkg/gateway`. There MUST
+    therefore be a single `WaitingSurfaceEmitter` seam: an interface declared in `pkg/tools/browser`
+    (`Emit(ctx, tabSetID, notice) error`), implemented in `pkg/gateway/browser_ws.go`, and registered
+    on the `LiveViewRegistry` at wiring time. Every producer emits through it; nobody formats the
+    frame twice. Without this, FR-048 and FR-031a's operator-visible line are specified with no way
+    to reach the thread — the same gap C2 found, one layer down.
+  - **Degradation, stated so it is not discovered in production.** If the session has no attached chat
+    WS connection, `resolveSessionConnsLocked` returns an empty set: the frame is **dropped**, no
+    error is raised, and the FR-043 transcript entry is the only surface until the operator
+    re-attaches. That is the same "visible after reload, never absent from both" contract the
+    Integration Boundaries section already promises — it is restated here because the panel being
+    open is not evidence that the *chat* socket is.
 - **FR-043**: The line MUST also be persisted as a `session.EntryTypeSystem` transcript entry (pattern:
   `pkg/agent/goal_loop.go::writeGoalSystemTranscript`) so a replay renders the same line in the same
   place. A delivery failure on the live frame MUST NOT suppress the transcript write.
+  - **The reverse also holds: a failed transcript write MUST NOT block or fail the release.** If the
+    session has been deleted or its workspace unmounted while the wheel was held, the writer's
+    `AppendTranscriptStrict` targets a directory that no longer exists. The writer MUST detect the
+    missing session and skip, logging at warn, rather than erroring out of a release path whose whole
+    job is to stop the agent being locked out. Giving the browser back is the load-bearing half; the
+    line is the courtesy half.
 - **FR-043a**: **Replay MUST emit the same frame type as live.** `pkg/gateway/replay.go` today turns
   an `EntryTypeSystem` entry into a generic `generated.ReplayMessageFrame`, with only two
   special cases: `entry.Type == session.EntryTypeSystem && entry.Status == "error"`, and an
@@ -918,9 +1260,22 @@ operator has disabled remote control.
   through `buildGoalAckInsertion`, whose id comes from `goalAckMessageId(goalId)`
   (`` `goal-ack-${goalId}` ``) and which returns `null` when `b.messagesById[ackId]` already exists.
   Applied here:
-  - The notice's message id MUST derive deterministically from `(sessionID, holdEpoch)`, where
-    `holdEpoch` is a monotonically increasing counter incremented on every **transition into** a held
-    state (take or handover) and never on a re-take within the same unbroken hold.
+  - The notice's message id MUST derive deterministically from `(sessionID, holdStartedAtUnixNano)`,
+    where `holdStartedAtUnixNano` is a wall-clock nanosecond timestamp minted at the **transition
+    into** a stood-down state (take or handover), stored on the `LiveView` beside the state itself,
+    and **reused verbatim** for every emission within that unbroken hold. Idempotency comes from
+    reusing the stored value; it does not come from a counter.
+    > **⚠️ A per-process counter — the first draft's `holdEpoch` — silently swallows the first take
+    > after a gateway restart, and this is a real sequence, not a theoretical one.** The lock is
+    > process memory with no persistence and no boot rehydration (`live.go`, stated in the Symbols
+    > table). Take → id `…epoch-1` is written into the transcript → gateway restarts → the operator
+    > reloads and replay puts `…epoch-1` into `messagesById` → the operator takes the wheel again →
+    > the counter restarts at 1 → the frame carries the **same id** → the SPA reducer's
+    > `if (b.messagesById[ackId]) return null` guard drops it → **no waiting line for a real
+    > takeover.** The `goal_status` precedent does not have this failure because `goalId` is durable;
+    > a hold epoch is not. A ULID minted at the transition and echoed into both the frame and the
+    > transcript entry is an equally acceptable implementation — the requirement is only that the id
+    > cannot repeat across a restart.
   - The SPA reducer MUST drop a notice whose id it already holds, exactly as `buildGoalAckInsertion`
     does — so a re-delivered frame after a reconnect, or a frame racing the replay entry, cannot
     produce a duplicate line.
@@ -957,7 +1312,13 @@ operator has disabled remote control.
 - **FR-049**: It MUST return a non-error result instructing the agent to conclude its turn with an
   explanation. It MUST NOT set `ParksTurn`.
 - **FR-050**: Handover-pending MUST be cleared by the same next-prompt release as FR-028, by an
-  explicit operator release, and by the FR-031a idle timer.
+  explicit operator release, by the FR-031a idle timer, by an FR-052 switch-off, and by the session
+  being deleted or its workspace unmounted. **The session-lifecycle case is not optional**: the lock
+  and the pending flag are keyed on the tab set, not on the session, so deleting a session releases
+  nothing today and leaves an agent deferring against a chat that no longer exists. Session deletion
+  MUST clear the hold, the handover-pending flag and the FR-026a latch across the FR-020 reachability
+  set through the same audited path, notify any still-attached holder per FR-031b, and skip the
+  FR-043 transcript write per FR-043's own missing-session rule.
   **Clearing MUST use the same reachability set the gate uses (FR-020), not a single key.** FR-047
   sets handover-pending on the **turn's resolved** tab set — for a delegated child that is the
   *child's own* tab set — while a next-prompt release arrives keyed on the **root chat**. Clearing
@@ -984,6 +1345,16 @@ operator has disabled remote control.
     silently browser-capable Mia that no test notices.
 - **FR-052**: With `tools.browser.take_control_enabled` false, `browser_handover` MUST NOT take effect
   and MUST return a result saying so. It MUST NOT become a bypass for the disabled feature.
+  - **Flipping the flag to false while a wheel is held MUST give the wheel up.** The flag is checked
+    only on `handleControl`'s `case "take"`; `case "release"` has no check, so an *attached* operator
+    can still release by hand — but with the panel closed there is then no release path at all except
+    the FR-031a timer, which is why that timer **MUST run regardless of the flag**. Concretely: on
+    each tick the FR-031a sweeper releases any hold, clears any handover-pending state and voids any
+    FR-026a latch it finds while the flag is false, audits each as a distinct outcome, and notifies
+    the former holder per FR-031b. The bound is one sweeper tick, not instantaneous — stated rather
+    than implied. Using the sweeper means **no config-reload hook and no `pkg/gateway/gateway.go`
+    edit**; the flag is read live on each tick, following the `gateway.preview_enabled` precedent of
+    a per-use read with no restart.
 
 ### H. Client take-over state rebuild (D8) — the regression surface
 
@@ -991,6 +1362,14 @@ operator has disabled remote control.
   instant `sendControl('take')` is sent and confirmed by the server's `controlling` status
   acknowledgement. It replaces `agentPausedByUserRef` / `agentPausedByUser`, which exist only to
   compensate for `cancelStream`'s asynchronous confirmation and have no meaning once FR-001 lands.
+  - **"Replaces" MUST be asserted structurally, because the behavioural tests do not catch a
+    half-done edit.** A minimal edit that deletes only the `cancelStream(sessionId)` line while
+    keeping `setAgentPausedByUser(true)` beside it satisfies FR-001's test and leaves FR-054 and
+    FR-055 green — only FR-057's second-turn regression catches it, and only because
+    `if (!agentWorking) setAgentPausedByUser(false)` happens to survive with it. A test MUST assert
+    that the identifiers `agentPausedByUser`, `agentPausedByUserRef` and `setAgentPausedByUser` **do
+    not appear** in `src/components/browser/BrowserLiveView.tsx` at all. Both flags cannot coexist:
+    two sources of truth for one state is the defect D8 exists to remove.
 - **FR-054**: `computeDriveMode` MUST give operator-holds-wheel priority **over** `agentWorking`.
   Today the priority ladder is `annotating > agent-working > you-driving > …`, and `agentWorking` is
   softened only indirectly, via `effectiveAgentWorking = agentWorking && !agentPausedByUser`.
@@ -1015,8 +1394,9 @@ operator has disabled remote control.
   > REGRESSION row in the test matrix. FR-056's own test is a **coverage** test (all four entry
   > points still take-and-act in one gesture), not a regression guard, and the matrix labels it so.
 - **FR-057**: Operator-holds-wheel MUST be cleared **only** on a release — Escape, entering annotate
-  mode, a failed take, a server `released` status, or disconnect. It MUST NOT be cleared by an
-  `agentWorking` transition.
+  mode, a failed take, **a server `browser_status{state:"released"}` frame (solicited or unsolicited
+  — FR-031b is what makes the unsolicited one arrive; a `control_only` frame is NOT one of these)**,
+  or disconnect. It MUST NOT be cleared by an `agentWorking` transition.
   **Regression guard, stated precisely.** The existing `agentPausedByUser` is cleared by
   `if (!agentWorking) setAgentPausedByUser(false)`. The harm is **not** at the moment the turn ends:
   the auto-release effect is `if (effectiveAgentWorking && isControlling && connectedRef.current)`,
@@ -1236,9 +1616,55 @@ operator has disabled remote control.
 **Traces to**: US-7, AS-5 · **Category**: Edge Case
 - **Given** the operator took the wheel during a running turn and then pressed Escape
 - **And** no message is sent afterwards
-- **When** time passes
-- **Then** the agent does not resume driving the browser on its own
+- **When** the agent attempts a browser action, in that turn or a later one
+- **Then** the action still defers
+- **And** the agent does not resume driving the browser on its own
 - **And** the waiting line remains in the thread
+
+#### Scenario: A holder who vanished does not leave the agent stood down
+**Traces to**: US-8, AS-1 (and FR-026a) · **Category**: Error Path
+- **Given** the operator took the wheel and their connection dropped without a clean close
+- **When** the agent attempts a browser action
+- **Then** the action executes normally
+- **And** the stand-down is void, not merely the lock — a holder that vanished released nothing
+  deliberately, so nothing deliberate is preserved
+
+#### Scenario: A server-initiated release reaches the holder's own panel
+**Traces to**: US-7, AS-7 (and FR-031b) · **Category**: Error Path
+- **Given** the operator holds the wheel with the live panel still open
+- **When** the server gives the browser back without the operator asking — an idle expiry, a
+  take-control switch-off, or the session being deleted
+- **Then** the panel stops reporting that the operator is driving
+- **And** the operator can take the wheel again immediately, without reloading
+
+#### Scenario: Answering a question card does not return the browser
+**Traces to**: US-7, AS-8 · **Category**: Edge Case
+- **Given** the operator holds the wheel and a question card is awaiting an answer
+- **When** they answer the card
+- **Then** the wheel is not released
+- **And** the resumed turn's browser attempts still defer
+
+#### Scenario: Cancelling a question card does not return the browser
+**Traces to**: US-7, AS-8 · **Category**: Error Path
+- **Given** the operator holds the wheel and a question card is awaiting an answer
+- **When** they press Cancel on the card
+- **Then** the wheel is not released
+- **And** the resumed turn's browser attempts still defer
+
+#### Scenario: Take-control is switched off while a wheel is held
+**Traces to**: US-11, AS-3 · **Category**: Error Path
+- **Given** the operator holds the wheel and has closed the panel
+- **When** take-control is switched off on that installation
+- **Then** within one sweeper interval the hold is given up and recorded
+- **And** the agent's next browser action executes normally
+
+#### Scenario: A held tab set is not reaped for inactivity
+**Traces to**: US-7, AS-7 (and FR-031a) · **Category**: Edge Case
+- **Given** the operator holds the wheel on a tab set that has seen no tab activity for longer than
+  the tab idle window
+- **When** the idle tab sweep runs
+- **Then** that tab set is not torn down
+- **And** the operator's page is still there when they look at it
 
 #### Scenario: A ghost holder does not lock the agent out
 **Traces to**: US-8, AS-1 · **Category**: Error Path
@@ -1291,8 +1717,8 @@ operator has disabled remote control.
 - **Then** the turn remains parked on the question exactly as before
 - **And** no second suspended state is created
 - **And** the operator still holds the wheel for as long as the card is unanswered
-- **And** when they answer it, the answer releases the wheel like any other prompt, and the resumed
-  turn drives the browser normally
+- **And** when they answer or cancel it, the wheel is **not** released — the composer lock and the
+  wheel are independent, and only a message the operator composed returns the browser
 
 #### Scenario: A background delegate finishing does not hand the browser back
 **Traces to**: US-7, AS-6 · **Category**: Error Path
@@ -1302,13 +1728,23 @@ operator has disabled remote control.
 - **Then** the wheel is not released
 - **And** the agent's next browser attempt still defers
 
-#### Scenario: An idle hold is released by the server
+#### Scenario: An idle stand-down is given up by the server
 **Traces to**: US-7, AS-7 · **Category**: Edge Case
-- **Given** the operator holds the wheel and then sends no input and neither attaches nor detaches
+- **Given** the operator has stood the agent down and nothing since then has proved anyone is still
+  there — no input, no attach or detach, no panel keep-alive, no live video
 - **When** the configured idle window elapses
-- **Then** the wheel is released server-side and recorded as an idle release
+- **Then** the hold, any pending handover and any stand-down are given up server-side and recorded as
+  an idle release
 - **And** a line appears saying the browser has been returned to the agent
 - **And** a scheduled turn on that session can drive the browser again
+
+#### Scenario: A watched hold does not expire
+**Traces to**: US-7, AS-7 · **Category**: Error Path
+- **Given** the operator holds the wheel with the panel open, reading the page and touching nothing
+- **When** more than the idle window elapses
+- **Then** the wheel is not released
+- **And** the agent's browser attempts still defer — an operator who is visibly still there is not
+  treated as an operator who left
 
 #### Scenario: A handover set by a delegated child is cleared by the root chat's prompt
 **Traces to**: US-9, AS-3 (edge) · **Category**: Edge Case
@@ -1360,7 +1796,7 @@ comes from CI or the `ci-omnipus` Fly worker.
 | FR-001, FR-053 | `does not call cancelStream when taking the wheel, and DOES send one browser_control{take} frame in the same gesture` (paired negative + positive: a bare "not called" passes on a component that no longer takes the wheel at all) | vitest | `src/components/browser/BrowserLiveView.handover.test.tsx` | Operator takes the wheel… |
 | FR-002 | `TestTakeover_WritesNoTurnCanceledEntry` — asserts zero `turn_canceled` entries after a take, **and**, on the same fixture, that pressing Stop DOES write one (the positive control; without it the test passes on a fixture whose transcript writer is broken) | Go integration | `pkg/gateway/browser_control_handover_test.go` | Operator takes the wheel…; Stop still cancels the turn |
 | FR-002 | `TestTakeover_SetsNoParkAndNoCancel` | Go unit | `pkg/agent/browser_deferral_test.go` | Operator takes the wheel… |
-| FR-003 | `TestControlGate_InFlightCallCompletesAfterTake` | Go unit | `pkg/tools/browser/tools_control_test.go` | Take-over mid-navigation… |
+| FR-003 | **COVERAGE, not a regression guard** `TestControlGate_InFlightCallCompletesAfterTake` — passes on today's unmodified code (no mid-tool preemption exists to remove); it exists so a future preemption cannot be added without a red test | Go unit | `pkg/tools/browser/tools_control_test.go` | Take-over mid-navigation… |
 | FR-004 | `TestTakeover_NonBrowserToolStillExecutes` — narrowed: asserts the non-browser tool executes **while `IsControlled` is true AND the turn is still running**. Both conditions are the point; without them the test passes on a fixture where the take never landed or the turn already ended | Go integration | `pkg/gateway/browser_control_handover_test.go` | Non-browser work continues… |
 | FR-010 | `TestExecute_ControlLock_InteractiveToolsDeferWhileControlled` (existing, extended) | Go unit | `pkg/tools/browser/tools_control_test.go` | The agent's next browser action defers… |
 | FR-011 | `TestDeferralReason_StatesNoRetryAndPromptToResume` | Go unit | `pkg/tools/browser/tools_control_test.go` | The agent's next browser action defers… |
@@ -1370,51 +1806,64 @@ comes from CI or the `ci-omnipus` Fly worker.
 | FR-013, FR-017 | `TestBrowserDeferralLedger_CountsPerTurnNotPerSession` | Go unit | `pkg/agent/browser_deferral_test.go` | A new turn starts the attempt count at zero |
 | FR-014, FR-015 | `TestBrowserDeferralLedger_ThirdAttemptCarriesStopInstruction` | Go unit | `pkg/agent/browser_deferral_test.go` | The agent is told to stop attempting… |
 | FR-016 | `TestBrowserDeferralLedger_FourthAttemptShortCircuitsWithoutBrowser` | Go unit | `pkg/agent/browser_deferral_test.go` | A fourth attempt never reaches the browser |
-| FR-016a | `TestBrowserTools_ControlGatedToolNamesEqualsActionPlusCapture` — the exported view equals the union of the action and capture rosters, element for element, so the engine's classifier cannot drift from the gate's | Go unit | `pkg/tools/browser/control_gate_membership_test.go` | — (structural) |
+| FR-016a | `TestBrowserTools_ControlGatedToolNamesEqualsActionPlusCapture` — the exported view equals the union of the action and capture rosters, element for element, **both sides metadata-scoped (14 names, `browser_upload_file` included)**, so the engine's classifier cannot drift from the gate's | Go unit | `pkg/tools/browser/control_gate_membership_test.go` | — (structural) |
 | FR-016a | `TestShortCircuit_UsesExportedRosterNotAHardcodedList` — the engine short-circuits every name in `ControlGatedToolNames()` and no name outside it | Go unit | `pkg/agent/browser_deferral_test.go` | A fourth attempt never reaches the browser |
 | FR-017 | `TestBrowserDeferralLedger_ChildTurnHasItsOwnCounter` | Go unit | `pkg/agent/browser_deferral_test.go` | A delegated worker driving its own tab set defers |
 | FR-020 | `TestControlledResult_ChecksRootChatPanelTabSet` | Go unit | `pkg/tools/browser/tools_control_test.go` | A delegated worker driving its own tab set defers |
-| FR-021 | `TestManagerResolver_SurfacesRootChatSessionID` | Go unit | `pkg/agent/browser_resolver_test.go` | A delegated worker driving its own tab set defers |
+| FR-021 | `TestToolContext_CarriesRootChatSessionID` — `pkg/agent` stamps the new tool-context key from `turnState.routingSessionID` and `ToolRootChatSessionID` reads it back; asserts the `ManagerResolver` interface is **unchanged** (a signature change would drag `register.go` into three waves) | Go unit | `pkg/agent/browser_resolver_test.go` | A delegated worker driving its own tab set defers |
 | FR-020 | `TestControlledResult_EmptyRootChatIDSkipsTheSecondCheck` — a resolver returning `""` skips the root-chat check entirely (fail-open), so the existing `implicit_acquisition_test.go` resolved-key case stays green for the right reason | Go unit | `pkg/tools/browser/tools_control_test.go` | An unrelated chat on the same workspace browser… |
 | FR-022 | `TestRoutingSessionID_ConsumerSetIsClosed` (existing, amended in **four** places: `browser_deferral.go` added to `u19RoutingSessionIDScanFiles`; a fifth `u19BucketBrowserGate` in `u19ClassifyRoutingSessionIDRead` with its role-B justification; that bucket's own exact-count assertion; `wantTotal` raised from 30 by exactly the number of new reads) | Go unit | `pkg/agent/routing_session_id_consumer_set_adr057_test.go` | — (structural) |
 | FR-023 | `TestDelegatedChild_DefersOnParentWheelHold` | Go integration | `pkg/gateway/browser_control_handover_test.go` | A delegated worker driving its own tab set defers |
 | FR-024 | `TestControlledResult_UnrelatedChatOnSameBrowserDoesNotDefer` | Go unit | `pkg/tools/browser/tools_control_test.go` | An unrelated chat on the same workspace browser… |
 | FR-025, FR-027 | `TestResume_NextPromptIsAnOrdinaryTurnWithNoInjectedState` | Go integration | `pkg/gateway/browser_control_handover_test.go` | The next message releases the wheel… |
 | FR-026 | `clears the wheel on Escape without resuming the agent` | vitest | `src/components/browser/BrowserLiveView.handover.test.tsx` | Escape released the wheel… |
-| FR-026 | `TestRelease_DoesNotClearWaitingLine` | Go integration | `pkg/gateway/browser_control_handover_test.go` | Escape released the wheel… |
+| FR-026 | **COVERAGE, not a regression guard** `TestRelease_DoesNotClearWaitingLine` — nothing retracts a transcript entry today, so this is a tautology on unmodified code; it exists so a future "tidy up the notice" change is caught | Go integration | `pkg/gateway/browser_control_handover_test.go` | Escape released the wheel… |
+| FR-026a | **`TestStandDown_SurvivesEscapeAndStillDefers`** — take the wheel, release it (Escape / annotate / panel close), then call a gated browser tool: the call still defers. Runs entirely in `pkg/tools/browser`, so it observes the Go gate rather than the SPA. **This is the test the first draft did not have**: its named vitest ran in the SPA and could not see whether the Go gate deferred | Go unit | `pkg/tools/browser/tools_control_test.go` | Escape released the wheel… |
+| FR-026a | **`TestStandDown_ClearedOnlyByPromptReleaseAndIdleExpiry`** — a new turn, a turn end, a re-take and a second viewer's input all leave the latch set; the FR-029 release and the FR-031a expiry each clear it | Go unit | `pkg/tools/browser/tools_control_test.go` | Escape released the wheel… |
+| FR-026a, FR-031 | **`TestStandDown_VoidedByGhostHolder`** — a holder that left `lv.viewers` voids the latch as well as the lock, so `TestControlGate_GhostHolderDoesNotDeferTools` stays green for the right reason | Go unit | `pkg/tools/browser/live_notcontroller_test.go` | A holder who vanished does not leave the agent stood down |
 | FR-028 | `TestChatTurnAccept_ReleasesHeldPanelLock` | Go integration | `pkg/gateway/browser_control_handover_test.go` | The next message releases the wheel… |
 | FR-028 | `TestChatTurnAccept_ReleasesWithPanelClosed` | Go integration | `pkg/gateway/browser_control_handover_test.go` | The wheel is released even with the panel closed |
 | FR-029 | `TestChatTurnAccept_ReleasesForNonWebchatChannel` | Go integration | `pkg/gateway/browser_control_handover_test.go` | The next message releases the wheel… |
 | FR-029 | `TestChatTurnAccept_ReleasesOnSSEPrompt` — the SSE publish site releases even though its `InboundMessage` leaves `UserInitiated` false | Go integration | `pkg/gateway/browser_control_handover_test.go` | The next message releases the wheel… |
 | FR-029 | **`TestChatTurnAccept_SyntheticAsyncNotifyDoesNotRelease`** — an `AsyncNotifier.Notify` publish on the `"system"` channel for a finished background delegate leaves the wheel held, and the agent's next attempt still defers | Go integration | `pkg/gateway/browser_control_handover_test.go` | A background delegate finishing does not hand the browser back |
 | FR-029 | `TestChatTurnAccept_GoalLoopFollowUpDoesNotRelease` — same for a `goalLoopFollowUpSenderID` re-injection | Go integration | `pkg/gateway/browser_control_handover_test.go` | A background delegate finishing does not hand the browser back |
-| FR-029 | `TestChatTurnAccept_AutoDefaultedQuestionCardDoesNotRelease` — a timed-out card resume (`resumeIsUserInitiated == false`) leaves the wheel held; a human answer releases it | Go integration | `pkg/gateway/browser_control_handover_test.go` | A question card is pending… |
-| FR-029a | `TestPublishInboundSites_ReleasePartitionIsPinned` — walks every non-test `PublishInbound` call site and asserts the release/no-release partition is exactly the four + two named in FR-029; a new site in either half fails | Go unit | `pkg/gateway/browser_release_sites_test.go` | — (structural) |
+| FR-029 | **`TestQuestionCardResume_NeverReleasesTheWheel`** — three cases on one fixture: a human answer, a **Cancel** (`set.Status == askuser.StatusCancelled`, the case that made `resumeIsUserInitiated` unusable here) and a timed-out auto-default. All three leave the wheel held and the next browser attempt deferring. Replaces `TestChatTurnAccept_AutoDefaultedQuestionCardDoesNotRelease`, whose human-answer half asserted the opposite | Go integration | `pkg/gateway/browser_control_handover_test.go` | Answering a question card…; Cancelling a question card… |
+| FR-029 | `TestReleaseHook_FiresOnlyOnOperatorPrompt` — `processMessage` invokes the registered hook for an `OperatorPrompt: true` message and for **no** other, including the `Sender.CanonicalID == "cron"` message `ProcessDirectWithChannel` hands it; a nil hook is a silent no-op | Go unit | `pkg/agent/browser_deferral_test.go` | The next message releases the wheel… |
+| FR-029a | **`TestOperatorPromptField_AssignmentPartitionIsPinned`** — walks every non-test assignment to `bus.InboundMessage.OperatorPrompt` and asserts sets-true = {`websocket.go`, `sse.go`, `channels/base.go`}, never-sets = {`ws_ask_user.go`, `async_notifier.go`, `loop.go`}; **and** asserts the `PublishInbound` census is six non-test call sites, so a new publish site cannot appear un-classified. Pins the field, not a helper call | Go unit | `pkg/gateway/browser_release_sites_test.go` | — (structural) |
 | FR-030 | `TestChatTurnAccept_ReleaseAuditsActingUserNotHolder` | Go integration | `pkg/gateway/browser_control_handover_test.go` | A different user's message releases the wheel… |
 | FR-030 | **`TestChatTurnAccept_ChannelReleaseAuditsCanonicalSenderNotHolder`** — a Telegram prompt (no `GatewayUserID`) records `Sender.CanonicalID` as actor, leaves the audit user field empty, and records the holder only as the prior holder | Go integration | `pkg/gateway/browser_control_handover_test.go` | A different user's message releases the wheel… |
 | FR-031 | `TestControlGate_GhostHolderDoesNotDeferTools` | Go unit | `pkg/tools/browser/live_notcontroller_test.go` | A ghost holder does not lock the agent out |
-| FR-031 | `TestControlGate_LiveHolderDefersTools` | Go unit | `pkg/tools/browser/live_notcontroller_test.go` | A live holder does lock the agent out |
-| FR-031a | **`TestControlGate_IdleHoldExpiresAndUngatesTheAgent`** — an attached, non-ghost holder with no input and no attach/detach for the idle window is released, audited `browser_control_idle_release`, and the agent's next attempt executes | Go unit | `pkg/tools/browser/live_notcontroller_test.go` | An idle hold is released by the server |
-| FR-031a | `TestHandoverPending_ExpiresOnTheSameIdleTimer` | Go unit | `pkg/tools/browser/tools_handover_test.go` | An idle hold is released by the server |
-| FR-031a | `TestIdleRelease_EmitsOperatorVisibleLine` | Go integration | `pkg/gateway/browser_control_handover_test.go` | An idle hold is released by the server |
+| FR-031 | **COVERAGE, not a regression guard** `TestControlGate_LiveHolderDefersTools` — `IsControlled` already returns true for any holder, so this passes unmodified; it exists to pin the positive half of the new `IsControlledByLiveViewer` biconditional | Go unit | `pkg/tools/browser/live_notcontroller_test.go` | A live holder does lock the agent out |
+| FR-031 | **`TestControlGate_UsesIsControlledByLiveViewerNotIsControlled`** — `IsControlled` / `Controller` keep their viewer-blind semantics (asserted directly, since `handleTabAction`'s F3 gate depends on them) while `controlledResult` no longer defers for a holder absent from `lv.viewers` | Go unit | `pkg/tools/browser/live_notcontroller_test.go` | A ghost holder does not lock the agent out |
+| FR-031b | **`TestServerInitiatedRelease_NotifiesTheFormerHolder`** — an idle expiry, an FR-052 switch-off and a prompt release each push one unsolicited `browser_status{state:"released"}` to the former holder's own connection, **without** `control_only`, in addition to the `control_only` broadcast to other viewers; a detached former holder is a no-op | Go integration | `pkg/gateway/browser_ws_test.go` | A server-initiated release reaches the holder's own panel |
+| FR-031b, FR-057 | `clears operator-holds-wheel on an UNSOLICITED server released frame, and re-takes on the next click` — drives an unsolicited `browser_status{state:"released"}` into the panel with no local release and asserts `controllingRef` clears, so `takeWheelIfNeeded`'s `if (controllingRef.current) return` guard no longer blocks a re-take. A `control_only` frame must **not** clear it | vitest | `src/components/browser/BrowserLiveView.handover.test.tsx` | A server-initiated release reaches the holder's own panel |
+| FR-031a | **`TestControlGate_IdleHoldExpiresAndUngatesTheAgent`** — a hold with **no proof of life** (no input, no attach/detach, no `ViewerHeartbeat`, no live media track) for the idle window is released by the sweeper, audited `browser_control_idle_release`, and the agent's next attempt executes | Go unit | `pkg/tools/browser/live_notcontroller_test.go` | An idle stand-down is given up by the server |
+| FR-031a | **`TestControlGate_HeartbeatingHolderNeverExpires`** — an attached holder whose only activity is `ViewerHeartbeat` survives several idle windows and the agent keeps deferring. Without this, a reading operator is released and the D5 exposure returns | Go unit | `pkg/tools/browser/live_notcontroller_test.go` | A watched hold does not expire |
+| FR-031a | **`TestIdleSweeper_FiresWithNoAgentRunning`** — the registry sweeper expires a hold and emits the line on its own tick, with no tool call in flight. Pins EAGER over a lazy check inside `controlledResult`, which would never emit the line when nothing is running | Go unit | `pkg/tools/browser/live_notcontroller_test.go` | An idle stand-down is given up by the server |
+| FR-031a | `TestHandoverPending_ExpiresOnTheSameIdleTimer` — and the FR-026a latch with it; both run their window from the transition, since neither has an attached viewer to produce liveness | Go unit | `pkg/tools/browser/tools_handover_test.go` | An idle stand-down is given up by the server |
+| FR-031a | **`TestReapIdleSessions_SkipsAControlledOrLatchedTabSet`** — `ReapIdleSessions` leaves a controlled, handover-pending or latched tab set alone; a context torn down for any other reason routes through the audited release path rather than orphaning the state | Go unit | `pkg/tools/browser/manager_reaper_test.go` | A held tab set is not reaped for inactivity |
+| FR-031a | `TestIdleRelease_EmitsOperatorVisibleLine` | Go integration | `pkg/gateway/browser_control_handover_test.go` | An idle stand-down is given up by the server |
 | FR-032 | `TestSharedControl_SecondViewerInputStillDispatches` (existing) | Go unit | `pkg/tools/browser/shared_control_test.go` | Two viewers, one wheel |
-| FR-032 | `TestSharedControl_SecondViewerDoesNotDeferTheAgent` | Go unit | `pkg/tools/browser/shared_control_test.go` | Two viewers, one wheel |
+| FR-032 | **COVERAGE, not a regression guard** `TestSharedControl_SecondViewerDoesNotDeferTheAgent` — `dispatchInput` carries an explicit "NO CONTROL GATE" comment and never touches the lock, so this passes unmodified; it exists so the ungated-input directive cannot be quietly reversed | Go unit | `pkg/tools/browser/shared_control_test.go` | Two viewers, one wheel |
 | FR-033 | `TestControlGate_CaptureToolsDeferWhileControlled` | Go unit | `pkg/tools/browser/tools_control_test.go` | Capture attempts defer… (outline) |
 | FR-034 | `TestControlGate_WaitListTabsAndDialogStayUngated` | Go unit | `pkg/tools/browser/tools_control_test.go` | Wait and tab listing still work… |
 | FR-033a | `TestCaptureTools_DescriptionsCarryTheDeferralClause` — all three capture descriptions contain `deferredIsNotAnError` (precedent: `evaluate_description_test.go`) | Go unit | `pkg/tools/browser/capture_description_test.go` | — (structural) |
-| FR-035, FR-038 | `TestBrowserTools_ThreeWayGateClassificationMatchesRosters` | Go unit | `pkg/tools/browser/control_gate_membership_test.go` | — (structural) |
+| FR-035, FR-038 | `TestBrowserTools_ThreeWayGateClassificationMatchesRosters` — **metadata-scoped** (`BrowserBuiltinMetadata()`, 17), counts **11 action / 3 capture / 3 exempt**, each count literal naming its scope in the message | Go unit | `pkg/tools/browser/control_gate_membership_test.go` | — (structural) |
 | FR-035a | `make verify-specs` is not a gate in this repo, so this is a **reviewer checklist row**: the same commit edits `browser-workspace-ownership-spec.md` §14.2 rule 3 / FR-019a / AC5 / §12 A17 and `browser-agent-capability-spec.md`'s restatement. The mechanical half is `TestBrowserTools_ThreeWayGateClassificationMatchesRosters`'s stated-reason strings, which MUST cite the amended rule | review gate | the two §14.2 spec documents | — (structural) |
-| FR-036 | `TestWriteLease_LeasedIffActionClass` | Go unit | `pkg/tools/browser/lease_membership_test.go` | — (structural) |
+| FR-036 | `TestWriteLease_LeasedIffActionClass` — **registry-scoped** (`registry.GetAll()`, 16), counts **10 action / 3 capture / 3 exempt** | Go unit | `pkg/tools/browser/lease_membership_test.go` | — (structural) |
 | FR-037 | `TestAudit_PerCallAuditedIffActionClass` | Go unit | `pkg/tools/browser/audit_test.go` | — (structural) |
 | FR-039 | `TestScreenshot_DeferredCallProducesNoFileNoMediaNoArtifactTag` | Go unit | `pkg/tools/browser/tools_control_test.go` | Capture attempts defer… (screenshot row) |
-| FR-040 | `TestCapture_PreTakeoverArtifactsAreNotRetracted` | Go integration | `pkg/gateway/browser_control_handover_test.go` | An earlier capture is not retracted |
+| FR-040 | **COVERAGE, not a regression guard** `TestCapture_PreTakeoverArtifactsAreNotRetracted` — nothing retracts anything today, so this passes unmodified; it exists so a future "clean up captures on takeover" idea is caught by a red test rather than a review | Go integration | `pkg/gateway/browser_control_handover_test.go` | An earlier capture is not retracted |
 | FR-041, FR-042 | `TestTakeControl_EmitsWaitingSurfaceFrame` | Go integration | `pkg/gateway/browser_control_handover_test.go` | The waiting line appears live… |
+| FR-042 | **`TestWaitingSurface_ReachesTheChatConnsAndDegradesWhenNoneAreAttached`** — the frame is delivered through `WSHandler.resolveSessionConnsLocked("", sessionID)` from the browser-WS handler, and with **no** chat connection attached the frame is dropped without error while the FR-043 transcript entry is still written | Go integration | `pkg/gateway/browser_control_handover_test.go` | The waiting line appears live… |
+| FR-042 | **`TestWaitingSurface_AllThreeProducersUseOneEmitter`** — the take, `browser_handover` and the idle sweeper all emit through the registered `WaitingSurfaceEmitter`; asserts `pkg/tools/browser` still does not import `pkg/gateway` | Go unit | `pkg/tools/browser/waiting_surface_test.go` | The waiting line appears live… |
+| FR-043 | **`TestWaitingSurface_MissingSessionDoesNotFailTheRelease`** — with the session directory deleted, the transcript write is skipped with a warn and the release still completes and audits | Go integration | `pkg/gateway/browser_control_handover_test.go` | — (structural) |
 | FR-042 | `renders the browser-handover waiting notice in the thread` | vitest | `src/components/chat/ChatScreen.browser-handover-notice.test.tsx` | The waiting line appears live… |
 | FR-042 | `verify-contracts` gate (`make verify-contracts`) | CI gate | `contracts/` + generated dirs | — (structural) |
 | FR-043 | `TestTakeControl_WritesWaitingSurfaceTranscriptEntry` | Go integration | `pkg/gateway/browser_control_handover_test.go` | The waiting line survives a reload |
 | FR-043a | **`TestReplay_HandoverNoticeReplaysAsTheSameFrameType`** — replaying a session containing the handover system entry yields the FR-042 frame type, not a generic `ReplayMessageFrame`, and the discrimination is on the stamped entry field (asserted by rewording the entry's content and seeing the frame type unchanged) | Go integration | `pkg/gateway/replay_test.go` | The waiting line survives a reload |
 | FR-044 | `TestTakeControl_SecondTakeWithoutReleaseEmitsOneLine` | Go integration | `pkg/gateway/browser_control_handover_test.go` | Taking the wheel twice emits one waiting line |
-| FR-044 | `TestWaitingNotice_MessageIDIsDeterministicPerHoldEpoch` — the id is a pure function of `(sessionID, holdEpoch)`; a re-take within one hold reuses it, a release-then-take produces a new one | Go unit | `pkg/gateway/browser_ws_test.go` | Taking the wheel twice emits one waiting line |
+| FR-044 | `TestWaitingNotice_MessageIDIsStableWithinAHoldAndUniqueAcrossRestarts` — the id is a pure function of `(sessionID, holdStartedAtUnixNano)`; a re-take within one hold reuses the stored value, a release-then-take produces a new one, and **an id minted for the same session after a simulated process restart differs from the one already in the transcript**, so a genuine fresh takeover is never dropped by the SPA's `messagesById` guard | Go unit | `pkg/gateway/browser_ws_test.go` | Taking the wheel twice emits one waiting line |
 | FR-044 | `drops a duplicate browser-handover notice with an id already in the store` (mirrors `buildGoalAckInsertion`'s `messagesById[ackId]` guard) | vitest | `src/store/chat.browser-handover-notice.test.ts` | Taking the wheel twice emits one waiting line |
 | FR-046, FR-049 | `TestHandoverTool_ReturnsConcludeInstructionAndDoesNotPark` | Go unit | `pkg/tools/browser/tools_handover_test.go` | The agent hands the browser over… |
 | FR-047 | `TestHandoverTool_SetsHandoverPendingNotAViewerLock` | Go unit | `pkg/tools/browser/tools_handover_test.go` | After handing over, the agent's own browser attempts defer |
@@ -1424,17 +1873,19 @@ comes from CI or the `ci-omnipus` Fly worker.
 | FR-049 | `TestHandoverTool_TurnEndsCompletedNotParked` | Go unit | `pkg/agent/browser_deferral_test.go` | A handover ends the turn normally… |
 | FR-050 | `TestHandoverPending_ClearedByNextPrompt` | Go integration | `pkg/gateway/browser_control_handover_test.go` | The next message clears an agent-initiated handover |
 | FR-050 | **`TestHandoverPending_SetByDelegatedChildIsClearedByRootPrompt`** — the child sets pending on its own tab set; the root chat's prompt clears it across the FR-020 reachability set, and a subsequent delegated action executes | Go integration | `pkg/gateway/browser_control_handover_test.go` | A handover set by a delegated child… |
+| FR-050 | **`TestSessionDeleted_ClearsHoldHandoverAndLatch`** — deleting the session (or unmounting its workspace) while the wheel is held clears all three across the reachability set, audits it, notifies the holder per FR-031b, and does not attempt the transcript write | Go integration | `pkg/gateway/browser_control_handover_test.go` | — (structural) |
 | FR-051 | `TestSeed_BrowserHandoverAtAllThreeConstraint6Sites` | Go unit | `pkg/coreagent/browser_handover_seed_test.go` | — (structural) |
 | FR-051 | `TestSeed_MiaAndAvaResolveDenyForBrowserHandover` — positively asserts the `deny` `denyAllThenOverride` produces for them, rather than asserting an absent entry | Go unit | `pkg/coreagent/browser_handover_seed_test.go` | — (structural) |
 | FR-051 | `TestConstructorSeed_PolicyMapMatchesCatalog` (existing) | Go unit | `pkg/coreagent/constructor_seed_test.go` | — (structural) |
 | FR-051 | `TestDefaults_CeilingLengthMatchesStaticCatalog` (existing assertion) | Go unit | `pkg/config/defaults_test.go` | — (structural) |
-| FR-052, FR-065 | `TestTakeControlDisabled_NoTakeNoLineNoDeferralNoHandover` | Go integration | `pkg/gateway/browser_control_handover_test.go` | With take-control disabled… |
+| FR-052, FR-065 | `TestTakeControlDisabled_NoTakeNoLineNoDeferralNoHandover` — **extended** with the mid-hold flip: with a wheel already held and the panel closed, flipping the flag false makes the next sweeper tick release the hold, clear handover-pending, void the latch, audit each, notify per FR-031b, and let the agent's next attempt execute; and the FR-031a timer is asserted to run with the flag false | Go integration | `pkg/gateway/browser_control_handover_test.go` | With take-control disabled…; Take-control is switched off while a wheel is held |
 | FR-053, FR-054 | **REGRESSION (headline)** `keeps dispatching keyboard, wheel and pointermove AFTER the pointerup that took the wheel, while the agent is still working`. Sequence: pointerdown → pointerup → keydown; assert an input frame is still sent. **Oracle**: `canDispatchInput` is `driveModeRef.current === 'you-driving' \|\| implicitDriveActive`; `handlePointerUp` sets `implicitDriveRef.current = false`; `computeDriveMode` returns `'agent-working'` before it ever reaches `'you-driving'`. So the post-gesture input survives **only** because `effectiveAgentWorking = agentWorking && !agentPausedByUser` is softened by the take — remove that softening without a replacement and this test goes red | vitest | `src/components/browser/BrowserLiveView.handover.test.tsx` | The operator keeps driving after the click that took the wheel |
 | FR-054 | **REGRESSION** `keeps you-driving priority over agent-working for the chip and the cursor`. **Oracle**: `computeDriveMode`'s ladder puts `agent-working` above `you-driving`, so on the naive removal the chip reads "the agent is browsing" while the operator holds the wheel | vitest | `src/components/browser/BrowserLiveView.handover.test.tsx` | The operator's click reaches the page… |
 | FR-055 | **REGRESSION** `does not auto-release the wheel after the take ack while the agent is still working`. **Oracle**: the effect `if (effectiveAgentWorking && isControlling && connectedRef.current) sendControl('release')` fires on the very next render once the softening is gone | vitest | `src/components/browser/BrowserLiveView.handover.test.tsx` | The wheel is not handed back… |
 | FR-056 | **COVERAGE, not a regression guard** (see FR-056's box) `acquires the wheel and dispatches in one click from the frame, the omnibox, the tab strip and Take over` — passes on today's code by design; it exists so a rebuild does not silently drop an entry point | vitest | `src/components/browser/BrowserLiveView.handover.test.tsx`, `BrowserLiveView.tabStrip.test.tsx` | The operator's click reaches the page… |
 | FR-057 | **REGRESSION** `still holds the wheel when a SECOND agent turn starts after the first ended` — drives `agentWorking` true → false → true and asserts **no** `release` frame is sent across either transition. **Oracle**: on the naive carry-over, `if (!agentWorking) setAgentPausedByUser(false)` re-arms the softening, so the second turn's first render satisfies `effectiveAgentWorking && isControlling` and the auto-release effect fires. (A test that stops at turn end proves nothing — the effect *cannot* fire while `agentWorking` is false) | vitest | `src/components/browser/BrowserLiveView.handover.test.tsx` | A wheel held across the end of one turn survives the start of the next |
 | FR-057 | `clears operator-holds-wheel on a server released status and on annotate mode` | vitest | `src/components/browser/BrowserLiveView.handover.test.tsx` | Escape released the wheel… |
+| FR-053 | **`does not contain agentPausedByUser anywhere`** — a structural source assertion that the identifiers `agentPausedByUser`, `agentPausedByUserRef` and `setAgentPausedByUser` are gone from `BrowserLiveView.tsx`. Without it, a minimal edit deleting only the `cancelStream` line while keeping `setAgentPausedByUser(true)` passes FR-001, FR-054 and FR-055 and leaves two sources of truth behind | vitest | `src/components/browser/BrowserLiveView.handover.test.tsx` | — (structural) |
 | FR-058 | `reverts control state and stops accepting input when the socket disconnects mid-control` (existing) | vitest | `src/components/browser/BrowserLiveView.controlToggle.test.tsx` | Escape released the wheel… |
 | FR-059 | `never renders a Take control / Release control / Hand to agent button` (existing) | vitest | `src/components/browser/BrowserLiveView.controlToggle.test.tsx` | — (structural) |
 | FR-060 | existing `handleControl` audit assertions | Go integration | `pkg/gateway/browser_ws_test.go` | — (structural) |
@@ -1447,14 +1898,23 @@ comes from CI or the `ci-omnipus` Fly worker.
 | — (end-to-end) | `agent states what it is waiting for after the third deferral`. **Positive observable**: exactly 3 `browser_*` tool-call rows appear in the Activity panel for the turn, and the turn's final assistant message is non-empty | Playwright e2e | `tests/e2e/browser-control-handover.spec.ts` | The agent ends its turn saying… |
 | — (end-to-end) | `next prompt releases the wheel and the agent re-orients from the page`. **Positive observable**: a `browser_control{release}` frame is observed on the WS before the turn's first tool call, and the agent's reply contains the hostname the operator hand-navigated to | Playwright e2e | `tests/e2e/browser-control-handover.spec.ts` | The next message releases the wheel… |
 
-**Count**: **89 rows, 89 distinct named tests or gates** — no test appears on two rows, though eight
-rows carry two FR ids because one test covers both. **13** rows reuse, amend, narrow or are a
-non-executable gate on existing material (each marked *existing* / *amended* / *narrowed* /
-*reviewer gate* / `verify-contracts` in the table); the remaining **76** are new.
+**Count**: **104 rows, 104 distinct named tests or gates** — no test appears on two rows, though
+eleven rows carry two FR ids because one test covers both. **11** rows reuse, amend, narrow, extend
+or are a non-executable gate on existing material (each marked *existing* / *amended* / *narrowed* /
+*extended* / *reviewer gate* / `verify-contracts` in the table); the remaining **93** are new.
+
+**Six rows are explicitly labelled COVERAGE, not regression guards** — FR-003, FR-026, FR-031's live
+holder, FR-032, FR-040 and FR-056. Each passes on today's unmodified code by construction (there is
+no mid-tool preemption to break, nothing retracts a transcript entry, `IsControlled` already returns
+true for any holder, `dispatchInput` carries an explicit "NO CONTROL GATE" comment, nothing retracts
+captures, and `handlePointerDown` never touches `cancelStream`). They earn their place by pinning
+properties a rebuild could silently drop; they must not be read as evidence that the change works.
+The **four** genuine regression guards are the rows marked REGRESSION under FR-053/FR-054, FR-054,
+FR-055 and FR-057.
 
 **FR-045 is the one FR with no matrix row, deliberately.** What a model chooses to narrate has no
 automated oracle in `pkg/tools/browser`, so it is traced to holdout **H1** and to nothing else. Every
-other one of the **66** FRs in this spec appears in the matrix at least once, and no test in the
+other one of the **68** FRs in this spec appears in the matrix at least once, and no test in the
 matrix is untraceable to an FR or to a named cross-cutting scenario.
 
 ---
@@ -1479,6 +1939,9 @@ matrix is untraceable to an FR or to a named cross-cutting scenario.
 | Tab-strip / omnibox take-then-act | `BrowserLiveView.takeTheWheel.test.tsx` tab-chip cases, `BrowserLiveView.tabStrip.test.tsx` | **Yes** — covered by FR-056's test |
 | Tool-policy coverage invariant | `pkg/coreagent/constructor_seed_test.go`, `pkg/coreagent/override_keys_panic_test.go`, the `len(AllStaticToolNames()) == len(DefaultConfig().Sandbox.ToolPolicies)` assertion | **No** — must stay green after the FR-051 three-site edit |
 | ADR-057 routing-session consumer set | `pkg/agent/routing_session_id_consumer_set_adr057_test.go::TestRoutingSessionID_ConsumerSetIsClosed` | **No** — amend the allowlist, keep the test |
+| `IsControlled` / `Controller` keep their viewer-blind semantics for the status path | `pkg/gateway/browser_ws.go::handleTabAction`'s F3 gate (which calls `LiveViewRegistry.Controller`) and the panel's control-ownership display | **Yes** — `TestControlGate_UsesIsControlledByLiveViewerNotIsControlled`. FR-031 adds a new accessor rather than changing these, precisely so this row stays a no-op |
+| `dispatchInput` is never gated on the control lock | its own "NO CONTROL GATE (operator directive, 2026-08-03)" comment block; `shared_control_test.go` | **No** — must stay green unchanged. FR-026a's latch is a **tool** gate; it MUST NOT be consulted by `dispatchInput` |
+| The take/release fan-out excludes the acting viewer | `ControlSink`'s doc comment; `snapshotControlSinksExceptLocked` | **Yes** — `TestServerInitiatedRelease_NotifiesTheFormerHolder`. The exclusion stays; FR-031b adds a **direct** frame to the former holder for releases they did not request, and **amends the doc comment in the same commit** because it currently states the opposite as an invariant |
 
 ### Deliberate test rewrites (each is a risk of silently losing coverage)
 
@@ -1497,14 +1960,19 @@ passing on the weaker.
    `declaredControlGateExemptions` **splits into `declaredCaptureClassTools` (3 names, each with its
    own reason) + `declaredControlGateExemptions` (3 names)**, and the
    `readOnlyBrowserTools == exemptions` equality becomes
-   `readOnlyBrowserTools == capture ∪ exempt`.
+   `readOnlyBrowserTools == capture ∪ exempt`. **Scope: this file walks `BrowserBuiltinMetadata()`
+   (17), despite its local variable being named `registered`** — so its partition is 11 / 3 / 3, not
+   10 / 3 / 3. Rename the variable while you are in there; a misleading name is what made the two
+   scopes look interchangeable.
 3. `pkg/tools/browser/lease_membership_test.go::TestWriteLease_EveryActionToolIsLeased` is
    **REPLACED** by `TestWriteLease_LeasedIffActionClass`. Concretely: its
    `require.Equal(t, defersUnderLock, defersUnderLease, …)` — the current biconditional, "gated iff
    leased" — becomes `defersUnderLease ⟺ action-class`, so a capture tool that defers under the lock
    and **not** under the lease is the new expected shape rather than a failure. Its two count
    literals change from `require.Equal(t, 10, leasedCount)` / `require.Equal(t, 6, exemptCount)` to
-   **10 action / 3 capture / 3 exempt**.
+   **10 action / 3 capture / 3 exempt**. **Scope: this file walks `registry.GetAll()` (16)** — a
+   different catalog from rewrite #2's. The same literal roster asserted in both files with one count
+   will redden one of them; every count message must name its scope (FR-035).
 4. `pkg/tools/browser/audit_test.go::TestAudit_WriteClassSetIsTheControlledResultSet` is **REPLACED**
    by `TestAudit_PerCallAuditedIffActionClass`.
 5. `pkg/tools/browser/audit.go::readOnlyBrowserTools`' doc comment ("the four tools that observe
@@ -1522,28 +1990,47 @@ File-disjoint by construction: **no two waves touch the same file.** Waves are i
 committable but not independently compilable — the coupling column names the wave whose symbols a
 wave depends on. Recommended order: **W0 → W4 → (W1 ‖ W2 ‖ W3 ‖ W5 ‖ W7) → W6 → W8.**
 
-**W0 is new and lands before W1 and W3**: both of them need `tools.ToolResult.Deferred` to exist
-(W1 populates it, W3 reads it), and neither can own `pkg/tools/result.go` without colliding with the
-other.
+**W0 has grown, and it lands before every other wave.** It is no longer just the deferral carrier: it
+owns every **cross-cutting field or key** that a later wave sets in one package and reads in another.
+Three separate wave-plan defects came from leaving those fields inside a feature wave — a file
+assigned to W6 that W1 and W3 both needed, a config field W2 needed from a wave ordered after it, and
+a bus field W2 sets and W3 reads. Putting all four in W0 fixes the class, not the instances.
 
 | Wave | Owns (exclusive) | Delivers | Compile-coupled to |
 |---|---|---|---|
-| **W0 — The structural deferral carrier** | `pkg/tools/result.go`, `pkg/tools/result_test.go` | FR-012a | none — lands first, before W1 and W3 |
-| **W1 — Gate semantics & three-way classification** | `pkg/tools/browser/tools.go`, `tools_interact.go`, `tools_snapshot.go`, `tabs.go`, `audit.go`, `key.go`, and the tests `tools_control_test.go`, `control_gate_membership_test.go`, `audit_test.go`, `lease_membership_test.go`, `interact_test.go`, **`implicit_acquisition_test.go`**, **`operator_takeover_test.go`**, **`snapshot_test.go`**, **`snapshot_audit_redaction_test.go`**, **`capture_description_test.go`** (new); plus the two rule-3 documents **`docs/internal/specs/browser-workspace-ownership-spec.md`** and **`docs/internal/specs/browser-agent-capability-spec.md`** | FR-003, FR-010–FR-012, FR-016a (exports), FR-020, FR-024, FR-033–FR-040, **FR-033a**, **FR-035a**, **FR-061** | W0 (the `Deferred` field), W3 (root-chat id via the resolver interface) |
-| **W2 — Lock lifecycle, release, handover-pending state** | `pkg/tools/browser/live.go`, `pkg/tools/browser/manager.go`, `pkg/gateway/browser_ws.go`, `pkg/gateway/websocket.go`, `pkg/gateway/sse.go`, `pkg/gateway/ws_ask_user.go`, `pkg/channels/base.go`, **`pkg/gateway/replay.go`**, and the tests `live_notcontroller_test.go`, `shared_control_test.go`, `browser_ws_test.go`, **`replay_test.go`**, **`browser_release_sites_test.go`** (new) | FR-028–FR-032, **FR-029a**, **FR-031a**, FR-041 (emission), FR-043a, FR-044 (id + epoch), FR-047 (state), FR-050, FR-060, FR-062, FR-065 | W0, W4 (frame types) |
-| **W3 — Turn engine: bounded attempts, root-chat identity, no-park** | `pkg/agent/browser_deferral.go` (new), `pkg/agent/turn.go`, `pkg/agent/loop.go`, `pkg/agent/routing_session_id_consumer_set_adr057_test.go`, `pkg/agent/browser_deferral_test.go` (new), `pkg/agent/browser_resolver_test.go` (new) | FR-002, FR-004, FR-013–FR-017, FR-016a (consumes), FR-021, FR-022, FR-064 | W0 (the `Deferred` field), W1 (`ControlGatedToolNames()`) |
+| **W0 — Cross-cutting carriers** | `pkg/tools/result.go`, `pkg/tools/result_test.go` (FR-012a); `pkg/tools/base.go` + its test file (FR-021's root-chat tool-context key); `pkg/bus/types.go` (FR-029's `OperatorPrompt`); `pkg/config/config.go` (FR-031a's `ControlIdleReleaseSec`) | FR-012a, and the declarations FR-021 / FR-029 / FR-031a are built on | none — lands first, before every other wave |
+| **W1 — Gate semantics & three-way classification** | `pkg/tools/browser/tools.go`, `tools_interact.go`, `tools_snapshot.go`, `tabs.go`, `audit.go`, `key.go`, and the tests `tools_control_test.go`, `control_gate_membership_test.go`, `audit_test.go`, `lease_membership_test.go`, `interact_test.go`, **`implicit_acquisition_test.go`**, **`operator_takeover_test.go`**, **`snapshot_test.go`**, **`snapshot_audit_redaction_test.go`**, **`capture_description_test.go`** (new), **`waiting_surface_test.go`** (new); plus the two rule-3 documents **`docs/internal/specs/browser-workspace-ownership-spec.md`** and **`docs/internal/specs/browser-agent-capability-spec.md`** | FR-003, FR-010–FR-012, FR-016a (exports), FR-020, FR-024, **FR-026a (the gate read)**, **FR-031 (the gate's switch to `IsControlledByLiveViewer`)**, FR-033–FR-040, **FR-033a**, **FR-035a**, **FR-061** | W0 (`ToolResult.Deferred`, `ToolRootChatSessionID`), W2 (`IsControlledByLiveViewer`, the latch and handover-pending accessors, the `WaitingSurfaceEmitter` seam) |
+| **W2 — Lock lifecycle, release, handover-pending, stand-down, waiting surface** | `pkg/tools/browser/live.go`, `pkg/tools/browser/manager.go`, `pkg/gateway/browser_ws.go`, `pkg/gateway/websocket.go`, `pkg/gateway/sse.go`, `pkg/gateway/ws_ask_user.go`, `pkg/channels/base.go`, **`pkg/gateway/replay.go`**, and the tests `live_notcontroller_test.go`, `shared_control_test.go`, `browser_ws_test.go`, **`replay_test.go`**, **`manager_reaper_test.go`**, **`browser_release_sites_test.go`** (new) | FR-026a (state + clearing), FR-028–FR-032, **FR-029a**, **FR-031a**, **FR-031b**, FR-041 (emission), FR-042 (the emitter seam + `resolveSessionConnsLocked` delivery), FR-043, FR-043a, FR-044 (id + hold timestamp), FR-047 (state), FR-050, FR-052 (the sweeper's flag duty), FR-060, FR-062, FR-065 | W0 (`OperatorPrompt`, `ControlIdleReleaseSec`), W3 (the `SetBrowserWheelReleaseHook` seam and the `ControlIdleReleaseSec` → `BrowserConfig` translation), W4 (frame types) |
+| **W3 — Turn engine: bounded attempts, root-chat identity, release hook, no-park** | `pkg/agent/browser_deferral.go` (new), `pkg/agent/turn.go`, `pkg/agent/loop.go`, `pkg/agent/routing_session_id_consumer_set_adr057_test.go`, `pkg/agent/browser_deferral_test.go` (new), `pkg/agent/browser_resolver_test.go` (new) | FR-002, FR-004, FR-013–FR-017, FR-016a (consumes), FR-021 (stamps the key), FR-022, **FR-029 (the hook declaration and its `processMessage` invocation)**, FR-064 | W0 (`ToolResult.Deferred`, the context key, `OperatorPrompt`, `ControlIdleReleaseSec`), W1 (`ControlGatedToolNames()`) |
 | **W4 — Contracts & generated types** | `contracts/components/schemas/*.yaml` (new frame), `contracts/asyncapi.yaml`, `pkg/api/generated/**`, `src/lib/api/generated/**` | FR-042 (schema half) | none — lands first |
-| **W5 — SPA live-panel take-over rebuild** | `src/components/browser/BrowserLiveView.tsx`, `BrowserLiveView.takeTheWheel.test.tsx`, `BrowserLiveView.handover.test.tsx` (new), `BrowserLiveView.controlToggle.test.tsx`, **`BrowserLiveView.tabStrip.test.tsx`**, **`BrowserLiveView.agentChip.test.tsx`** | FR-001, FR-053–FR-059 | none |
-| **W6 — `browser_handover` tool + policy seeding** | `pkg/tools/browser/tools_handover.go` (new), `pkg/tools/browser/tools_handover_test.go` (new), `pkg/tools/browser/register.go`, `pkg/coreagent/core.go`, `pkg/coreagent/browser_handover_seed_test.go` (new), `pkg/config/defaults.go`, **`pkg/config/config.go`** (the `ControlIdleReleaseSec` field) | FR-046, FR-048, **FR-048a**, FR-049, FR-051, FR-052 | W1 (class rosters), W2 (handover-pending state) |
-| **W7 — Audit event vocabulary** | `pkg/audit/events.go` | the new deferral / handover / `browser_control_idle_release` event constants used by W1 and W2 | none |
+| **W5 — SPA live-panel take-over rebuild** | `src/components/browser/BrowserLiveView.tsx`, `BrowserLiveView.takeTheWheel.test.tsx`, `BrowserLiveView.handover.test.tsx` (new), `BrowserLiveView.controlToggle.test.tsx`, **`BrowserLiveView.tabStrip.test.tsx`**, **`BrowserLiveView.agentChip.test.tsx`** | FR-001, FR-053–FR-059 (including FR-031b's unsolicited-`released` handling) | none |
+| **W6 — `browser_handover` tool + policy seeding** | `pkg/tools/browser/tools_handover.go` (new), `pkg/tools/browser/tools_handover_test.go` (new), **`pkg/tools/browser/register.go`**, `pkg/coreagent/core.go`, `pkg/coreagent/browser_handover_seed_test.go` (new), `pkg/config/defaults.go` | FR-046, FR-048, **FR-048a**, FR-049, FR-051, FR-052 (the tool's own refusal) | W1 (class rosters), W2 (handover-pending state, the emitter seam) |
+| **W7 — Audit event vocabulary** | `pkg/audit/events.go` | the new deferral / handover / `browser_control_idle_release` / take-control-disabled-sweep event constants used by W1 and W2 | none |
 | **W8 — Thread rendering + e2e** | **`src/store/chat.ts`**, **`src/components/chat/ChatScreen.tsx`**, `src/components/chat/ChatScreen.browser-handover-notice.test.tsx` (new), **`src/store/chat.browser-handover-notice.test.ts`** (new), `src/lib/ws.ts` consumer wiring, `tests/e2e/browser-control-handover.spec.ts` (new) | FR-042 (render half), FR-044 (SPA idempotency half), e2e | W4, W2 |
 
-**Shared-nothing check**: `pkg/tools` is W0 (`result.go`) only. `pkg/tools/browser` is split across
-W1 (tool bodies, audit, and every test file that asserts the deferral marker), W2 (`live.go`,
-`manager.go`) and W6 (`register.go`, the new tool) with no file in two waves. `pkg/gateway` is
-entirely W2. `pkg/agent` is entirely W3. `src/components/browser` is entirely W5; `src/store` and
-`src/components/chat` are entirely W8. `pkg/config` is split by file: `defaults.go` and `config.go`
-are W6; nothing else in that package is touched.
+**Shared-nothing check**: `pkg/tools` is W0 (`result.go`, `base.go`) only. `pkg/tools/browser` is
+split across W1 (tool bodies, audit, and every test file that asserts the deferral marker), W2
+(`live.go`, `manager.go`) and W6 (`register.go`, the new tool) with no file in two waves. `pkg/bus`
+is W0 only. `pkg/gateway` is entirely W2 — **including no edit to `pkg/gateway/gateway.go`**, because
+the release hook is registered inside `browser_ws.go::newBrowserWSHandler`, which is already handed
+the `*agent.AgentLoop`. `pkg/channels` is W2 (`base.go` only). `pkg/agent` is entirely W3.
+`src/components/browser` is entirely W5; `src/store` and `src/components/chat` are entirely W8.
+`pkg/config` is split by file: `config.go` is **W0**, `defaults.go` is **W6**.
+
+**Two ordering notes that are not file collisions.**
+1. **`register.go` stays wholly in W6, and that is a deliberate consequence of FR-021's ctx-key
+   route.** The first draft routed the root-chat id through `ManagerResolver`, declared in
+   `register.go` — a file W6 must own outright for the `browser_handover` registration — which would
+   have put one file in W1, W3 and W6 at once while the wave table assigned it to W6 alone, ordered
+   *after* both. The tool-context key removes the need for any `register.go` change outside W6.
+2. **`ControlIdleReleaseSec` needs no `defaults.go` entry.** `LeaseWaitSec` and `IdleTTLSec` have
+   none either — `pkg/config/defaults.go`'s browser block sets neither, and the "unset means the
+   shipped default" translation happens at the **reader** (`pkg/agent/loop.go`, e.g.
+   `if cfg.Tools.Browser.IdleTTLSec > 0 { browserCfg.IdleTTL = … }`). So the 900 s default lands in
+   W3's `loop.go` translation into W2's `BrowserConfig`, and `defaults.go` stays untouched by
+   FR-031a — leaving it free for W6's FR-051 tool-policy entry, which must land atomically with
+   `coreagent/core.go` per Constraint #6. Until W3 lands, W2's sweeper sees a zero window, which
+   means *expiry disabled* — a development-only state, and never a shippable one.
 
 **Cross-wave coupling that is NOT a file collision and must still be respected.** W3's
 `routing_session_id_consumer_set_adr057_test.go` reads **`pkg/gateway/websocket.go` live at test
@@ -1577,11 +2064,20 @@ about ADR-057 that says nothing about the browser change that caused it.
   (=0), `golangci-lint run --build-tags=goolm,stdjson` and the CI Go suite all exit 0.
 - **SC-008**: With `take_control_enabled: false`, 0 takes succeed, 0 waiting lines are emitted and 0
   agent deferrals occur.
-- **SC-009**: A synthetic inbound message on a session with a held wheel (a background delegate
-  completion, a goal-loop follow-up) produces **0** releases across 10 consecutive completions.
-- **SC-010**: A wheel held with no viewer activity is released within one idle window
+- **SC-009**: A non-operator inbound message on a session with a held wheel — a background delegate
+  completion, a goal-loop follow-up, a cron fire, **or a question-card answer or cancel** — produces
+  **0** releases across 10 consecutive occurrences of each.
+- **SC-010**: A stood-down state with **no proof of life** (no input, no attach/detach, no
+  `ViewerHeartbeat`, no live media track) is given up within one idle window
   (`tools.browser.control_idle_release`, default 900s) in 100% of cases, and a scheduled browser turn
-  on that session succeeds afterwards.
+  on that session succeeds afterwards. Conversely, a hold whose panel is attached and heart-beating
+  survives **3** consecutive idle windows with **0** releases.
+- **SC-011**: After the operator releases the wheel without prompting (Escape, annotate, panel
+  close), **0** of the next 10 control-gated browser tool calls reach the page — across a turn
+  boundary and across a cron fire — until a prompt arrives or the idle window elapses.
+- **SC-012**: Every server-initiated release delivers exactly **1** unsolicited
+  `browser_status{state:"released"}` to a still-attached former holder, and the panel accepts a
+  re-take on the very next click with **0** reloads.
 
 ---
 
@@ -1604,19 +2100,21 @@ about ADR-057 that says nothing about the browser change that caused it.
 | FR-016a | US-3 | A fourth attempt never reaches the browser | `TestBrowserTools_ControlGatedToolNamesEqualsActionPlusCapture`; `TestShortCircuit_UsesExportedRosterNotAHardcodedList` |
 | FR-017 | US-3, US-4 | A new turn starts…; A delegated worker… | `TestBrowserDeferralLedger_ChildTurnHasItsOwnCounter` |
 | FR-020 | US-4 | A delegated worker driving its own tab set defers; An unrelated chat… | `TestControlledResult_ChecksRootChatPanelTabSet`; `TestControlledResult_EmptyRootChatIDSkipsTheSecondCheck` |
-| FR-021 | US-4 | A delegated worker driving its own tab set defers | `TestManagerResolver_SurfacesRootChatSessionID` |
+| FR-021 | US-4 | A delegated worker driving its own tab set defers | `TestToolContext_CarriesRootChatSessionID` |
 | FR-022 | US-4 | — (structural) | `TestRoutingSessionID_ConsumerSetIsClosed` |
 | FR-023 | US-4 | A delegated worker driving its own tab set defers | `TestDelegatedChild_DefersOnParentWheelHold` |
 | FR-024 | US-4 | An unrelated chat on the same workspace browser… | `TestControlledResult_UnrelatedChatOnSameBrowserDoesNotDefer` |
 | FR-025 | US-7 | The next message releases the wheel… | `TestResume_NextPromptIsAnOrdinaryTurnWithNoInjectedState` |
 | FR-026 | US-7 | Escape released the wheel… | `clears the wheel on Escape…`; `TestRelease_DoesNotClearWaitingLine` |
+| FR-026a | US-7, US-8 | Escape released the wheel…; A holder who vanished does not leave the agent stood down | `TestStandDown_SurvivesEscapeAndStillDefers`; `TestStandDown_ClearedOnlyByPromptReleaseAndIdleExpiry`; `TestStandDown_VoidedByGhostHolder` |
 | FR-027 | US-7 | The next message releases the wheel… | `TestResume_NextPromptIsAnOrdinaryTurnWithNoInjectedState` |
 | FR-028 | US-7 | The next message…; The wheel is released even with the panel closed | `TestChatTurnAccept_ReleasesHeldPanelLock`; `TestChatTurnAccept_ReleasesWithPanelClosed` |
-| FR-029 | US-7 | The next message releases the wheel…; A background delegate finishing…; A question card is pending… | `TestChatTurnAccept_ReleasesForNonWebchatChannel`; `TestChatTurnAccept_ReleasesOnSSEPrompt`; `TestChatTurnAccept_SyntheticAsyncNotifyDoesNotRelease`; `TestChatTurnAccept_GoalLoopFollowUpDoesNotRelease`; `TestChatTurnAccept_AutoDefaultedQuestionCardDoesNotRelease` |
-| FR-029a | US-7 | — (structural) | `TestPublishInboundSites_ReleasePartitionIsPinned` |
+| FR-029 | US-7 | The next message releases the wheel…; A background delegate finishing…; Answering a question card…; Cancelling a question card… | `TestChatTurnAccept_ReleasesForNonWebchatChannel`; `TestChatTurnAccept_ReleasesOnSSEPrompt`; `TestChatTurnAccept_SyntheticAsyncNotifyDoesNotRelease`; `TestChatTurnAccept_GoalLoopFollowUpDoesNotRelease`; `TestQuestionCardResume_NeverReleasesTheWheel`; `TestReleaseHook_FiresOnlyOnOperatorPrompt` |
+| FR-029a | US-7 | — (structural) | `TestOperatorPromptField_AssignmentPartitionIsPinned` |
 | FR-030 | US-7 | A different user's message releases the wheel… | `TestChatTurnAccept_ReleaseAuditsActingUserNotHolder`; `TestChatTurnAccept_ChannelReleaseAuditsCanonicalSenderNotHolder` |
-| FR-031 | US-8 | A ghost holder…; A live holder… | `TestControlGate_GhostHolderDoesNotDeferTools`; `TestControlGate_LiveHolderDefersTools` |
-| FR-031a | US-7 | An idle hold is released by the server | `TestControlGate_IdleHoldExpiresAndUngatesTheAgent`; `TestHandoverPending_ExpiresOnTheSameIdleTimer`; `TestIdleRelease_EmitsOperatorVisibleLine` |
+| FR-031 | US-8 | A ghost holder…; A live holder…; A holder who vanished… | `TestControlGate_GhostHolderDoesNotDeferTools`; `TestControlGate_LiveHolderDefersTools`; `TestControlGate_UsesIsControlledByLiveViewerNotIsControlled`; `TestStandDown_VoidedByGhostHolder` |
+| FR-031a | US-7 | An idle stand-down is given up by the server; A watched hold does not expire; A held tab set is not reaped for inactivity | `TestControlGate_IdleHoldExpiresAndUngatesTheAgent`; `TestControlGate_HeartbeatingHolderNeverExpires`; `TestIdleSweeper_FiresWithNoAgentRunning`; `TestHandoverPending_ExpiresOnTheSameIdleTimer`; `TestReapIdleSessions_SkipsAControlledOrLatchedTabSet`; `TestIdleRelease_EmitsOperatorVisibleLine` |
+| FR-031b | US-7 | A server-initiated release reaches the holder's own panel | `TestServerInitiatedRelease_NotifiesTheFormerHolder`; `clears operator-holds-wheel on an UNSOLICITED server released frame…` |
 | FR-032 | US-8 | Two viewers, one wheel | `TestSharedControl_SecondViewerInputStillDispatches`; `TestSharedControl_SecondViewerDoesNotDeferTheAgent` |
 | FR-033 | US-5 | Capture attempts defer… (outline) | `TestControlGate_CaptureToolsDeferWhileControlled` |
 | FR-033a | US-5 | — (structural) | `TestCaptureTools_DescriptionsCarryTheDeferralClause` |
@@ -1629,24 +2127,24 @@ about ADR-057 that says nothing about the browser change that caused it.
 | FR-039 | US-5 | Capture attempts defer… (screenshot row) | `TestScreenshot_DeferredCallProducesNoFileNoMediaNoArtifactTag` |
 | FR-040 | US-5 | An earlier capture is not retracted | `TestCapture_PreTakeoverArtifactsAreNotRetracted` |
 | FR-041 | US-6 | The waiting line appears live… | `TestTakeControl_EmitsWaitingSurfaceFrame` |
-| FR-042 | US-6 | The waiting line appears live… | `TestTakeControl_EmitsWaitingSurfaceFrame`; `renders the browser-handover waiting notice…`; `make verify-contracts` |
-| FR-043 | US-6 | The waiting line survives a reload | `TestTakeControl_WritesWaitingSurfaceTranscriptEntry` |
+| FR-042 | US-6 | The waiting line appears live… | `TestTakeControl_EmitsWaitingSurfaceFrame`; `TestWaitingSurface_ReachesTheChatConnsAndDegradesWhenNoneAreAttached`; `TestWaitingSurface_AllThreeProducersUseOneEmitter`; `renders the browser-handover waiting notice…`; `make verify-contracts` |
+| FR-043 | US-6 | The waiting line survives a reload | `TestTakeControl_WritesWaitingSurfaceTranscriptEntry`; `TestWaitingSurface_MissingSessionDoesNotFailTheRelease` |
 | FR-043a | US-6 | The waiting line survives a reload | `TestReplay_HandoverNoticeReplaysAsTheSameFrameType` |
-| FR-044 | US-6 | Taking the wheel twice emits one waiting line | `TestTakeControl_SecondTakeWithoutReleaseEmitsOneLine`; `TestWaitingNotice_MessageIDIsDeterministicPerHoldEpoch`; `drops a duplicate browser-handover notice…` |
+| FR-044 | US-6 | Taking the wheel twice emits one waiting line | `TestTakeControl_SecondTakeWithoutReleaseEmitsOneLine`; `TestWaitingNotice_MessageIDIsStableWithinAHoldAndUniqueAcrossRestarts`; `drops a duplicate browser-handover notice…` |
 | FR-045 | US-3, US-6 | The agent ends its turn saying… | **SHOULD — verified by holdout H1, no automated oracle.** Deliberately no matrix row: what a model narrates is not observable from a Go unit test |
 | FR-046 | US-9 | The agent hands the browser over… | `TestHandoverTool_ReturnsConcludeInstructionAndDoesNotPark` |
 | FR-047 | US-9 | After handing over, the agent's own browser attempts defer | `TestHandoverTool_SetsHandoverPendingNotAViewerLock`; `TestHandoverPending_IsNotSubjectToGhostVoiding` |
 | FR-048 | US-9 | The agent hands the browser over… | `TestHandoverTool_EmitsWaitingSurface` |
 | FR-048a | US-9 | The agent hands the browser over… | `TestHandoverTool_ReasonAppearsInSurfaceAndAudit` |
 | FR-049 | US-9 | A handover ends the turn normally… | `TestHandoverTool_TurnEndsCompletedNotParked` |
-| FR-050 | US-9 | The next message clears an agent-initiated handover; A handover set by a delegated child… | `TestHandoverPending_ClearedByNextPrompt`; `TestHandoverPending_SetByDelegatedChildIsClearedByRootPrompt` |
+| FR-050 | US-9 | The next message clears an agent-initiated handover; A handover set by a delegated child… | `TestHandoverPending_ClearedByNextPrompt`; `TestHandoverPending_SetByDelegatedChildIsClearedByRootPrompt`; `TestSessionDeleted_ClearsHoldHandoverAndLatch` |
 | FR-051 | US-9 | — (structural) | `TestSeed_BrowserHandoverAtAllThreeConstraint6Sites`; `TestSeed_MiaAndAvaResolveDenyForBrowserHandover`; `TestConstructorSeed_PolicyMapMatchesCatalog`; `TestDefaults_CeilingLengthMatchesStaticCatalog` |
-| FR-052 | US-11 | With take-control disabled… | `TestTakeControlDisabled_NoTakeNoLineNoDeferralNoHandover` |
-| FR-053 | US-2 | The operator's click reaches the page…; The operator keeps driving after the click… | `does not call cancelStream…, and DOES send one browser_control{take} frame`; `keeps dispatching keyboard, wheel and pointermove AFTER the pointerup…` |
+| FR-052 | US-11 | With take-control disabled…; Take-control is switched off while a wheel is held | `TestTakeControlDisabled_NoTakeNoLineNoDeferralNoHandover` |
+| FR-053 | US-2 | The operator's click reaches the page…; The operator keeps driving after the click… | `does not call cancelStream…, and DOES send one browser_control{take} frame`; `keeps dispatching keyboard, wheel and pointermove AFTER the pointerup…`; `does not contain agentPausedByUser anywhere` |
 | FR-054 | US-2 | The operator keeps driving after the click…; The operator's click reaches the page… | `keeps dispatching keyboard, wheel and pointermove AFTER the pointerup…`; `keeps you-driving priority over agent-working for the chip and the cursor` |
 | FR-055 | US-2 | The wheel is not handed back… | `does not auto-release the wheel after the take ack…` |
 | FR-056 | US-2 | The operator's click reaches the page… | `acquires the wheel and dispatches in one click from the frame, the omnibox, the tab strip and Take over` (coverage, not a regression guard) |
-| FR-057 | US-2 | A wheel held across the end of one turn survives the start of the next; Escape released the wheel… | `still holds the wheel when a SECOND agent turn starts after the first ended`; `clears operator-holds-wheel on a server released status…` |
+| FR-057 | US-2 | A wheel held across the end of one turn survives the start of the next; Escape released the wheel…; A server-initiated release reaches the holder's own panel | `still holds the wheel when a SECOND agent turn starts after the first ended`; `clears operator-holds-wheel on a server released status…`; `clears operator-holds-wheel on an UNSOLICITED server released frame…` |
 | FR-058 | US-7 | Escape released the wheel… | `reverts control state and stops accepting input when the socket disconnects mid-control` |
 | FR-059 | US-7 | — (structural) | `never renders a Take control / Release control / Hand to agent button` |
 | FR-060 | US-7 | — (structural) | existing `handleControl` audit assertions |
@@ -1658,7 +2156,8 @@ about ADR-057 that says nothing about the browser change that caused it.
 
 **Scenarios not tied to a single FR** (cross-cutting, still traced): *A question card is pending when
 the operator takes the wheel* → `TestAskUserQuestionPending_UnaffectedByWheelTake`, asserting the
-ADR §4 claim that the two pending states no longer interact.
+ADR §4 claim that the two pending states no longer interact. Its two sibling scenarios (*Answering a
+question card…* and *Cancelling a question card…*) are traced to FR-029 above.
 
 ---
 
@@ -1671,23 +2170,28 @@ implementation starts.**
 |---|---|---|---|
 | A1 | D5 vs. the §14.2 rule 3 biconditional (C1) — gating the capture tools makes them write-leased and per-call audited under the current rule | Split into a three-way classification; capture tools are gated but neither leased nor per-call audited. The rule is amended **in the two spec documents that actually carry it** (`browser-workspace-ownership-spec.md` §14.2 rule 3 / FR-019a / AC5 / §12 A17, and `browser-agent-capability-spec.md`'s restatement) — **not** in ADR-075, which has no §14 (FR-035a) | Do you accept amending §14.2 rule 3? ADR-085 records the amendment as §7 R4-c. |
 | A2 | D6's waiting surface has no wire path (C2) | A new contract-first chat frame is added, plus the transcript entry, so live and replay agree | Approve the new wire type, or accept a transcript-only line that is invisible until reload? |
-| A3 | D4 says "the gateway releases it", but prompts arrive from webchat WS, SSE, question-card resumes and every non-web channel (C7) — **and the one point they all converge on, `PublishInbound`, also carries synthetic traffic** | Release from a shared helper called at the **four operator-originated publish sites only** (FR-029), never at the bus; pin the partition with a structural test (FR-029a) | Confirm the release must cover non-web channels **and** that a background delegate's completion must never release. If webchat-only is acceptable, say so — it leaves a known stale-lock path. |
+| A3 | D4 says "the gateway releases it", but prompts arrive from webchat WS, SSE, question-card resumes and every non-web channel (C7) — **and the one point they all converge on, `PublishInbound`, also carries synthetic traffic** | The **decision** is a fail-closed `bus.InboundMessage.OperatorPrompt` field set at the **three operator-originated publish sites only**; the **action** fires from a gateway-registered hook at `processMessage`, where the session id exists, never at the bus (FR-029, C7.2). The partition is pinned by a structural test on the field's assignment sites (FR-029a). **Revised:** the first draft's four-site helper-call model could not compile at one of those sites, and one of the four (the question-card resume) was the wrong site regardless — see A13 | Confirm the release must cover non-web channels **and** that a background delegate's completion must never release. If webchat-only is acceptable, say so — it leaves a known stale-lock path. |
 | A4 | D7's "passes the lock to the operator" is undefined with no attached viewer (C5), and a never-attached holder is exactly D4's void ghost | A distinct handover-pending state on the live view, not a viewer lock; explicitly exempt from the ghost rule | Confirm handover-pending is a separate state, and confirm it should survive a viewer's absence. |
-| A5 | ~~Which SPA component renders a system entry in the chat thread~~ | **CLOSED — identified, with a shipping precedent.** `src/store/chat.ts`'s `case 'goal_status'` already synthesizes a `role: 'system'` `ChatMessage` from a frame, via `buildGoalAckInsertion` with a deterministic id from `goalAckMessageId(goalId)` that is idempotent by construction (`if (b.messagesById[ackId]) return null`). It is rendered by `src/components/chat/ChatScreen.tsx::VirtualSystemMessageRow` (virtualised list) and `::SystemMessage` (non-virtualised branch). FR-044 follows that pattern with `(sessionID, holdEpoch)`; both files are named in W8 | — (no longer open) |
+| A5 | ~~Which SPA component renders a system entry in the chat thread~~ | **CLOSED — identified, with a shipping precedent.** `src/store/chat.ts`'s `case 'goal_status'` already synthesizes a `role: 'system'` `ChatMessage` from a frame, via `buildGoalAckInsertion` with a deterministic id from `goalAckMessageId(goalId)` that is idempotent by construction (`if (b.messagesById[ackId]) return null`). It is rendered by `src/components/chat/ChatScreen.tsx::VirtualSystemMessageRow` (virtualised list) and `::SystemMessage` (non-virtualised branch). FR-044 follows that pattern with `(sessionID, holdStartedAtUnixNano)` — a timestamp rather than a process counter, so the id cannot repeat across a gateway restart and suppress a genuine fresh takeover; both files are named in W8 | — (no longer open) |
 | A6 | N=3 for the attempt bound — the ADR invites justification | N=3, justified in FR-014 (a deferral is 100% reproducible; >1 attempt only helps the model discover the state on the tool it needed) | Accept N=3, or set a different value? |
 | A7 | Whether the deferral audit record (D10) is a new event kind or an extension of `EventBrowserLiveControlTaken` | A distinct record is emitted, sharing the take's field set plus **root chat session id**, tab set and tool name. Turn id is **not** in the set (FR-061: there is no turn id in the tool context) | New `audit.Event` constant, or a `reason` variant on the existing one? |
 | A8 | Whether the waiting line's copy should name the agent | Copy is agent-neutral ("the agent has stopped driving the browser…") | Should it name the agent, and if so which one for a delegated subtree? |
 | A9 | Whether `browser_handover` should be seeded for the delegation-tier workers (Explorer, Researcher) as well as Jim and Ray | **CLOSED — seeded for all four, on a stated rule rather than a preference: an agent that holds the browser action set holds the verb that stands down from it.** Splitting them would leave Explorer able to drive the operator's browser but unable to hand it back, which is the worse half of the pair. Verified: all four (`IDJim`, `IDRay`, `IDExplorer`, `IDResearcher`) carry `browser_navigate`/`click`/`type` at `allow` today. Mia and Ava need **no edit** — `denyAllThenOverride` gives them an explicit `deny` automatically (FR-051) | — (no longer open; raise it only to overturn the rule) |
 | A10 | Whether a take on a session with **no** running turn should emit the waiting line | Yes — the line is emitted on every take, because the operator cannot tell whether a turn is running and the message is true either way | Emit always, or only during a running turn? |
 | A11 | Whether the bounded-attempt terminal instruction should also apply across a delegated child's *parent* (i.e. shared budget) | No — per FR-017 each turn has its own counter, so a parent and child each get 3 | Should the budget be shared across a delegation subtree? |
-| A12 | The ADR is silent on what happens to an in-flight `browser_upload_file` approval (`ask` policy) when the wheel is taken mid-approval | Untouched — the approval gate is orthogonal; the tool defers at the control gate if it is still held when approval lands. Exercised by holdout **H2** | Confirm no interaction is intended. |
-| A13 | Whether a **question-card answer** is a "prompt" for D4's release rule (it is operator-originated, but the operator may be answering a card while deliberately still driving the browser) | **Treated as a prompt: it releases** (FR-029), because D4's rule is "any authenticated user's prompt on that session", and an answer resumes the same turn a message would. An auto-defaulted (timed-out) card does not release. The earlier draft's edge case said the browser stays held; that is amended | Confirm. The alternative — cards never release — is defensible and would need FR-029 and the question-card scenario changed back together. |
-| A14 | Whether the idle-release window (FR-031a) should be a config key at all, versus a fixed constant | A config key `tools.browser.control_idle_release`, default **900** seconds, `0` disables. Matches the existing `lease_wait` / `idle_ttl` keys in the same block | Accept 900s, or pick another default? Is an operator-disableable expiry acceptable given M7's "walked away" scenario? |
+| A12 | The ADR is silent on what happens to an in-flight approval (`ask` policy) on a browser tool when the wheel is taken mid-approval | Untouched — the approval gate is orthogonal; the tool defers at the control gate if it is still held when approval lands. Exercised by holdout **H2**. **Corrected:** the first draft named `browser_upload_file` as the example, because it is the one browser tool seeded `ask` in `defaults.go`. It is also **deliberately unregistered** (`register.go`; `interact_test.go::TestUploadFile_NotRegistered`), so a model can never call it and it can never raise a card. H2 now uses a per-agent `ask` override on a **registered** action verb instead — a supported operator configuration under Constraint #6 layer 2, needing no test build | Confirm no interaction is intended. |
+| A13 | Whether a **question-card answer or cancel** is a "prompt" for D4's release rule | **REVERSED IN REVISION 5 — operator-ratified: it does NOT release** (FR-029, C7.1). The first draft treated it as a prompt, gated on `ws_ask_user.go::resumeIsUserInitiated`. That predicate's first branch is `if set.Status == askuser.StatusCancelled { return true }`, so **clicking Cancel would have handed the browser to the agent mid-drive** — the exact D5 exposure, through the release path, on the most ordinary click available. Three reasons the reversal is right independent of the bug: (a) **harm asymmetry** — releasing mid-drive reinstates the D5 exposure, while not releasing costs one deferred round-trip, visible to the operator and bounded by FR-014's N=3; (b) **a card answer is not an ordinary turn** — `DispatchResume` injects a *synthesised* `resumeText` into a turn that is already parked, and the operator composed nothing; (c) **the composer lock is a reason to keep the two states independent, not to fuse them** — the whole point of the edge case is that the wheel and the card do not interact. `resumeIsUserInitiated` stays untouched; it is correct for goal/loop origin gating and MUST NOT be read here | — (ratified; raise only to overturn) |
+| A14 | The idle-release window (FR-031a): whether it should be a config key at all, and **what counts as activity** | A config key `tools.browser.control_idle_release`, default **900** seconds, `0` disables. Matches the existing `lease_wait` / `idle_ttl` keys in the same block — and, like them, takes **no `defaults.go` entry**: the "unset means the shipped default" translation happens at the reader, per `IdleTTLSec`'s existing pattern in `pkg/agent/loop.go`. **Corrected in revision 5:** activity is no longer "input or attach/detach". A *reading* operator produces no input, so that definition released a live operator after 900 s and handed the agent the page they were looking at. Activity is now any of input, attach/detach, `ViewerHeartbeat` (the panel's WS pong) or a live media track; a stood-down state with no attached viewer at all runs its window from the transition | Accept 900s, or pick another default? Is an operator-disableable expiry acceptable, given it is now also the only path out of a held wheel when take-control is switched off (FR-052)? |
 
 ### Assumptions (non-ambiguous, recorded)
 
-- The control lock stays process memory with no persistence and no boot rehydration; a gateway restart
-  loses it, which is already true today and which the ADR accepts.
+- The control lock, the FR-047 handover-pending flag and the FR-026a stand-down latch all stay process
+  memory with no persistence and no boot rehydration; a gateway restart loses all three, which is
+  already true of the lock today and which the ADR accepts. **Accepted consequence, stated rather than
+  discovered:** a waiting line already written to the transcript is replayed after a restart and reads
+  as though the agent were still stood down. It is stale, not false — a message does return the
+  browser — and no automated surface distinguishes the two. What a restart must not do is *suppress* a
+  genuine fresh takeover, which is why FR-044's notice id is a timestamp rather than a process counter.
 - WebRTC remains the only live-video path; nothing in this change records frames (ADR-061).
 - `pkg/tools/browser` continues not to import `pkg/agent`; all engine-side data reaches the tools
   through the existing `ManagerResolver` seam.
@@ -1712,11 +2216,18 @@ implementation starts.**
 
 ### H2 — The wheel taken on top of an outstanding approval card (Edge Case)
 > *Replaces the previous H2 ("one click, every time"), which was derivable from FR-056's test.*
-- **Setup**: Give an agent a task that calls `browser_upload_file` (seeded `ask`), so an approval
-  card is outstanding and the tool has not run.
+> *Re-targeted in revision 5: the earlier version required the agent to call `browser_upload_file`,
+> which is **deliberately not registered** (`register.go`; `interact_test.go::TestUploadFile_NotRegistered`).
+> The model never sees it, so no approval card could ever be raised and the holdout could not be run
+> at all — meaning A12 was untested and H2's "tested rather than asserted" claim was false. The point
+> was never that particular verb; it is approval-gate × control-gate on the same call.*
+- **Setup**: On the test agent, set a per-agent `ask` policy on a **registered** action verb —
+  `browser_navigate` or `browser_click` (an ordinary Constraint #6 layer-2 tightening; no test build
+  required). Give the agent a browsing task, so an approval card is outstanding and the tool has not
+  run.
 - **Action**: While the approval is still pending, take the wheel. Then approve the card.
 - **Expected**: The approval lands normally — the wheel is not an authorization decision on it. The
-  upload then **defers at the control gate**, as an ordinary non-error deferral, and the agent
+  approved call then **defers at the control gate**, as an ordinary non-error deferral, and the agent
   continues. Neither the approval flow nor the composer is left in a stuck state, and exactly one
   waiting line exists. *(This is Ambiguity A12's assumption, tested rather than asserted.)*
 
@@ -1737,13 +2248,18 @@ implementation starts.**
 > *Replaces the previous H5 (ghost holder), which was `TestControlGate_GhostHolderDoesNotDeferTools`
 > under a different name.*
 - **Setup**: A session with a recurring heartbeat or scheduled trigger that drives the browser. Take
-  the wheel on it — attached and alive, not a ghost — and then do nothing at all.
+  the wheel on it, then **close the live panel and walk away** — no input, no message, and, once the
+  panel is gone, no keep-alive. (Revision 5: the earlier version said "attached and alive, not a
+  ghost — and then do nothing at all", which under FR-031a's corrected liveness rule now **never**
+  expires, by design. An attached, heart-beating panel is proof somebody is watching; H5 is about the
+  operator who genuinely left.)
 - **Action**: Let at least two scheduled fires elapse **inside** the idle window, then let the idle
   window pass and let a third fire.
-- **Expected**: The two fires inside the window defer cleanly and say why; no scheduled run is
-  recorded as failed or cancelled. After the window, the wheel is released server-side, the operator
-  sees a line saying so, and the third fire drives the browser normally. **The pass condition is that
-  the session is not permanently disabled by an operator who walked away.**
+- **Expected**: The two fires inside the window defer cleanly and say why — the stand-down latch
+  (FR-026a) is what defers them, since closing the panel already cleared the lock — and no scheduled
+  run is recorded as failed or cancelled. After the window, the latch is given up server-side, the
+  operator sees a line saying so, and the third fire drives the browser normally. **The pass
+  condition is that the session is not permanently disabled by an operator who walked away.**
 
 ### H6 — Three levels deep (Edge Case)
 > *Replaces the previous H6 (two people, one browser), which was FR-030 + FR-032 restated.*
@@ -1780,10 +2296,16 @@ implementation starts.**
   `make gen-contracts` for W4.
 - **Tech stack**: unchanged. No new library on either side.
 - **Deployment / runtime**: `tools.browser.take_control_enabled` is reused as the feature's kill
-  switch. **One new config key**: `tools.browser.control_idle_release` (`ControlIdleReleaseSec int`,
-  default 900, `0` disables) for FR-031a. It needs a default in `pkg/config/defaults.go` and a doc
-  comment on the field, and — being a plain scalar with a non-zero default — it must follow the
-  existing `LeaseWaitSec` / `IdleTTLSec` pattern for "unset means the default", not "unset means 0".
-- **Footprint**: the new state is, per live view, one flag, one hold-epoch counter and one
-  last-activity timestamp; per turn, one small counter — well inside the <10 MB security-overhead
-  budget (Constraint #3).
+  switch — but it is no longer a *pure* switch: flipping it false on a running install now gives up
+  any held wheel within one sweeper tick (FR-052), so operators disabling it mid-session will see the
+  browser return to the agent rather than freeze. **One new config key**:
+  `tools.browser.control_idle_release` (`ControlIdleReleaseSec int`, default 900, `0` disables) for
+  FR-031a. It needs a doc comment on the field and **no entry in `pkg/config/defaults.go`** —
+  `LeaseWaitSec` and `IdleTTLSec` have none either; the "unset means the shipped default" translation
+  happens at the reader (`pkg/agent/loop.go`, following `IdleTTLSec`'s existing
+  `if cfg.Tools.Browser.IdleTTLSec > 0 { … }` shape), never "unset means 0". *(The first draft said it
+  needed a `defaults.go` default; that was wrong, and it is what put `defaults.go` in two waves.)*
+- **Footprint**: the new state is, per live view, two flags (handover-pending, stand-down), one
+  hold-start timestamp and one last-control-activity timestamp; per registry, one 30-second ticker;
+  per turn, one small counter; per inbound message, one bool — well inside the <10 MB
+  security-overhead budget (Constraint #3).
