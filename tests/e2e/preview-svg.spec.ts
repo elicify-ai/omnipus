@@ -222,8 +222,7 @@ const TYPE_UNKNOWN = 'application/octet-stream';
 const SETTLE_MS = 2_500;
 
 /** The seven egress vectors the experiment measured. */
-const VECTORS = ['img', 'fetch', 'beacon', 'ws', 'iframe', 'form', 'popup'] as const;
-type Vector = (typeof VECTORS)[number];
+type Vector = 'img' | 'fetch' | 'beacon' | 'ws' | 'iframe' | 'form' | 'popup';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The second origin: a request sink that records what ARRIVES.

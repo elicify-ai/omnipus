@@ -343,7 +343,7 @@ function LibraryAudioPreview({ workspaceId, entry }: { workspaceId: string; entr
       className="flex flex-1 min-h-0 items-center justify-center overflow-auto bg-[var(--color-surface-0)] p-4"
       data-testid="library-audio-preview"
     >
-      {/* eslint-disable-next-line jsx-a11y/media-has-caption -- workspace files carry no caption tracks to attach */}
+      {/* No <track>: a workspace audio file carries no caption track to attach. */}
       <audio controls src={src} className="w-full max-w-lg">
         Your browser does not support playing this audio file. Use Download instead.
       </audio>

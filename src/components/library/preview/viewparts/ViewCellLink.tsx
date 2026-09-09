@@ -163,6 +163,6 @@ export function CellText({ value, resolver }: { value: string; resolver?: ViewCe
   }
 
   if (nodes.length === 0) return <>{value}</>
-  if (last < value.length) nodes.push(<span key={key++}>{value.slice(last)}</span>)
+  if (last < value.length) nodes.push(<span key={key}>{value.slice(last)}</span>)
   return <>{nodes}</>
 }

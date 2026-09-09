@@ -412,6 +412,7 @@ export function LibraryPdfPreview({ workspaceId, entry }: LibraryPdfPreviewProps
           throw new Error(
             `The PDF parsing worker could not start, so this PDF was not opened. ` +
               `Parsing never runs on the main thread. Cause: ${String(err)}`,
+            { cause: err },
           )
         }
         // `PDFWorker.create` rather than `new PDFWorker`: same object, but the

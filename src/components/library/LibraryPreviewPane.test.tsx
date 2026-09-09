@@ -742,6 +742,7 @@ describe('LibraryPreviewPane — every preview kind mounts a surface', () => {
       } catch (err) {
         throw new Error(
           `kind "${kind}" did not mount "${testCase.surfaceTestId}" — it fell through the pane's dispatch: ${String(err)}`,
+          { cause: err },
         )
       } finally {
         unmount()
