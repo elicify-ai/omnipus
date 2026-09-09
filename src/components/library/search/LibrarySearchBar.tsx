@@ -130,6 +130,17 @@ const FILE_SEARCH_TRUNCATED_REASON: Record<
     'Stopped early — the folder became unreadable while searching (it may have been moved, unmounted, or deleted).',
 }
 
+/** Finding S3: FileSearchResponse.truncated_root names WHICH root went
+ *  unreadable — the empty string means the workspace's own work tree (a
+ *  legitimate, meaningful value, never "absent"; per its own schema comment
+ *  the other roots are named mounts), so this must branch on `!== undefined`
+ *  wherever it is read, never on truthiness. Rendering this is the only way
+ *  a root_lost stop tells the reader WHICH mount died instead of just that
+ *  one did. */
+function truncatedRootLabel(root: string): string {
+  return root === '' ? 'the workspace folder' : `the “${root}” mount`
+}
+
 export interface LibrarySearchBarProps {
   /** null = the Library virtual root — the bar renders disabled, matching
    *  KnowledgePanel's own null handling (there is no folder to test). */
@@ -143,8 +154,15 @@ export interface LibrarySearchBarProps {
   onOpenNote: (workspacePath: string) => void
   /** Navigate INTO a matched folder. A directory hit (FileSearchHit.is_dir)
    *  addresses a container, so opening it as a file would select a directory
-   *  in the preview pane instead of browsing it. */
-  onOpenFolder?: (workspacePath: string) => void
+   *  in the preview pane instead of browsing it.
+   *
+   *  Returns whether navigation actually happened. Finding S1: the caller
+   *  (LibraryExplorer) gates real navigation behind
+   *  confirmDiscardLibraryEdits(), which the user can decline (an unsaved-
+   *  edits "Cancel"). A caller that declined must report `false` so this bar
+   *  knows NOT to clear the query and its results — a user who cancelled to
+   *  avoid losing unsaved work must not lose their search instead. */
+  onOpenFolder?: (workspacePath: string) => boolean
   /** The file list to show while no query is active. Replaced entirely by
    *  grouped results while one is (library-b-c-design-2026-09-07 §C1). */
   children: ReactNode
@@ -284,7 +302,38 @@ function AttachmentRow({ hit, onOpen }: { hit: VaultSearchAttachmentHit; onOpen:
   )
 }
 
-function RecordRow({ hit, onOpen }: { hit: VaultSearchRecordHit; onOpen: () => void }) {
+/** Finding S2: VaultFindCell carries no "this is what matched" flag on the
+ *  wire (checked against VaultFindCell.yaml before writing this — property
+ *  and value only), so which of a record's cells explain the hit can only be
+ *  APPROXIMATED client-side — the same disclosed tradeoff vaultCoverage/
+ *  highlightQuery above already accept for notes. A cell whose property or
+ *  value contains one of the query's words is sorted first (stable within
+ *  each group) so that when cells are withheld below, the ones most likely
+ *  to justify the match are the ones actually shown. */
+function orderCellsForDisplay(
+  cells: VaultSearchRecordHit['cells'],
+  query: string,
+): VaultSearchRecordHit['cells'] {
+  const words = query
+    .split(/\s+/)
+    .filter((w) => w.length > 0)
+    .map((w) => w.toLowerCase())
+  if (words.length === 0) return cells
+  const isMatch = (cell: VaultSearchRecordHit['cells'][number]) =>
+    words.some((w) => cell.value.toLowerCase().includes(w) || cell.property.toLowerCase().includes(w))
+  const matched = cells.filter(isMatch)
+  const unmatched = cells.filter((c) => !isMatch(c))
+  return [...matched, ...unmatched]
+}
+
+function RecordRow({ hit, query, onOpen }: { hit: VaultSearchRecordHit; query: string; onOpen: () => void }) {
+  const orderedCells = orderCellsForDisplay(hit.cells, query)
+  const shownCells = orderedCells.slice(0, 4)
+  // Finding S2: silently slicing to 4 left a 7-property record showing four
+  // cells NONE of which contain the search term, with nothing saying a cell
+  // was withheld — a real match that reads as a non-match. Say how many were
+  // left out.
+  const withheldCount = hit.cells.length - shownCells.length
   return (
     <li>
       <button
@@ -308,12 +357,21 @@ function RecordRow({ hit, onOpen }: { hit: VaultSearchRecordHit; onOpen: () => v
         </span>
         <span className="text-[11px] text-[var(--color-muted)]">{hit.path}</span>
         {hit.cells.length > 0 && (
-          <span className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs leading-snug text-[var(--color-muted)]">
-            {hit.cells.slice(0, 4).map((cell) => (
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs leading-snug text-[var(--color-muted)]">
+            {shownCells.map((cell) => (
               <span key={cell.property}>
                 <span className="text-[var(--color-muted)]/70">{cell.property}:</span> {cell.value}
               </span>
             ))}
+            {withheldCount > 0 && (
+              <Badge
+                variant="secondary"
+                data-testid="vault-search-record-cells-more"
+                className="px-1.5 py-0 text-[10px] leading-4"
+              >
+                +{withheldCount} more
+              </Badge>
+            )}
           </span>
         )}
       </button>
@@ -573,6 +631,13 @@ export function LibrarySearchBar({
     isBusy: filesIsBusy,
     error: filesError,
     response: filesResponse,
+    // Finding S4: `filesResponse` may still be a PREVIOUS query's answer
+    // while a newer one sits in the debounce window (useFileSearch keeps it
+    // on screen deliberately — see useFileSearch.ts's 429-grace-path
+    // comment, which must NOT be removed). Copy describing those results
+    // must name the query that actually produced them, not the live
+    // keystrokes in the box.
+    debouncedQuery: filesDebouncedQuery,
   } = useFileSearch({
     workspaceId,
     folderPath,
@@ -658,8 +723,13 @@ export function LibrarySearchBar({
   // folderPath — a click on a folder produced ANOTHER result list, never
   // the folder itself.
   function openFolder(path: string) {
-    setText('')
-    onOpenFolder?.(path)
+    // Finding S1: clearing unconditionally (before we know whether the
+    // caller actually navigated) wiped the query even when the caller
+    // declined — e.g. LibraryExplorer's onOpenFolder gates on
+    // confirmDiscardLibraryEdits() and the user hit "Cancel" on that prompt.
+    // Only clear once onOpenFolder itself reports navigation happened.
+    const navigated = onOpenFolder?.(path) ?? false
+    if (navigated) setText('')
   }
 
   const viewResultQuery = useQuery({
@@ -839,7 +909,7 @@ export function LibrarySearchBar({
                   )}
                   <ul className="flex flex-col gap-1">
                     {response.records.map((hit) => (
-                      <RecordRow key={hit.path} hit={hit} onOpen={() => openNote(hit.path)} />
+                      <RecordRow key={hit.path} hit={hit} query={text.trim()} onOpen={() => openNote(hit.path)} />
                     ))}
                   </ul>
                 </div>
@@ -923,16 +993,49 @@ export function LibrarySearchBar({
                     {filesResponse.truncated_reason !== undefined
                       ? FILE_SEARCH_TRUNCATED_REASON[filesResponse.truncated_reason]
                       : 'Stopped early — this search did not finish.'}{' '}
+                    {/* Finding S3: files_visited alone, next to "too many
+                        files to search in one pass", can read as nonsense —
+                        a walk that burned its whole Files budget on 40,000
+                        directories and 12 files reported only "12 files
+                        searched". dirs_visited is optional (older engines
+                        never sent it — MV-3-adjacent back-compat, matching
+                        this same field's own schema comment), so it is
+                        included only when present, never invented as 0. */}
+                    {filesResponse.stats.dirs_visited !== undefined && (
+                      <>
+                        {filesResponse.stats.dirs_visited.toLocaleString('en-US')} director
+                        {filesResponse.stats.dirs_visited === 1 ? 'y' : 'ies'} and{' '}
+                      </>
+                    )}
                     {filesResponse.stats.files_visited.toLocaleString('en-US')} file
                     {filesResponse.stats.files_visited === 1 ? '' : 's'} searched.
+                    {/* Finding S3: when a mount is lost (root_lost), the
+                        response NAMES which one via truncated_root — shown
+                        only then, since the schema only ever sends it
+                        alongside that reason (and only when more than one
+                        root was searched). `!== undefined`, not truthiness:
+                        '' is the legitimate "workspace's own work tree"
+                        value, not "absent". */}
+                    {filesResponse.truncated_root !== undefined && (
+                      <> Unreadable root: {truncatedRootLabel(filesResponse.truncated_root)}.</>
+                    )}
                   </p>
                 </div>
               )}
 
               {filesResponse.hits.length === 0 && (
                 <div className="flex flex-col gap-1">
+                  {/* Finding S4: `text` is the LIVE keystroke value; during
+                      the debounce window it can already name a query that
+                      has not run yet, while `filesResponse` (and this empty
+                      state) still belongs to the PREVIOUS one.
+                      filesDebouncedQuery is the query that actually produced
+                      this response — the retention of the stale response
+                      itself is load-bearing for the 429 grace path
+                      (useFileSearch.ts) and must stay; only the label
+                      changes. */}
                   <p role="status" data-testid="library-search-empty" className="text-xs leading-snug text-[var(--color-muted)]">
-                    No results for “{text.trim()}”.
+                    No results for “{filesDebouncedQuery}”.
                   </p>
                   {/* Finding F-K, sharpest case: a file can be visible in
                       the listing, pruned from search by .gitignore, and
@@ -951,7 +1054,11 @@ export function LibrarySearchBar({
                       <FileHitRow
                         key={`${hit.path}:${hit.line ?? 0}:${i}`}
                         hit={hit}
-                        query={text.trim()}
+                        // Finding S4: highlight against the query that
+                        // actually produced these hits, not the live text —
+                        // see the empty-state comment above for why they can
+                        // differ during the debounce window.
+                        query={filesDebouncedQuery}
                         // Finding R-2: a directory hit must be opened as a
                         // FOLDER or not at all — falling through to openFile
                         // (which addresses a NOTE/file, not a container)

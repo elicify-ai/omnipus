@@ -104,8 +104,9 @@ function renderBar(opts: {
   info?: KnowledgeBaseInfo | LoadCollectionInfoFn
   filesRes?: FileSearchResponse | FileSearchFn
   onOpenNote?: (p: string) => void
-  onOpenFolder?: (p: string) => void
+  onOpenFolder?: (p: string) => boolean
   loadViewResult?: LoadViewResultFn
+  debounceMs?: number
 } = {}) {
   const searchFn: VaultSearchFn =
     typeof opts.res === 'function' ? opts.res : vi.fn().mockResolvedValue(opts.res ?? response())
@@ -121,7 +122,7 @@ function renderBar(opts: {
         workspaceId={opts.workspaceId === undefined ? 'ws-1' : opts.workspaceId}
         folderPath="vault"
         onOpenNote={onOpenNote}
-        debounceMs={5}
+        debounceMs={opts.debounceMs ?? 5}
         searchFn={searchFn}
         searchFilesFn={searchFilesFn}
         loadCollectionInfo={loadCollectionInfo}
@@ -953,7 +954,9 @@ describe('LibrarySearchBar — knowledge base detection failure (finding F-I)', 
 
 describe('LibrarySearchBar — directory hits (findings R-1/R-2)', () => {
   it('clicking a directory hit clears the search and calls onOpenFolder, never onOpenNote', async () => {
-    const onOpenFolder = vi.fn()
+    // Returns true: navigation actually happened (the S1 contract) — this
+    // is the happy path the R-1 clearing behaviour is meant to cover.
+    const onOpenFolder = vi.fn().mockReturnValue(true)
     const onOpenNote = vi.fn()
     renderBar({
       info: plainFolderInfo(),
@@ -989,5 +992,201 @@ describe('LibrarySearchBar — directory hits (findings R-1/R-2)', () => {
     // R-2: no handler means the row does nothing — it must NOT degrade into
     // opening the directory path as though it were a note/file.
     expect(onOpenNote).not.toHaveBeenCalled()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Finding S1 (code review of the ADR-081 search work): the production
+// onOpenFolder (LibraryExplorer.tsx) gates real navigation behind
+// confirmDiscardLibraryEdits(), which the user can decline. Before this fix,
+// openFolder cleared the query UNCONDITIONALLY before calling onOpenFolder —
+// a user who clicked a folder result, then clicked "Cancel" on the discard
+// prompt, correctly stayed put but lost their search query and results
+// anyway. onOpenFolder now reports back whether navigation happened; the bar
+// must only clear once it knows that is true.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — a cancelled folder navigation must not wipe the search (finding S1)', () => {
+  it('keeps the query AND its results on screen when onOpenFolder reports navigation did not happen', async () => {
+    // Simulates LibraryExplorer's onOpenFolder declining because the user
+    // clicked "Cancel" on the unsaved-edits discard prompt.
+    const onOpenFolder = vi.fn().mockReturnValue(false)
+    const onOpenNote = vi.fn()
+    renderBar({
+      info: plainFolderInfo(),
+      filesRes: filesResponse({ hits: [{ path: 'sub-dir', match_kind: 'name', is_dir: true }] }),
+      onOpenFolder,
+      onOpenNote,
+    })
+
+    type('sub')
+    const row = await screen.findByTestId('file-search-name-hit')
+    fireEvent.click(row)
+
+    expect(onOpenFolder).toHaveBeenCalledWith('sub-dir')
+    // This is the whole defect: a declined navigation must leave the query
+    // AND its rendered results exactly as the user left them — never wiped
+    // as a side effect of a navigation that never happened.
+    expect(screen.getByTestId('library-search-input')).toHaveValue('sub')
+    expect(screen.getByTestId('file-search-name-hit')).toBeInTheDocument()
+    expect(screen.queryByTestId('file-tree')).not.toBeInTheDocument()
+    expect(onOpenNote).not.toHaveBeenCalled()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Finding S2 (code review of the ADR-081 search work): a record hit rendered
+// only its first 4 cells with no indication anything was withheld — a
+// record that matched on its 7th property could show four cells NONE of
+// which contain the search term. VaultFindCell carries no "this matched"
+// flag on the wire (contracts/components/schemas/VaultFindCell.yaml has only
+// `property`/`value`), so the fix approximates client-side: cells whose
+// property or value contain a query word sort first, and a withheld count is
+// shown whenever cells remain hidden.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — record hits: withheld cells are disclosed (finding S2)', () => {
+  it('surfaces the MATCHING cell instead of silently cutting it, and states how many were withheld', async () => {
+    renderBar({
+      res: response({
+        records: [
+          {
+            path: 'crm/acme.md',
+            title: 'Acme Corp',
+            cells: [
+              { property: 'status', value: 'open' },
+              { property: 'owner', value: 'jamie' },
+              { property: 'region', value: 'west' },
+              { property: 'tier', value: 'gold' },
+              { property: 'notes', value: 'renewal pending' },
+              { property: 'contact', value: 'ops@acme.test' },
+              { property: 'sku', value: 'widget-42' },
+            ],
+          },
+        ],
+      }),
+    })
+
+    type('widget')
+    const hit = await screen.findByTestId('vault-search-record-hit')
+
+    // The 7th cell is the one that actually matched "widget" — it must be
+    // shown, not silently dropped by a naive first-4 slice.
+    expect(within(hit).getByText(/widget-42/)).toBeInTheDocument()
+    // 7 cells total, 4 shown — 3 withheld.
+    expect(within(hit).getByTestId('vault-search-record-cells-more')).toHaveTextContent('+3 more')
+  })
+
+  it('renders no withheld-count indicator when every cell already fits', async () => {
+    renderBar({
+      res: response({
+        records: [{ path: 'crm/acme.md', title: 'Acme Corp', cells: [{ property: 'status', value: 'open' }] }],
+      }),
+    })
+
+    type('open')
+    await screen.findByTestId('vault-search-record-hit')
+    expect(screen.queryByTestId('vault-search-record-cells-more')).toBeNull()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Finding S3 (code review of the ADR-081 search work): FileSearchResponse's
+// honesty fields `truncated_root` and `stats.dirs_visited` arrived on the
+// wire and were dropped entirely. A walk that burned its whole Files budget
+// on thousands of directories and a handful of files reported only "N files
+// searched" beside "too many files to search in one pass" — two true
+// numbers that together read as nonsense. And a lost mount named itself in
+// `truncated_root` while the UI never said which one.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — files kind: honesty fields dirs_visited/truncated_root (finding S3)', () => {
+  const zeroStats = {
+    files_visited: 12,
+    bytes_scanned: 0,
+    files_skipped_problems: 0,
+    files_pruned_ignored: 0,
+    files_skipped_per_file_cap: 0,
+    hits_capped_per_file: 0,
+  }
+
+  it('reports directories alongside files so a directory-heavy stop is not read as nonsense', async () => {
+    renderBar({
+      info: plainFolderInfo(),
+      filesRes: filesResponse({
+        truncated: true,
+        truncated_reason: 'max_files',
+        stats: { ...zeroStats, dirs_visited: 40000 },
+      }),
+    })
+
+    type('report')
+    const banner = await screen.findByTestId('library-search-truncated')
+    expect(banner.textContent ?? '').toMatch(/40,000 directories/i)
+    expect(banner.textContent ?? '').toMatch(/12 files? searched/i)
+  })
+
+  it('names the lost mount when truncated_root identifies one', async () => {
+    renderBar({
+      info: plainFolderInfo(),
+      filesRes: filesResponse({
+        truncated: true,
+        truncated_reason: 'root_lost',
+        truncated_root: 'research-drive',
+        stats: zeroStats,
+      }),
+    })
+
+    type('report')
+    const banner = await screen.findByTestId('library-search-truncated')
+    expect(banner.textContent ?? '').toMatch(/research-drive/i)
+  })
+
+  it('names the workspace folder itself when truncated_root is the empty string — never "absent"', async () => {
+    renderBar({
+      info: plainFolderInfo(),
+      filesRes: filesResponse({
+        truncated: true,
+        truncated_reason: 'root_lost',
+        truncated_root: '',
+        stats: zeroStats,
+      }),
+    })
+
+    type('report')
+    const banner = await screen.findByTestId('library-search-truncated')
+    expect(banner.textContent ?? '').toMatch(/workspace folder/i)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Finding S4 (code review of the ADR-081 search work): the previous query's
+// results stay on screen during the debounce window (useFileSearch's
+// stale-while-debouncing retention, load-bearing for the 429 grace path —
+// see useFileSearch.ts) but the copy describing them was keyed to the LIVE
+// `text`, not the query that actually produced them — so mid-keystroke the
+// UI could assert "No results for 'bar'" before "bar" had been searched at
+// all.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — files kind: empty-state copy keys to the query that ran, not live text (finding S4)', () => {
+  it('keeps naming the query that produced the results while a newer keystroke is still debouncing', async () => {
+    const searchFilesFn = vi.fn().mockResolvedValue(filesResponse({ hits: [] }))
+    // A long debounce makes the "still on the old query" window observable
+    // synchronously, with no need to fake timers.
+    renderBar({ info: plainFolderInfo(), filesRes: searchFilesFn, debounceMs: 200 })
+
+    type('foo')
+    await waitFor(() => expect(searchFilesFn).toHaveBeenCalledTimes(1))
+    const empty = await screen.findByTestId('library-search-empty')
+    expect(empty.textContent ?? '').toMatch(/foo/)
+
+    // Type a new query. Its debounce (200ms) has not elapsed yet, so the
+    // request for "bar" has not even been sent — the empty state must still
+    // describe "foo", the query that actually ran, not the live keystrokes.
+    type('bar')
+    expect(searchFilesFn).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('library-search-empty').textContent ?? '').toMatch(/foo/)
+    expect(screen.getByTestId('library-search-empty').textContent ?? '').not.toMatch(/bar/)
   })
 })

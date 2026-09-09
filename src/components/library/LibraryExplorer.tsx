@@ -970,9 +970,16 @@ export function LibraryExplorer({
               goTo(workspaceId, workspacePath)
             }}
             onOpenFolder={(workspacePath) => {
-              if (!confirmDiscardLibraryEdits()) return
+              // Finding S1: report back whether navigation actually
+              // happened. LibrarySearchBar only clears its query/results
+              // once it KNOWS this returned true — a "Cancel" on the
+              // discard-unsaved-edits prompt must leave the search exactly
+              // as the user left it, not wipe it as a side effect of a
+              // navigation that never occurred.
+              if (!confirmDiscardLibraryEdits()) return false
               setBrowsedDir(workspacePath)
               goTo(workspaceId, null)
+              return true
             }}
           >
             {entriesQuery.isLoading && <ListSkeleton />}
