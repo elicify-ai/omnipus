@@ -1,6 +1,6 @@
 # ADR-084 — The Judge is an active reviewer, not a passive one
 
-- **Status:** Proposed (revision 3, after spec-authoring review) — 2026-09-09
+- **Status:** Proposed (revision 4 — greenfield, migration removed by operator directive) — 2026-09-09
 - **Amends:** the un-ADR'd judge fix-wave in commit `02214f5c` (2026-09-09, "fix GX-E") — `planArtifactCheck`, the rung-1.5 dispatch, and the working-tree diff feed. *(Revision 1 wrongly attributed this to ADR-082, which is about UI-independent turns and session-bound streaming and says nothing about the Judge.)*
 - **Relates to:** ADR-052 (verifier adjudication, FR-039 reproducibility), ADR-055 (PlanSupervisor, the skills-allowlist gap), ADR-057 FR-011 (delegated children own their sessions), ADR-074 D7 (`evidence_quote`), ADR-077 / Constraint #6 (tool policy), Constraint #8 (contract-first wire formats)
 - **Prerequisites:** issue #688 (configurable judge timeout) **and** D9's investigation bounds, **and** D10's capability closures. None of D1 ships before all three.
@@ -99,11 +99,15 @@ A completed check that exited **non-zero** (file absent, empty, or the named sub
 
 Path safety (`isSafeWorkspaceArtifactPath`) is unchanged.
 
-### D6 — Existing installs are migrated against every historical rubric
+### D6 — REMOVED: no migration (greenfield, operator directive 2026-09-09)
 
-`JudgeDefaultRubric` has been revised at least once (`4b2378f8` 2026-07-19; `577c0df1` 2026-09-05, the judgment-grounding revision). An install seeded in that window holds a `SOUL.md` matching neither the current default nor the new one, so revision 1's "matches the current default ⇒ update, else operator-edited ⇒ leave alone + WARN" would silently strand **the entire population running today** on "Do not run tools".
+> migration is not needed assume greenfield remove migrations
 
-Migration compares against a **frozen list of every historical default**, each pinned as its own constant with its commit noted. A byte-match against any of them ⇒ overwrite with the new default and record a one-shot marker on `cfg` (precedent: `SeededSkillGrants` / `SkillsMigrationDefineGoalRename`). No match ⇒ leave alone and WARN naming the path. It runs **at boot**, alongside `seedSystemAgentEagerSouls` and before any verifier dispatch, so no adjudication straddles it. `ensureVerifierSoul`'s backfill-only contract and `SeedSystemAgentSoulFile`'s never-overwrite invariant are unchanged; this is a separate, deliberately-overwriting path.
+Revisions 2 and 3 specified a migration that compared each install's `agents/judge/SOUL.md` against a frozen list of historical `JudgeDefaultRubric` texts and overwrote un-edited ones. That is deleted in full: no frozen list, no hash comparison, no one-shot marker, no overwrite path, no WARN-on-edited branch. Nothing in this ADR writes over an existing soul file, and the existing invariants stand untouched — `SeedSystemAgentSoulFile` never overwrites, `ensureVerifierSoul` backfills only when empty.
+
+**The consequence, stated plainly:** the rubric is materialised to `agents/judge/SOUL.md` and read from there, so an install that already has that file **keeps the old instructions, including "Do not run tools", indefinitely.** D1 reaches fresh installs and any install whose soul file is absent or empty. Bringing an existing install onto the new behaviour is an operator action — delete or replace that file — not something this change performs. That is the accepted meaning of greenfield here.
+
+This also retires revision 3's R3-a, which existed only to correct the migration's frozen list.
 
 ### D7 — Verdict provenance and an investigation log
 
@@ -157,9 +161,9 @@ A criterion naming a path that does not exist is `unmet` (D5a's veto). A path th
 
 Spec authoring re-verified every claim in revision 2 and found eight further errors. They are corrected here; `docs/internal/specs/judge-active-reviewer-spec.md` implements the corrected form and records the evidence in its §0.
 
-### R3-a — D6's frozen rubric list is half missing (blocker)
+### R3-a — RETIRED
 
-Hashing every historical `JudgeDefaultRubric` body yields **four** distinct texts, not the two revision 2 names. It omits `89297b51` (2026-07-21) — which was live for roughly six and a half weeks and therefore covers essentially the entire existing install population — and `3eff293a` (the current text). Shipping D6 as written would WARN and strand exactly the installs the migration exists to rescue. The frozen list is all four, each pinned with its commit and a hash.
+Concerned the migration's frozen rubric list. The migration itself is removed in revision 4 (see D6), so this correction no longer applies. Recorded rather than deleted so the history reads straight: the finding was correct — four historical rubric texts exist, not two — and it is moot only because nothing now compares against them.
 
 ### R3-b — D2c's `source` cannot live inside `evidence_quote` (blocker)
 
