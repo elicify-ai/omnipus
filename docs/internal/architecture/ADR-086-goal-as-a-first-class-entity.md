@@ -80,6 +80,19 @@ With an identity to address, a goal no longer needs to remember a channel, a cha
 
 Consistent with the operator's standing directive (ADR-084 §D6, "assume greenfield, remove migrations"): no migration of existing goals is built. Goals in flight at upgrade are not carried across. This MUST be stated in the spec's deployment section rather than discovered.
 
+### D8 — Goal progress becomes visible: the verdict is projected onto criterion status (operator-approved)
+
+> *"yes to make goal progress visible"* — operator, 2026-09-09
+
+`pkg/task/criterion.go` defines and validates three statuses — `CritPending`, `CritMet`, `CritUnmet` — and **only the first is ever written**. A repository-wide search finds 14 writers of `CritPending` and **zero** non-test assignments of `CritMet` or `CritUnmet`. Every criterion therefore renders as pending in the UI regardless of what the Judge decided, at **task and plan level as well as chat**. The verdict is produced, persisted and logged; it simply never reaches the tick marks anyone looks at.
+
+This is a pre-existing defect, not one this ADR introduces, and it is the reason goal work has felt opaque: even a correct verdict was invisible.
+
+- When an adjudication records a verdict, each criterion's `status` MUST be set from that criterion's outcome — `met` → `CritMet`, `unmet` → `CritUnmet` — and `unable_to_verify` (ADR-084 D2a) MUST be representable rather than collapsed into `unmet`.
+- The writer runs where the verdict is recorded, so it covers **all three scopes at once**; it is not a chat-only fix.
+- The goal entity (D1) is the natural home for this: today a chat goal's criteria are a serialised string with nowhere to write a per-criterion result back to.
+- Constraint #8 applies: `AcceptanceCriterion.status` is a wire type with **four** copies — `AcceptanceCriterion.yaml`, `AcceptanceCriterionInput.yaml`, and two hand-synced inline duplicates inside `contracts/asyncapi.yaml` for `GoalStatusFrame.criteria[]` and `.dod[]`, which generate `status: z.enum(["pending","met","unmet"])` under `.strict()` (verified at `src/lib/api/generated/_asyncapi-zod-schemas.generated.ts:837` and `:867`). `GoalStatusFrame.yaml` warns in its own description that edits must be mirrored there. **Missing either inline copy drops every goal-status frame at the SPA edge — the goal card blanks in production with a green `make verify-contracts`.**
+
 ## 4. Consequences
 
 - One counter pair, one criteria list, one status vocabulary across chat and task.
