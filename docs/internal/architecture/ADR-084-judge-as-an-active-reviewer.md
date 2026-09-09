@@ -1,6 +1,7 @@
 # ADR-084 — The Judge is an active reviewer, not a passive one
 
-- **Status:** Proposed (revision 5 — four claims about the code corrected; decisions unchanged) — 2026-09-09
+- **Status:** Proposed (revision 6 — D4's residual-risk acceptance narrowed, D10's confinement scope widened; no decision withdrawn) — 2026-09-09
+  - *Revision 5 — four claims about the code corrected; decisions unchanged.*
   - *Revision 4 — greenfield, migration removed by operator directive.*
 - **Amends:** the un-ADR'd judge fix-wave in commit `02214f5c` (2026-09-09, "fix GX-E") — `planArtifactCheck`, the rung-1.5 dispatch, and the working-tree diff feed. *(Revision 1 wrongly attributed this to ADR-082, which is about UI-independent turns and session-bound streaming and says nothing about the Judge.)*
 - **Relates to:** ADR-052 (verifier adjudication, FR-039 reproducibility), ADR-055 (PlanSupervisor, the skills-allowlist gap), ADR-057 FR-011 (delegated children own their sessions), ADR-074 D7 (`evidence_quote`), ADR-077 / Constraint #6 (tool policy), Constraint #8 (contract-first wire formats)
@@ -90,6 +91,8 @@ The rubric already says this of the worker's summary. It extends to **every byte
 
 **Residual risk, re-derived from the true blast radius (C1).** A successful injection does not merely produce one wrong verdict: at task scope a false `met` marks the task Done, which unblocks and dispatches dependent tasks holding `bash` and `write_file`, and notifies the source channel. Goal scope is comparatively benign (`runGoalAdjudication` → `clearGoal`, terminal). This is accepted **only** because D2a–D2d make an unearned `met` structurally hard to produce and D10 closes the capability paths. **If those controls are descoped, this acceptance is void.**
 
+> ⚠️ **AMENDED BY REVISION 6 — read §7 R6-a before relying on this paragraph.** "Structurally hard to produce" is the claim the controls support; "impossible", which the spec's revision-2 user story asserted, is not. The controls close *wrong file*; they do not close *right file, wrong conclusion*, because nothing evaluates whether a grounded quote **entails** the criterion — that is the model's judgement, which §1 directs the Judge to supply. §7 R6-a carries the amended acceptance sentence and names the residual.
+
 ### D5 — Deterministic checks inform the Judge; they do not replace it
 
 Commit `02214f5c` added `judge.go::planArtifactCheck`, which settles an artifact criterion outright with no LLM call. Under the operator's direction that is wrong in principle: it substitutes a program for the judgement the Judge exists to provide. The check is retained and demoted to a **fact in the evidence block**.
@@ -138,7 +141,7 @@ D1 must not widen the Judge's real capability. Before it ships:
 - **God mode.** `resolveEffectivePolicyWith`'s `cfg.GodMode` short-circuit floors every tool at `allow` regardless of seed. The verifier dispatch refuses to run a Judge turn under god mode rather than running one holding `bash`.
 - **MCP.** The Judge's seed gains an explicit `mcp_*: deny` wildcard — the one place a wildcard is legitimate under Constraint #6's own MCP carve-out — because `registerServerTools` registers MCP tools into every agent and they resolve from the global ceiling.
 - **Skills.** The allowlist becomes explicit and non-nil (`["define-goal"]`, or empty), re-enforced every boot by `seedSystemAgents`' existing `skills != nil` branch. A skill body is instruction-shaped text delivered through a tool result, outside `buildJudgeUserContent`'s framing; ADR-055 recorded this gap rather than closing it, and D1 makes closing it mandatory.
-- **Read confinement.** The verifier turn pins `restrict = true` for itself regardless of the global `RestrictToWorkspace`/`AllowReadOutsideWorkspace` defaults. Confinement is a role invariant for a verifier, exactly like `MemoryEnabled=false` and its tool policy. Note `seedSystemAgents` re-enforces many fields but **not** `Workspace` — the reason `systemAgentSeed` gives for denying PlanSupervisor `read_file` at all ("a read grant would have unspecified, operator-mutable reach"); the Judge is safe only once D10 pins the confinement.
+- **Filesystem confinement** *(retitled from "Read confinement" by revision 6 — see §7 R6-b: the mechanism R5-d specifies governs `FSOpRead`, `FSOpList` **and** `FSOpSend`, and narrowing it to reads would leave `list_directory $OMNIPUS_HOME/sessions/` open)*. The verifier turn pins `restrict = true` for itself regardless of the global `RestrictToWorkspace`/`AllowReadOutsideWorkspace` defaults. Confinement is a role invariant for a verifier, exactly like `MemoryEnabled=false` and its tool policy. Note `seedSystemAgents` re-enforces many fields but **not** `Workspace` — the reason `systemAgentSeed` gives for denying PlanSupervisor `read_file` at all ("a read grant would have unspecified, operator-mutable reach"); the Judge is safe only once D10 pins the confinement.
 
 ### D11 — File-not-found versus unreachable
 
@@ -220,3 +223,90 @@ D10 says the verifier turn *"pins `restrict = true` for itself"*. R3-d/C6 correc
 So the pin as written changes nothing, and §2.1 C4's conclusion ("an unconfined Judge reads every transcript in the install, defeating the `VerifierSessionScopeAllows` lock") remains true **after** D10 as specified. Closing it needs a real mechanism in the shared filesystem gate — a new `fspolicy.FSPolicy.ReadConfined` honoured in `ResolvePath`'s `FSOpRead` branch, set only for System-Agent instances, plus the symlink case — owned by security-lead, with an explicit statement of what does not change for every other agent. Spec FR-060 / FR-060a. Two mechanical notes: `coreagent.IsSystemAgentID` takes a `CoreAgentID`, not a `string`; and confining all System Agents also confines PlanSupervisor, which is intended and must be stated.
 
 **Unchanged by revision 5:** D1, D1a's descendant extension, D2, D2a, D2b, D2c's grounding requirement, D2d, D3, D4, D5, D5a, D6's removal, D7's provenance and log, D8, D9, D10's four closures as *goals*, and D11. Revision 5 corrects four factual premises and relocates two closures; it withdraws nothing.
+
+## 7. Revision 6 — the risk acceptance is narrowed, and one closure is widened (2026-09-09)
+
+A second adversarial review of `docs/internal/specs/judge-active-reviewer-spec.md`, at `ea8dffdb`,
+found that **D4's residual-risk acceptance was calibrated on a claim the controls do not deliver**,
+and that **D10's read-confinement bullet names one filesystem operation where the mechanism governs
+three**. Both are recorded here rather than buried in §6, because the first changes what this ADR
+accepts and the second changes what it requires. No decision is withdrawn. The spec's §0 carries
+the code evidence for each (C16 – C21).
+
+### R6-a — D4's residual-risk acceptance is narrowed: the controls close *wrong file*, not *wrong conclusion*
+
+D4 accepts the injection surface "**only** because D2a–D2d make an unearned `met` structurally hard
+to produce and D10 closes the capability paths", and revision 2's spec carried that forward as a
+user story titled "an unearned `met` is impossible to state". **That is stronger than anything the
+controls establish, and the gap is the failure class this ADR exists for.**
+
+Trace a verdict of `{"outcome":"met","evidence_source":"file_read","evidence_target":
+"neon-2048/index.html","evidence_quote":"<div id=\"game-board\" class=\"grid\"></div><script
+src=\"game.js\">"}` against a **stub** `index.html`. It passes every control: the quote is
+non-empty, both discriminators are present and in-enum, the quote is a genuine substring of a
+genuine read of that exact path, the criterion names the path, the quote clears the length floor and
+the boilerplate list, it is used once, the reason names the target, the criterion is one clause with
+one entry, and the deterministic check exits zero — which D5a makes non-binding. The outcome is
+`met`, and at task scope `adjudicateClaim` dispatches downstream tasks holding `bash` and
+`write_file`.
+
+**Nothing in D2a–D2d, and nothing the spec can add, evaluates whether the quote *entails* the
+criterion.** That is irreducibly the model's judgement — which is exactly what §1's operator
+direction asks the Judge to supply, and is not up for re-litigation. The controls make an unearned
+`met` **expensive, attributable and auditable**; they do not make it impossible.
+
+**D4's acceptance sentence is therefore amended to read:**
+
+> This is accepted **only** because D2a–D2d make an unearned `met` costly to produce and, when
+> produced, attributable to a named artifact — **not because they make it impossible.** A `met`
+> grounded in a real, correctly-targeted, distinct, non-boilerplate quote from the very file the
+> criterion names, whose reason names that file, is accepted by every mechanical control in the
+> spec **even when the file does not satisfy the criterion**. That residual is the accepted risk,
+> it is measured rather than assumed (spec SC-002b, against a real model), and D10 closes the
+> capability paths that would make its consequences worse. **If any of the attribution controls is
+> descoped — the reachability rule, the length floor and deny-list, the distinctness rule, the
+> reason-names-target rule, or the per-clause evidence count — this acceptance is void.**
+
+Two consequences the spec implements: the user story is retitled to what the controls deliver ("no
+`met` can be stated without stating and grounding what it looked at"); and the success criterion
+splits, so that the mechanical classes keep their 0-of-100 bar while the residual class is measured
+against a real model with a **non-zero expected pass rate**, recorded as a baseline. A corpus built
+only from the classes the controls were designed for would score perfectly with the original failure
+class untouched, and the feature would be declared successful on a number that never tested it.
+
+### R6-b — D10's read confinement governs three operations, not one
+
+R5-d established that the confinement needs a real mechanism in the shared filesystem gate — a
+`ReadConfined` flag honoured in `ResolvePath`'s out-of-workdir branch. That branch is
+`case FSOpRead, FSOpList, FSOpSend:` (`pkg/tools/resolvepath.go:904`), so the flag necessarily
+governs `read_file`, `list_directory` **and** `send_file`; `send_file` reaches it through a real
+path (`pkg/tools/send_file.go:116` resolves the turn policy, `:126` passes `FSOpSend`).
+
+Narrowing the flag to `FSOpRead` alone was considered and rejected: the Judge is granted
+`list_directory`, so a read-only flag would leave `list_directory $OMNIPUS_HOME/sessions/` open and
+close only half of §2.1 C4's hole. **D10's read-confinement bullet is therefore restated as
+filesystem confinement over all three operations**, and the spec's requirement, oracle and success
+criterion cover the three rather than reads alone (FR-060, FR-061, SC-006).
+
+A second mechanical gap, recorded because it makes the mechanism buildable rather than merely
+named: `fspolicy.EffectiveFSPolicy` **discards** its `ctx`, `agentID` and `workspaceID` parameters
+outright, and the package has no System-Agent concept, so there was no input that could set the
+flag. The spec names one, following the shipped `tools.WithVerifierSessionScope` precedent — an
+engine-owned fact placed on the turn context that a tool reads but cannot set, fail-closed, with
+"unset" meaning *not confined* so no other agent's policy changes (FR-060b).
+
+### R6-c — Three consequences of D2a and D6 that this ADR states but does not bound
+
+Recorded here because each is a property of a decision above, and in each case the spec's revision-5
+form contradicted the decision it implemented.
+
+| # | Decision | The unbounded or self-defeating consequence | Where the spec bounds it |
+|---|---|---|---|
+| 1 | **D2a** — `unable_to_verify` flows into the existing withholding | The existing bound is **per criterion**: `noteNonVerdict`'s no-op arm resets that criterion's counter, and `runGoalAdjudication`'s `Unavailable` branch consumes no round. Prose criteria never emitted `unable_to_verify` before, so D2a *creates* the path — after which a Judge withholding a **different** criterion each round loops without bound, each iteration a tool-using turn of up to the raised timeout inside the operator's chat turn | A per-unit consecutive-withheld counter at the same K (spec FR-020a). D9.3's "an honest failure arrives in ≤ K+1 adjudications" is true per criterion and false per goal without it |
+| 2 | **D6** — greenfield; the engine never overwrites a soul | The install that keeps its old prompt is the one the new controls are calibrated against. A rubric that never asked for a quote cannot satisfy an empty-quote rewrite, so applying that rewrite unconditionally converts **100 % of that population's passing verdicts** into blocked escalations — destroying precisely the installs D6's greenfield stance leaves in place | A second, independent capability sentinel for "does this rubric instruct a quote at all", gating that one rewrite separately (spec C16, FR-024, FR-077, FR-079(c)) |
+| 3 | **D6** — operator edits survive | The capability test is a **substring test for shipped strings**, so it fails on every operator who wrote their own modern rubric in their own words — the very operator D6 protects. Telling them their prompt is obsolete and offering only "reset" makes the supported way out *delete the edit D6 exists to preserve* | The report states the missing declarations and quotes the sentinels verbatim, with an add-them affordance alongside reset (spec C17, FR-078) |
+
+**Unchanged by revision 6:** every decision D1 – D11, including D4's decision to accept the
+injection surface and D10's four closures. Revision 6 narrows one acceptance to what the controls
+deliver, widens one closure to what its mechanism governs, and names three bounds the decisions
+imply. It withdraws nothing.
