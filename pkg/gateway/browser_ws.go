@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/pion/ice/v4"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -669,14 +670,17 @@ type BrowserWSHandler struct {
 	// configured (the laptop default) -- Sessions then use ephemeral ports,
 	// exactly as before ADR-062.
 	//
-	// Gateway-owned, not Session-owned, because a Session exists PER AGENT:
-	// if each bound the same fixed port itself, the first agent would win and
-	// every later one would silently fall back to an ephemeral port, giving a
-	// multi-agent hosted install working video for one agent and an
-	// inexplicable failure for the rest.
-	mediaConnMu sync.Mutex
-	mediaConn   net.PacketConn
-	mediaTCP    net.Listener
+	// Captures belong to workspace browser panels and can be recreated while
+	// other captures remain live. The gateway owns both the socket/listener
+	// and its single mux routing table across all of those lifetimes.
+	// mediaLifecycleMu fences capture creation against gateway teardown.
+	mediaLifecycleMu sync.RWMutex
+	mediaClosed      bool // guarded by mediaConnMu
+	mediaUDPMux      ice.UDPMux
+	mediaTCPMux      ice.TCPMux
+	mediaConnMu      sync.Mutex
+	mediaConn        net.PacketConn
+	mediaTCP         net.Listener
 	// mediaTCPBindErr records that ICE-TCP (ADR-062 tier 2) was configured
 	// but its listener could not be bound. Guarded by mediaConnMu. Like
 	// mediaPortFallback it exists so the failure reaches the PANEL, not just

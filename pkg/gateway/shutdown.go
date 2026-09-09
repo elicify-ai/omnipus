@@ -124,6 +124,9 @@ func omnipusGracefulShutdown(
 	// the agent loop's context cancellation path (handled in pkg/agent).
 
 	slog.Info("shutdown: step 4 — stopping background services")
+	if runningServices.browserWS != nil {
+		runningServices.browserWS.closeMediaTransport()
+	}
 	// Heartbeat + cron were already stopped in step 1 (they trigger turns).
 	// Stop the remaining services that have no turn side effects.
 	if runningServices.DeviceService != nil {

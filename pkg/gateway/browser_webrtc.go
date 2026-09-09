@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gorilla/websocket"
+	pion "github.com/pion/webrtc/v4"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -700,13 +701,21 @@ func (h *BrowserWSHandler) ensureCaptureSession(
 	panelSessionID string,
 	cfg *config.Config,
 ) (*browser.CaptureSession, error) {
+	h.mediaLifecycleMu.RLock()
+	defer h.mediaLifecycleMu.RUnlock()
+	h.mediaConnMu.Lock()
+	closed := h.mediaClosed
+	h.mediaConnMu.Unlock()
+	if closed {
+		return nil, errors.New("browser media transport is closed")
+	}
 	browsingKey := mgr.BrowsingKey().String()
 	return mgr.EnsureCaptureSessionForPanel(panelSessionID, func() (*browser.CaptureSession, error) {
 		webrtcCfg := webrtc.Config{
-			StunServer: cfg.Tools.Browser.WebRTCStunServer,
-			MediaConn:  h.sharedMediaConn(cfg),
-			MediaTCP:   h.sharedMediaTCP(cfg),
-			PublicIPs:  resolveWebRTCPublicIPs(cfg),
+			StunServer:  cfg.Tools.Browser.WebRTCStunServer,
+			MediaUDPMux: h.sharedMediaUDPMux(cfg),
+			MediaTCPMux: h.sharedMediaTCPMux(cfg),
+			PublicIPs:   resolveWebRTCPublicIPs(cfg),
 		}
 		sink := newWebRTCContextInputSink(cfg.Gateway.ValidateInbound)
 		logf := webrtcRelayLogf(agentID)
@@ -1111,6 +1120,9 @@ func (h *BrowserWSHandler) sharedMediaConn(cfg *config.Config) net.PacketConn {
 	}
 	h.mediaConnMu.Lock()
 	defer h.mediaConnMu.Unlock()
+	if h.mediaClosed {
+		return nil
+	}
 	if h.mediaConn != nil {
 		return h.mediaConn
 	}
@@ -1120,6 +1132,7 @@ func (h *BrowserWSHandler) sharedMediaConn(cfg *config.Config) net.PacketConn {
 	if err == nil {
 		slog.Info("browser-webrtc: fixed media UDP socket bound", "addr", conn.LocalAddr().String())
 		h.mediaConn = conn
+		h.mediaUDPMux = pion.NewICEUDPMux(nil, conn)
 		return conn
 	}
 	configuredErr := err
@@ -1146,6 +1159,7 @@ func (h *BrowserWSHandler) sharedMediaConn(cfg *config.Config) net.PacketConn {
 			"configured_port_error", configuredErr,
 		)
 		h.mediaConn = fallback
+		h.mediaUDPMux = pion.NewICEUDPMux(nil, fallback)
 		return fallback
 	}
 
@@ -1251,6 +1265,9 @@ func (h *BrowserWSHandler) sharedMediaTCP(cfg *config.Config) net.Listener {
 	}
 	h.mediaConnMu.Lock()
 	defer h.mediaConnMu.Unlock()
+	if h.mediaClosed {
+		return nil
+	}
 	if h.mediaTCP != nil {
 		return h.mediaTCP
 	}
@@ -1268,6 +1285,7 @@ func (h *BrowserWSHandler) sharedMediaTCP(cfg *config.Config) net.Listener {
 	h.mediaTCPBindErr = nil
 	slog.Info("browser-webrtc: ICE-TCP socket bound", "addr", ln.Addr().String())
 	h.mediaTCP = ln
+	h.mediaTCPMux = pion.NewICETCPMux(nil, ln, 8)
 	return ln
 }
 

@@ -318,14 +318,12 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 	// adversarial review of ADR-069 before it shipped; both legs run through
 	// buildPeerConnection, which made the blast radius easy to miss.)
 	viewerSE := se
-	if cfg.MediaConn != nil {
-		// One gateway-owned socket, shared by every agent's Session: Pion's
-		// UDP mux demultiplexes concurrent ICE agents on it by ufrag. See
-		// Config.MediaConn for why a per-Session bind would break the
-		// second agent.
-		viewerSE.SetICEUDPMux(webrtc.NewICEUDPMux(nil, cfg.MediaConn))
+	if cfg.MediaUDPMux != nil {
+		// Borrow the gateway's single reader and ufrag routing table. A new
+		// mux here would compete with every live and retired capture reader.
+		viewerSE.SetICEUDPMux(cfg.MediaUDPMux)
 	}
-	if cfg.MediaTCP != nil {
+	if cfg.MediaTCPMux != nil {
 		// ADR-069 tier 2. Default Pion network types omit TCP entirely, so the
 		// mux would be installed and never advertised. Widen to include TCP;
 		// deliberately KEEP both UDP families -- an earlier revision narrowed
@@ -335,7 +333,7 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 		// fly-global-services bind and by ICE-Lite dropping srflx, not by the
 		// network-type list (with a UDP mux, pion's gatherCandidatesLocalUDPMux
 		// ignores networkTypes and just enumerates the mux's addresses).
-		viewerSE.SetICETCPMux(webrtc.NewICETCPMux(nil, cfg.MediaTCP, 8))
+		viewerSE.SetICETCPMux(cfg.MediaTCPMux)
 		viewerSE.SetNetworkTypes([]webrtc.NetworkType{
 			webrtc.NetworkTypeUDP4, webrtc.NetworkTypeUDP6, webrtc.NetworkTypeTCP4,
 		})
@@ -391,8 +389,8 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 		webrtc.WithInterceptorRegistry(viewerInterceptors),
 		webrtc.WithSettingEngine(viewerSE),
 	)
-	if cfg.MediaConn != nil || cfg.MediaTCP != nil || len(cfg.PublicIPs) > 0 {
-		s.logf("webrtc: viewer leg using fixed media udp=%v tcp=%v public=%v", cfg.MediaConn != nil, cfg.MediaTCP != nil, cfg.PublicIPs)
+	if cfg.MediaUDPMux != nil || cfg.MediaTCPMux != nil || len(cfg.PublicIPs) > 0 {
+		s.logf("webrtc: viewer leg using fixed media udp=%v tcp=%v public=%v", cfg.MediaUDPMux != nil, cfg.MediaTCPMux != nil, cfg.PublicIPs)
 	}
 	return s
 }
