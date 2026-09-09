@@ -1,4 +1,4 @@
-import { Check, CircleNotch, Warning } from '@phosphor-icons/react'
+import { Check, CircleNotch, Warning, ArrowsClockwise } from '@phosphor-icons/react'
 import type { AutoSaveStatus } from '@/hooks/useAutoSave'
 
 interface AutoSaveIndicatorProps {
@@ -36,14 +36,20 @@ function formatSavedAt(date: Date): string {
  */
 export function AutoSaveIndicator({ status, error, className = '', lastSavedAt }: AutoSaveIndicatorProps) {
   const isError = status === 'error'
+  // ADR-083 EMB-004/EMB-007 (Step 0) — a save refused with a 409 because
+  // someone else changed the file is a CONFLICT the person can act on
+  // (reload, then redo the change), not a generic failure. Same alert
+  // semantics as the error branch (it's just as load-bearing), a distinct
+  // icon/color so it reads differently at a glance.
+  const isConflict = status === 'conflict'
 
   return (
     <span
       className={`inline-flex items-center gap-1 text-[10px] transition-opacity duration-300 ${
         status === 'saved' ? 'opacity-60' : status === 'idle' ? 'opacity-0' : 'opacity-100'
       } ${className}`}
-      aria-live={isError ? undefined : 'polite'}
-      role={isError ? 'alert' : undefined}
+      aria-live={isError || isConflict ? undefined : 'polite'}
+      role={isError || isConflict ? 'alert' : undefined}
     >
       {status === 'saving' && (
         <>
@@ -57,6 +63,12 @@ export function AutoSaveIndicator({ status, error, className = '', lastSavedAt }
           <span className="text-emerald-400">
             {lastSavedAt ? formatSavedAt(lastSavedAt) : 'Saved'}
           </span>
+        </>
+      )}
+      {isConflict && (
+        <>
+          <ArrowsClockwise size={11} weight="bold" className="text-[var(--color-warning)]" />
+          <span className="text-[var(--color-warning)]">{error || 'Someone else changed this file'}</span>
         </>
       )}
       {isError && (

@@ -212,6 +212,9 @@ import {
   FileSearchRequest as FileSearchRequestSchema,
   FileSearchResponse as FileSearchResponseSchema,
   LibraryBinaryContentRequest as LibraryBinaryContentRequestSchema,
+  // ADR-083 EMB-007/EMB-007b Step 0 — the typed 409 body for a refused
+  // Library whole-file save (contract-first #8):
+  LibraryConflictError as LibraryConflictErrorSchema,
   KnowledgeGraphResponse as KnowledgeGraphResponseSchema,
   // view-kinds-design-2026-09-03 §7 — the evaluated saved-view result the
   // Library's .base surface draws, and the list of views one .base owns
@@ -528,6 +531,9 @@ import type {
   VaultSearchResponse,
   CreateVaultRequest,
   LibraryBinaryContentRequest,
+  // ADR-083 EMB-007/EMB-007b Step 0 — typed 409 body for a refused Library
+  // whole-file save:
+  LibraryConflictError,
   KnowledgeGraphResponse,
   // unified-search-and-grep-spec.md workstream B (contract-first #8):
   FileSearchRequest,
@@ -720,6 +726,8 @@ export type {
   LibraryRenameRequest,
   LibraryUploadResponse,
   LibraryTransferRequest,
+  // ADR-083 EMB-007/EMB-007b Step 0:
+  LibraryConflictError,
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -4739,11 +4747,274 @@ export function fetchLibraryContent(workspaceId: string, path: string): Promise<
   )
 }
 
-/** Write a file's text content from the Library editor (D-5 — write side; the editor itself is a separate, later task). */
-export function putLibraryContent(workspaceId: string, body: LibraryContentRequest): Promise<LibraryEntry> {
-  return request<LibraryEntry>(
+// ── ADR-083 Step 0 (EMB-001/EMB-004/EMB-006/EMB-007/EMB-007a/EMB-007b/EMB-007c)
+// — closing the Library's unguarded save door ──────────────────────────────
+//
+// EMB-007c names the problem precisely: `request<T>` above is the SPA's
+// single API entry point, and it DISCARDS `res.headers` entirely — so no
+// caller that goes through it can ever see the `ETag` response header
+// EMB-007/EMB-007a/EMB-007b declare on GET .../content, GET .../download,
+// PUT .../content and PUT .../content-binary. Widening `request<T>`'s return
+// contract (option a) would touch every SPA call site's type surface for the
+// benefit of four callers. Per the spec's own recommendation, this is option
+// (b) instead: bespoke fetches — modelled on the providers-catalogue one
+// above (`fetchProvidersCatalogOnce`) — for exactly these four operations,
+// leaving `request<T>` and every other caller untouched.
+//
+// The bare (unquoted) token is what a caller sends back as `expect_version`
+// (EMB-007b): the wire header is the RFC-quoted strong form (`ETag:
+// "v1:…"`), matching what Go's `http.ServeContent` can parse; the request
+// body carries the bare value. Centralising the strip here means every one
+// of the four operations agrees on the same shape without re-deriving it.
+function bareVersionToken(res: Response): string | null {
+  const raw = res.headers.get('ETag')
+  if (!raw) return null
+  const trimmed = raw.trim()
+  // Defensive: EMB-007b says a weak (`W/`) form MUST NOT be emitted, but a
+  // caller reading an unexpected value should still recover the token rather
+  // than silently treating it as absent.
+  const unweak = trimmed.startsWith('W/') ? trimmed.slice(2) : trimmed
+  if (unweak.length >= 2 && unweak.startsWith('"') && unweak.endsWith('"')) {
+    return unweak.slice(1, -1)
+  }
+  return unweak
+}
+
+export interface LibraryVersionedResult<T> { // not-wire-format: SPA-internal pairing of a parsed response body with its ETag-derived version token — never itself sent or received on the wire.
+  data: T
+  /** Bare (unquoted) version token from the response's `ETag` header, or
+   * `null` when the server did not send one (e.g. an older gateway build
+   * that hasn't picked up EMB-007 yet). Send this back, unquoted, as
+   * `expect_version` on a subsequent PUT .../content or .../content-binary. */
+  version: string | null
+}
+
+/**
+ * LibraryVersionConflictError is the typed 409 EMB-004 requires the Library
+ * editors to surface as an actionable CONFLICT — distinct from a generic
+ * ApiError(409): `isLibraryVersionConflict(err)` lets a caller branch on it
+ * specifically, and `actualVersion` is the fresh token a retry MUST send
+ * (never the stale one the refused attempt sent). Extends ApiError so every
+ * existing `isApiError`/`getErrorMessage` call site still works unchanged.
+ */
+export class LibraryVersionConflictError extends ApiError {
+  readonly path: string
+  readonly expectedVersion: string | undefined
+  readonly actualVersion: string | undefined
+
+  constructor(conflict: LibraryConflictError, bodyText: string) {
+    super(409, conflict.error, { code: conflict.code, body: bodyText })
+    this.name = 'LibraryVersionConflictError'
+    this.path = conflict.path
+    this.expectedVersion = conflict.expected_version
+    this.actualVersion = conflict.actual_version
+    Object.setPrototypeOf(this, LibraryVersionConflictError.prototype)
+  }
+}
+
+export function isLibraryVersionConflict(err: unknown): err is LibraryVersionConflictError {
+  return err instanceof LibraryVersionConflictError
+}
+
+// Reads the 409 body ONCE (a Response body stream can only be consumed
+// once), then attempts to parse it as the typed LibraryConflictError
+// envelope. A 409 that doesn't match the envelope (unexpected shape, a proxy
+// error page, …) still surfaces as a real 409 ApiError — just not one
+// isLibraryVersionConflict() recognises — rather than being misreported as
+// some other status.
+async function libraryConflictErrorFromResponse(res: Response): Promise<ApiError> {
+  const generic = () =>
+    new ApiError(409, 'This conflicts with the current state. Please refresh and try again.')
+  let bodyText: string
+  try {
+    bodyText = await res.text()
+  } catch {
+    return generic()
+  }
+  let raw: unknown
+  try {
+    raw = JSON.parse(bodyText) as unknown
+  } catch {
+    return new ApiError(409, 'This conflicts with the current state. Please refresh and try again.', { body: bodyText })
+  }
+  const parsed = (LibraryConflictErrorSchema as ZodType<LibraryConflictError>).safeParse(raw)
+  if (!parsed.success) {
+    return new ApiError(409, 'This conflicts with the current state. Please refresh and try again.', { body: bodyText })
+  }
+  return new LibraryVersionConflictError(parsed.data, bodyText)
+}
+
+// Shared PUT implementation for the two version-carrying Library write doors.
+// Mirrors request()'s CSRF fast-fail + withCsrfRetry recovery (never routes
+// through request() itself, since that helper discards response headers —
+// see the module note above), and distinguishes a 409 conflict from every
+// other non-2xx before falling back to the generic ApiError path.
+async function putLibraryVersionedWrite<TRes>(
+  apiPath: string,
+  body: unknown,
+  resSchema: ZodType<TRes>,
+): Promise<LibraryVersionedResult<TRes>> {
+  if (readCSRFCookie() === null) {
+    throw new ApiError(
+      403,
+      `CSRF cookie missing — cannot PUT ${apiPath}. Log in or complete onboarding first so the server can issue the CSRF cookie.`,
+      { code: 'csrf_missing' },
+    )
+  }
+  return withCsrfRetry(() => attemptPutLibraryVersionedWrite(apiPath, body, resSchema))
+}
+
+async function attemptPutLibraryVersionedWrite<TRes>(
+  apiPath: string,
+  body: unknown,
+  resSchema: ZodType<TRes>,
+): Promise<LibraryVersionedResult<TRes>> {
+  let res: Response
+  try {
+    res = await fetch(`${BASE_URL}/api/v1${apiPath}`, {
+      method: 'PUT',
+      credentials: 'include',
+      headers: buildHeaders(),
+      body: JSON.stringify(body),
+    })
+  } catch (cause) {
+    throw new ApiError(0, 'Network unavailable. Check your connection.', { cause })
+  }
+  if (res.status === 409) {
+    throw await libraryConflictErrorFromResponse(res)
+  }
+  if (!res.ok) {
+    throw await ApiError.fromResponse(res)
+  }
+  let raw: unknown
+  try {
+    raw = (await res.json()) as unknown
+  } catch {
+    _recordApiSchemaError(`PUT /api/v1${apiPath}`, 1)
+    const schemaErr = new ApiSchemaError(
+      `PUT /api/v1${apiPath}`,
+      [{ path: [], message: 'Response is not valid JSON' }],
+      undefined,
+    )
+    void maybeDevToast(`[api] Non-JSON response: ${apiPath}`, `PUT:${apiPath}:non-json`)
+    throw schemaErr
+  }
+  const parsed = resSchema.safeParse(raw)
+  if (!parsed.success) {
+    _recordApiSchemaError(`PUT /api/v1${apiPath}`, parsed.error.issues.length)
+    const issues = parsed.error.issues.map((i) => ({ path: i.path as (string | number)[], message: i.message }))
+    void maybeDevToast(`[api] Schema mismatch: ${apiPath} — ${issues[0]?.message ?? 'unknown'}`, `PUT:${apiPath}:schema`)
+    throw new ApiSchemaError(`PUT /api/v1${apiPath}`, issues, raw)
+  }
+  return { data: parsed.data, version: bareVersionToken(res) }
+}
+
+/**
+ * fetchLibraryContentVersioned is fetchLibraryContent's version-carrying
+ * sibling (EMB-007c) — the read side of the Library text editor's save
+ * guard. `useLibraryFileEditor` is the only production caller: it needs the
+ * `ETag` header fetchLibraryContent's request()-based call can never expose,
+ * to send back as `expect_version` on putLibraryContent.
+ */
+export async function fetchLibraryContentVersioned(
+  workspaceId: string,
+  path: string,
+): Promise<LibraryVersionedResult<LibraryContentResponse>> {
+  const qs = new URLSearchParams({ path }).toString()
+  const apiPath = `/library/${encodeURIComponent(workspaceId)}/content?${qs}`
+  let res: Response
+  try {
+    res = await fetch(`${BASE_URL}/api/v1${apiPath}`, { credentials: 'include', headers: buildHeaders() })
+  } catch (cause) {
+    throw new ApiError(0, 'Network unavailable. Check your connection.', { cause })
+  }
+  if (!res.ok) throw await ApiError.fromResponse(res)
+  let raw: unknown
+  try {
+    raw = (await res.json()) as unknown
+  } catch {
+    _recordApiSchemaError(`GET /api/v1${apiPath}`, 1)
+    const schemaErr = new ApiSchemaError(
+      `GET /api/v1${apiPath}`,
+      [{ path: [], message: 'Response is not valid JSON' }],
+      undefined,
+    )
+    void maybeDevToast(`[api] Non-JSON response: ${apiPath}`, `GET:${apiPath}:non-json`)
+    throw schemaErr
+  }
+  const parsed = (LibraryContentResponseSchema as ZodType<LibraryContentResponse>).safeParse(raw)
+  if (!parsed.success) {
+    _recordApiSchemaError(`GET /api/v1${apiPath}`, parsed.error.issues.length)
+    const issues = parsed.error.issues.map((i) => ({ path: i.path as (string | number)[], message: i.message }))
+    void maybeDevToast(`[api] Schema mismatch: ${apiPath} — ${issues[0]?.message ?? 'unknown'}`, `GET:${apiPath}:schema`)
+    throw new ApiSchemaError(`GET /api/v1${apiPath}`, issues, raw)
+  }
+  return { data: parsed.data, version: bareVersionToken(res) }
+}
+
+/**
+ * downloadLibraryFileVersioned is the byte-stream sibling of
+ * fetchLibraryContentVersioned (EMB-007/EMB-007c) — the ONLY read on the
+ * annotated-PDF editor's save path (library-b-c-design-2026-09-07.md), since
+ * that editor's loader never calls GET .../content. LibraryPdfPreview's
+ * `fetchPdfBytes` is the sole production caller: it captures the `ETag` this
+ * returns so `handleSave` has a token to send as `expect_version` on
+ * putLibraryContentBinary. `libraryDownloadUrl` (below) stays a plain
+ * URL-builder for every non-version-carrying caller (audio/video `src`,
+ * download links) — this is deliberately a SEPARATE function, not a
+ * behaviour change to that one.
+ */
+export async function downloadLibraryFileVersioned(
+  workspaceId: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<LibraryVersionedResult<ArrayBuffer>> {
+  const qs = new URLSearchParams({ path }).toString()
+  const apiPath = `/library/${encodeURIComponent(workspaceId)}/download?${qs}`
+  let res: Response
+  try {
+    res = await fetch(`${BASE_URL}/api/v1${apiPath}`, {
+      credentials: 'include',
+      ...(signal ? { signal } : {}),
+    })
+  } catch (cause) {
+    throw new ApiError(0, 'Network unavailable. Check your connection.', { cause })
+  }
+  if (!res.ok) throw await ApiError.fromResponse(res)
+  const data = await res.arrayBuffer()
+  return { data, version: bareVersionToken(res) }
+}
+
+/**
+ * Write a file's text content from the Library editor (D-5 — write side).
+ * ADR-083 EMB-001/EMB-004/EMB-007c, founder ruling N2: `expect_version` is
+ * REQUIRED with no exemption — the caller must have read a token first (see
+ * fetchLibraryContentVersioned). Rejects locally with a 400 ApiError before
+ * any network call if the token is missing or empty, so an empty token can
+ * never reach the wire. A stale token surfaces as LibraryVersionConflictError
+ * (409); the response's fresh ETag is returned so a second save in the same
+ * session can send THAT token, not the one the original read returned.
+ */
+export async function putLibraryContent(
+  workspaceId: string,
+  body: LibraryContentRequest & { expect_version: string },
+): Promise<LibraryVersionedResult<LibraryEntry>> {
+  // `async` (not a bare `throw` in a non-async function returning a Promise
+  // type) is deliberate: every OTHER rejection path in this module surfaces
+  // as a genuine Promise rejection, and a caller that does
+  // `putLibraryContent(...).catch(...)` rather than `await`/try-catch —
+  // fully legitimate given the declared Promise<T> return type — would
+  // never see a synchronous throw.
+  if (!body.expect_version) {
+    throw new ApiError(
+      400,
+      'A version token is required to save this file — reload it and try again.',
+      { code: 'expect_version_missing' },
+    )
+  }
+  return putLibraryVersionedWrite(
     `/library/${encodeURIComponent(workspaceId)}/content`,
-    { method: 'PUT', body: JSON.stringify(body) },
+    body,
     LibraryEntrySchema as ZodType<LibraryEntry>,
   )
 }
@@ -4753,14 +5024,27 @@ export function putLibraryContent(workspaceId: string, body: LibraryContentReque
  * Library editor (feature B). Sibling of putLibraryContent — the text route
  * cannot carry bytes. `content_base64` is standard base64; the server decodes,
  * enforces a 25 MB decoded cap, and overwrites the file (PUT .../content-binary).
+ * Same `expect_version` contract as putLibraryContent above (ADR-083
+ * EMB-001/EMB-004/EMB-007/EMB-007c, founder ruling N2) — REQUIRED, no
+ * exemption, including for the annotated-PDF editor: see
+ * downloadLibraryFileVersioned for where that editor's token comes from.
  */
-export function putLibraryContentBinary(
+export async function putLibraryContentBinary(
   workspaceId: string,
-  body: LibraryBinaryContentRequest,
-): Promise<LibraryEntry> {
-  return request<LibraryEntry>(
+  body: LibraryBinaryContentRequest & { expect_version: string },
+): Promise<LibraryVersionedResult<LibraryEntry>> {
+  // async for the same reason as putLibraryContent above — see its comment.
+  if (!body.expect_version) {
+    throw new ApiError(
+      400,
+      'A version token is required to save this file — reload it and try again.',
+      { code: 'expect_version_missing' },
+    )
+  }
+  const validated = LibraryBinaryContentRequestSchema.parse(body)
+  return putLibraryVersionedWrite(
     `/library/${encodeURIComponent(workspaceId)}/content-binary`,
-    { method: 'PUT', body: JSON.stringify(LibraryBinaryContentRequestSchema.parse(body)) },
+    validated,
     LibraryEntrySchema as ZodType<LibraryEntry>,
   )
 }

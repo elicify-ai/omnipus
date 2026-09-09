@@ -29,6 +29,12 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchLibraryContent: vi.fn(),
     putLibraryContent: vi.fn(),
+    // ADR-083 EMB-007 — useLibraryFileEditor (mounted by every editable text
+    // kind below) reads its OWN version token independently of this pane's
+    // display-only `fetchLibraryContent` query — see that hook's module doc
+    // for why. Mocked here (rather than left as `actual`) so no editable-kind
+    // test fires a real network call for it.
+    fetchLibraryContentVersioned: vi.fn(),
     libraryDownloadUrl: vi.fn((wsId: string, path: string) => `/api/v1/library/${wsId}/download?path=${path}`),
     // HP-1 regression guard (defect-list-html-preview-2026-09-08.md): mocked
     // here — rather than left as `actual` — so that a test which omits the
@@ -77,11 +83,12 @@ vi.mock('./preview/LibraryPdfPreview', () => ({
   },
 }))
 
-import { fetchLibraryContent, putLibraryContent, mintLibraryPreviewToken } from '@/lib/api'
+import { fetchLibraryContent, fetchLibraryContentVersioned, putLibraryContent, mintLibraryPreviewToken } from '@/lib/api'
 import { LibraryPreviewPane } from './LibraryPreviewPane'
 import type { MintLibraryPreviewToken } from './LibraryPreviewPane'
 
 const mockedFetchContent = vi.mocked(fetchLibraryContent)
+const mockedFetchContentVersioned = vi.mocked(fetchLibraryContentVersioned)
 const mockedPutContent = vi.mocked(putLibraryContent)
 const mockedMintLibraryPreviewToken = vi.mocked(mintLibraryPreviewToken)
 
@@ -152,6 +159,13 @@ function renderPane(entry: LibraryEntry, handlers: RenderPaneHandlers = {}) {
 beforeEach(() => {
   vi.clearAllMocks()
   useUiStore.setState({ toasts: [] })
+  // ADR-083 EMB-007 — default resolution so every editable-kind test's
+  // useLibraryFileEditor mount has a real token to work with; the two save
+  // tests below override this with a specific value to assert against.
+  mockedFetchContentVersioned.mockResolvedValue({
+    data: makeContent(),
+    version: 'v1:default',
+  })
 })
 
 describe('LibraryPreviewPane — markdown + mermaid', () => {
@@ -182,9 +196,10 @@ describe('LibraryPreviewPane — code file', () => {
 })
 
 describe('LibraryPreviewPane — edit and save', () => {
-  it('edits then saves, calling putLibraryContent with the new content and showing the saved state', async () => {
+  it('edits then saves, calling putLibraryContent with the new content and the token it read, and showing the saved state', async () => {
     mockedFetchContent.mockResolvedValue(makeContent())
-    mockedPutContent.mockResolvedValue(makeEntry({ size: 30 }))
+    mockedFetchContentVersioned.mockResolvedValue({ data: makeContent(), version: 'v1:read-token' })
+    mockedPutContent.mockResolvedValue({ data: makeEntry({ size: 30 }), version: 'v1:post-save' })
 
     renderPane(makeEntry())
 
@@ -202,6 +217,7 @@ describe('LibraryPreviewPane — edit and save', () => {
       expect(mockedPutContent).toHaveBeenCalledWith('ws-1', {
         path: 'report.md',
         content: '# Report\n\nUpdated body.\n',
+        expect_version: 'v1:read-token',
       }),
     )
     await waitFor(() => expect(screen.getByText(/saved/i)).toBeInTheDocument())

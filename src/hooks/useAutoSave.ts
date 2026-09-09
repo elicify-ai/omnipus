@@ -9,7 +9,14 @@ import { isReAuthCancelled } from '@/components/settings/useReAuthGate'
 // consumer's own onSaved comment should point back here rather than
 // re-narrating it.
 
-export type AutoSaveStatus = 'idle' | 'saving' | 'saved' | 'error'
+// 'conflict' (ADR-083 EMB-004/EMB-007, Step 0) is a save refused with a 409
+// because someone else changed the file since it was last read — distinct
+// from 'error' (a transient/generic save failure) so a caller with something
+// real to say about a conflict (which file, whose token) can render that
+// instead of the generic failure message. Additive: every existing producer
+// of this type still only ever sets the original four values, and
+// AutoSaveIndicator's switch has a branch for this fifth one.
+export type AutoSaveStatus = 'idle' | 'saving' | 'saved' | 'error' | 'conflict'
 
 interface UseAutoSaveOptions<T> {
   /** Debounce delay in ms. Default: 500 */

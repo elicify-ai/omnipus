@@ -90,7 +90,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { SpinnerGap, Eye, PencilSimple, FloppyDisk, Signature, X } from '@phosphor-icons/react'
-import { libraryDownloadUrl, putLibraryContentBinary } from '@/lib/api'
+import { ApiError, downloadLibraryFileVersioned, putLibraryContentBinary, isLibraryVersionConflict } from '@/lib/api'
 import type { LibraryEntry } from '@/lib/api'
 import type { AutoSaveStatus } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
@@ -220,17 +220,29 @@ export function __resetPdfAssetProbeForTests(): void {
   assetProbe = null
 }
 
-async function fetchPdfBytes(workspaceId: string, path: string, signal: AbortSignal): Promise<ArrayBuffer> {
-  // The authenticated Library endpoint — session cookie, `attachment`
-  // disposition unchanged. `fetch` ignores the disposition; nothing navigates.
-  const res = await fetch(libraryDownloadUrl(workspaceId, path), {
-    credentials: 'include',
-    signal,
-  })
-  if (!res.ok) {
-    throw new Error(`Could not read this file from the workspace (HTTP ${res.status}).`)
-  }
-  return res.arrayBuffer()
+/** What this document's current bytes came with: the raw bytes PDF.js parses,
+ *  and the version token (ADR-083 EMB-007) — bare, unquoted — the byte-stream
+ *  download's `ETag` header carried. `version` is `null` only when the
+ *  server didn't send one (an older gateway build); `handleSave` refuses to
+ *  send an empty/invented token in that case rather than pretending it has
+ *  one. */
+interface PdfBytesRead {
+  bytes: ArrayBuffer
+  version: string | null
+}
+
+async function fetchPdfBytes(workspaceId: string, path: string, signal: AbortSignal): Promise<PdfBytesRead> {
+  // ADR-083 EMB-007/EMB-007c — this download IS the only read on this
+  // component's save path (there is no JSON `GET .../content` call here at
+  // all), so it is the sole source of the version token `handleSave` below
+  // must send back on PUT .../content-binary. `downloadLibraryFileVersioned`
+  // is api.ts's bespoke fetch for exactly this: `request<T>()` discards
+  // response headers, so a raw fetch — which this already was — is the only
+  // way to reach the `ETag` at all; the authenticated session cookie and
+  // `attachment` disposition (`fetch` ignores it; nothing navigates) are
+  // unchanged from before.
+  const { data, version } = await downloadLibraryFileVersioned(workspaceId, path, signal)
+  return { bytes: data, version }
 }
 
 // ── Edit-mode link handling ──────────────────────────────────────────────
@@ -344,6 +356,15 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane' }: Libr
   const signaturePreviewElsRef = useRef<Map<string, HTMLDivElement>>(new Map())
   const pendingSaveBytesRef = useRef<Uint8Array | null>(null)
   const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // ADR-083 EMB-007 — the version token handleSave sends as expect_version.
+  // Set from the download's ETag on a real read (the load effect's `else`
+  // branch below); REPLACED from putLibraryContentBinary's own response on
+  // every successful save, and from a 409's actual_version on a refused one
+  // — never left pointing at a token already proven stale. Deliberately NOT
+  // reset when the load effect reuses `pendingSaveBytesRef` (a just-saved
+  // reload) — that path performs no new read, and the ref already holds the
+  // fresh token the save that produced those bytes just returned.
+  const versionRef = useRef<string | null>(null)
 
   // Dirty-state guard (library-spec.md: "warn before navigating away from
   // unsaved edits") — same wiring useLibraryFileEditor.ts uses for the text
@@ -436,8 +457,13 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane' }: Libr
         if (pendingSaveBytesRef.current) {
           data = pendingSaveBytesRef.current
           pendingSaveBytesRef.current = null
+          // versionRef already holds the fresh token handleSave's own
+          // response returned for these exact bytes (EMB-007) — no read
+          // happened on this path, so nothing to update it from.
         } else {
-          data = await fetchPdfBytes(workspaceId, entry.path, abort.signal)
+          const read = await fetchPdfBytes(workspaceId, entry.path, abort.signal)
+          data = read.bytes
+          versionRef.current = read.version
         }
         if (cancelled) return
 
@@ -887,9 +913,31 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane' }: Libr
     setSaveStatus('saving')
     setSaveError(undefined)
     try {
+      // ADR-083 EMB-001/EMB-004/EMB-007/EMB-007c, founder ruling N2:
+      // expect_version is REQUIRED on this door with no exemption — including
+      // for this editor, whose only read (the download in fetchPdfBytes) is
+      // what versionRef was populated from. Refuse locally rather than send
+      // an empty/invented token: this can only happen if the read genuinely
+      // never returned one (e.g. an older gateway build pre-EMB-007).
+      const expectVersion = versionRef.current
+      if (!expectVersion) {
+        throw new ApiError(
+          400,
+          'Could not confirm this file’s current version — reload it and try again.',
+          { code: 'expect_version_unavailable' },
+        )
+      }
       const bytes = await doc.saveDocument()
       const content_base64 = uint8ArrayToBase64(bytes)
-      await putLibraryContentBinary(workspaceId, { path: entry.path, content_base64 })
+      const { version } = await putLibraryContentBinary(workspaceId, {
+        path: entry.path,
+        content_base64,
+        expect_version: expectVersion,
+      })
+      // EMB-007 — replace with the token THIS save's response returned, not
+      // the one the original download returned, so a second save in the
+      // same session compares against the file's actual current state.
+      versionRef.current = version
       doc.annotationStorage.resetModified()
       setSaveStatus('saved')
       setLastSavedAt(new Date())
@@ -907,6 +955,20 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane' }: Libr
       // stays in the tab for a retry (library-b-c-design-2026-09-07.md: "a
       // save failure surfaces the reason and keeps the user's entries in the
       // tab, never a silent no-op").
+      if (isLibraryVersionConflict(err)) {
+        // ADR-083 EMB-004/EMB-007 — a refused save because someone else
+        // changed the file is a CONFLICT, distinct from a generic failure:
+        // 'conflict' status (AutoSaveIndicator renders it distinctly) plus
+        // the fresh token from the 409 body, so the NEXT press of this SAME
+        // Save button (the only retry affordance this editor has) sends
+        // that one — never the stale token this attempt sent. Nothing here
+        // resends automatically (EMB-004).
+        versionRef.current = err.actualVersion ?? null
+        setSaveStatus('conflict')
+        setSaveError(err.userMessage)
+        addToast({ message: err.userMessage, variant: 'error' })
+        return
+      }
       const message = getLibraryErrorMessage(err, 'Save failed')
       setSaveStatus('error')
       setSaveError(message)

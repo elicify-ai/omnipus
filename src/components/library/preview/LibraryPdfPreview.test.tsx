@@ -45,7 +45,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
-import { libraryDownloadUrl } from '@/lib/api'
+import { libraryDownloadUrl, LibraryVersionConflictError } from '@/lib/api'
 import type { LibraryEntry } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 
@@ -229,11 +229,19 @@ function jsonResponse(body: unknown): Response {
   } as unknown as Response
 }
 
-function binaryResponse(): Response {
+// ADR-083 EMB-007 — the `ETag` default here is what fetchPdfBytes's
+// downloadLibraryFileVersioned call reads as this document's version token.
+// Every existing test (asset probes, the initial PDF fetch) goes through
+// this same helper, so it always carries one — a test asserting a SPECIFIC
+// token (the version-token suite below) passes its own header via `etag`.
+function binaryResponse(etag: string | null = '"v1:initial"'): Response {
   return {
     ok: true,
     status: 200,
-    headers: new Headers({ 'content-type': 'application/octet-stream' }),
+    headers: new Headers({
+      'content-type': 'application/octet-stream',
+      ...(etag ? { ETag: etag } : {}),
+    }),
     arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
   } as unknown as Response
 }
@@ -313,14 +321,22 @@ beforeEach(async () => {
   const api = await import('@/lib/api')
   mockedPutBinary = vi.mocked(api.putLibraryContentBinary)
   mockedPutBinary.mockReset()
+  // ADR-083 EMB-007 — putLibraryContentBinary now returns the wrapped
+  // {data, version} shape; `version` here is deliberately DIFFERENT from the
+  // load's own "v1:initial" (binaryResponse's default ETag) so a test can
+  // tell "sent the token from the READ" apart from "sent the token from a
+  // PRIOR SAVE".
   mockedPutBinary.mockResolvedValue({
-    name: 'doc.pdf',
-    path: 'reports/doc.pdf',
-    is_dir: false,
-    is_hidden: false,
-    size: 4096,
-    modified_at: '2026-08-22T10:15:00Z',
-    is_text_editable: false,
+    data: {
+      name: 'doc.pdf',
+      path: 'reports/doc.pdf',
+      is_dir: false,
+      is_hidden: false,
+      size: 4096,
+      modified_at: '2026-08-22T10:15:00Z',
+      is_text_editable: false,
+    },
+    version: 'v1:after-save',
   })
 
   vi.stubGlobal(
@@ -763,13 +779,16 @@ describe('LibraryPdfPreview — Save', () => {
 
     // --- retry, succeeds ---
     mockedPutBinary.mockResolvedValueOnce({
-      name: 'doc.pdf',
-      path: 'reports/doc.pdf',
-      is_dir: false,
-      is_hidden: false,
-      size: 3,
-      modified_at: '2026-08-22T10:15:00Z',
-      is_text_editable: false,
+      data: {
+        name: 'doc.pdf',
+        path: 'reports/doc.pdf',
+        is_dir: false,
+        is_hidden: false,
+        size: 3,
+        modified_at: '2026-08-22T10:15:00Z',
+        is_text_editable: false,
+      },
+      version: 'v1:after-save',
     })
     fireEvent.click(screen.getByTestId('library-pdf-save'))
 
@@ -780,9 +799,17 @@ describe('LibraryPdfPreview — Save', () => {
     // — it rejected, it wasn't skipped. Index [1] is that SECOND, successful
     // call.
     await waitFor(() => expect(mockedPutBinary).toHaveBeenCalledTimes(2))
-    const [wsArg, bodyArg] = mockedPutBinary.mock.calls[1] as [string, { path: string; content_base64: string }]
+    type PutBinaryBody = { path: string; content_base64: string; expect_version: string }
+    const [wsArg, bodyArg] = mockedPutBinary.mock.calls[1] as [string, PutBinaryBody]
     expect(wsArg).toBe('ws-1')
     expect(bodyArg.path).toBe('reports/doc.pdf')
+    // ADR-083 EMB-007 (spec test 101) — the FIRST attempt (network failure,
+    // not a version conflict) already sent the token the load's ETag
+    // returned (binaryResponse's default "v1:initial", stripped of quotes);
+    // the retry sends the SAME one, since nothing invalidated it.
+    const [, firstBodyArg] = mockedPutBinary.mock.calls[0] as [string, PutBinaryBody]
+    expect(firstBodyArg.expect_version).toBe('v1:initial')
+    expect(bodyArg.expect_version).toBe('v1:initial')
     // Independent oracle: decode the base64 back to bytes via the platform's
     // own atob, rather than re-deriving it with the encoder under test.
     const decoded = Uint8Array.from(atob(bodyArg.content_base64), (c) => c.charCodeAt(0))
@@ -796,6 +823,119 @@ describe('LibraryPdfPreview — Save', () => {
     await waitFor(() => expect(screen.getByTestId('library-pdf-mode-view')).toHaveAttribute('aria-pressed', 'true'))
     const libraryGetCount = fetchLog.filter((f) => f.url.includes('/api/v1/library/')).length
     expect(libraryGetCount).toBe(1)
+  })
+
+  // ADR-083 EMB-004/EMB-007 (spec test 101, "reads-token-from-download-and-
+  // sends-it", paired half) — the version-token round trip this component's
+  // loader/save exist for: a stale token surfaces a distinguishable
+  // CONFLICT (never the generic error path), a refused save is never
+  // resent automatically, and a retry sends the token the 409 body handed
+  // back — never the stale one that was refused, and never the original
+  // load's token either.
+  it("surfaces a stale-token save as a conflict, and a retry sends the FRESH token from the 409 — not the original load's", async () => {
+    h.fieldObjects = { name: [{ id: '1' }] }
+    h.pageAnnotations = [{ id: '1', fieldName: 'name', rect: [0, 0, 10, 10] }]
+    await renderPreview()
+    await enterEditMode()
+    await waitFor(() => expect(h.annotationLayerConstructorArgs).toHaveLength(1))
+
+    const annotationStorage = h.annotationLayerConstructorArgs[0].annotationStorage as {
+      setValue: (key: string, value: unknown) => void
+    }
+    act(() => annotationStorage.setValue('1', { value: 'Jane Doe' }))
+    const saveButton = await screen.findByTestId('library-pdf-save')
+    await waitFor(() => expect(saveButton).not.toBeDisabled())
+
+    // --- first save: the file changed under us since the load ---
+    mockedPutBinary.mockRejectedValueOnce(
+      new LibraryVersionConflictError(
+        {
+          error: 'Someone else edited reports/doc.pdf since you opened it.',
+          code: 'library_version_conflict',
+          path: 'reports/doc.pdf',
+          expected_version: 'v1:initial',
+          actual_version: 'v1:fresh-from-conflict',
+        },
+        JSON.stringify({ error: 'Someone else edited reports/doc.pdf since you opened it.' }),
+      ),
+    )
+    fireEvent.click(saveButton)
+
+    // Distinguishable from the generic error path (the round-trip test
+    // above): the exact conflict message renders, not the generic
+    // "Save failed" fallback a network error produces.
+    await screen.findByText(/someone else edited reports\/doc\.pdf/i)
+    expect(screen.queryByText(/^save failed$/i)).not.toBeInTheDocument()
+    // The entry survives, same as any other refused save
+    // (library-b-c-design-2026-09-07.md) — never discarded, always
+    // available for the user's own retry.
+    expect(screen.getByTestId('library-pdf-save')).not.toBeDisabled()
+    // MUTATION THIS DIES ON: auto-retrying the refused save — EMB-004
+    // forbids the system resending on its own. Only ONE call so far.
+    expect(mockedPutBinary).toHaveBeenCalledTimes(1)
+    const [, firstBody] = mockedPutBinary.mock.calls[0] as [string, { expect_version: string }]
+    expect(firstBody.expect_version).toBe('v1:initial')
+
+    // --- retry: the user presses the SAME Save button again ---
+    mockedPutBinary.mockResolvedValueOnce({
+      data: {
+        name: 'doc.pdf',
+        path: 'reports/doc.pdf',
+        is_dir: false,
+        is_hidden: false,
+        size: 5,
+        modified_at: '2026-08-22T10:20:00Z',
+        is_text_editable: false,
+      },
+      version: 'v1:after-retry',
+    })
+    fireEvent.click(screen.getByTestId('library-pdf-save'))
+
+    await waitFor(() => expect(mockedPutBinary).toHaveBeenCalledTimes(2))
+    const [, retryBody] = mockedPutBinary.mock.calls[1] as [string, { expect_version: string }]
+    // The load-bearing assertion (CANNOT already be true — see the spec's
+    // own review of this phase): the retry sends the token the 409 handed
+    // back, never the stale "v1:initial" the refused attempt sent.
+    expect(retryBody.expect_version).toBe('v1:fresh-from-conflict')
+    expect(retryBody.expect_version).not.toBe('v1:initial')
+
+    await waitFor(() => expect(screen.getByTestId('library-pdf-mode-view')).toHaveAttribute('aria-pressed', 'true'))
+  })
+
+  // ADR-083 EMB-007, founder ruling N2 — "no exemption" also means: never
+  // fall back to an empty/omitted token just because the read didn't carry
+  // one. Exercises exactly the risk this task's own brief names: the
+  // backend landing the ETag header concurrently — this is what happens if
+  // a build is queried before that lands.
+  it('refuses to save with a clear error — never an empty token — when the download carried no ETag', async () => {
+    h.fieldObjects = { name: [{ id: '1' }] }
+    h.pageAnnotations = [{ id: '1', fieldName: 'name', rect: [0, 0, 10, 10] }]
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/pdfjs/')) {
+        const rel = url.slice('/pdfjs/'.length)
+        return Promise.resolve(rel === 'asset-manifest.json' ? jsonResponse(MANIFEST) : binaryResponse())
+      }
+      if (url.includes('/api/v1/library/')) return Promise.resolve(binaryResponse(null))
+      return Promise.reject(new Error(`unexpected fetch: ${url}`))
+    })
+    await renderPreview()
+    await enterEditMode()
+    await waitFor(() => expect(h.annotationLayerConstructorArgs).toHaveLength(1))
+
+    const annotationStorage = h.annotationLayerConstructorArgs[0].annotationStorage as {
+      setValue: (key: string, value: unknown) => void
+    }
+    act(() => annotationStorage.setValue('1', { value: 'Jane Doe' }))
+    const saveButton = await screen.findByTestId('library-pdf-save')
+    await waitFor(() => expect(saveButton).not.toBeDisabled())
+
+    fireEvent.click(saveButton)
+
+    await screen.findByText(/current version/i)
+    // MUTATION THIS DIES ON: sending '' or any placeholder token instead of
+    // refusing locally — putLibraryContentBinary must never be called.
+    expect(mockedPutBinary).not.toHaveBeenCalled()
   })
 })
 

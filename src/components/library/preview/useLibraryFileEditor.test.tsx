@@ -4,6 +4,11 @@
 // swallowed, and the unsavedGuard integration (library-spec.md's
 // "warn before navigating away from unsaved edits" wiring) that
 // LibraryExplorer.test.tsx's navigation-guard test builds on.
+//
+// ADR-083 Step 0 (EMB-001/EMB-004/EMB-007) coverage lives in the sibling
+// useLibraryFileEditor.conflict.test.tsx (spec tests 7 and 8) — this file
+// keeps the pre-existing dirty/save/error coverage, updated for the version
+// token this hook now requires on every save.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
@@ -17,14 +22,16 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     putLibraryContent: vi.fn(),
+    fetchLibraryContentVersioned: vi.fn(),
   }
 })
 
-import { putLibraryContent } from '@/lib/api'
+import { putLibraryContent, fetchLibraryContentVersioned } from '@/lib/api'
 import { useLibraryFileEditor } from './useLibraryFileEditor'
 import { isLibraryEditorDirty, setLibraryEditorDirty } from './unsavedGuard'
 
 const mockedPut = vi.mocked(putLibraryContent)
+const mockedFetchVersioned = vi.mocked(fetchLibraryContentVersioned)
 
 function makeEntry(over: Partial<LibraryEntry> = {}): LibraryEntry {
   return {
@@ -48,6 +55,15 @@ beforeEach(() => {
   vi.clearAllMocks()
   useUiStore.setState({ toasts: [] })
   setLibraryEditorDirty(false)
+  // ADR-083 EMB-007 — this hook reads its OWN version token on mount
+  // (independent of whatever `initialContent` it was constructed with — see
+  // the hook's module doc). Every test needs SOME resolution here or the
+  // effect's `.then()` has nothing to chain onto; tests that care about a
+  // specific token override this.
+  mockedFetchVersioned.mockResolvedValue({
+    data: { path: 'report.md', content: '# Report\n', size: 9, is_text: true, too_large: false },
+    version: 'v1:initial',
+  })
 })
 
 describe('useLibraryFileEditor — dirty tracking', () => {
@@ -81,8 +97,12 @@ describe('useLibraryFileEditor — dirty tracking', () => {
 })
 
 describe('useLibraryFileEditor — save', () => {
-  it('calls putLibraryContent with the draft, then clears dirty and the guard on success', async () => {
-    mockedPut.mockResolvedValue(makeEntry({ size: 40 }))
+  it('calls putLibraryContent with the draft and the token it read, then clears dirty and the guard on success', async () => {
+    mockedFetchVersioned.mockResolvedValue({
+      data: { path: 'report.md', content: '# Report\n', size: 9, is_text: true, too_large: false },
+      version: 'v1:abc123',
+    })
+    mockedPut.mockResolvedValue({ data: makeEntry({ size: 40 }), version: 'v1:new456' })
     const onSaved = vi.fn()
 
     const { result } = renderHook(
@@ -95,7 +115,11 @@ describe('useLibraryFileEditor — save', () => {
     act(() => result.current.save())
 
     await waitFor(() => expect(result.current.status).toBe('saved'))
-    expect(mockedPut).toHaveBeenCalledWith('ws-1', { path: 'report.md', content: '# Report\n\nEdited.\n' })
+    expect(mockedPut).toHaveBeenCalledWith('ws-1', {
+      path: 'report.md',
+      content: '# Report\n\nEdited.\n',
+      expect_version: 'v1:abc123',
+    })
     expect(result.current.isDirty).toBe(false)
     expect(isLibraryEditorDirty()).toBe(false)
     expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({ size: 40 }))
@@ -120,6 +144,8 @@ describe('useLibraryFileEditor — save', () => {
     // Still dirty: the edit was NOT discarded by the failed attempt.
     expect(result.current.isDirty).toBe(true)
     expect(isLibraryEditorDirty()).toBe(true)
+    // A generic failure is not a conflict.
+    expect(result.current.conflict).toBeUndefined()
   })
 
   it('is a no-op when there is nothing dirty to save', () => {
@@ -130,6 +156,27 @@ describe('useLibraryFileEditor — save', () => {
 
     act(() => result.current.save())
 
+    expect(mockedPut).not.toHaveBeenCalled()
+  })
+
+  it('refuses to save with a client-side error when the version read never resolved a token', async () => {
+    mockedFetchVersioned.mockResolvedValue({
+      data: { path: 'report.md', content: '# Report\n', size: 9, is_text: true, too_large: false },
+      version: null,
+    })
+
+    const { result } = renderHook(
+      () => useLibraryFileEditor({ workspaceId: 'ws-1', path: 'report.md', initialContent: '# Report\n' }),
+      { wrapper },
+    )
+
+    act(() => result.current.setDraft('# Report\n\nEdited.\n'))
+    act(() => result.current.save())
+
+    await waitFor(() => expect(result.current.status).toBe('error'))
+    // MUTATION THIS DIES ON: falling back to an empty string or inventing a
+    // token instead of refusing — putLibraryContent must never be called
+    // with no real token.
     expect(mockedPut).not.toHaveBeenCalled()
   })
 })

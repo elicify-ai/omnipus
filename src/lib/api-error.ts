@@ -205,9 +205,12 @@ export class ApiError extends Error {
     try {
       bodyText = await res.text()
     } catch (err) {
-      // Reading body failed (e.g. response stream errored). Use statusText.
+      // Reading body failed (e.g. response stream errored). Use statusText —
+      // `?? ''` guards a Response whose own statusText is itself absent
+      // (a spec-compliant fetch Response always carries a string, even
+      // empty, but a hand-built test double is not obligated to).
       console.warn('[api-error] Could not read response body:', err)
-      bodyText = res.statusText
+      bodyText = res.statusText ?? ''
     }
 
     // H3-FE: Reject bodies that exceed MAX_BODY_BYTES after the read (handles
