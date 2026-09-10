@@ -162,10 +162,16 @@ beforeEach(() => {
   // ADR-083 EMB-007 — default resolution so every editable-kind test's
   // useLibraryFileEditor mount has a real token to work with; the two save
   // tests below override this with a specific value to assert against.
-  mockedFetchContentVersioned.mockResolvedValue({
-    data: makeContent(),
+  // Derived from whatever mockedFetchContent resolves, NOT a second independent
+  // fixture. Both mocks stand for reads of the SAME FILE, so returning different
+  // bytes from each is a state production cannot produce — and it silently
+  // broke two tests once the editor started rebasing onto the versioned read's
+  // content (ADR-083 B1). A test whose fixture models an impossible world tests
+  // nothing about the real one.
+  mockedFetchContentVersioned.mockImplementation(async (workspaceId, path) => ({
+    data: await mockedFetchContent(workspaceId, { path }),
     version: 'v1:default',
-  })
+  }))
 })
 
 describe('LibraryPreviewPane — markdown + mermaid', () => {
