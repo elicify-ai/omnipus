@@ -482,9 +482,13 @@ func (r *ToolRegistry) ExecuteWithContext(
 			"args": args,
 		})
 
-	// Capture auditLogger under lock to avoid a data race with SetAuditLogger.
+	// Capture the registry's injected dependencies once, under a single read
+	// lock, so this execution sees a consistent snapshot and neither field
+	// races with its setter (SetAuditLogger / SetMediaStore, which both take
+	// the write lock). Deliberately one RLock for both, not one each.
 	r.mu.RLock()
 	auditLog := r.auditLogger
+	mediaStore := r.mediaStore
 	r.mu.RUnlock()
 
 	tool, ok := r.Get(name)
@@ -563,7 +567,9 @@ func (r *ToolRegistry) ExecuteWithContext(
 		}
 	}
 
-	result = normalizeToolResult(ctx, result, name, r.mediaStore, channel, chatID)
+	// mediaStore is the snapshot taken at entry, not a fresh r.mediaStore
+	// read — see the capture block above.
+	result = normalizeToolResult(ctx, result, name, mediaStore, channel, chatID)
 
 	duration := time.Since(start)
 
@@ -621,6 +627,10 @@ func (r *ToolRegistry) ExecuteWithContext(
 // This is critical for KV cache stability: non-deterministic map iteration would
 // produce different system prompts and tool definitions on each call, invalidating
 // the LLM's prefix cache even when no tools have changed.
+//
+// Reads r.tools without locking: MUST be called with r.mu held. All four
+// callers today already hold RLock — GetDefinitions, ToProviderDefs, List,
+// GetAll.
 func (r *ToolRegistry) sortedToolNames() []string {
 	names := make([]string, 0, len(r.tools))
 	for name := range r.tools {
@@ -729,7 +739,31 @@ func SanitizeToolName(name string) string {
 // UnsanitizeToolName reverses SanitizeToolName — maps LLM tool names back
 // to internal names (e.g., "browser_navigate" → "browser.navigate").
 // Only applies to known prefixes to avoid false positives.
+//
+// Takes r.mu for reading. It is called on the hot dispatch path for every
+// tool call (pkg/agent/loop.go), concurrently with registration writes from
+// the MCP reconcile path — without the read lock this is an unsynchronised
+// map read against a map write, which the Go runtime turns into
+// `fatal error: concurrent map read and map write`. That is a runtime fatal,
+// not a panic: recover() does not catch it and the whole process dies.
+// See issue #660.
+//
+// DO NOT call this from anywhere that already holds r.mu — including
+// indirectly. sync.RWMutex is not reentrant, so a second acquisition
+// self-deadlocks. The indirect route is real: SetMediaStore (line 256),
+// SetAuditLogger (line 272) and SetMemoryRateLimiter (line 294) each iterate
+// r.tools and invoke arbitrary Tool methods while holding r.mu.Lock(). A tool
+// whose setter called back into UnsanitizeToolName would deadlock the
+// registry. Call unsanitizeToolNameLocked instead from any such context.
 func (r *ToolRegistry) UnsanitizeToolName(name string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.unsanitizeToolNameLocked(name)
+}
+
+// unsanitizeToolNameLocked is the body of UnsanitizeToolName. It reads
+// r.tools directly and MUST be called with r.mu held (read or write).
+func (r *ToolRegistry) unsanitizeToolNameLocked(name string) string {
 	// Try the name as-is first (most tools have no dots).
 	if _, ok := r.tools[name]; ok {
 		return name
