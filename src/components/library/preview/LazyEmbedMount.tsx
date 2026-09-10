@@ -32,9 +32,91 @@
 // the page under the reader. Once mounted, the wrapper stops constraining
 // height at all — the child is free to reflow to its real size (the "one
 // reflow is accepted" the requirement names).
-
-import { useEffect, useRef, useState } from 'react'
+//
+// M2 / EMB-071 (ADR-083 spec ~line 513/1990, ADR ~line 671) — "While any
+// embed on the page is unmounted, the reader shows one line stating that
+// find-in-page and printing will not reach modules that have not been
+// scrolled to. The notice disappears once every embed on the page is
+// mounted, and never appears on a note with no embeds." N3 DROPPED print
+// support for a lazily-mounted note entirely (`beforeprint` cannot await
+// async work); this notice is the compensating control that ruling depends
+// on — without it a reader prints or Ctrl+F's a dashboard and silently gets
+// a PARTIAL SUBSET with nothing saying so.
+//
+// SELF-REGISTERING, not caller-aggregated. `onMountedChange` above already
+// lets a caller aggregate mount state itself (its own doc comment says so:
+// "that notice... lives above this component, not inside it"), but nothing
+// has ever wired it — this module additionally tracks every currently-
+// mounted `LazyEmbedMount` INSTANCE (not just its content-mounted bit) in a
+// page-wide registry, so `UnmountedEmbedsNotice` below works the moment it
+// is rendered anywhere on the page, with zero per-instance wiring. The two
+// mechanisms coexist: a caller that still wants its own `onMountedChange`
+// callback keeps getting it, unaffected.
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
+import { Info } from '@phosphor-icons/react'
+
+/** id -> is this instance's content currently mounted. Module-level (one
+ *  registry, page-wide) because the notice this exists to drive is itself
+ *  page-wide ("While any embed on the page is unmounted") — not scoped to
+ *  one note's own component subtree. */
+const embedMountRegistry = new Map<string, boolean>()
+const embedMountRegistryListeners = new Set<() => void>()
+
+function notifyEmbedMountRegistryListeners(): void {
+  for (const listener of embedMountRegistryListeners) listener()
+}
+
+function subscribeToEmbedMountRegistry(listener: () => void): () => void {
+  embedMountRegistryListeners.add(listener)
+  return () => embedMountRegistryListeners.delete(listener)
+}
+
+/** False when the registry is empty (EMB-071's "never appears on a note
+ *  with no embeds") or when every registered instance is mounted; true the
+ *  moment at least one is not. A primitive return keeps this a stable
+ *  `useSyncExternalStore` snapshot — no unnecessary re-render from a
+ *  same-value recompute. */
+function getAnyEmbedUnmountedSnapshot(): boolean {
+  for (const mounted of embedMountRegistry.values()) {
+    if (!mounted) return true
+  }
+  return false
+}
+
+/** True while at least one currently-mounted `LazyEmbedMount` instance has
+ *  NOT mounted its content — see the module doc's M2/EMB-071 section. Test
+ *  seam: exported so a test can assert the registry itself independent of
+ *  `UnmountedEmbedsNotice`'s own rendered text. */
+export function useAnyEmbedUnmounted(): boolean {
+  return useSyncExternalStore(subscribeToEmbedMountRegistry, getAnyEmbedUnmountedSnapshot, getAnyEmbedUnmountedSnapshot)
+}
+
+/** EMB-071's own line, verbatim to the spec's two named limitations
+ *  (find-in-page AND printing — N3 folded printing into what was originally
+ *  a find-in-page-only statement). */
+export const UNMOUNTED_EMBEDS_NOTICE_TEXT =
+  'Find-in-page and printing will not reach content that has not been scrolled into view yet.'
+
+/**
+ * Drop this anywhere on a page that renders `LazyEmbedMount` instances (no
+ * props, no wiring) — it renders EMB-071's one line while at least one of
+ * them is unmounted, and nothing while every embed on the page is mounted or
+ * the page has no embeds at all.
+ */
+export function UnmountedEmbedsNotice() {
+  const anyUnmounted = useAnyEmbedUnmounted()
+  if (!anyUnmounted) return null
+  return (
+    <div
+      data-testid="unmounted-embeds-notice"
+      className="flex shrink-0 items-center gap-1.5 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[11px] text-[var(--color-muted)]"
+    >
+      <Info size={13} />
+      {UNMOUNTED_EMBEDS_NOTICE_TEXT}
+    </div>
+  )
+}
 
 /** How far outside the viewport, in pixels, mounting begins. */
 export const DEFAULT_MOUNT_MARGIN_PX = 600
@@ -56,10 +138,13 @@ export interface LazyEmbedMountProps {
   children: ReactNode
   mountMarginPx?: number
   unmountMarginPx?: number
-  /** Surfaced for the page-level "find-in-page and printing will not reach
-   *  unmounted embeds" notice (EMB-071) — that notice counts mounted vs.
-   *  total embeds across the whole note, which lives above this component,
-   *  not inside it. Optional; omit if the caller does not need to know. */
+  /** Per-instance notification of this embed's own mount transitions. NOT
+   *  what drives EMB-071's page-wide "find-in-page and printing will not
+   *  reach unmounted embeds" notice — `UnmountedEmbedsNotice` (this module's
+   *  own export) gets that from every instance's SELF-registration, with no
+   *  wiring required. This prop exists for a caller that wants its own,
+   *  separate per-instance signal (e.g. instance-scoped analytics or UI);
+   *  optional, omit if the caller does not need one. */
   onMountedChange?: (mounted: boolean) => void
   className?: string
 }
@@ -130,6 +215,33 @@ export function LazyEmbedMount({
   useEffect(() => {
     onMountedChangeRef.current?.(mounted)
   }, [mounted])
+
+  // M2 / EMB-071 — self-registration into the page-wide registry
+  // `UnmountedEmbedsNotice` reads (module doc above). `instanceId` is stable
+  // for this component instance's whole lifetime (`useId`), so it is safe to
+  // both register AND unregister under the same key.
+  //
+  // Split into two effects, DELIBERATELY not combined into one keyed on
+  // `[instanceId, mounted]`: a single combined effect's cleanup re-runs on
+  // EVERY `mounted` transition (not just true unmount), which would delete
+  // then immediately re-add this instance's registry entry on every mount ⇄
+  // unmount flip — two extra listener notifications per transition, and a
+  // window (between the delete and the re-add, both inside the same effect
+  // flush) where `getAnyEmbedUnmountedSnapshot` could transiently disagree
+  // with the real state. Keeping "update the value" and "remove the entry"
+  // as separate effects with different dependency lists means the entry is
+  // removed exactly once, only on the real unmount.
+  const instanceId = useId()
+  useEffect(() => {
+    embedMountRegistry.set(instanceId, mounted)
+    notifyEmbedMountRegistryListeners()
+  }, [instanceId, mounted])
+  useEffect(() => {
+    return () => {
+      embedMountRegistry.delete(instanceId)
+      notifyEmbedMountRegistryListeners()
+    }
+  }, [instanceId])
 
   return (
     <div

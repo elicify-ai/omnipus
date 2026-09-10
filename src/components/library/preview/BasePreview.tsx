@@ -38,7 +38,7 @@
 // load are reported as a count rather than as quietly missing tabs.
 
 import { useEffect, useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Code, DownloadSimple, SpinnerGap, Warning } from '@phosphor-icons/react'
 
 import { Button } from '@/components/ui/button'
@@ -59,6 +59,7 @@ import { collectionPathToWorkspacePath, libraryNoteHref } from '../knowledge/Kno
 import type { KbLinkResolution } from './knowledgeMarkdown'
 import { INLINE_PREVIEW_BOX_CLASS } from './libraryPreviewVariant'
 import type { LibraryPreviewVariant } from './libraryPreviewVariant'
+import { viewEvaluationPool, VIEW_EVALUATION_POOL_CEILING } from './viewEvaluationPool'
 
 /** Test seams; production passes nothing and gets the shared clients. */
 export interface BasePreviewLoaders {
@@ -254,9 +255,61 @@ export function BasePreview({
   // staleTime is raised to match: a minute is long enough that a reader
   // flipping between two apps never re-triggers evaluation mid-read, while
   // still refreshing well within a normal editing session.
+  //
+  // ADR-083 spec ~line 901 / ADR ~line 661 (M1) — "No more than 4 view
+  // evaluations may be in flight page-wide at any instant" — a dashboard of
+  // N modules inside LazyEmbedMount's mount margin all mount at once (that
+  // primitive deliberately has no cap of its own — see its own module doc),
+  // so without a bound here N mounts means N simultaneous evaluations
+  // hitting the single Go binary. `viewEvaluationPool` (viewEvaluationPool.ts,
+  // the same synchronous-reservation shape as pdfWorkerPool.ts / EMB-032,
+  // applied to this ceiling of 4) is acquired BEFORE the fetch and released
+  // the moment it settles — a view evaluation is one bounded fetch, not a
+  // resource held for the component's whole mounted lifetime the way a PDF
+  // worker is, so there is no "hold past success" case to reason about here.
+  //
+  // The lease is acquired against react-query's OWN queryFn `signal` — the
+  // one TanStack Query itself recognises as a legitimate cancellation
+  // (verified against its docs: "if consumed by your queryFn, unmount also
+  // cancels the request", and the query's state then REVERTS rather than
+  // recording an error — unlike a plain externally-thrown AbortError, which
+  // would sit in the cache as a genuine error for a later remount to trip
+  // over). Consuming it (destructuring `{ signal }` below) marks it
+  // consumed; this file does not then wait for react-query's own internal
+  // GC/observer-count timing to decide the query is unused — the explicit
+  // `cancelQueries` call in the unmount effect below fires the SAME
+  // recognised cancellation deterministically, the moment THIS component
+  // unmounts, matching the queryKey exactly so only this instance's own
+  // fetch is touched (a page can have many `.base` embeds sharing one
+  // QueryClient). A lease still QUEUED at that point is removed from
+  // `viewEvaluationPool`'s queue immediately (EMB-065 applied to a
+  // still-queued lease — the same requirement pdfWorkerPool.ts's own unmount
+  // test proves), freeing the slot for the next real waiter.
+  const [resultQueued, setResultQueued] = useState(false)
+  const queryClient = useQueryClient()
+  const resultQueryKey = ['library', workspaceId, 'knowledge', 'view-result', collectionId, selected?.name]
+  useEffect(() => {
+    return () => {
+      void queryClient.cancelQueries({ queryKey: resultQueryKey, exact: true })
+    }
+  }, [queryClient, workspaceId, collectionId, selected?.name])
+  // Reset whenever a genuinely new fetch is about to start (file, tab, or
+  // resolved-view change) — mirrors this file's own selectedSlug/showRaw
+  // reset-effect convention above, so a stale `true` from a prior fetch can
+  // never outlive the fetch that set it.
+  useEffect(() => setResultQueued(false), [collectionId, selected?.name])
   const resultQuery = useQuery({
-    queryKey: ['library', workspaceId, 'knowledge', 'view-result', collectionId, selected?.name],
-    queryFn: () => loadViewResult(workspaceId, collectionId as string, selected?.name as string),
+    queryKey: resultQueryKey,
+    queryFn: async ({ signal }) => {
+      setResultQueued(false)
+      const lease = await viewEvaluationPool.acquire(signal, () => setResultQueued(true))
+      setResultQueued(false)
+      try {
+        return await loadViewResult(workspaceId, collectionId as string, selected?.name as string)
+      } finally {
+        lease.release()
+      }
+    },
     enabled: collectionId !== undefined && selected !== undefined,
     staleTime: 60_000,
     refetchOnWindowFocus: false,
@@ -504,7 +557,21 @@ export function BasePreview({
 
       {/* Body: the selected view's evaluated result. */}
       <div className="flex-1 overflow-auto bg-[var(--color-surface-0)]">
-        {resultQuery.isLoading ? (
+        {resultQueued ? (
+          // M1 / ADR-083 spec ~line 901 — the visible waiting state for the
+          // page-wide 4-evaluation ceiling, checked BEFORE the generic
+          // loading branch below: `resultQuery.isLoading` is also true while
+          // queued (react-query has no third state for "waiting on an
+          // app-level admission gate"), so the honest, named reason must win
+          // over the indistinguishable-from-a-slow-fetch generic spinner.
+          <Centered>
+            <span data-testid="base-preview-result-queued" className="flex items-center gap-2">
+              <SpinnerGap size={16} className="animate-spin" />
+              Only {VIEW_EVALUATION_POOL_CEILING} views can evaluate on this page at once. This one
+              will run automatically once another finishes or scrolls out of view.
+            </span>
+          </Centered>
+        ) : resultQuery.isLoading ? (
           <Centered>
             <SpinnerGap size={16} className="animate-spin" /> Evaluating view…
           </Centered>

@@ -69,6 +69,7 @@ import type {
 } from '@/lib/api/generated/openapi-types'
 
 import { KnowledgeReader } from './KnowledgeReader'
+import { UnmountedEmbedsNotice } from '../preview/LazyEmbedMount'
 import { KnowledgeOutline, type KnowledgeOutlineLoader } from './KnowledgeOutline'
 import {
   KnowledgeBacklinks,
@@ -702,6 +703,12 @@ export function KnowledgeNoteView({
           </button>
         </div>
       ) : null}
+      {/* EMB-071. ADR-083's N3 dropped print support, and this notice is the
+          compensating control that ruling depends on: an embed that has not
+          scrolled into view is not in the DOM, so Ctrl+F cannot find its text
+          and printing silently yields a PARTIAL SUBSET. Self-registering -
+          it needs no props and no wiring beyond being rendered here. */}
+      <UnmountedEmbedsNotice />
       <KnowledgeReader
         content={content}
         path={collectionNotePath}
