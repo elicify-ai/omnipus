@@ -555,3 +555,43 @@ transcript, and R8-e is what makes that re-read safe. Spec C28, FR-105.
 **Unchanged by revision 8:** D1 – D11 in full, and D12, D13 and D14 including D14's three rules and
 its two binding constraints. Revision 8 corrects five factual premises, relocates two mechanisms,
 and records the three resolutions. It withdraws nothing.
+
+## 10. Revision 9 — the three-state outcome is withdrawn; unproven is not done
+
+### Operator direction (verbatim, 2026-09-09/10)
+
+> i do not understand why we need the third state, the judge needs to verify all claims
+
+> we do not need the third state — if nobody can proof it it is not done
+
+### The decision
+
+**D2a is withdrawn in full.** A criterion's verdict is met or unmet. There is no `unable_to_verify` outcome, on the wire, in the store, or in the UI. A criterion the Judge could not verify is **unmet**: unproven is not done. This restores the pre-revision-6 behaviour deliberately, as a product stance rather than an oversight.
+
+`AcceptanceCriterion.status` keeps its three existing values — `pending`, `met`, `unmet` — where **pending means "not yet judged"**, not "judged and undecidable". No fourth value is added anywhere.
+
+### What this retires
+
+| Retired | Was |
+|---|---|
+| D2a, and the `outcome` enum on `CriterionVerdict` | the three-state verdict |
+| `evidence_source`'s companion `outcome` contract work | part of D8's five-step change |
+| The fourth `CriterionStatus` value and `IsValidCriterionStatus` extension | ADR-086 D8.2 |
+| `CriterionStatusIcon`'s third rendering state | the silent-fallthrough hazard |
+| Plumbing `NonVerdictUnableToVerify` onto a per-criterion verdict | revision 6 FR-015a/018a's return-shape change |
+| FR-020a's aggregate withholding bound, and revision 8's R8-c argument about it | both existed to bound a state that no longer exists |
+
+`UnableToVerifyTracker` and the `NonVerdict*` classification **stay** where they are today: internal to the deterministic rungs and the verifier-turn outcome, never surfaced as a criterion result. `CriterionVerdict.Met` stays a bool. `ADR-086 D8` collapses back to one undivided piece of work — there is no D8.1/D8.2 split, because there is no third value to wait for.
+
+### The cost, stated plainly
+
+A criterion the Judge genuinely could not reach is now reported as not done, which can send a worker to redo work that was finished. That is E1's failure mode, accepted deliberately:
+
+- **It is far rarer under D1.** The Judge now reads files and investigates rather than judging from a stripped transcript; "no evidence was handed to me" was the dominant cause and it is gone.
+- **It is far rarer under D13.** Adjudication fires on a completion claim, not on a timer, so a quiet agent is no longer judged on absent evidence.
+- **It fails in the safe direction.** An unproven claim blocking completion is a smaller harm than an unearned `met`, which at task scope dispatches dependent work holding `bash` and `write_file` (§2.1 C1).
+- **The remedy is visible and cheap.** An unmet criterion carries the Judge's reason, which under D2d names what was looked for and where — so a worker that genuinely finished sees what evidence was missing and can supply it.
+
+### Consequence for ADR-086
+
+`ADR-086 D8`'s dependency on this ADR is removed. Projecting the verdict onto criterion status now needs only `met` and `unmet`, both of which exist today, so the visibility fix ships independently and immediately. §4's ordering claim in ADR-086 — that the goal-entity work should land before ADR-084 — becomes correct rather than contradicted.
