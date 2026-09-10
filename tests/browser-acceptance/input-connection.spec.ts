@@ -31,7 +31,13 @@ for (const mode of ['websocket', 'dedicated'] as const) {
       checkpoints.push({ label, state: { ...state } });
       console.log(`[input-smoke] ${mode}: ${label}`);
     };
-    const clickAt = async (x: number, y: number) => { const p = await point(page, x, y); await page.mouse.click(p.x, p.y); state = { ...state, downs: state.downs + 1, ups: state.ups + 1 }; };
+    const awaitInputReady = async () => {
+      const panel = browserLivePanel(page);
+      await expect(panel.getByRole('status').filter({ hasText: /Waiting for the current page|Pointer input is unavailable|Browser input is unavailable|Reconnecting video to restore browser input/ })).toHaveCount(0, { timeout: 15000 });
+      await expect(panel.getByRole('alert')).toHaveCount(0);
+      if (mode === 'dedicated') await expect(page.locator('[data-input-mode="dedicated"]')).toHaveAttribute('data-input-state', 'ready');
+    };
+    const clickAt = async (x: number, y: number) => { await awaitInputReady(); const p = await point(page, x, y); await page.mouse.click(p.x, p.y); state = { ...state, downs: state.downs + 1, ups: state.ups + 1 }; };
     try {
       const served = await page.request.get(fixtureURL.href, { maxRedirects: 0 });
       expect(served.status()).toBe(200); expect(await served.text()).toBe(fixtureHTML);
@@ -48,6 +54,19 @@ for (const mode of ['websocket', 'dedicated'] as const) {
       const address = page.getByRole('textbox', { name: 'Address bar' });
       await address.fill(target.href); await address.press('Enter');
       await installPixels(page); await checkpoint('fixture-ready');
+      try {
+        await awaitInputReady();
+      } finally {
+        const clickPoint = await point(page, .73, .68);
+        const readiness = await page.evaluate(p => {
+          const hit = document.elementFromPoint(p.x, p.y);
+          const mode = document.querySelector('[data-input-mode]');
+          return { point: p, hit: hit && { tag: hit.tagName, testId: hit.getAttribute('data-testid'), role: hit.getAttribute('role') }, inputState: mode?.getAttribute('data-input-state'), status: Array.from(document.querySelectorAll('[role="status"]')).map(node => node.textContent) };
+        }, clickPoint);
+        await fs.promises.writeFile(info.outputPath('pre-click-readiness.json'), JSON.stringify(readiness, null, 2));
+        await page.screenshot({ path: info.outputPath('pre-click.png') });
+      }
+      console.log(`[input-smoke] ${mode}: input-gate-ready`);
       const tabA = await page.locator('[data-testid^="browser-tab-"][aria-pressed="true"]').getAttribute('data-testid');
       expect(tabA).toMatch(/^browser-tab-\d+$/);
       for (let i = 0; i < 10; i++) {
@@ -59,6 +78,7 @@ for (const mode of ['websocket', 'dedicated'] as const) {
       await clickAt(.25, .68); await stateIs(page, state);
       // Trusted viewer key events exercise the UI handler for non-US keys;
       // no command is sent directly to target Chromium by this test.
+      await awaitInputReady();
       const viewerCDP = await page.context().newCDPSession(page);
       const text = 'Zażółć 世界';
       for (const key of text) {
@@ -66,11 +86,13 @@ for (const mode of ['websocket', 'dedicated'] as const) {
         await viewerCDP.send('Input.dispatchKeyEvent', { type: 'keyUp', key });
       }
       await viewerCDP.detach(); state = { ...state, text }; await checkpoint('unicode-text');
+      await awaitInputReady();
       const wheel = await point(page, .25, .86); await page.mouse.move(wheel.x, wheel.y);
       const scrollStart = performance.now();
       await page.mouse.wheel(0, 120); await page.mouse.wheel(0, 180);
       state = { ...state, scroll: 300 }; await stateIs(page, state); scrollCatchUpMs = performance.now() - scrollStart;
       await checkpoint('scroll-300');
+      await awaitInputReady();
       const from = await point(page, .60, .86), to = await point(page, .87, .86);
       await page.mouse.move(from.x, from.y); await page.mouse.down();
       state = { ...state, downs: state.downs + 1, held: 1 }; await stateIs(page, state);
@@ -88,6 +110,7 @@ for (const mode of ['websocket', 'dedicated'] as const) {
       await expect.poll(() => browserLiveVideo(page).evaluate(node => `${(node as HTMLVideoElement).videoWidth}x${(node as HTMLVideoElement).videoHeight}`)).not.toBe(before);
       await checkpoint('resized');
       await clickAt(.73, .68); state = { ...state, clicks: state.clicks + 1 }; await checkpoint('resized-click');
+      await awaitInputReady();
       await browserLiveFrame(page).focus(); await page.keyboard.down('ArrowLeft');
       state = { ...state, held: 2 }; await checkpoint('key-held');
       const openedBefore = (await routeEvidence(page)).openedSockets;

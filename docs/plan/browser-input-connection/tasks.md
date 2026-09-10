@@ -1,6 +1,6 @@
 # Implementation plan — early user test first
 
-Status: implementation completed in parallel on 2026-09-10. Focused server and race checks passed for the new transport, input retirement and gateway lifecycle. The frontend production rebuild and TypeScript checks also passed. Deployment and live Amsterdam validation remain before early handoff. One combined design review only; no second grill round.
+Status: implementation completed in parallel on 2026-09-10. Focused server and race checks passed for the new transport, input retirement and gateway lifecycle. The frontend production rebuild and TypeScript checks also passed. Source f092b634d is deployed and verified in Amsterdam. Both live interaction modes passed and user comparison links were handed off. Speed benefit and long-duration validation remain unproven. One combined design review only; no second grill round.
 
 All project paths below are relative to the explicit root `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo` for internal ownership only. Implementers must present absolute paths to the user. Branch browser-improvements; main and installed Mac10994 remain untouched. Preserve existing local edits. Agents share the repository and must not revert one another's work.
 
@@ -32,3 +32,5 @@ One combined ADR/spec grill round. Lead incorporates concrete findings once; no 
 ## Integration corrections
 
 Focused implementation review found and corrected silent attachment-timeout failures, stale control epochs on asynchronous peer-state messages, incomplete joining of input dispatch during peer replacement, and reliable events overtaken by control messages. All three input counters now restart at each control epoch on both sides; late events from the previous epoch are ignored. Regression checks cover exact Unicode delivery through real WebRTC channels, held-source retirement, control acknowledgments, peer-scoped state delivery, and the overtaken-event case.
+
+Early handoff completed: dedicated input passed 13 live checkpoints and WebSocket passed 12, including exact gestures, tab/resize actions and recovery. Evidence and remaining limits are recorded in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/docs/internal/browser-input-candidate-2026-09-10.md`.
