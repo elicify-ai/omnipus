@@ -570,6 +570,28 @@ and records the three resolutions. It withdraws nothing.
 
 `AcceptanceCriterion.status` keeps its three existing values — `pending`, `met`, `unmet` — where **pending means "not yet judged"**, not "judged and undecidable". No fourth value is added anywhere.
 
+### What "proof" means here — and what it does not
+
+> **Operator clarification, 2026-09-10:** *"proof does not necessarily mean deterministic proof — the judge has to judge, not just checking a checklist"*
+
+This is the load-bearing sentence of the whole ADR and it must not be read away.
+
+**The standard is the Judge's reasoned conviction from evidence it examined — a competent human reviewer's standard, not a test suite's.** "Unproven is not done" means *the Judge looked and was not persuaded*. It does **not** mean "no machine check exists, therefore unmet". A criterion with no check, no diff and no command is the **normal** case (D14: tier 2 is optional and coding-shaped), and it is decided by the Judge reading the artifact and forming a view — that is the entire reason D1 grants it file access.
+
+Concretely, all of these are legitimate grounds for `met`, with no deterministic component whatsoever:
+
+- the Judge opened the deck and judged that it has the five sections the criterion names, and that they say what the criterion asks;
+- the Judge read the drafted email and judged the tone appropriate for the stated audience;
+- the Judge looked at the page and judged the interface genuinely modern rather than merely claimed to be.
+
+And these are `unmet`, for the same reason a person would say so:
+
+- the Judge opened the artifact and it does not do what the criterion says;
+- the Judge looked and found nothing addressing the criterion at all;
+- the Judge could not reach the evidence, having tried.
+
+**The grounding controls (D2b–D2d, revision 6) are anti-hallucination, not a proof requirement.** They exist so a verdict points at something real that the Judge actually opened, and so a `met` cannot rest on the worker's own say-so. They must never be implemented as "a criterion is only `met` when a mechanical check passes". Any implementation that turns the Judge into a checklist evaluator has failed this ADR, whatever else it satisfies — the operator's founding direction (§1) was *"we need the judge to actually judge like a human and not like a program"*, and revision 9 narrows the outcome vocabulary without touching that.
+
 ### What this retires
 
 | Retired | Was |
