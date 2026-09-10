@@ -4809,7 +4809,7 @@ export interface components {
              *     NOT YET in this schema's "required" list — deliberately, and temporarily. The handler that would always emit it (pkg/gateway/rest_knowledge.go::knowledgeEdge) has not been updated yet, and several existing SPA test fixtures construct a KnowledgeGraphEdge literal without this field; marking it required now breaks their TypeScript compilation ahead of that handler and fixture work, which is out of scope for the contract-only change that introduced this field. The next wave MUST add heading_found to this schema's "required" array in the SAME commit that updates knowledgeEdge() to always set it and migrates the fixtures that construct edges by hand (Test 110's Go pairing, Test 122's reader pairing) — see EMB-039.
              * @example true
              */
-            heading_found?: boolean;
+            heading_found: boolean;
             /**
              * @description Block anchor with the leading "#^" removed, for a link to an anchored block such as [[note#^abc123]] (ADR-083 EMB-036). Its own property, separate from "heading" — a block reference never populates "heading", and "heading_found" is meaningless when this field is set. Present only for a block link.
              * @example abc123

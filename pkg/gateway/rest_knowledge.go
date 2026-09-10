@@ -649,8 +649,10 @@ func knowledgeEdge(l knowledge.ResolvedLink) gen.KnowledgeGraphEdge {
 	// for a ".base" target and for a block reference (graph.go only records
 	// headings for markdown paths, and only checks the flag when l.Heading is
 	// non-empty), so this is a straight projection, not a second decision.
-	headingFound := l.HeadingFound
-	e.HeadingFound = &headingFound
+	// A VALUE, not a pointer: heading_found is `required` in
+	// KnowledgeGraphEdge, so it is always present on the wire and the
+	// generated type cannot express absence.
+	e.HeadingFound = l.HeadingFound
 	// block (CW-2, ADR-083 EMB-036) — its own field, separate from heading.
 	// This is BlockID's first projection onto the wire; it was parsed and
 	// otherwise unread until now.

@@ -12154,7 +12154,7 @@ type KnowledgeGraphEdge struct {
 
 	// HeadingFound Whether the text in "heading" matched an actual heading in the resolved target (ADR-083 EMB-035/EMB-039). Meaningful ONLY when the target is a markdown file AND "heading" is non-empty — the graph builder records headings for markdown files alone, so this MUST be set FALSE BY CONSTRUCTION for a ".base" target (heading is then a view label, not a heading) and for a link carrying "block" instead of "heading". A reader MUST NOT render a "no such heading" refusal from this flag in either of those two cases.
 	// NOT YET in this schema's "required" list — deliberately, and temporarily. The handler that would always emit it (pkg/gateway/rest_knowledge.go::knowledgeEdge) has not been updated yet, and several existing SPA test fixtures construct a KnowledgeGraphEdge literal without this field; marking it required now breaks their TypeScript compilation ahead of that handler and fixture work, which is out of scope for the contract-only change that introduced this field. The next wave MUST add heading_found to this schema's "required" array in the SAME commit that updates knowledgeEdge() to always set it and migrates the fixtures that construct edges by hand (Test 110's Go pairing, Test 122's reader pairing) — see EMB-039.
-	HeadingFound *bool `json:"heading_found,omitempty"`
+	HeadingFound bool `json:"heading_found"`
 
 	// LinkText The link target exactly as written in the source note.
 	LinkText *string `json:"link_text,omitempty"`

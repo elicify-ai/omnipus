@@ -1084,7 +1084,12 @@ function EmbedMountError({ message, onRetry }: { message: string; onRetry?: () =
       <Warning size={16} />
       <span>{message}</span>
       {onRetry && (
-        <button type="button" onClick={onRetry} className="text-[11px] underline underline-offset-2">
+        <button
+          type="button"
+          tabIndex={0}
+          onClick={onRetry}
+          className="text-[11px] underline underline-offset-2"
+        >
           Retry
         </button>
       )}

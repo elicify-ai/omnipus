@@ -81,6 +81,7 @@ function graph(over: Partial<KnowledgeGraphResponse> = {}): KnowledgeGraphRespon
 
 function embedEdge(over: Partial<KnowledgeGraphEdge> = {}): KnowledgeGraphEdge {
   return {
+    heading_found: false,
     from_path: 'architecture/sandboxing.md',
     to_path: 'diagram.png',
     link_text: 'diagram.png',
@@ -257,6 +258,7 @@ describe('KnowledgeNoteView — inside a collection', () => {
         nodes: [{ path: 'index.md', title: 'Index', exists: true }],
         edges: [
           {
+            heading_found: false,
             from_path: 'index.md',
             to_path: 'architecture/sandboxing.md',
             resolution: 'exact_path',
@@ -310,6 +312,7 @@ describe('KnowledgeNoteView — wikilinks are resolved only on evidence (FR-065)
             ],
             edges: [
               {
+                heading_found: false,
                 from_path: 'architecture/sandboxing.md',
                 to_path: 'Ghost.md',
                 link_text: 'Ghost',
@@ -317,6 +320,7 @@ describe('KnowledgeNoteView — wikilinks are resolved only on evidence (FR-065)
                 ambiguous: false,
               },
               {
+                heading_found: false,
                 from_path: 'architecture/sandboxing.md',
                 to_path: 'index.md',
                 link_text: 'Index',
@@ -792,7 +796,17 @@ describe('KnowledgeNoteView — transclusion heading honesty (ADR-083 EMB-035/EM
     })
   })
 
-  it('resolves normally when heading_found is simply absent — the field is not yet required on the wire, and its absence must never read as "not found" (regression pin)', async () => {
+  // WAS: "resolves normally when heading_found is simply absent — the field is
+  // not yet required on the wire". That premise is now FALSE: heading_found is
+  // `required` on KnowledgeGraphEdge, so an edge cannot omit it, and a payload
+  // that does is rejected by the SPA's zod validation rather than reaching this
+  // code with the field missing. The hazard the old pin guarded — absence being
+  // read as "not found" — is therefore unreachable by construction.
+  //
+  // Kept, not deleted, with its premise corrected: the positive half still
+  // needs a guard, because heading_found=true must resolve and NOT fall into
+  // the refusal branch its sibling tests cover.
+  it('resolves when heading_found is true — a found heading must never take the refusal branch', async () => {
     const loadGraph = vi.fn(async (req: { kind: string }) =>
       req.kind === 'links'
         ? graph({
@@ -803,6 +817,7 @@ describe('KnowledgeNoteView — transclusion heading honesty (ADR-083 EMB-035/EM
                 to_path: 'target-note.md',
                 link_text: 'target-note.md',
                 heading: 'Intro',
+                heading_found: true,
                 resolution: 'exact_path',
               }),
             ],

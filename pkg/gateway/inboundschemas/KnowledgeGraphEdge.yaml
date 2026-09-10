@@ -12,6 +12,7 @@ required:
   - to_path
   - resolution
   - ambiguous
+  - heading_found
 properties:
   from_path:
     type: string

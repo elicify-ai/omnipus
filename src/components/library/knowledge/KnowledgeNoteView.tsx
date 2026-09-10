@@ -632,6 +632,7 @@ export function KnowledgeNoteView({
         >
           <span>{graphAnswerIssue.message}</span>
           <button
+            tabIndex={0}
             type="button"
             onClick={() => void linksQuery.refetch()}
             className="shrink-0 rounded border border-current px-2 py-1 text-[10px] uppercase tracking-wide hover:opacity-80"

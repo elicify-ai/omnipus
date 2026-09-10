@@ -245,7 +245,7 @@ type KnowledgeGraphEdge = {
   link_text?: string | undefined;
   alias?: string | undefined;
   heading?: string | undefined;
-  heading_found?: boolean | undefined;
+  heading_found: boolean;
   block?: string | undefined;
   unresolved_reason?: ("no_match" | "outside_root") | undefined;
   resolution:
@@ -4512,7 +4512,7 @@ export const KnowledgeGraphEdge: z.ZodType<KnowledgeGraphEdge> = z.object({
   link_text: z.string().optional(),
   alias: z.string().optional(),
   heading: z.string().optional(),
-  heading_found: z.boolean().optional(),
+  heading_found: z.boolean(),
   block: z.string().optional(),
   unresolved_reason: z.enum(["no_match", "outside_root"]).optional(),
   resolution: z.enum([

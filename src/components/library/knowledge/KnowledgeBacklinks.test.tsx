@@ -43,6 +43,7 @@ type Node = KnowledgeGraphResponse['nodes'][number]
 
 function edge(over: Partial<Edge> = {}): Edge {
   return {
+    heading_found: false,
     from_path: 'index.md',
     to_path: 'architecture/sandboxing.md',
     resolution: 'exact_path',

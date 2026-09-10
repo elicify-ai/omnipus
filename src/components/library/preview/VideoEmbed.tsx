@@ -164,6 +164,7 @@ export function VideoEmbed({ url, title }: VideoEmbedProps) {
         <Warning size={16} />
         <span>Could not check which video hosts are allowed.</span>
         <button
+          tabIndex={0}
           type="button"
           onClick={() => void appStateQuery.refetch()}
           className="text-[11px] underline underline-offset-2"
@@ -223,6 +224,7 @@ export function VideoEmbed({ url, title }: VideoEmbedProps) {
       >
         <span>This video link could not be recognised.</span>
         <a
+          tabIndex={0}
           href={url}
           target="_blank"
           rel="noreferrer"
@@ -242,6 +244,7 @@ export function VideoEmbed({ url, title }: VideoEmbedProps) {
         className="relative flex aspect-video w-full items-center justify-center overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]"
       >
         <button
+          tabIndex={0}
           type="button"
           data-testid="video-embed-play"
           aria-label={title ? `Play video: ${title}` : 'Play video'}

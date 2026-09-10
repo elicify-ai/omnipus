@@ -65,6 +65,7 @@ const GRAPH: KnowledgeGraphResponse = {
   nodes: [{ path: 'index.md', title: 'Index', exists: true }],
   edges: [
     {
+      heading_found: false,
       from_path: 'index.md',
       to_path: 'architecture/sandboxing.md',
       resolution: 'exact_path',

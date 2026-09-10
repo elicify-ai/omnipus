@@ -85,13 +85,13 @@ func TestKnowledgeEdge_HeadingFoundTrueAndFalse(t *testing.T) {
 		return e.Heading != nil && *e.Heading == "Real Heading"
 	})
 	require.NotNil(t, found.HeadingFound, "heading_found must always be set on an edge whose target resolved")
-	assert.True(t, *found.HeadingFound, "the heading exists in the target and must be reported found")
+	assert.True(t, found.HeadingFound, "the heading exists in the target and must be reported found")
 
 	missing := edgeWhere(t, resp, "heading=Missing Heading", func(e gen.KnowledgeGraphEdge) bool {
 		return e.Heading != nil && *e.Heading == "Missing Heading"
 	})
 	require.NotNil(t, missing.HeadingFound)
-	assert.False(t, *missing.HeadingFound, "the heading does not exist in the target and must be reported not found")
+	assert.False(t, missing.HeadingFound, "the heading does not exist in the target and must be reported not found")
 }
 
 // TestKnowledgeEdge_HeadingFoundIsFalseForBaseAndBlockTargets — Test 110. The
@@ -125,20 +125,20 @@ func TestKnowledgeEdge_HeadingFoundIsFalseForBaseAndBlockTargets(t *testing.T) {
 	baseEdge := edgeByLinkText(t, resp, "Dashboard.base")
 	require.Equal(t, gen.KnowledgeGraphEdgeResolutionExactPath, baseEdge.Resolution, "fixture sanity: the .base target must resolve")
 	require.NotNil(t, baseEdge.HeadingFound)
-	assert.False(t, *baseEdge.HeadingFound, "a .base target's fragment is a view label, never a heading")
+	assert.False(t, baseEdge.HeadingFound, "a .base target's fragment is a view label, never a heading")
 
 	blockEdge := edgeWhere(t, resp, "block=abc123", func(e gen.KnowledgeGraphEdge) bool {
 		return e.Block != nil && *e.Block == "abc123"
 	})
 	require.Equal(t, gen.KnowledgeGraphEdgeResolutionExactPath, blockEdge.Resolution, "fixture sanity: the block target must resolve")
 	require.NotNil(t, blockEdge.HeadingFound)
-	assert.False(t, *blockEdge.HeadingFound, "a block reference carries no heading text to match")
+	assert.False(t, blockEdge.HeadingFound, "a block reference carries no heading text to match")
 
 	headingEdge := edgeWhere(t, resp, "heading=Real Heading", func(e gen.KnowledgeGraphEdge) bool {
 		return e.Heading != nil && *e.Heading == "Real Heading"
 	})
 	require.NotNil(t, headingEdge.HeadingFound)
-	assert.True(t, *headingEdge.HeadingFound, "paired control: a genuine markdown heading match must still read true")
+	assert.True(t, headingEdge.HeadingFound, "paired control: a genuine markdown heading match must still read true")
 }
 
 // TestKnowledgeEdge_BlockAnchorProjectedSeparately — Test 40. BlockID's first
