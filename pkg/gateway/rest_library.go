@@ -489,6 +489,44 @@ var libraryWriteRaceHook func()
 //nolint:gochecknoglobals // a test seam, nil in production.
 var libraryContentGetRaceHook func()
 
+// Refusal reasons recorded on a library.write audit entry whose decision is
+// NOT allow (see logLibraryWriteRefused). They exist because "the save was
+// refused" on its own does not answer the question an operator opens the
+// audit log to ask — a stale token, a lock they could not take, and a client
+// sending the wrong SHAPE of token are three different incidents with three
+// different fixes, and a single "refused" label collapses them into one.
+//
+// The vocabulary deliberately matches pkg/knowledge/audit.go's Mutation.
+// Reason tokens ("version_conflict", "lock_timeout"), so an operator
+// grepping one audit file sees ONE vocabulary across the Library door and
+// the agent authoring path rather than two spellings of the same event.
+const (
+	// libraryRefusalVersionConflict — 409: the file's current token is not
+	// the one the caller said it was replacing (EMB-002). This is the record
+	// that answers "my note changed and I do not know who": it names an
+	// actor who tried to write over a change they had not seen.
+	libraryRefusalVersionConflict = "version_conflict"
+	// libraryRefusalLockTimeout — 503: the write gave up waiting for the
+	// note's tier-1 lock (FR-108's bound). Nothing was written.
+	libraryRefusalLockTimeout = "lock_timeout"
+	// libraryRefusalVersionMissing — 400: expect_version was absent or empty,
+	// i.e. the caller never said which version it believed it was replacing.
+	libraryRefusalVersionMissing = "expect_version_missing"
+	// libraryRefusalVersionQuoted — 400: expect_version carried the
+	// RFC-quoted wire shape instead of the bare token (EMB-007b). Split from
+	// the missing case on purpose: this one is a client bug that repeats on
+	// every save until someone fixes the client, and it is invisible if both
+	// 400s share one label.
+	libraryRefusalVersionQuoted = "expect_version_quoted"
+	// libraryRefusalWriteFailed — the compare succeeded and the write itself
+	// errored inside the locked closure (a case-insensitive collision, a
+	// raced directory removal). Recorded with decision "error", not "deny":
+	// pkg/knowledge/audit.go's MutationFailed makes the same distinction, and
+	// it is the one that tells a reader whether the file on disk still needs
+	// looking at.
+	libraryRefusalWriteFailed = "write_failed"
+)
+
 // requireLibraryExpectVersion validates and returns the bare token from a
 // whole-file save request's expect_version (EMB-001, founder ruling N2: no
 // caller is exempt). Absent or empty is refused with 400. A value carrying
@@ -502,18 +540,22 @@ var libraryContentGetRaceHook func()
 // cannot express absence. An omitted field therefore decodes to "" and lands in
 // the same branch as an explicitly empty one — which is correct, because both
 // mean the caller did not tell us which version it believes it is replacing.
-func requireLibraryExpectVersion(w http.ResponseWriter, expectVersion string) (bare string, ok bool) {
+//
+// refusalReason names WHICH of the two 400s fired, for the caller to hand to
+// logLibraryWriteRefused. It is "" when ok is true. The HTTP behaviour of
+// both branches is byte-for-byte what it was before the reason was returned.
+func requireLibraryExpectVersion(w http.ResponseWriter, expectVersion string) (bare, refusalReason string, ok bool) {
 	v := strings.TrimSpace(expectVersion)
 	if v == "" {
 		jsonErr(w, http.StatusBadRequest, "expect_version is required")
-		return "", false
+		return "", libraryRefusalVersionMissing, false
 	}
 	if len(v) >= 2 && v[0] == '"' && v[len(v)-1] == '"' {
 		jsonErr(w, http.StatusBadRequest,
 			"expect_version must be the bare token from the ETag response header, not its quoted wire form")
-		return "", false
+		return "", libraryRefusalVersionQuoted, false
 	}
-	return v, true
+	return v, "", true
 }
 
 // libraryETagValue renders a knowledge version token as the RFC 7232
@@ -596,23 +638,33 @@ func newLibraryConflictErr(relPath, expected, actual string) *libraryConflictErr
 // locked closure — falls back to mapLibraryErr, unchanged from before this
 // write took a lock at all. Returns false after writing a response, ok=true
 // otherwise, matching this file's existing ok-bool convention.
-func handleLibraryWriteLockErr(w http.ResponseWriter, op, workspaceID string, err error) bool {
+//
+// refusalReason names WHICH of the three failure classes fired, for the
+// caller to hand to logLibraryWriteRefused; it is "" when ok is true. The
+// status code and body every branch writes are byte-for-byte what they were
+// before the reason was returned — this function still decides the response
+// and still writes it here, and the reason is only carried back out so the
+// caller (which holds the request, the path and the byte count this function
+// deliberately does not) can record the refusal.
+func handleLibraryWriteLockErr(
+	w http.ResponseWriter, op, workspaceID string, err error,
+) (refusalReason string, ok bool) {
 	if err == nil {
-		return true
+		return "", true
 	}
 	var conflict *libraryConflictErr
 	if errors.As(err, &conflict) {
 		writeJSON(w, http.StatusConflict, conflict.body)
-		return false
+		return libraryRefusalVersionConflict, false
 	}
 	var timeout *knowledge.LockTimeoutError
 	if errors.As(err, &timeout) {
 		jsonErr(w, http.StatusServiceUnavailable,
 			"timed out waiting for this file's write lock — another write is in progress; try again")
-		return false
+		return libraryRefusalLockTimeout, false
 	}
 	mapLibraryErr(w, op, workspaceID, err)
-	return false
+	return libraryRefusalWriteFailed, false
 }
 
 // enclosingCollectionRel returns the workspace-relative directory of the
@@ -839,8 +891,9 @@ func (a *restAPI) handleLibraryContentPut(w http.ResponseWriter, r *http.Request
 	// ADR-083 EMB-001, founder ruling N2: no caller is exempt. Validated
 	// here in the handler, not in the schema — expect_version stays
 	// contract-optional until a follow-up flips it (owned elsewhere).
-	expectedBare, ok := requireLibraryExpectVersion(w, req.ExpectVersion)
+	expectedBare, refusal, ok := requireLibraryExpectVersion(w, req.ExpectVersion)
 	if !ok {
+		a.logLibraryWriteRefused(r, workspaceID, rel, refusal, false, len(req.Content))
 		return
 	}
 
@@ -891,7 +944,8 @@ func (a *restAPI) handleLibraryContentPut(w http.ResponseWriter, r *http.Request
 		newToken = knowledge.ComputeVersionToken(content)
 		return nil
 	})
-	if !handleLibraryWriteLockErr(w, "put content", workspaceID, writeErr) {
+	if refusal, ok := handleLibraryWriteLockErr(w, "put content", workspaceID, writeErr); !ok {
+		a.logLibraryWriteRefused(r, workspaceID, rel, refusal, false, len(content))
 		return
 	}
 
@@ -985,8 +1039,9 @@ func (a *restAPI) handleLibraryContentBinaryPut(w http.ResponseWriter, r *http.R
 	// ADR-083 EMB-001, founder ruling N2: no caller is exempt — including
 	// the annotated-PDF editor, the only production caller of this route
 	// (EMB-007 is what gives it a read that can return a token to send).
-	expectedBare, ok := requireLibraryExpectVersion(w, req.ExpectVersion)
+	expectedBare, refusal, ok := requireLibraryExpectVersion(w, req.ExpectVersion)
 	if !ok {
+		a.logLibraryWriteRefused(r, workspaceID, rel, refusal, true, len(decoded))
 		return
 	}
 
@@ -1031,7 +1086,8 @@ func (a *restAPI) handleLibraryContentBinaryPut(w http.ResponseWriter, r *http.R
 		newToken = knowledge.ComputeVersionToken(decoded)
 		return nil
 	})
-	if !handleLibraryWriteLockErr(w, "put content", workspaceID, writeErr) {
+	if refusal, ok := handleLibraryWriteLockErr(w, "put content", workspaceID, writeErr); !ok {
+		a.logLibraryWriteRefused(r, workspaceID, rel, refusal, true, len(decoded))
 		return
 	}
 
@@ -1790,14 +1846,86 @@ func (a *restAPI) handleLibraryTransfer(w http.ResponseWriter, r *http.Request, 
 // matching the convention rest_workspace_media.go's logMediaDeleteAudit and
 // rest_workspaces.go's workspace.create/update events already establish.
 func (a *restAPI) logLibraryAudit(r *http.Request, event, workspaceID string, details map[string]any) {
+	a.logLibraryAuditDecision(r, event, audit.DecisionAllow, workspaceID, details)
+}
+
+// logLibraryWriteRefused records a whole-file save that NEVER REACHED DISK —
+// a 400 shape error on expect_version, a 409 stale token, a 503 lock timeout,
+// or a write that errored inside the locked closure.
+//
+// # Why a refusal needs a record at all
+//
+// The premise of the version door is that a lost note is undetectable after
+// the fact: nothing on disk says a second writer was ever here. Recording
+// only the saves that SUCCEEDED gives an operator investigating "my note
+// changed and I do not know who" exactly the population that is not the
+// answer. The attempts that were REFUSED are the ones that name a second
+// writer working from a version they had not re-read — the same reasoning
+// pkg/knowledge/audit.go's header sets out for the agent authoring path
+// ("no REFUSAL happens without one either"), applied to the Library door
+// that path's own comment already points at.
+//
+// # Shape
+//
+// Same event name as the success record ("library.write"), so one query
+// returns the whole population of attempted saves; DECISION and the `reason`
+// detail are what separate them. Decision is "deny" for the four deliberate
+// refusals and "error" for libraryRefusalWriteFailed, mirroring
+// knowledge.MutationRefused vs MutationFailed — for the reader of an audit
+// log those are different events, because a refusal means the file is intact
+// and a failure means the file on disk needs looking at.
+//
+// The SUCCESS record's shape is untouched: it still carries exactly
+// path/bytes/binary (plus the actor and workspace_id every library.* record
+// gets), and never a `reason`. Existing tooling reading allow rows sees no
+// change.
+//
+// # It cannot turn a 409 into a 500
+//
+// Every call site invokes this AFTER its response has already been written,
+// and logLibraryAuditDecision swallows sink failures into a WARN exactly as
+// the success path does. An audit sink problem therefore cannot change the
+// status code the caller already received. A nil a.auditor (sandbox.
+// audit_log off) is a documented operator choice and stays a silent no-op.
+//
+// attemptedBytes is the size of the content the caller TRIED to write, which
+// for every reason here is a size that never landed; it is recorded because
+// "who tried to overwrite my 40 KB note with 3 bytes" is a question the
+// refused population exists to answer.
+func (a *restAPI) logLibraryWriteRefused(
+	r *http.Request, workspaceID, relPath, reason string, binary bool, attemptedBytes int,
+) {
+	decision := audit.DecisionDeny
+	if reason == libraryRefusalWriteFailed {
+		decision = audit.DecisionError
+	}
+	a.logLibraryAuditDecision(r, "library.write", decision, workspaceID, map[string]any{
+		"path":   relPath,
+		"bytes":  attemptedBytes,
+		"binary": binary,
+		"reason": reason,
+	})
+}
+
+// logLibraryAuditDecision is the shared body of logLibraryAudit and
+// logLibraryWriteRefused. It exists so a refusal and a success travel the
+// same nil-auditor guard, the same actor/workspace_id stamping and the same
+// swallow-the-sink-error handling, and so the only difference between them
+// is the Decision and the details the caller chose.
+func (a *restAPI) logLibraryAuditDecision(
+	r *http.Request, event, decision, workspaceID string, details map[string]any,
+) {
 	if a.auditor == nil {
 		return
+	}
+	if details == nil {
+		details = map[string]any{}
 	}
 	details["actor"] = a.callerIdentity(r).Username
 	details["workspace_id"] = workspaceID
 	if err := a.auditor.Log(&audit.Entry{
 		Event:    event,
-		Decision: audit.DecisionAllow,
+		Decision: decision,
 		Details:  details,
 	}); err != nil {
 		logger.WarnCF("rest", "library: audit write failed",

@@ -12,6 +12,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -29,6 +30,7 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/knowledge"
 	"github.com/elicify-ai/omnipus/pkg/library"
 )
@@ -650,4 +652,388 @@ func TestLibraryContentPut_CompareAndWriteAreAtomicUnderAgentWrite(t *testing.T)
 	require.NoError(t, json.Unmarshal(g.Body.Bytes(), &resp))
 	require.NotNil(t, resp.Content)
 	assert.Equal(t, "from-writer-1", *resp.Content, "exactly one write must survive")
+}
+
+// --- A refused save must leave a record too -------------------------------
+//
+// The whole premise of the version door is that a lost note is undetectable
+// after the fact — nothing on disk says a second writer was ever here. An
+// audit log that records only the saves that SUCCEEDED therefore hands an
+// operator investigating "my note changed and I do not know who" precisely
+// the population that is NOT the answer. The tests below pin the other half:
+// every refusal — a 400 shape error on expect_version, a 409 stale token, a
+// 503 lock timeout — is recorded, with a `reason` that says WHICH, because
+// "refused" alone does not answer the question the log was opened to ask.
+//
+// All of them read back REAL entries from a real *audit.Logger via the
+// existing attachTestAuditor/readAuditEntries scaffolding, and all of them
+// assert the DECISION, the REASON and the exact COMPOSITION of the sink —
+// never merely "an entry exists", which would pass on a success record.
+
+// libPutJSONAs is libPutJSON with an authenticated gateway principal in the
+// request context — the same UserContextKey{} shape production's withAuth
+// installs — so these tests can assert the refusal record actually NAMES who
+// attempted the write. Without it callerIdentity returns an empty Username
+// and an `actor` assertion would be satisfied by a handler that recorded
+// nobody.
+func libPutJSONAs(t *testing.T, api *restAPI, target, body, username string) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, target, bytes.NewBufferString(body))
+	r.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(r.Context(), UserContextKey{}, &config.UserConfig{Username: username})
+	api.HandleLibrary(w, r.WithContext(ctx))
+	return w
+}
+
+// libraryWriteAuditEntries splits every library.write record in the real sink
+// into its allow half and its non-allow half.
+//
+// Counting BOTH is the point. "A deny entry exists" would still pass if the
+// handler had also written a bogus allow for the same refused request, and a
+// total-count assertion alone would pass on a pre-existing success record.
+// Every test below asserts the exact composition of the sink.
+func libraryWriteAuditEntries(t *testing.T, auditDir string) (allow, refused []map[string]any) {
+	t.Helper()
+	for _, e := range readAuditEntries(t, auditDir, "library.write") {
+		if e["decision"] == audit.DecisionAllow {
+			allow = append(allow, e)
+			continue
+		}
+		refused = append(refused, e)
+	}
+	return allow, refused
+}
+
+// wantRefusal is the full expected shape of one refusal record. Every field
+// is asserted — a record that says "deny" but names the wrong file, the wrong
+// workspace or nobody at all is not a usable answer to the operator's
+// question.
+type wantRefusal struct {
+	decision  string
+	reason    string
+	path      string
+	binary    bool
+	bytes     int
+	actor     string
+	workspace string
+}
+
+func assertRefusalRecord(t *testing.T, entry map[string]any, want wantRefusal) {
+	t.Helper()
+	assert.Equal(t, want.decision, entry["decision"],
+		"a refused save must not be recorded as an allow: %+v", entry)
+	details, ok := entry["details"].(map[string]any)
+	require.True(t, ok, "entry carries no details object: %+v", entry)
+	assert.Equal(t, want.reason, details["reason"],
+		"the record must name WHICH refusal this was — \"refused\" alone does not tell an "+
+			"operator whether to fix a client, chase a second writer, or look at a stuck lock")
+	assert.Equal(t, want.path, details["path"])
+	assert.Equal(t, want.binary, details["binary"])
+	assert.EqualValues(t, want.bytes, details["bytes"],
+		"the record must carry the size of the content that was attempted and never landed")
+	assert.Equal(t, want.actor, details["actor"], "a refusal that names nobody answers nothing")
+	assert.Equal(t, want.workspace, details["workspace_id"])
+	assert.NotEmpty(t, entry["timestamp"], "a record with no timestamp cannot be correlated")
+}
+
+// assertSuccessRecordShapeUnchanged pins the other half of the contract: the
+// records other tooling already reads must not have changed. A success entry
+// carries path/bytes/binary plus actor/workspace_id, and NEVER a reason —
+// `reason` is the field that exists only on the refused population.
+func assertSuccessRecordShapeUnchanged(t *testing.T, entry map[string]any) {
+	t.Helper()
+	assert.Equal(t, audit.DecisionAllow, entry["decision"])
+	details, ok := entry["details"].(map[string]any)
+	require.True(t, ok, "entry carries no details object: %+v", entry)
+	_, hasReason := details["reason"]
+	assert.False(t, hasReason,
+		"the SUCCESS record's shape must be untouched — no reason key: %+v", details)
+	for _, key := range []string{"path", "bytes", "binary", "actor", "workspace_id"} {
+		_, present := details[key]
+		assert.True(t, present, "success record lost its %q field: %+v", key, details)
+	}
+}
+
+// --- 409 version conflict -------------------------------------------------
+
+// TestLibraryContentPut_VersionConflictWritesRefusalAuditRecord is THE record
+// the gap was about: someone tried to write over a change they had not seen.
+// It is the only trace that second writer ever leaves, because a refused
+// write touches no file.
+func TestLibraryContentPut_VersionConflictWritesRefusalAuditRecord(t *testing.T) {
+	api, id := buildLibraryTestAPI(t)
+
+	// Seed BEFORE the auditor is attached, so the sink afterwards contains
+	// exactly what this test's own request produced and a count assertion
+	// means something.
+	seed := libPutJSON(t, api, "/api/v1/library/"+id+"/content",
+		`{"path":"conflict.md","content":"v0","expect_version":"v1:absent"}`)
+	require.Equal(t, http.StatusOK, seed.Code, "body: %s", seed.Body.String())
+
+	auditDir := attachTestAuditor(t, api)
+
+	w := libPutJSONAs(t, api, "/api/v1/library/"+id+"/content",
+		`{"path":"conflict.md","content":"clobber","expect_version":"a-token-nobody-issued"}`,
+		"second-writer")
+	require.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
+
+	allow, refused := libraryWriteAuditEntries(t, auditDir)
+	assert.Empty(t, allow, "a refused save must not also produce an allow record: %+v", allow)
+	require.Len(t, refused, 1, "expected exactly one refusal record in the real audit sink")
+	assertRefusalRecord(t, refused[0], wantRefusal{
+		decision: audit.DecisionDeny, reason: "version_conflict",
+		path: "conflict.md", binary: false, bytes: len("clobber"),
+		actor: "second-writer", workspace: id,
+	})
+
+	// The 409 the caller received must be unchanged by the audit call.
+	var conflict gen.LibraryConflictError
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &conflict))
+	assert.Equal(t, gen.LibraryVersionConflict, conflict.Code)
+}
+
+// TestLibraryContentBinaryPut_VersionConflictWritesRefusalAuditRecord is the
+// binary door's half — the route the annotated-PDF editor saves through.
+func TestLibraryContentBinaryPut_VersionConflictWritesRefusalAuditRecord(t *testing.T) {
+	api, id := buildLibraryTestAPI(t)
+
+	enc0 := base64.StdEncoding.EncodeToString([]byte{0x01})
+	seed := libPutJSON(t, api, "/api/v1/library/"+id+"/content-binary",
+		`{"path":"conflict.bin","content_base64":"`+enc0+`","expect_version":"v1:absent"}`)
+	require.Equal(t, http.StatusOK, seed.Code, "body: %s", seed.Body.String())
+
+	auditDir := attachTestAuditor(t, api)
+
+	enc1 := base64.StdEncoding.EncodeToString([]byte{0x02, 0x03, 0x04})
+	w := libPutJSONAs(t, api, "/api/v1/library/"+id+"/content-binary",
+		`{"path":"conflict.bin","content_base64":"`+enc1+`","expect_version":"a-token-nobody-issued"}`,
+		"pdf-editor")
+	require.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
+
+	allow, refused := libraryWriteAuditEntries(t, auditDir)
+	assert.Empty(t, allow, "a refused save must not also produce an allow record: %+v", allow)
+	require.Len(t, refused, 1, "expected exactly one refusal record in the real audit sink")
+	assertRefusalRecord(t, refused[0], wantRefusal{
+		decision: audit.DecisionDeny, reason: "version_conflict",
+		path: "conflict.bin", binary: true, bytes: 3,
+		actor: "pdf-editor", workspace: id,
+	})
+}
+
+// --- 400 malformed expect_version ----------------------------------------
+
+// TestLibraryContentPut_MalformedExpectVersionWritesRefusalAuditRecord covers
+// both 400 shapes, and asserts they are told APART. They are different
+// incidents: "the caller sent no version at all" and "the caller sent the
+// quoted wire form instead of the bare token" have different fixes, and a
+// single "malformed" label would hide a client bug that repeats on every save.
+func TestLibraryContentPut_MalformedExpectVersionWritesRefusalAuditRecord(t *testing.T) {
+	t.Run("absent", func(t *testing.T) {
+		api, id := buildLibraryTestAPI(t)
+		auditDir := attachTestAuditor(t, api)
+
+		w := libPutJSONAs(t, api, "/api/v1/library/"+id+"/content",
+			`{"path":"nover.md","content":"body"}`, "forgetful-client")
+		require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+
+		allow, refused := libraryWriteAuditEntries(t, auditDir)
+		assert.Empty(t, allow, "%+v", allow)
+		require.Len(t, refused, 1)
+		assertRefusalRecord(t, refused[0], wantRefusal{
+			decision: audit.DecisionDeny, reason: "expect_version_missing",
+			path: "nover.md", binary: false, bytes: len("body"),
+			actor: "forgetful-client", workspace: id,
+		})
+	})
+
+	t.Run("empty", func(t *testing.T) {
+		api, id := buildLibraryTestAPI(t)
+		auditDir := attachTestAuditor(t, api)
+
+		w := libPutJSONAs(t, api, "/api/v1/library/"+id+"/content",
+			`{"path":"nover2.md","content":"body","expect_version":""}`, "forgetful-client")
+		require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+
+		_, refused := libraryWriteAuditEntries(t, auditDir)
+		require.Len(t, refused, 1)
+		assertRefusalRecord(t, refused[0], wantRefusal{
+			decision: audit.DecisionDeny, reason: "expect_version_missing",
+			path: "nover2.md", binary: false, bytes: len("body"),
+			actor: "forgetful-client", workspace: id,
+		})
+	})
+
+	t.Run("quoted-wire-form", func(t *testing.T) {
+		api, id := buildLibraryTestAPI(t)
+		seed := libPutJSON(t, api, "/api/v1/library/"+id+"/content",
+			`{"path":"quoted-audit.md","content":"v0","expect_version":"v1:absent"}`)
+		require.Equal(t, http.StatusOK, seed.Code, "body: %s", seed.Body.String())
+		bare := libraryBareETag(t, seed)
+
+		auditDir := attachTestAuditor(t, api)
+
+		w := libPutJSONAs(t, api, "/api/v1/library/"+id+"/content",
+			`{"path":"quoted-audit.md","content":"v1","expect_version":"\"`+bare+`\""}`,
+			"quoting-client")
+		require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+
+		allow, refused := libraryWriteAuditEntries(t, auditDir)
+		assert.Empty(t, allow, "%+v", allow)
+		require.Len(t, refused, 1)
+		assertRefusalRecord(t, refused[0], wantRefusal{
+			decision: audit.DecisionDeny, reason: "expect_version_quoted",
+			path: "quoted-audit.md", binary: false, bytes: len("v1"),
+			actor: "quoting-client", workspace: id,
+		})
+	})
+
+	t.Run("binary-door-absent", func(t *testing.T) {
+		api, id := buildLibraryTestAPI(t)
+		auditDir := attachTestAuditor(t, api)
+
+		enc := base64.StdEncoding.EncodeToString([]byte{0x01, 0x02})
+		w := libPutJSONAs(t, api, "/api/v1/library/"+id+"/content-binary",
+			`{"path":"nover.bin","content_base64":"`+enc+`"}`, "forgetful-pdf-editor")
+		require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+
+		_, refused := libraryWriteAuditEntries(t, auditDir)
+		require.Len(t, refused, 1)
+		assertRefusalRecord(t, refused[0], wantRefusal{
+			decision: audit.DecisionDeny, reason: "expect_version_missing",
+			path: "nover.bin", binary: true, bytes: 2,
+			actor: "forgetful-pdf-editor", workspace: id,
+		})
+	})
+}
+
+// --- 503 lock timeout -----------------------------------------------------
+
+// TestLibraryContentPut_LockTimeoutWritesRefusalAuditRecord produces a REAL
+// *knowledge.LockTimeoutError rather than simulating one: a first writer is
+// held inside knowledge.WithNoteWriteLock's critical section via the existing
+// libraryWriteRaceHook seam, and a second save of the SAME file then genuinely
+// waits out knowledge.DefaultLockBound and gives up. Both halves of the sink
+// are then asserted — the refusal AND the holder's unchanged success record —
+// so this test also pins that the refusal record did not disturb the shape
+// other tooling already reads.
+//
+// The hook deliberately does NOT block a second entrant. If the lock were not
+// exclusive, a blocking hook would deadlock this test into a 10-minute go-test
+// timeout instead of failing; letting a second entrant straight through makes
+// that case fail fast on the status-code assertion below.
+func TestLibraryContentPut_LockTimeoutWritesRefusalAuditRecord(t *testing.T) {
+	api, id := buildLibraryTestAPI(t)
+
+	seed := libPutJSON(t, api, "/api/v1/library/"+id+"/content",
+		`{"path":"locked.md","content":"v0","expect_version":"v1:absent"}`)
+	require.Equal(t, http.StatusOK, seed.Code, "body: %s", seed.Body.String())
+	t0 := libraryBareETag(t, seed)
+
+	auditDir := attachTestAuditor(t, api)
+
+	entered := make(chan struct{})
+	proceed := make(chan struct{})
+	var hookCalls atomic.Int32
+	libraryWriteRaceHook = func() {
+		if hookCalls.Add(1) != 1 {
+			return
+		}
+		close(entered)
+		<-proceed
+	}
+	t.Cleanup(func() { libraryWriteRaceHook = nil })
+
+	var (
+		wg         sync.WaitGroup
+		holderCode int
+		holderBody string
+	)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		w := libPutJSONAs(t, api, "/api/v1/library/"+id+"/content",
+			`{"path":"locked.md","content":"holder","expect_version":"`+t0+`"}`, "lock-holder")
+		holderCode, holderBody = w.Code, w.Body.String()
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		close(proceed)
+		wg.Wait()
+		t.Fatal("the holding writer never reached the race hook — the write-lock wiring changed shape")
+	}
+
+	// The holder now owns the note's tier-1 lock and stays there until
+	// `proceed` closes, so this save waits out knowledge.DefaultLockBound and
+	// is refused with a genuine *knowledge.LockTimeoutError.
+	late := libPutJSONAs(t, api, "/api/v1/library/"+id+"/content",
+		`{"path":"locked.md","content":"late","expect_version":"`+t0+`"}`, "latecomer")
+	require.Equal(t, http.StatusServiceUnavailable, late.Code,
+		"the blocked writer must time out on the lock (503), not slip past it: body=%s", late.Body.String())
+	require.EqualValues(t, 1, hookCalls.Load(),
+		"only the holder may have entered the critical section")
+
+	close(proceed)
+	wg.Wait()
+	require.Equal(t, http.StatusOK, holderCode, "body: %s", holderBody)
+
+	allow, refused := libraryWriteAuditEntries(t, auditDir)
+	require.Len(t, refused, 1, "expected exactly one refusal record in the real audit sink")
+	assertRefusalRecord(t, refused[0], wantRefusal{
+		decision: audit.DecisionDeny, reason: "lock_timeout",
+		path: "locked.md", binary: false, bytes: len("late"),
+		actor: "latecomer", workspace: id,
+	})
+
+	require.Len(t, allow, 1, "the holder's successful save must still be recorded")
+	assertSuccessRecordShapeUnchanged(t, allow[0])
+}
+
+// --- the three reasons are actually distinguishable -----------------------
+
+// TestLibraryWriteRefusals_AuditReasonsAreDistinct is the assertion the requirement
+// turns on: an operator reading one workspace's audit file must be able to
+// separate a stale-token conflict from a malformed token, not merely see that
+// three saves were refused. It drives all three classes through ONE api into
+// ONE sink and asserts the reasons form three distinct values, in the order
+// the refusals happened.
+//
+// The lock-timeout class is covered by its own test above (it needs a real
+// 5-second lock wait); this one pins the two that share a sink cheaply, plus
+// the conflict, and asserts no two of them collapse to the same label.
+func TestLibraryWriteRefusals_AuditReasonsAreDistinct(t *testing.T) {
+	api, id := buildLibraryTestAPI(t)
+	seed := libPutJSON(t, api, "/api/v1/library/"+id+"/content",
+		`{"path":"distinct.md","content":"v0","expect_version":"v1:absent"}`)
+	require.Equal(t, http.StatusOK, seed.Code, "body: %s", seed.Body.String())
+	bare := libraryBareETag(t, seed)
+
+	auditDir := attachTestAuditor(t, api)
+
+	require.Equal(t, http.StatusBadRequest, libPutJSONAs(t, api, "/api/v1/library/"+id+"/content",
+		`{"path":"distinct.md","content":"a","expect_version":""}`, "op").Code)
+	require.Equal(t, http.StatusBadRequest, libPutJSONAs(t, api, "/api/v1/library/"+id+"/content",
+		`{"path":"distinct.md","content":"a","expect_version":"\"`+bare+`\""}`, "op").Code)
+	require.Equal(t, http.StatusConflict, libPutJSONAs(t, api, "/api/v1/library/"+id+"/content",
+		`{"path":"distinct.md","content":"a","expect_version":"a-token-nobody-issued"}`, "op").Code)
+
+	allow, refused := libraryWriteAuditEntries(t, auditDir)
+	assert.Empty(t, allow, "%+v", allow)
+	require.Len(t, refused, 3, "every refused save must be recorded, one row each")
+
+	var reasons []string
+	for _, e := range refused {
+		details, ok := e["details"].(map[string]any)
+		require.True(t, ok, "entry carries no details object: %+v", e)
+		assert.Equal(t, audit.DecisionDeny, e["decision"])
+		reason, isString := details["reason"].(string)
+		require.True(t, isString, "every refusal must carry a string reason: %+v", details)
+		reasons = append(reasons, reason)
+	}
+	assert.Equal(t,
+		[]string{"expect_version_missing", "expect_version_quoted", "version_conflict"},
+		reasons,
+		"the three refusal classes must be distinguishable from one another in the log")
 }
