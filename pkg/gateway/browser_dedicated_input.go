@@ -267,9 +267,12 @@ func (h *BrowserWSHandler) dispatchDedicatedControl(wc *browserWSConn, state *br
 		return
 	}
 	job := browserCommand{navigation: inputKindIsDiscrete(f.Kind), run: func(parent context.Context) {
+		failJob := func(reason string) {
+			d.failControlUnlessSuperseded(parent, request.ctx, epoch, next, reason, fail)
+		}
 		a, err := state.awaitAttachment(parent, request)
 		if err != nil {
-			fail("Browser attachment was not ready. Retry input.")
+			failJob("Browser attachment was not ready. Retry input.")
 			return
 		}
 		ctx, cancel := a.bindContext(parent)
@@ -284,7 +287,7 @@ func (h *BrowserWSHandler) dispatchDedicatedControl(wc *browserWSConn, state *br
 			case <-ctx.Done():
 				ack.Reason = strPtr("Input retirement timed out.")
 				reply()
-				fail("Input retirement timed out.")
+				failJob("Input retirement timed out.")
 				return
 			}
 		}
@@ -292,7 +295,7 @@ func (h *BrowserWSHandler) dispatchDedicatedControl(wc *browserWSConn, state *br
 			if err = a.mgr.Live().ReleaseInputSourceContext(ctx, a.panelSessionID, source); err != nil {
 				ack.Reason = strPtr(err.Error())
 				reply()
-				fail("Input release failed.")
+				failJob("Input release failed.")
 				return
 			}
 		}
@@ -342,10 +345,25 @@ func (h *BrowserWSHandler) dispatchDedicatedControl(wc *browserWSConn, state *br
 		}
 		reply()
 		if !ok {
-			fail("Browser control failed. Retry input.")
+			failJob("Browser control failed. Retry input.")
 		}
 	}, onDiscard: func() { fail("Browser control was canceled. Retry input.") }}
 	if !state.commands.submit(&h.activeConns, job) {
 		fail("Browser control queue is full. Retry input.")
 	}
+}
+
+// A newer navigation cancels the active command through the serial queue.
+// That older cancellation must not retire the peer needed by its successor.
+// Deadlines, actual refusals, and cancellation of the latest command still fail.
+func (d *browserDedicatedInput) failControlUnlessSuperseded(operation, attachment context.Context, epoch, control int, reason string, fail func(string)) {
+	if operation.Err() == context.Canceled && attachment.Err() == nil {
+		d.mu.Lock()
+		superseded := !d.closed && d.epoch == epoch && d.control > control
+		d.mu.Unlock()
+		if superseded {
+			return
+		}
+	}
+	fail(reason)
 }
