@@ -111,9 +111,25 @@ export function LazyEmbedMount({
     }
   }, [mountMarginPx, unmountMarginPx])
 
+  // Latest-ref pattern, deliberately NOT `[mounted, onMountedChange]`. A
+  // caller's `onMountedChange` is expected to setState from it (that is the
+  // whole point — EMB-071's mount-count notice reads it) but is very likely
+  // to be an unmemoized inline function, a fresh identity every render. If
+  // this effect depended on that identity directly, an inline callback would
+  // re-run it on EVERY parent render, not just on a real mount/unmount
+  // transition; calling a callback that itself setStates would then trigger
+  // another parent render, producing ANOTHER new identity, re-running the
+  // effect again — an infinite loop with no caller having done anything
+  // wrong by the type's own contract. Reading the CURRENT callback out of a
+  // ref, and keying the notifying effect on `mounted` alone, reports every
+  // real transition exactly once regardless of whether the caller memoizes.
+  const onMountedChangeRef = useRef(onMountedChange)
   useEffect(() => {
-    onMountedChange?.(mounted)
-  }, [mounted, onMountedChange])
+    onMountedChangeRef.current = onMountedChange
+  })
+  useEffect(() => {
+    onMountedChangeRef.current?.(mounted)
+  }, [mounted])
 
   return (
     <div

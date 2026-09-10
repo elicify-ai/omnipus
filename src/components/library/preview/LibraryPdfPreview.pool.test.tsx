@@ -270,6 +270,60 @@ describe('LibraryPdfPreview — bounded worker pool (EMB-032, ceiling 2)', () =>
     expect(within(doc3.container).queryByTestId('library-pdf-error')).not.toBeInTheDocument()
   })
 
+  it('third-queues-honestly-after-two-fully-loaded-documents: two RESOLVED PDFs hold both workers indefinitely, and a third queues honestly until one unmounts', async () => {
+    // The gap this test closes (B2): the suite's other three tests
+    // (28-30, above and below) admit two documents whose `getDocument()`
+    // never resolves — they stay mid-load forever, so nothing has ever
+    // proven what happens once a lease is held by a document that has
+    // GENUINELY FINISHED opening and rendering, which is the real, common
+    // case (three PDF embeds in one note, none of them broken).
+    const doc1 = await mountDoc('reports/a.pdf')
+    const doc2 = await mountDoc('reports/b.pdf')
+    await waitFor(() => expect(constructedWorkers).toHaveLength(2))
+    await waitFor(() => expect(h.pendingDocs).toHaveLength(2))
+
+    h.pendingDocs[0]?.resolve(makePdfDoc())
+    h.pendingDocs[1]?.resolve(makePdfDoc())
+    await waitFor(() => expect(within(doc1.container).getByTestId('library-pdf-page')).toBeInTheDocument())
+    await waitFor(() => expect(within(doc2.container).getByTestId('library-pdf-page')).toBeInTheDocument())
+    await waitFor(() => expect(within(doc1.container).queryByTestId('library-pdf-loading')).not.toBeInTheDocument())
+    await waitFor(() => expect(within(doc2.container).queryByTestId('library-pdf-loading')).not.toBeInTheDocument())
+    expect(within(doc1.container).queryByTestId('library-pdf-error')).not.toBeInTheDocument()
+    expect(within(doc2.container).queryByTestId('library-pdf-error')).not.toBeInTheDocument()
+
+    const doc3 = await mountDoc('reports/c.pdf')
+
+    // MUTATION THIS DIES ON: releasing the pool lease once a document's
+    // first render pass completes (a "release on success" path) — with two
+    // FULLY LOADED documents still mounted and still needing their worker
+    // for Edit mode / Save, that would free a slot neither is actually done
+    // with, `constructedWorkers` would reach 3, and the third would never
+    // show the queued state at all.
+    await waitFor(() => expect(within(doc3.container).getByTestId('library-pdf-queued')).toBeInTheDocument())
+    expect(constructedWorkers).toHaveLength(2)
+
+    // Honest: the waiting state names the real, finite reason — not a
+    // generic spinner indistinguishable from a slow network fetch.
+    expect(within(doc3.container).getByTestId('library-pdf-queued').textContent).toMatch(/only 2 pdfs/i)
+
+    // The wait is bounded, not silently infinite: releasing either
+    // fully-loaded document's lease (unmounting it, matching what
+    // LazyEmbedMount does once a document scrolls well outside the far
+    // margin — EMB-065) grants the third's queued lease, and it goes on to
+    // construct a genuinely fresh worker and render for real.
+    doc1.unmount()
+    await waitFor(() => expect(constructedWorkers).toHaveLength(3))
+    expect(within(doc3.container).queryByTestId('library-pdf-queued')).not.toBeInTheDocument()
+    const thirdWorker = constructedWorkers[2]
+    expect(thirdWorker).not.toBe(constructedWorkers[0])
+    expect(thirdWorker.terminated).toBe(false)
+
+    await waitFor(() => expect(h.pendingDocs).toHaveLength(3))
+    h.pendingDocs[2]?.resolve(makePdfDoc())
+    await waitFor(() => expect(within(doc3.container).getByTestId('library-pdf-page')).toBeInTheDocument())
+    expect(within(doc3.container).queryByTestId('library-pdf-error')).not.toBeInTheDocument()
+  })
+
   it('releases a queued lease when the component unmounts before its turn, without ever constructing that worker', async () => {
     const doc1 = await mountDoc('reports/a.pdf')
     await mountDoc('reports/b.pdf') // occupies the pool's second slot; never queried further

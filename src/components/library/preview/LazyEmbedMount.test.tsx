@@ -10,26 +10,36 @@
 // callback directly, rather than trying to simulate real scroll geometry.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { useState } from 'react'
 import { render, screen, act } from '@testing-library/react'
-import { LazyEmbedMount } from './LazyEmbedMount'
+import { LazyEmbedMount, DEFAULT_MOUNT_MARGIN_PX, DEFAULT_UNMOUNT_MARGIN_PX } from './LazyEmbedMount'
 
 interface ObserverInstance {
   callback: IntersectionObserverCallback
   observedElements: Element[]
   disconnected: boolean
+  /** The `rootMargin` this instance was actually constructed with — this is
+   *  the mount budget itself (EMB-065/066's two named constants), and until
+   *  this fake captured it, NOTHING in this suite could tell a component
+   *  that reads `mountMarginPx`/`unmountMarginPx` apart from one that
+   *  ignores them entirely and hardcodes '' (the prior shape of this fake,
+   *  which the earlier constructor signature below made impossible to catch
+   *  — it never even received the `options` argument). */
+  rootMargin: string
 }
 
 let observerInstances: ObserverInstance[] = []
 
 class FakeIntersectionObserver implements IntersectionObserver {
   readonly root = null
-  readonly rootMargin = ''
+  readonly rootMargin: string
   readonly scrollMargin = ''
   readonly thresholds: ReadonlyArray<number> = []
   private instance: ObserverInstance
 
-  constructor(callback: IntersectionObserverCallback) {
-    this.instance = { callback, observedElements: [], disconnected: false }
+  constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+    this.rootMargin = options?.rootMargin ?? ''
+    this.instance = { callback, observedElements: [], disconnected: false, rootMargin: this.rootMargin }
     observerInstances.push(this.instance)
   }
   observe(el: Element) {
@@ -89,6 +99,42 @@ describe('LazyEmbedMount — reserved height before mounting (EMB-066)', () => {
     expect(wrapper.style.minHeight).toBe('240px')
     expect(screen.queryByTestId('embed-child')).not.toBeInTheDocument()
     expect(wrapper).toHaveAttribute('data-mounted', 'false')
+  })
+})
+
+describe('LazyEmbedMount — the mount budget itself: margins actually reach the browser IntersectionObserver', () => {
+  it('uses DEFAULT_MOUNT_MARGIN_PX for the near observer and DEFAULT_UNMOUNT_MARGIN_PX for the far one, when no override is given', () => {
+    render(
+      <LazyEmbedMount reservedHeight={240}>
+        <Child />
+      </LazyEmbedMount>,
+    )
+    // Hardcoded expected values, deliberately NOT read off the constants
+    // under test — an oracle built from `` `${DEFAULT_MOUNT_MARGIN_PX}px` ``
+    // would pass unchanged no matter what that constant is set to, which is
+    // exactly the blocker this test exists to close (the bug report:
+    // "Change DEFAULT_MOUNT_MARGIN_PX from 600 to 100000 ... every embed
+    // mounts on first paint, the entire bound gone — and all 8 tests ...
+    // STILL PASS"). These two literals ARE the mount budget's shipped
+    // values today; a change to either constant must change these too.
+    expect(DEFAULT_MOUNT_MARGIN_PX).toBe(600)
+    expect(DEFAULT_UNMOUNT_MARGIN_PX).toBe(1800)
+    expect(observerInstances[0]?.rootMargin).toBe('600px')
+    expect(observerInstances[1]?.rootMargin).toBe('1800px')
+  })
+
+  it('passes custom mountMarginPx/unmountMarginPx straight through to the observers, not the defaults', () => {
+    render(
+      <LazyEmbedMount reservedHeight={240} mountMarginPx={50} unmountMarginPx={9000}>
+        <Child />
+      </LazyEmbedMount>,
+    )
+    // MUTATION THIS DIES ON: a component that reads its props but always
+    // constructs its observers with the DEFAULT_* constants — the previous
+    // shape of this suite could not tell that apart from correct wiring,
+    // because nothing asserted rootMargin at all.
+    expect(observerInstances[0]?.rootMargin).toBe('50px')
+    expect(observerInstances[1]?.rootMargin).toBe('9000px')
   })
 })
 
@@ -195,5 +241,41 @@ describe('LazyEmbedMount — no IntersectionObserver available (graceful degrada
       </LazyEmbedMount>,
     )
     expect(screen.getByTestId('embed-child')).toBeInTheDocument()
+  })
+})
+
+describe('LazyEmbedMount — onMountedChange cannot loop on an unmemoized callback (M13)', () => {
+  it('reports a real mount transition exactly once, even when the caller passes a fresh callback every render and setStates from it', () => {
+    const calls: boolean[] = []
+    function Harness() {
+      const [, forceRerender] = useState(0)
+      return (
+        <LazyEmbedMount
+          reservedHeight={240}
+          // Deliberately a fresh arrow function every render — no useCallback
+          // — which is exactly what nothing today happens to pass, and
+          // exactly what EMB-071's future mount-count consumer is likely to
+          // pass by default. It also setStates from inside the callback,
+          // the real reason this prop exists at all.
+          onMountedChange={(m) => {
+            calls.push(m)
+            forceRerender((n) => n + 1)
+          }}
+        >
+          <Child />
+        </LazyEmbedMount>
+      )
+    }
+    render(<Harness />)
+    calls.length = 0 // drop the initial-mount call (mounted=false), same as the sibling test above
+
+    // MUTATION THIS DIES ON: keying the notifying effect on
+    // `[mounted, onMountedChange]` instead of `[mounted]` alone — a fresh
+    // callback identity every render re-runs the effect on every render, the
+    // callback's own setState produces another fresh identity, and the two
+    // feed each other forever. That shape hangs this test (and, for real,
+    // the reader's browser tab) rather than settling on a single call.
+    fireIntersection(0, true)
+    expect(calls).toEqual([true])
   })
 })

@@ -104,7 +104,7 @@ import { LibrarySignaturePad, SIGNATURE_PAD_WIDTH, SIGNATURE_PAD_HEIGHT } from '
 import { buildInkAnnotationEntry } from './pdfInkAnnotation'
 import type { SignatureStroke } from './pdfInkAnnotation'
 import { uint8ArrayToBase64 } from './pdfBinaryEncoding'
-import { pdfWorkerPool } from './pdfWorkerPool'
+import { pdfWorkerPool, PDF_WORKER_POOL_CEILING } from './pdfWorkerPool'
 import type { PdfWorkerLease } from './pdfWorkerPool'
 import { INLINE_PREVIEW_BOX_CLASS } from './libraryPreviewVariant'
 import type { LibraryPreviewVariant } from './libraryPreviewVariant'
@@ -648,6 +648,19 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane' }: Libr
           pageAnnotationsRef.current.set(n, annotations)
         }
 
+        // EMB-032 — deliberately NO releaseLease() here, and that is not an
+        // oversight. Reaching this point means the document is open and its
+        // first pass over every page is done, but its `PDFWorker` is not
+        // finished being used: entering Edit mode below mounts a real
+        // `AnnotationLayer` against this SAME `doc`, and `handleSave` calls
+        // `doc.saveDocument()` — both keep talking to this worker for as
+        // long as the component stays mounted. The lease (and the worker
+        // instance it stands for) is held for the component's WHOLE mounted
+        // lifetime, released only on failure, abandonment before its turn,
+        // or unmount (see the effect's cleanup below, and pdfWorkerPool.ts's
+        // own header for why releasing on render success would break
+        // EMB-032's "at most two worker instances" ceiling rather than
+        // honour it).
         if (!cancelled) setAllPagesRendered(true)
       } catch (err) {
         if (cancelled) {
@@ -1210,12 +1223,24 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane' }: Libr
       )}
 
       {status === 'queued' && (
+        // EMB-032's visible waiting state. Deliberately names the real,
+        // finite reason (the page-wide worker ceiling) rather than a
+        // generic "Loading" that would read as a stalled fetch — a reader
+        // who sees this on a note with several PDFs is not looking at a
+        // bug, and the copy says so and says what resolves it, honestly:
+        // this document opens the moment another releases its worker
+        // (closes, or is scrolled far enough away to unmount), which may be
+        // immediate or may be a genuine wait if nothing does — never a
+        // silent, unexplained hang.
         <div
-          className="flex flex-1 items-center justify-center gap-2 text-sm text-[var(--color-muted)]"
+          className="flex flex-1 items-center justify-center gap-2 p-6 text-center text-sm text-[var(--color-muted)]"
           data-testid="library-pdf-queued"
         >
-          <SpinnerGap className="h-4 w-4 animate-spin" aria-hidden />
-          <span>Waiting for a PDF worker to become available…</span>
+          <SpinnerGap className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+          <span>
+            Only {PDF_WORKER_POOL_CEILING} PDFs can be open on this page at once. This one will
+            open automatically once another PDF closes or scrolls out of view.
+          </span>
         </div>
       )}
 
