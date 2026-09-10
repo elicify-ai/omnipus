@@ -169,7 +169,7 @@ beforeEach(() => {
   // content (ADR-083 B1). A test whose fixture models an impossible world tests
   // nothing about the real one.
   mockedFetchContentVersioned.mockImplementation(async (workspaceId, path) => ({
-    data: await mockedFetchContent(workspaceId, { path }),
+    data: await mockedFetchContent(workspaceId, path),
     version: 'v1:default',
   }))
 })
