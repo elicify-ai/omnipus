@@ -26,14 +26,20 @@
 //
 // ── The two permitted divergences (FR-013b), and nothing else ────────────────
 //   (1) the `a` slot — `KnowledgeMarkdownLink` below: wikilinks, in-document
-//       heading links, collection-relative path links, and a visible unresolved
-//       state. Everything it does not recognise is handed to the INHERITED
-//       renderer, so external and unsafe hrefs behave exactly as in chat.
+//       heading links, collection-relative path links, an allow-listed video
+//       destination (ADR-083 B11/EMB-075 — mounts VideoEmbed, never the graph),
+//       and a visible unresolved state. Everything it does not recognise is
+//       handed to the INHERITED renderer, so external and unsafe hrefs behave
+//       exactly as in chat.
 //   (2) appended remark plugins — private-comment stripping (inherited from
 //       stage 1, not re-implemented), frontmatter suppression, callouts,
-//       highlights, wikilinks/embeds.
+//       highlights, wikilinks/embeds, and rewriting a video-shaped `![]()`
+//       image into a link (`remarkKbVideoImages`) so an IMAGE-form video
+//       destination reaches divergence (1) instead of opening a second one.
 // There is no third divergence: no rehype plugin is added (KB_REHYPE_PLUGINS is
-// re-exported from stage 1 unchanged), and no other component slot is replaced.
+// re-exported from stage 1 unchanged), and no other component slot is replaced
+// — `img` still renders through chat's own, untouched renderer in every case,
+// including a video-shaped image, which arrives at the `a` slot as a link.
 //
 // ── Chat is untouched (FR-013d) ──────────────────────────────────────────────
 // Nothing in this file is imported by any chat module, and no chat array or map
@@ -65,6 +71,17 @@ import { LazyEmbedMount } from './LazyEmbedMount'
 import { matchBaseView } from './baseViewMatch'
 import { sliceTranscludedContent } from './noteTransclusion'
 import { BasePreview, type BasePreviewEmbedOptions } from './BasePreview'
+// The SAME image renderer the Library pane uses (EMB-027) — reused for a
+// sized picture embed, never a second image-rendering implementation.
+import { LibraryImagePreview } from './LibraryImagePreview'
+// The external-video facade (ADR-083 US-9/B11/EMB-075) and its own destination
+// parser — reused here, never re-implemented, so "what counts as a video
+// destination" has exactly one definition on either side of the dispatch.
+import { VideoEmbed, parseVideoEmbedUrl } from './VideoEmbed'
+// codeText already extracts plain text from react-markdown children for a
+// fence's contents (markdown-shared.tsx); reused here for a link/image's
+// caption rather than a second implementation of the same walk.
+import { codeText } from '@/components/chat/markdown-shared'
 
 type RemarkPlugins = ComponentProps<typeof ReactMarkdown>['remarkPlugins']
 
@@ -322,11 +339,33 @@ export interface ParsedWikilink {
    *  block id is never matched against heading text (ADR-083 EMB-011, EMB-036,
    *  mirroring `pkg/knowledge/links.go`'s `Link.BlockID`/`Link.Heading` split). */
   block?: string
-  /** Display text: the alias when one was given, else the raw inner text. */
+  /** Display text: the alias when one was given, else the raw inner text.
+   *  Never the raw digits of a `width` (below) — a bar segment is read as
+   *  EITHER a size OR a caption, never both, and never the wrong one. */
   text: string
   /** True for the `![[…]]` embed form. */
   embed: boolean
+  /** Pixel width from `![[target|400]]` / `![[target|400x300]]` (a height, if
+   *  given, is read and discarded — see `EMBED_WIDTH_PATTERN`'s own doc).
+   *  Only ever populated for the EMBED form (ADR-083 EMB-030: "a size given
+   *  after a bar applies to pictures only", and only an embed can be a
+   *  picture) — a plain `[[target|400]]` reference link's bar segment is
+   *  always a caption, even when it happens to look like digits. Whether the
+   *  TARGET actually turns out to be a picture is decided later, from its
+   *  resolved kind — this field only reports what the notation itself said. */
+  width?: number
 }
+
+/** `pkg/knowledge/knowledge_edit.go`'s own `embedWidthPattern` — EMB-030's
+ *  exact data constraint ("A size given after `|` in an embed MUST match
+ *  `^\d+(x\d+)?$` to be read as a size; anything else is display text."),
+ *  mirrored here so read and write agree on what counts as a size rather
+ *  than each having its own idea. Capture group 1 is the WIDTH only; an
+ *  optional `x<height>` suffix is recognised (so it is never mistaken for
+ *  caption text) but discarded — `LibraryImagePreview`'s existing `width`
+ *  prop is the one sizing path this reads into, and it takes pixels wide,
+ *  not a separate height. */
+const EMBED_WIDTH_PATTERN = /^(\d+)(?:x\d+)?$/
 
 /** Parses the inside of a `[[…]]`, in Obsidian's order: alias last, heading
  *  before it. Exported because the outline/backlink rails parse the same forms.
@@ -334,8 +373,8 @@ export interface ParsedWikilink {
 export function parseWikilink(inner: string, embed = false): ParsedWikilink | null {
   const bar = inner.indexOf('|')
   const head = (bar === -1 ? inner : inner.slice(0, bar)).trim()
-  const alias = bar === -1 ? undefined : inner.slice(bar + 1).trim()
-  if (head === '' && !alias) return null
+  const barContent = bar === -1 ? undefined : inner.slice(bar + 1).trim()
+  if (head === '' && !barContent) return null
 
   const hash = head.indexOf('#')
   const target = (hash === -1 ? head : head.slice(0, hash)).trim()
@@ -348,12 +387,23 @@ export function parseWikilink(inner: string, embed = false): ParsedWikilink | nu
   const heading = isBlock ? undefined : fragment
   const block = isBlock ? fragment.slice(1) || undefined : undefined
 
+  // EMB-030: on an EMBED, a bar segment shaped like a size is read as one —
+  // never as the caption a size was never meant to be, even when the target
+  // turns out not to be a picture (there it is simply inert, per EMB-030's
+  // own "applies only to pictures" rule) rather than silently eating the
+  // display text. A plain (non-embed) wikilink never has a size to give, so
+  // its bar segment is always an alias, digits or not.
+  const widthMatch = embed && barContent !== undefined ? EMBED_WIDTH_PATTERN.exec(barContent) : null
+  const width = widthMatch ? Number.parseInt(widthMatch[1] as string, 10) : undefined
+  const alias = widthMatch ? undefined : barContent
+
   return {
     target,
     heading,
     block,
     text: alias && alias !== '' ? alias : head,
     embed,
+    ...(width !== undefined ? { width } : {}),
   }
 }
 
@@ -518,7 +568,38 @@ export function remarkKbWikilinks(options: KbWikilinkOptions = {}) {
           NO_RESOLVER_EMBED_RESOLUTION
 
         if (KINDS_WITH_INLINE_RENDERER.has(kind) && resolution.state === 'resolved' && resolution.url) {
-          return { type: 'image', url: resolution.url, alt: parsed.text, children: [] }
+          // Still a plain `image` node in every case (EMB-030 does not
+          // change WHERE this renders, only whether a width reaches it) —
+          // an unsized picture is byte-for-byte what this returned before.
+          // A SIZED one additionally carries the width and workspace
+          // coordinates as `data.hProperties`: inert here (this composition
+          // never touches the `img` slot — FR-013d — so `MarkdownImage`
+          // reads only `src`/`alt` and drops the rest), but read back by
+          // `promoteStandaloneEmbeds` below, which is the ONLY place that
+          // knows whether this embed stood alone in its own paragraph —
+          // `LibraryImagePreview`'s width prop needs that block-safe
+          // placement (its own root is a `<div>`), the same reason a `.base`
+          // or markdown embed needs it. An embed mixed inline with other
+          // words is not decidable yet at this point in the pipeline, so it
+          // is deferred, not guessed.
+          const sizable = parsed.width !== undefined && resolution.workspaceId && resolution.workspacePath
+          return {
+            type: 'image',
+            url: resolution.url,
+            alt: parsed.text,
+            children: [],
+            ...(sizable
+              ? {
+                  data: {
+                    hProperties: {
+                      'data-kb-embed-width': String(parsed.width),
+                      'data-kb-embed-workspace-id': resolution.workspaceId,
+                      'data-kb-embed-workspace-path': resolution.workspacePath,
+                    },
+                  },
+                }
+              : {}),
+          }
         }
         // Every other combination is reported, never faked: a resolved
         // non-image embed (no inline renderer for its kind yet), an
@@ -564,18 +645,31 @@ export function remarkKbWikilinks(options: KbWikilinkOptions = {}) {
 // (ADR-083 Step 2/Step 3)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** True for a resolved `.base` or markdown embed node — the only two kinds
- *  that mount BLOCK content (a table, another note's own headings and
- *  paragraphs) rather than an inline picture or a styled span. Everything
- *  else (image, an unresolved/indeterminate/loading state, a resolved embed
- *  of a kind with no inline renderer) is unaffected and keeps rendering
- *  wherever `remarkKbWikilinks` put it. */
+/** True for a resolved `.base` or markdown embed node — the two kinds that
+ *  mount BLOCK content (a table, another note's own headings and
+ *  paragraphs) rather than an inline picture or a styled span. A sized
+ *  image embed is a SEPARATE case (`isSizableImageEmbedNode` below) — it is
+ *  still a plain `image` mdast node at this point, not yet converted to a
+ *  link, so it would not match this check even if `image` were added to the
+ *  kind list here. Everything else (an unresolved/indeterminate/loading
+ *  state, a resolved embed of a kind with no inline renderer) is unaffected
+ *  and keeps rendering wherever `remarkKbWikilinks` put it. */
 function isPromotableBlockEmbedNode(node: MdNode): boolean {
   const props = node.data?.hProperties
   if (!props || props['data-kb-embed'] === undefined) return false
   const kind = props['data-kb-embed-kind']
   const state = props['data-kb-embed-state']
   return (kind === 'base' || kind === 'markdown') && state === 'resolved'
+}
+
+/** True for a resolved, WIDTH-bearing image embed (EMB-030) —
+ *  `remarkKbWikilinks` tags one with `data-kb-embed-width` (see its own
+ *  doc), but leaves its `type` as plain `image` because the pipeline does
+ *  not yet know whether it stands alone in its paragraph. THIS is where
+ *  that becomes knowable, which is why the conversion to a link node
+ *  happens HERE and not in `remarkKbWikilinks`. */
+function isSizableImageEmbedNode(node: MdNode): boolean {
+  return node.type === 'image' && node.data?.hProperties?.['data-kb-embed-width'] !== undefined
 }
 
 function isBlankTextNode(node: MdNode): boolean {
@@ -587,12 +681,13 @@ function promoteStandaloneEmbeds(parent: MdNode): void {
   parent.children = parent.children.map((child) => {
     if (child.type === 'paragraph' && child.children) {
       const meaningful = child.children.filter((c) => !isBlankTextNode(c))
-      if (meaningful.length === 1 && isPromotableBlockEmbedNode(meaningful[0] as MdNode)) {
-        const embedNode = meaningful[0] as MdNode
-        embedNode.data = {
-          ...embedNode.data,
+      const only = meaningful.length === 1 ? (meaningful[0] as MdNode) : undefined
+
+      if (only && isPromotableBlockEmbedNode(only)) {
+        only.data = {
+          ...only.data,
           hProperties: {
-            ...(embedNode.data?.hProperties ?? {}),
+            ...(only.data?.hProperties ?? {}),
             // Marks that THIS occurrence stood alone in its own paragraph —
             // the only shape a block-level renderer is safe to mount in
             // (nesting a table inside a <p> the note wrote around inline
@@ -601,7 +696,37 @@ function promoteStandaloneEmbeds(parent: MdNode): void {
             'data-kb-embed-standalone': '',
           },
         }
-        return embedNode
+        return only
+      }
+
+      // A sized picture that stood ALONE: converted to the SAME link-node
+      // shape a base/markdown embed uses, so it reaches `a` (the one slot
+      // this composition is permitted to replace) and mounts
+      // `KbImageEmbedMount` — `LibraryImagePreview`'s width prop, applied
+      // through a `<div>`-rooted component, needs exactly this block-safe
+      // placement. A sized picture MIXED inline with other words is left
+      // completely untouched here — still a plain `image` node, rendering
+      // exactly as an unsized one would (EMB-030's width silently unused,
+      // never a "shown as a link" downgrade of the picture itself).
+      if (only && isSizableImageEmbedNode(only)) {
+        const props = only.data?.hProperties ?? {}
+        return {
+          type: 'link',
+          url: '',
+          data: {
+            hProperties: {
+              'data-kb-wikilink': '',
+              'data-kb-embed': '',
+              'data-kb-embed-kind': 'image',
+              'data-kb-embed-state': 'resolved',
+              'data-kb-embed-standalone': '',
+              'data-kb-embed-width': props['data-kb-embed-width'],
+              'data-kb-embed-workspace-id': props['data-kb-embed-workspace-id'],
+              'data-kb-embed-workspace-path': props['data-kb-embed-workspace-path'],
+            },
+          },
+          children: [{ type: 'text', value: only.alt ?? '' }],
+        }
       }
     }
     promoteStandaloneEmbeds(child)
@@ -742,6 +867,63 @@ function hasOwnScheme(href: string): boolean {
     return true
   } catch {
     return false
+  }
+}
+
+/**
+ * True for a destination — a markdown LINK's href, or (via
+ * `remarkKbVideoImages` below) a markdown IMAGE's src — that names a video by
+ * ADR-083's own rules (B11, EMB-075): it carries a scheme of its own, so it
+ * can never be a collection path or a wikilink target (a wikilink is
+ * addressed by file, never by URL), and VideoEmbed's own parser can read a
+ * valid, exactly-eleven-character identifier from it. Recognised HERE, before
+ * `resolveCollectionPath` and before the graph are ever consulted, by
+ * REUSING VideoEmbed's parser rather than a second implementation of "what
+ * counts as a video destination".
+ *
+ * Whether the destination's HOST is currently PERMITTED is a different
+ * question this function does not answer — that is decided reactively INSIDE
+ * VideoEmbed itself (A-14), from the live allow-list, not at dispatch time.
+ * This function only recognises the SHAPE, so an operator emptying the
+ * allow-list mid-session still reaches VideoEmbed (which then says so
+ * honestly) rather than silently falling back to a plain link.
+ */
+function isVideoEmbedDestination(raw: string): boolean {
+  return raw !== '' && hasOwnScheme(raw) && parseVideoEmbedUrl(raw).id !== null
+}
+
+/**
+ * remark plugin: an ordinary `![alt](url)` — NEVER a wikilink embed, whose own
+ * `image` nodes are produced later (at render time, by `remarkKbWikilinks`,
+ * from literal `![[...]]` text) and always carry the graph resolver's own
+ * same-origin download URL, never a scheme'd destination — whose `url` names a
+ * video is rewritten to a LINK at parse time. That routes it to the ONE slot
+ * this composition is permitted to replace (`a`) instead of adding a second,
+ * competing divergence on `img`: `KnowledgeMarkdownLink` then makes the
+ * IDENTICAL dispatch decision for it that it makes for a markdown LINK naming
+ * the same destination (EMB-075: "recognised only from a markdown-link
+ * form" — this plugin is what makes an image destination reach that same
+ * form, not a second recognition rule).
+ *
+ * Runs in the MODULE-SCOPE base list (`KB_BASE_REMARK_PLUGINS`), before the
+ * per-render `remarkKbWikilinks`/`remarkKbPromoteBlockEmbeds` are appended —
+ * so it only ever sees the note's OWN written `![]()` syntax, never a node a
+ * later plugin produced.
+ */
+function rewriteVideoImageNodes(parent: MdNode): void {
+  if (!parent.children) return
+  parent.children = parent.children.map((child) => {
+    if (child.type === 'image' && child.url && isVideoEmbedDestination(child.url)) {
+      return { type: 'link', url: child.url, children: [{ type: 'text', value: child.alt ?? '' }] }
+    }
+    rewriteVideoImageNodes(child)
+    return child
+  })
+}
+
+export function remarkKbVideoImages() {
+  return (tree: unknown) => {
+    rewriteVideoImageNodes(tree as MdNode)
   }
 }
 
@@ -1179,6 +1361,33 @@ function KbBaseEmbedContent({
   const match = matchBaseView(viewsQuery.data.views, viewFragment)
 
   if (match.kind === 'not_found') {
+    // EMB-028 — the SAME distinction BasePreview.tsx's own "zero views"
+    // state already draws for the full pane: zero views WITH rejections is
+    // not the same fact as zero views WITHOUT them. `matchBaseView` answers
+    // `not_found` for both "no view exists" AND "every view file failed to
+    // load" (it only ever sees the empty `views` array either way) — so
+    // without reading `unloadable_count`, a broken `.base` file tells the
+    // reader "No view named X" — this notation is wrong — when the truth is
+    // "this file could not be read". That is the same class of falsehood
+    // ADR-083 exists to eliminate, just pointed at a base file instead of a
+    // missing note. Scoped to the exact shape the server reports for this
+    // (`views: []` PLUS `unloadable_count > 0`): a PARTIAL failure — some
+    // views loaded, the fragment just does not match any of them — keeps
+    // today's "no view named X" answer, which is still true of the views
+    // that DID load.
+    if (viewsQuery.data.views.length === 0 && viewsQuery.data.unloadable_count > 0) {
+      const count = viewsQuery.data.unloadable_count
+      return (
+        <div
+          data-testid="kb-base-embed-unloadable-views"
+          className="rounded-md border border-dashed border-[var(--color-warning)]/50 px-3 py-3 text-xs text-[var(--color-warning)]"
+        >
+          {count === 1
+            ? `The one view imported from ${entry.name} could not be loaded, so this embed cannot be checked against it.`
+            : `All ${count} views imported from ${entry.name} could not be loaded, so this embed cannot be checked against them.`}
+        </div>
+      )
+    }
     const labels = viewsQuery.data.views.map((v) => v.label)
     return (
       <div
@@ -1222,6 +1431,67 @@ function KbBaseEmbedContent({
       {...(ctx.onNavigate ? { onOpenNote: (p: string) => ctx.onNavigate?.(p) } : {})}
     />
   )
+}
+
+/** Reserved height for a sized picture embed while its directory listing is
+ *  in flight (EMB-066) — a modest, PICTURE-shaped default, not the written
+ *  width itself: the note author's `width` is a rendered PIXEL WIDTH, not a
+ *  reliable predictor of aspect ratio, and guessing a height from it would
+ *  invite a bigger reflow than reserving nothing kind-specific at all. */
+const IMAGE_EMBED_RESERVED_HEIGHT_PX = 240
+
+/** ADR-083 EMB-030 — a `![[photo.png|400]]` standing alone in its
+ *  paragraph. `LibraryImagePreview` needs a REAL `LibraryEntry` (`size`,
+ *  `modified_at`, `is_text_editable` — none of which a graph edge carries,
+ *  same reasoning as `KbBaseEmbedContent` above), so this fetches the SAME
+ *  parent-directory listing that component already uses, for the identical
+ *  reason, rather than fabricating one — and mounts the SAME
+ *  `LibraryImagePreview` the Library pane itself uses (EMB-027), never a
+ *  second image renderer. */
+function KbImageEmbedMount({
+  workspaceId,
+  workspacePath,
+  width,
+}: {
+  workspaceId: string
+  workspacePath: string
+  width: number
+}) {
+  // EMB-065: as with every other embed, no fetch starts until this is near
+  // the viewport.
+  return (
+    <LazyEmbedMount reservedHeight={IMAGE_EMBED_RESERVED_HEIGHT_PX} className="my-3 block">
+      <KbImageEmbedContent workspaceId={workspaceId} workspacePath={workspacePath} width={width} />
+    </LazyEmbedMount>
+  )
+}
+
+function KbImageEmbedContent({
+  workspaceId,
+  workspacePath,
+  width,
+}: {
+  workspaceId: string
+  workspacePath: string
+  width: number
+}) {
+  const parentDir = useMemo(() => dirnameOf(workspacePath), [workspacePath])
+  const entriesQuery = useQuery({
+    queryKey: libraryQueryKeys.entries(workspaceId, parentDir, false),
+    queryFn: () => fetchLibraryEntries(workspaceId, parentDir, false),
+    staleTime: 30_000,
+  })
+
+  if (entriesQuery.isLoading) return <EmbedMountPlaceholder />
+
+  const entry = entriesQuery.data?.find((e) => e.path === workspacePath)
+  if (entriesQuery.isError || !entry) {
+    return (
+      <EmbedMountError message="Could not read this file's details." onRetry={() => void entriesQuery.refetch()} />
+    )
+  }
+
+  return <LibraryImagePreview workspaceId={workspaceId} entry={entry} variant="inline" width={width} />
 }
 
 /** ADR-083 Step 3 — a `![[Note]]` / `![[Note#Heading]]` / `![[Note#^block]]`
@@ -1371,6 +1641,7 @@ function KnowledgeMarkdownLink(
     'data-kb-embed-standalone'?: string
     'data-kb-embed-workspace-id'?: string
     'data-kb-embed-workspace-path'?: string
+    'data-kb-embed-width'?: string
   },
 ) {
   const { href, children } = props
@@ -1436,6 +1707,18 @@ function KnowledgeMarkdownLink(
               block={props['data-kb-block']}
             />
           )
+        }
+        // EMB-030 — a sized picture that stood alone in its own paragraph
+        // (see `isSizableImageEmbedNode`/`promoteStandaloneEmbeds`'s own
+        // doc for why an inline-mixed one never reaches this branch at all).
+        if (embedKind === 'image') {
+          const widthRaw = props['data-kb-embed-width']
+          const width = widthRaw ? Number.parseInt(widthRaw, 10) : undefined
+          if (width !== undefined) {
+            return (
+              <KbImageEmbedMount workspaceId={embedWorkspaceId} workspacePath={embedWorkspacePath} width={width} />
+            )
+          }
         }
       }
 
@@ -1504,8 +1787,21 @@ function KnowledgeMarkdownLink(
     )
   }
 
-  // Anything carrying its own scheme is not a collection path — inherited.
+  // Anything carrying its own scheme is not a collection path. A destination
+  // naming a video (ADR-083 B11, EMB-075) is recognised right here — before
+  // resolveCollectionPath below, and before any graph consultation — and
+  // mounts the click-to-play facade; whether its host is currently permitted
+  // is decided reactively INSIDE VideoEmbed (A-14), never at this dispatch
+  // point. Everything else with its own scheme is handed to the inherited
+  // renderer, exactly as before.
   if (raw === '' || hasOwnScheme(raw)) {
+    if (isVideoEmbedDestination(raw)) {
+      return (
+        <LazyEmbedMount reservedHeight={360} className="my-3 block">
+          <VideoEmbed url={raw} title={codeText(children) || undefined} />
+        </LazyEmbedMount>
+      )
+    }
     return <InheritedLink {...props} />
   }
 
@@ -1558,12 +1854,17 @@ export const knowledgeMarkdownComponents = {
  *   • comment stripping next, so a wikilink or highlight inside `%%…%%` never
  *     becomes a rendered element;
  *   • highlights before wikilinks (appended at render time), so `==[[Note]]==`
- *     yields a highlighted, working link rather than stray `==` text. */
+ *     yields a highlighted, working link rather than stray `==` text;
+ *   • the video-image rewrite last, so it runs on the note's OWN `![]()`
+ *     syntax only, well before wikilinks (appended at render time, after this
+ *     whole list) ever expand `![[...]]` into an `image`/`link` node of its
+ *     own — see `remarkKbVideoImages`'s own doc for why that ordering matters. */
 export const KB_BASE_REMARK_PLUGINS = [
   remarkKbFrontmatter,
   ...KB_REMARK_PLUGINS,
   remarkKbCallouts,
   remarkKbHighlights,
+  remarkKbVideoImages,
 ]
 
 export { KB_REHYPE_PLUGINS }

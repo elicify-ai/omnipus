@@ -37,6 +37,7 @@ import {
   remarkKbCallouts,
   remarkKbFrontmatter,
   remarkKbHighlights,
+  remarkKbVideoImages,
   remarkKbWikilinks,
   resolveCollectionPath,
 } from './knowledgeMarkdown'
@@ -169,6 +170,7 @@ describe("chat's LIVE renderer is unchanged too (FR-013d, the other half)", () =
       'remarkKbCallouts',
       'remarkKbHighlights',
       'remarkKbFrontmatter',
+      'remarkKbVideoImages',
       'KB_REMARK_PLUGINS',
       'KB_BASE_REMARK_PLUGINS',
     ]) {
@@ -233,6 +235,7 @@ describe('the composition inherits chat’s renderers (FR-013a/b — spec test 8
       remarkKbFrontmatter,
       remarkKbCallouts,
       remarkKbHighlights,
+      remarkKbVideoImages,
     ])
     for (const plugin of KB_BASE_REMARK_PLUGINS) {
       expect(permitted.has(plugin), `unexpected remark plugin: ${String(plugin)}`).toBe(true)
@@ -826,6 +829,52 @@ describe('parseWikilink (unit)', () => {
     // A same-note block reference, `[[#^abc]]`.
     expect(parseWikilink('#^abc')?.block).toBe('abc')
     expect(parseWikilink('#^abc')?.target).toBe('')
+  })
+})
+
+describe('parseWikilink — a bar segment on an EMBED is a size or a caption, never both (ADR-083 EMB-030)', () => {
+  // DIES ON: reverting to the old single `alias` field, which put EVERYTHING
+  // after `|` into `text` regardless of embed-ness or digit shape — the exact
+  // defect the finding named: `![[photo.png|400]]` rendering with alt="400",
+  // and `![[song.mp3|400]]` losing its display text to "400" outright.
+
+  it('reads digits after a bar on an EMBED as a width, and the display text stays the TARGET name, not the digits', () => {
+    const parsed = parseWikilink('photo.png|400', true)
+    expect(parsed?.width).toBe(400)
+    expect(parsed?.text).toBe('photo.png')
+  })
+
+  it('reads a digitsxdigits bar segment on an EMBED as a width, using only the leading number', () => {
+    const parsed = parseWikilink('photo.png|400x300', true)
+    expect(parsed?.width).toBe(400)
+    expect(parsed?.text).toBe('photo.png')
+  })
+
+  it('never applies the width rule to a PLAIN (non-embed) wikilink — its bar segment is always a caption, digits or not', () => {
+    // The write side (knowledge_edit.go's composeEmbedNotation) only ever
+    // emits a `|width` on an EMBED — a plain `[[Note|400]]` reference link
+    // naming "400" as its alias is a human author's choice, not a size.
+    const parsed = parseWikilink('Note|400', false)
+    expect(parsed?.width).toBeUndefined()
+    expect(parsed?.text).toBe('400')
+  })
+
+  it('keeps a non-digit bar segment on an EMBED as the caption it plainly is — width recognition does not swallow real aliases', () => {
+    const parsed = parseWikilink('photo.png|My Caption', true)
+    expect(parsed?.width).toBeUndefined()
+    expect(parsed?.text).toBe('My Caption')
+  })
+
+  it('reads a size-shaped bar segment on a NON-PICTURE embed as a width too, at the notation-parsing level — never eaten as display text', () => {
+    // The audio case the finding named specifically: `![[song.mp3|400]]`
+    // must not show "400" as its display text. Whether that recognised
+    // width is APPLIED is a later, kind-dependent decision (EMB-030: width
+    // applies only to pictures) — this level only proves the notation was
+    // read correctly, regardless of what the target turns out to be.
+    const parsed = parseWikilink('song.mp3|400', true)
+    expect(parsed?.width).toBe(400)
+    expect(parsed?.text).toBe('song.mp3')
+    expect(parsed?.text).not.toBe('400')
   })
 })
 

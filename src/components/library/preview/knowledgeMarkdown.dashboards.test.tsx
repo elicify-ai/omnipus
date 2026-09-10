@@ -192,6 +192,52 @@ describe('a view label that does not exist lists what does (EMB-016)', () => {
   })
 })
 
+describe('a broken .base file says so, distinctly from "no view is named that" (EMB-028)', () => {
+  // The trap: a test asserting only "some warning renders" would pass even
+  // with the wrong sentence shown. Every assertion below checks the EXACT
+  // testid/copy this state must produce, distinct from the sibling
+  // `kb-base-embed-missing-view` state — and is paired with a control using
+  // the identical empty-views fixture but unloadable_count back at zero, so
+  // the pair proves the branch reads unloadable_count rather than merely
+  // "views is empty".
+
+  it('says the view could not be loaded when the server reports the one view in the file failed to parse', async () => {
+    vi.mocked(fetchKnowledgeBaseViews).mockResolvedValue(views({ views: [], unloadable_count: 1 }))
+    renderNote('![[Tasks.base#Needs Daniel]]')
+    await waitFor(() => expect(screen.getByTestId('kb-base-embed-unloadable-views')).toBeInTheDocument())
+    const text = screen.getByTestId('kb-base-embed-unloadable-views').textContent ?? ''
+    expect(text).toMatch(/could not be loaded/i)
+    expect(text).not.toContain('No view named')
+    expect(screen.queryByTestId('kb-base-embed-missing-view')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('base-preview')).not.toBeInTheDocument()
+  })
+
+  it('pluralises correctly and names the count for more than one unloadable view', async () => {
+    vi.mocked(fetchKnowledgeBaseViews).mockResolvedValue(views({ views: [], unloadable_count: 3 }))
+    renderNote('![[Tasks.base#Needs Daniel]]')
+    await waitFor(() => expect(screen.getByTestId('kb-base-embed-unloadable-views')).toBeInTheDocument())
+    expect(screen.getByTestId('kb-base-embed-unloadable-views').textContent).toContain('All 3 views')
+  })
+
+  it('reports the unloadable state even when the embed named no view fragment at all', async () => {
+    vi.mocked(fetchKnowledgeBaseViews).mockResolvedValue(views({ views: [], unloadable_count: 1 }))
+    renderNote('![[Tasks.base]]')
+    await waitFor(() => expect(screen.getByTestId('kb-base-embed-unloadable-views')).toBeInTheDocument())
+    expect(screen.queryByTestId('kb-base-embed-missing-view')).not.toBeInTheDocument()
+  })
+
+  // The paired control: the SAME empty-views fixture, with unloadable_count
+  // back at zero, must still produce the ORIGINAL "no view named" answer —
+  // an honest "zero views were ever imported", not a load failure.
+  it('keeps the ORIGINAL "no view named" answer when the views list is empty for an honest reason (zero imported, not failed)', async () => {
+    vi.mocked(fetchKnowledgeBaseViews).mockResolvedValue(views({ views: [], unloadable_count: 0 }))
+    renderNote('![[Tasks.base#Needs Daniel]]')
+    await waitFor(() => expect(screen.getByTestId('kb-base-embed-missing-view')).toBeInTheDocument())
+    expect(screen.queryByTestId('kb-base-embed-unloadable-views')).not.toBeInTheDocument()
+    expect(screen.getByTestId('kb-base-embed-missing-view').textContent).toContain('No view named')
+  })
+})
+
 describe('an embed mixed inline with other text is NOT promoted to a live view (block-promotion gate)', () => {
   // The critical regression test for this phase: delete the standalone check
   // in remarkKbPromoteBlockEmbeds and EVERY resolved `.base` embed — inline
