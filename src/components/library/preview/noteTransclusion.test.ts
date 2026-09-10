@@ -52,6 +52,43 @@ describe('sliceTranscludedContent — a heading section (US-7 AS-2)', () => {
     expect(s.text).toContain('## Results')
   })
 
+  it('prefers the EXACT-case heading over a differently-cased one when both exist', () => {
+    // NOTE (above) has only ONE heading that could ever match "results" —
+    // the case-insensitive fallback pass finds it regardless of whether the
+    // exact-match pass ran at all, so that test alone cannot tell "exact
+    // first, then case-insensitive" apart from "case-insensitive only". A
+    // fixture with BOTH "## Results" and "## results" as real, distinct
+    // headings is the only way to observe exact-match precedence as a rule:
+    // querying "Results" and querying "results" must land on their OWN
+    // same-cased heading, not both collapse onto whichever comes first.
+    const DUPLICATE_CASE_NOTE = `# Title
+
+## Results
+
+Capitalized results content.
+
+## results
+
+Lowercase results content.
+`
+    const exact = sliceTranscludedContent(DUPLICATE_CASE_NOTE, 'Results')
+    expect(exact.found).toBe(true)
+    expect(exact.text).toContain('Capitalized results content.')
+    expect(exact.text).not.toContain('Lowercase results content.')
+
+    const lower = sliceTranscludedContent(DUPLICATE_CASE_NOTE, 'results')
+    expect(lower.found).toBe(true)
+    expect(lower.text).toContain('Lowercase results content.')
+    expect(lower.text).not.toContain('Capitalized results content.')
+
+    // The two queries must resolve to DIFFERENT sections. A mapper whose
+    // exact-match pass was deleted (falling straight to case-insensitive
+    // matching for every query) would return the SAME first-in-document
+    // section ("## Results") for both — this is what that regression looks
+    // like from the caller's side.
+    expect(exact.text).not.toBe(lower.text)
+  })
+
   it('a heading that does not exist reports not-found, never a silent empty slice', () => {
     const s = sliceTranscludedContent(NOTE, 'Nonexistent Section')
     expect(s.found).toBe(false)

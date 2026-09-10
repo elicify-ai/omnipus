@@ -9,12 +9,14 @@ package gateway
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -521,13 +523,59 @@ func TestLibraryContent_WindowsRulesStillRejectThoseNames(t *testing.T) {
 // .../content refuses to silently create a duplicate (Linux) or overwrite
 // a different file than the caller named (Windows/macOS) when a
 // case-different sibling already exists.
+//
+// Why this is more than "assert 409": on a case-folding filesystem (APFS,
+// NTFS) the SECOND call's own "report.txt" resolves onto the ALREADY
+// existing "Report.txt" — so a naively reused expect_version:"v1:absent"
+// gets refused by checkLibraryVersion (the optimistic-lock/version check)
+// before root.WriteContent's case-insensitive collision guard is ever
+// reached. That still returns 409, but for the wrong reason: it would keep
+// passing even if the collision guard itself (library.ErrAlreadyExists in
+// content.go's WriteContent) were deleted outright, because the version
+// check alone already 409s first. A prior version of this test asserted
+// only the status code and was blind to that on macOS/NTFS CI.
+//
+// Fixed two ways, deliberately layered:
+//  1. Read "report.txt"'s version the way a real client would (GET first,
+//     PUT with whatever version that GET implies) so expect_version can
+//     never itself be the source of the conflict, on either kind of
+//     filesystem — a case-sensitive host truly has no "report.txt" (GET
+//     404s, so PUT claims v1:absent); a case-folding host's GET resolves
+//     onto "Report.txt" and returns ITS real ETag, so the PUT's version
+//     check is satisfied and the request reaches WriteContent for real.
+//  2. Assert on the conflict's typed body, not just the status: a version
+//     conflict is the typed gen.LibraryConflictError with
+//     Code=="library_version_conflict" (newLibraryConflictErr); the
+//     collision guard's ErrAlreadyExists is mapLibraryErr's plain
+//     gen.ErrorResponse, which has no "code" field at all. Requiring the
+//     absence of that code is what a broken (1) above would also catch.
 func TestLibraryContent_CaseInsensitiveCollision_409(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	require.Equal(t, http.StatusOK,
 		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"Report.txt","content":"original","expect_version":"v1:absent"}`).Code)
 
-	w := libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"report.txt","content":"new","expect_version":"v1:absent"}`)
-	assert.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
+	getW := libGet(t, api, "/api/v1/library/"+id+"/content?path=report.txt")
+	expectVersion := "v1:absent"
+	if getW.Code == http.StatusOK {
+		// Case-folding host: "report.txt" already resolves onto
+		// "Report.txt". Use ITS real ETag so this PUT's own version check
+		// passes cleanly and execution actually reaches the
+		// case-insensitive collision guard under test.
+		expectVersion = strings.Trim(getW.Header().Get("ETag"), `"`)
+		require.NotEmpty(t, expectVersion, "GET report.txt returned 200 but no ETag: %s", getW.Body.String())
+	} else {
+		require.Equal(t, http.StatusNotFound, getW.Code,
+			"GET report.txt must be either a case-fold hit (200) or a genuine miss (404): %s", getW.Body.String())
+	}
+
+	w := libPutJSON(t, api, "/api/v1/library/"+id+"/content",
+		fmt.Sprintf(`{"path":"report.txt","content":"new","expect_version":%q}`, expectVersion))
+	require.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body), "body: %s", w.Body.String())
+	assert.NotEqual(t, string(gen.LibraryVersionConflict), body["code"],
+		"the 409 must come from the case-insensitive collision guard, not a version-token mismatch: body=%s", w.Body.String())
 }
 
 // --- POST /library/{id}/upload ---

@@ -39,13 +39,44 @@ describe('matchBaseView — the ladder (EMB-041)', () => {
     expect(m.kind === 'matched' && m.view.label).toBe('Awaiting founder')
   })
 
-  it('stops at the first rung that matches ANYTHING — a near-miss with internal whitespace does not fall through to a machine-name match', () => {
-    // "Needs  Daniel" (double space) matches neither the exact nor the
-    // case-insensitive label, and does not equal any machine name either —
-    // this is EMB-041's own worked example: the missing-view marker,
-    // listing the labels that exist.
+  it('a near-miss with internal whitespace matches no rung at all, not just the label rungs', () => {
+    // Renamed from "stops at the first rung that matches ANYTHING" — that
+    // claim was never exercised here: "Needs  Daniel" (double space)
+    // matches NEITHER the exact NOR the case-insensitive label, AND does
+    // not equal any machine name either, so this fixture is not_found at
+    // every rung — it says nothing about whether the ladder stops at the
+    // first MATCHING rung, only that an all-round miss stays a miss. This
+    // is still EMB-041's own worked example (the missing-view marker,
+    // listing the labels that exist), so it is kept — just under an
+    // accurate name. See the test below for the actual stop-at-first-match
+    // property.
     const m = matchBaseView(VIEWS, 'Needs  Daniel')
     expect(m.kind).toBe('not_found')
+  })
+
+  it('stops at the first rung that matches ANYTHING, even ambiguously — an ambiguous match at an earlier rung is never rescued by a cleaner match at a later one', () => {
+    // Two views share the exact label "Open" — rung 1 (exact label) matches
+    // BOTH of them, ambiguously. A third view's MACHINE NAME is itself
+    // "Open", which would be a clean, single match at rung 3 (machine name)
+    // if the ladder ever reached it. EMB-041/EMB-042 require stopping at
+    // the FIRST rung that produces any match at all, even an ambiguous one
+    // — "never falling through past a step that matched at all, even
+    // ambiguously" (baseViewMatch.ts's own doc comment). A ladder that
+    // instead kept searching for the first rung with EXACTLY ONE match
+    // would silently resolve to the third view here rather than refusing;
+    // this fixture makes that wrong behavior observably different from the
+    // right one.
+    const rungs: KnowledgeBaseView[] = [
+      view({ name: 'crm--open-a', label: 'Open' }),
+      view({ name: 'crm--open-b', label: 'Open' }),
+      view({ name: 'Open', label: 'Something Else Entirely' }),
+    ]
+    const m = matchBaseView(rungs, 'Open')
+    expect(m.kind).toBe('ambiguous')
+    expect(m.kind === 'ambiguous' && m.matches.map((v) => v.name).sort()).toEqual([
+      'crm--open-a',
+      'crm--open-b',
+    ])
   })
 })
 

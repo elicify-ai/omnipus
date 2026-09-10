@@ -206,16 +206,54 @@ func TestKnowledgeEdge_UnresolvedReasonDistinguishesAbsenceFromContainment(t *te
 // FROM contracts/components/schemas/KnowledgeGraphEdge.yaml's enum, so a
 // passing assertion here is a real claim about what the contract permits,
 // not a value compared to itself.
+//
+// Validity alone is NOT enough: the wire enum has only two members
+// (no_match, outside_root) for four Go reasons, so the mapper necessarily
+// groups two-and-two — and a mapper that swapped which pair goes where
+// (e.g. ReasonEmptyTarget <-> ReasonAbsoluteTarget) would still return a
+// VALID wire value for every input, so a Valid()-only assertion cannot see
+// the swap. The `want` table below pins the exact expected value per
+// reason, derived from the semantics both links.go's doc comments and
+// KnowledgeGraphEdge.yaml's `unresolved_reason` description state
+// independently of this mapper's current code: "no_match" is an ordinary
+// broken link that never attempted to leave the collection at all
+// (ReasonNoMatch — nothing in the collection carries that path/name;
+// ReasonEmptyTarget — "[[]]" names nothing, so there was never a path to
+// escape with); "outside_root" is a link that DID try to leave the
+// collection root (ReasonAbsoluteTarget — an absolute filesystem path is
+// itself an attempt to leave the collection, e.g. [[/etc/passwd]];
+// ReasonOutsideRoot — literal ../ traversal past the root). Swapping
+// Empty<->Absolute inverts exactly the containment signal the contract
+// calls out by name — the scenario this test exists to catch.
 func TestKnowledgeEdgeUnresolvedReason_MapsEveryGoConstant(t *testing.T) {
 	reasons := knowledge.AllUnresolvedReasons()
 	require.NotEmpty(t, reasons, "fixture sanity: the source-of-truth list must not be empty")
+
+	want := map[knowledge.UnresolvedReason]gen.KnowledgeGraphEdgeUnresolvedReason{
+		knowledge.ReasonNoMatch:        gen.KnowledgeGraphEdgeUnresolvedReasonNoMatch,
+		knowledge.ReasonEmptyTarget:    gen.KnowledgeGraphEdgeUnresolvedReasonNoMatch,
+		knowledge.ReasonAbsoluteTarget: gen.KnowledgeGraphEdgeUnresolvedReasonOutsideRoot,
+		knowledge.ReasonOutsideRoot:    gen.KnowledgeGraphEdgeUnresolvedReasonOutsideRoot,
+	}
+
 	for _, r := range reasons {
 		r := r
 		t.Run(string(r), func(t *testing.T) {
+			wantWire, known := want[r]
+			require.True(t, known,
+				"no expected wire value pinned for knowledge.UnresolvedReason %q — add it to "+
+					"this test's `want` table (checked against KnowledgeGraphEdge.yaml's "+
+					"containment-signal semantics, not against whatever the mapper currently "+
+					"does) before trusting knowledgeEdgeUnresolvedReason for it", string(r))
+
 			wire := knowledgeEdgeUnresolvedReason(r)
 			assert.True(t, wire.Valid(),
 				"knowledgeEdgeUnresolvedReason(%q) = %q is not a value the generated "+
 					"KnowledgeGraphEdgeUnresolvedReason enum permits", string(r), string(wire))
+			assert.Equal(t, wantWire, wire,
+				"knowledgeEdgeUnresolvedReason(%q) = %q, want %q — a mapper that swaps two "+
+					"reasons into each other's group still emits a VALID value, so exact "+
+					"equality (not mere validity) is required to catch that", string(r), string(wire), string(wantWire))
 		})
 	}
 }

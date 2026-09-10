@@ -514,19 +514,48 @@ func TestResolveVideoEmbedHosts_RejectsUnsafeEntries(t *testing.T) {
 	})
 }
 
-// TestSpaCSPForVideoHosts_PanicsIfTheDirectiveVanishes pins the loud-failure
-// contract, for the same reason withWasmCompilation's panic is pinned.
+// TestSpaCSPForVideoHosts_BasePolicyStillCarriesTheGuardedDirective is a
+// FIXTURE-SANITY check, not a proof of spaCSPForVideoHosts's panic — despite
+// this test's former name (…PanicsIfTheDirectiveVanishes) claiming the
+// latter. It never calls spaCSPForVideoHosts in a state that panics, and
+// never asserts require.Panics/assert.Panics anywhere. Renamed rather than
+// rewritten to actually panic, because it CANNOT be made to: unlike its
+// sibling withWasmCompilation(policy string), spaCSPForVideoHosts reads the
+// package-level spaBaseContentSecurityPolicy CONSTANT directly rather than
+// accepting the base policy as a parameter (see embed.go), so there is no
+// legal way from a test in this package to hand it a policy string missing
+// spaCSPFrameSrcSelfOnly and observe the panic — doing that would require
+// either mutating a Go constant (impossible) or changing spaCSPForVideoHosts's
+// signature, which is embed.go, out of scope here.
 //
-// A strings.Replace that matches nothing returns its input unchanged. The
-// gateway would boot, serve a policy with no video host, and the only symptom
-// would be a blank frame the reader still draws a play control for.
-func TestSpaCSPForVideoHosts_PanicsIfTheDirectiveVanishes(t *testing.T) {
+// What this test actually verifies, and why each half still earns its place:
+//  1. The REAL spaBaseContentSecurityPolicy constant still contains
+//     spaCSPFrameSrcSelfOnly — i.e. the precondition spaCSPForVideoHosts's
+//     panic guards is CURRENTLY satisfied. A silent drop of this substring
+//     from the constant (a plausible unrelated CSP edit) is caught here
+//     first, before any of this file's other tests would surface it as a
+//     confusing downstream mismatch.
+//  2. replaceFrameSrc — the LOCAL test-only double every other negative-case
+//     table in this file uses to simulate "frame-src is gone" — genuinely
+//     removes the substring when told to. If it did not, every test in this
+//     file that builds a "directive vanished" fixture via replaceFrameSrc
+//     would be silently exercising a no-op mutation instead.
+//
+// TESTABILITY GAP (reported, not fixed here — embed.go is out of scope for
+// qa-lead): parameterizing spaCSPForVideoHosts the same way
+// withWasmCompilation already is would make the real panic path unit-testable
+// directly (call it with a policy string missing the directive, assert
+// require.Panics). Until then, the panic branch itself has no direct test in
+// this codebase, for either function — the same is true of withWasmCompilation
+// today, despite it already being technically testable.
+func TestSpaCSPForVideoHosts_BasePolicyStillCarriesTheGuardedDirective(t *testing.T) {
 	require.Contains(t, spaBaseContentSecurityPolicy, spaCSPFrameSrcSelfOnly,
 		"the base policy must contain the directive the builder edits, or every policy this "+
-			"package serves is built by a no-op")
+			"package serves is built by a no-op — and spaCSPForVideoHosts's own panic guard "+
+			"exists specifically to catch this if it ever regresses at runtime")
 
-	// The control: the checker the panic depends on distinguishes present from
-	// absent. Asserted on a copy, because the real string cannot be mutated.
 	assert.NotContains(t, replaceFrameSrc(spaBaseContentSecurityPolicy, ""), spaCSPFrameSrcSelfOnly,
-		"if removing frame-src did not remove the substring, the panic could never fire")
+		"replaceFrameSrc (this file's own directive-removal double) must actually remove the "+
+			"substring, or every OTHER test in this file that uses it to simulate a vanished "+
+			"directive is silently exercising a no-op")
 }
