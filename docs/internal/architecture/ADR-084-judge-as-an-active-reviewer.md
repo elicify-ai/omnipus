@@ -1,6 +1,6 @@
 # ADR-084 — The Judge is an active reviewer, not a passive one
 
-- **Status:** Proposed (revision 8 — five of §8's claims about the code corrected and the three open items resolved, see §9; no decision withdrawn. Revision 7 — claim-triggered, off the critical path, evidence-tiered for all task kinds; see §8. Revision 6 — D4's residual-risk acceptance narrowed, D10's confinement scope widened) — 2026-09-09
+- **Status:** Proposed (revision 9 — the three-state outcome withdrawn and "proof" defined as reasoned conviction, see §10. Earlier: revision 8 — five of §8's claims about the code corrected and the three open items resolved, see §9; no decision withdrawn. Revision 7 — claim-triggered, off the critical path, evidence-tiered for all task kinds; see §8. Revision 6 — D4's residual-risk acceptance narrowed, D10's confinement scope widened) — 2026-09-09
   - *Revision 5 — four claims about the code corrected; decisions unchanged.*
   - *Revision 4 — greenfield, migration removed by operator directive.*
 - **Amends:** the un-ADR'd judge fix-wave in commit `02214f5c` (2026-09-09, "fix GX-E") — `planArtifactCheck`, the rung-1.5 dispatch, and the working-tree diff feed. *(Revision 1 wrongly attributed this to ADR-082, which is about UI-independent turns and session-bound streaming and says nothing about the Judge.)*
