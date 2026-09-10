@@ -443,11 +443,11 @@ func TestKnowledgeEditEmbedOp_TargetHeadingMustExist(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Supplementary coverage: target_block is written as a "^" fragment once it
-// passes embedBlockAnchorPattern (there is still no EXISTENCE check against
-// the target note's real blocks — the spec states none, unlike view/
-// heading — but the STRING is now constrained to the reader's own
-// block-anchor grammar; see the malformed-target_block test below for the
-// refusal side of that). A redundant leading "^" from the caller is not
+// passes embedBlockAnchorPattern AND is checked to actually exist in the
+// target note's real blocks — the same EXISTENCE contract view and
+// target_heading already keep (see TestKnowledgeEditEmbedOp_TargetBlockMustExist
+// for the refusal side of that, and the malformed-target_block test below
+// for the grammar side). A redundant leading "^" from the caller is not
 // doubled.
 // ---------------------------------------------------------------------------
 
@@ -472,6 +472,58 @@ func TestKnowledgeEditEmbedOp_TargetBlockWritesCaretFragment(t *testing.T) {
 	}
 	if strings.Contains(got, "^^abc123") {
 		t.Fatalf("a caller-supplied leading '^' must not be doubled, got: %s", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HIGH finding fix: target_block is validated against the target NOTE's real
+// block anchors, listing what exists when it does not match — mirrors
+// TestKnowledgeEditEmbedOp_TargetHeadingMustExist's shape for the block case.
+// Before this test, a nonexistent anchor was written into the note as a
+// successful embed notation, and only a later READER discovered the break —
+// exactly the failure US-11 exists to prevent, and exactly what the tool's
+// own Description() claimed ("after checking the target exists") without
+// actually doing for a block.
+// ---------------------------------------------------------------------------
+
+func TestKnowledgeEditEmbedOp_TargetBlockMustExist(t *testing.T) {
+	home, ws, root := a4Fixture(t, "kb")
+	deps, _ := a4Deps(home)
+	tool := veTool(deps)
+
+	a4Note(t, root, "Plan.md", "# Plan\n\nQuarter three. ^q3\n\nQuarter four. ^q4\n")
+	orig := "---\nstatus: draft\n---\nIntro.\n"
+	a4Note(t, root, "Dashboard.md", orig)
+
+	v1 := a4Version(t, root, "Dashboard.md")
+	missing := tool.Execute(a4Ctx("mia", ws), map[string]any{
+		"collection": "kb", "op": "embed", "path": "Dashboard.md",
+		"target": "Plan.md", "target_block": "nope", "section": "This week",
+		"expect_version": v1,
+	})
+	if !missing.IsError {
+		t.Fatalf("a target_block that does not exist must be refused, got success: %s", missing.ForLLM)
+	}
+	for _, want := range []string{"^q3", "^q4"} {
+		if !strings.Contains(missing.ForLLM, want) {
+			t.Fatalf("the refusal must list the real block anchors (missing %q), got: %s", want, missing.ForLLM)
+		}
+	}
+	if got := a4Read(t, root, "Dashboard.md"); got != orig {
+		t.Fatalf("a refused embed must leave the note byte-identical, got: %s", got)
+	}
+
+	// A REAL anchor still succeeds — the control that proves the check does
+	// not over-refuse.
+	v2 := a4Version(t, root, "Dashboard.md")
+	ok := tool.Execute(a4Ctx("mia", ws), map[string]any{
+		"collection": "kb", "op": "embed", "path": "Dashboard.md",
+		"target": "Plan.md", "target_block": "q3", "section": "This week",
+		"expect_version": v2,
+	})
+	require.False(t, ok.IsError, "an existing target_block must be accepted: %s", ok.ForLLM)
+	if !strings.Contains(a4Read(t, root, "Dashboard.md"), "![[Plan.md#^q3]]") {
+		t.Fatalf("expected the block-fragmented embed to be written, got: %s", a4Read(t, root, "Dashboard.md"))
 	}
 }
 
@@ -532,8 +584,18 @@ func TestKnowledgeEditEmbedOp_MalformedTargetBlockRefused(t *testing.T) {
 			"target": "Plan.md", "target_block": bad, "section": "This week",
 			"expect_version": v,
 		})
+		// The MESSAGE, never merely IsError (this file's own header rule,
+		// line 15-16) — IsError alone would also pass for a stale version
+		// token or any other unrelated refusal, proving nothing about the
+		// grammar check this loop exists to cover.
 		if !res.IsError {
 			t.Fatalf("malformed target_block %q must be refused, got success: %s", bad, res.ForLLM)
+		}
+		for _, want := range []string{"embed", "target_block"} {
+			if !strings.Contains(res.ForLLM, want) {
+				t.Fatalf("the refusal for %q must name the operation and the argument (missing %q), got: %s",
+					bad, want, res.ForLLM)
+			}
 		}
 	}
 

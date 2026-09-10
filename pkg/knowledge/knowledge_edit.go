@@ -63,6 +63,7 @@
 package knowledge
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -347,7 +348,8 @@ func (t *EditTool) Parameters() map[string]any {
 				"type": "string",
 				"description": "embed: show only the block anchored with this ID in the " +
 					"embedded note (without the leading '^'). Names a block ON THE EMBED " +
-					"TARGET. Applies only when the target is a note.",
+					"TARGET, not on the note being written. Refused if the target is not a " +
+					"note or names no such block anchor.",
 			},
 			"width": map[string]any{
 				"type": "string",
@@ -935,6 +937,80 @@ func embedTargetHeadings(fsys LinkFS, resolvedPath string) ([]Heading, error) {
 	return scan.Headings, nil
 }
 
+// embedBlockAnchorLinePattern is the reader's own DEFINITION grammar for a
+// block anchor — src/components/library/preview/noteTransclusion.ts's
+// BLOCK_ANCHOR_RE (`/(?:^|[ \t])\^([A-Za-z0-9-]+)[ \t]*$/`), matched per LINE
+// exactly as sliceBlock matches it there. This is deliberately a SEPARATE
+// pattern from embedBlockAnchorPattern above: that one validates the bare id
+// the caller supplied (no "^", no surrounding line), this one recognizes the
+// "^id" token a note's own line ends with when it DEFINES an anchor. The two
+// must agree on what an id looks like ([A-Za-z0-9-]+) or a real anchor could
+// be refused, or a fake one accepted — which is exactly the failure this
+// check exists to close (EMB-098's write/read agreement, applied to blocks
+// the way it was already applied to headings and views).
+var embedBlockAnchorLinePattern = regexp.MustCompile(`(?:^|[ \t])\^([A-Za-z0-9-]+)[ \t]*$`)
+
+// embedBlockAnchorListMax bounds how many of a note's block anchors a
+// refusal enumerates. A large note could carry hundreds of anchors; the
+// refusal states the bound rather than silently showing a short list with no
+// indication anything was left out.
+const embedBlockAnchorListMax = 20
+
+// embedTargetBlockAnchors reads an embed target's block anchors — the
+// distinct "^id" tokens found at the end of a line, in document order, the
+// first occurrence kept when an id repeats (matching sliceBlock's own
+// first-match behavior). ReadNoteContent, the same read EditNote uses for
+// the note actually being written, rather than a bare Open+ReadAll — a
+// cloud-evicted target reads as a clean, empty EOF either way, so this at
+// least goes through the one helper that documents that failure mode
+// (FR-111) instead of a second, undocumented copy of it.
+func embedTargetBlockAnchors(fsys LinkFS, resolvedPath string) ([]string, error) {
+	content, err := ReadNoteContent(fsys, resolvedPath)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool)
+	var anchors []string
+	for _, lineBytes := range bytes.Split(content, []byte("\n")) {
+		line := strings.TrimSuffix(string(lineBytes), "\r")
+		m := embedBlockAnchorLinePattern.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		id := m[1]
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		anchors = append(anchors, id)
+	}
+	return anchors, nil
+}
+
+// embedBlockRefusalText is op=embed's block-anchor analogue of
+// readSectionRefusalText: "embed: no block "nope" in Plan.md; block anchors:
+// ^q3, ^q4" — echoing what DOES exist so an agent that gets this refused can
+// fix itself, the same contract the heading and view refusals already keep.
+// requested is the raw argument as given (with or without its own leading
+// "^"), never normalized, so the refusal names exactly what the caller typed.
+func embedBlockRefusalText(embedPath, requested string, anchors []string) string {
+	if len(anchors) == 0 {
+		return fmt.Sprintf("embed: no block %q in %s; this note has no block anchors", requested, embedPath)
+	}
+	shown := anchors
+	var suffix string
+	if len(shown) > embedBlockAnchorListMax {
+		shown = shown[:embedBlockAnchorListMax]
+		suffix = fmt.Sprintf(", and %d more", len(anchors)-embedBlockAnchorListMax)
+	}
+	names := make([]string, len(shown))
+	for i, a := range shown {
+		names[i] = "^" + a
+	}
+	return fmt.Sprintf("embed: no block %q in %s; block anchors: %s%s",
+		requested, embedPath, strings.Join(names, ", "), suffix)
+}
+
 // embedInsertEdit returns an edit that inserts one embed notation line
 // under the named section, creating the section if absent (EMB-097) — the
 // write half of US-11, sharing insertUnderSection with AddWikilink rather
@@ -1107,6 +1183,22 @@ func (t *EditTool) execEmbed(ctx context.Context, target mutationTarget, args ma
 		}
 		fragment = want
 	case targetBlock != "":
+		anchors, aErr := embedTargetBlockAnchors(OSLinkFS(), resolved)
+		if aErr != nil {
+			return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+				fmt.Sprintf("embed: reading %q: %v", embedTarget, aErr))
+		}
+		found := false
+		for _, a := range anchors {
+			if a == targetBlockID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+				embedBlockRefusalText(embedTarget, targetBlock, anchors))
+		}
 		fragment = "^" + targetBlockID
 	}
 
