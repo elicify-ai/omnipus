@@ -899,6 +899,23 @@ func isDataFileTarget(rel string) bool {
 // for (the "must not accept an argument it does not act on" prohibition).
 var embedWidthPattern = regexp.MustCompile(`^\d+(x\d+)?$`)
 
+// embedBlockAnchorPattern is the reader's own block-anchor grammar, not a
+// server-invented rule: src/components/library/preview/noteTransclusion.ts's
+// BLOCK_ANCHOR_RE (`/(?:^|[ \t])\^([A-Za-z0-9-]+)[ \t]*$/`) only ever
+// recognizes a `^id` token whose id is `[A-Za-z0-9-]+` — anything else can
+// never resolve to a real block when the reader later scans the target
+// note. Enforcing the same grammar at write time also closes the concrete
+// failure a security review demonstrated: target_block was written VERBATIM
+// into "^" + value with no escaping, so a value containing "]]" plus a
+// newline could break out of the single fragment position inside
+// composeEmbedNotation's "![[target#^value]]" and land arbitrary markdown
+// lines in the note under the guise of one embed notation. This is a
+// correctness/contract fix (the op's own promise is "the correct notation
+// is written for you", and EMB's block-anchor data constraint), not a
+// privilege-escalation fix — an agent holding knowledge_edit can already
+// write arbitrary markdown via 'body' on create/append_section/replace_body.
+var embedBlockAnchorPattern = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
+
 // embedTargetHeadings reads an embed target's headings via the SAME
 // bounded-memory scanner links.go's own extraction uses (ScanNote), rather
 // than loading the whole file into memory — this validates a file the
@@ -1032,6 +1049,11 @@ func (t *EditTool) execEmbed(ctx context.Context, target mutationTarget, args ma
 		return t.deps.refuse(AuthorOpEdit, target, []string{rel},
 			fmt.Sprintf("embed: 'target_block' only applies to a note; %q is not one", embedTarget))
 	}
+	targetBlockID := strings.TrimPrefix(targetBlock, "^")
+	if targetBlock != "" && !embedBlockAnchorPattern.MatchString(targetBlockID) {
+		return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+			fmt.Sprintf("embed: 'target_block' must be a block anchor like '^abc123' (letters, digits, and hyphens only, with an optional leading '^'), got %q", targetBlock))
+	}
 
 	fragment := ""
 	switch {
@@ -1085,7 +1107,7 @@ func (t *EditTool) execEmbed(ctx context.Context, target mutationTarget, args ma
 		}
 		fragment = want
 	case targetBlock != "":
-		fragment = "^" + strings.TrimPrefix(targetBlock, "^")
+		fragment = "^" + targetBlockID
 	}
 
 	notation := composeEmbedNotation(embedRel, fragment, width)

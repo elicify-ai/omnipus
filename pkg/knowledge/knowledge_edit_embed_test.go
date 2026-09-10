@@ -442,9 +442,13 @@ func TestKnowledgeEditEmbedOp_TargetHeadingMustExist(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Supplementary coverage: target_block is written verbatim as a "^"
-// fragment (no existence check — the spec states none, unlike view/
-// heading), and a redundant leading "^" from the caller is not doubled.
+// Supplementary coverage: target_block is written as a "^" fragment once it
+// passes embedBlockAnchorPattern (there is still no EXISTENCE check against
+// the target note's real blocks — the spec states none, unlike view/
+// heading — but the STRING is now constrained to the reader's own
+// block-anchor grammar; see the malformed-target_block test below for the
+// refusal side of that). A redundant leading "^" from the caller is not
+// doubled.
 // ---------------------------------------------------------------------------
 
 func TestKnowledgeEditEmbedOp_TargetBlockWritesCaretFragment(t *testing.T) {
@@ -468,6 +472,82 @@ func TestKnowledgeEditEmbedOp_TargetBlockWritesCaretFragment(t *testing.T) {
 	}
 	if strings.Contains(got, "^^abc123") {
 		t.Fatalf("a caller-supplied leading '^' must not be doubled, got: %s", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Security-review regression: target_block used to be written VERBATIM into
+// "^" + value with no validation, so a value containing "]]" plus a
+// newline could break out of the single fragment position inside the
+// composed "![[target#^value]]" notation and land arbitrary markdown lines
+// in the note under the guise of one embed notation. target_block must now
+// be checked against the reader's own block-anchor grammar
+// (src/components/library/preview/noteTransclusion.ts's BLOCK_ANCHOR_RE:
+// `[A-Za-z0-9-]+`), exactly as width/view/target_heading are already
+// checked against theirs.
+// ---------------------------------------------------------------------------
+
+func TestKnowledgeEditEmbedOp_MalformedTargetBlockRefused(t *testing.T) {
+	home, ws, root := a4Fixture(t, "kb")
+	deps, _ := a4Deps(home)
+	tool := veTool(deps)
+
+	a4Note(t, root, "Plan.md", "# Plan\n\nA paragraph. ^abc123\n")
+	orig := "---\nstatus: draft\n---\nIntro.\n"
+	a4Note(t, root, "Dashboard.md", orig)
+
+	// The reviewer's exact payload: a caret id that closes the wikilink
+	// early ("x]]"), then a blank line and a second embed notation of the
+	// attacker's choosing ("## Injected" / "![[Other").
+	const injectionPayload = "x]]\n\n## Injected\n\n![[Other"
+
+	v1 := a4Version(t, root, "Dashboard.md")
+	injected := tool.Execute(a4Ctx("mia", ws), map[string]any{
+		"collection": "kb", "op": "embed", "path": "Dashboard.md",
+		"target": "Plan.md", "target_block": injectionPayload, "section": "This week",
+		"expect_version": v1,
+	})
+	if !injected.IsError {
+		t.Fatalf("a target_block that is not a valid block anchor must be refused, got success: %s", injected.ForLLM)
+	}
+	for _, want := range []string{"embed", "target_block"} {
+		if !strings.Contains(injected.ForLLM, want) {
+			t.Fatalf("the refusal must name the operation and the argument (missing %q), got: %s", want, injected.ForLLM)
+		}
+	}
+	if !strings.Contains(injected.ForLLM, "^abc123") {
+		t.Fatalf("the refusal must show what a valid block anchor looks like, got: %s", injected.ForLLM)
+	}
+	if got := a4Read(t, root, "Dashboard.md"); got != orig {
+		t.Fatalf("a refused embed must leave the note byte-identical — no injected markdown may reach the file, got: %s", got)
+	}
+
+	// A plain space, an empty-after-caret value, and a value carrying '#'
+	// are all rejected the same way — none of them can ever match a real
+	// Obsidian block anchor either.
+	for _, bad := range []string{"has space", "^", "a#b", "a|b"} {
+		v := a4Version(t, root, "Dashboard.md")
+		res := tool.Execute(a4Ctx("mia", ws), map[string]any{
+			"collection": "kb", "op": "embed", "path": "Dashboard.md",
+			"target": "Plan.md", "target_block": bad, "section": "This week",
+			"expect_version": v,
+		})
+		if !res.IsError {
+			t.Fatalf("malformed target_block %q must be refused, got success: %s", bad, res.ForLLM)
+		}
+	}
+
+	// The valid form still works, proving the fix is a grammar check, not
+	// a blanket ban.
+	v2 := a4Version(t, root, "Dashboard.md")
+	ok := tool.Execute(a4Ctx("mia", ws), map[string]any{
+		"collection": "kb", "op": "embed", "path": "Dashboard.md",
+		"target": "Plan.md", "target_block": "abc123", "section": "This week",
+		"expect_version": v2,
+	})
+	require.False(t, ok.IsError, "a valid target_block must still be accepted: %s", ok.ForLLM)
+	if !strings.Contains(a4Read(t, root, "Dashboard.md"), "![[Plan.md#^abc123]]") {
+		t.Fatalf("expected the valid block-fragmented embed to be written, got: %s", a4Read(t, root, "Dashboard.md"))
 	}
 }
 
