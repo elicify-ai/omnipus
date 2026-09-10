@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -286,6 +287,68 @@ func TestLibraryDownload_ReturnsVersionHeader(t *testing.T) {
 	assert.Equal(t, string(knowledge.ComputeVersionToken(content)), libraryBareETag(t, w))
 }
 
+// --- Test: M11 — content and token must come from the SAME read ---------
+
+// TestLibraryContentGet_TokenMatchesReturnedContentUnderConcurrentWrite
+// pins the M11 fix: the ETag GET .../content returns must always be derived
+// from the SAME bytes as the Content field in that same response, never from
+// a second, independent read of the file. Before the fix, the handler read
+// Content via root.ReadContent and THEN re-read the file from scratch via
+// knowledge.ReadFileVersion for the token — a window in which a concurrent
+// writer's change could land, so the response would pair one version's
+// content with a DIFFERENT version's token. That is exactly the shape of
+// bug B1 (useLibraryFileEditor.ts) turns into a silent lost update: a save
+// built on Content, carrying this ETag as expect_version, would pass the
+// server's compare-and-swap (the token really is current) while silently
+// overwriting the concurrent writer's change.
+//
+// libraryContentGetRaceHook (test-only seam, mirrors libraryWriteRaceHook)
+// fires right after root.ReadContent returns and before the token is
+// derived, so this test can deterministically widen that window rather than
+// relying on a timing accident.
+//
+// THIS TEST DIES ON: reverting the M11 fix back to an unconditional
+// `knowledge.ReadFileVersion(root.HostPath(rel))` call for the token (as the
+// pre-fix code did) — the hook's concurrent write would then be visible to
+// that second read, and the assertions below would fail.
+func TestLibraryContentGet_TokenMatchesReturnedContentUnderConcurrentWrite(t *testing.T) {
+	api, id := buildLibraryTestAPI(t)
+	work := workDir(api, id)
+	require.NoError(t, os.MkdirAll(work, 0o700))
+	target := filepath.Join(work, "race.txt")
+	original := []byte("version A")
+	require.NoError(t, os.WriteFile(target, original, 0o600))
+
+	libraryContentGetRaceHook = func() {
+		// A concurrent writer (e.g. an agent) lands AFTER ReadContent has
+		// already captured "version A" into the response, but BEFORE the
+		// (pre-fix) second read would derive the token.
+		require.NoError(t, os.WriteFile(target, []byte("version B - concurrent write"), 0o600))
+	}
+	t.Cleanup(func() { libraryContentGetRaceHook = nil })
+
+	w := libGet(t, api, "/api/v1/library/"+id+"/content?path=race.txt")
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	var resp gen.LibraryContentResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Content)
+	require.Equal(t, "version A", *resp.Content,
+		"fixture sanity: ReadContent must have captured the PRE-race bytes")
+
+	gotToken := libraryBareETag(t, w)
+	wantToken := string(knowledge.ComputeVersionToken([]byte("version A")))
+	assert.Equal(t, wantToken, gotToken,
+		"the ETag must be derived from the SAME bytes as Content, not a second independent "+
+			"read of the file")
+
+	// Pin the exact failure mode — the pre-fix token, not just "some other
+	// token" — so this test cannot be satisfied by an unrelated regression.
+	concurrentWriterToken := string(knowledge.ComputeVersionToken([]byte("version B - concurrent write")))
+	assert.NotEqual(t, concurrentWriterToken, gotToken,
+		"the ETag must not be the CONCURRENT writer's token — that pairing is the B1 lost update")
+}
+
 // TestLibraryVersionToken_IdenticalAcrossBothReadDoors is test 121: for the
 // SAME file, GET .../content's ETag and GET .../download's ETag must be
 // byte-identical, and both must equal knowledge.ReadNoteVersion's Token for
@@ -463,6 +526,34 @@ func TestLibraryContentPut_LockKeyUsesTheInnermostEnclosingCollection(t *testing
 // path would for this exact file, so racing this handler against itself
 // races the SAME mutual-exclusion boundary an agent write would collide
 // with.
+//
+// PROPERTY, NOT CLOCK (false-green-patterns.md §3): a prior version of this
+// test inferred "writer 2 is blocked" from 300ms of silence on secondDone —
+// on a loaded runner, a LOCK-FREE implementation whose second goroutine
+// simply had not been SCHEDULED yet within that window passes exactly the
+// same way a genuinely-blocked one does, so the check proved nothing under
+// load. There is no production seam exposing WithNoteWriteLock's internal
+// mutex acquire/release to this package (pkg/gateway is external to
+// pkg/knowledge) to instrument directly — mirroring pkg/session's
+// sessionLockAcquireFn/sessionLockReleaseFn (FR-101) pattern here would need
+// a new exported hook in pkg/knowledge/version.go, which is backend-lead's
+// call, not qa-lead's to add unilaterally.
+//
+// Instead this pins a real PROPERTY using the ALREADY-EXISTING
+// libraryWriteRaceHook seam this test already relies on: hookCalls counts
+// every entry into the shared instrumented critical section (the point
+// past checkLibraryVersion, reached only once WithNoteWriteLock's lock is
+// actually HELD). While writer 1 is paused inside the hook, that lock —
+// real or not — is the only thing standing between writer 2 and a second
+// hookCalls increment: writer 2 CANNOT increment it without first getting
+// past acquireMutexByDeadline. So instead of guessing a wall-clock bound is
+// "long enough" to prove absence, the loop below polls hookCalls
+// continuously over a generous budget and fails THE INSTANT it changes —
+// catching re-entry into the critical section itself, which happens well
+// before a broken write's HTTP round trip would ever complete, so it is not
+// vulnerable to secondDone being slow to fire on a loaded runner either.
+// secondStarted additionally rules out "writer 2's goroutine was never
+// scheduled at all" as a reason for observing no change.
 func TestLibraryContentPut_CompareAndWriteAreAtomicUnderAgentWrite(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 
@@ -474,7 +565,9 @@ func TestLibraryContentPut_CompareAndWriteAreAtomicUnderAgentWrite(t *testing.T)
 	entered := make(chan struct{})
 	proceed := make(chan struct{})
 	var once sync.Once
+	var hookCalls atomic.Int32
 	libraryWriteRaceHook = func() {
+		hookCalls.Add(1)
 		once.Do(func() { close(entered) })
 		<-proceed
 	}
@@ -498,22 +591,44 @@ func TestLibraryContentPut_CompareAndWriteAreAtomicUnderAgentWrite(t *testing.T)
 	case <-time.After(5 * time.Second):
 		t.Fatal("writer 1 never reached the race hook — checkLibraryVersion or the lock wiring changed shape")
 	}
-	// Writer 1 is now past its compare and holding the lock, paused before
-	// its write.
+	// Writer 1 is now past its compare and holding the lock (hookCalls==1),
+	// paused before its write.
+	require.EqualValues(t, 1, hookCalls.Load(), "fixture sanity: only writer 1 has reached the critical section so far")
 
+	secondStarted := make(chan struct{})
 	secondDone := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
+		close(secondStarted) // proves the goroutine was actually scheduled and is running
 		secondDone <- libPutJSON(t, api, "/api/v1/library/"+id+"/content",
 			`{"path":"race.txt","content":"from-writer-2","expect_version":"`+t0+`"}`)
 	}()
 
 	select {
-	case <-secondDone:
-		t.Fatal("the second writer completed while writer 1 still held the lock — " +
-			"the compare-and-swap is not exclusive")
-	case <-time.After(300 * time.Millisecond):
-		// expected: writer 2 is blocked on the lock.
+	case <-secondStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("writer 2's goroutine was never scheduled — cannot judge blocking from a goroutine that never ran")
 	}
+
+	// Poll the PROPERTY (hookCalls, and secondDone as a belt-and-suspenders
+	// check) over a generous budget, failing the instant either changes —
+	// not after a fixed sleep elapses.
+	pollDeadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(pollDeadline) {
+		if n := hookCalls.Load(); n > 1 {
+			t.Fatalf("writer 2 entered the write critical section (hookCalls=%d) while writer 1 "+
+				"still held the lock — the compare-and-swap is not exclusive", n)
+		}
+		select {
+		case <-secondDone:
+			t.Fatal("the second writer completed while writer 1 still held the lock — " +
+				"the compare-and-swap is not exclusive")
+		default:
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	require.EqualValues(t, 1, hookCalls.Load(),
+		"writer 2 must still be blocked acquiring the lock (never having reached the critical "+
+			"section), not merely slow to respond, at the moment writer 1 is about to release it")
 
 	close(proceed) // let writer 1's write land and release the lock
 	wg.Wait()

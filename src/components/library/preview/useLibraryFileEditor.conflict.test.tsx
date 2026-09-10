@@ -186,3 +186,228 @@ describe('useLibraryFileEditor — test 8: surfaces conflict without resending',
     expect(result.current.conflict).toBeUndefined()
   })
 })
+
+// --- B1: the token must be paired with the bytes it was read with ---------
+//
+// THE DEFECT THIS GUARDS: fetchLibraryContentVersioned returns content AND a
+// token from ONE response, but the hook used to discard the content and pair
+// the token with `initialContent` — a DIFFERENT, STRICTLY EARLIER read
+// (LibraryPreviewPane's own contentQuery). If a writer changed the file in
+// between, a save built on the stale `initialContent` would still pass the
+// server's compare-and-swap (the token really is current) and silently
+// destroy the intervening write. Every fixture above deliberately sets
+// `data.content` EQUAL to `initialContent`, so none of them could ever catch
+// this — the tests below are the ones where they differ.
+
+/** Resolves/controls a fetchLibraryContentVersioned response on demand, so a
+ * test can make the version read settle at a chosen moment relative to other
+ * actions (typing, calling save()) instead of always before the first
+ * assertion. */
+function deferredVersionRead() {
+  let resolve!: (v: {
+    data: { path: string; content: string; size: number; is_text: boolean; too_large: boolean }
+    version: string | null
+  }) => void
+  const promise = new Promise<{
+    data: { path: string; content: string; size: number; is_text: boolean; too_large: boolean }
+    version: string | null
+  }>((res) => {
+    resolve = res
+  })
+  return { promise, resolve }
+}
+
+describe('useLibraryFileEditor — B1: pairs the token with the bytes it was read with', () => {
+  it('rebases the editing baseline onto the freshly-read content when nothing has been typed yet, so the saved diff is built on the SAME bytes as the token', async () => {
+    // Simulates: LibraryPreviewPane's contentQuery read 'stale content' at
+    // T0 (passed in as initialContent). Before THIS hook's own read
+    // resolves at T2, a concurrent writer changed the file to
+    // 'fresh content' at T1 — the token this hook reads belongs to
+    // 'fresh content', not 'stale content'.
+    mockedFetchVersioned.mockResolvedValue({
+      data: { path: 'report.md', content: 'fresh content\n', size: 14, is_text: true, too_large: false },
+      version: 'v1:fresh-token',
+    })
+    mockedPut.mockResolvedValue({ data: makeEntry(), version: 'v1:after-save' })
+
+    const { result } = renderHook(
+      () => useLibraryFileEditor({ workspaceId: 'ws-1', path: 'report.md', initialContent: 'stale content\n' }),
+      { wrapper },
+    )
+
+    // MUTATION THIS DIES ON: never rebasing — draft would stay 'stale
+    // content\n' forever, which is exactly what today's code does.
+    await waitFor(() => expect(result.current.draft).toBe('fresh content\n'))
+    expect(result.current.isDirty).toBe(false)
+    expect(useUiStore.getState().toasts.some((t) => t.variant === 'warning')).toBe(true)
+
+    act(() => result.current.setDraft('fresh content\nedited by user\n'))
+    act(() => result.current.save())
+
+    await waitFor(() => expect(mockedPut).toHaveBeenCalled())
+    const [, body] = mockedPut.mock.calls[0] as [string, { content: string; expect_version: string }]
+
+    // The load-bearing assertion: the diff is built on the bytes the token
+    // was actually read with, never on the stale initialContent.
+    expect(body.content).toBe('fresh content\nedited by user\n')
+    expect(body.expect_version).toBe('v1:fresh-token')
+  })
+
+  it('does not discard an edit already typed against the older content, and refuses to save rather than pair a fresh token with a stale diff', async () => {
+    const { promise, resolve } = deferredVersionRead()
+    mockedFetchVersioned.mockReturnValue(promise)
+
+    const { result } = renderHook(
+      () => useLibraryFileEditor({ workspaceId: 'ws-1', path: 'report.md', initialContent: 'stale content\n' }),
+      { wrapper },
+    )
+
+    // The user starts typing BEFORE the version read resolves.
+    act(() => result.current.setDraft('stale content\nmy in-progress edit\n'))
+    expect(result.current.isDirty).toBe(true)
+
+    // NOW the read resolves — with DIFFERENT content, proving the token
+    // belongs to a version the user never saw.
+    await act(async () => {
+      resolve({
+        data: { path: 'report.md', content: 'fresh content\n', size: 14, is_text: true, too_large: false },
+        version: 'v1:fresh-token',
+      })
+      await promise
+    })
+
+    // MUTATION THIS DIES ON: silently discarding the user's typed edit by
+    // rebasing the draft anyway.
+    expect(result.current.draft).toBe('stale content\nmy in-progress edit\n')
+    await waitFor(() => expect(result.current.status).toBe('conflict'))
+    expect(result.current.conflict?.actualVersion).toBe('v1:fresh-token')
+
+    act(() => result.current.save())
+
+    // MUTATION THIS DIES ON: letting this save reach the network — that
+    // would pair 'v1:fresh-token' with a diff built on 'stale content',
+    // exactly the B1 lost update.
+    expect(mockedPut).not.toHaveBeenCalled()
+    await waitFor(() => expect(result.current.status).toBe('conflict'))
+  })
+
+  it('refuses the save even when save() is invoked WHILE the version read is still in flight and only later discovers the mismatch', async () => {
+    const { promise, resolve } = deferredVersionRead()
+    mockedFetchVersioned.mockReturnValue(promise)
+
+    const { result } = renderHook(
+      () => useLibraryFileEditor({ workspaceId: 'ws-1', path: 'report.md', initialContent: 'stale content\n' }),
+      { wrapper },
+    )
+
+    act(() => result.current.setDraft('stale content\nmy in-progress edit\n'))
+
+    // save() is called BEFORE the read settles — mutationFn's mismatch
+    // check must happen AFTER it awaits the token, not before, or it would
+    // race the read's own detection and let this through.
+    act(() => result.current.save())
+
+    await act(async () => {
+      resolve({
+        data: { path: 'report.md', content: 'fresh content\n', size: 14, is_text: true, too_large: false },
+        version: 'v1:fresh-token',
+      })
+      await promise
+    })
+
+    // MUTATION THIS DIES ON: checking contentMismatchRef before awaiting
+    // ensureVersion() — that ordering lets a save triggered mid-flight
+    // reach putLibraryContent before the mismatch is known.
+    await waitFor(() => expect(result.current.status).toBe('conflict'))
+    expect(mockedPut).not.toHaveBeenCalled()
+  })
+})
+
+// --- stale-promise resurrection: a deleted file or a stripped ETag must ---
+// --- not turn Save into an inescapable identical-retry loop ---------------
+//
+// THE DEFECT THIS GUARDS: ensureVersion() falls back to the mount-time
+// read's settled promise whenever versionRef.current is falsy. That promise
+// is never cleared once it settles, so a LATER null in versionRef.current —
+// a 409 whose body has no actual_version (the file was deleted), or a
+// successful save whose response had no ETag (a proxy stripped it) — was
+// silently masked by resurrecting the ORIGINAL, long-stale mount-time token
+// instead of being reported honestly. Save then resent that exact stale
+// token and got the exact same 409 forever, with no way out short of a page
+// reload.
+
+describe('useLibraryFileEditor — stale-promise resurrection', () => {
+  it('a 409 with actual_version ABSENT does not let the next save resend the stale mount-time token forever', async () => {
+    mockedFetchVersioned.mockResolvedValue({
+      data: { path: 'report.md', content: '# Report\n', size: 9, is_text: true, too_large: false },
+      version: 'v1:mount-token',
+    })
+    // The file was deleted since — LibraryConflictError.yaml: actual_version
+    // is absent in exactly this case.
+    mockedPut.mockRejectedValueOnce(
+      new LibraryVersionConflictError(
+        {
+          error: 'report.md changed on disk since you opened it: it has been deleted',
+          code: 'library_version_conflict',
+          path: 'report.md',
+          expected_version: 'v1:mount-token',
+          actual_version: undefined,
+        },
+        '',
+      ),
+    )
+
+    const { result } = renderHook(
+      () => useLibraryFileEditor({ workspaceId: 'ws-1', path: 'report.md', initialContent: '# Report\n' }),
+      { wrapper },
+    )
+
+    act(() => result.current.setDraft('# Report\n\nEdited.\n'))
+    act(() => result.current.save())
+    await waitFor(() => expect(mockedPut).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(result.current.status).toBe('conflict'))
+    expect(result.current.conflict?.actualVersion).toBeUndefined()
+
+    // The user presses Save again — the module's own documented retry path.
+    act(() => result.current.save())
+
+    // MUTATION THIS DIES ON: ensureVersion() falling back to the settled
+    // mount-time promise and resending 'v1:mount-token' — that would call
+    // putLibraryContent a SECOND time with the identical stale token
+    // (indistinguishable, from the outside, from an infinite retry loop).
+    // The honest outcome is a CLIENT-SIDE refusal: no second network call.
+    await waitFor(() => expect(result.current.status).toBe('error'))
+    expect(mockedPut).toHaveBeenCalledTimes(1)
+    expect(result.current.error).toMatch(/version/i)
+  })
+
+  it('a successful save whose response carries no ETag does not let the next save resurrect the stale mount-time token', async () => {
+    mockedFetchVersioned.mockResolvedValue({
+      data: { path: 'report.md', content: '# Report\n', size: 9, is_text: true, too_large: false },
+      version: 'v1:mount-token',
+    })
+    // The PUT succeeds, but a proxy stripped the ETag off the response.
+    mockedPut.mockResolvedValueOnce({ data: makeEntry({ size: 20 }), version: null })
+
+    const { result } = renderHook(
+      () => useLibraryFileEditor({ workspaceId: 'ws-1', path: 'report.md', initialContent: '# Report\n' }),
+      { wrapper },
+    )
+
+    act(() => result.current.setDraft('# Report\n\nfirst edit\n'))
+    act(() => result.current.save())
+    await waitFor(() => expect(result.current.status).toBe('saved'))
+    expect(mockedPut).toHaveBeenCalledTimes(1)
+
+    // A second, independent edit and save.
+    act(() => result.current.setDraft('# Report\n\nsecond edit\n'))
+    act(() => result.current.save())
+
+    // MUTATION THIS DIES ON: ensureVersion() resurrecting 'v1:mount-token'
+    // (the ORIGINAL mount-time read, now describing a version two saves
+    // out of date) instead of honestly reporting no current token is known.
+    await waitFor(() => expect(result.current.status).toBe('error'))
+    expect(mockedPut).toHaveBeenCalledTimes(1)
+    expect(result.current.error).toMatch(/version/i)
+  })
+})

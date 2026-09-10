@@ -476,6 +476,19 @@ func detectKnowledgeBaseInRoot(root *library.Root, rel string) (isKB, establishe
 //nolint:gochecknoglobals // a test seam, nil in production.
 var libraryWriteRaceHook func()
 
+// libraryContentGetRaceHook is a TEST SEAM: nil in production. When set, it
+// runs once inside handleLibraryContentGet, immediately after
+// root.ReadContent returns and before the version token is derived (M11) —
+// the exact gap that fix closes. A test using this hook to mutate the file
+// in that window and asserting the response's ETag still matches the
+// response's own Content proves the token comes from the SAME read as the
+// content, not a second independent one; that same test fails against a
+// handler that re-reads the file for its token instead of deriving it from
+// the bytes already in hand.
+//
+//nolint:gochecknoglobals // a test seam, nil in production.
+var libraryContentGetRaceHook func()
+
 // requireLibraryExpectVersion validates and returns the bare token from a
 // whole-file save request's expect_version (EMB-001, founder ruling N2: no
 // caller is exempt). Absent or empty is refused with 400. A value carrying
@@ -737,23 +750,50 @@ func (a *restAPI) handleLibraryContentGet(w http.ResponseWriter, r *http.Request
 		mapLibraryErr(w, "get content", workspaceID, err)
 		return
 	}
+	if libraryContentGetRaceHook != nil {
+		libraryContentGetRaceHook()
+	}
 
-	// ADR-083 EMB-007/EMB-007a: the version token is ALWAYS derived from the
-	// file's raw bytes, read independently of ContentResult here — which
-	// omits Content by design for a binary file and for a too_large text
-	// file (library.ContentResult's doc comment) — so hashing the response
-	// body would collapse every such file onto the hash of an empty string,
-	// identical for all of them. ReadFileVersion streams the same bytes
-	// ReadContent just read a moment ago, through the SAME digest
-	// (knowledge.version.go's readNoteVersionAbs) the agent write path and
-	// GET .../download use, so the token is byte-identical across doors
-	// (test 121).
-	version, verErr := knowledge.ReadFileVersion(root.HostPath(rel))
-	if verErr != nil {
-		logger.ErrorCF("rest", "library: read version failed",
-			map[string]any{"workspace_id": workspaceID, "path": rel, "error": verErr.Error()})
-		jsonErr(w, http.StatusInternalServerError, "internal server error")
-		return
+	// M11 fix — read once, derive both. The old code unconditionally called
+	// knowledge.ReadFileVersion for the token, which re-opens and re-reads
+	// the file from scratch AFTER root.ReadContent above already returned —
+	// two independent reads with a window between them for a concurrent
+	// writer's atomic rename to land, so Content and the ETag could come
+	// from two different on-disk versions of the file. B1
+	// (useLibraryFileEditor.ts) is the concrete failure this produces: the
+	// text-editor save path pairs whatever this endpoint returns as Content
+	// with this endpoint's own ETag, so those two must always come from the
+	// SAME read.
+	//
+	// For a text, non-too-large file — the only case where Content is ever
+	// populated below, and therefore the only case where a caller can pair
+	// it with the token at all — ReadContent already holds the file's full
+	// bytes (result.Content). knowledge.ComputeVersionToken hashes byte-
+	// identically to ReadFileVersion (both bottom out in the same
+	// sha256-plus-length-suffix digest — see ComputeVersionToken's own doc
+	// comment), so deriving the token from those SAME bytes yields the
+	// token a fresh read would have returned, without a second read to
+	// desynchronize from the first.
+	//
+	// Binary and too-large files never populate Content (ContentResult's own
+	// doc comment — ReadContent deliberately reads only a bounded sniff
+	// prefix for those, not the full file, to avoid paying for a multi-MB
+	// hash on every listing), so there are no bytes here to hash from; the
+	// original ReadFileVersion re-read is kept for exactly those two cases,
+	// where there is no Content field for a caller to mismatch it against in
+	// the first place.
+	var token knowledge.VersionToken
+	if result.IsText && !result.TooLarge {
+		token = knowledge.ComputeVersionToken([]byte(result.Content))
+	} else {
+		version, verErr := knowledge.ReadFileVersion(root.HostPath(rel))
+		if verErr != nil {
+			logger.ErrorCF("rest", "library: read version failed",
+				map[string]any{"workspace_id": workspaceID, "path": rel, "error": verErr.Error()})
+			jsonErr(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+		token = version.Token
 	}
 
 	resp := gen.LibraryContentResponse{
@@ -772,7 +812,7 @@ func (a *restAPI) handleLibraryContentGet(w http.ResponseWriter, r *http.Request
 	}
 	// Set BEFORE jsonOK/writeJSON: once WriteHeader is called the header map
 	// is flushed and a later Set is silently ignored.
-	w.Header().Set("ETag", libraryETagValue(version.Token))
+	w.Header().Set("ETag", libraryETagValue(token))
 	jsonOK(w, resp)
 }
 
