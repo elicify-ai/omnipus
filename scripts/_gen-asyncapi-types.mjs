@@ -405,6 +405,7 @@ const clientFrames = [
   // Browser WebRTC signaling (ADR-047 D1/D4) — client (SPA) → server frame
   // on the SPA-facing `browser` channel.
   "BrowserWebRTCOfferFrame",
+  "BrowserInputOfferFrame",
   // NOTE: BrowserCapture*Frame schemas (browser_capture_hello/offer/answer/
   // control) belong to the loopback-only browserCaptureIngest channel
   // between the gateway and the capture extension's encoder page — the SPA

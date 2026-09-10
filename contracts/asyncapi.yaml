@@ -146,6 +146,14 @@ channels:
         $ref: '#/components/messages/BrowserTabActionFrame'
       BrowserViewportFrame:
         $ref: '#/components/messages/BrowserViewportFrame'
+      BrowserInputOfferFrame:
+        $ref: '#/components/messages/BrowserInputOfferFrame'
+      BrowserInputAnswerFrame:
+        $ref: '#/components/messages/BrowserInputAnswerFrame'
+      BrowserInputStateFrame:
+        $ref: '#/components/messages/BrowserInputStateFrame'
+      BrowserInputControlAckFrame:
+        $ref: '#/components/messages/BrowserInputControlAckFrame'
       BrowserWebRTCOfferFrame:
         $ref: '#/components/messages/BrowserWebRTCOfferFrame'
       ErrorFrame:
@@ -683,6 +691,30 @@ operations:
       '
     messages:
     - $ref: '#/channels/browser/messages/BrowserTabsFrame'
+  sendBrowserInputOfferFrame:
+    action: send
+    channel:
+      $ref: '#/channels/browser'
+    messages:
+    - $ref: '#/channels/browser/messages/BrowserInputOfferFrame'
+  receiveBrowserInputAnswerFrame:
+    action: receive
+    channel:
+      $ref: '#/channels/browser'
+    messages:
+    - $ref: '#/channels/browser/messages/BrowserInputAnswerFrame'
+  receiveBrowserInputStateFrame:
+    action: receive
+    channel:
+      $ref: '#/channels/browser'
+    messages:
+    - $ref: '#/channels/browser/messages/BrowserInputStateFrame'
+  receiveBrowserInputControlAckFrame:
+    action: receive
+    channel:
+      $ref: '#/channels/browser'
+    messages:
+    - $ref: '#/channels/browser/messages/BrowserInputControlAckFrame'
   sendBrowserWebRTCOffer:
     action: send
     channel:
@@ -1142,6 +1174,30 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/BrowserTabsFrame'
+    BrowserInputOfferFrame:
+      name: BrowserInputOfferFrame
+      title: browser_input_offer
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/BrowserInputOfferFrame'
+    BrowserInputAnswerFrame:
+      name: BrowserInputAnswerFrame
+      title: browser_input_answer
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/BrowserInputAnswerFrame'
+    BrowserInputStateFrame:
+      name: BrowserInputStateFrame
+      title: browser_input_state
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/BrowserInputStateFrame'
+    BrowserInputControlAckFrame:
+      name: BrowserInputControlAckFrame
+      title: browser_input_control_ack
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/BrowserInputControlAckFrame'
     BrowserWebRTCOfferFrame:
       name: BrowserWebRTCOfferFrame
       title: browser_webrtc_offer
@@ -1269,6 +1325,10 @@ components:
       - judge_verdict
       - ask_user_question
       - ask_user_answer
+      - browser_input_offer
+      - browser_input_answer
+      - browser_input_state
+      - browser_input_control_ack
     AuthFrame:
       title: AuthFrame
       description: Client → server authentication frame.
@@ -3725,6 +3785,12 @@ components:
           type: string
           minLength: 1
           maxLength: 128
+        input_mode:
+          type: string
+          enum:
+            - websocket
+            - dedicated
+          description: ADR-081 experimental input route, fixed for this attachment. Omitted means websocket.
     BrowserInputFrame:
       title: BrowserInputFrame
       description: 'Client → server. A viewer input event to inject into the live browser via CDP Input.dispatch*. Only honoured
@@ -3821,7 +3887,26 @@ components:
           description: >-
             Non-secret opaque capture-session identity. Generation claims are valid
             only within this capture; replacement invalidates all previous claims.
-
+        input_epoch:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        control_epoch:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        reliable_seq:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+        hover_seq:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+        gesture_barrier:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
     BrowserControlFrame:
       title: BrowserControlFrame
       description: 'Client → server. Take or release interactive control of the live browser. While a viewer holds control,
@@ -3842,6 +3927,14 @@ components:
           enum:
           - take
           - release
+        input_epoch:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        control_epoch:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
     BrowserDetachFrame:
       title: BrowserDetachFrame
       description: 'Client → server. Detach this viewer from the live browser; the server stops watching the session when
@@ -3952,6 +4045,14 @@ components:
           description: Viewer devicePixelRatio, used as Chromium's deviceScaleFactor so the capture renders at display
             resolution rather than upscaling. Capped at 3 because cost scales with the SQUARE of this value. Omitted
             means 1.
+        input_epoch:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        control_epoch:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
     BrowserTabActionFrame:
       title: BrowserTabActionFrame
       description: 'Client → server. A tab-management action on a live-browser session: switch the active tab, close a tab,
@@ -3984,6 +4085,14 @@ components:
           type: integer
           minimum: 0
           description: Tab index for switch/close (ignored for open).
+        input_epoch:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        control_epoch:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
     BrowserTabsFrame:
       title: BrowserTabsFrame
       description: 'Server → client. The current set of open tabs for a live-browser session and which one is active, broadcast
@@ -5088,3 +5197,166 @@ components:
       properties:
         llm_error:
           $ref: '#/components/schemas/LLMErrorReplay'
+
+    BrowserInputOfferFrame:
+      title: BrowserInputOfferFrame
+      description: ADR-081 attachment-scoped dedicated input signaling. Never starts or replaces media capture.
+      type: object
+      required:
+        - type
+        - session_id
+        - input_epoch
+        - control_epoch
+        - offer_id
+        - agent_id
+        - sdp
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: browser_input_offer
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        input_epoch:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+        control_epoch:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        offer_id:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+        agent_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        sdp:
+          type: string
+          minLength: 1
+          maxLength: 131072
+
+    BrowserInputAnswerFrame:
+      title: BrowserInputAnswerFrame
+      description: ADR-081 attachment-scoped dedicated input signaling. Never starts or replaces media capture.
+      type: object
+      required:
+        - type
+        - session_id
+        - input_epoch
+        - control_epoch
+        - offer_id
+        - sdp
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: browser_input_answer
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        input_epoch:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+        control_epoch:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        offer_id:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+        sdp:
+          type: string
+          minLength: 1
+          maxLength: 131072
+
+    BrowserInputStateFrame:
+      title: BrowserInputStateFrame
+      description: ADR-081 attachment-scoped dedicated input signaling. Never starts or replaces media capture.
+      type: object
+      required:
+        - type
+        - session_id
+        - input_epoch
+        - control_epoch
+        - offer_id
+        - state
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: browser_input_state
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        input_epoch:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+        control_epoch:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        offer_id:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+        state:
+          type: string
+          enum:
+            - connecting
+            - ready
+            - failed
+            - closed
+        reason:
+          type: string
+          maxLength: 512
+
+    BrowserInputControlAckFrame:
+      title: BrowserInputControlAckFrame
+      description: ADR-081 attachment-scoped dedicated input signaling. Never starts or replaces media capture.
+      type: object
+      required:
+        - type
+        - session_id
+        - input_epoch
+        - control_epoch
+        - ok
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: browser_input_control_ack
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        input_epoch:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        control_epoch:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        ok:
+          type: boolean
+        reason:
+          type: string
+          maxLength: 512
+        capture_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        capture_generation:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991

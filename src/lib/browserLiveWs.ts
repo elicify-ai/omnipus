@@ -19,6 +19,10 @@
 import { WsFrame as WsFrameSchema } from '@/lib/api/generated/schemas'
 import type {
   BrowserAttachFrame,
+  BrowserInputOfferFrame,
+  BrowserInputAnswerFrame,
+  BrowserInputStateFrame,
+  BrowserInputControlAckFrame,
   BrowserControlFrame,
   BrowserDetachFrame,
   BrowserInputFrame,
@@ -39,6 +43,9 @@ import type {
  * mid-flight, `parseBrowserFrame` below drops it like any other frame type
  * this socket doesn't understand. */
 type BrowserServerFrame =
+  | BrowserInputAnswerFrame
+  | BrowserInputStateFrame
+  | BrowserInputControlAckFrame
   | BrowserStatusFrame
   | BrowserTabsFrame
   | BrowserWebRTCAnswerFrame
@@ -47,6 +54,9 @@ type BrowserServerFrame =
   | ErrorFrame
 
 export interface BrowserLiveWsCallbacks { // not-wire-format: SPA-only callback interface passed to BrowserLiveWsConnection's constructor. Never serialized to or from the gateway.
+  onInputAnswer?: (frame: BrowserInputAnswerFrame) => void
+  onInputState?: (frame: BrowserInputStateFrame) => void
+  onInputControlAck?: (frame: BrowserInputControlAckFrame) => void
   onStatus: (frame: BrowserStatusFrame) => void
   /** ADR-041 D4 — the current tab list + active index, broadcast on any tab open/close/switch/title-change. */
   onTabs: (frame: BrowserTabsFrame) => void
@@ -127,6 +137,9 @@ export function parseBrowserFrame(data: unknown): BrowserServerFrame | null {
 
   const frame = result.data
   if (
+    frame.type === 'browser_input_answer' ||
+    frame.type === 'browser_input_state' ||
+    frame.type === 'browser_input_control_ack' ||
     frame.type === 'browser_status' ||
     frame.type === 'browser_tabs' ||
     frame.type === 'browser_webrtc_answer' ||
@@ -288,6 +301,11 @@ export function describeVideoHealth(frame: BrowserVideoHealthFrame | null | unde
   }
 }
 
+interface BrowserInputOptions { // not-wire-format: attachment-local mode and control callback; only generated frames are serialized
+  mode: 'websocket' | 'dedicated'
+  beforeControl: () => Pick<BrowserInputFrame, 'input_epoch' | 'control_epoch'> | null
+}
+
 export class BrowserLiveWsConnection {
   private ws: WebSocket | null = null
   private readonly sessionId: string
@@ -297,7 +315,7 @@ export class BrowserLiveWsConnection {
   private reconnectAttempts = 0
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
-  constructor(sessionId: string, agentId: string, callbacks: BrowserLiveWsCallbacks) {
+  constructor(sessionId: string, agentId: string, callbacks: BrowserLiveWsCallbacks, private readonly inputOptions?: BrowserInputOptions) {
     this.sessionId = sessionId
     this.agentId = agentId
     this.callbacks = callbacks
@@ -322,6 +340,7 @@ export class BrowserLiveWsConnection {
     this.ws = ws
 
     ws.onopen = () => {
+      if (this.ws !== ws) return
       this.reconnectAttempts = 0
       // Auth rides the WS handshake via the same-origin `omnipus-session`
       // HttpOnly cookie (ADR-044): the browser attaches it automatically and
@@ -330,6 +349,7 @@ export class BrowserLiveWsConnection {
       // token any more.
       const attach: BrowserAttachFrame = {
         type: 'browser_attach',
+        ...(this.inputOptions?.mode === 'dedicated' ? { input_mode: 'dedicated' as const } : {}),
         session_id: this.sessionId,
         agent_id: this.agentId,
       }
@@ -338,9 +358,17 @@ export class BrowserLiveWsConnection {
     }
 
     ws.onmessage = (event: MessageEvent) => {
+      if (this.ws !== ws) return
       const frame = parseBrowserFrame(event.data as string)
       if (!frame) return
-      if (frame.type === 'browser_status') {
+      if ((frame.type === 'browser_input_answer' || frame.type === 'browser_input_state' || frame.type === 'browser_input_control_ack') && frame.session_id !== this.sessionId) return
+      if (frame.type === 'browser_input_answer') {
+        this.callbacks.onInputAnswer?.(frame)
+      } else if (frame.type === 'browser_input_state') {
+        this.callbacks.onInputState?.(frame)
+      } else if (frame.type === 'browser_input_control_ack') {
+        this.callbacks.onInputControlAck?.(frame)
+      } else if (frame.type === 'browser_status') {
         this.callbacks.onStatus(frame)
       } else if (frame.type === 'browser_tabs') {
         this.callbacks.onTabs(frame)
@@ -362,10 +390,12 @@ export class BrowserLiveWsConnection {
     }
 
     ws.onerror = () => {
+      if (this.ws !== ws) return
       this.callbacks.onError('Live browser connection error — will retry.')
     }
 
     ws.onclose = (event: CloseEvent) => {
+      if (this.ws !== ws) return
       this.ws = null
       this.callbacks.onDisconnected?.()
       if (this.intentionalClose) return
@@ -418,13 +448,31 @@ export class BrowserLiveWsConnection {
       this.ws.close(4008, 'input_backpressure')
       return false
     }
-    const frame: BrowserInputFrame = { type: 'browser_input', ...input }
+    const intent = ['navigate', 'navigate_back', 'reload'].includes(input.kind)
+    if (this.inputOptions?.mode === 'dedicated' && !intent) return false
+    const control = intent ? this.prepareControl() : {}
+    if (control === null) return false
+    const frame: BrowserInputFrame = { ...control, type: 'browser_input', ...input }
     return this._rawSend(frame)
   }
 
   sendControl(action: 'take' | 'release'): boolean {
-    const frame: BrowserControlFrame = { type: 'browser_control', action }
+    const control = this.prepareControl()
+    if (control === null) return false
+    const frame: BrowserControlFrame = { type: 'browser_control', action, ...control }
     return this._rawSend(frame)
+  }
+
+  /** Signals the separate ADR-081 data-only input peer on this attachment. */
+  sendInputOffer(offer: Pick<BrowserInputOfferFrame, 'sdp' | 'offer_id' | 'input_epoch' | 'control_epoch'>): boolean {
+    const frame: BrowserInputOfferFrame = { type: 'browser_input_offer', session_id: this.sessionId, agent_id: this.agentId, ...offer }
+    return this._rawSend(frame)
+  }
+
+  private prepareControl(): Pick<BrowserInputFrame, 'input_epoch' | 'control_epoch'> | null {
+    if (this.inputOptions?.mode !== 'dedicated') return {}
+    if (!this.isConnected) return null
+    return this.inputOptions.beforeControl()
   }
 
   /** ADR-047 (WebRTC build) — sends this connection's non-trickle SDP offer
@@ -453,7 +501,10 @@ export class BrowserLiveWsConnection {
    * multiplexed across sessions.
    */
   sendTabAction(action: 'switch' | 'close' | 'open', index?: number): boolean {
+    const control = this.prepareControl()
+    if (control === null) return false
     const frame: BrowserTabActionFrame = {
+      ...control,
       type: 'browser_tab_action',
       session_id: this.sessionId,
       agent_id: this.agentId,
@@ -480,7 +531,10 @@ export class BrowserLiveWsConnection {
    * so this must not be sent per resize event.
    */
   sendViewport(width: number, height: number, deviceScaleFactor: number): boolean {
+    const control = this.prepareControl()
+    if (control === null) return false
     const frame: BrowserViewportFrame = {
+      ...control,
       type: 'browser_viewport',
       session_id: this.sessionId,
       agent_id: this.agentId,

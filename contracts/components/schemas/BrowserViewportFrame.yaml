@@ -57,3 +57,11 @@ properties:
       3 because cost scales with the SQUARE of this value — a 2x factor is 4x
       the pixels to render, encode and ship. Omitted means 1 (unchanged
       behaviour).
+  input_epoch:
+    type: integer
+    minimum: 0
+    maximum: 9007199254740991
+  control_epoch:
+    type: integer
+    minimum: 0
+    maximum: 9007199254740991

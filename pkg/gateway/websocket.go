@@ -1155,6 +1155,8 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 // for frame types that have no inbound schema (e.g. ping — no body to validate).
 func wsFrameSchemaName(frameType string) string {
 	switch frameType {
+	case "browser_input_offer":
+		return "BrowserInputOfferFrame"
 	case string(generated.WsFrameTypeMessage):
 		return "MessageFrame"
 	case string(generated.WsFrameTypeCancel):

@@ -4,6 +4,7 @@
 // explicit Take over button stops the chat response. Control status is a
 // presentation hint, not a prerequisite for input; annotation stays local.
 
+import { BrowserInputWebRTCSession, type BrowserInputState } from '@/lib/browserInputWebRTC'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowSquareOut,
@@ -383,6 +384,11 @@ export function BrowserLiveView({
   // one instance per WS-connection effect lifecycle (see that effect further
   // down), mirroring wsRef's own per-mount lifetime.
   const webrtcRef = useRef<BrowserWebRTCSession | null>(null)
+  const [inputMode] = useState<'websocket' | 'dedicated'>(() => new URLSearchParams(window.location.search).get('browserInput') === 'dedicated' ? 'dedicated' : 'websocket')
+  const inputRef = useRef<BrowserInputWebRTCSession | null>(null)
+  const [inputState, setInputState] = useState<BrowserInputState>('idle')
+  const [inputError, setInputError] = useState<string | null>(null)
+  const inputFrameRequirementRef = useRef<{ id: string; generation: number } | null | undefined>(undefined)
   const containerRef = useRef<HTMLDivElement | null>(null)
   // Bound to the `<video>` sink's srcObject via the effect below whenever
   // `mediaStream` is set. The `<video>` element is only ever mounted once a
@@ -439,6 +445,7 @@ export function BrowserLiveView({
   const pendingAnnotationRef = useRef<PendingAnnotation | null>(null)
   // Coalesce mouse moves on the input timer. Store final CSS coordinates so
   // later encoder adaptation cannot reinterpret an already mapped position.
+  const flushWheelBeforeActionRef = useRef<() => void>(() => {})
   const pendingMoveRef = useRef<{ x: number; y: number; modifiers: number } | null>(null)
   // Wheel is coalesced on the SAME pacer as moves, with deltas ACCUMULATED
   // (position = latest). Un-paced wheel was the second half of the operator's
@@ -943,6 +950,19 @@ export function BrowserLiveView({
     setConnected(false)
     setWebrtcStream(null)
     refreshFrameGate()
+    const inputMachine = inputMode === 'dedicated' ? new BrowserInputWebRTCSession({
+      sendOffer: (offer) => wsRef.current?.sendInputOffer(offer) ?? false,
+      onState: (state, reason) => {
+        setInputState(state)
+        setInputError(state === 'failed' ? reason || 'Input connection failed.' : null)
+        if (state === 'failed') {
+          pressedInputsRef.current.clear()
+          pendingMoveRef.current = pendingWheelRef.current = null
+        }
+      },
+    }) : null
+    inputRef.current = inputMachine
+    inputFrameRequirementRef.current = undefined
     const machine = new BrowserWebRTCSession()
     webrtcRef.current = machine
     machine.onStream((stream, identity) => {
@@ -1015,6 +1035,13 @@ export function BrowserLiveView({
       // ADR-041 D4 — tab list + active index, broadcast on any
       // open/close/switch/title-change. This is the sole source of truth
       // the tab strip renders from (see the `tabState` doc comment above).
+      onInputAnswer: (f) => inputMachine?.applyAnswer(f),
+      onInputState: (f) => inputMachine?.applyState(f),
+      onInputControlAck: (f) => {
+        if (!inputMachine?.applyControlAck(f) || !f.ok) return
+        inputFrameRequirementRef.current = f.capture_id && f.capture_generation !== undefined
+          ? { id: f.capture_id, generation: f.capture_generation } : null
+      },
       onTabs: (f) => {
         setTabState({ tabs: f.tabs, activeIndex: f.active_index })
       },
@@ -1118,6 +1145,8 @@ export function BrowserLiveView({
             })),
           )
         }
+        if (inputMachine && f.ice_servers) inputMachine.setICEServers(f.ice_servers.map((server) => ({ ...server })))
+        if (inputMachine && f.available && inputMachine.state !== 'failed') inputMachine.start()
         machine.applyState(f)
         if (f.available) {
           browserAttachedRef.current = true
@@ -1171,6 +1200,7 @@ export function BrowserLiveView({
             captureRef.current.gate.acceptBoundary({ generation: f.capture_generation, rtpTimestamp: f.rtp_timestamp })
             if (requiresFreshViewerRef.current || captureViewerNeededRef.current || (streamIdentityRef.current && streamIdentityRef.current.captureId !== f.capture_id)) requestFreshViewerRef.current()
           }
+          if (f.state === 'recovered' && inputFrameRequirementRef.current === null) inputFrameRequirementRef.current = { id: f.capture_id, generation: f.capture_generation }
           refreshFrameGate()
         }
         if (f.state === 'lost' || f.state === 'recovering' || f.state === 'unrecoverable') {
@@ -1188,6 +1218,8 @@ export function BrowserLiveView({
         setConnError(null)
       },
       onDisconnected: () => {
+        inputMachine?.resetAttachment()
+        inputFrameRequirementRef.current = undefined
         browserAttachedRef.current = false
         captureRef.current = { id: null, generation: 0, marker: null, css: null, gate: new BrowserFrameGate(), retired: new Set() }
         streamIdentityRef.current = null
@@ -1227,11 +1259,22 @@ export function BrowserLiveView({
         // drops the optimistic "you're driving" chip (UAT A8).
         setPendingTake(false)
       },
-    })
+    }, inputMachine ? {
+      mode: 'dedicated',
+      beforeControl: () => {
+        flushWheelBeforeActionRef.current()
+        pendingMoveRef.current = pendingWheelRef.current = null
+        pressedInputsRef.current.clear()
+        const epoch = inputMachine.beginControl()
+        return epoch === null ? null : inputMachine.controlIdentity
+      },
+    } : undefined)
     wsRef.current = conn
     conn.connect()
     return () => {
       releaseInputsRef.current()
+      inputMachine?.stop()
+      inputRef.current = null
       conn.detach()
       conn.close()
       wsRef.current = null
@@ -1240,7 +1283,7 @@ export function BrowserLiveView({
       requestFreshViewerRef.current = () => {}
       if (framePresentationTimerRef.current !== null) clearTimeout(framePresentationTimerRef.current)
     }
-  }, [sessionId, agentId, connectionAttempt, acceptCapture, refreshFrameGate])
+  }, [sessionId, agentId, connectionAttempt, acceptCapture, refreshFrameGate, inputMode])
 
   // ── Bind the <video> sink's srcObject imperatively. React has no
   // `srcObject` JSX prop (it's a DOM property, not an attribute) — this is
@@ -1333,13 +1376,22 @@ export function BrowserLiveView({
 
   // Shared human input is independent of control ownership and chat state.
   const canIssueCommands = useCallback(() => connectedRef.current && driveModeRef.current !== 'annotating', [])
+  const dedicatedFrameReady = useCallback(() => {
+    const required = inputFrameRequirementRef.current
+    if (required === undefined) return true
+    if (required === null) return false
+    const current = captureRef.current
+    const proof = current.gate.read(performance.now())
+    if (current.id !== required.id || proof.status !== 'ready' || proof.generation < required.generation) return false
+    inputFrameRequirementRef.current = undefined
+    return true
+  }, [])
   const canDispatchInput = useCallback(() => {
-    return canIssueCommands() && captureRef.current.gate.read(performance.now()).status === 'ready'
-  }, [canIssueCommands])
+    return canIssueCommands() && (inputMode === 'websocket' || (inputRef.current?.state === 'ready' && dedicatedFrameReady())) && captureRef.current.gate.read(performance.now()).status === 'ready'
+  }, [canIssueCommands, inputMode, dedicatedFrameReady])
 
-  // All human input shares the ordered control socket. Successful send means
-  // queued locally, never proof that Chrome executed it. Do not replay on a
-  // second transport: a delayed click or text insertion could execute twice.
+  // Each attachment uses exactly one input route. A successful send is local
+  // admission, not execution proof; never replay uncertain actions elsewhere.
   const pressedInputsRef = useRef(new Map<string, Omit<BrowserInputFrame, 'type'>>())
   const releaseInputsRef = useRef<() => void>(() => {})
   const inputFailureAtRef = useRef(-Infinity)
@@ -1348,11 +1400,14 @@ export function BrowserLiveView({
       const initiating = ['navigate', 'navigate_back', 'reload'].includes(input.kind)
       const current = captureRef.current
       const proof = current.gate.read(performance.now())
-      if (!initiating && !cleanup && proof.status !== 'ready') return false
+      if (!initiating && !cleanup && (proof.status !== 'ready' || (inputMode === 'dedicated' && !dedicatedFrameReady()))) return false
+      if (inputMode === 'dedicated' && !cleanup && input.kind !== 'wheel' && input.kind !== 'mouse_move') flushWheelBeforeActionRef.current()
       const payload = !initiating && !cleanup && proof.status === 'ready' && current.id
         ? { ...input, capture_id: current.id, capture_generation: proof.generation }
         : input
-      const sent = wsRef.current?.sendInput(payload) ?? false
+      const sent = inputMode === 'dedicated' && !initiating
+        ? inputRef.current?.sendInput(payload) ?? false
+        : wsRef.current?.sendInput(payload) ?? false
       if (!sent) {
         if (Date.now() - inputFailureAtRef.current >= 3000) {
           inputFailureAtRef.current = Date.now()
@@ -1371,7 +1426,7 @@ export function BrowserLiveView({
         }
       }
       return true
-    }, [],
+    }, [inputMode, dedicatedFrameReady],
   )
   const releasePressedInputs = useCallback(() => {
     pendingMoveRef.current = null
@@ -1676,6 +1731,8 @@ export function BrowserLiveView({
   // them in when a pointer moves and scrolls in the same tick, and the remote
   // page's hit-testing depends on the cursor already being where the scroll
   // happens.
+  flushWheelBeforeActionRef.current = flushPendingWheel
+
   const flushPendingInput = useCallback(() => {
     inputFlushScheduledRef.current = false
     inputFlushTimerRef.current = null
@@ -1752,6 +1809,9 @@ export function BrowserLiveView({
 
   // Record human activity without pausing chat or waiting for ownership.
   const takeWheelIfNeeded = useCallback(() => {
+    // Shared input needs no ownership claim. An implicit take would pause and
+    // invalidate the very first dedicated gesture while awaiting its ack.
+    if (inputMode === 'dedicated') return
     if (!connectedRef.current) return
     if (controllingRef.current) return // already driving — nothing to acquire
     if (pendingTakeRef.current) return // a take is already in flight — never double-fire
@@ -1764,7 +1824,7 @@ export function BrowserLiveView({
         variant: 'error',
       })
     }
-  }, [setPendingTake])
+  }, [setPendingTake, inputMode])
 
   // ── Annotate mode (ADR-039 D-B1/B2) ─────────────────────────────────────
 
@@ -2310,7 +2370,14 @@ export function BrowserLiveView({
   }
 
   return (
-    <div className={cn('relative flex h-full min-h-0 flex-col bg-[var(--color-primary)]', className)}>
+    <div data-input-mode={inputMode} data-input-state={inputMode === 'dedicated' ? inputState : 'websocket'} className={cn('relative flex h-full min-h-0 flex-col bg-[var(--color-primary)]', className)}>
+      {inputError && <div role="alert" data-testid="browser-input-error" className="absolute bottom-2 left-2 right-2 z-30 rounded bg-[var(--color-primary)] p-2 text-sm">
+        <span>{inputError}</span>{' '}
+        <button type="button" onClick={() => {
+          if (inputRef.current?.awaitingControl) setConnectionAttempt((attempt) => attempt + 1)
+          else inputRef.current?.start()
+        }}>Retry input</button>
+      </div>}
       {/* == Row A: tabs + window controls =============================
           Header consolidation (operator direction, 2026-08-04): the panel used
           to spend FOUR rows on chrome -- identity/controls, handback hint,

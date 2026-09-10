@@ -48,3 +48,9 @@ properties:
       member of the workspace session_id resolves to; it does not by itself
       select a browser, because a browser belongs to the workspace and every
       agent on that team shares it (ADR-075 FR-001).
+  input_mode:
+    type: string
+    enum:
+      - websocket
+      - dedicated
+    description: ADR-081 experimental input route, fixed for this attachment. Omitted means websocket.

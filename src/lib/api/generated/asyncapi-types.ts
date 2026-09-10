@@ -64,7 +64,11 @@ export type WsFrameType =
   | "plan_status"
   | "judge_verdict"
   | "ask_user_question"
-  | "ask_user_answer";
+  | "ask_user_answer"
+  | "browser_input_offer"
+  | "browser_input_answer"
+  | "browser_input_state"
+  | "browser_input_control_ack";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
@@ -554,6 +558,7 @@ export interface BrowserAttachFrame {
   type: "browser_attach";
   session_id: string;
   agent_id: string;
+  input_mode?: "websocket" | "dedicated";
 }
 
 export interface BrowserInputFrame {
@@ -574,11 +579,18 @@ export interface BrowserInputFrame {
   url?: string;
   capture_generation?: number;
   capture_id?: string;
+  input_epoch?: number;
+  control_epoch?: number;
+  reliable_seq?: number;
+  hover_seq?: number;
+  gesture_barrier?: number;
 }
 
 export interface BrowserControlFrame {
   type: "browser_control";
   action: "take" | "release";
+  input_epoch?: number;
+  control_epoch?: number;
 }
 
 export interface BrowserDetachFrame {
@@ -604,6 +616,8 @@ export interface BrowserViewportFrame {
   width: number;
   height: number;
   device_scale_factor?: number;
+  input_epoch?: number;
+  control_epoch?: number;
 }
 
 export interface BrowserTabActionFrame {
@@ -612,6 +626,8 @@ export interface BrowserTabActionFrame {
   agent_id?: string;
   action: "switch" | "close" | "open";
   index?: number;
+  input_epoch?: number;
+  control_epoch?: number;
 }
 
 export interface BrowserTabsFrame {
@@ -825,6 +841,46 @@ export interface ReplayErrorPayload {
   llm_error: LLMErrorReplay;
 }
 
+export interface BrowserInputOfferFrame {
+  type: "browser_input_offer";
+  session_id: string;
+  input_epoch: number;
+  control_epoch: number;
+  offer_id: number;
+  agent_id: string;
+  sdp: string;
+}
+
+export interface BrowserInputAnswerFrame {
+  type: "browser_input_answer";
+  session_id: string;
+  input_epoch: number;
+  control_epoch: number;
+  offer_id: number;
+  sdp: string;
+}
+
+export interface BrowserInputStateFrame {
+  type: "browser_input_state";
+  session_id: string;
+  input_epoch: number;
+  control_epoch: number;
+  offer_id: number;
+  state: "connecting" | "ready" | "failed" | "closed";
+  reason?: string;
+}
+
+export interface BrowserInputControlAckFrame {
+  type: "browser_input_control_ack";
+  session_id: string;
+  input_epoch: number;
+  control_epoch: number;
+  ok: boolean;
+  reason?: string;
+  capture_id?: string;
+  capture_generation?: number;
+}
+
 // ── Union of all WS frames (discriminated by the `type` field) ──────────────
 
 export type WsFrame =
@@ -885,7 +941,11 @@ export type WsFrame =
   | GoalStatusFrame
   | LoopStatusFrame
   | PlanStatusFrame
-  | JudgeVerdictFrame;
+  | JudgeVerdictFrame
+  | BrowserInputOfferFrame
+  | BrowserInputAnswerFrame
+  | BrowserInputStateFrame
+  | BrowserInputControlAckFrame;
 
 // ── Client → server frames ──────────────────────────────────────────────────
 
@@ -903,12 +963,13 @@ export type ClientFrame =
   | BrowserInputFrame
   | BrowserControlFrame
   | BrowserDetachFrame
-  | BrowserWebRTCOfferFrame;
+  | BrowserWebRTCOfferFrame
+  | BrowserInputOfferFrame;
 
 // ── ClientFrameTypes constant — generated from spec, not hand-written ─────────
 // Import this in ws.ts to build CLIENT_FRAME_TYPES set. Never edit directly.
 
-export const ClientFrameTypes = ["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "whatsapp_pairing_subscribe", "ask_user_answer", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_webrtc_offer"] as const
+export const ClientFrameTypes = ["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "whatsapp_pairing_subscribe", "ask_user_answer", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_webrtc_offer", "browser_input_offer"] as const
 
 // ── Server → client frames ──────────────────────────────────────────────────
 
@@ -956,4 +1017,7 @@ export type ServerFrame =
   | GoalStatusFrame
   | LoopStatusFrame
   | PlanStatusFrame
-  | JudgeVerdictFrame;
+  | JudgeVerdictFrame
+  | BrowserInputAnswerFrame
+  | BrowserInputStateFrame
+  | BrowserInputControlAckFrame;

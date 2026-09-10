@@ -97,9 +97,11 @@ type AuthFrame struct {
 
 // BrowserAttachFrame — Client → server. Binds this browser-live WebSocket connection to a workspace's browser and starts watching it for control-lock and tab-strip bookkeeping (video is carried exclusively by WebRTC — see BrowserWebRTCStateFrame, ADR-061). Per ADR-075 a browser belongs to a WORKSPACE, not to an agent: one workspace, one Chrome, one profile directory, one cookie jar, shared by every agent on that workspace's team. session_id RESOLVES the browsing context — the gateway reads the named chat session's own workspace_id from the session meta, server-side, and attaches to that workspace's browser. agent_id names who is asking and is checked for membership of that workspace; it is NO LONGER the binding key. When the session names no workspace the gateway falls back to the agent's own workspace membership, and REFUSES rather than tie-breaking when that is ambiguous (ADR-075 FR-033).
 type BrowserAttachFrame struct {
-	AgentId   string `json:"agent_id"`
-	SessionId string `json:"session_id"`
-	Type      string `json:"type"`
+	AgentId string `json:"agent_id"`
+	// ADR-081 experimental input route, fixed for this attachment. Omitted means websocket.
+	InputMode *string `json:"input_mode,omitempty"`
+	SessionId string  `json:"session_id"`
+	Type      string  `json:"type"`
 }
 
 // BrowserCaptureAnswerFrame — Server (gateway) → client (capture extension). Pion SDP answer to a browser_capture_offer, completing the ingest leg's non-trickle offer/answer exchange. Once applied, the encoder page's tabCapture MediaStream (video, plus audio when the tab produces sound) flows into the gateway's shared TrackLocalStaticRTP tracks for relay to viewers. See ADR-047 D1/D2.
@@ -170,14 +172,38 @@ type BrowserCaptureOfferFrame struct {
 
 // BrowserControlFrame — Client → server. Take or release interactive control of the live browser. While a viewer holds control, the agent's own browser tools defer (cooperative turn-coordination, ADR-038 D6).
 type BrowserControlFrame struct {
-	Action string `json:"action"`
-	Type   string `json:"type"`
+	Action       string `json:"action"`
+	ControlEpoch *int   `json:"control_epoch,omitempty"`
+	InputEpoch   *int   `json:"input_epoch,omitempty"`
+	Type         string `json:"type"`
 }
 
 // BrowserDetachFrame — Client → server. Detach this viewer from the live browser; the server stops watching the session when the last viewer detaches. Sent when the panel closes.
 type BrowserDetachFrame struct {
 	SessionId *string `json:"session_id,omitempty"`
 	Type      string  `json:"type"`
+}
+
+// BrowserInputAnswerFrame — ADR-081 attachment-scoped dedicated input signaling. Never starts or replaces media capture.
+type BrowserInputAnswerFrame struct {
+	ControlEpoch int    `json:"control_epoch"`
+	InputEpoch   int    `json:"input_epoch"`
+	OfferId      int    `json:"offer_id"`
+	Sdp          string `json:"sdp"`
+	SessionId    string `json:"session_id"`
+	Type         string `json:"type"`
+}
+
+// BrowserInputControlAckFrame — ADR-081 attachment-scoped dedicated input signaling. Never starts or replaces media capture.
+type BrowserInputControlAckFrame struct {
+	CaptureGeneration *int    `json:"capture_generation,omitempty"`
+	CaptureId         *string `json:"capture_id,omitempty"`
+	ControlEpoch      int     `json:"control_epoch"`
+	InputEpoch        int     `json:"input_epoch"`
+	Ok                bool    `json:"ok"`
+	Reason            *string `json:"reason,omitempty"`
+	SessionId         string  `json:"session_id"`
+	Type              string  `json:"type"`
 }
 
 // BrowserInputFrame — Client → server. A viewer input event to inject into the live browser via CDP Input.dispatch*. Only honoured while the viewer holds control (browser_control action=take). Coordinates are device (CSS) pixels of the WebRTC video frame, UNLESS capture_width/capture_height are present — then x/y are in that capture-frame pixel space and the server rescales them into the tab's real CSS viewport before dispatch (root cause 2026-07-31, fault 3).
@@ -190,20 +216,47 @@ type BrowserInputFrame struct {
 	// Non-secret opaque capture-session identity. Generation claims are valid only within this capture; replacement invalidates all previous claims.
 	CaptureId *string `json:"capture_id,omitempty"`
 	// Intrinsic pixel width of the capture frame the client mapped x/y into (the <video>'s videoWidth in WebRTC mode). With capture_height, the server rescales x/y into the tab's actual CSS viewport before CDP dispatch. Absent (older client) means x/y are already CSS pixels.
-	CaptureWidth *float64 `json:"capture_width,omitempty"`
-	Code         *string  `json:"code,omitempty"`
-	DeltaX       *float64 `json:"delta_x,omitempty"`
-	DeltaY       *float64 `json:"delta_y,omitempty"`
-	Key          *string  `json:"key,omitempty"`
+	CaptureWidth   *float64 `json:"capture_width,omitempty"`
+	Code           *string  `json:"code,omitempty"`
+	ControlEpoch   *int     `json:"control_epoch,omitempty"`
+	DeltaX         *float64 `json:"delta_x,omitempty"`
+	DeltaY         *float64 `json:"delta_y,omitempty"`
+	GestureBarrier *int     `json:"gesture_barrier,omitempty"`
+	HoverSeq       *int     `json:"hover_seq,omitempty"`
+	InputEpoch     *int     `json:"input_epoch,omitempty"`
+	Key            *string  `json:"key,omitempty"`
 	// Windows virtual key code for key_down/key_up (DOM KeyboardEvent.keyCode) — required for CDP to perform editing/nav key actions and modifier shortcuts. See ADR-039.
-	KeyCode   *int     `json:"key_code,omitempty"`
-	Kind      string   `json:"kind"`
-	Modifiers *int     `json:"modifiers,omitempty"`
-	Text      *string  `json:"text,omitempty"`
-	Type      string   `json:"type"`
-	Url       *string  `json:"url,omitempty"`
-	X         *float64 `json:"x,omitempty"`
-	Y         *float64 `json:"y,omitempty"`
+	KeyCode     *int     `json:"key_code,omitempty"`
+	Kind        string   `json:"kind"`
+	Modifiers   *int     `json:"modifiers,omitempty"`
+	ReliableSeq *int     `json:"reliable_seq,omitempty"`
+	Text        *string  `json:"text,omitempty"`
+	Type        string   `json:"type"`
+	Url         *string  `json:"url,omitempty"`
+	X           *float64 `json:"x,omitempty"`
+	Y           *float64 `json:"y,omitempty"`
+}
+
+// BrowserInputOfferFrame — ADR-081 attachment-scoped dedicated input signaling. Never starts or replaces media capture.
+type BrowserInputOfferFrame struct {
+	AgentId      string `json:"agent_id"`
+	ControlEpoch int    `json:"control_epoch"`
+	InputEpoch   int    `json:"input_epoch"`
+	OfferId      int    `json:"offer_id"`
+	Sdp          string `json:"sdp"`
+	SessionId    string `json:"session_id"`
+	Type         string `json:"type"`
+}
+
+// BrowserInputStateFrame — ADR-081 attachment-scoped dedicated input signaling. Never starts or replaces media capture.
+type BrowserInputStateFrame struct {
+	ControlEpoch int     `json:"control_epoch"`
+	InputEpoch   int     `json:"input_epoch"`
+	OfferId      int     `json:"offer_id"`
+	Reason       *string `json:"reason,omitempty"`
+	SessionId    string  `json:"session_id"`
+	State        string  `json:"state"`
+	Type         string  `json:"type"`
 }
 
 // BrowserStatusFrame — Server → client. Lifecycle / control status for the live browser connection. state=controlling means this viewer holds interactive control; released means control was dropped; error carries a human-readable message.
@@ -223,12 +276,14 @@ type BrowserStatusFrame struct {
 
 // BrowserTabActionFrame — Client → server. A tab-management action on a live-browser session: switch the active tab, close a tab, or open a new (blank) tab. Honoured the same way as browser_input/browser_control — switch/close target the active browsing context's tab set. index is required for switch/close, ignored for open. See ADR-041.
 type BrowserTabActionFrame struct {
-	Action  string  `json:"action"`
-	AgentId *string `json:"agent_id,omitempty"`
+	Action       string  `json:"action"`
+	AgentId      *string `json:"agent_id,omitempty"`
+	ControlEpoch *int    `json:"control_epoch,omitempty"`
 	// Tab index for switch/close (ignored for open).
-	Index     *int    `json:"index,omitempty"`
-	SessionId *string `json:"session_id,omitempty"`
-	Type      string  `json:"type"`
+	Index      *int    `json:"index,omitempty"`
+	InputEpoch *int    `json:"input_epoch,omitempty"`
+	SessionId  *string `json:"session_id,omitempty"`
+	Type       string  `json:"type"`
 }
 
 // BrowserTabsFrame — Server → client. The current set of open tabs for a live-browser session and which one is active, broadcast whenever a tab is opened (e.g. a target=_blank click or window.open the agent/user followed), closed, switched, or its title/url changes. The SPA renders this as the panel's tab strip; the WebRTC capture always follows the active tab. See ADR-041.
@@ -274,13 +329,15 @@ type BrowserVideoHealthFrame struct {
 
 // BrowserViewportFrame — Client → server. Reports the live-browser panel's current render box so the gateway can size the captured tab to match it. The captured tab was pinned to a hardcoded 1280x720 while the docked panel is an arbitrary resizable shape, so object-fit:contain could only ever fill one dimension and letterboxed the rest (operator UAT 2026-07-31). device_scale_factor addresses the same report's second half, blur: the managed headless Chrome renders at DPR 1, so a capture displayed larger than its CSS size upscales. Sent on attach and debounced on resize; the server applies the metrics then triggers browser_capture_control{action: recapture} so the encoder rebuilds its stream at the new geometry (capture constraints are pinned per stream).
 type BrowserViewportFrame struct {
-	AgentId *string `json:"agent_id,omitempty"`
+	AgentId      *string `json:"agent_id,omitempty"`
+	ControlEpoch *int    `json:"control_epoch,omitempty"`
 	// Viewer devicePixelRatio, used as Chromium's deviceScaleFactor so the capture renders at display resolution rather than upscaling. Capped at 3 because cost scales with the SQUARE of this value. Omitted means 1.
 	DeviceScaleFactor *float64 `json:"device_scale_factor,omitempty"`
 	// Panel render-box height in CSS pixels.
-	Height    int     `json:"height"`
-	SessionId *string `json:"session_id,omitempty"`
-	Type      string  `json:"type"`
+	Height     int     `json:"height"`
+	InputEpoch *int    `json:"input_epoch,omitempty"`
+	SessionId  *string `json:"session_id,omitempty"`
+	Type       string  `json:"type"`
 	// Panel render-box width in CSS pixels. Bounded so a malformed or hostile frame cannot ask Chromium for an absurd allocation.
 	Width int `json:"width"`
 }
@@ -1040,4 +1097,8 @@ const (
 	WsFrameTypeJudgeVerdict             WsFrameType = "judge_verdict"
 	WsFrameTypeAskUserQuestion          WsFrameType = "ask_user_question"
 	WsFrameTypeAskUserAnswer            WsFrameType = "ask_user_answer"
+	WsFrameTypeBrowserInputOffer        WsFrameType = "browser_input_offer"
+	WsFrameTypeBrowserInputAnswer       WsFrameType = "browser_input_answer"
+	WsFrameTypeBrowserInputState        WsFrameType = "browser_input_state"
+	WsFrameTypeBrowserInputControlAck   WsFrameType = "browser_input_control_ack"
 )

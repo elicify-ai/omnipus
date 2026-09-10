@@ -391,6 +391,9 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 	if err != nil {
 		return
 	}
+	if state.dedicatedInput() != nil {
+		parent = context.WithValue(parent, disabledMediaInputKey{}, true)
+	}
 	answer, viewerHandle, offerErr := cs.HandleViewerOfferRequest(negotiation, parent, epoch, viewerID, frame.Sdp)
 	if offerErr != nil {
 		cs.CleanupViewerOffer(viewerHandle)

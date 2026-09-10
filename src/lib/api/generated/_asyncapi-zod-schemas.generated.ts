@@ -6,7 +6,7 @@
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack"]);
 
 export const AuthFrame = z
   .object({
@@ -616,6 +616,7 @@ export const BrowserAttachFrame = z
     type: z.literal("browser_attach"),
     session_id: z.string().min(1).max(128),
     agent_id: z.string().min(1).max(128),
+    input_mode: z.enum(["websocket", "dedicated"]).optional(),
   })
   .strict();
 
@@ -638,6 +639,11 @@ export const BrowserInputFrame = z
     url: z.string().max(2048).optional(),
     capture_generation: z.number().int().min(1).max(9007199254740991).optional(),
     capture_id: z.string().min(1).max(128).optional(),
+    input_epoch: z.number().int().min(0).max(9007199254740991).optional(),
+    control_epoch: z.number().int().min(0).max(9007199254740991).optional(),
+    reliable_seq: z.number().int().min(1).max(9007199254740991).optional(),
+    hover_seq: z.number().int().min(1).max(9007199254740991).optional(),
+    gesture_barrier: z.number().int().min(0).max(9007199254740991).optional(),
   })
   .strict();
 
@@ -645,6 +651,8 @@ export const BrowserControlFrame = z
   .object({
     type: z.literal("browser_control"),
     action: z.enum(["take", "release"]),
+    input_epoch: z.number().int().min(0).max(9007199254740991).optional(),
+    control_epoch: z.number().int().min(0).max(9007199254740991).optional(),
   })
   .strict();
 
@@ -676,6 +684,8 @@ export const BrowserViewportFrame = z
     width: z.number().int().min(1).max(8192),
     height: z.number().int().min(1).max(8192),
     device_scale_factor: z.number().min(1).max(3).optional(),
+    input_epoch: z.number().int().min(0).max(9007199254740991).optional(),
+    control_epoch: z.number().int().min(0).max(9007199254740991).optional(),
   })
   .strict();
 
@@ -686,6 +696,8 @@ export const BrowserTabActionFrame = z
     agent_id: z.string().max(128).optional(),
     action: z.enum(["switch", "close", "open"]),
     index: z.number().int().min(0).optional(),
+    input_epoch: z.number().int().min(0).max(9007199254740991).optional(),
+    control_epoch: z.number().int().min(0).max(9007199254740991).optional(),
   })
   .strict();
 
@@ -954,6 +966,54 @@ export const ReplayErrorPayload = z
   })
   .strict();
 
+export const BrowserInputOfferFrame = z
+  .object({
+    type: z.literal("browser_input_offer"),
+    session_id: z.string().min(1).max(128),
+    input_epoch: z.number().int().min(1).max(9007199254740991),
+    control_epoch: z.number().int().min(0).max(9007199254740991),
+    offer_id: z.number().int().min(1).max(9007199254740991),
+    agent_id: z.string().min(1).max(128),
+    sdp: z.string().min(1).max(131072),
+  })
+  .strict();
+
+export const BrowserInputAnswerFrame = z
+  .object({
+    type: z.literal("browser_input_answer"),
+    session_id: z.string().min(1).max(128),
+    input_epoch: z.number().int().min(1).max(9007199254740991),
+    control_epoch: z.number().int().min(0).max(9007199254740991),
+    offer_id: z.number().int().min(1).max(9007199254740991),
+    sdp: z.string().min(1).max(131072),
+  })
+  .strict();
+
+export const BrowserInputStateFrame = z
+  .object({
+    type: z.literal("browser_input_state"),
+    session_id: z.string().min(1).max(128),
+    input_epoch: z.number().int().min(1).max(9007199254740991),
+    control_epoch: z.number().int().min(0).max(9007199254740991),
+    offer_id: z.number().int().min(1).max(9007199254740991),
+    state: z.enum(["connecting", "ready", "failed", "closed"]),
+    reason: z.string().max(512).optional(),
+  })
+  .strict();
+
+export const BrowserInputControlAckFrame = z
+  .object({
+    type: z.literal("browser_input_control_ack"),
+    session_id: z.string().min(1).max(128),
+    input_epoch: z.number().int().min(0).max(9007199254740991),
+    control_epoch: z.number().int().min(0).max(9007199254740991),
+    ok: z.boolean(),
+    reason: z.string().max(512).optional(),
+    capture_id: z.string().min(1).max(128).optional(),
+    capture_generation: z.number().int().min(1).max(9007199254740991).optional(),
+  })
+  .strict();
+
 // ── WS frame discriminated union ─────────────────────────────────────────────
 
 export const WsFrame = z.discriminatedUnion("type", [
@@ -1015,6 +1075,10 @@ export const WsFrame = z.discriminatedUnion("type", [
   LoopStatusFrame,
   PlanStatusFrame,
   JudgeVerdictFrame,
+  BrowserInputOfferFrame,
+  BrowserInputAnswerFrame,
+  BrowserInputStateFrame,
+  BrowserInputControlAckFrame,
 ]);
 
 export type WsFrameType = z.infer<typeof WsFrameType>;

@@ -38,3 +38,7 @@ enum:
   # ── Server → client (internal / ack) ────────────────────────────────────────
   - session_close_ack
   - device_pairing_request
+  - browser_input_offer
+  - browser_input_answer
+  - browser_input_state
+  - browser_input_control_ack

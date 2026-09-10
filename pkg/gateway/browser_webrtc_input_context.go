@@ -12,6 +12,7 @@ import (
 )
 
 type webRTCInputRouteKey struct{}
+type disabledMediaInputKey struct{}
 
 type webRTCInputRoute struct {
 	manager        *browser.BrowserManager
@@ -48,6 +49,9 @@ func newWebRTCContextInputSink(validateInbound bool) webrtc.ContextInputSink {
 func newWebRTCContextInputSinkWithDispatch(validateInbound bool, dispatch func(context.Context, *browser.BrowserManager, string, string, browser.LiveInput) error) webrtc.ContextInputSink {
 	return func(ctx context.Context, viewerID string, raw []byte) {
 		if ctx == nil || ctx.Err() != nil {
+			return
+		}
+		if disabled, _ := ctx.Value(disabledMediaInputKey{}).(bool); disabled {
 			return
 		}
 		route, ok := ctx.Value(webRTCInputRouteKey{}).(webRTCInputRoute)

@@ -17,3 +17,11 @@ properties:
     enum:
       - take
       - release
+  input_epoch:
+    type: integer
+    minimum: 0
+    maximum: 9007199254740991
+  control_epoch:
+    type: integer
+    minimum: 0
+    maximum: 9007199254740991

@@ -702,3 +702,34 @@ describe('browser input backpressure', () => {
     conn.close()
   })
 })
+
+describe('dedicated input attachment', () => {
+  it('selects one route and fences every ordered control before sending it', () => {
+    let epoch = 0
+    const beforeControl = vi.fn(() => ({ input_epoch: 3, control_epoch: ++epoch }))
+    const conn = new BrowserLiveWsConnection('s', 'a', makeCallbacks(), { mode: 'dedicated', beforeControl })
+    conn.connect(); openSocket()
+    expect(sentFrames()).toEqual([{ type: 'browser_attach', session_id: 's', agent_id: 'a', input_mode: 'dedicated' }])
+    expect(conn.sendInput({ kind: 'text', text: 'no fallback' })).toBe(false)
+    conn.sendControl('take'); conn.sendTabAction('open'); conn.sendViewport(800, 600, 1); conn.sendInput({ kind: 'navigate', url: 'https://example.com' })
+    expect(sentFrames().slice(1)).toEqual([
+      { type: 'browser_control', action: 'take', input_epoch: 3, control_epoch: 1 },
+      { type: 'browser_tab_action', session_id: 's', agent_id: 'a', action: 'open', input_epoch: 3, control_epoch: 2 },
+      { type: 'browser_viewport', session_id: 's', agent_id: 'a', width: 800, height: 600, device_scale_factor: 1, input_epoch: 3, control_epoch: 3 },
+      { type: 'browser_input', kind: 'navigate', url: 'https://example.com', input_epoch: 3, control_epoch: 4 },
+    ])
+    conn.close()
+  })
+  it('routes separately validated input answers and acknowledgments', () => {
+    const callbacks = { ...makeCallbacks(), onInputAnswer: vi.fn(), onInputControlAck: vi.fn() }
+    const conn = new BrowserLiveWsConnection('s', 'a', callbacks)
+    conn.connect(); openSocket()
+    const answer = { type: 'browser_input_answer', session_id: 's', offer_id: 1, input_epoch: 1, control_epoch: 0, sdp: 'answer' }
+    const ack = { type: 'browser_input_control_ack', session_id: 's', input_epoch: 1, control_epoch: 1, ok: true }
+    for (const frame of [answer, ack, { ...answer, input_epoch: -1 }]) lastWsInstance.onmessage?.({ data: JSON.stringify(frame) })
+    expect(callbacks.onInputAnswer.mock.calls).toEqual([[answer]])
+    expect(callbacks.onInputControlAck.mock.calls).toEqual([[ack]])
+    expect(callbacks.onWebRTCAnswer).not.toHaveBeenCalled()
+    conn.close()
+  })
+})

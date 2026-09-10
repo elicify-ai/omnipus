@@ -135,6 +135,8 @@ func dropContext(sessionID, viewerID, label string) string {
 // The StatusSink/ControlSink/TabsSink callbacks still touch nothing here,
 // only wc.sendCriticalGen, which is channel-safe.
 type browserConnState struct { // not-wire-format: internal connection bookkeeping, never marshaled.
+	inputMu sync.Mutex
+	input   *browserDedicatedInput
 	// attachMu guards mgr, sessionID, attachEpoch and the viewport-refusal
 	// throttle pair below. Deliberately NOT webrtcMu: the two protect
 	// independent lifecycles (a session attachment vs a WebRTC viewer) that
@@ -1065,6 +1067,7 @@ func (h *BrowserWSHandler) readLoop(
 		// committed just before we invalidated — and returns non-nil to
 		// exactly one of the two paths, so the viewer is detached once and
 		// only once.
+		state.setDedicatedInput(false)
 		state.work.close()
 		state.commands.close()
 		state.invalidateAttach()
@@ -1133,6 +1136,13 @@ func (h *BrowserWSHandler) readLoop(
 			}
 		}
 
+		if state.dedicatedInput() != nil {
+			switch typ.Type {
+			case "browser_input", "browser_control", "browser_tab_action", "browser_viewport":
+				h.dispatchDedicatedControl(wc, &state, viewerID, userID, data, typ.Type, cfg)
+				continue
+			}
+		}
 		switch typ.Type {
 		case string(generated.WsFrameTypeBrowserAttach):
 			// FIX WAVE B finding A: dispatched onto this connection's serial
@@ -1166,6 +1176,8 @@ func (h *BrowserWSHandler) readLoop(
 			// may not have committed to state.webrtc yet, but this explicit
 			// detach must still invalidate it.
 			h.detachWebRTCViewer(&state, viewerID)
+		case "browser_input_offer":
+			h.dispatchDedicatedInputOffer(wc, &state, viewerID, data, cfg)
 		case string(generated.WsFrameTypeBrowserWebrtcOffer):
 			// FIX WAVE A finding 1: dispatched onto its own goroutine
 			// (dispatchWebRTCOffer, browser_webrtc.go) rather than handled
@@ -1215,6 +1227,12 @@ func (h *BrowserWSHandler) dispatchAttach(
 	cfg *config.Config,
 ) {
 	epoch := state.beginAttach()
+	var attach generated.BrowserAttachFrame
+	if err := json.Unmarshal(data, &attach); err == nil {
+		state.setDedicatedInput(attach.InputMode != nil && *attach.InputMode == "dedicated")
+	} else {
+		state.setDedicatedInput(false)
+	}
 	state.work.submit(&h.activeConns, workKindAttach, func() {
 		h.handleAttach(wc, state, viewerID, userID, data, cfg, epoch)
 	})
@@ -1458,6 +1476,9 @@ func (h *BrowserWSHandler) handleInputContext(ctx context.Context, wc *browserWS
 		in.Timing = &browser.LiveInputTimingObserver{Observe: probe.mark}
 	}
 	inputErr := mgr.Live().InputContext(ctx, panelSessionID, viewerID, in)
+	if inputErr == nil {
+		markBrowserInputControlSuccess(ctx)
+	}
 	if probe != nil {
 		probe.outcome = "completed"
 		if inputErr != nil {
@@ -1645,6 +1666,7 @@ func (h *BrowserWSHandler) handleControlContext(ctx context.Context, wc *browser
 				dropContext(chatSessionID, viewerID, "control-take-denied"))
 			return
 		}
+		markBrowserInputControlSuccess(ctx)
 		h.auditControl(userID, chatSessionID, viewerID, audit.SeverityInfo, "take")
 		controller := userID
 		sendResult(generated.BrowserStatusFrame{
@@ -1657,6 +1679,7 @@ func (h *BrowserWSHandler) handleControlContext(ctx context.Context, wc *browser
 		if !state.withCommandAttachment(ctx, attachment, func() { mgr.Live().ReleaseControl(panelSessionID, viewerID) }) {
 			return
 		}
+		markBrowserInputControlSuccess(ctx)
 		h.auditRelease(userID, chatSessionID, viewerID)
 		sendResult(generated.BrowserStatusFrame{
 			Type:      string(generated.WsFrameTypeBrowserStatus),
@@ -1748,6 +1771,8 @@ func (h *BrowserWSHandler) handleTabActionContext(ctx context.Context, wc *brows
 			}
 			sendResult(operationErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
 				dropContext(chatSessionID, viewerID, "tab-switch-failed"))
+		} else {
+			markBrowserInputControlSuccess(ctx)
 		}
 	case "close":
 		if frame.Index == nil {
@@ -1761,6 +1786,8 @@ func (h *BrowserWSHandler) handleTabActionContext(ctx context.Context, wc *brows
 			}
 			sendResult(operationErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
 				dropContext(chatSessionID, viewerID, "tab-close-failed"))
+		} else {
+			markBrowserInputControlSuccess(ctx)
 		}
 	case "open":
 		if _, err := mgr.OpenTabContext(ctx, panelSessionID); err != nil {
@@ -1769,6 +1796,8 @@ func (h *BrowserWSHandler) handleTabActionContext(ctx context.Context, wc *brows
 			}
 			sendResult(operationErrorStatus(chatSessionID, fmt.Sprintf("browser_tab_action: %s", err)),
 				dropContext(chatSessionID, viewerID, "tab-open-failed"))
+		} else {
+			markBrowserInputControlSuccess(ctx)
 		}
 	default:
 		sendResult(operationErrorStatus("", fmt.Sprintf("browser_tab_action: unknown action %q", frame.Action)),
@@ -1811,6 +1840,7 @@ func tabsToBrowserTabsWire(tabs []browser.Tab) []browserTabWire {
 
 // handleDetach unbinds this connection from its current live view.
 func (h *BrowserWSHandler) handleDetach(wc *browserWSConn, state *browserConnState, viewerID, userID string) {
+	state.setDedicatedInput(false)
 	// Unconditional, and BEFORE the clear — the same discipline
 	// detachWebRTCViewer applies with invalidateWebRTCOffer, for the same
 	// reason: a browser_attach dispatched onto the worker may still be
@@ -1969,6 +1999,9 @@ func (h *BrowserWSHandler) handleViewportContext(ctx context.Context, wc *browse
 	}
 	dsf = max(1, min(dsf, maxDeviceScaleFactor))
 	_, err := mgr.Live().SetViewportContext(ctx, panelSessionID, frame.Width, frame.Height, dsf)
+	if err == nil {
+		markBrowserInputControlSuccess(ctx)
+	}
 	if err != nil && !commandWasSuperseded(ctx, attachment) {
 		slog.Warn("browser-ws: viewport resize failed", "error", err, "viewer_id", viewerID)
 		sendFailure("could not resize the browser viewport", "viewport-failed")
