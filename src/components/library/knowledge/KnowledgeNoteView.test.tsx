@@ -19,7 +19,12 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-import { KnowledgeNoteView, findSkipForTarget, noteAncestorDirs } from './KnowledgeNoteView'
+import {
+  KnowledgeNoteView,
+  findSkipForTarget,
+  directorySkipMakesBareAbsenceUnproven,
+  noteAncestorDirs,
+} from './KnowledgeNoteView'
 import type { KnowledgeGraphLoader } from './KnowledgeBacklinks'
 import type { KnowledgeOutlineLoader } from './KnowledgeOutline'
 import type {
@@ -190,6 +195,54 @@ describe('findSkipForTarget (unit, ADR-083 EMB-021)', () => {
   it('reports no match when nothing in the skip list corresponds (the ordinary case)', () => {
     expect(findSkipForTarget([skip({ path: 'unrelated/dir' })], 'notes/plan.md')).toBeUndefined()
     expect(findSkipForTarget([], 'notes/plan.md')).toBeUndefined()
+  })
+})
+
+describe('directorySkipMakesBareAbsenceUnproven (unit) — a bare wikilink into a skipped directory', () => {
+  it('is defined for a BARE target when the answer holds a directory-capable skip', () => {
+    // `plan` names no folder at all — `findSkipForTarget`'s own clause 3
+    // needs a "/" to test as a prefix and has none here, which is exactly
+    // the gap this function exists to cover.
+    expect(
+      directorySkipMakesBareAbsenceUnproven([skip({ path: 'notes/private', reason: 'unreadable' })], 'plan'),
+    ).toBeDefined()
+  })
+
+  it('is defined for a symlink or outside_root skip too — both can name a directory', () => {
+    expect(
+      directorySkipMakesBareAbsenceUnproven([skip({ path: 'notes/shared', reason: 'symlink' })], 'plan'),
+    ).toBeDefined()
+    expect(
+      directorySkipMakesBareAbsenceUnproven([skip({ path: 'notes/escaped', reason: 'outside_root' })], 'plan'),
+    ).toBeDefined()
+  })
+
+  it('is undefined for a target naming a folder — that case is findSkipForTarget’s own three clauses', () => {
+    expect(
+      directorySkipMakesBareAbsenceUnproven([skip({ path: 'notes/private', reason: 'unreadable' })], 'notes/plan'),
+    ).toBeUndefined()
+  })
+
+  it('is undefined with no skips at all — the DoD control (no over-fire)', () => {
+    expect(directorySkipMakesBareAbsenceUnproven([], 'plan')).toBeUndefined()
+  })
+
+  it('is undefined when every skip present is NOT directory-capable — proves the reason filter, not just emptiness', () => {
+    // `not_addressable` (a socket/device/FIFO) is a leaf by definition; it
+    // cannot be hiding a subtree with some OTHER, differently-named file in
+    // it, so it must not cast doubt on an unrelated bare target's absence.
+    expect(
+      directorySkipMakesBareAbsenceUnproven([skip({ path: 'notes/weird-file', reason: 'not_addressable' })], 'plan'),
+    ).toBeUndefined()
+    // node_limit/hop_limit are neighbourhood traversal bounds, not an I/O
+    // skip of content — "the walk stopped here", not "the walk could not
+    // read what is here".
+    expect(
+      directorySkipMakesBareAbsenceUnproven([skip({ path: 'notes/far-away', reason: 'node_limit' })], 'plan'),
+    ).toBeUndefined()
+    expect(
+      directorySkipMakesBareAbsenceUnproven([skip({ path: 'notes/far-away', reason: 'hop_limit' })], 'plan'),
+    ).toBeUndefined()
   })
 })
 
@@ -552,6 +605,62 @@ describe('KnowledgeNoteView — the embed resolver (ADR-083 EMB-011 through EMB-
       const el = screen.getByTestId('markdown-link')
       expect(el.getAttribute('data-kb-unresolved')).toBe('true')
       expect(el.textContent ?? '').toContain('private/plan')
+    })
+  })
+
+  it('renders indeterminate for a BARE wikilink into an unreadable directory — no folder for clause 3 to test as a prefix', async () => {
+    // `![[plan]]` — no folder, Obsidian's ORDINARY spelling for "somewhere
+    // in the collection" — into a directory the walk could not list. The
+    // only skip in the answer names the ENCLOSING DIRECTORY ("notes/private"),
+    // not "plan" itself: findSkipForTarget's clause 1 (path equality) and
+    // clause 2 (basename equality) both compare against "private", and
+    // clause 3 (ancestor prefix) has no "/" in the bare target to test a
+    // prefix against at all. Absence here is not proven.
+    const loadGraph = vi.fn(async (req: { kind: string }) =>
+      req.kind === 'links'
+        ? graph({
+            kind: 'links',
+            nodes: [],
+            edges: [embedEdge({ to_path: 'plan', link_text: 'plan', resolution: 'unresolved' })],
+            skipped: [skip({ path: 'notes/private', reason: 'unreadable' })],
+          })
+        : graph(),
+    ) as unknown as KnowledgeGraphLoader
+
+    renderEmbedNote({ content: '![[plan]]', loadGraph })
+
+    await waitFor(() => {
+      const el = screen.getByTestId('markdown-link')
+      expect(el.getAttribute('data-kb-embed-state')).toBe('indeterminate')
+      expect(el.getAttribute('data-kb-unresolved')).toBeNull()
+      expect(el.getAttribute('title') ?? '').toMatch(/could not look inside/i)
+    })
+  })
+
+  it('still reports absence for a bare wikilink when no skip in the answer is directory-capable (does not over-fire)', async () => {
+    // A skip IS present, so a check that fires on "any skip at all" would
+    // wrongly render this indeterminate too. "not_addressable" names a
+    // socket/device/FIFO — a leaf by definition, incapable of hiding a
+    // DIFFERENTLY-named file — so it must cast no doubt on "ghost"'s
+    // absence.
+    const loadGraph = vi.fn(async (req: { kind: string }) =>
+      req.kind === 'links'
+        ? graph({
+            kind: 'links',
+            nodes: [],
+            edges: [embedEdge({ to_path: 'ghost', link_text: 'ghost', resolution: 'unresolved' })],
+            skipped: [skip({ path: 'notes/weird-device', reason: 'not_addressable' })],
+          })
+        : graph(),
+    ) as unknown as KnowledgeGraphLoader
+
+    renderEmbedNote({ content: '![[ghost]]', loadGraph })
+
+    await waitFor(() => {
+      const el = screen.getByTestId('markdown-link')
+      expect(el.getAttribute('data-kb-unresolved')).toBe('true')
+      expect(el.getAttribute('data-kb-embed-state')).toBeNull()
+      expect(el.textContent ?? '').toContain('ghost')
     })
   })
 

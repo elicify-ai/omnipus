@@ -193,6 +193,54 @@ export function findSkipForTarget(
   return undefined
 }
 
+/**
+ * `findSkipForTarget`'s three clauses all need a PATH to compare against a
+ * skip's own path — clause 3 (the one that reaches into a directory) tests a
+ * `/` prefix, and a bare wikilink target such as `plan` (no folder at all —
+ * Obsidian's ordinary spelling, not an edge case) has none. So a skip naming
+ * only the enclosing directory (`notes/private`, reason `unreadable`) never
+ * matches `plan` under any clause: clause 1 and 2 compare against
+ * `notes/private`'s own path/basename ("private"), and clause 3 has no `/`
+ * in the target to test a prefix against. The miss then reads as confident
+ * absence — "no file in this collection matches 'plan'" — about a file the
+ * walk never actually got to look for, because it could be sitting inside
+ * exactly the directory that skip names.
+ *
+ * This is a DIFFERENT gap from EMB-021's: `findSkipForTarget` answers "does
+ * a skip name (or contain) THIS path"; this answers "could ANY skip be
+ * hiding a file with THIS bare name, given that the walk could not fully
+ * enumerate everything". While the answer contains a skip capable of hiding
+ * a whole, arbitrarily-named subtree, a bare basename's absence is NOT
+ * proven and MUST render indeterminate rather than absent.
+ *
+ * Deliberately excluded from "capable of hiding a subtree": `not_addressable`
+ * (a socket/device/FIFO — a leaf by definition, it has no children) and
+ * `node_limit`/`hop_limit` (neighbourhood traversal bounds, not an I/O skip
+ * of collection content — they say "the walk stopped here", not "the walk
+ * could not read what is here"). Neither casts any doubt on a DIFFERENT bare
+ * name elsewhere in the same answer, so treating either as directory-capable
+ * would make an ordinary, provable absence report as indeterminate for no
+ * reason connected to that absence at all.
+ */
+const DIRECTORY_CAPABLE_SKIP_REASONS: ReadonlySet<KnowledgeGraphSkip['reason']> = new Set([
+  'unreadable',
+  'symlink',
+  'outside_root',
+])
+
+/** Returns the first skip (if any) that makes a BARE basename's absence
+ *  unprovable per the rule above. `undefined` for a target that names a
+ *  folder (findSkipForTarget's own clauses already cover that path-bearing
+ *  case) and for a bare target when nothing in `skipped` could be hiding a
+ *  subtree. */
+export function directorySkipMakesBareAbsenceUnproven(
+  skipped: readonly KnowledgeGraphSkip[],
+  target: string,
+): KnowledgeGraphSkip | undefined {
+  if (target.includes('/')) return undefined
+  return skipped.find((s) => DIRECTORY_CAPABLE_SKIP_REASONS.has(s.reason))
+}
+
 /** EMB-011's match key: an embed edge and a plain-link edge to the identical
  *  target are different facts, so `embed` is checked first, then the written
  *  target (link_text, the resolved to_path, or its basename — the same
@@ -292,6 +340,19 @@ function resolveEmbedAgainstGraph(
     // is the conservative, non-regressing default.
     if (edge.unresolved_reason === 'outside_root') {
       return { state: 'unresolved', outsideRoot: true, reason: 'this target is outside the collection root' }
+    }
+    // A BARE target (no folder — Obsidian's ordinary `![[plan]]` spelling)
+    // that findSkipForTarget above could not place against any skip's own
+    // path is not yet proven absent while the answer holds a skip capable
+    // of hiding an arbitrarily-named subtree: the walk may simply never
+    // have been able to look for it. See directorySkipMakesBareAbsenceUnproven's
+    // own doc for why this is a distinct gap from EMB-021's three clauses.
+    const bareSkip = directorySkipMakesBareAbsenceUnproven(graph.skipped, target)
+    if (bareSkip) {
+      return {
+        state: 'indeterminate',
+        reason: `"${target}" names no folder, and this collection has a directory this answer could not look inside (${describeSkip(bareSkip)}) — its absence is not proven`,
+      }
     }
     return { state: 'unresolved', reason: `no file in this collection matches "${target}"` }
   }

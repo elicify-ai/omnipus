@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -1752,11 +1753,12 @@ func (t *ReadTool) gather(
 		if gerr != nil {
 			return nil, fmt.Errorf("building link graph: %w", gerr)
 		}
+		skipped := g.Skipped()
 		if included[ReadIncludeLinks] {
-			data.Links = toReadLinks(g.Links(notePath), false)
+			data.Links = toReadLinks(g.Links(notePath), skipped, false)
 		}
 		if included[ReadIncludeBacklinks] {
-			data.Backlinks = toReadLinks(g.Backlinks(notePath), true)
+			data.Backlinks = toReadLinks(g.Backlinks(notePath), skipped, true)
 		}
 	}
 	return data, nil
@@ -1798,12 +1800,18 @@ func (t *ReadTool) splitFrontmatter(content []byte) (bodyStart int, fm records.F
 }
 
 // toReadLinks projects graph.go's ResolvedLink into knowledge_read's own render
-// shape.
-func toReadLinks(in []ResolvedLink, backlinks bool) []ReadLink {
+// shape. `skipped` is the SAME walk-skip set g.Skipped() reports for the
+// whole collection, threaded through so EMB-021a's cross-check can run: a
+// link this loop marks unresolved is, BEFORE this function existed, always
+// rendered by renderReadLinks as plainly "(unresolved) … no_match" — exactly
+// the false claim of absence EMB-021 already corrected on the reader
+// (KnowledgeNoteView.tsx's resolveEmbedAgainstGraph). Founder decision D-B:
+// the same honesty is owed to the agent surface, not the reader alone.
+func toReadLinks(in []ResolvedLink, skipped []SkippedEntry, backlinks bool) []ReadLink {
 	_ = backlinks // both directions render through the same projection
 	out := make([]ReadLink, 0, len(in))
 	for _, l := range in {
-		out = append(out, ReadLink{
+		rl := ReadLink{
 			To:         l.To,
 			From:       l.From,
 			Form:       l.Raw,
@@ -1815,9 +1823,95 @@ func toReadLinks(in []ResolvedLink, backlinks bool) []ReadLink {
 			Ambiguous:  l.Ambiguous,
 			Candidates: l.Candidates,
 			Line:       l.Line,
-		})
+		}
+		if l.State == ResolveUnresolved {
+			if entry, ok := findSkipForLinkTarget(skipped, unresolvedLinkTarget(l)); ok {
+				rl.SkipReason = describeSkippedEntry(entry)
+			}
+		}
+		out = append(out, rl)
 	}
 	return out
+}
+
+// unresolvedLinkTarget is the text EMB-021a's cross-check matches against the
+// skip list for an UNRESOLVED link — mirroring
+// pkg/gateway/rest_knowledge.go's knowledgeEdgeTarget, the identical
+// fallback the wire's to_path already uses for an unresolved edge (the
+// resolver never wrote ResolvedLink.To for one, so it is always empty here).
+// Preferring Target over Raw matches the reader: Target is the link's own
+// destination text with any alias/anchor already stripped, which is what a
+// skip's path is compared against; Raw (brackets and all) is the last resort
+// for the pathological case of a target that failed to parse into one at
+// all.
+func unresolvedLinkTarget(l ResolvedLink) string {
+	if t := strings.TrimSpace(l.Target); t != "" {
+		return t
+	}
+	return strings.TrimSpace(l.Raw)
+}
+
+// findSkipForLinkTarget applies EMB-021's three clauses — the SAME rule
+// KnowledgeNoteView.tsx's findSkipForTarget implements for the reader
+// surface — against knowledge_read's own graph.Skipped() set, so the agent
+// surface reaches the identical verdict the reader already does (EMB-021a).
+// Every comparison runs on normalised, "/"-separated, collection-relative
+// paths. A skip entry matches when any of:
+//
+//  1. Path equality — the skip's path equals the target.
+//  2. Basename equality — the skip path's final segment equals the target's,
+//     with and without a markdown extension.
+//  3. Ancestor prefix, on a full path-segment boundary — the skip's path
+//     names a directory that is a proper ancestor of the target. A bare
+//     basename match is clause 2's job, never clause 3's: "notes/priv" must
+//     never suppress a target under "notes/private/".
+func findSkipForLinkTarget(skipped []SkippedEntry, target string) (SkippedEntry, bool) {
+	target = normalizeRel(target)
+	if target == "" {
+		return SkippedEntry{}, false
+	}
+	targetBase := path.Base(target)
+	for _, s := range skipped {
+		skipPath := normalizeRel(s.RelPath)
+		if skipPath == "" {
+			continue
+		}
+		if skipPath == target { // 1. path equality
+			return s, true
+		}
+		skipBase := path.Base(skipPath)
+		if skipBase == targetBase || trimMarkdownExt(skipBase) == trimMarkdownExt(targetBase) { // 2. basename equality
+			return s, true
+		}
+		if strings.HasPrefix(target, skipPath+"/") { // 3. ancestor prefix, segment-bounded
+			return s, true
+		}
+	}
+	return SkippedEntry{}, false
+}
+
+// describeSkippedEntry renders one SkippedEntry in EMB-021a's terms — the
+// Go-side counterpart of KnowledgeNoteView.tsx's SKIP_REASON_TEXT/
+// describeSkip, kept in the same four-reason wording so an agent and a human
+// reader are told the identical fact about the identical skip.
+func describeSkippedEntry(s SkippedEntry) string {
+	var base string
+	switch s.Reason {
+	case SkipSymlink:
+		base = "a symbolic link Omnipus did not follow"
+	case SkipOutsideRoot:
+		base = "a target outside the collection root"
+	case SkipUnreadable:
+		base = "a file or folder Omnipus could not read"
+	case SkipIrregular:
+		base = "a name Omnipus cannot address on this platform"
+	default:
+		base = string(s.Reason)
+	}
+	if s.Detail != "" {
+		return fmt.Sprintf("%s (%s)", base, s.Detail)
+	}
+	return base
 }
 
 // parseReadInclude reads `include`, refusing a member outside ReadIncludeOrder

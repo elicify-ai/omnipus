@@ -127,9 +127,20 @@ type ReadLink struct {
 	// ResolvedLink.Link.Embed, which toReadLinks used to drop entirely
 	// (founder decision D-B — the agent surface owes the same honesty the
 	// reader does).
-	Embed      bool
-	Resolved   bool
-	Reason     string
+	Embed    bool
+	Resolved bool
+	Reason   string
+	// SkipReason is EMB-021a's agent-surface half of the honesty guarantee
+	// EMB-021 gives the reader: non-empty ONLY when this link is unresolved
+	// AND the walk-skip cross-check (toReadLinks, the same three clauses
+	// KnowledgeNoteView.tsx's findSkipForTarget applies on the reader —
+	// path equality, basename equality, ancestor-prefix) found a skipped
+	// entry covering this target. When set, the target's absence was never
+	// actually observed — the walk simply could not look there — so
+	// renderReadLinks reports "could not be checked" with this text
+	// instead of the ordinary "(unresolved) … Reason" rendering. Empty for
+	// every resolved link and for an unresolved link no skip explains.
+	SkipReason string
 	Ambiguous  bool
 	Candidates []string
 	Line       int
@@ -316,6 +327,20 @@ func renderReadLinks(b *strings.Builder, label string, links []ReadLink, backlin
 			tag = "embed"
 		}
 		switch {
+		case !l.Resolved && l.SkipReason != "":
+			// EMB-021a: the same cross-check the reader applies (EMB-021) —
+			// a walk-skipped target is reported as could-not-be-checked,
+			// with the skip's own reason, NEVER as plainly unresolved.
+			// Checked ahead of the ordinary unresolved case below so a
+			// skip-derived explanation always wins over whatever
+			// UnresolvedReason toReadLinks also set on the same ReadLink
+			// (typically "no_match" — the very claim this branch exists to
+			// avoid printing about a target the walk never actually saw).
+			checkedTag := "could not be checked"
+			if tag != "" {
+				checkedTag = checkedTag + " " + tag
+			}
+			fmt.Fprintf(b, "  %s (%s) %s — %s", arrow, checkedTag, l.Form, l.SkipReason)
 		case !l.Resolved:
 			unresolvedTag := "unresolved"
 			if tag != "" {
