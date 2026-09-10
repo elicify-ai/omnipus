@@ -49,15 +49,10 @@ properties:
       comparison and the write happen inside one acquisition of the same
       lock the agent write path takes.
 
-      NOT YET in this schema's "required" list — deliberately, and
-      temporarily. Flipping it to required breaks TypeScript compilation
-      for every existing caller in the same change (the PDF annotation
-      editor's save call, the plain-text editor's save call, and their
-      test fixtures), because none of them sends this field today
-      (EMB-007c names the callers). That migration is out of scope for
-      the contract-only change that introduced this field. The next wave
-      MUST add expect_version to this schema's "required" array in the
-      SAME commit that updates every caller to send it — see EMB-007c for
-      the exact call sites — so the schema and its callers never disagree
-      about whether the field is optional.
+      This field is REQUIRED (see the top-level "required" list above)
+      — every caller, including the PDF annotation editor's save call and
+      the plain-text editor's save call, now sends it (EMB-007c). The 409
+      LibraryConflictError response carries both the expected_version the
+      caller sent and the file's current actual_version, so a caller can
+      reload, merge, and retry.
     example: "v1:9f2a7c40"
