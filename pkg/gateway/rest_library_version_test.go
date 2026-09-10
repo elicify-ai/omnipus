@@ -1023,7 +1023,7 @@ func TestLibraryWriteRefusals_AuditReasonsAreDistinct(t *testing.T) {
 	assert.Empty(t, allow, "%+v", allow)
 	require.Len(t, refused, 3, "every refused save must be recorded, one row each")
 
-	var reasons []string
+	reasons := make([]string, 0, len(refused))
 	for _, e := range refused {
 		details, ok := e["details"].(map[string]any)
 		require.True(t, ok, "entry carries no details object: %+v", e)

@@ -566,15 +566,15 @@ func libraryETagValue(token knowledge.VersionToken) string {
 	return `"` + string(token) + `"`
 }
 
-// libraryConflictErr wraps a typed LibraryConflictError so it can travel out
+// libraryConflictError wraps a typed LibraryConflictError so it can travel out
 // of a knowledge.WithNoteWriteLock closure as an error and be told apart, by
 // errors.As, from a *knowledge.LockTimeoutError or a library.Err* the same
 // closure's own write can still produce.
-type libraryConflictErr struct {
+type libraryConflictError struct {
 	body *gen.LibraryConflictError
 }
 
-func (e *libraryConflictErr) Error() string { return e.body.Error }
+func (e *libraryConflictError) Error() string { return e.body.Error }
 
 // checkLibraryVersion is the Library door's compare half of EMB-006's
 // compare-and-swap — the same four-branch decision as pkg/knowledge/
@@ -594,7 +594,7 @@ func (e *libraryConflictErr) Error() string { return e.body.Error }
 // check". A comparison that let TokenAbsent through unconditionally would
 // make every accepted write on an existing file a silent last-writer-wins,
 // exactly the door EMB-006 exists to close.
-func checkLibraryVersion(relPath, expectedBare string, current knowledge.NoteVersion) *libraryConflictErr {
+func checkLibraryVersion(relPath, expectedBare string, current knowledge.NoteVersion) *libraryConflictError {
 	if current.Exists {
 		if expectedBare == string(current.Token) {
 			return nil
@@ -607,7 +607,7 @@ func checkLibraryVersion(relPath, expectedBare string, current knowledge.NoteVer
 	return newLibraryConflictErr(relPath, expectedBare, "")
 }
 
-func newLibraryConflictErr(relPath, expected, actual string) *libraryConflictErr {
+func newLibraryConflictErr(relPath, expected, actual string) *libraryConflictError {
 	body := &gen.LibraryConflictError{
 		Path: relPath,
 		Code: gen.LibraryVersionConflict,
@@ -623,13 +623,13 @@ func newLibraryConflictErr(relPath, expected, actual string) *libraryConflictErr
 		body.ActualVersion = &act
 		body.Error = fmt.Sprintf("library: %s changed on disk since you opened it", relPath)
 	}
-	return &libraryConflictErr{body: body}
+	return &libraryConflictError{body: body}
 }
 
 // handleLibraryWriteLockErr resolves the outcome of a compare-and-swap write
 // performed inside knowledge.WithNoteWriteLock (EMB-006) and writes the
 // matching HTTP response. nil is success — the caller continues and writes
-// its own 200 body. A *libraryConflictErr is written as 409 with the typed
+// its own 200 body. A *libraryConflictError is written as 409 with the typed
 // LibraryConflictError body (EMB-002). A *knowledge.LockTimeoutError
 // (FR-108's bound) is written as 503, so a lock hang becomes an actionable
 // retry rather than looking like the request hung. Anything else — most
@@ -652,7 +652,7 @@ func handleLibraryWriteLockErr(
 	if err == nil {
 		return "", true
 	}
-	var conflict *libraryConflictErr
+	var conflict *libraryConflictError
 	if errors.As(err, &conflict) {
 		writeJSON(w, http.StatusConflict, conflict.body)
 		return libraryRefusalVersionConflict, false
