@@ -325,7 +325,7 @@ func TestContract_RecordValue_NumericFieldsAreStringsNotNumbers(t *testing.T) {
 		f, ok := jsonField(typ, field)
 		require.True(t, ok, "RecordValue must carry a %q field", field)
 		kind := f.Type.Kind()
-		if kind == reflect.Ptr {
+		if kind == reflect.Pointer {
 			kind = f.Type.Elem().Kind()
 		}
 		assert.Equal(t, reflect.String, kind,

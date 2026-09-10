@@ -379,9 +379,9 @@ func TestReadFileVersion_MatchesReadContentBytes_G1c(t *testing.T) {
 		t.Fatalf("OpenFileForDownload: %v", err)
 	}
 	downloaded := make([]byte, fi.Size())
-	if _, err := f.Read(downloaded); err != nil {
+	if _, readErr := f.Read(downloaded); readErr != nil {
 		f.Close()
-		t.Fatalf("read downloaded bytes: %v", err)
+		t.Fatalf("read downloaded bytes: %v", readErr)
 	}
 	f.Close()
 	if string(downloaded) != body {

@@ -237,7 +237,6 @@ func TestKnowledgeEdgeUnresolvedReason_MapsEveryGoConstant(t *testing.T) {
 	}
 
 	for _, r := range reasons {
-		r := r
 		t.Run(string(r), func(t *testing.T) {
 			wantWire, known := want[r]
 			require.True(t, known,

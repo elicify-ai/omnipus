@@ -478,7 +478,7 @@ func probeListElementField(path string, sample any, listField, elemField string)
 		return c
 	}
 	t := f.Type
-	for t != nil && (t.Kind() == reflect.Ptr || t.Kind() == reflect.Slice || t.Kind() == reflect.Array) {
+	for t != nil && (t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice || t.Kind() == reflect.Array) {
 		t = t.Elem()
 	}
 	_, has := wireFieldIn(t, elemField)
@@ -491,7 +491,7 @@ func probeListElementField(path string, sample any, listField, elemField string)
 func probeOptionalType() wireCap {
 	c := wireCap{Path: "ViewDef.type (optional — omit it for an untyped view)"}
 	f, ok := wireField(generated.ViewDef{}, "type")
-	c.Present = ok && f.Type.Kind() == reflect.Ptr
+	c.Present = ok && f.Type.Kind() == reflect.Pointer
 	return c
 }
 
