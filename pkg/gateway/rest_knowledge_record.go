@@ -11,8 +11,11 @@
 package gateway
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -566,33 +569,158 @@ func (a *restAPI) handleKnowledgeRecordWrite(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	var req gen.RecordWriteRequest
+	// THE OPERATION IS DECLARED, NEVER INFERRED (the create/update split).
+	//
+	// This used to decode one flat RecordWriteRequest and then ask `if req.Id
+	// != nil` to decide what the caller meant. Under that shape an UPDATE
+	// that lost its `id` — a client bug, a dropped field, an upstream
+	// response whose shape changed — was not an error: it was a valid
+	// CREATE. It wrote a duplicate note at whatever `path` was set, silently
+	// discarded the `version_token` the caller had supplied precisely to
+	// protect against a concurrent write, and answered 201. Nothing in the
+	// contract could refuse it, because nothing in the contract said which
+	// of the two operations the caller wanted.
+	//
+	// So `mode` says. The dispatch below is the ADR-034 pattern (peek the
+	// discriminator from the RAW body, then strictly decode into the NAMED
+	// variant struct, never through the generated union wrapper's accessors)
+	// — the same one createAgent uses for AgentCreateRequest, and the same
+	// one CLAUDE.md Constraint #8 requires of every discriminated union here.
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
-	if !decodeAndValidate(w, r, "RecordWriteRequest", &req, validateEnabled) {
-		// decodeAndValidate has already written the 400. Audited here because
-		// the refused population is what answers "was anything attempted
-		// against this vault" (review H4), and a malformed-body flood is
-		// exactly the case where that question gets asked.
-		a.logRecordWriteRefusedAs(r, actor, workspaceID, "", "", "", recordRefusalInvalidRequest)
+
+	// 1 MB, matching decodeAndValidate's own cap — this handler reads the
+	// body itself (the peek needs the raw bytes twice) and must not become
+	// the one JSON route on this dispatcher with no limit.
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		a.refuseRecordWrite(w, r, actor, workspaceID, "", "", "", &recordWriteRefusal{
+			http.StatusBadRequest, recordRefusalInvalidRequest, "could not read request body"})
 		return
 	}
-	typeName := strings.TrimSpace(req.Type)
-	if typeName == "" {
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		a.refuseRecordWrite(w, r, actor, workspaceID, "", "", "", &recordWriteRefusal{
-			http.StatusBadRequest, recordRefusalInvalidRequest, "type is required"})
-		return
-	}
-	if len(req.Properties) == 0 {
-		a.refuseRecordWrite(w, r, actor, workspaceID, "", "", "", &recordWriteRefusal{
-			http.StatusBadRequest, recordRefusalInvalidRequest, "properties must not be empty"})
+			http.StatusBadRequest, recordRefusalInvalidRequest, "request body is required"})
 		return
 	}
 
-	if req.Id != nil && strings.TrimSpace(*req.Id) != "" {
-		a.handleRecordUpdate(w, r, actor, workspaceID, typeName, strings.TrimSpace(*req.Id), req)
+	var modePeek struct {
+		Mode *string `json:"mode"`
+	}
+	if err := json.Unmarshal(raw, &modePeek); err != nil {
+		// Audited because the refused population is what answers "was
+		// anything attempted against this vault" (review H4), and a
+		// malformed-body flood is exactly when that gets asked.
+		a.refuseRecordWrite(w, r, actor, workspaceID, "", "", "", &recordWriteRefusal{
+			http.StatusBadRequest, recordRefusalInvalidRequest, "invalid JSON body"})
 		return
 	}
-	a.handleRecordCreate(w, r, actor, workspaceID, typeName, req)
+	const modeErrMsg = `mode is required and must be "create" or "update" — ` +
+		`a write no longer infers which one it is from whether id or path happens to be set`
+	if modePeek.Mode == nil {
+		a.refuseRecordWrite(w, r, actor, workspaceID, "", "", "", &recordWriteRefusal{
+			http.StatusBadRequest, recordRefusalInvalidRequest, modeErrMsg})
+		return
+	}
+
+	switch *modePeek.Mode {
+	case string(gen.Create):
+		var req gen.RecordWriteRequestCreate
+		if !a.decodeRecordWriteVariant(w, r, actor, workspaceID, raw, "RecordWriteRequestCreate", &req, validateEnabled) {
+			return
+		}
+		typeName, ok := a.recordWriteCommonFields(w, r, actor, workspaceID, req.Type, len(req.Properties))
+		if !ok {
+			return
+		}
+		a.handleRecordCreate(w, r, actor, workspaceID, typeName, req)
+	case string(gen.Update):
+		var req gen.RecordWriteRequestUpdate
+		if !a.decodeRecordWriteVariant(w, r, actor, workspaceID, raw, "RecordWriteRequestUpdate", &req, validateEnabled) {
+			return
+		}
+		typeName, ok := a.recordWriteCommonFields(w, r, actor, workspaceID, req.Type, len(req.Properties))
+		if !ok {
+			return
+		}
+		id := strings.TrimSpace(req.Id)
+		if id == "" {
+			a.refuseRecordWrite(w, r, actor, workspaceID, "", "", "", &recordWriteRefusal{
+				http.StatusBadRequest, recordRefusalInvalidRequest, "id is required when mode is update"})
+			return
+		}
+		a.handleRecordUpdate(w, r, actor, workspaceID, typeName, id, req)
+	default:
+		a.refuseRecordWrite(w, r, actor, workspaceID, "", "", "", &recordWriteRefusal{
+			http.StatusBadRequest, recordRefusalInvalidRequest, modeErrMsg})
+	}
+}
+
+// decodeRecordWriteVariant strictly decodes raw into the named generated
+// variant struct, audits and answers 400 on failure.
+//
+// DisallowUnknownFields RUNS UNCONDITIONALLY, independent of
+// gateway.validate_inbound (which defaults to false). That is the mechanism
+// that makes the split's central promise true on every deployment rather
+// than only on opted-in ones: `version_token` on a create, or `path` on an
+// update, is a NAMED 400 instead of a field quietly dropped. Quietly
+// dropping either is the precise failure the split exists to end — a caller
+// that sent a version token believed it was protected against a concurrent
+// write, and a server that ignored it left it believing that.
+//
+// When validate_inbound IS enabled, the full-body JSON Schema check runs
+// first for richer errors, exactly as createAgent does.
+func (a *restAPI) decodeRecordWriteVariant(
+	w http.ResponseWriter, r *http.Request, actor, workspaceID string,
+	raw []byte, variantName string, out any, validateEnabled bool,
+) bool {
+	if validateEnabled {
+		if errMsg, serverErr := validateBodyAgainstSchema(variantName, raw); errMsg != "" {
+			if serverErr {
+				a.logRecordWriteRefusedAs(r, actor, workspaceID, "", "", "", recordRefusalInvalidRequest)
+				jsonErr(w, http.StatusInternalServerError, "inbound schema unavailable")
+				return false
+			}
+			a.refuseRecordWrite(w, r, actor, workspaceID, "", "", "", &recordWriteRefusal{
+				http.StatusBadRequest, recordRefusalInvalidRequest,
+				fmt.Sprintf("request body does not match schema %s: %s", variantName, errMsg)})
+			return false
+		}
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(out); err != nil {
+		msg := "invalid JSON body"
+		if strings.Contains(err.Error(), "unknown field") {
+			msg = fmt.Sprintf("field not allowed on this write mode: %v — see the %s schema", err, variantName)
+		}
+		a.refuseRecordWrite(w, r, actor, workspaceID, "", "", "", &recordWriteRefusal{
+			http.StatusBadRequest, recordRefusalInvalidRequest, msg})
+		return false
+	}
+	return true
+}
+
+// recordWriteCommonFields checks the two fields both variants carry.
+//
+// They stay a runtime check rather than resting on the schema's own
+// `minLength: 1` / `minItems: 1`, because those only bind when
+// validate_inbound is on: a `type` of "   " decodes to a non-empty Go string
+// and would otherwise reach schema lookup as a record type nobody declared.
+func (a *restAPI) recordWriteCommonFields(
+	w http.ResponseWriter, r *http.Request, actor, workspaceID, rawType string, propertyCount int,
+) (string, bool) {
+	typeName := strings.TrimSpace(rawType)
+	if typeName == "" {
+		a.refuseRecordWrite(w, r, actor, workspaceID, "", "", "", &recordWriteRefusal{
+			http.StatusBadRequest, recordRefusalInvalidRequest, "type is required"})
+		return "", false
+	}
+	if propertyCount == 0 {
+		a.refuseRecordWrite(w, r, actor, workspaceID, "", "", "", &recordWriteRefusal{
+			http.StatusBadRequest, recordRefusalInvalidRequest, "properties must not be empty"})
+		return "", false
+	}
+	return typeName, true
 }
 
 // recordWriteTokenRefusal checks the SHAPE of a supplied version token, which
@@ -635,7 +763,7 @@ func recordWriteTokenRefusal(raw string) *recordWriteRefusal {
 // re-read the file after the lock was released and pair those bytes with the
 // token from inside it — the shape of defect R-1/B1, fixed once on this
 // branch already. See EditNoteResult.Content for both things that goes wrong.
-func (a *restAPI) handleRecordUpdate(w http.ResponseWriter, r *http.Request, actor, workspaceID, typeName, id string, req gen.RecordWriteRequest) {
+func (a *restAPI) handleRecordUpdate(w http.ResponseWriter, r *http.Request, actor, workspaceID, typeName, id string, req gen.RecordWriteRequestUpdate) {
 	if err := validateEntityID(id); err != nil {
 		a.refuseRecordWrite(w, r, actor, workspaceID, "", "", id, &recordWriteRefusal{
 			http.StatusBadRequest, recordRefusalInvalidRequest, "invalid record id: " + err.Error()})
@@ -668,12 +796,20 @@ func (a *restAPI) handleRecordUpdate(w http.ResponseWriter, r *http.Request, act
 	// absent or empty one is a 400, never a silent bypass — it is a
 	// different failure from a STALE one (409): the caller never told us
 	// which version it believed it was replacing at all.
-	if req.VersionToken == nil || strings.TrimSpace(*req.VersionToken) == "" {
+	//
+	// The contract now carries that requirement too — `version_token` is a
+	// REQUIRED field on RecordWriteRequestUpdate rather than one of three
+	// independent optionals, so it decodes into a plain string. This check
+	// survives as the WHITESPACE case: `"   "` satisfies a required field
+	// and satisfies `minLength: 1`, and without this it would reach the
+	// compare-and-swap as a token that simply does not match, answering 409
+	// and blaming a concurrent editor who does not exist.
+	if strings.TrimSpace(req.VersionToken) == "" {
 		a.refuseRecordWrite(w, r, actor, workspaceID, found.scoped.Name, found.relPath, id, &recordWriteRefusal{
-			http.StatusBadRequest, recordRefusalVersionMissing, "version_token is required when id is present"})
+			http.StatusBadRequest, recordRefusalVersionMissing, "version_token is required when mode is update"})
 		return
 	}
-	expectVersion := strings.TrimSpace(*req.VersionToken)
+	expectVersion := strings.TrimSpace(req.VersionToken)
 	if refusal := recordWriteTokenRefusal(expectVersion); refusal != nil {
 		a.refuseRecordWrite(w, r, actor, workspaceID, found.scoped.Name, found.relPath, id, refusal)
 		return
@@ -739,13 +875,17 @@ func (a *restAPI) handleRecordUpdate(w http.ResponseWriter, r *http.Request, act
 // the first place, and holding the counter open across the file write would
 // make a crash between them reuse an id that a note on disk already carries,
 // which is the failure that actually matters.
-func (a *restAPI) handleRecordCreate(w http.ResponseWriter, r *http.Request, actor, workspaceID, typeName string, req gen.RecordWriteRequest) {
-	if req.Path == nil || strings.TrimSpace(*req.Path) == "" {
+func (a *restAPI) handleRecordCreate(w http.ResponseWriter, r *http.Request, actor, workspaceID, typeName string, req gen.RecordWriteRequestCreate) {
+	// `path` is a REQUIRED field on RecordWriteRequestCreate, so it decodes
+	// into a plain string; this check survives as the whitespace case, which
+	// a required field and `minLength: 1` both admit and which would
+	// otherwise reach CreateNote as an empty relative path.
+	if strings.TrimSpace(req.Path) == "" {
 		a.refuseRecordWrite(w, r, actor, workspaceID, "", "", "", &recordWriteRefusal{
-			http.StatusBadRequest, recordRefusalInvalidRequest, "path is required when id is absent"})
+			http.StatusBadRequest, recordRefusalInvalidRequest, "path is required when mode is create"})
 		return
 	}
-	relPath := strings.TrimSpace(*req.Path)
+	relPath := strings.TrimSpace(req.Path)
 
 	scope := knowledge.ResolveScope(a.homePath, workspaceID)
 	sc, ok := scope.Select("")

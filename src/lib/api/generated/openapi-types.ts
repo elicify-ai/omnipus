@@ -3156,9 +3156,11 @@ export interface paths {
          * Create or update one record's properties, by splice
          * @description CW-7 (ADR-083 EMB-085, EMB-086, EMB-087). Wires RecordWriteRequest — previously reachable only from an agent-facing record-write tool — to the gateway/SPA boundary, as the ONE write door an inline record editor (US-10) uses: the same lock, version compare-and-swap, atomic write and audit path an agent's write already goes through (EMB-085). This is deliberately NOT the whole-file Library save endpoint and NOT the raw frontmatter property-setter, neither of which carries this contract's guards.
          *
-         *     `id` ABSENT means create (`path` then required, the identifier is server-minted). `id` PRESENT means update, and `version_token` is then REQUIRED: a stale token is refused with 409 and the typed KnowledgeConflictError body naming the path and both versions (EMB-086), the field is left untouched on disk (FR-042), and the refusal is audited. A refused write is never retried automatically by the server (EMB-087) — the caller decides.
+         *     `mode` SAYS WHICH OPERATION THIS IS — it is never inferred from which optional fields happen to be set. `mode: create` requires `path` and mints the identifier server-side (FR-036); `mode: update` requires `id` and `version_token`. A field belonging to the other variant is a 400 naming it, so an update that lost its `id` can no longer land as a duplicate note with its version token discarded.
          *
-         *     RELATIONS AND PERSON PROPERTIES ARE NOT WRITABLE HERE (ADR-068 FR-045) — see RelationWriteRequest — and a property this record type's schema describes as derived is rejected, not honoured (D9, FR-046). A record's title and path are never editable through this request once `id` is present (EMB-089).
+         *     On update a stale token is refused with 409 and the typed KnowledgeConflictError body naming the path and both versions (EMB-086), the field is left untouched on disk (FR-042), and the refusal is audited. A refused write is never retried automatically by the server (EMB-087) — the caller decides.
+         *
+         *     RELATIONS AND PERSON PROPERTIES ARE NOT WRITABLE HERE (ADR-068 FR-045) — see RelationWriteRequest — and a property this record type's schema describes as derived is rejected, not honoured (D9, FR-046). A record's title and path are never editable through an update (EMB-089) — `path` is not an accepted field on that variant at all, so a caller that believed it was moving the note is told so rather than having the field ignored.
          */
         post: operations["writeVaultRecord"];
         delete?: never;
@@ -5823,37 +5825,84 @@ export interface components {
             paths?: string[];
         };
         /**
-         * RecordWriteRequest
-         * @description A typed, validated write to one record (ADR-068 D14, FR-040 to FR-044).
+         * @description Body for POST .../knowledge/records. Discriminated by `mode`, because CREATE and UPDATE are two operations with different required fields and different consequences, and the flat shape this replaced could not tell them apart.
+         *
+         *     THE DEFECT THIS CLOSES. The flat request required only `type` and `properties`, leaving `id`, `path` and `version_token` as three independent optionals — so `id` present meant update and `id` absent meant create. A caller that MEANT to update and lost its `id` (a bug, a dropped field, a response shape that changed) was silently reinterpreted as a create: it wrote a DUPLICATE note, DISCARDED the version token it had supplied, and got a success back. Nothing in the contract could refuse it, because the request it sent was a perfectly valid create.
+         *
+         *     Now the caller states the operation and the server checks the fields against it. `version_token` is required on update and rejected on create; `path` is required on create and rejected on update. A field sent on the wrong variant is a 400 that names it, never a field quietly ignored — and a quietly ignored `version_token` is the one that matters, since a caller that sent one believed it was protected against a concurrent write when it was not.
+         */
+        RecordWriteRequest: components["schemas"]["RecordWriteRequestCreate"] | components["schemas"]["RecordWriteRequestUpdate"];
+        /**
+         * RecordWriteRequestCreate
+         * @description CREATE one record: a new note at `path`, carrying a server-minted identifier (ADR-068 D14, FR-036, FR-040 to FR-044).
+         *     THE CALLER SAYS `mode: create`. It is not inferred from the absence of `id`. The flat shape this replaced required only `type` and `properties` and left `id`, `path` and `version_token` as three independent optionals, so a caller that MEANT to update and omitted `id` — a bug, a dropped field, a response shape that changed — was silently reinterpreted as a create: it wrote a duplicate note, discarded the version token it had carefully supplied, and returned success. The two operations differ in what they do to a vault, so the caller declares which one it wants and a mistake is a 400 instead of a second note nobody asked for.
+         *     `id` AND `version_token` ARE NOT ACCEPTED HERE (`additionalProperties: false`), and that is the half that makes the split worth having. A create has no prior version to compare, so a `version_token` sent with one could only ever be ignored — and a caller that sent one believed it was protected against a concurrent write when it was not. Sending either field on this variant is a schema violation, named in the 400, never dropped.
+         *     A write is a SPLICE, never a re-serialisation. Comments, key order, blank lines and quoting style survive, and the file is byte-identical outside the patched span (FR-041). This is not a nicety: the vault is simultaneously a human's working notes, and a writer that re-serialises YAML degrades it a little on every touch until the operator stops trusting the agent.
+         *     A write that violates the schema is REJECTED with the expected shape named, and no note is created (FR-042). Nothing is half-written.
+         *     RELATIONS AND PERSON PROPERTIES ARE NOT WRITABLE HERE. They are modified through RelationWriteRequest's three explicit verbs (FR-045), because a read-then-write round trip that silently replaces a relation list is how the incumbent deletes relations and returns success.
+         *     Derived values are never written into frontmatter (D9, FR-046) — a request naming a derived property is rejected, not honoured.
+         */
+        RecordWriteRequestCreate: {
+            /**
+             * @description Discriminator. Must be exactly "create" for this variant.
+             *      (enum property replaced by openapi-typescript)
+             * @enum {string}
+             */
+            mode: "create";
+            /**
+             * @description The record type being created. Always required, on create and update alike.
+             * @example company
+             */
+            type: string;
+            /**
+             * @description Vault-relative path of the note to create. REQUIRED here — a create has to put the note somewhere, and the server never invents a location. A note already at this path is refused (the create is an O_EXCL create, not an overwrite), which is an ordinary caller-fixable outcome rather than a server fault.
+             * @example CRM/Companies/Acme Ltd.md
+             */
+            path: string;
+            /**
+             * @description The properties to write, and only those. An entry whose `values` array is empty CLEARS that property (D3.2) — on a create that is a property the new note simply will not carry. A write of a list into a scalar property, or of a value outside a closed enum, is rejected with the expected shape named (FR-006, FR-011, FR-042).
+             *     The record's `type` and `id` are seeded by the server and cannot be named here (ADR-068 D1/D7): writing through the identity keys would rename the record, and clearing one would leave it unreachable through every record door.
+             */
+            properties: components["schemas"]["RecordPropertyValue"][];
+        };
+        /**
+         * RecordWriteRequestUpdate
+         * @description UPDATE one existing record's properties, by splice, under a version compare-and-swap (ADR-068 D14, FR-040 to FR-044, ADR-083 EMB-085/EMB-086).
+         *     THE CALLER SAYS `mode: update`. It is not inferred from the presence of `id`. In the flat shape this replaced, an update that lost its `id` — a bug, a dropped field, a response shape that changed — silently became a CREATE: it wrote a duplicate note at whatever `path` happened to be set, discarded the `version_token` the caller had supplied, and returned success. A caller now states which operation it wants, so that mistake is a 400 naming the missing field instead of a second note nobody asked for.
+         *     `path` IS NOT ACCEPTED HERE (`additionalProperties: false`). The `id` already locates the record, and a rename is a separate operation — a `path` sent alongside an `id` could only ever be ignored, and a caller that sent one believed it was moving the note (EMB-089: a record's title and path are never editable through this request).
          *     A write is a SPLICE, never a re-serialisation. Comments, key order, blank lines and quoting style survive, and the file is byte-identical outside the patched span (FR-041). This is not a nicety: the vault is simultaneously a human's working notes, and a writer that re-serialises YAML degrades it a little on every touch until the operator stops trusting the agent.
          *     A write that violates the schema is REJECTED with the expected shape named, and the file is left unmodified (FR-042). Nothing is half-written.
          *     RELATIONS AND PERSON PROPERTIES ARE NOT WRITABLE HERE. They are modified through RelationWriteRequest's three explicit verbs (FR-045), because a read-then-write round trip that silently replaces a relation list is how the incumbent deletes relations and returns success.
          *     Derived values are never written into frontmatter (D9, FR-046) — a request naming a derived property is rejected, not honoured.
          */
-        RecordWriteRequest: {
+        RecordWriteRequestUpdate: {
             /**
-             * @description The record type being written. Always required, on create and update alike.
+             * @description Discriminator. Must be exactly "update" for this variant.
+             *      (enum property replaced by openapi-typescript)
+             * @enum {string}
+             */
+            mode: "update";
+            /**
+             * @description The record type being written. Always required, on create and update alike. A record whose stored type differs from this is refused rather than rewritten — naming the wrong type is a caller error, not an instruction to change the record's type.
              * @example company
              */
             type: string;
             /**
-             * @description The record to update. ABSENT MEANS CREATE, in which case `path` is required and the identifier is minted by the server (FR-036) — never supplied by the caller, so two concurrent creators cannot choose the same id. When present, `version_token` is required too.
+             * @description The record to update. REQUIRED here — the identifier is what locates the record, and it is never supplied on a create, where the server mints it (FR-036) so two concurrent creators cannot choose the same one.
              * @example CO-0142
              */
-            id?: string;
+            id: string;
             /**
-             * @description Vault-relative path of the note. Required on create; ignored on update, where the id already locates the record and a rename is a separate operation.
-             * @example CRM/Companies/Acme Ltd.md
-             */
-            path?: string;
-            /**
-             * @description ADR-067 D14's opaque content-hash token, as returned on the record that is being updated. REQUIRED whenever `id` is present: a stale token means the file changed since it was read, and the write is REFUSED and the refusal AUDITED (FR-043, FR-044) rather than overwriting an edit nobody saw. Omitted only on create, where there is no prior version.
+             * @description ADR-067 D14's opaque content-hash token, as returned on the record that is being updated. REQUIRED on every update: a stale token means the file changed since it was read, and the write is REFUSED and the refusal AUDITED (FR-043, FR-044) rather than overwriting an edit nobody saw. There is no variant of this operation that updates without one — that was the point of splitting create from update, since an optional token is one a caller can lose without being told.
              *     THE `pattern` IS ON THIS INBOUND FIELD AND DELIBERATELY NOT ON THE THREE OUTBOUND ONES (VaultRecord, VaultFindRow, KnowledgeConflictError), which carry the same token with no pattern. The asymmetry is the decision, not an oversight. Inbound, a token that is not one of the two shapes this server ever MINTS cannot be a stale token — it is a malformed request, and 400 is the truthful answer, caught before the compare-and-swap rather than surfacing as a 409 that blames a concurrent editor who does not exist. Outbound, a pattern would be validated by the SPA's Zod edge, where a single non-conforming field DROPS THE WHOLE RESPONSE — so a server-side anomaly on one row would blank an entire dashboard. The outbound guarantee is held in Go instead, by NoteVersion.TokenIfPresent (pkg/knowledge/version.go), which makes emitting the absent-sentinel for a note that exists syntactically impossible at the source.
              *     "Opaque" (FR-107) still binds: a client never PARSES, orders or constructs a token. This pattern lets the server reject a shape it could not have issued; it is not a licence to build one.
              * @example v1:9f2a7c4081e3b5d6a0c1f2e3b4d5a6c7
              */
-            version_token?: string;
-            /** @description The properties to write, and only those — every other byte of the file is untouched. An entry whose `values` array is empty CLEARS that property (D3.2). A write of a list into a scalar property, or of a value outside a closed enum, is rejected with the expected shape named (FR-006, FR-011, FR-042). */
+            version_token: string;
+            /**
+             * @description The properties to write, and only those — every other byte of the file is untouched. An entry whose `values` array is empty CLEARS that property (D3.2). A write of a list into a scalar property, or of a value outside a closed enum, is rejected with the expected shape named (FR-006, FR-011, FR-042).
+             *     The record's `type` and `id` cannot be named here (ADR-068 D1/D7): writing through the identity keys would rename the record, and clearing one would leave it unreachable through every record door and invisible to the identifier allocator's collision check.
+             */
             properties: components["schemas"]["RecordPropertyValue"][];
         };
         /**
@@ -21786,7 +21835,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description UPDATE (`id` was present): the record as it stands after the write, including its new version_token. */
+            /** @description UPDATE (`mode: update`): the record as it stands after the write, including its new version_token. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -21795,7 +21844,7 @@ export interface operations {
                     "application/json": components["schemas"]["VaultRecord"];
                 };
             };
-            /** @description CREATE (`id` was absent): the newly created record, carrying the server-minted identifier (FR-036) and its first version_token. Distinguished from 200 because the two outcomes of this one operation differ in a way a caller acts on — a create produced an identifier the caller did not choose and could not have predicted, and it created a note at `path` that did not exist before. */
+            /** @description CREATE (`mode: create`): the newly created record, carrying the server-minted identifier (FR-036) and its first version_token. Distinguished from 200 because the two outcomes of this one operation differ in a way a caller acts on — a create produced an identifier the caller did not choose and could not have predicted, and it created a note at `path` that did not exist before. */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -22436,6 +22485,8 @@ export type RecordGroup = components["schemas"]["RecordGroup"];
 export type RecordGroupKey = components["schemas"]["RecordGroupKey"];
 export type RecordProblem = components["schemas"]["RecordProblem"];
 export type RecordWriteRequest = components["schemas"]["RecordWriteRequest"];
+export type RecordWriteRequestCreate = components["schemas"]["RecordWriteRequestCreate"];
+export type RecordWriteRequestUpdate = components["schemas"]["RecordWriteRequestUpdate"];
 export type RelationWriteRequest = components["schemas"]["RelationWriteRequest"];
 export type ViewGroupBy = components["schemas"]["ViewGroupBy"];
 export type ViewPropertyConfig = components["schemas"]["ViewPropertyConfig"];

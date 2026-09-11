@@ -4694,10 +4694,21 @@ export function fetchVaultRecord(
 
 /**
  * Create or update one record's properties, by splice
- * (POST .../knowledge/records). `id` present means update, and
- * `version_token` is then REQUIRED by the contract itself (Zod-validated
- * client-side via RecordWriteRequestSchema.parse before the request ever
- * leaves the browser) — a stale token is refused with 409 and surfaces as
+ * (POST .../knowledge/records).
+ *
+ * `body.mode` STATES which operation this is — `'create'` (which requires
+ * `path`) or `'update'` (which requires `id` and `version_token`). It is a
+ * discriminated union, so TypeScript refuses a body that mixes the two at
+ * compile time and `RecordWriteRequestSchema.parse` refuses one at runtime
+ * before the request leaves the browser.
+ *
+ * That replaced a flat shape where the operation was INFERRED from whether
+ * `id` happened to be set, under which an update that lost its `id` was not
+ * an error but a valid create: it wrote a duplicate note, discarded the
+ * `version_token` the caller had supplied to guard against a concurrent
+ * write, and resolved successfully.
+ *
+ * On an update a stale token is refused with 409 and surfaces as
  * KnowledgeRecordConflictError, never a generic ApiError, so a caller can
  * branch on it specifically (see isKnowledgeRecordConflict).
  */
