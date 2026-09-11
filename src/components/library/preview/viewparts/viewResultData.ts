@@ -10,13 +10,91 @@
 // re-spaces digits the server already produced; it never adds two of them.
 
 import type {
+  VaultFindCell,
   VaultFindRow,
+  VaultRecord,
   ViewResultPart,
   ViewUnitTotal,
 } from '@/lib/api/generated/openapi-types'
 
 /** The engine's synthetic column for the note's own name. */
 export const FILE_NAME_PROPERTY = 'file.name'
+
+/**
+ * The declared cell types this surface knows how to draw an inline editor
+ * for (ADR-083 §4.6): 'enum' → dropdown, 'date' → date input, 'text' →
+ * inline text. Every other declared type (`integer`, `decimal`, `checkbox`,
+ * `relation`, `person`) is a scope decision, not a gate — no editor control
+ * for them exists yet, so a cell of one of those types falls through to the
+ * same "anything else the schema does not describe" read-only row §4.6's
+ * table names, even though the schema DOES describe it.
+ */
+export type EditableCellType = 'enum' | 'date' | 'text'
+
+function isEditableCellType(type: VaultFindCell['type']): type is EditableCellType {
+  return type === 'enum' || type === 'date' || type === 'text'
+}
+
+/**
+ * Whether ONE cell may be offered an inline editor at all (ADR-083 §4.6,
+ * EMB-088). Three, and only three, things gate it, all read from the cell
+ * itself and NEVER guessed from `value`'s shape:
+ *
+ *   - `type` must be one of the three this surface can draw a control for.
+ *     Absent `type` (an ordinary note's frontmatter, a task-row column, or a
+ *     property no loaded schema describes) is the SAME as an undescribed
+ *     type — no editor, ever — per VaultFindCell's own doc comment.
+ *   - `derived` must not be true. A computed value is never written into
+ *     frontmatter (ADR-068 D9/FR-046); RecordWriteRequest refuses it
+ *     server-side regardless, but this surface must not offer a control
+ *     that will always fail.
+ *   - `relation` must not be true. Relations and person properties are
+ *     modified through RelationWriteRequest's explicit verbs, never through
+ *     a read-then-write splice (ADR-068 FR-045).
+ *
+ * This function is the single place that decision is made — TablePart and
+ * ListPart both call it rather than re-deriving the rule, so the two
+ * surfaces can never drift on what counts as editable.
+ */
+export function isEditableCell(cell: VaultFindCell): boolean {
+  return cell.derived !== true && cell.relation !== true && isEditableCellType(cell.type)
+}
+
+/**
+ * Reads one property's current rendered value off a VaultRecord (the
+ * getVaultRecord / writeVaultRecord response shape) as plain text — the
+ * same "one value, rendered" contract VaultFindCell.value carries, so a
+ * value read this way can replace a cell's `value` directly after a write
+ * or a post-conflict refresh.
+ *
+ * Only the FIRST value is read (arity is >1 only for a list-valued
+ * property, which this surface does not offer an editor for at all —
+ * §4.2c). An empty or absent `values` array means the property is ABSENT
+ * (D3.2) and renders as '', matching how an absent VaultFindCell renders.
+ */
+export function recordPropertyText(record: VaultRecord, property: string): string {
+  const prop = record.properties.find((p) => p.property === property)
+  const v = prop?.values[0]
+  if (v === undefined) return ''
+  switch (v.type) {
+    case 'text':
+      return v.text ?? ''
+    case 'enum':
+      return v.enum ?? ''
+    case 'date':
+      return v.date ?? ''
+    case 'integer':
+      return v.integer ?? ''
+    case 'decimal':
+      return v.decimal ?? ''
+    default:
+      // relation / person / checkbox — not a type this surface renders as
+      // plain text here; callers never ask for one of these (isEditableCell
+      // already excludes them), so this is a defensive fallback, not a path
+      // any editable field reaches.
+      return ''
+  }
+}
 
 /**
  * One row's rendered value for one property, or '' when the row carries no
@@ -27,6 +105,19 @@ export function cellValue(row: VaultFindRow, property: string): string {
   if (property === FILE_NAME_PROPERTY) return row.title
   const cell = row.cells.find((c) => c.property === property)
   return cell?.value ?? ''
+}
+
+/**
+ * One row's OWN VaultFindCell for a property, or undefined — never
+ * synthesised for `file.name` (there is no cell for it; see `cellValue`),
+ * which is exactly why a caller building an inline editor from this can
+ * never accidentally offer one for the record's title (Founder ruling Q5,
+ * ADR-083 §4.6): the title has no cell to find, so there is nothing to hand
+ * an editor.
+ */
+export function findCell(row: VaultFindRow, property: string): VaultFindCell | undefined {
+  if (property === FILE_NAME_PROPERTY) return undefined
+  return row.cells.find((c) => c.property === property)
 }
 
 /**

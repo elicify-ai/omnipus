@@ -4,10 +4,12 @@
 // lists keep their group headers; totals, when the part declares them, are
 // the same G2/G3 footer every part carries.
 
+import type { ReactNode } from 'react'
 import type { VaultFindRow, ViewResultPart } from '@/lib/api/generated/openapi-types'
-import { cellValue, rowExcludedFromTotals, rowsByPath, FILE_NAME_PROPERTY } from './viewResultData'
+import { cellValue, findCell, rowExcludedFromTotals, rowsByPath, FILE_NAME_PROPERTY } from './viewResultData'
 import { ExcludedRowMark, GroupHeaderLabel, TotalsFooter } from './PartChrome'
 import { CellText, type ViewCellLinkResolver } from './ViewCellLink'
+import { EditableCell, type RecordEditContext } from './RecordFieldEditor'
 
 function detailProperty(part: ViewResultPart): string | undefined {
   return (part.columns ?? []).find((c) => c !== FILE_NAME_PROPERTY)
@@ -19,14 +21,20 @@ function ListRow({
   detail,
   onOpenPath,
   cellLinks,
+  editContext,
 }: {
   row: VaultFindRow
   part: ViewResultPart
   detail: string | undefined
   onOpenPath?: ((path: string) => void) | undefined
   cellLinks?: ViewCellLinkResolver | undefined
+  /** Enables ADR-083 D8 inline record-field editing for the detail cell.
+   *  Absent renders it exactly as before — plain (or wikilinked) text. */
+  editContext?: RecordEditContext | undefined
 }) {
   const detailValue = detail === undefined ? '' : cellValue(row, detail)
+  const detailCell = detail === undefined ? undefined : findCell(row, detail)
+  const renderDetailValue = (v: string): ReactNode => (cellLinks ? <CellText value={v} resolver={cellLinks} /> : v)
   return (
     <li
       className={`flex items-baseline gap-2 border-b border-[var(--color-border)] px-3 py-1.5 text-[13px] last:border-b-0 ${
@@ -54,7 +62,12 @@ function ListRow({
       )}
       {detailValue !== '' && (
         <span className="min-w-0 truncate text-[12px] text-[var(--color-muted)]">
-          · {cellLinks ? <CellText value={detailValue} resolver={cellLinks} /> : detailValue}
+          ·{' '}
+          {detailCell !== undefined ? (
+            <EditableCell context={editContext} row={row} cell={detailCell} renderValue={renderDetailValue} />
+          ) : (
+            renderDetailValue(detailValue)
+          )}
         </span>
       )}
       {rowExcludedFromTotals(row, part) && <ExcludedRowMark />}
@@ -67,6 +80,7 @@ export function ListPart({
   rows,
   onOpenPath,
   cellLinks,
+  editContext,
 }: {
   part: ViewResultPart
   rows: VaultFindRow[]
@@ -75,6 +89,9 @@ export function ListPart({
   onOpenPath?: (path: string) => void
   /** Renders the detail cell's raw `[[wikilink]]` as a real link (KB-8b). */
   cellLinks?: ViewCellLinkResolver
+  /** Enables ADR-083 D8 inline record-field editing. Absent renders every
+   *  detail cell exactly as before — plain (or wikilinked) text. */
+  editContext?: RecordEditContext
 }) {
   const detail = detailProperty(part)
   const byPath = rowsByPath(rows)
@@ -85,7 +102,15 @@ export function ListPart({
       {groups === undefined ? (
         <ul>
           {rows.map((row) => (
-            <ListRow key={row.path} row={row} part={part} detail={detail} onOpenPath={onOpenPath} cellLinks={cellLinks} />
+            <ListRow
+              key={row.path}
+              row={row}
+              part={part}
+              detail={detail}
+              onOpenPath={onOpenPath}
+              cellLinks={cellLinks}
+              editContext={editContext}
+            />
           ))}
         </ul>
       ) : (
@@ -106,6 +131,7 @@ export function ListPart({
                     detail={detail}
                     onOpenPath={onOpenPath}
                     cellLinks={cellLinks}
+                    editContext={editContext}
                   />
                 ))}
             </ul>

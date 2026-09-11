@@ -224,6 +224,11 @@ import {
   // HP-1 fix (defect-list-html-preview-2026-09-08.md) — the mint client for
   // the sandboxed HTML/SVG preview frame (ADR-067 §10.3, spec FR-003f):
   LibraryPreviewTokenResponse as LibraryPreviewTokenResponseSchema,
+  // ADR-083 CW-4/CW-7 (EMB-085/EMB-086/EMB-087/EMB-094) — step 5's inline
+  // record-field editor (contract-first #8):
+  VaultRecord as VaultRecordSchema,
+  RecordWriteRequest as RecordWriteRequestSchema,
+  KnowledgeConflictError as KnowledgeConflictErrorSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -541,6 +546,12 @@ import type {
   // view-kinds-design-2026-09-03 §7 — evaluated saved-view results:
   ViewResult,
   KnowledgeBaseViews,
+  // ADR-083 CW-4/CW-7 (EMB-085/EMB-086/EMB-087/EMB-094) — the typed record
+  // read/write layer, wired to the gateway/SPA boundary for the inline
+  // record-field editor (step 5):
+  VaultRecord,
+  RecordWriteRequest,
+  KnowledgeConflictError,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -4598,6 +4609,111 @@ export function fetchKnowledgeBaseViews(
     signal ? { signal } : undefined,
     KnowledgeBaseViewsSchema as ZodType<KnowledgeBaseViews>,
   )
+}
+
+// ── ADR-083 Step 5 (CW-4, CW-7) — inline record-field editor ────────────────
+//
+// The typed record read/write layer ADR-068 already built (RecordSchema,
+// VaultRecord, RecordWriteRequest) was, until now, reachable only from
+// agent-facing tools. `fetchVaultRecord` and `writeVaultRecord` are its
+// FIRST wiring to the gateway/SPA boundary — the one write door an inline
+// editor uses (EMB-085): the same lock, version compare-and-swap, atomic
+// write and audit path an agent's write already goes through. Deliberately
+// NOT the whole-file Library save endpoint and NOT a raw frontmatter
+// property-setter — see RecordWriteRequest's own description for the two
+// prohibitions (relations/person properties, derived values) this layer
+// enforces server-side regardless of what the client offers an editor for.
+
+/**
+ * KnowledgeRecordConflictError is the typed 409 EMB-086 requires
+ * `writeVaultRecord` to surface as an actionable CONFLICT, distinct from a
+ * generic ApiError(409) — mirrors LibraryVersionConflictError's shape
+ * exactly (same reasoning: `actualVersion` is the fresh token a retry MUST
+ * send, never the stale one the refused attempt sent). Extends ApiError so
+ * every existing `isApiError`/`getErrorMessage` call site still works
+ * unchanged.
+ */
+export class KnowledgeRecordConflictError extends ApiError {
+  readonly path: string
+  readonly expectedVersion: string | undefined
+  readonly actualVersion: string | undefined
+
+  constructor(conflict: KnowledgeConflictError, bodyText: string) {
+    super(409, conflict.error, { code: conflict.code, body: bodyText })
+    this.name = 'KnowledgeRecordConflictError'
+    this.path = conflict.path
+    this.expectedVersion = conflict.expected_version
+    this.actualVersion = conflict.actual_version
+    Object.setPrototypeOf(this, KnowledgeRecordConflictError.prototype)
+  }
+}
+
+export function isKnowledgeRecordConflict(err: unknown): err is KnowledgeRecordConflictError {
+  return err instanceof KnowledgeRecordConflictError
+}
+
+/**
+ * Re-parses a 409's raw body (preserved on ApiError.body by
+ * ApiError.fromResponse) as the typed KnowledgeConflictError envelope. A 409
+ * that doesn't match the envelope (unexpected shape, a proxy error page,
+ * …) is returned unchanged — still a real 409 ApiError, just not one
+ * isKnowledgeRecordConflict() recognises, rather than being misreported.
+ */
+function knowledgeRecordConflictFromApiError(err: unknown): unknown {
+  if (!isApiErrorFn(err) || err.status !== 409 || !err.body) return err
+  let raw: unknown
+  try {
+    raw = JSON.parse(err.body) as unknown
+  } catch {
+    return err
+  }
+  const parsed = (KnowledgeConflictErrorSchema as ZodType<KnowledgeConflictError>).safeParse(raw)
+  if (!parsed.success) return err
+  return new KnowledgeRecordConflictError(parsed.data, err.body)
+}
+
+/**
+ * One record, by its stable identifier (GET .../knowledge/records/{id}).
+ * Used both to open a record a relation cell named non-editable (EMB-092)
+ * and, here, to refresh a record's current field values right after
+ * `writeVaultRecord` refuses a stale write — so a 409 can show the reader
+ * what the field ACTUALLY holds now, with a token this call itself just
+ * read, never one carried over from the refused attempt.
+ */
+export function fetchVaultRecord(
+  workspaceId: string,
+  id: string,
+  signal?: AbortSignal,
+): Promise<VaultRecord> {
+  return request<VaultRecord>(
+    `/library/${encodeURIComponent(workspaceId)}/knowledge/records/${encodeURIComponent(id)}`,
+    signal ? { signal } : undefined,
+    VaultRecordSchema as ZodType<VaultRecord>,
+  )
+}
+
+/**
+ * Create or update one record's properties, by splice
+ * (POST .../knowledge/records). `id` present means update, and
+ * `version_token` is then REQUIRED by the contract itself (Zod-validated
+ * client-side via RecordWriteRequestSchema.parse before the request ever
+ * leaves the browser) — a stale token is refused with 409 and surfaces as
+ * KnowledgeRecordConflictError, never a generic ApiError, so a caller can
+ * branch on it specifically (see isKnowledgeRecordConflict).
+ */
+export async function writeVaultRecord(
+  workspaceId: string,
+  body: RecordWriteRequest,
+): Promise<VaultRecord> {
+  try {
+    return await request<VaultRecord>(
+      `/library/${encodeURIComponent(workspaceId)}/knowledge/records`,
+      { method: 'POST', body: JSON.stringify(RecordWriteRequestSchema.parse(body)) },
+      VaultRecordSchema as ZodType<VaultRecord>,
+    )
+  } catch (err) {
+    throw knowledgeRecordConflictFromApiError(err)
+  }
 }
 
 /**

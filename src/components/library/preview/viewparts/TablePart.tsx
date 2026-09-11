@@ -18,6 +18,7 @@ import type { ReactNode } from 'react'
 import type { VaultFindRow, ViewResultPart } from '@/lib/api/generated/openapi-types'
 import {
   cellValue,
+  findCell,
   formatNumberText,
   partUnitProperty,
   rowExcludedFromTotals,
@@ -26,6 +27,7 @@ import {
 } from './viewResultData'
 import { ExcludedRowMark, GroupHeaderLabel, TotalsFooter, UnitValue } from './PartChrome'
 import { CellText, type ViewCellLinkResolver } from './ViewCellLink'
+import { EditableCell, type RecordEditContext } from './RecordFieldEditor'
 
 /** The row-level click target every openable part shares: mouse convenience
  *  on the row/card itself, plus one real, keyboard-reachable button that is
@@ -86,6 +88,7 @@ function Cell({
   primary,
   onOpenPath,
   cellLinks,
+  editContext,
 }: {
   row: VaultFindRow
   property: string
@@ -97,8 +100,18 @@ function Cell({
   primary: boolean
   onOpenPath?: ((path: string) => void) | undefined
   cellLinks?: ViewCellLinkResolver | undefined
+  /** Enables ADR-083 D8 inline editing for this cell, when its own metadata
+   *  allows one at all (RecordFieldEditor.tsx's EditableCell decides that,
+   *  cell by cell — this is only the wire it needs to write through). */
+  editContext?: RecordEditContext | undefined
 }) {
   const value = cellValue(row, property)
+  // `file.name` (the primary column, typically) has no VaultFindCell at all
+  // — findCell returns undefined for it by construction — so it can never
+  // reach EditableCell with something to edit (Founder ruling Q5: title is
+  // never inline-editable).
+  const cell = findCell(row, property)
+  const renderCellValue = (v: string): ReactNode => (cellLinks ? <CellText value={v} resolver={cellLinks} /> : v)
   if (!numeric) {
     return (
       <td className="max-w-[16rem] truncate border-b border-[var(--color-border)] px-3 py-1.5 text-[var(--color-secondary)]">
@@ -106,10 +119,10 @@ function Cell({
           <RowOpenButton rowTitle={row.title} onOpen={() => onOpenPath(row.path)} className="block w-full truncate text-left">
             {value}
           </RowOpenButton>
-        ) : cellLinks ? (
-          <CellText value={value} resolver={cellLinks} />
+        ) : cell !== undefined ? (
+          <EditableCell context={editContext} row={row} cell={cell} renderValue={renderCellValue} />
         ) : (
-          value
+          renderCellValue(value)
         )}
       </td>
     )
@@ -145,6 +158,7 @@ function BodyRows({
   numeric,
   onOpenPath,
   cellLinks,
+  editContext,
 }: {
   rows: VaultFindRow[]
   columns: string[]
@@ -152,6 +166,7 @@ function BodyRows({
   numeric: Set<string>
   onOpenPath?: ((path: string) => void) | undefined
   cellLinks?: ViewCellLinkResolver | undefined
+  editContext?: RecordEditContext | undefined
 }) {
   return (
     <>
@@ -175,6 +190,7 @@ function BodyRows({
                 primary={i === 0}
                 onOpenPath={onOpenPath}
                 cellLinks={cellLinks}
+                editContext={editContext}
               />
             ))}
           </tr>
@@ -189,6 +205,7 @@ export function TablePart({
   rows,
   onOpenPath,
   cellLinks,
+  editContext,
 }: {
   part: ViewResultPart
   rows: VaultFindRow[]
@@ -197,6 +214,9 @@ export function TablePart({
   onOpenPath?: (path: string) => void
   /** Renders a relation cell's raw `[[wikilink]]` as a real link (KB-8b). */
   cellLinks?: ViewCellLinkResolver
+  /** Enables ADR-083 D8 inline record-field editing. Absent renders every
+   *  cell exactly as before — plain text, never an editor. */
+  editContext?: RecordEditContext
 }) {
   // code-review finding #3(b): `part.columns ?? [FILE_NAME_PROPERTY]` only
   // caught `undefined` — a part that "declares no properties" as the EMPTY
@@ -249,6 +269,7 @@ export function TablePart({
                 numeric={numeric}
                 onOpenPath={onOpenPath}
                 cellLinks={cellLinks}
+                editContext={editContext}
               />
             ) : (
               groups.map((group) => {
@@ -265,6 +286,7 @@ export function TablePart({
                     numeric={numeric}
                     onOpenPath={onOpenPath}
                     cellLinks={cellLinks}
+                    editContext={editContext}
                   />
                 )
               })
@@ -289,6 +311,7 @@ function FragmentRows({
   numeric,
   onOpenPath,
   cellLinks,
+  editContext,
 }: {
   group: NonNullable<ViewResultPart['groups']>[number]
   memberRows: VaultFindRow[]
@@ -297,6 +320,7 @@ function FragmentRows({
   numeric: Set<string>
   onOpenPath?: ((path: string) => void) | undefined
   cellLinks?: ViewCellLinkResolver | undefined
+  editContext?: RecordEditContext | undefined
 }) {
   return (
     <>
@@ -316,6 +340,7 @@ function FragmentRows({
         numeric={numeric}
         onOpenPath={onOpenPath}
         cellLinks={cellLinks}
+        editContext={editContext}
       />
       {/* Per-group, per-unit subtotal rows — the wireframe's `tr.sub`. ONE ROW
           PER UNIT VALUE (G2): the list shape upstream makes a combined figure

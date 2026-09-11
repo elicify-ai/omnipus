@@ -29,6 +29,7 @@ import { FiguresPart } from './FiguresPart'
 import { ChartPart } from './ChartPart'
 import { CrosstabPart } from './CrosstabPart'
 import type { ViewCellLinkResolver } from './ViewCellLink'
+import type { RecordEditContext, RecordFieldWriteResult } from './RecordFieldEditor'
 
 /** KB-8a — every part that draws individual records gets a row-open action.
  *  `figures`, `chart` and `crosstab` deliberately do NOT: each one draws a
@@ -41,6 +42,7 @@ function renderPart(
   resolveImageUrl?: (vaultPath: string) => string | undefined,
   onOpenPath?: (path: string) => void,
   cellLinks?: ViewCellLinkResolver,
+  editContext?: RecordEditContext,
 ) {
   switch (part.part) {
     case 'table':
@@ -50,6 +52,7 @@ function renderPart(
           rows={rows}
           {...(onOpenPath ? { onOpenPath } : {})}
           {...(cellLinks ? { cellLinks } : {})}
+          {...(editContext ? { editContext } : {})}
         />
       )
     case 'list':
@@ -59,6 +62,7 @@ function renderPart(
           rows={rows}
           {...(onOpenPath ? { onOpenPath } : {})}
           {...(cellLinks ? { cellLinks } : {})}
+          {...(editContext ? { editContext } : {})}
         />
       )
     case 'tiles':
@@ -143,6 +147,8 @@ export function ViewPartsRenderer({
   onOpenPath,
   resolveWikilink,
   linkHref,
+  workspaceId,
+  onFieldWritten,
 }: {
   result: ViewResult
   /** Vault-relative image path → servable URL, for the tiles part. */
@@ -154,11 +160,30 @@ export function ViewPartsRenderer({
    *  rows (KB-8b) — see BasePreview.tsx for how it is built. */
   resolveWikilink?: ViewCellLinkResolver['resolveWikilink']
   linkHref?: ViewCellLinkResolver['linkHref']
+  /** Enables ADR-083 D8 inline record-field editing for every table/list
+   *  cell whose own metadata allows one (RecordFieldEditor.tsx's
+   *  isEditableCell gate). Absent renders every cell exactly as before —
+   *  plain text, never an editor; this is also what a caller gets for FREE
+   *  on an untyped view (`result.type` absent), since RecordWriteRequest
+   *  needs a record type to write with and a cell in an untyped view never
+   *  carries editable metadata anyway. */
+  workspaceId?: string
+  /** Invoked after a successful inline field write. The intended wiring
+   *  point is BasePreview (owner of this view's TanStack Query cache): it
+   *  invalidates the per-note caches ADR-083 §4.5 names (content, outline,
+   *  links) and this collection's view-result queries, and may patch its
+   *  own cached rows so both a dashboard embed and the ordinary view
+   *  surface reflect the write at once. This component never touches a
+   *  query client itself. */
+  onFieldWritten?: (result: RecordFieldWriteResult) => void
 }) {
   const cellLinks: ViewCellLinkResolver | undefined =
     resolveWikilink !== undefined || linkHref !== undefined || onOpenPath !== undefined
       ? { resolveWikilink, linkHref, onOpenPath }
       : undefined
+
+  const editContext: RecordEditContext | undefined =
+    workspaceId !== undefined ? { workspaceId, recordType: result.type, onFieldWritten } : undefined
 
   if (result.refusal !== undefined) return <RefusalState refusal={result.refusal} />
   if (result.rows.length === 0) return <EmptyState result={result} />
@@ -183,7 +208,7 @@ export function ViewPartsRenderer({
           className="border-b border-[var(--color-border)] last:border-b-0"
           data-testid={`view-part-${part.part}`}
         >
-          {renderPart(part, result.rows, resolveImageUrl, onOpenPath, cellLinks)}
+          {renderPart(part, result.rows, resolveImageUrl, onOpenPath, cellLinks, editContext)}
         </div>
       ))}
       {result.problems.length > 0 && (
