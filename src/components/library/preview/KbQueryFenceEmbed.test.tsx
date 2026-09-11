@@ -61,6 +61,27 @@ describe('KbQueryFenceEmbed', () => {
     )
   })
 
+  // Review I16. The call above used objectContaining and omitted `limit`, so
+  // changing the per-kind cap from 5 to 500 broke nothing.
+  //
+  // THE ORACLE IS THE COMPONENT'S STATED PURPOSE, not the constant: the
+  // header calls a fence "a compact inline summary, not the full search
+  // experience the persistent search bar already offers, so it asks for
+  // fewer per kind." A fence that requested the search bar's own page size
+  // would dump a full result set into the middle of a note — and, behind the
+  // EMB-065 lazy gate, do it on every fence in every note the reader scrolls
+  // past. `limit` being SENT AT ALL is the load-bearing half; the exact 5
+  // pins it so a change has to be deliberate rather than silent.
+  it('caps the request to a short per-kind preview rather than a full search page', async () => {
+    vi.mocked(searchVault).mockResolvedValue(emptyResponse({ notes: [{ path: 'a.md', title: 'A note' }] }))
+    renderEmbed('landlock seccomp')
+
+    await waitFor(() => expect(searchVault).toHaveBeenCalledTimes(1))
+    const body = vi.mocked(searchVault).mock.calls[0][1] as { limit?: number }
+    expect(body.limit).toBe(5)
+    expect(body.limit).toBeLessThan(50)
+  })
+
   it('renders real note/record/view hits from the response, each visibly', async () => {
     vi.mocked(searchVault).mockResolvedValue(
       emptyResponse({
