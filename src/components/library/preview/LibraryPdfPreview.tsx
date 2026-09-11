@@ -147,6 +147,21 @@ interface LibraryPdfPreviewProps {
    *  (EMB-027/028, libraryPreviewVariant.ts) — worker pooling, Edit mode and
    *  every other behaviour below are identical on both. */
   variant?: LibraryPreviewVariant
+  /** ADR-083 embedded-content spec, Step 6 / EMB-105, US-12 AS-4 — a
+   *  `![[doc.pdf#page=3]]` embed fragment: render ONLY this 1-based page,
+   *  never the whole document. This is the SAME open/parse path as every
+   *  other PDF (the same worker-pool lease, the same asset probe, the same
+   *  Worker construction — EMB-032's "ride the pool, do not spawn a second
+   *  worker" applies here unchanged), so the only thing this prop changes is
+   *  WHICH of the already-opened document's pages get a canvas. A fragment
+   *  naming a page outside the document's range is a real, honest failure —
+   *  it surfaces through the same `status === 'error'` state every other
+   *  open failure uses, naming the page and the document's real page count,
+   *  never a blank box. Edit mode (mode toggle, save, signature) has no
+   *  header to reach it from on a fragment (there is no
+   *  `PreviewHeaderSlotProvider` outside the pane — see previewHeaderSlot.tsx),
+   *  so it is left wired but unreachable rather than special-cased here. */
+  pageFragment?: number
 }
 
 class PdfAssetError extends Error {}
@@ -314,7 +329,7 @@ interface PlacedSignature {
   pageNumber: number
 }
 
-export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane' }: LibraryPdfPreviewProps) {
+export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFragment }: LibraryPdfPreviewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   // 'queued' is EMB-032's visible waiting state — set only when the pool
   // could not grant a worker slot immediately (pdfWorkerPool's `onQueued`
@@ -571,12 +586,30 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane' }: Libr
             if (!cancelled) setHasFormFields(null)
           })
         setPageCount(doc.numPages)
+
+        // EMB-105 / US-12 AS-4 — a page-fragment embed renders ONE page, not
+        // the whole document. Validated against the REAL page count this
+        // document just reported (not against any earlier guess), so a
+        // fragment naming a page beyond the document's end is a genuine,
+        // honest failure — never a silently empty page.
+        let pagesToRender: number[]
+        if (pageFragment !== undefined) {
+          if (!Number.isInteger(pageFragment) || pageFragment < 1 || pageFragment > doc.numPages) {
+            throw new Error(
+              `Page ${pageFragment} does not exist in this ${doc.numPages}-page PDF.`,
+            )
+          }
+          pagesToRender = [pageFragment]
+        } else {
+          pagesToRender = Array.from({ length: doc.numPages }, (_, i) => i + 1)
+        }
+
         setStatus('ready')
 
         const width = container.clientWidth || 800
         const ratio = Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO)
 
-        for (let n = 1; n <= doc.numPages; n++) {
+        for (const n of pagesToRender) {
           const page: PDFPageProxy = await doc.getPage(n)
           if (cancelled) return
 
@@ -707,7 +740,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane' }: Libr
       // the worker we handed in — one call covers both.
       void loadingTask?.destroy().catch(() => {})
     }
-  }, [workspaceId, entry.path, reloadNonce])
+  }, [workspaceId, entry.path, reloadNonce, pageFragment])
 
   // Edit-mode AnnotationLayer mount/unmount. Runs only once every page has
   // finished its base render (see `allPagesRendered` above) — entering Edit
@@ -1002,6 +1035,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane' }: Libr
       }
       data-testid="library-pdf-preview"
       data-variant={variant}
+      {...(pageFragment !== undefined ? { 'data-page-fragment': pageFragment } : {})}
     >
       {/* PDF.js positions every text run absolutely and sizes it from
           --total-scale-factor. These rules are the minimum from pdfjs-dist's
@@ -1270,7 +1304,11 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane' }: Libr
         ref={containerRef}
         className={`min-h-0 flex-1 overflow-auto p-2 ${status === 'ready' ? '' : 'hidden'}`}
         data-testid="library-pdf-pages"
-        aria-label={`${entry.name}, ${pageCount} page${pageCount === 1 ? '' : 's'}`}
+        aria-label={
+          pageFragment !== undefined
+            ? `${entry.name}, page ${pageFragment} of ${pageCount}`
+            : `${entry.name}, ${pageCount} page${pageCount === 1 ? '' : 's'}`
+        }
       />
 
       <LibrarySignaturePad

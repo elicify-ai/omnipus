@@ -43,7 +43,7 @@ import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { X, SpinnerGap, ShieldWarning, ArrowClockwise, WarningCircle } from '@phosphor-icons/react'
 import { QueryErrorState } from '@/components/shared/QueryErrorState'
-import { fetchLibraryContent, libraryDownloadUrl, libraryQueryKeys, mintLibraryPreviewToken } from '@/lib/api'
+import { fetchLibraryContent, libraryQueryKeys, mintLibraryPreviewToken } from '@/lib/api'
 import type { LibraryEntry } from '@/lib/api'
 import type {
   LibraryPreviewTokenRequest,
@@ -53,6 +53,7 @@ import { classifyLibraryEntry } from './preview/libraryPreviewKind'
 import { BasePreview } from './preview/BasePreview'
 import { LibraryImagePreview } from './preview/LibraryImagePreview'
 import { LibraryVideoPreview } from './preview/LibraryVideoPreview'
+import { LibraryAudioPreview } from './preview/LibraryAudioPreview'
 import { LibraryPdfPreview } from './preview/LibraryPdfPreview'
 import { LibraryMarkdownPreview } from './preview/LibraryMarkdownPreview'
 import { LibraryMermaidPreview } from './preview/LibraryMermaidPreview'
@@ -326,27 +327,6 @@ function UntrustedContentBoundary() {
         Untrusted content — Omnipus did not write this page. It runs isolated: it cannot read your
         session or reach the network.
       </p>
-    </div>
-  )
-}
-
-// LibraryAudioPreview — plain <audio controls>, the exact shape
-// LibraryVideoPreview already is for video: the raw authenticated download URL
-// is the source, so there is nothing to fetch, decode or sandbox. It lives in
-// this file rather than in preview/ because this pane is the only mount point
-// and the component is four lines; if a second host ever needs it, move it
-// beside LibraryVideoPreview then.
-function LibraryAudioPreview({ workspaceId, entry }: { workspaceId: string; entry: LibraryEntry }) {
-  const src = libraryDownloadUrl(workspaceId, entry.path)
-  return (
-    <div
-      className="flex flex-1 min-h-0 items-center justify-center overflow-auto bg-[var(--color-surface-0)] p-4"
-      data-testid="library-audio-preview"
-    >
-      {/* No <track>: a workspace audio file carries no caption track to attach. */}
-      <audio controls src={src} className="w-full max-w-lg">
-        Your browser does not support playing this audio file. Use Download instead.
-      </audio>
     </div>
   )
 }
