@@ -9,6 +9,18 @@ description: >
   one, and otherwise at the value's own scale as written in the note. Thousands
   separators are a choice of the compact-text projection and are never part of a
   stored or compared value.
+
+  ADR-083 CW-5 (EMB-088, EMB-094): `type`, `values`, `derived` and `relation`
+  are the metadata an inline editor needs to decide whether it may offer an
+  editor for this cell AT ALL — today a cell is a property name and a
+  rendered string, and nothing more, so none of EMB-088's editor-gating rows
+  are evaluable without them. All four are OPTIONAL and OMITTED, never an
+  empty/false placeholder, when the cell does not correspond to a declared
+  record property (an ordinary note's frontmatter, a task-row column, or a
+  property no loaded schema describes) — an editor MUST treat an absent
+  `type` exactly like an undescribed field: no editor, a way to open the note
+  instead. They stay optional so that a view answer produced by code that
+  does not yet populate them remains a valid VaultFindCell.
 type: object
 additionalProperties: false
 required:
@@ -26,3 +38,76 @@ properties:
       empty string property, or of a property the record leaves absent — so a
       renderer must not treat empty as "omit this cell".
     example: "open"
+  type:
+    type: string
+    enum:
+      - text
+      - enum
+      - relation
+      - date
+      - integer
+      - decimal
+      - person
+      - checkbox
+    # x-enum-varnames PINS these constant names, matching the precedent set by
+    # RecordPropertyValue.yaml, RecordValue.yaml and PropertyDef.yaml (each of
+    # which pins its OWN copy of this literal for the same reason): oapi-codegen
+    # derives an enum constant's Go name from a GLOBAL collision scan across
+    # every enum in the spec, so an unrelated enum growing can silently rename
+    # these. A fifth copy of the enum values is deliberate, not an oversight —
+    # extracting a single shared component is exactly the change that caused
+    # the RecordAggregate.op collision this precedent's comment documents.
+    x-enum-varnames:
+      - VaultFindCellTypeText
+      - VaultFindCellTypeEnum
+      - VaultFindCellTypeRelation
+      - VaultFindCellTypeDate
+      - VaultFindCellTypeInteger
+      - VaultFindCellTypeDecimal
+      - VaultFindCellTypePerson
+      - VaultFindCellTypeCheckbox
+    description: >
+      The cell's DECLARED property type (PropertyDef.type), echoed so an
+      editor can pick the right control — a dropdown for "enum", a date input
+      for "date", an inline text field for "text", and so on. Absent when the
+      cell has no declared type: an ordinary note's frontmatter property, a
+      task-row column (`line`/`status`/`text` cover those), or a property
+      name no loaded schema for the record's type describes. Absence, not a
+      placeholder value, is how "anything the definition does not describe"
+      (EMB-088) is represented — an editor must never guess a type from
+      `value`'s shape.
+    example: "enum"
+  values:
+    type: array
+    description: >
+      The property's closed value set, in declaration order. Present only
+      when `type` is "enum", and then non-empty — mirrors PropertyDef.values.
+      Reused rather than re-derived from `value` because a dropdown needs the
+      FULL set, not just the one token this row happens to hold.
+    items:
+      $ref: "./EnumValueDef.yaml"
+      x-go-type: EnumValueDef
+  derived:
+    type: boolean
+    description: >
+      True when this cell's value is COMPUTED — a view's own `formulas:`
+      entry, an aggregate, or any other value the record itself does not
+      store — rather than a value read from the record's own frontmatter
+      (ADR-068 D9, FR-046). A derived cell MUST get no editor and a way to
+      open the note instead (EMB-088): writing it back through
+      RecordWriteRequest is refused server-side regardless (EMB-085), but the
+      browser must not offer an editor that will always fail. Omitted means
+      false — this cell is an ordinary stored value.
+    example: false
+  relation:
+    type: boolean
+    description: >
+      True when this cell's declared property type is "relation" or
+      "person". Carried as its own flag, distinct from `type`, so a client
+      does not have to enumerate two type values to find the one gate that
+      matters: RELATIONS AND PERSON PROPERTIES ARE NOT WRITABLE THROUGH
+      RecordWriteRequest (ADR-068 FR-045) — they are modified through
+      RelationWriteRequest's explicit add/remove/replace verbs instead. A
+      relation cell MUST get no editor and a way to open the note instead
+      (EMB-088). Omitted means false.
+    example: false

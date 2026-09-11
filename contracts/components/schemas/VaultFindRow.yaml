@@ -83,3 +83,26 @@ properties:
       saying so. A flagged row moves the response's completeness verdict to
       `no` and appears in `problems` by name.
     example: true
+  version_token:
+    type: string
+    minLength: 1
+    description: >
+      ADR-083 CW-6 (EMB-086): the SAME opaque content-hash token defined on
+      KnowledgeConflictError and carried on VaultRecord — computed by
+      pkg/knowledge/version.go's ComputeVersionToken / ReadNoteVersion over
+      the file this row is at. There is exactly one version-token scheme in
+      this codebase; this field reuses it rather than minting a second one.
+
+      Present so an inline editor drawn from a view answer can send a
+      RecordWriteRequest straight from the row it already has, with no
+      preceding per-record read. Reading each record separately before every
+      edit is not an acceptable substitute (EMB-086): it is one extra request
+      per edit, AND it opens a fresh race window between that read and the
+      write — the exact lost-update shape the version-token mechanism exists
+      to close.
+
+      OPTIONAL and OMITTED, not an empty placeholder, wherever the code
+      producing this row does not yet compute it — an inline editor MUST
+      treat an absent token the same as an ungoverned field: no direct write
+      from this row, open the note instead.
+    example: "sha256:3d1c9a7e5b2f4806"

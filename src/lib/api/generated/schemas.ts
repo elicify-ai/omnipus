@@ -644,10 +644,26 @@ type VaultFindRow = {
   cells: Array<VaultFindCell>;
   joins: Array<VaultFindJoin>;
   stale?: boolean | undefined;
+  version_token?: string | undefined;
 };
 type VaultFindCell = {
   property: string;
   value: string;
+  type?:
+    | (
+        | "text"
+        | "enum"
+        | "relation"
+        | "date"
+        | "integer"
+        | "decimal"
+        | "person"
+        | "checkbox"
+      )
+    | undefined;
+  values?: Array<EnumValueDef> | undefined;
+  derived?: boolean | undefined;
+  relation?: boolean | undefined;
 };
 type VaultFindJoin = {
   relation: string;
@@ -4467,9 +4483,30 @@ export const VaultSearchNoteHit: z.ZodType<VaultSearchNoteHit> = z.object({
   snippet: z.string().optional(),
   excerpt_unavailable: z.boolean().optional(),
 });
+export const EnumValueDef: z.ZodType<EnumValueDef> = z.object({
+  value: z.string().min(1),
+  label: z.string().optional(),
+  position: z.number().int().gte(0),
+  group: z.enum(["open", "done", "cancelled"]).optional(),
+});
 export const VaultFindCell: z.ZodType<VaultFindCell> = z.object({
   property: z.string().min(1),
   value: z.string(),
+  type: z
+    .enum([
+      "text",
+      "enum",
+      "relation",
+      "date",
+      "integer",
+      "decimal",
+      "person",
+      "checkbox",
+    ])
+    .optional(),
+  values: z.array(EnumValueDef).optional(),
+  derived: z.boolean().optional(),
+  relation: z.boolean().optional(),
 });
 export const VaultSearchRecordHit: z.ZodType<VaultSearchRecordHit> = z.object({
   path: z.string().min(1),
@@ -4701,6 +4738,7 @@ export const VaultFindRow: z.ZodType<VaultFindRow> = z.object({
   cells: z.array(VaultFindCell),
   joins: z.array(VaultFindJoin),
   stale: z.boolean().optional(),
+  version_token: z.string().min(1).optional(),
 });
 export const VaultFindTotal: z.ZodType<VaultFindTotal> = z.object({
   op: z.enum([
@@ -4789,6 +4827,106 @@ export const ViewResult: z.ZodType<ViewResult> = z.object({
   complete_reason: z.string().optional(),
   aggregates: z.array(VaultFindTotal).optional(),
   problems: z.array(RecordProblem),
+});
+export const PropertyDef: z.ZodType<PropertyDef> = z.object({
+  name: z.string().min(1),
+  type: z.enum([
+    "text",
+    "enum",
+    "relation",
+    "date",
+    "integer",
+    "decimal",
+    "person",
+    "checkbox",
+  ]),
+  many: z.boolean(),
+  required: z.boolean(),
+  label: z.string().optional(),
+  values: z.array(EnumValueDef).optional(),
+  to: z.string().min(1).optional(),
+  inverse: z.string().min(1).optional(),
+  unit: z.string().optional(),
+  unit_property: z.string().min(1).optional(),
+  formula: z.string().min(1).optional(),
+});
+export const RecordType: z.ZodType<RecordType> = z.object({
+  schema_version: z.number().int().gte(1),
+  type: z.string().min(1),
+  label: z.string().optional(),
+  identity_prefix: z.string().min(1).optional(),
+  properties: z.array(PropertyDef),
+  source_path: z.string().optional(),
+});
+export const RecordSchema: z.ZodType<RecordSchema> = z.object({
+  types: z.array(RecordType),
+  problems: z.array(RecordProblem),
+});
+export const RecordRef: z.ZodType<RecordRef> = z.object({
+  link: z.string().min(1),
+  resolved: z.boolean(),
+  id: z.string().min(1).optional(),
+  type: z.string().min(1).optional(),
+  title: z.string().optional(),
+});
+export const RecordValue: z.ZodType<RecordValue> = z.object({
+  type: z.enum([
+    "text",
+    "enum",
+    "relation",
+    "date",
+    "integer",
+    "decimal",
+    "person",
+    "checkbox",
+  ]),
+  text: z.string().optional(),
+  enum: z.string().min(1).optional(),
+  relation: RecordRef.optional(),
+  date: z.string().min(8).max(40).optional(),
+  integer: z
+    .string()
+    .min(1)
+    .max(20)
+    .regex(/^-?(0|[1-9][0-9]*)$/)
+    .optional(),
+  decimal: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(/^-?(0|[1-9][0-9]*)(\.[0-9]{1,100})?$/)
+    .optional(),
+  person: RecordRef.optional(),
+  checkbox: z.boolean().optional(),
+});
+export const RecordPropertyValue: z.ZodType<RecordPropertyValue> = z.object({
+  property: z.string().min(1),
+  type: z
+    .enum(["text", "enum", "relation", "date", "integer", "decimal", "person"])
+    .optional(),
+  values: z.array(RecordValue),
+});
+export const VaultRecord: z.ZodType<VaultRecord> = z.object({
+  id: z.string().min(1),
+  type: z.string().min(1),
+  path: z.string().min(1),
+  title: z.string().optional(),
+  version_token: z.string().min(1).optional(),
+  properties: z.array(RecordPropertyValue),
+});
+export const RecordWriteRequest: z.ZodType<RecordWriteRequest> = z.object({
+  type: z.string().min(1),
+  id: z.string().min(1).optional(),
+  path: z.string().min(1).optional(),
+  version_token: z.string().min(1).optional(),
+  properties: z.array(RecordPropertyValue).min(1),
+});
+export const KnowledgeConflictError = z.object({
+  error: z.string().min(1),
+  code: z.literal("knowledge_version_conflict"),
+  path: z.string().min(1),
+  expected_version: z.string().optional(),
+  actual_version: z.string().optional(),
 });
 export const WorkspaceDelegationEdge: z.ZodType<WorkspaceDelegationEdge> =
   z.object({
@@ -5002,111 +5140,12 @@ export const CliValidateResponse = z.object({
 });
 export const OnboardingCompleteResponse: z.ZodType<OnboardingCompleteResponse> =
   LoginResponse;
-export const KnowledgeConflictError = z.object({
-  error: z.string().min(1),
-  code: z.literal("knowledge_version_conflict"),
-  path: z.string().min(1),
-  expected_version: z.string().optional(),
-  actual_version: z.string().optional(),
-});
 export const KnowledgeMountConflictError = z.object({
   error: z.string().min(1),
   code: z.literal("knowledge_mount_conflict"),
   existing_root_path: z.string().min(1),
   requested_root_path: z.string().min(1),
   existing_collection_id: z.string().optional(),
-});
-export const EnumValueDef: z.ZodType<EnumValueDef> = z.object({
-  value: z.string().min(1),
-  label: z.string().optional(),
-  position: z.number().int().gte(0),
-  group: z.enum(["open", "done", "cancelled"]).optional(),
-});
-export const PropertyDef: z.ZodType<PropertyDef> = z.object({
-  name: z.string().min(1),
-  type: z.enum([
-    "text",
-    "enum",
-    "relation",
-    "date",
-    "integer",
-    "decimal",
-    "person",
-    "checkbox",
-  ]),
-  many: z.boolean(),
-  required: z.boolean(),
-  label: z.string().optional(),
-  values: z.array(EnumValueDef).optional(),
-  to: z.string().min(1).optional(),
-  inverse: z.string().min(1).optional(),
-  unit: z.string().optional(),
-  unit_property: z.string().min(1).optional(),
-  formula: z.string().min(1).optional(),
-});
-export const RecordType: z.ZodType<RecordType> = z.object({
-  schema_version: z.number().int().gte(1),
-  type: z.string().min(1),
-  label: z.string().optional(),
-  identity_prefix: z.string().min(1).optional(),
-  properties: z.array(PropertyDef),
-  source_path: z.string().optional(),
-});
-export const RecordSchema: z.ZodType<RecordSchema> = z.object({
-  types: z.array(RecordType),
-  problems: z.array(RecordProblem),
-});
-export const RecordRef: z.ZodType<RecordRef> = z.object({
-  link: z.string().min(1),
-  resolved: z.boolean(),
-  id: z.string().min(1).optional(),
-  type: z.string().min(1).optional(),
-  title: z.string().optional(),
-});
-export const RecordValue: z.ZodType<RecordValue> = z.object({
-  type: z.enum([
-    "text",
-    "enum",
-    "relation",
-    "date",
-    "integer",
-    "decimal",
-    "person",
-    "checkbox",
-  ]),
-  text: z.string().optional(),
-  enum: z.string().min(1).optional(),
-  relation: RecordRef.optional(),
-  date: z.string().min(8).max(40).optional(),
-  integer: z
-    .string()
-    .min(1)
-    .max(20)
-    .regex(/^-?(0|[1-9][0-9]*)$/)
-    .optional(),
-  decimal: z
-    .string()
-    .min(1)
-    .max(128)
-    .regex(/^-?(0|[1-9][0-9]*)(\.[0-9]{1,100})?$/)
-    .optional(),
-  person: RecordRef.optional(),
-  checkbox: z.boolean().optional(),
-});
-export const RecordPropertyValue: z.ZodType<RecordPropertyValue> = z.object({
-  property: z.string().min(1),
-  type: z
-    .enum(["text", "enum", "relation", "date", "integer", "decimal", "person"])
-    .optional(),
-  values: z.array(RecordValue),
-});
-export const VaultRecord: z.ZodType<VaultRecord> = z.object({
-  id: z.string().min(1),
-  type: z.string().min(1),
-  path: z.string().min(1),
-  title: z.string().optional(),
-  version_token: z.string().min(1).optional(),
-  properties: z.array(RecordPropertyValue),
 });
 export const RecordFilter: z.ZodType<RecordFilter> = z.object({
   property: z.string().min(1),
@@ -5201,13 +5240,6 @@ export const RecordQueryResponse: z.ZodType<RecordQueryResponse> = z.object({
   limit_requested: z.number().int().gte(1).optional(),
   total_matched: z.number().int().gte(0).optional(),
   next_cursor: z.string().min(1).optional(),
-});
-export const RecordWriteRequest: z.ZodType<RecordWriteRequest> = z.object({
-  type: z.string().min(1),
-  id: z.string().min(1).optional(),
-  path: z.string().min(1).optional(),
-  version_token: z.string().min(1).optional(),
-  properties: z.array(RecordPropertyValue).min(1),
 });
 export const RelationWriteRequest = z.object({
   id: z.string().min(1),
@@ -8196,6 +8228,174 @@ Frontmatter that is not valid YAML is reported through frontmatter_malformed; th
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/library/:workspace_id/knowledge/record-schema",
+    alias: "getRecordSchema",
+    description: `CW-4 (ADR-083 EMB-094). Wires RecordSchema — previously reachable only from the agent-facing record_schema tool — to the gateway/SPA boundary, so the browser can read a record type&#x27;s field declarations for itself: which properties exist, their declared type and arity, and (for &quot;enum&quot;) the closed value set. Without this, an inline record editor (US-10) has no way to decide whether a cell may be offered an editor at all.
+
+ADR-068 D0: Omnipus ships no record types of its own. An empty &#x60;types&#x60; array on a vault that has declared none is the correct answer, not a broken installation. Scoped to the calling caller&#x27;s workspace (FR-060) — a schema declared in a vault mounted only into another workspace is not in this list, indistinguishable from it not existing (FR-062).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: RecordSchema,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/library/:workspace_id/knowledge/records",
+    alias: "writeVaultRecord",
+    description: `CW-7 (ADR-083 EMB-085, EMB-086, EMB-087). Wires RecordWriteRequest — previously reachable only from an agent-facing record-write tool — to the gateway/SPA boundary, as the ONE write door an inline record editor (US-10) uses: the same lock, version compare-and-swap, atomic write and audit path an agent&#x27;s write already goes through (EMB-085). This is deliberately NOT the whole-file Library save endpoint and NOT the raw frontmatter property-setter, neither of which carries this contract&#x27;s guards.
+
+&#x60;id&#x60; ABSENT means create (&#x60;path&#x60; then required, the identifier is server-minted). &#x60;id&#x60; PRESENT means update, and &#x60;version_token&#x60; is then REQUIRED: a stale token is refused with 409 and the typed KnowledgeConflictError body naming the path and both versions (EMB-086), the field is left untouched on disk (FR-042), and the refusal is audited. A refused write is never retried automatically by the server (EMB-087) — the caller decides.
+
+RELATIONS AND PERSON PROPERTIES ARE NOT WRITABLE HERE (ADR-068 FR-045) — see RelationWriteRequest — and a property this record type&#x27;s schema describes as derived is rejected, not honoured (D9, FR-046). A record&#x27;s title and path are never editable through this request once &#x60;id&#x60; is present (EMB-089).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: RecordWriteRequest,
+      },
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: VaultRecord,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `version_token no longer matches the record&#x27;s current version — it changed on disk since the caller last read it (EMB-086).
+`,
+        schema: KnowledgeConflictError,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/library/:workspace_id/knowledge/records/:id",
+    alias: "getVaultRecord",
+    description: `CW-4 (ADR-083 EMB-094). Wires VaultRecord — previously reachable only from agent-facing record tools — to the gateway/SPA boundary. Returns the record&#x27;s declared properties and their current values, together with its &#x60;version_token&#x60; (the same opaque content-hash token as KnowledgeConflictError and VaultFindRow.version_token, computed by pkg/knowledge/version.go), so a caller that only has a record id — for example one named by a relation cell a view answer marked non-editable — can open it directly, and so a client can refresh a record&#x27;s full field set after a write that changed more than the one field it sent (EMB-092).
+
+A record IS the note (ADR-068 D1); a note whose type matches no schema is simply not a record and is reported as not found here. Derived values — counts, sums, relation inverses — are NEVER present as stored properties (D9, FR-046): they are computed at query time, not carried on this read.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: VaultRecord,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
         schema: ErrorResponse,
       },
       {

@@ -3099,6 +3099,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/library/{workspace_id}/knowledge/record-schema": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every record type declared in the caller's workspace
+         * @description CW-4 (ADR-083 EMB-094). Wires RecordSchema — previously reachable only from the agent-facing record_schema tool — to the gateway/SPA boundary, so the browser can read a record type's field declarations for itself: which properties exist, their declared type and arity, and (for "enum") the closed value set. Without this, an inline record editor (US-10) has no way to decide whether a cell may be offered an editor at all.
+         *
+         *     ADR-068 D0: Omnipus ships no record types of its own. An empty `types` array on a vault that has declared none is the correct answer, not a broken installation. Scoped to the calling caller's workspace (FR-060) — a schema declared in a vault mounted only into another workspace is not in this list, indistinguishable from it not existing (FR-062).
+         */
+        get: operations["getRecordSchema"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/{workspace_id}/knowledge/records/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One record, by its stable identifier
+         * @description CW-4 (ADR-083 EMB-094). Wires VaultRecord — previously reachable only from agent-facing record tools — to the gateway/SPA boundary. Returns the record's declared properties and their current values, together with its `version_token` (the same opaque content-hash token as KnowledgeConflictError and VaultFindRow.version_token, computed by pkg/knowledge/version.go), so a caller that only has a record id — for example one named by a relation cell a view answer marked non-editable — can open it directly, and so a client can refresh a record's full field set after a write that changed more than the one field it sent (EMB-092).
+         *
+         *     A record IS the note (ADR-068 D1); a note whose type matches no schema is simply not a record and is reported as not found here. Derived values — counts, sums, relation inverses — are NEVER present as stored properties (D9, FR-046): they are computed at query time, not carried on this read.
+         */
+        get: operations["getVaultRecord"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/library/{workspace_id}/knowledge/records": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create or update one record's properties, by splice
+         * @description CW-7 (ADR-083 EMB-085, EMB-086, EMB-087). Wires RecordWriteRequest — previously reachable only from an agent-facing record-write tool — to the gateway/SPA boundary, as the ONE write door an inline record editor (US-10) uses: the same lock, version compare-and-swap, atomic write and audit path an agent's write already goes through (EMB-085). This is deliberately NOT the whole-file Library save endpoint and NOT the raw frontmatter property-setter, neither of which carries this contract's guards.
+         *
+         *     `id` ABSENT means create (`path` then required, the identifier is server-minted). `id` PRESENT means update, and `version_token` is then REQUIRED: a stale token is refused with 409 and the typed KnowledgeConflictError body naming the path and both versions (EMB-086), the field is left untouched on disk (FR-042), and the refusal is audited. A refused write is never retried automatically by the server (EMB-087) — the caller decides.
+         *
+         *     RELATIONS AND PERSON PROPERTIES ARE NOT WRITABLE HERE (ADR-068 FR-045) — see RelationWriteRequest — and a property this record type's schema describes as derived is rejected, not honoured (D9, FR-046). A record's title and path are never editable through this request once `id` is present (EMB-089).
+         */
+        post: operations["writeVaultRecord"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{id}/delegation": {
         parameters: {
             query?: never;
@@ -6773,11 +6841,19 @@ export interface components {
              * @example true
              */
             stale?: boolean;
+            /**
+             * @description ADR-083 CW-6 (EMB-086): the SAME opaque content-hash token defined on KnowledgeConflictError and carried on VaultRecord — computed by pkg/knowledge/version.go's ComputeVersionToken / ReadNoteVersion over the file this row is at. There is exactly one version-token scheme in this codebase; this field reuses it rather than minting a second one.
+             *     Present so an inline editor drawn from a view answer can send a RecordWriteRequest straight from the row it already has, with no preceding per-record read. Reading each record separately before every edit is not an acceptable substitute (EMB-086): it is one extra request per edit, AND it opens a fresh race window between that read and the write — the exact lost-update shape the version-token mechanism exists to close.
+             *     OPTIONAL and OMITTED, not an empty placeholder, wherever the code producing this row does not yet compute it — an inline editor MUST treat an absent token the same as an ungoverned field: no direct write from this row, open the note instead.
+             * @example sha256:3d1c9a7e5b2f4806
+             */
+            version_token?: string;
         };
         /**
          * VaultFindCell
          * @description One rendered column of one row (spec 4.2). The value is TEXT, exactly as it will be shown, and never a JSON number — a decimal that round-tripped through a binary float would render digits the note does not contain, and the whole type system exists to stop that.
          *     A `decimal` renders at its property's DECLARED scale where the schema declares one, and otherwise at the value's own scale as written in the note. Thousands separators are a choice of the compact-text projection and are never part of a stored or compared value.
+         *     ADR-083 CW-5 (EMB-088, EMB-094): `type`, `values`, `derived` and `relation` are the metadata an inline editor needs to decide whether it may offer an editor for this cell AT ALL — today a cell is a property name and a rendered string, and nothing more, so none of EMB-088's editor-gating rows are evaluable without them. All four are OPTIONAL and OMITTED, never an empty/false placeholder, when the cell does not correspond to a declared record property (an ordinary note's frontmatter, a task-row column, or a property no loaded schema describes) — an editor MUST treat an absent `type` exactly like an undescribed field: no editor, a way to open the note instead. They stay optional so that a view answer produced by code that does not yet populate them remains a valid VaultFindCell.
          */
         VaultFindCell: {
             /** @example status */
@@ -6787,6 +6863,24 @@ export interface components {
              * @example open
              */
             value: string;
+            /**
+             * @description The cell's DECLARED property type (PropertyDef.type), echoed so an editor can pick the right control — a dropdown for "enum", a date input for "date", an inline text field for "text", and so on. Absent when the cell has no declared type: an ordinary note's frontmatter property, a task-row column (`line`/`status`/`text` cover those), or a property name no loaded schema for the record's type describes. Absence, not a placeholder value, is how "anything the definition does not describe" (EMB-088) is represented — an editor must never guess a type from `value`'s shape.
+             * @example enum
+             * @enum {string}
+             */
+            type?: "text" | "enum" | "relation" | "date" | "integer" | "decimal" | "person" | "checkbox";
+            /** @description The property's closed value set, in declaration order. Present only when `type` is "enum", and then non-empty — mirrors PropertyDef.values. Reused rather than re-derived from `value` because a dropdown needs the FULL set, not just the one token this row happens to hold. */
+            values?: components["schemas"]["EnumValueDef"][];
+            /**
+             * @description True when this cell's value is COMPUTED — a view's own `formulas:` entry, an aggregate, or any other value the record itself does not store — rather than a value read from the record's own frontmatter (ADR-068 D9, FR-046). A derived cell MUST get no editor and a way to open the note instead (EMB-088): writing it back through RecordWriteRequest is refused server-side regardless (EMB-085), but the browser must not offer an editor that will always fail. Omitted means false — this cell is an ordinary stored value.
+             * @example false
+             */
+            derived?: boolean;
+            /**
+             * @description True when this cell's declared property type is "relation" or "person". Carried as its own flag, distinct from `type`, so a client does not have to enumerate two type values to find the one gate that matters: RELATIONS AND PERSON PROPERTIES ARE NOT WRITABLE THROUGH RecordWriteRequest (ADR-068 FR-045) — they are modified through RelationWriteRequest's explicit add/remove/replace verbs instead. A relation cell MUST get no editor and a way to open the note instead (EMB-088). Omitted means false.
+             * @example false
+             */
+            relation?: boolean;
         };
         /**
          * VaultFindJoin
@@ -21599,6 +21693,111 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    getRecordSchema: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every record type visible to the caller, plus any schema files that failed to load. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordSchema"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    getVaultRecord: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+                /**
+                 * @description The record's stable identifier (VaultRecord.id).
+                 * @example CO-0142
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The record's declared properties, values and current version token. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VaultRecord"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    writeVaultRecord: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordWriteRequest"];
+            };
+        };
+        responses: {
+            /** @description The record as it stands after the write, including its new version_token. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VaultRecord"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            /** @description version_token no longer matches the record's current version — it changed on disk since the caller last read it (EMB-086). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeConflictError"];
+                };
+            };
             429: components["responses"]["429TooManyRequests"];
             500: components["responses"]["500InternalServerError"];
         };

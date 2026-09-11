@@ -9242,6 +9242,197 @@ paths:
         '500':
           $ref: '#/components/responses/500InternalServerError'
 
+  # ── ADR-083 CW-4 / CW-7 — inline record editing (US-10, step 5) ────────────
+  # RecordSchema, VaultRecord and RecordWriteRequest already existed as
+  # components with ZERO path usages: the whole typed-record layer (ADR-068)
+  # was agent-tool-only on the wire. These three paths are the FIRST wiring of
+  # any of them to the gateway/SPA boundary. KnowledgeConflictError likewise
+  # had zero usages; this is its first wiring too.
+  /library/{workspace_id}/knowledge/record-schema:
+    get:
+      operationId: getRecordSchema
+      summary: Every record type declared in the caller's workspace
+      description: >
+        CW-4 (ADR-083 EMB-094). Wires RecordSchema — previously reachable
+        only from the agent-facing record_schema tool — to the gateway/SPA
+        boundary, so the browser can read a record type's field declarations
+        for itself: which properties exist, their declared type and arity,
+        and (for "enum") the closed value set. Without this, an inline
+        record editor (US-10) has no way to decide whether a cell may be
+        offered an editor at all.
+
+
+        ADR-068 D0: Omnipus ships no record types of its own. An empty
+        `types` array on a vault that has declared none is the correct
+        answer, not a broken installation. Scoped to the calling caller's
+        workspace (FR-060) — a schema declared in a vault mounted only into
+        another workspace is not in this list, indistinguishable from it not
+        existing (FR-062).
+      tags:
+      - Knowledge
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      responses:
+        '200':
+          description: Every record type visible to the caller, plus any schema files that failed to load.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordSchema'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/knowledge/records/{id}:
+    get:
+      operationId: getVaultRecord
+      summary: One record, by its stable identifier
+      description: >
+        CW-4 (ADR-083 EMB-094). Wires VaultRecord — previously reachable
+        only from agent-facing record tools — to the gateway/SPA boundary.
+        Returns the record's declared properties and their current values,
+        together with its `version_token` (the same opaque content-hash
+        token as KnowledgeConflictError and VaultFindRow.version_token,
+        computed by pkg/knowledge/version.go), so a caller that only has a
+        record id — for example one named by a relation cell a view answer
+        marked non-editable — can open it directly, and so a client can
+        refresh a record's full field set after a write that changed more
+        than the one field it sent (EMB-092).
+
+
+        A record IS the note (ADR-068 D1); a note whose type matches no
+        schema is simply not a record and is reported as not found here.
+        Derived values — counts, sums, relation inverses — are NEVER present
+        as stored properties (D9, FR-046): they are computed at query time,
+        not carried on this read.
+      tags:
+      - Knowledge
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The record's stable identifier (VaultRecord.id).
+        example: "CO-0142"
+      responses:
+        '200':
+          description: The record's declared properties, values and current version token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VaultRecord'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/knowledge/records:
+    post:
+      operationId: writeVaultRecord
+      summary: Create or update one record's properties, by splice
+      description: >
+        CW-7 (ADR-083 EMB-085, EMB-086, EMB-087). Wires RecordWriteRequest —
+        previously reachable only from an agent-facing record-write tool —
+        to the gateway/SPA boundary, as the ONE write door an inline record
+        editor (US-10) uses: the same lock, version compare-and-swap, atomic
+        write and audit path an agent's write already goes through
+        (EMB-085). This is deliberately NOT the whole-file Library save
+        endpoint and NOT the raw frontmatter property-setter, neither of
+        which carries this contract's guards.
+
+
+        `id` ABSENT means create (`path` then required, the identifier is
+        server-minted). `id` PRESENT means update, and `version_token` is
+        then REQUIRED: a stale token is refused with 409 and the typed
+        KnowledgeConflictError body naming the path and both versions
+        (EMB-086), the field is left untouched on disk (FR-042), and the
+        refusal is audited. A refused write is never retried automatically
+        by the server (EMB-087) — the caller decides.
+
+
+        RELATIONS AND PERSON PROPERTIES ARE NOT WRITABLE HERE (ADR-068
+        FR-045) — see RelationWriteRequest — and a property this record
+        type's schema describes as derived is rejected, not honoured (D9,
+        FR-046). A record's title and path are never editable through this
+        request once `id` is present (EMB-089).
+      tags:
+      - Knowledge
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordWriteRequest'
+      responses:
+        '200':
+          description: The record as it stands after the write, including its new version_token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VaultRecord'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          description: >
+            version_token no longer matches the record's current version —
+            it changed on disk since the caller last read it (EMB-086).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KnowledgeConflictError'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
   /workspaces/{id}/delegation:
     get:
       operationId: getWorkspaceDelegation

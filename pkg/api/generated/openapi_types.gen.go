@@ -7967,6 +7967,42 @@ func (e VaultFindAggregateOp) Valid() bool {
 	}
 }
 
+// Defines values for VaultFindCellType.
+const (
+	VaultFindCellTypeCheckbox VaultFindCellType = "checkbox"
+	VaultFindCellTypeDate     VaultFindCellType = "date"
+	VaultFindCellTypeDecimal  VaultFindCellType = "decimal"
+	VaultFindCellTypeEnum     VaultFindCellType = "enum"
+	VaultFindCellTypeInteger  VaultFindCellType = "integer"
+	VaultFindCellTypePerson   VaultFindCellType = "person"
+	VaultFindCellTypeRelation VaultFindCellType = "relation"
+	VaultFindCellTypeText     VaultFindCellType = "text"
+)
+
+// Valid indicates whether the value is a known member of the VaultFindCellType enum.
+func (e VaultFindCellType) Valid() bool {
+	switch e {
+	case VaultFindCellTypeCheckbox:
+		return true
+	case VaultFindCellTypeDate:
+		return true
+	case VaultFindCellTypeDecimal:
+		return true
+	case VaultFindCellTypeEnum:
+		return true
+	case VaultFindCellTypeInteger:
+		return true
+	case VaultFindCellTypePerson:
+		return true
+	case VaultFindCellTypeRelation:
+		return true
+	case VaultFindCellTypeText:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for VaultFindGroupByDirection.
 const (
 	VaultFindGroupByDirectionAsc  VaultFindGroupByDirection = "asc"
@@ -18296,12 +18332,27 @@ type VaultFindAggregateOp string
 
 // VaultFindCell One rendered column of one row (spec 4.2). The value is TEXT, exactly as it will be shown, and never a JSON number — a decimal that round-tripped through a binary float would render digits the note does not contain, and the whole type system exists to stop that.
 // A `decimal` renders at its property's DECLARED scale where the schema declares one, and otherwise at the value's own scale as written in the note. Thousands separators are a choice of the compact-text projection and are never part of a stored or compared value.
+// ADR-083 CW-5 (EMB-088, EMB-094): `type`, `values`, `derived` and `relation` are the metadata an inline editor needs to decide whether it may offer an editor for this cell AT ALL — today a cell is a property name and a rendered string, and nothing more, so none of EMB-088's editor-gating rows are evaluable without them. All four are OPTIONAL and OMITTED, never an empty/false placeholder, when the cell does not correspond to a declared record property (an ordinary note's frontmatter, a task-row column, or a property no loaded schema describes) — an editor MUST treat an absent `type` exactly like an undescribed field: no editor, a way to open the note instead. They stay optional so that a view answer produced by code that does not yet populate them remains a valid VaultFindCell.
 type VaultFindCell struct {
+	// Derived True when this cell's value is COMPUTED — a view's own `formulas:` entry, an aggregate, or any other value the record itself does not store — rather than a value read from the record's own frontmatter (ADR-068 D9, FR-046). A derived cell MUST get no editor and a way to open the note instead (EMB-088): writing it back through RecordWriteRequest is refused server-side regardless (EMB-085), but the browser must not offer an editor that will always fail. Omitted means false — this cell is an ordinary stored value.
+	Derived  *bool  `json:"derived,omitempty"`
 	Property string `json:"property"`
+
+	// Relation True when this cell's declared property type is "relation" or "person". Carried as its own flag, distinct from `type`, so a client does not have to enumerate two type values to find the one gate that matters: RELATIONS AND PERSON PROPERTIES ARE NOT WRITABLE THROUGH RecordWriteRequest (ADR-068 FR-045) — they are modified through RelationWriteRequest's explicit add/remove/replace verbs instead. A relation cell MUST get no editor and a way to open the note instead (EMB-088). Omitted means false.
+	Relation *bool `json:"relation,omitempty"`
+
+	// Type The cell's DECLARED property type (PropertyDef.type), echoed so an editor can pick the right control — a dropdown for "enum", a date input for "date", an inline text field for "text", and so on. Absent when the cell has no declared type: an ordinary note's frontmatter property, a task-row column (`line`/`status`/`text` cover those), or a property name no loaded schema for the record's type describes. Absence, not a placeholder value, is how "anything the definition does not describe" (EMB-088) is represented — an editor must never guess a type from `value`'s shape.
+	Type *VaultFindCellType `json:"type,omitempty"`
 
 	// Value The rendered value. An EMPTY STRING is a legitimate rendering — of an empty string property, or of a property the record leaves absent — so a renderer must not treat empty as "omit this cell".
 	Value string `json:"value"`
+
+	// Values The property's closed value set, in declaration order. Present only when `type` is "enum", and then non-empty — mirrors PropertyDef.values. Reused rather than re-derived from `value` because a dropdown needs the FULL set, not just the one token this row happens to hold.
+	Values *[]EnumValueDef `json:"values,omitempty"`
 }
+
+// VaultFindCellType The cell's DECLARED property type (PropertyDef.type), echoed so an editor can pick the right control — a dropdown for "enum", a date input for "date", an inline text field for "text", and so on. Absent when the cell has no declared type: an ordinary note's frontmatter property, a task-row column (`line`/`status`/`text` cover those), or a property name no loaded schema for the record's type describes. Absence, not a placeholder value, is how "anything the definition does not describe" (EMB-088) is represented — an editor must never guess a type from `value`'s shape.
+type VaultFindCellType string
 
 // VaultFindCounts The four numbers a completeness verdict is built from (spec FR-121, FR-125a).
 // They are separate fields because they are separate facts and they routinely disagree. A design in which they cannot disagree is a design whose test for FR-125a cannot fail — which is precisely the defect an earlier revision of the worked example shipped, stating "14 evaluated" in its header and "over 12 of 12 rows" in its total, the same number twice.
@@ -18624,6 +18675,11 @@ type VaultFindRow struct {
 
 	// Title The note's display title.
 	Title string `json:"title"`
+
+	// VersionToken ADR-083 CW-6 (EMB-086): the SAME opaque content-hash token defined on KnowledgeConflictError and carried on VaultRecord — computed by pkg/knowledge/version.go's ComputeVersionToken / ReadNoteVersion over the file this row is at. There is exactly one version-token scheme in this codebase; this field reuses it rather than minting a second one.
+	// Present so an inline editor drawn from a view answer can send a RecordWriteRequest straight from the row it already has, with no preceding per-record read. Reading each record separately before every edit is not an acceptable substitute (EMB-086): it is one extra request per edit, AND it opens a fresh race window between that read and the write — the exact lost-update shape the version-token mechanism exists to close.
+	// OPTIONAL and OMITTED, not an empty placeholder, wherever the code producing this row does not yet compute it — an inline editor MUST treat an absent token the same as an ungoverned field: no direct write from this row, open the note instead.
+	VersionToken *string `json:"version_token,omitempty"`
 }
 
 // VaultFindRowStatus TASK ROWS ONLY. The checkbox state.
@@ -19892,6 +19948,9 @@ type SearchFilesJSONRequestBody = FileSearchRequest
 
 // FindVaultJSONRequestBody defines body for FindVault for application/json ContentType.
 type FindVaultJSONRequestBody = VaultSearchRequest
+
+// WriteVaultRecordJSONRequestBody defines body for WriteVaultRecord for application/json ContentType.
+type WriteVaultRecordJSONRequestBody = RecordWriteRequest
 
 // CreateLibraryDirectoryJSONRequestBody defines body for CreateLibraryDirectory for application/json ContentType.
 type CreateLibraryDirectoryJSONRequestBody = LibraryMkdirRequest
