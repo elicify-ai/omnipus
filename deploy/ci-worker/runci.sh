@@ -747,7 +747,9 @@ run_e2e() {
   elif [ -z "${DISPLAY:-}" ]; then
     echo "WARNING: no Xvfb on this box — the preview-headed shard will fail at browserType.launch, and that is an ENVIRONMENT failure, not a code defect" >&2
   fi
-  trap '[ -n "${_XVFB_PID:-}" ] && kill "$_XVFB_PID" 2>/dev/null; return' RETURN
+  # Reap by EXACT pid. A bare `return` inside a RETURN trap is not needed and
+  # muddies the function's own exit status, so the trap only kills.
+  trap '[ -n "${_XVFB_PID:-}" ] && kill "$_XVFB_PID" 2>/dev/null || true' RETURN
 
   _e2e_build || return 1
 
