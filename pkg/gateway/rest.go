@@ -2569,18 +2569,14 @@ func (a *restAPI) HandleUserContext(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *restAPI) getUserContext(w http.ResponseWriter) {
-	cfg := a.agentLoop.GetConfig()
-	userMDPath := filepath.Join(cfg.WorkspacePath(), "USER.md")
-	content := ""
-	if data, err := os.ReadFile(userMDPath); err != nil {
-		if !os.IsNotExist(err) {
-			// Distinguish missing file (normal, return empty) from unreadable file (error).
-			slog.Error("rest: read USER.md", "error", err)
-			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read USER.md: %v", err))
-			return
-		}
-	} else {
-		content = string(data)
+	// config.ReadUserProfile is the single resolver, shared with the agent
+	// context builder. Reading USER.md independently here is what let the two
+	// halves drift apart in the first place.
+	_, content, err := config.ReadUserProfile()
+	if err != nil {
+		slog.Error("rest: read USER.md", "error", err)
+		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read USER.md: %v", err))
+		return
 	}
 	jsonOK(w, gen.UserContextResponse{Content: content})
 }
@@ -2591,8 +2587,14 @@ func (a *restAPI) putUserContext(w http.ResponseWriter, r *http.Request) {
 	if !decodeAndValidate(w, r, "UserContextRequest", &req, validateEnabled) {
 		return
 	}
-	cfg := a.agentLoop.GetConfig()
-	userMDPath := filepath.Join(cfg.WorkspacePath(), "USER.md")
+	// Always writes the global path, never the legacy one — so the first save
+	// after upgrading moves the profile to its proper home.
+	userMDPath := config.UserProfilePath()
+	if err := os.MkdirAll(filepath.Dir(userMDPath), 0o700); err != nil {
+		slog.Error("rest: create USER.md parent", "error", err)
+		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not write USER.md: %v", err))
+		return
+	}
 	if err := fileutil.WriteFileAtomic(userMDPath, []byte(req.Content), 0o600); err != nil {
 		slog.Error("rest: write USER.md", "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not write USER.md: %v", err))

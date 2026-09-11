@@ -20,6 +20,8 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"strings"
+
+	"github.com/dapicom-ai/omnipus/pkg/config"
 )
 
 // canonicalMetadataNames maps the canonical key (lowercase) to the on-disk
@@ -43,6 +45,67 @@ var canonicalMetadataNames = map[string]string{
 func CanonicalMetadataFilename(key string) (string, bool) {
 	name, ok := canonicalMetadataNames[strings.ToLower(strings.TrimSpace(key))]
 	return name, ok
+}
+
+// userProfileWriteBlocked reports whether absPath is the global USER.md.
+//
+// WRITES ONLY. USER.md is the user's own profile and its content is already
+// injected into every agent's prompt, so blocking reads would buy nothing.
+// Writes are different: the file is GLOBAL (config.UserProfilePath), so a
+// single agent rewriting it would rewrite what every other agent believes
+// about the user.
+//
+// Why this is a separate check rather than another entry in
+// canonicalMetadataNames: that table matches on the agents/<id>/<name>.md
+// SHAPE, and the user profile deliberately does not live under agents/. This
+// is the same class of gap that once left workspaces/<id>/AGENT.md unguarded
+// while agents/<id>/AGENT.md was covered — see pkg/workspace/instructions.go.
+//
+// With the sandbox on, a confined tool cannot reach the home root at all and
+// this never fires. It exists for god mode, which is precisely when the
+// app-level guards are the only thing left.
+func userProfileWriteBlocked(absPath, op string) bool {
+	if op != "write" {
+		return false
+	}
+	profile := config.UserProfilePath()
+	if filepath.Clean(absPath) == filepath.Clean(profile) {
+		return true
+	}
+	// absPath arrives already resolved through EvalSymlinks (resolveAbsPath).
+	// The profile path does not, so compare resolved-to-resolved as well —
+	// otherwise a single symlink anywhere in OMNIPUS_HOME (a symlinked home
+	// directory is ordinary) makes this guard silently fail OPEN. On macOS the
+	// default temp dir alone is enough: /var is a symlink to /private/var.
+	//
+	// Structural guards like metadataFileMatch do not have this problem
+	// because they match on shape rather than on equality with a known
+	// absolute path. An equality check has to normalise both sides.
+	resolvedProfile, err := filepath.EvalSymlinks(profile)
+	if err != nil {
+		// The profile does not exist yet, so a write would CREATE it — still
+		// the shared file, so still refused. Resolve the parent instead and
+		// fail closed if even that is not resolvable.
+		parent, parentErr := filepath.EvalSymlinks(filepath.Dir(profile))
+		if parentErr != nil {
+			return false
+		}
+		resolvedProfile = filepath.Join(parent, filepath.Base(profile))
+	}
+	return filepath.Clean(absPath) == filepath.Clean(resolvedProfile)
+}
+
+// userProfileGuardError is the structured refusal for a blocked USER.md write.
+func userProfileGuardError() string {
+	payload := map[string]string{
+		"error":  "USER_PROFILE_READ_ONLY",
+		"detail": "USER.md is the user's own profile and is shared by every agent. It is edited by the user in Settings, not by an agent.",
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "USER_PROFILE_READ_ONLY: USER.md is the user's profile and is not agent-writable"
+	}
+	return string(encoded)
 }
 
 // metadataFileMatch reports whether absPath is one of the four canonical

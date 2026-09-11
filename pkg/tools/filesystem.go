@@ -373,6 +373,9 @@ func guardMetadataPath(workspace, path, op string) *ToolResult {
 	if _, _, matched := metadataFileMatch(absPath); matched {
 		return ErrorResult(metadataGuardError(absPath, op))
 	}
+	if userProfileWriteBlocked(absPath, op) {
+		return ErrorResult(userProfileGuardError())
+	}
 	return nil
 }
 

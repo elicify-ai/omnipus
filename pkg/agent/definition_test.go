@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"github.com/dapicom-ai/omnipus/pkg/config"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,10 +107,19 @@ func TestLoadAgentDefinitionFallsBackToLegacyAgentsMarkdown(t *testing.T) {
 	}
 }
 
-func TestLoadAgentDefinitionLoadsWorkspaceUserMarkdown(t *testing.T) {
+// USER.md is GLOBAL, so it is read from config.UserProfilePath() and NOT from
+// the agent's own directory. This test previously asserted the opposite; the
+// assertion it makes is the same strength, only the location changed.
+func TestLoadAgentDefinitionLoadsGlobalUserMarkdown(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+
+	if err := os.WriteFile(config.UserProfilePath(), []byte("# User\nGlobal preferences."), 0o600); err != nil {
+		t.Fatalf("seed global USER.md: %v", err)
+	}
+
 	tmpDir := setupWorkspace(t, map[string]string{
 		"AGENT.md": "# Agent\nStructured agent.",
-		"USER.md":  "# User\nWorkspace preferences.",
 	})
 	defer cleanupWorkspace(t, tmpDir)
 
@@ -119,11 +129,11 @@ func TestLoadAgentDefinitionLoadsWorkspaceUserMarkdown(t *testing.T) {
 	if definition.User == nil {
 		t.Fatal("expected USER.md to be loaded")
 	}
-	if definition.User.Path != filepath.Join(tmpDir, "USER.md") {
-		t.Fatalf("expected workspace USER.md path, got %q", definition.User.Path)
+	if definition.User.Path != config.UserProfilePath() {
+		t.Fatalf("expected the global USER.md path %q, got %q", config.UserProfilePath(), definition.User.Path)
 	}
-	if !strings.Contains(definition.User.Content, "Workspace preferences") {
-		t.Fatalf("expected workspace USER.md content, got %q", definition.User.Content)
+	if !strings.Contains(definition.User.Content, "Global preferences") {
+		t.Fatalf("expected global USER.md content, got %q", definition.User.Content)
 	}
 }
 
@@ -201,11 +211,16 @@ Follow the body prompt.
 	}
 }
 
-func TestLoadBootstrapFilesIncludesWorkspaceUserMarkdown(t *testing.T) {
+func TestLoadBootstrapFilesIncludesGlobalUserMarkdown(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+	if err := os.WriteFile(config.UserProfilePath(), []byte("# User\nShared profile."), 0o600); err != nil {
+		t.Fatalf("seed global USER.md: %v", err)
+	}
+
 	tmpDir := setupWorkspace(t, map[string]string{
 		"AGENT.md": "# Agent\nFollow the new structure.",
 		"SOUL.md":  "# Soul\nSpeak plainly.",
-		"USER.md":  "# User\nShared profile.",
 	})
 	defer cleanupWorkspace(t, tmpDir)
 
@@ -213,7 +228,7 @@ func TestLoadBootstrapFilesIncludesWorkspaceUserMarkdown(t *testing.T) {
 	bootstrap := cb.LoadBootstrapFiles()
 
 	if !strings.Contains(bootstrap, "Shared profile") {
-		t.Fatalf("expected workspace USER.md in bootstrap, got %q", bootstrap)
+		t.Fatalf("expected the global USER.md in bootstrap, got %q", bootstrap)
 	}
 	if !strings.Contains(bootstrap, "## USER.md") {
 		t.Fatalf("expected USER.md heading in bootstrap, got %q", bootstrap)
@@ -258,10 +273,16 @@ func TestStructuredAgentIgnoresIdentityChanges(t *testing.T) {
 }
 
 func TestStructuredAgentUserChangesInvalidateCache(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+	userPath := config.UserProfilePath()
+	if err := os.WriteFile(userPath, []byte("# User\nInitial workspace preferences."), 0o600); err != nil {
+		t.Fatalf("seed global USER.md: %v", err)
+	}
+
 	tmpDir := setupWorkspace(t, map[string]string{
 		"AGENT.md": "# Agent\nFollow the new structure.",
 		"SOUL.md":  "# Soul\nVersion one.",
-		"USER.md":  "# User\nInitial workspace preferences.",
 	})
 	defer cleanupWorkspace(t, tmpDir)
 
@@ -269,11 +290,10 @@ func TestStructuredAgentUserChangesInvalidateCache(t *testing.T) {
 
 	promptV1 := cb.BuildSystemPromptWithCache()
 	if !strings.Contains(promptV1, "Initial workspace preferences") {
-		t.Fatalf("expected workspace USER.md in prompt, got %q", promptV1)
+		t.Fatalf("expected the global USER.md in prompt, got %q", promptV1)
 	}
 
-	userPath := filepath.Join(tmpDir, "USER.md")
-	if err := os.WriteFile(userPath, []byte("# User\nUpdated workspace preferences."), 0o644); err != nil {
+	if err := os.WriteFile(userPath, []byte("# User\nUpdated workspace preferences."), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	future := time.Now().Add(2 * time.Second)

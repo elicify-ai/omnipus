@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/gomarkdown/markdown/parser"
 	"gopkg.in/yaml.v3"
 
@@ -53,7 +54,13 @@ type SoulDefinition struct {
 	Content string `json:"content"`
 }
 
-// UserDefinition represents the resolved USER.md file linked to the workspace.
+// UserDefinition represents the resolved USER.md file — the user's own profile.
+//
+// It is GLOBAL: one file for the whole installation, the same for every agent
+// and every workspace. See config.UserProfilePath. The previous comment said
+// "linked to the workspace", which read as the user-facing Workspace but meant
+// the agent's own directory — and that ambiguity is what kept this file from
+// reaching any agent.
 type UserDefinition struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
@@ -78,7 +85,9 @@ func (cb *ContextBuilder) LoadAgentDefinition() AgentContextDefinition {
 
 func loadAgentDefinition(workspace string) AgentContextDefinition {
 	definition := AgentContextDefinition{}
-	definition.User = loadUserDefinition(workspace)
+	// USER.md is deliberately NOT resolved from `workspace`. It describes the
+	// user, so it is global — see config.ReadUserProfile.
+	definition.User = loadUserDefinition()
 	agentPath := filepath.Join(workspace, string(AgentDefinitionSourceAgent))
 	agentContent, agentErr := os.ReadFile(agentPath)
 	if agentErr == nil {
@@ -140,7 +149,7 @@ func (definition AgentContextDefinition) trackedPaths(workspace string) []string
 	paths := []string{
 		filepath.Join(workspace, string(AgentDefinitionSourceAgent)),
 		filepath.Join(workspace, "SOUL.md"),
-		filepath.Join(workspace, "USER.md"),
+		config.UserProfilePath(),
 	}
 	if definition.Source != AgentDefinitionSourceAgent {
 		paths = append(paths,
@@ -151,20 +160,17 @@ func (definition AgentContextDefinition) trackedPaths(workspace string) []string
 	return uniquePaths(paths)
 }
 
-func loadUserDefinition(workspace string) *UserDefinition {
-	userPath := filepath.Join(workspace, "USER.md")
-	content, err := os.ReadFile(userPath)
-	if err == nil {
-		return &UserDefinition{
-			Path:    userPath,
-			Content: string(content),
-		}
-	}
-	if !os.IsNotExist(err) {
+func loadUserDefinition() *UserDefinition {
+	path, content, err := config.ReadUserProfile()
+	if err != nil {
 		logger.WarnCF("agent", "Could not read USER.md",
-			map[string]any{"path": userPath, "error": err.Error()})
+			map[string]any{"path": config.UserProfilePath(), "error": err.Error()})
+		return nil
 	}
-	return nil
+	if path == "" {
+		return nil // no profile yet — normal on a fresh install
+	}
+	return &UserDefinition{Path: path, Content: content}
 }
 
 func parseAgentPromptDefinition(path, content string) AgentPromptDefinition {
