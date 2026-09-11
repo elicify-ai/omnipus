@@ -16,8 +16,10 @@
 // PIECES of them, which is worse than having none, because the pieces looked
 // like the whole thing:
 //
-//   - op "link" with `relation` ADDS one edge, and only adds. There is no
-//     unlink.
+//   - op "link" with `relation` ADDED one edge, and only added. There was no
+//     unlink. (Removed once this op landed — see Execute's `relation` refusal.
+//     Two ways to write one property is one too many, and the one that
+//     survives is the one with the whole verb set.)
 //   - set_property with `list_op: add`/`remove` reaches add and remove, but
 //     only by treating a relation as an untyped string list — no wikilink
 //     wrapping, no declared-cardinality enforcement, no idea it is a
@@ -232,8 +234,10 @@ func knowledgeEditRelationWikilink(target string) string {
 //
 // # Which shape the property is written in
 //
-// Exactly the three cases knowledgeEditLinkPropertyEdit already distinguishes,
-// and for the reasons argued there:
+// Three cases, on the same D5 reading ("Cardinality is declared and enforced
+// (many: true or not)") that op "link"'s removed `relation` mode once shared
+// — the argument is restated here in full rather than cited, because this is
+// now the only place it is made:
 //
 //   - Declared many: true  -> LIST. add/remove touch one element each and
 //     leave every other byte alone; replace rewrites the whole list.

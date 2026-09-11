@@ -443,7 +443,15 @@ func TestToolParameterSchemaMatchesAcceptedArguments(t *testing.T) {
 	}{
 		{tool: NewDescribeTool(ToolDeps{}, nil), accepted: describeArgNames},
 		{tool: NewReadTool(ToolDeps{}), accepted: readArgNames},
-		{tool: NewEditTool(AuthoringDeps{}), accepted: editArgNames},
+		{
+			// 'relation' was op "link"'s frontmatter-property mode until op
+			// "relation" replaced it. Execute refuses it by name with the
+			// migration in the message, so — like knowledge_restructure's
+			// expect_version — it must NOT be advertised in the schema: a
+			// model shown the field would keep sending it.
+			tool: NewEditTool(AuthoringDeps{}), accepted: editArgNames,
+			alsoRefused: []string{"relation"},
+		},
 		{
 			tool: NewRestructureTool(AuthoringDeps{}), accepted: restructureArgNames,
 			alsoRefused: []string{"expect_version"},

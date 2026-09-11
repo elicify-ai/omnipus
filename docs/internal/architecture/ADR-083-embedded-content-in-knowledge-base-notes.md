@@ -2247,11 +2247,25 @@ The prior comment at that site called the gap a **DEFERRAL** and told the next r
 complete it (*"Whoever picks it up adds `'block-mount'` here"*). That instruction is now removed —
 it was the opposite of the ruling.
 
-### 15.3 Not changed by this ruling, and deliberately so
+### 15.3 The spec rows this ruling made stale — now corrected
 
-`docs/internal/specs/adr-083-embedded-content-spec.md` still carries the step-6 expectation in two
+`docs/internal/specs/adr-083-embedded-content-spec.md` carried the step-6 expectation in two
 places — its test table (test **82**, `audio-video-mermaid-pdf-page`) and its C8 coverage row
-(*"`.mmd` | Deferred | diagram renderer, inline (step 6)"*). Those rows are stale under N8 and are
-flagged here rather than edited, because the spec was out of scope for the change that recorded
-this ruling. Whoever next revises the spec should strike `mermaid` from test 82's name and re-state
-C8 as a permanent refusal citing §15.
+(*"`.mmd` | Deferred | diagram renderer, inline (step 6)"*). Both were stale under N8. They were
+flagged here rather than edited at the time, because the spec was out of scope for the change that
+recorded this ruling.
+
+**Both are now fixed** (2026-09-12): `mermaid` is struck from test 82's name, and C8 is re-stated
+as a permanent refusal citing §15, with the fenced-block distinction spelled out in the row itself
+so the two mechanisms cannot be collapsed by a later reader.
+
+A **third** staleness was found while making those edits and is also fixed: the spec cited **no
+test at all** for the N8 refusal, even though `knowledgeMarkdown.diagramEmbed.test.tsx` was already
+written and passing. It is now **test 126**. A spec that records a ruling but not its enforcement
+invites someone to "implement" the deferred feature the stale row still promised.
+
+`docs/internal/uat/library-uat-plan.md` needed no expectation changed — its file-type table is
+about the **standalone Library preview pane**, which §15.1's last line already places outside this
+ruling — but a three-case table was added beneath it, because a tester reading "Mermaid file
+`.mmd` → rendered diagram" next to a ruling titled "embedded diagram files are out of scope" can
+reasonably conclude the two contradict each other. They do not; they are different surfaces.

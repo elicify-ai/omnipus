@@ -142,7 +142,7 @@ var editArgNames = []string{
 	"property", "value", "list_op",
 	"heading", "level", "once",
 	"anchor", "line_range",
-	"target", "alias", "section", "relation",
+	"target", "alias", "section",
 	// embed (US-11). 'view', 'target_heading' and 'target_block' are the
 	// embed's OWN fragment modifiers — named distinctly from 'heading'
 	// (append_section's destination heading) and from 'section' (link's and
@@ -184,7 +184,7 @@ var editOpArgs = map[string][]string{
 	opCreate:        {"op", "collection", "path", "template", "title", "body", "frontmatter"},
 	opSetProperty:   {"op", "collection", "path", "expect_version", "property", "value", "list_op"},
 	opAppendSection: {"op", "collection", "path", "expect_version", "heading", "level", "once", "body"},
-	opLink:          {"op", "collection", "path", "expect_version", "target", "alias", "section", "relation"},
+	opLink:          {"op", "collection", "path", "expect_version", "target", "alias", "section"},
 	opReplaceBody:   {"op", "collection", "path", "expect_version", "anchor", "line_range", "body"},
 	opEmbed: {
 		"op", "collection", "path", "expect_version",
@@ -338,14 +338,8 @@ func (t *EditTool) Parameters() map[string]any {
 			},
 			"section": map[string]any{
 				"type": "string",
-				"description": "link: heading to put a body wikilink under. Ignored when " +
-					"'relation' is given. embed: heading to put the embed under; created if " +
-					"absent.",
-			},
-			"relation": map[string]any{
-				"type": "string",
-				"description": "link: a relation property name to record the link on, instead " +
-					"of inserting a wikilink in the body.",
+				"description": "link: heading to put the wikilink under. embed: heading to " +
+					"put the embed under; created if absent.",
 			},
 
 			// embed (US-11). At most one of view/target_heading/target_block.
@@ -415,6 +409,40 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	target, refusal := t.deps.begin(ctx, authorOp, args)
 	if refusal != nil {
 		return refusal
+	}
+	// THE `relation` REFUSAL — checked ahead of both generic sweeps below so
+	// the caller gets the migration in the error text rather than a generic
+	// "does not read" line it cannot act on. Same shape and same reason as
+	// knowledge_restructure's expect_version refusal (AC-X3): an argument
+	// this tool deliberately no longer declares, whose senders are all
+	// following instructions that were true until recently.
+	//
+	// op "link" USED to accept `relation` and splice the wikilink into that
+	// frontmatter property instead of the body. It was add-only — there was
+	// no unlink — which made it half of a verb set rather than a way in, and
+	// two ways to write one property is one too many. op "relation"
+	// (knowledge_edit_relation.go) is the whole set, and preserves the rest
+	// of the list on every verb, so it replaces this outright.
+	//
+	// Presence, not emptiness, is what is refused: `relation: ""` is a
+	// caller whose property name resolved to nothing, and running it as a
+	// body wikilink would silently do something other than what it asked.
+	//
+	// Tool-wide rather than op-scoped because NO op reads `relation` now —
+	// an agent that sends it to set_property or to op "relation" itself
+	// (meaning `property`) has made the same mistake and needs the same
+	// sentence.
+	if _, sentRelation := args["relation"]; sentRelation {
+		return t.deps.refuse(authorOp, target, nil,
+			"knowledge_edit's op \"link\" no longer takes 'relation': it only ever added an "+
+				"edge, never removed one, and a relation property now has exactly one way in. "+
+				"To write a relation property, send op \"relation\" instead: same collection, "+
+				"path and expect_version as this call, plus property: the relation property "+
+				"name you put in 'relation', relation_op: \"add\", \"remove\" or \"replace\", "+
+				"and targets: a list of note names or paths (the '[[...]]' notation is written "+
+				"for you). \"add\" and \"remove\" leave the rest of the list untouched; "+
+				"\"replace\" discards it on purpose. To insert a wikilink in the note's BODY "+
+				"instead, re-send this op \"link\" call with 'relation' dropped")
 	}
 	// Checked before the op switch, and against the FULL cross-op name set
 	// (not the subset the resolved op happens to read): a misspelled or
@@ -800,24 +828,20 @@ func (t *EditTool) execLink(ctx context.Context, target mutationTarget, args map
 	// always the layer actually deciding it. Removed rather than kept as
 	// unverified redundancy.
 	expect := strings.TrimSpace(stringArg(args["expect_version"]))
-	relation := strings.TrimSpace(stringArg(args["relation"]))
 
-	// gov stays zero-value (Reason knowledgeEditGoverned, Note() == "") on
-	// the non-relation branch below — a body wikilink never touches schema
-	// governance at all, so there is nothing to report either way.
-	var gov knowledgeEditGovernance
-	var edit NoteEdit
-	if relation != "" {
-		set, report, serr := t.loadSchemas(target)
-		if serr != nil {
-			return t.deps.refuse(AuthorOpEdit, target, []string{rel}, serr.Error())
-		}
-		edit = knowledgeEditLinkPropertyEdit(set, report, relation, "[["+linkTarget+"]]", &gov)
-	} else {
-		edit = AddWikilink(linkTarget,
-			strings.TrimSpace(stringArg(args["alias"])),
-			strings.TrimSpace(stringArg(args["section"])))
-	}
+	// op "link" writes a BODY wikilink, and nothing else. It once had a
+	// second mode — `relation`, which spliced the link into a frontmatter
+	// relation property instead — and that mode is gone: op "relation" is
+	// the single way in for a relation property now, and Execute refuses
+	// `relation` here by name before this function is reached.
+	//
+	// No schema is loaded and no governance is resolved, because a body
+	// wikilink is not a property write: there is no declared property for a
+	// schema to have an opinion about, which is why EditData.SchemaNote is
+	// left empty below rather than reporting "nothing was checked".
+	edit := AddWikilink(linkTarget,
+		strings.TrimSpace(stringArg(args["alias"])),
+		strings.TrimSpace(stringArg(args["section"])))
 
 	res, err := EditNote(OSLinkFS(), target.collection, EditNoteRequest{
 		RelPath: rel, Edits: []NoteEdit{edit}, ExpectVersion: expect,
@@ -834,8 +858,8 @@ func (t *EditTool) execLink(ctx context.Context, target mutationTarget, args map
 	}
 	return tools.NewToolResult(RenderEdit(EditData{
 		Op: opLink, Path: res.RelPath, Version: res.Version,
-		Target: linkTarget, Relation: relation, Changed: res.Changed,
-		SchemaNote: gov.Note(), IndexWarning: indexWarning,
+		Target: linkTarget, Changed: res.Changed,
+		IndexWarning: indexWarning,
 	}))
 }
 
@@ -1286,7 +1310,6 @@ type EditData struct {
 	ListOp   string
 	Heading  string
 	Target   string
-	Relation string
 	// RelationOp is op=relation's verb — "add", "remove" or "replace"
 	// (FR-045). A DELIBERATELY separate field from ListOp (set_property's
 	// own add/remove sub-verb) even though both render as a verb word: the
@@ -1356,11 +1379,11 @@ func RenderEdit(d EditData) string {
 		}
 		fmt.Fprintf(&b, "APPEND_SECTION %q (%s)\n", d.Heading, state)
 	case opLink:
-		if d.Relation != "" {
-			fmt.Fprintf(&b, "LINK %s -> %s (%s)\n", d.Relation, d.Target, changedWord(d.Changed))
-		} else {
-			fmt.Fprintf(&b, "LINK -> %s (%s)\n", d.Target, changedWord(d.Changed))
-		}
+		// One shape, because op "link" now has one mode. The second form
+		// ("LINK <relation> -> <target>") rendered the frontmatter-property
+		// mode, which op "relation" replaced outright — see Execute's
+		// `relation` refusal.
+		fmt.Fprintf(&b, "LINK -> %s (%s)\n", d.Target, changedWord(d.Changed))
 	case opReplaceBody:
 		fmt.Fprintf(&b, "REPLACE_BODY (%s)\n", changedWord(d.Changed))
 	case opEmbed:
