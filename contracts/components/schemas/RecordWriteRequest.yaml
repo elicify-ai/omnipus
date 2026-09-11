@@ -49,13 +49,32 @@ properties:
   version_token:
     type: string
     minLength: 1
+    pattern: '^v1:(absent|[0-9a-f]{32})$'
     description: >
       ADR-067 D14's opaque content-hash token, as returned on the record that
       is being updated. REQUIRED whenever `id` is present: a stale token means
       the file changed since it was read, and the write is REFUSED and the
       refusal AUDITED (FR-043, FR-044) rather than overwriting an edit nobody
       saw. Omitted only on create, where there is no prior version.
-    example: "sha256:3d1c9a7e5b2f4806"
+
+      THE `pattern` IS ON THIS INBOUND FIELD AND DELIBERATELY NOT ON THE THREE
+      OUTBOUND ONES (VaultRecord, VaultFindRow, KnowledgeConflictError), which
+      carry the same token with no pattern. The asymmetry is the decision, not
+      an oversight. Inbound, a token that is not one of the two shapes this
+      server ever MINTS cannot be a stale token — it is a malformed request,
+      and 400 is the truthful answer, caught before the compare-and-swap
+      rather than surfacing as a 409 that blames a concurrent editor who does
+      not exist. Outbound, a pattern would be validated by the SPA's Zod edge,
+      where a single non-conforming field DROPS THE WHOLE RESPONSE — so a
+      server-side anomaly on one row would blank an entire dashboard. The
+      outbound guarantee is held in Go instead, by NoteVersion.TokenIfPresent
+      (pkg/knowledge/version.go), which makes emitting the absent-sentinel for
+      a note that exists syntactically impossible at the source.
+
+      "Opaque" (FR-107) still binds: a client never PARSES, orders or
+      constructs a token. This pattern lets the server reject a shape it could
+      not have issued; it is not a licence to build one.
+    example: "v1:9f2a7c4081e3b5d6a0c1f2e3b4d5a6c7"
   properties:
     type: array
     minItems: 1

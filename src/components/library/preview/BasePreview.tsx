@@ -480,9 +480,16 @@ export function BasePreview({
 
   // ADR-083 EMB-048/WL-1: an embed's own `resolveWikilink` (the note reader's
   // real link graph) takes over completely when supplied — never merged with
-  // the row-scoped fallback below, which can only ever answer `resolved` or
-  // `unknown` and therefore renders a genuinely broken link as merely
-  // unverified.
+  // the fallback below.
+  //
+  // That fallback is now TWO tiers, not the one this comment used to describe.
+  // It said the fallback "can only ever answer `resolved` or `unknown` and
+  // therefore renders a genuinely broken link as merely unverified" — true
+  // before WL-1's standalone-pane fix, and contradicted by the code four lines
+  // down ever since, which checks each loaded row's own link-graph edges FIRST
+  // and returns a real `unresolved` from real evidence. Only rows past
+  // COLLECTION_LINK_ROW_QUERY_CAP fall through to the older
+  // resolved-or-unknown-only guess.
   const resolveWikilink = useMemo(() => {
     if (embed?.resolveWikilink) return embed.resolveWikilink
     if (!result) return undefined
@@ -735,12 +742,60 @@ export function BasePreview({
             // Which cells actually offer an editor is decided per-cell from the
             // wire (a derived or relation cell never does), not here.
             workspaceId={workspaceId}
-            // A successful write changes the stored record, so the rendered view
-            // is now stale. Invalidate rather than patching in place: the server
-            // owns derived columns, and a locally-patched row would show a stale
-            // computed value beside a fresh one.
-            onFieldWritten={() => {
-              void queryClient.invalidateQueries({ queryKey: resultQueryKey, exact: true })
+            // A successful write changes the stored record, so everything
+            // derived from that note is now stale. Invalidate rather than
+            // patching in place: the server owns derived columns, and a
+            // locally-patched row would show a stale computed value beside a
+            // fresh one.
+            //
+            // FOUR CACHES, NOT ONE (ADR-083 §4.5 / EMB-092, review I4/F5).
+            // This used to invalidate only `resultQueryKey` with `exact: true`
+            // — the single view that happened to host the edit — while the
+            // doc comments on ViewPartsRenderer and RecordFieldEditor already
+            // told readers all four were handled. Two comments describing
+            // behaviour the code did not have is worse than a plain omission:
+            // the next reader believes it is done. §4.5 requires, on success:
+            //
+            //   1. every view-result query for this COLLECTION, not one view.
+            //      A note carrying two `.base` embeds of DIFFERENT saved views
+            //      over the same record type — the dashboard shape this whole
+            //      feature exists for — would otherwise refresh the table you
+            //      edited in and leave the other showing `open` indefinitely,
+            //      with nothing marking it stale. Prefix match, no `exact`.
+            //   2. the written note's own rendered CONTENT, so its frontmatter
+            //      re-renders if that note is also open.
+            //   3. its OUTLINE.
+            //   4. its link-graph edges, which a changed relation-shaped
+            //      property can alter.
+            //
+            // 2-4 are keyed by the note's path, which is why the callback now
+            // takes the write result instead of discarding it.
+            //
+            // ⚠️ TWO PATH SPACES, and mixing them silently invalidates
+            // nothing. `written.path` is COLLECTION-relative (it is
+            // VaultRecord.path, which the record door reports relative to the
+            // knowledge base). The content and outline caches are keyed on a
+            // WORKSPACE-relative path, so those two go through the same
+            // `toWorkspacePath` mapper KB-8's row-open wiring already uses;
+            // the graph cache is keyed on the collection-relative path
+            // alongside collectionId, so it takes `written.path` as-is. A
+            // wrong-space key here does not throw — it just matches no query
+            // and the stale render survives, which is precisely the class of
+            // silent no-op this whole callback was rewritten to close.
+            onFieldWritten={(written) => {
+              const workspacePath = toWorkspacePath(written.path)
+              void queryClient.invalidateQueries({
+                queryKey: ['library', workspaceId, 'knowledge', 'view-result', collectionId],
+              })
+              void queryClient.invalidateQueries({
+                queryKey: libraryQueryKeys.content(workspaceId, workspacePath),
+              })
+              void queryClient.invalidateQueries({
+                queryKey: ['library', 'knowledge', 'outline', workspaceId, workspacePath],
+              })
+              void queryClient.invalidateQueries({
+                queryKey: ['library', workspaceId, 'knowledge', 'graph', 'links', collectionId, written.path],
+              })
             }}
           />
         ) : null}

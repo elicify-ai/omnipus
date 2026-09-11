@@ -43,6 +43,22 @@ properties:
       - integer
       - decimal
       - person
+      - checkbox
+    # `checkbox` is FR-004c/D24.5's EIGHTH property type, and its absence here
+    # was a real, shipped contract gap found by the ADR-083 review's enum-cast
+    # audit. Every sibling enum over the same domain (PropertyDef.type,
+    # VaultFindCell.type, RecordValue.type) already carried all eight; this one
+    # stopped at seven, so a record type declaring a `checkbox` property
+    # rendered a `type` value outside its own declared enum on every read —
+    # invisible in Go (the producer was an unchecked cast), and fatal at the
+    # SPA's Zod edge, where one non-conforming field drops the WHOLE response.
+    # DO NOT "tidy" the four copies of this enum into one shared component:
+    # see the x-enum-varnames note below for why they are deliberately
+    # separate. Keeping them in step is enforced by a test instead —
+    # TestWirePropertyType_EveryDeclaredTypeIsValidInAllFourWireEnums
+    # (pkg/records/wire_enum_contract_test.go) checks all four against
+    # records.PropertyTypes, which is what caught this one.
+    #
     # x-enum-varnames PINS these constant names. oapi-codegen derives an enum
     # constant's Go name from a GLOBAL collision scan across every enum in the
     # spec, so adding a value to an UNRELATED enum silently renames these —
@@ -60,6 +76,7 @@ properties:
       - RecordPropertyValueTypeInteger
       - RecordPropertyValueTypeDecimal
       - RecordPropertyValueTypePerson
+      - RecordPropertyValueTypeCheckbox
     description: >
       The declared property type, echoed by the server on reads. Optional on a
       write request, where the schema is the authority.

@@ -60,7 +60,7 @@ properties:
       on reads, and required back on a write; a stale token is REFUSED and the
       refusal is audited (FR-043). Opaque — never parsed, compared only for
       equality.
-    example: "sha256:3d1c9a7e5b2f4806"
+    example: "v1:9f2a7c4081e3b5d6a0c1f2e3b4d5a6c7"
   properties:
     type: array
     description: >

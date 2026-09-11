@@ -377,7 +377,15 @@ type RecordProblem = {
     | "stale_cursor"
     | "unknown_view"
     | "unknown_record_type"
-    | "view_part_ineligible";
+    | "view_part_ineligible"
+    | "schema_unreadable"
+    | "schema_invalid_yaml"
+    | "schema_unsupported_version"
+    | "schema_missing_type"
+    | "schema_no_properties"
+    | "schema_bad_property"
+    | "schema_unknown_key"
+    | "schema_load_failed";
   reason: string;
   records: Array<string>;
   property?: string | undefined;
@@ -397,7 +405,16 @@ type VaultRecord = {
 type RecordPropertyValue = {
   property: string;
   type?:
-    | ("text" | "enum" | "relation" | "date" | "integer" | "decimal" | "person")
+    | (
+        | "text"
+        | "enum"
+        | "relation"
+        | "date"
+        | "integer"
+        | "decimal"
+        | "person"
+        | "checkbox"
+      )
     | undefined;
   values: Array<RecordValue>;
 };
@@ -664,6 +681,7 @@ type VaultFindCell = {
   values?: Array<EnumValueDef> | undefined;
   derived?: boolean | undefined;
   relation?: boolean | undefined;
+  many?: boolean | undefined;
 };
 type VaultFindJoin = {
   relation: string;
@@ -4507,6 +4525,7 @@ export const VaultFindCell: z.ZodType<VaultFindCell> = z.object({
   values: z.array(EnumValueDef).optional(),
   derived: z.boolean().optional(),
   relation: z.boolean().optional(),
+  many: z.boolean().optional(),
 });
 export const VaultSearchRecordHit: z.ZodType<VaultSearchRecordHit> = z.object({
   path: z.string().min(1),
@@ -4805,6 +4824,14 @@ export const RecordProblem: z.ZodType<RecordProblem> = z.object({
     "unknown_view",
     "unknown_record_type",
     "view_part_ineligible",
+    "schema_unreadable",
+    "schema_invalid_yaml",
+    "schema_unsupported_version",
+    "schema_missing_type",
+    "schema_no_properties",
+    "schema_bad_property",
+    "schema_unknown_key",
+    "schema_load_failed",
   ]),
   reason: z.string().min(1),
   records: z.array(z.string().min(1)),
@@ -4902,7 +4929,16 @@ export const RecordValue: z.ZodType<RecordValue> = z.object({
 export const RecordPropertyValue: z.ZodType<RecordPropertyValue> = z.object({
   property: z.string().min(1),
   type: z
-    .enum(["text", "enum", "relation", "date", "integer", "decimal", "person"])
+    .enum([
+      "text",
+      "enum",
+      "relation",
+      "date",
+      "integer",
+      "decimal",
+      "person",
+      "checkbox",
+    ])
     .optional(),
   values: z.array(RecordValue),
 });
@@ -4918,7 +4954,11 @@ export const RecordWriteRequest: z.ZodType<RecordWriteRequest> = z.object({
   type: z.string().min(1),
   id: z.string().min(1).optional(),
   path: z.string().min(1).optional(),
-  version_token: z.string().min(1).optional(),
+  version_token: z
+    .string()
+    .min(1)
+    .regex(/^v1:(absent|[0-9a-f]{32})$/)
+    .optional(),
   properties: z.array(RecordPropertyValue).min(1),
 });
 export const KnowledgeConflictError = z.object({

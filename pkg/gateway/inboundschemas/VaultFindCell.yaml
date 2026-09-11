@@ -10,11 +10,11 @@ description: >
   separators are a choice of the compact-text projection and are never part of a
   stored or compared value.
 
-  ADR-083 CW-5 (EMB-088, EMB-094): `type`, `values`, `derived` and `relation`
-  are the metadata an inline editor needs to decide whether it may offer an
-  editor for this cell AT ALL — today a cell is a property name and a
+  ADR-083 CW-5 (EMB-088, EMB-094): `type`, `values`, `derived`, `relation`
+  and `many` are the metadata an inline editor needs to decide whether it may
+  offer an editor for this cell AT ALL — today a cell is a property name and a
   rendered string, and nothing more, so none of EMB-088's editor-gating rows
-  are evaluable without them. All four are OPTIONAL and OMITTED, never an
+  are evaluable without them. All five are OPTIONAL and OMITTED, never an
   empty/false placeholder, when the cell does not correspond to a declared
   record property (an ordinary note's frontmatter, a task-row column, or a
   property no loaded schema describes) — an editor MUST treat an absent
@@ -110,4 +110,24 @@ properties:
       RelationWriteRequest's explicit add/remove/replace verbs instead. A
       relation cell MUST get no editor and a way to open the note instead
       (EMB-088). Omitted means false.
+    example: false
+  many:
+    type: boolean
+    description: >
+      True when this cell's declared property is LIST-VALUED (PropertyDef.many).
+      Carried because `value` is a single rendered string either way — a list
+      renders as its members joined with ", " — so `many` is the ONLY thing on
+      the wire that distinguishes "the text `a, b`" from "the two values `a`
+      and `b`", and a client cannot recover the difference from `value`'s
+      shape without guessing.
+
+      A list-valued cell MUST get no editor and a way to open the note instead
+      (ADR-083 §4.6: "a list-valued property — none; a scope decision, not a
+      platform limit"). Offering one collapses the whole list into a single
+      joined string on save, which is silent data loss, not a rendering
+      defect. The server refuses the same write independently (a client is not
+      trusted to have respected this flag, exactly as with `derived` and
+      `relation` — §4.2c); this field exists so the UI knows what to OFFER,
+      not so the server can skip checking. Omitted means false — a scalar
+      property.
     example: false

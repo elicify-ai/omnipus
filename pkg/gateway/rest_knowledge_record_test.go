@@ -7,6 +7,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,7 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/records"
 )
 
@@ -69,15 +71,64 @@ func buildRecordTestVaultWithAuditor(t *testing.T) (*restAPI, string, string, st
 	return api, ws, vault, auditDir
 }
 
+// recordTestUsername is the authenticated principal every ordinary write test
+// runs as. The record write door refuses an UNATTRIBUTABLE caller outright
+// (ADR-083 §4.2b / founder ruling N4: "a request that reaches the handler with
+// neither an authenticated user nor bypass active is still rejected"), so a
+// test that posts with no identity at all is exercising the refusal, not the
+// write. Tests that want the refusal ask for it explicitly — see
+// TestKnowledgeRecordWrite_AuditActor.
+const recordTestUsername = "daniela"
+
+// knowledgePost posts as an AUTHENTICATED user, which is the ordinary case.
 func knowledgePost(t *testing.T, api *restAPI, target string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	return knowledgePostWithUser(t, api, target, body, &config.UserConfig{Username: recordTestUsername})
+}
+
+// knowledgePostWithUser posts as `user`, or as nobody at all when user is nil.
+func knowledgePostWithUser(t *testing.T, api *restAPI, target string, body any, user *config.UserConfig) *httptest.ResponseRecorder {
 	t.Helper()
 	raw, err := json.Marshal(body)
 	require.NoError(t, err)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, target, bytes.NewReader(raw))
 	r.Header.Set("Content-Type", "application/json")
+	if user != nil {
+		r = r.WithContext(context.WithValue(r.Context(), UserContextKey{}, user))
+	}
 	api.HandleLibraryTree(w, r)
 	return w
+}
+
+// recordAuditEntries returns this door's audit rows, newest last.
+func recordAuditEntries(t *testing.T, auditDir string) []map[string]any {
+	t.Helper()
+	out := []map[string]any{}
+	for _, e := range readAuditEventsForTest(t, auditDir) {
+		if e["event"] == recordWriteAuditEvent {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// recordAuditActors returns the `actor` detail of every entry this door wrote.
+func recordAuditActors(t *testing.T, auditDir string) []string {
+	t.Helper()
+	out := []string{}
+	for _, e := range recordAuditEntries(t, auditDir) {
+		details, _ := e["details"].(map[string]any)
+		if details == nil {
+			continue
+		}
+		actor, ok := details["actor"].(string)
+		if !ok {
+			t.Fatalf("audit entry has no string actor: %#v", e)
+		}
+		out = append(out, actor)
+	}
+	return out
 }
 
 func widgetVersionToken(t *testing.T, api *restAPI, ws string) string {
@@ -91,12 +142,8 @@ func widgetVersionToken(t *testing.T, api *restAPI, ws string) string {
 
 func auditReasonsFor(t *testing.T, auditDir string) []string {
 	t.Helper()
-	entries := readAuditEventsForTest(t, auditDir)
-	out := make([]string, 0, len(entries))
-	for _, e := range entries {
-		if e["event"] != "knowledge.record.write" {
-			continue
-		}
+	out := []string{}
+	for _, e := range recordAuditEntries(t, auditDir) {
 		details, _ := e["details"].(map[string]any)
 		if details == nil {
 			continue
@@ -233,10 +280,18 @@ func TestKnowledgeRecordWrite_StaleTokenIs409(t *testing.T) {
 	before, err := os.ReadFile(filepath.Join(vault, "w1.md"))
 	require.NoError(t, err)
 
+	// A WELL-FORMED but stale token: "v1:" plus exactly 32 hex, the shape this
+	// server actually mints. The fixture used to send "v1:" + 16 hex, which
+	// this door now refuses as MALFORMED (400) rather than stale (409) — see
+	// TestKnowledgeRecordWrite_QuotedTokenIs400NotConflict for why that
+	// distinction exists. A token the server could not have issued cannot be a
+	// stale one it issued, so a 16-hex fixture was testing the conflict path
+	// with an input that can never reach it in production.
+	const staleToken = "v1:0000000000000000000000000000dead"
 	body := map[string]any{
 		"type":          "widget",
 		"id":            "WD-0001",
-		"version_token": "v1:0000000000000000",
+		"version_token": staleToken,
 		"properties": []map[string]any{
 			{"property": "name", "values": []map[string]any{{"type": "text", "text": "Should Not Land"}}},
 		},
@@ -247,7 +302,7 @@ func TestKnowledgeRecordWrite_StaleTokenIs409(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &conflict))
 	assert.Equal(t, gen.KnowledgeVersionConflict, conflict.Code)
 	require.NotNil(t, conflict.ExpectedVersion)
-	assert.Equal(t, "v1:0000000000000000", *conflict.ExpectedVersion)
+	assert.Equal(t, staleToken, *conflict.ExpectedVersion)
 	require.NotNil(t, conflict.ActualVersion)
 	assert.NotEmpty(t, *conflict.ActualVersion)
 
@@ -331,7 +386,9 @@ func TestKnowledgeRecordWrite_DerivedPropertyRefused(t *testing.T) {
 		{Property: "score", Values: []gen.RecordValue{{Type: gen.RecordValueTypeDecimal, Decimal: strPtr("2")}}},
 	}
 
-	edits, refusal := buildRecordPropertyEdits(sc, props)
+	// nil `current`: a create has no stored record, and this refusal does not
+	// depend on one — the schema's own Formula declaration is the whole basis.
+	edits, refusal := buildRecordPropertyEdits(sc, props, nil)
 	require.Nil(t, edits)
 	require.NotNil(t, refusal)
 	assert.Equal(t, http.StatusBadRequest, refusal.status)

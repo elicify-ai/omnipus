@@ -84,8 +84,8 @@ func renderRow(q *query, s survivor) generated.VaultFindRow {
 
 // applyCellMetadata fills in a VaultFindCell's editor-gating metadata from the
 // resolved property that produced it (ADR-083 CW-5, EMB-088/EMB-094): type,
-// values, derived and relation. All four stay OMITTED — never a placeholder
-// zero value — for whatever this call does not set, per the field's own
+// values, derived, relation and many. All five stay OMITTED — never a
+// placeholder zero value — for whatever this call does not set, per the field's own
 // "absence, not a placeholder, is how 'anything the definition does not
 // describe' is represented" rule.
 //
@@ -95,8 +95,36 @@ func renderRow(q *query, s survivor) generated.VaultFindRow {
 // a resolved declaration — a schema property, a namespace.go file.* synthesis,
 // or a view's formula.* synthesis).
 func applyCellMetadata(cell *generated.VaultFindCell, prop *records.Property) {
-	t := generated.VaultFindCellType(prop.Type)
-	cell.Type = &t
+	// TYPE IS OMITTED FOR AN UNDECLARED PROPERTY (ADR-083 review M10/F9).
+	//
+	// VaultFindCell.yaml's own rule: "Absent when the cell has no declared
+	// type: an ordinary note's frontmatter property, a task-row column, or a
+	// property name no loaded schema for the record's type describes.
+	// Absence, not a placeholder value, is how 'anything the definition does
+	// not describe' (EMB-088) is represented — an editor must never guess a
+	// type from `value`'s shape."
+	//
+	// An UNTYPED query has no schema at all, so namespace.go's resolveUntyped
+	// SYNTHESISES a declaration (text, many) for every frontmatter key it
+	// meets, purely so filtering and sorting have something to read. That
+	// synthesis is an internal convenience, not a declaration the vault made —
+	// stamping its `text` onto the wire told a client the exact opposite of
+	// the truth, and isEditableCell answered `true` for an ordinary note's
+	// frontmatter key on the strength of it. Nothing broke only because
+	// resolveEditTarget happens to demand ViewResult.type as well, which an
+	// untyped view lacks — an accident of a second gate, not this one.
+	if !prop.Undeclared {
+		t := records.WireVaultFindCellType(prop.Type)
+		cell.Type = &t
+
+		// MANY rides with Type, and must never be sent without it: `many`
+		// answers "is this cell's single rendered string one value or
+		// several", which is only a meaningful question about a property the
+		// schema actually declares.
+		if prop.Many {
+			cell.Many = boolPtr(true)
+		}
+	}
 
 	if vals := prop.EnumValueDefs(); len(vals) > 0 {
 		cell.Values = &vals

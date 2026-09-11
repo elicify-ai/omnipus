@@ -29,6 +29,17 @@
 # A second definition anywhere else — most importantly, a reintroduced
 # private copy inside LibraryPreviewPane.tsx — fails the build.
 #
+# SCOPE: ONE COMPONENT, DELIBERATELY. Despite the generic filename and the
+# "one renderer per kind" rule quoted above, this script enforces that rule
+# for `LibraryAudioPreview` and nothing else. That narrowness is the correct
+# call, not an oversight: `LibraryAudioPreview` is the only renderer that was
+# ever a private in-file definition, so it is the only one a branch cut before
+# the extraction can re-add conflict-free on merge. `LibraryVideoPreview` and
+# `LibraryPdfPreview` were already standalone modules and carry no equivalent
+# risk today. It is NOT a general per-kind duplicate-renderer scan — a future
+# extraction that repeats this pattern for another kind must extend or clone
+# this script rather than assume it is already covered.
+#
 # WHAT IS ALLOWED
 #
 # - The one definition in the canonical file itself.
@@ -64,8 +75,16 @@ if [ ! -f "$CANONICAL" ]; then
   exit 2
 fi
 
-# `-l` lists matching FILES only (never prints the line, so this script's
-# own doc comment above — which names the function — cannot match itself).
+# `-l` lists matching FILES only, which is all this check needs.
+#
+# It is NOT what stops this script matching its own doc comment above — an
+# earlier version of this note claimed that, and it is a non-sequitur: `-l`
+# changes grep's OUTPUT FORMAT, never whether a line matches. Two independent
+# things actually prevent a self-match: the search is confined to `src/` with
+# `--include='*.ts' --include='*.tsx'`, and this file is a `.sh` under
+# `scripts/`; and the pattern is anchored to line-start, so a prose mention of
+# the function name inside any comment could not match even if it were in
+# scope.
 MATCHES=$(grep -rlE '^(export )?function LibraryAudioPreview\(|^(export )?const LibraryAudioPreview =' \
   --include='*.ts' --include='*.tsx' \
   src/ 2>/dev/null || true)

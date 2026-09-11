@@ -331,29 +331,72 @@ func buildViewResult(ctx context.Context, env vaultprops.FindEnv, name, collecti
 // fresh race window between it and the write — the exact lost-update shape
 // the version-token mechanism exists to close.
 //
-// Best-effort, per row: a path whose version cannot be read (the collection
-// itself failed to open, or the file was removed between the query and this
-// pass) simply keeps VersionToken unset. That is not a degraded answer — the
-// field is documented as OPTIONAL for precisely this case, and an editor that
-// finds it absent already knows to fall back to opening the note instead of
-// writing through this row.
+// Best-effort, per row: a path whose version cannot be read (the file was
+// removed between the query and this pass) simply keeps VersionToken unset.
+// The field is documented as OPTIONAL for precisely that case.
+//
+// BEST-EFFORT MEANS "DEGRADE, THEN SAY SO" — NOT "DEGRADE SILENTLY"
+// (ADR-083 review C2). A missing token is invisible on screen: the SPA's
+// resolveEditTarget returns undefined and the cell renders as ordinary text,
+// so a whole board silently loses every inline editor and looks completely
+// normal. That is the shape of the JPEG-screencast defect this project
+// deleted a working code path over — a fallback nobody can detect hides the
+// real defect indefinitely. So every failure here is LOGGED, at a severity
+// matching its blast radius:
+//
+//	OpenCollection fails  ERROR. Not a per-row miss at all — it drops the
+//	                      whole pass, so EVERY row on the board loses its
+//	                      editor at once. An operator whose vault directory
+//	                      went unreadable during a backup has this one line
+//	                      as their only evidence.
+//
+//	ReadNoteVersion fails WARN, with the path. One row, and usually benign
+//	                      (a note deleted between the query and this pass),
+//	                      but a burst of them is a real fault and must be
+//	                      visible as one. Capped so a large answer over an
+//	                      unreadable directory cannot flood the log with one
+//	                      line per row.
 func attachRowVersionTokens(rows []gen.VaultFindRow, collectionRoot string) {
 	if len(rows) == 0 {
 		return
 	}
 	col, err := knowledge.OpenCollection(collectionRoot)
 	if err != nil {
+		logger.ErrorCF("rest", "knowledge: open collection for row version tokens — "+
+			"no row in this answer carries a version token, so no cell in it is editable",
+			map[string]any{"collection_root": collectionRoot, "rows": len(rows), "error": err.Error()})
 		return
 	}
+	failures := 0
 	for i := range rows {
 		v, verr := knowledge.ReadNoteVersion(col, rows[i].Path)
-		if verr != nil || !v.Exists {
+		if verr != nil {
+			failures++
+			if failures <= rowVersionTokenLogCap {
+				logger.WarnCF("rest", "knowledge: read row version token",
+					map[string]any{"path": rows[i].Path, "error": verr.Error()})
+			}
 			continue
 		}
-		token := string(v.Token)
-		rows[i].VersionToken = &token
+		token, ok := v.TokenIfPresent()
+		if !ok {
+			continue
+		}
+		s := string(token)
+		rows[i].VersionToken = &s
+	}
+	if failures > rowVersionTokenLogCap {
+		logger.WarnCF("rest", "knowledge: further row version-token reads failed",
+			map[string]any{"collection_root": collectionRoot, "failed": failures,
+				"logged": rowVersionTokenLogCap})
 	}
 }
+
+// rowVersionTokenLogCap bounds the per-row WARN above. A view answer can carry
+// hundreds of rows, and a directory that has become unreadable fails every one
+// of them — one line per row would bury the fault it is meant to reveal, so
+// the tail is collapsed into a single count.
+const rowVersionTokenLogCap = 10
 
 // buildSelect widens the view's own column selection so every property a part
 // aggregates or binds is present as a cell on every row. When the view names

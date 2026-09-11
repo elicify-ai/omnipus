@@ -61,6 +61,14 @@ properties:
       - unknown_view
       - unknown_record_type
       - view_part_ineligible
+      - schema_unreadable
+      - schema_invalid_yaml
+      - schema_unsupported_version
+      - schema_missing_type
+      - schema_no_properties
+      - schema_bad_property
+      - schema_unknown_key
+      - schema_load_failed
     description: >
       Machine-readable cause, so a caller can branch without parsing prose.
       "missing_schema_version" — a schema file lacking schema_version; no
@@ -194,6 +202,37 @@ properties:
       binary written before D6 closed op=write_view — and a part that computes
       nothing because its bindings are absent must never be served as an empty
       but clean rendering.
+
+      THE EIGHT `schema_*` CODES (ADR-083 review H2/F9) report a schema FILE
+      that could not be loaded. They exist because a knowledge base whose
+      schemas fail to load used to answer `{types: [], problems: []}` — byte
+      for byte the SAME answer a healthy vault that declares no record types
+      returns. Those two are not the same fact and must not share a rendering:
+      in the first, every record editor in every view silently declines to
+      appear and nothing on screen says why; the operator's only evidence was
+      a WARN line in a server log they cannot reach from a browser. Seven of
+      them mirror pkg/records' SchemaRejectionCode one-for-one, so no
+      rejection is ever dropped or reported under a code that means something
+      else:
+      "schema_unreadable" — the schema file could not be read from disk.
+      "schema_invalid_yaml" — the file is not parseable YAML (the common case:
+      an indentation slip while adding a property).
+      "schema_unsupported_version" — the file declares a schema_version this
+      build does not implement.
+      "schema_missing_type" — the file declares no `type`, so it describes
+      nothing.
+      "schema_no_properties" — the file declares a type with no properties.
+      "schema_bad_property" — one property declaration is malformed (a bad
+      type name, a bad enum member, a bad `group`).
+      "schema_unknown_key" — the file mentions a key a schema file is not
+      entitled to mention.
+      "schema_load_failed" — the schema DIRECTORY itself could not be
+      enumerated, so this knowledge base contributed no types at all. This is
+      the one with no SchemaRejection behind it: there is no single file to
+      blame, so `paths` is absent and `reason` names the collection.
+
+      `paths` names the offending file(s) for the seven file-level codes;
+      `reason` carries the loader's own explanation verbatim in all eight.
     example: "type_mismatch"
   reason:
     type: string

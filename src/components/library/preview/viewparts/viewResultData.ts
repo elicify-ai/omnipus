@@ -37,7 +37,7 @@ function isEditableCellType(type: VaultFindCell['type']): type is EditableCellTy
 
 /**
  * Whether ONE cell may be offered an inline editor at all (ADR-083 §4.6,
- * EMB-088). Three, and only three, things gate it, all read from the cell
+ * EMB-088). Four, and only four, things gate it, all read from the cell
  * itself and NEVER guessed from `value`'s shape:
  *
  *   - `type` must be one of the three this surface can draw a control for.
@@ -51,13 +51,40 @@ function isEditableCellType(type: VaultFindCell['type']): type is EditableCellTy
  *   - `relation` must not be true. Relations and person properties are
  *     modified through RelationWriteRequest's explicit verbs, never through
  *     a read-then-write splice (ADR-068 FR-045).
+ *   - `many` must not be true. A LIST-VALUED property renders as its members
+ *     joined with ", " in the single string `value` carries, so an editor on
+ *     that cell sends ONE value back and the server's SetPropertyList
+ *     replaces the WHOLE list: `[alpha, beta]` becomes the single tag
+ *     "alpha, beta", at HTTP 200, with nothing on screen saying a value was
+ *     lost. §4.6's table gives a list-valued property no editor for exactly
+ *     this reason. The server refuses a shrinking list write independently
+ *     (§4.2c — this door does not trust the client to have honoured the
+ *     flag); this gate exists so the browser never OFFERS a control whose
+ *     obvious use destroys data.
  *
  * This function is the single place that decision is made — TablePart and
  * ListPart both call it rather than re-deriving the rule, so the two
  * surfaces can never drift on what counts as editable.
+ *
+ * It is a TYPE GUARD, not a `boolean` (ADR-083 review F10). It already calls
+ * the correctly-typed `isEditableCellType` internally, and returning plain
+ * `boolean` threw that narrowing away — which is why the one caller had to
+ * write `cell.type as EditableCellType` to get it back. An `as` cast keeps
+ * `tsc` silent through exactly the change that needs to break the build: add
+ * a fourth editable type without extending the control that renders it, and
+ * the cast passes, the switch falls off the end, and the user is shown a
+ * generic "could not save" for a missing case in a switch. Narrowing here
+ * deletes the cast, so that change fails to compile instead.
  */
-export function isEditableCell(cell: VaultFindCell): boolean {
-  return cell.derived !== true && cell.relation !== true && isEditableCellType(cell.type)
+export function isEditableCell(
+  cell: VaultFindCell,
+): cell is VaultFindCell & { type: EditableCellType } {
+  return (
+    cell.derived !== true &&
+    cell.relation !== true &&
+    cell.many !== true &&
+    isEditableCellType(cell.type)
+  )
 }
 
 /**

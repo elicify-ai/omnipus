@@ -9407,7 +9407,21 @@ paths:
               $ref: '#/components/schemas/RecordWriteRequest'
       responses:
         '200':
-          description: The record as it stands after the write, including its new version_token.
+          description: >
+            UPDATE (`id` was present): the record as it stands after the
+            write, including its new version_token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VaultRecord'
+        '201':
+          description: >
+            CREATE (`id` was absent): the newly created record, carrying the
+            server-minted identifier (FR-036) and its first version_token.
+            Distinguished from 200 because the two outcomes of this one
+            operation differ in a way a caller acts on — a create produced an
+            identifier the caller did not choose and could not have predicted,
+            and it created a note at `path` that did not exist before.
           content:
             application/json:
               schema:
