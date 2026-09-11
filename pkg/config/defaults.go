@@ -164,6 +164,29 @@ func DefaultConfig() *Config {
 			LogLevel:  "warn",
 		},
 		Sandbox: OmnipusSandboxConfig{
+			// SEC-15/SEC-17: the structured security audit log is ON by
+			// default (founder decision, 2026-09-11) so a new install records
+			// who changed what from its first minute. Until this seed existed
+			// the field had no entry here at all, so it defaulted to the bool
+			// zero value — audit off — and a freshly onboarded instance, which
+			// has no "sandbox" block in config.json, recorded no REST mutation
+			// of any kind for the life of the process.
+			//
+			// Like every other value in this literal, this is install-time
+			// DATA an operator can edit in their own config.json, not a
+			// fallback branch in the binary: loadConfig unmarshals the
+			// operator's JSON over DefaultConfig(), so an explicit
+			// `"audit_log": false` wins, and a config.json predating this seed
+			// (no `audit_log` key) picks the default up on its next load.
+			// The full reasoning, including why the field carries no
+			// `omitempty`, is on the field itself in sandbox.go.
+			AuditLog: true,
+			// Provenance: this true came from the seed, not from anybody's
+			// config.json. loadConfig clears it whenever the key IS present.
+			// See the field's doc comment on sandbox.go for why the polarity
+			// is "from default" rather than "explicit".
+			AuditLogFromDefault: true,
+
 			// browser_evaluate is ON by default (ADR D1.9b ruling 2). It is a
 			// standard browser capability, and gating it behind a config flag
 			// an operator had to discover meant the tool was registered,

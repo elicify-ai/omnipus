@@ -998,38 +998,95 @@ func NewAgentLoop(
 		}
 	}
 
-	// SEC-15: Initialize structured audit logging (optional) and policy
-	// evaluation (always on). Audit directory is ~/.omnipus/system/ (sibling of
-	// workspace). The audit logger and the policy evaluator are decoupled:
-	// disabling audit logging must NOT disable enforcement.
+	// SEC-15: Initialize structured audit logging (ON by default since the
+	// 2026-09-11 founder decision — see cfg.Sandbox.AuditLog's doc comment)
+	// and policy evaluation (always on). Audit directory is ~/.omnipus/system/
+	// (sibling of workspace). The audit logger and the policy evaluator are
+	// decoupled: disabling audit logging must NOT disable enforcement.
 	if cfg.Sandbox.AuditLog {
 		auditDir := filepath.Join(homePath, "system")
 		auditLogger, auditErr := audit.NewLogger(audit.LoggerConfig{
 			Dir:           auditDir,
 			RetentionDays: 90,
-			// CRIT-2: signal to NewLogger that the operator explicitly enabled
-			// audit. Without this, NewLogger would swallow openCurrentFile
-			// errors and return a degraded logger + nil error — the gateway
-			// would think audit_logger=ok at startup while every subsequent
-			// write rejects in degraded mode. Setting AuditLogRequested makes
-			// openCurrentFile failure surface as a *LoggerConstructionError so
-			// the gateway boot path can fail closed.
+			// CRIT-2: signal to NewLogger that audit logging is genuinely
+			// wanted here. Without this, NewLogger would swallow
+			// openCurrentFile errors and return a degraded logger + nil error
+			// — the gateway would think audit_logger=ok at startup while every
+			// subsequent write rejects in degraded mode. Setting
+			// AuditLogRequested makes openCurrentFile failure surface as a
+			// *LoggerConstructionError instead.
+			//
+			// This stays unconditionally true now that audit is on by default.
+			// It is deliberately NOT wired to AuditLogExplicit: the flag's job
+			// is to stop NewLogger from hiding a failure, and a failure must
+			// never be hidden regardless of who asked. WHAT WE DO about the
+			// surfaced failure is the part that depends on provenance, and
+			// that decision is taken below, at this call site, which is the
+			// only place that knows it.
 			AuditLogRequested: true,
 		})
 		if auditErr != nil {
-			// B1.2(b): when sandbox.audit_log is explicitly enabled,
-			// audit construction failure is a fail-closed boot abort.
-			// CLAUDE.md "audit-everything stance is non-negotiable" —
-			// silently dropping audit while the operator asked for it would
-			// be a security regression. The gateway maps the returned typed
-			// error to a SandboxBootError + EX_CONFIG (78) exit code; see
-			// pkg/gateway/gateway.go around the agent.NewAgentLoop call.
+			// The audit logger could not be built. Two different populations
+			// reach this line and they have earned different answers.
+			//
+			// (1) Somebody WROTE `"audit_log": true` — in config.json, or in
+			//     a Config built directly in Go. Unchanged from B1.2(b):
+			//     fail-closed boot abort. They asked for a compliance
+			//     guarantee we cannot deliver, and running on without it
+			//     would silently break the SEC-15 audit-everything contract.
+			//     The gateway maps the returned typed error to a
+			//     SandboxBootError + EX_CONFIG (78) exit code; see
+			//     pkg/gateway/gateway.go around the agent.NewAgentLoop call,
+			//     whose branch is still gated on cfg.Sandbox.AuditLog being
+			//     true. This is the branch a zero-valued provenance field
+			//     selects, deliberately — see AuditLogFromDefault's doc
+			//     comment on the polarity being the safety property.
+			//
+			// (2) Audit is on because it is now the DEFAULT and this config
+			//     never mentioned it. Degrade loudly and keep booting.
+			//
+			// Why (2) is not also an abort. Fail-closed is justified by
+			// consent: the operator requested a guarantee, so not delivering
+			// it silently is the regression. A default is not a request.
+			// Aborting on it would convert a security improvement into a
+			// denial of service for installs that never opted in and that
+			// booted perfectly well yesterday with audit off — an upgrade
+			// would turn "audit was off" into "the product does not start",
+			// on a read-only filesystem, a full disk, or a partially-mounted
+			// container volume. Strictly compared against the status quo this
+			// branch is still an improvement: that population previously had
+			// audit off AND no error; it now has audit off, a loud error, and
+			// a degraded health endpoint.
+			//
+			// The failure is NOT silent. al.auditLogger stays nil, so
+			// AgentLoop.AuditLogger() returns nil while the gateway's
+			// SetAuditLoggerConfiguredFunc still reports configured=true from
+			// cfg.Sandbox.AuditLog — the exact pair pkg/health/server.go
+			// documents as "audit_logger=unavailable AND operator asked for
+			// audit → degraded (broken)". /health reads degraded, and the
+			// ERROR below names the directory and the underlying cause.
+			//
+			// In practice (2) should be close to unreachable: auditDir is
+			// $OMNIPUS_HOME/system, the same tree that already holds
+			// config.json, master.key, sessions and token_budget.json, so an
+			// install that cannot write it is broken in ways that surface
+			// elsewhere anyway. That is an argument for the blast radius of
+			// this branch being small — not an argument for making a default
+			// the thing that refuses to start.
+			if !cfg.Sandbox.AuditLogFromDefault {
+				logger.ErrorCF("agent",
+					"Audit logger construction failed; aborting boot because sandbox.audit_log=true was explicitly set",
+					map[string]any{"error": auditErr.Error(), "dir": auditDir})
+				return nil, &audit.LoggerConstructionError{Dir: auditDir, Err: auditErr}
+			}
 			logger.ErrorCF("agent",
-				"Audit logger construction failed; aborting boot because sandbox.audit_log=true",
+				"Audit logger construction failed; continuing WITHOUT audit logging because audit_log is on by default, not by explicit configuration. "+
+					"No security audit entries will be recorded for the lifetime of this process. "+
+					"/health reports audit as degraded. Fix the directory, or set sandbox.audit_log=true to make this failure abort boot instead.",
 				map[string]any{"error": auditErr.Error(), "dir": auditDir})
-			return nil, &audit.LoggerConstructionError{Dir: auditDir, Err: auditErr}
+			auditLogger = nil
 		}
-		{
+		if auditLogger != nil {
 			al.auditLogger = auditLogger
 
 			// Log startup event. CRIT-6: route through audit.EmitEntry so a
