@@ -692,13 +692,39 @@ EOF
   # next to the manifest) is per-shard too — otherwise concurrent shards, sharing one repo
   # CWD, would race on test-results/soft-skips.json. $pwargs (sharded only) adds --output +
   # --reporter=list so concurrent shards don't collide on test-results/ and playwright-report/.
+  # A VIRTUAL DISPLAY, because one shard runs a REAL headed browser.
+  #
+  # playwright.config.ts's `preview-headed` project sets `headless: false`
+  # deliberately — ADR-067 tests 57/58 measure what a real browser's own PDF
+  # viewer does, which headless cannot answer. This box has no X display, so
+  # without a virtual one every headed test dies inside browserType.launch.
+  #
+  # THAT FAILURE IS INDISTINGUISHABLE FROM A CODE REGRESSION AT A GLANCE, and
+  # it is the third trap in this directory's CLAUDE.md: every test fails in
+  # 2-4ms, across specs that share nothing, because no browser ever started.
+  # Observed 2026-09-11: 7 failed / 1 passed on preview-headed while the other
+  # 14 shards were green, on specs the branch had not touched.
+  #
+  # xvfb is already installed in the image for exactly this reason and was
+  # simply never wired up. `xvfb-run -a` picks a free display number, so
+  # concurrent shards cannot collide on one. It wraps EVERY shard rather than
+  # only the headed one: headless Chromium ignores DISPLAY, so this costs the
+  # others nothing, and a single path means a future headed spec cannot land
+  # in a shard that silently lacks a display.
+  local xvfb=()
+  if command -v xvfb-run >/dev/null 2>&1; then
+    xvfb=(xvfb-run -a)
+  else
+    echo "WARNING: xvfb-run not found — the preview-headed shard WILL fail at browserType.launch, and that failure is not a code defect" >&2
+  fi
+
   OMNIPUS_HOME="$home" \
   OMNIPUS_URL="http://localhost:$port" \
   OMNIPUS_AUTH_FILE="$authfile" \
   OMNIPUS_SKIP_MANIFEST_PATH="/tmp/e2e-$name-results/skip-manifest.json" \
   OPENROUTER_API_KEY="$key" \
   OPENROUTER_API_KEY_CI="$key" \
-    npx playwright test $specs $pwargs
+    "${xvfb[@]}" npx playwright test $specs $pwargs
 }
 
 run_e2e() {
