@@ -8,7 +8,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { KbQueryFenceEmbed } from './KbQueryFenceEmbed'
+import { KbQueryFenceEmbed, QUERY_FENCE_EMBED_RESERVED_HEIGHT_PX } from './KbQueryFenceEmbed'
+import { holdEmbedsOutOfView, scrollIntoView } from '@/test/intersectionObserver'
 import type { components } from '@/lib/api/generated/openapi-types'
 
 type VaultSearchResponse = components['schemas']['VaultSearchResponse']
@@ -289,5 +290,74 @@ describe('KbQueryFenceEmbed — a pending-but-not-loading query renders SOMETHIN
     } finally {
       onlineSpy.mockRestore()
     }
+  })
+})
+
+// ── The lazy-mount budget, actually exercised (EMB-065/066) ─────────────────
+//
+// THE SHARPEST CASE OF THE FOUR. This component's own header says it is
+// "mounted through the same LazyEmbedMount budget every other embed kind uses
+// (EMB-065) — a query fence issues a real network request, so it should not
+// fire for a fence that is not near the viewport". That request is the entire
+// justification for gating, and until now it was the one thing this file
+// never checked: jsdom defines no IntersectionObserver, `LazyEmbedMount`
+// fails open without one, and so every test above fired the search
+// immediately regardless of scroll position. A note with twenty query fences
+// would have issued twenty vault searches on first paint and no test here
+// would have noticed.
+
+describe('KbQueryFenceEmbed — the lazy-mount budget (EMB-065/066)', () => {
+  beforeEach(() => {
+    vi.mocked(searchVault).mockReset()
+  })
+
+  it('issues NO vault search at all while the fence is out of view', () => {
+    holdEmbedsOutOfView()
+    vi.mocked(searchVault).mockResolvedValue(emptyResponse({ notes: [{ path: 'a.md', title: 'A note' }] }))
+    renderEmbed('landlock seccomp')
+
+    const wrapper = screen.getByTestId('lazy-embed-mount')
+    expect(wrapper.getAttribute('data-mounted')).toBe('false')
+    // The requirement itself: a real request that did not happen.
+    expect(searchVault).not.toHaveBeenCalled()
+    // And no results chrome of any kind — not even the loading state.
+    expect(screen.queryByTestId('kb-query-fence-loading')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('kb-query-fence-results')).not.toBeInTheDocument()
+  })
+
+  it("reserves THIS kind's own height while unmounted (EMB-066)", () => {
+    holdEmbedsOutOfView()
+    vi.mocked(searchVault).mockResolvedValue(emptyResponse())
+    renderEmbed('landlock seccomp')
+
+    expect(screen.getByTestId('lazy-embed-mount').style.minHeight).toBe(
+      `${QUERY_FENCE_EMBED_RESERVED_HEIGHT_PX}px`,
+    )
+  })
+
+  it('fires the search exactly once, with the fence body, when the reader scrolls to it', async () => {
+    holdEmbedsOutOfView()
+    vi.mocked(searchVault).mockResolvedValue(
+      emptyResponse({ notes: [{ path: 'notes/a.md', title: 'Landlock notes' }] }),
+    )
+    renderEmbed('landlock seccomp')
+
+    const wrapper = screen.getByTestId('lazy-embed-mount')
+    expect(searchVault).not.toHaveBeenCalled()
+
+    scrollIntoView(wrapper)
+
+    expect(wrapper.getAttribute('data-mounted')).toBe('true')
+    // Paired positive: the deferred request is the SAME real request, with
+    // the same arguments, that the eager tests above assert — deferred, not
+    // dropped or altered.
+    await waitFor(() =>
+      expect(searchVault).toHaveBeenCalledWith(
+        'ws-1',
+        expect.objectContaining({ query: 'landlock seccomp', collection_id: 'kb_1' }),
+      ),
+    )
+    expect(searchVault).toHaveBeenCalledTimes(1)
+    expect(await screen.findByText('Landlock notes')).toBeInTheDocument()
   })
 })

@@ -1,8 +1,8 @@
 # ADR-083 — Embedded content inside knowledge-base notes
 
-- **Status:** Proposed — **revision 4**. Rev 2 followed an adversarial grill review of rev 1; rev 3 followed the grill review of the *implementation spec*, which found this ADR to be the source of several of the spec's defects (including one outright self-contradiction); rev 4 follows the **second** spec review (5 CRITICAL, 12 MAJOR, 8 MINOR, 4 OBSERVATION; BLOCK) and three further founder rulings. Four decisions (D-A…D-D in §2.6) plus Q1–Q9 (§9) are **founder-ratified** and settled. Four rulings from rev 3 — **N1 nested embeds are out, N2 the version token is required, N3 print support is dropped, N4 an anonymous-actor write under auth bypass is allowed** — are in §2.8. Three further rulings — **N5 the two save doors share the EXISTING knowledge version token (closing A-11), N6 agents DO see the raw path plus its reason, redaction rejected as theatre, N7 record editing stays in this ADR** — are in §14.1 and are equally settled.
-- **Deciders:** Daniel Piatkowski (founder — ratified the mount budget, the unresolved-marker rule, the external-content boundary, the interactivity split, and N1–N4); architect (resolver shape, component reuse, agent surface, write-path contract, sequencing)
-- **Date:** 2026-09-09 (rev 1), revised 2026-09-09 (rev 2), revised 2026-09-09 (rev 3), revised 2026-09-09 (rev 4)
+- **Status:** Proposed — **revision 5**. Rev 2 followed an adversarial grill review of rev 1; rev 3 followed the grill review of the *implementation spec*, which found this ADR to be the source of several of the spec's defects (including one outright self-contradiction); rev 4 follows the **second** spec review (5 CRITICAL, 12 MAJOR, 8 MINOR, 4 OBSERVATION; BLOCK) and three further founder rulings; **rev 5 records one further founder ruling, N8, and retires a capability rev 4 had scheduled.** Four decisions (D-A…D-D in §2.6) plus Q1–Q9 (§9) are **founder-ratified** and settled. Four rulings from rev 3 — **N1 nested embeds are out, N2 the version token is required, N3 print support is dropped, N4 an anonymous-actor write under auth bypass is allowed** — are in §2.8. Three further rulings — **N5 the two save doors share the EXISTING knowledge version token (closing A-11), N6 agents DO see the raw path plus its reason, redaction rejected as theatre, N7 record editing stays in this ADR** — are in §14.1 and are equally settled. **N8 — an embedded diagram FILE (`![[chart.mmd]]`) is out of scope and will not be built; the ` ```mermaid ` FENCE is a different mechanism and is untouched** — is in §15, and it **supersedes §5's and §6's revision-4 text**, which routed a `.mmd` embed to the mermaid renderer in step 6.
+- **Deciders:** Daniel Piatkowski (founder — ratified the mount budget, the unresolved-marker rule, the external-content boundary, the interactivity split, N1–N4, and **N8**); architect (resolver shape, component reuse, agent surface, write-path contract, sequencing)
+- **Date:** 2026-09-09 (rev 1), revised 2026-09-09 (rev 2), revised 2026-09-09 (rev 3), revised 2026-09-09 (rev 4), revised 2026-09-11 (rev 5 — founder ruling N8, §15)
 - **Branch / commit this was verified against:** `integrate/library-improvements-v0.1.1`, HEAD `def10b90e`, worktree `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-integrate`. Every repo-relative path below is relative to that worktree root.
 - **Number verification:** `ADR-083` is free. Checked three ways: the directory listing tops out at `ADR-082`; `git log --all --diff-filter=A --name-only -- 'docs/internal/architecture/ADR-08*'` returns only ADR-080, ADR-081 and ADR-082 across every ref, past and present; and no `ADR-083` path exists on any branch. ADR-082's own header records why this check is not ceremony — ADR-081 was drafted as "ADR-069" and had to be renumbered after a merge.
 - **Closes:** [`defect-list-wikilink-rendering-2026-09-08.md`](../defect-list-wikilink-rendering-2026-09-08.md) **WL-5** (a base view cannot be embedded in a note), which that document correctly classifies as a missing capability rather than a bad import.
@@ -1570,7 +1570,7 @@ enumerated here.
 | `note` (synthetic) | transclusion of a note, heading or block (D5) — **one level only; the transcluded note's own embeds are links (N1)** | 3 |
 | `video` | `LibraryVideoPreview`, `variant="inline"` — already its own exported module, no extraction needed | 6 |
 | `audio` | `LibraryAudioPreview` — **requires extraction from `LibraryPreviewPane.tsx` into its own module first** (§2.4) | 6 |
-| `mermaid` | already renders as a fenced block; an `![[x.mmd]]` embed routes to the mermaid renderer | 6 |
+| **`mermaid`** | **§2.2 link fallback, permanently — an embedded diagram FILE is out of scope (founder ruling N8, §15).** A ` ```mermaid ` fence inside a note is a **different mechanism** and is untouched: §2.1 measures 163 of them, they render through `kbMarkdownBase.tsx`'s `language === 'mermaid'` branch, and they keep working. What is refused is `![[chart.mmd]]`. Revision 4 of this row said the embed "routes to the mermaid renderer" in step 6; that expectation is **retired**, not merely unscheduled. The refusal is expressed in `inlineEmbedTreatment` (`knowledgeMarkdown.tsx`), which returns `link-only` for this kind with the ruling written beside it, and is held by `knowledgeMarkdown.diagramEmbed.test.tsx`. `classifyEmbedKind` deliberately still answers `mermaid` for a `.mmd` target — see §15 for why the refusal lives at the rendering decision rather than in the classifier. | — |
 | `text` | §2.2 link fallback. A plain-text file inline is a wall of unstyled text with no reader affordance; no measured use. | — |
 | **`html`** | **§2.2 link fallback, permanently.** Never framed inline. See §2.5's correction: mounting `LibraryHtmlFrame` in a note would put a token-minted isolation boundary carrying agent-generated HTML inside a reading surface that is not an isolation boundary. If inline HTML is genuinely wanted later, it is its own ADR with its own threat model, not a row in a dispatch table. | — |
 | **`other`** | **§2.2 link fallback**, not a download card (D2(a)). Same for the `binary` and `too_large` fallbacks. | — |
@@ -1586,9 +1586,10 @@ Also **in**: image sizing (`\|400`), the inline ` ```base ` fence, PDF page frag
 
 **Out, explicitly and permanently.** Every plugin format — Dataview, Excalidraw, Kanban,
 Templater, Charts, ABC, Admonition — none of which is core Obsidian and none of which the vault
-uses. **Canvas**, ruled out by the founder ("we will not support that at all"). External images
-of any kind. Any external frame host other than allow-listed YouTube. Inline framing of
-collection HTML.
+uses. **Canvas**, ruled out by the founder ("we will not support that at all"). **Embedded
+diagram files** (`![[chart.mmd]]`), ruled out by the founder in N8 (§15) — *not* the ` ```mermaid `
+fence, which is a different mechanism and stays. External images of any kind. Any external frame
+host other than allow-listed YouTube. Inline framing of collection HTML.
 
 ---
 
@@ -1621,7 +1622,7 @@ Constraint #8 no client or handler code may be written before its schema lands.
 | **3** | Note / heading / block transclusion, **one level only (N1)** — a transcluded note's own embeds render as links | 1c | Zero vault uses today, but it is the most fundamental Obsidian idiom and a vault written in Obsidian will grow them. **No cycle apparatus:** with one level there is no second level to loop through, so the cycle set, the depth cap and their tests are deleted rather than deferred (D5). |
 | **4** | **CW-3**, then the YouTube allow-list (D9) | CW-3, Q9 | Self-contained; touches the SPA's security policy and must not be entangled with the renderer work. Ships with the **four** CSP artefact changes — including `adr-067-knowledge-base-and-preview-spec.md` §10.7, whose literal line is `TestSpaServedWithCSP`'s oracle — and the audit amendment, in the same PR. |
 | **5** | **CW-4, CW-5, CW-6, CW-7**, then inline record editing (D8, §4), in **both** the ordinary view surface and dashboard embeds at once | **CW-4…CW-7**, Q1, N4's actor (§4.2b), the `NewWriter` construction (§4.2 precondition 1), and Q8 | Last, because it is the only new write path, and because shipping it in one surface first guarantees the two diverge. **Four contract changes, not one:** rev 2 listed a request and a result schema and assumed the rest of ADR-068's record layer was already reachable from the wire. It is not — `RecordSchema`, `VaultRecord` and `RecordWriteRequest` are declared in `components` and referenced from **no path**. |
-| **6** | Audio (**with the `LibraryAudioPreview` extraction first**), video, mermaid embeds, PDF page fragments, ` ```query ` and ` ```base ` fences | — | In scope, no evidenced use. Build when a real need appears rather than on speculation. **Nested embeds are no longer listed here** — under N1 they are out, not deferred; D5 records what bringing them back would require. |
+| **6** | Audio (**with the `LibraryAudioPreview` extraction first**), video, PDF page fragments, ` ```query ` and ` ```base ` fences | — | In scope, no evidenced use. Build when a real need appears rather than on speculation. **Nested embeds are no longer listed here** — under N1 they are out, not deferred; D5 records what bringing them back would require. **Mermaid embeds are no longer listed here either** — under N8 (§15) they are out, not deferred; §5's `mermaid` row records the refusal and the scope boundary against the ` ```mermaid ` fence. |
 
 **"Ship steps 0–5 and stop" is a legitimate outcome.** §2.1 measures zero uses for everything in
 step 6. That option is recorded in §8 rather than left implicit.
@@ -2190,3 +2191,67 @@ three checks now names the command that re-measures it**, and the two that can b
 mechanised: SC-026 is a `diff` of two extracted number columns, SC-030 and SC-031 are `grep`s.
 A count that is wrong because it was derived rather than measured belongs in the same category as a
 test that cannot fail: both are claims whose subject was never examined.
+
+---
+
+## 15. Founder ruling N8 — embedded diagram files are out of scope (revision 5)
+
+**The ruling, in the founder's words (2026-09-11):** *"diagrams / obsydian diagrams are out of
+scope and will not be a feature of omnipus KBs"*.
+
+| # | Ruling | What follows |
+|---|---|---|
+| **N8** | **An embedded diagram FILE — `![[chart.mmd]]` — is not supported, and will not be.** | §5's `mermaid` row is now a **permanent link fallback**, alongside `html`, `text` and `other`, not a step-6 deferral. It is removed from §6's step 6. This **retires revision 4's expectation** that the embed "routes to the mermaid renderer"; a reader must not be able to mistake today's link fallback for an unfinished feature. |
+
+### 15.1 The scope boundary, stated so it cannot drift
+
+The ruling is about **embedded diagram files**. It is **not** about ` ```mermaid ` **fenced code
+blocks**, and the two are different mechanisms end to end:
+
+| | Embedded diagram file | Fenced diagram block |
+|---|---|---|
+| Written as | `![[chart.mmd]]` | ` ```mermaid ` … ` ``` ` |
+| Reaches the renderer via | the wikilink/embed pipeline (`remarkKbWikilinks` → `inlineEmbedTreatment`) | the markdown `code` slot (`kbMarkdownBase.tsx`, `language === 'mermaid'`) |
+| Uses in the founder's vault (§2.1) | **0** | **163** |
+| Disposition | **Refused (N8)** | **Untouched — keeps working** |
+
+Fenced blocks were already recorded in §2.1 as *"Already works — a fenced code block, a different
+mechanism entirely"*, and §2.5 lists them among the things that need no work. N8 does not disturb
+either statement. A change that removed fenced mermaid rendering would silently delete 163 working
+diagrams from the founder's own knowledge base; `knowledgeMarkdown.diagramEmbed.test.tsx` renders a
+refused `.mmd` embed and a working fence **in the same note** so that neither half can be satisfied
+by breaking the other.
+
+The **standalone Library preview** of a `.mmd` file (`LibraryMermaidPreview`, reached through
+`classifyLibraryEntry`) is likewise a different surface and is **not** in scope of this ruling.
+
+### 15.2 Why the refusal lives in `inlineEmbedTreatment`, not in `classifyEmbedKind`
+
+Two expressions were available. The one chosen keeps `classifyEmbedKind` answering `mermaid` for a
+`.mmd` target and refuses it at `inlineEmbedTreatment`, for three reasons:
+
+1. **The classifier's contract is a fact, not a policy.** Its own doc comment says it *"Classifies
+   an embed's WRITTEN target by extension alone"*. A `.mmd` file **is** a mermaid file. Making it
+   answer `other` would encode a product decision as a false statement about the file, and would
+   put `.mmd` in the same bucket as `archive.zip` and `README`.
+2. **It would create a silent divergence.** `classifyEmbedKind`'s header states it is a deliberate
+   sibling of `classifyLibraryEntry` *"sharing the same extension tables"*. `classifyLibraryEntry`
+   must keep returning `mermaid` (§15.1's third surface), so deleting the row here would make the
+   two disagree for a reason no comment at either site would explain.
+3. **Discoverability is the whole requirement.** `inlineEmbedTreatment` is the single exhaustive
+   switch that decides how each kind renders inline — the exact place a future implementer looks
+   before "finishing" the feature. An explicit `case 'mermaid':` carrying the ruling cannot be read
+   as an oversight; a missing row in a classifier can.
+
+The prior comment at that site called the gap a **DEFERRAL** and told the next reader how to
+complete it (*"Whoever picks it up adds `'block-mount'` here"*). That instruction is now removed —
+it was the opposite of the ruling.
+
+### 15.3 Not changed by this ruling, and deliberately so
+
+`docs/internal/specs/adr-083-embedded-content-spec.md` still carries the step-6 expectation in two
+places — its test table (test **82**, `audio-video-mermaid-pdf-page`) and its C8 coverage row
+(*"`.mmd` | Deferred | diagram renderer, inline (step 6)"*). Those rows are stale under N8 and are
+flagged here rather than edited, because the spec was out of scope for the change that recorded
+this ruling. Whoever next revises the spec should strike `mermaid` from test 82's name and re-state
+C8 as a permanent refusal citing §15.

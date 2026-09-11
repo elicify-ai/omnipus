@@ -8,10 +8,11 @@
 // deleted dispatch fails the pair rather than passing trivially. See this
 // task's own report for the mutation-test proof on this exact file.
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { KbVideoEmbedMount } from './KbVideoEmbedMount'
+import { KbVideoEmbedMount, VIDEO_EMBED_RESERVED_HEIGHT_PX } from './KbVideoEmbedMount'
+import { holdEmbedsOutOfView, scrollIntoView, scrollOutOfView } from '@/test/intersectionObserver'
 import type { LibraryEntry } from '@/lib/api'
 
 const ENTRY: LibraryEntry = {
@@ -97,5 +98,81 @@ describe('KbVideoEmbedMount', () => {
 
     await waitFor(() => expect(screen.getByTestId('kb-embed-mount-error')).toBeInTheDocument())
     expect(screen.queryByTestId('library-video-preview')).not.toBeInTheDocument()
+  })
+})
+
+// ── The lazy-mount budget, actually exercised (EMB-065/066) ─────────────────
+//
+// See KbAudioEmbedMount.test.tsx's equivalent block for why these are new:
+// jsdom has no IntersectionObserver and `LazyEmbedMount` fails open without
+// one, so until `src/test/intersectionObserver.ts` was installed, nothing in
+// this file ran with the mount gate switched on.
+
+describe('KbVideoEmbedMount — the lazy-mount budget (EMB-065/066)', () => {
+  beforeEach(() => {
+    vi.mocked(fetchLibraryEntries).mockReset()
+  })
+
+  it('mounts nothing and issues NO directory listing while the embed is out of view', () => {
+    holdEmbedsOutOfView()
+    vi.mocked(fetchLibraryEntries).mockResolvedValue([ENTRY])
+    renderMount()
+
+    const wrapper = screen.getByTestId('lazy-embed-mount')
+    expect(wrapper.getAttribute('data-mounted')).toBe('false')
+    expect(screen.queryByTestId('library-video-preview')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('kb-embed-mount-loading')).not.toBeInTheDocument()
+    // A video is the heaviest of these kinds to start fetching by accident.
+    expect(fetchLibraryEntries).not.toHaveBeenCalled()
+  })
+
+  it("reserves THIS kind's own height while unmounted (EMB-066)", () => {
+    holdEmbedsOutOfView()
+    vi.mocked(fetchLibraryEntries).mockResolvedValue([ENTRY])
+    renderMount()
+
+    expect(screen.getByTestId('lazy-embed-mount').style.minHeight).toBe(
+      `${VIDEO_EMBED_RESERVED_HEIGHT_PX}px`,
+    )
+  })
+
+  it('mounts the real player, and only then issues the listing, once it scrolls into view', async () => {
+    holdEmbedsOutOfView()
+    vi.mocked(fetchLibraryEntries).mockResolvedValue([ENTRY])
+    renderMount()
+
+    const wrapper = screen.getByTestId('lazy-embed-mount')
+    expect(fetchLibraryEntries).not.toHaveBeenCalled()
+
+    scrollIntoView(wrapper)
+
+    expect(wrapper.getAttribute('data-mounted')).toBe('true')
+    const video = await screen.findByTestId('library-video-preview')
+    expect(video.querySelector('video')).toHaveAttribute(
+      'src',
+      '/api/v1/library/ws-1/download?path=video%2Fclip.mp4',
+    )
+    expect(fetchLibraryEntries).toHaveBeenCalledTimes(1)
+    expect(wrapper.style.minHeight).toBe('')
+  })
+
+  it('gives up its place again once the reader scrolls well past it', async () => {
+    // The far boundary — `LazyEmbedMount`'s second observer, and the half of
+    // "begins when near, STOPS when well outside" that nothing else asserts
+    // at this level. The reservation must come back, or the page collapses
+    // under a reader who scrolls away.
+    holdEmbedsOutOfView()
+    vi.mocked(fetchLibraryEntries).mockResolvedValue([ENTRY])
+    renderMount()
+
+    const wrapper = screen.getByTestId('lazy-embed-mount')
+    scrollIntoView(wrapper)
+    await screen.findByTestId('library-video-preview')
+
+    scrollOutOfView(wrapper)
+
+    expect(wrapper.getAttribute('data-mounted')).toBe('false')
+    expect(screen.queryByTestId('library-video-preview')).not.toBeInTheDocument()
+    expect(wrapper.style.minHeight).toBe(`${VIDEO_EMBED_RESERVED_HEIGHT_PX}px`)
   })
 })

@@ -393,6 +393,15 @@ export function classifyEmbedKind(target: string): LibraryPreviewKind {
   if (EMBED_AUDIO_EXTENSIONS.has(e)) return 'audio'
   if (e === 'base') return 'base'
   if (e === 'md' || e === 'markdown') return 'markdown'
+  // A `.mmd` target is classified HONESTLY as what it is, even though an
+  // embedded diagram file is refused: the refusal is founder ruling N8
+  // (ADR-083 §15) and it lives at the RENDERING decision
+  // (`inlineEmbedTreatment` below), not here. Answering `other` instead
+  // would state something false about the file, drop it into the same
+  // bucket as `archive.zip`, and silently diverge from
+  // `classifyLibraryEntry` — which must keep answering `mermaid`, because
+  // the standalone Library preview of a `.mmd` file is a different surface
+  // and is not in scope of that ruling. Do not "simplify" this line away.
   if (e === 'mmd' || e === 'mermaid') return 'mermaid'
   return 'other'
 }
@@ -706,12 +715,22 @@ export function remarkKbWikilinks(options: KbWikilinkOptions = {}) {
  *                             (`KbPdfPageEmbedMount`); a whole-document pdf
  *                             embed has no renderer and stays link-only
  *                             (EMB-025).
- *   - `link-only`           — no inline renderer, and for `html`/`text`/
- *                             `other` that part of EMB-025 is permanent,
- *                             not a "not yet". */
+ *   - `link-only`           — no inline renderer, and for `mermaid`/`html`/
+ *                             `text`/`other` that is permanent, not a "not
+ *                             yet". `html`/`text`/`other` are EMB-025;
+ *                             `mermaid` is founder ruling N8 (ADR-083 §15),
+ *                             enforced in its own case below. */
 type InlineEmbedTreatment = 'image-node' | 'block-mount' | 'block-mount-if-page' | 'link-only'
 
-function inlineEmbedTreatment(kind: LibraryPreviewKind): InlineEmbedTreatment {
+// Exported ONLY as a test seam, for the same reason `classifyEmbedKind` is:
+// this switch is where founder ruling N8 (ADR-083 §15) is enforced, and a
+// change from `link-only` to `block-mount` for `mermaid` produces IDENTICAL
+// rendered output today (the promotion gate would let it through, but
+// `KnowledgeMarkdownLink` has no mermaid branch to dispatch to, so it still
+// falls back to a link). That makes the decision invisible to any
+// render-level assertion — so the decision is asserted here, directly.
+// Nothing outside tests should call this.
+export function inlineEmbedTreatment(kind: LibraryPreviewKind): InlineEmbedTreatment {
   switch (kind) {
     case 'image':
       return 'image-node'
@@ -722,17 +741,28 @@ function inlineEmbedTreatment(kind: LibraryPreviewKind): InlineEmbedTreatment {
       return 'block-mount'
     case 'pdf':
       return 'block-mount-if-page'
-    // `mermaid` is a DEFERRAL, not an oversight, and is called out here so
-    // the next reader sees a decision. ADR-083 §5 routes a `![[chart.mmd]]`
-    // embed to the mermaid renderer "in step 6"; step 6 shipped audio,
-    // video, pdf pages and query fences and did not state that the fifth was
-    // dropped. It is not implemented, there are zero measured uses of a
-    // `.mmd` embed, and a `.mmd` file already renders through the ordinary
-    // ```mermaid fence inside a note — so a link-only embed is a real,
-    // working reference rather than a missing feature the reader cannot
-    // route around. Whoever picks it up adds `'block-mount'` here and a
-    // dispatch branch in `KnowledgeMarkdownLink`.
+    // `mermaid` is REFUSED, permanently — a founder ruling (2026-09-11,
+    // recorded as N8 in ADR-083 §15): "diagrams / obsydian diagrams are out
+    // of scope and will not be a feature of omnipus KBs". An embedded
+    // diagram FILE (`![[chart.mmd]]`) renders as a link and nothing more.
+    //
+    // DO NOT "FINISH" THIS. An earlier version of this comment called the
+    // gap a DEFERRAL and told the next reader how to complete it ("adds
+    // `'block-mount'` here and a dispatch branch in `KnowledgeMarkdownLink`").
+    // That instruction is the opposite of the ruling and has been removed.
+    // Adding a renderer here is a regression, not a missing feature.
+    //
+    // SCOPE — the narrow reading, and it matters. This refuses the embedded
+    // FILE only. A ```mermaid FENCED CODE BLOCK inside a note is a
+    // DIFFERENT MECHANISM, reaching `kbMarkdownBase.tsx`'s
+    // `language === 'mermaid'` branch through the markdown `code` slot,
+    // never through this switch. ADR-083 §2.1 measures 163 fenced diagrams
+    // in the founder's own vault and records them as already working; they
+    // are untouched and must stay that way. `knowledgeMarkdown.diagramEmbed.
+    // test.tsx` renders a refused `.mmd` embed and a working fence in the
+    // SAME note so neither half can be satisfied by breaking the other.
     case 'mermaid':
+      return 'link-only'
     case 'html':
     case 'text':
     case 'other':

@@ -10,10 +10,11 @@
 // mutation-test proof (comment out the render call in
 // `KbAudioEmbedContent`, watch this file fail; restore it, watch it pass).
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { KbAudioEmbedMount } from './KbAudioEmbedMount'
+import { KbAudioEmbedMount, AUDIO_EMBED_RESERVED_HEIGHT_PX } from './KbAudioEmbedMount'
+import { holdEmbedsOutOfView, scrollIntoView } from '@/test/intersectionObserver'
 import type { LibraryEntry } from '@/lib/api'
 
 const ENTRY: LibraryEntry = {
@@ -147,5 +148,70 @@ describe('KbAudioEmbedMount — a renamed/deleted target is distinguishable from
     vi.mocked(fetchLibraryEntries).mockResolvedValueOnce([ENTRY])
     retry?.click()
     await screen.findByTestId('library-audio-preview')
+  })
+})
+
+// ── The lazy-mount budget, actually exercised (EMB-065/066) ─────────────────
+//
+// This file's header has always claimed the audio embed mounts "through the
+// same lazy-mount budget (EMB-065) every other embed kind uses". Until these
+// tests, nothing here checked it: jsdom defines no IntersectionObserver and
+// `LazyEmbedMount` FAILS OPEN without one, so every assertion above ran with
+// the gate disabled and would have passed identically had the LazyEmbedMount
+// wrapper been deleted outright. `holdEmbedsOutOfView()` (from
+// `src/test/intersectionObserver.ts`, installed for every suite by
+// `src/test/setup.ts`) switches the gate on.
+
+describe('KbAudioEmbedMount — the lazy-mount budget (EMB-065/066)', () => {
+  beforeEach(() => {
+    vi.mocked(fetchLibraryEntries).mockReset()
+  })
+
+  it('mounts nothing and issues NO directory listing while the embed is out of view', () => {
+    holdEmbedsOutOfView()
+    vi.mocked(fetchLibraryEntries).mockResolvedValue([ENTRY])
+    renderMount()
+
+    const wrapper = screen.getByTestId('lazy-embed-mount')
+    expect(wrapper.getAttribute('data-mounted')).toBe('false')
+    // Not merely "the player is absent" — the whole content subtree is,
+    // including the loading placeholder a mounted-but-pending embed shows.
+    expect(screen.queryByTestId('library-audio-preview')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('kb-embed-mount-loading')).not.toBeInTheDocument()
+    // The point of the budget: no work, not just no pixels.
+    expect(fetchLibraryEntries).not.toHaveBeenCalled()
+  })
+
+  it("reserves THIS kind's own height while unmounted, so the page does not shift (EMB-066)", () => {
+    holdEmbedsOutOfView()
+    vi.mocked(fetchLibraryEntries).mockResolvedValue([ENTRY])
+    renderMount()
+
+    // Bound to the exported constant, not to a literal: this is what ties
+    // AUDIO_EMBED_RESERVED_HEIGHT_PX to observable behaviour, while
+    // embedReservedHeights.test.ts proves the four kinds' values differ.
+    expect(screen.getByTestId('lazy-embed-mount').style.minHeight).toBe(
+      `${AUDIO_EMBED_RESERVED_HEIGHT_PX}px`,
+    )
+  })
+
+  it('mounts the real player, and only then issues the listing, once it scrolls into view', async () => {
+    holdEmbedsOutOfView()
+    vi.mocked(fetchLibraryEntries).mockResolvedValue([ENTRY])
+    renderMount()
+
+    const wrapper = screen.getByTestId('lazy-embed-mount')
+    expect(fetchLibraryEntries).not.toHaveBeenCalled()
+
+    scrollIntoView(wrapper)
+
+    expect(wrapper.getAttribute('data-mounted')).toBe('true')
+    // Paired positive: the SAME shared renderer the eager tests above assert,
+    // reached through the gate rather than around it.
+    const audio = await screen.findByTestId('library-audio-preview')
+    expect(audio.querySelector('audio')).toHaveAttribute('src', EXPECTED_SRC)
+    expect(fetchLibraryEntries).toHaveBeenCalledTimes(1)
+    // And the reservation is released once real content occupies the space.
+    expect(wrapper.style.minHeight).toBe('')
   })
 })
