@@ -94,7 +94,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
 })
 
 import { fetchLibraryEntries } from '@/lib/api'
-import { KbPdfPageEmbedMount } from './KbPdfPageEmbedMount'
+import { KbPdfPageEmbedMount, PDF_PAGE_EMBED_RESERVED_HEIGHT_PX } from './KbPdfPageEmbedMount'
+import { holdEmbedsOutOfView, scrollIntoView } from '@/test/intersectionObserver'
 
 function renderMount(page = 3) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -166,5 +167,61 @@ describe('KbPdfPageEmbedMount', () => {
     expect(missing.querySelector('button')).toBeNull()
     expect(screen.queryByTestId('kb-embed-mount-error')).not.toBeInTheDocument()
     expect(screen.queryByTestId('library-pdf-preview')).not.toBeInTheDocument()
+  })
+})
+
+// ── The lazy-mount budget, actually exercised (EMB-065/066) ─────────────────
+//
+// See KbAudioEmbedMount.test.tsx's equivalent block for why these are new.
+// A PDF page is the most expensive embed kind to mount by accident — it takes
+// a lease on the shared pdf.js worker pool (EMB-032) on top of its own
+// document fetch — so "does no work until it is near the viewport" carries
+// more weight here than anywhere else.
+
+describe('KbPdfPageEmbedMount — the lazy-mount budget (EMB-065/066)', () => {
+  beforeEach(() => {
+    // The file-level `afterEach` runs `vi.restoreAllMocks()`, which restores
+    // spies but does NOT clear a `vi.fn()` from the module mock factory — so
+    // `fetchLibraryEntries` still carries the call history of every test
+    // above. "Was not called" only means anything after this.
+    vi.mocked(fetchLibraryEntries).mockClear()
+  })
+
+  it('mounts nothing and issues NO directory listing while the embed is out of view', () => {
+    holdEmbedsOutOfView()
+    vi.mocked(fetchLibraryEntries).mockResolvedValue([ENTRY])
+    renderMount(3)
+
+    const wrapper = screen.getByTestId('lazy-embed-mount')
+    expect(wrapper.getAttribute('data-mounted')).toBe('false')
+    expect(screen.queryByTestId('library-pdf-preview')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('kb-embed-mount-loading')).not.toBeInTheDocument()
+    expect(fetchLibraryEntries).not.toHaveBeenCalled()
+  })
+
+  it("reserves THIS kind's own height while unmounted (EMB-066)", () => {
+    holdEmbedsOutOfView()
+    vi.mocked(fetchLibraryEntries).mockResolvedValue([ENTRY])
+    renderMount(3)
+
+    expect(screen.getByTestId('lazy-embed-mount').style.minHeight).toBe(
+      `${PDF_PAGE_EMBED_RESERVED_HEIGHT_PX}px`,
+    )
+  })
+
+  it('mounts the real PDF renderer, and only then issues the listing, once it scrolls into view', async () => {
+    holdEmbedsOutOfView()
+    vi.mocked(fetchLibraryEntries).mockResolvedValue([ENTRY])
+    renderMount(3)
+
+    const wrapper = screen.getByTestId('lazy-embed-mount')
+    expect(fetchLibraryEntries).not.toHaveBeenCalled()
+
+    scrollIntoView(wrapper)
+
+    expect(wrapper.getAttribute('data-mounted')).toBe('true')
+    await screen.findByTestId('library-pdf-preview')
+    expect(fetchLibraryEntries).toHaveBeenCalledTimes(1)
+    expect(wrapper.style.minHeight).toBe('')
   })
 })
