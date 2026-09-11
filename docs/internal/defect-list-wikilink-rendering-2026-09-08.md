@@ -17,9 +17,12 @@ verified in code and what was not.
 
 ### WL-1 — links in a base render WHITE; the same links in a note render GOLD
 **Severity:** medium · **Area:** Library SPA (base/view cells) · **Reported by:** founder
-**Status: PARTLY FIXED — still Open on the surface it was reported from.**
-Fixed inside an embedded view (`15f60b861`); unchanged when a `.base` file is
-opened directly in the Library.
+**Status: FIXED, with a stated bound.**
+Fixed inside an embedded view (`15f60b861`), and then on the surface it was
+actually reported from — a `.base` file opened directly — by `f3a9154de`. The
+bound is real and deliberate: only the first 40 loaded rows are queried for
+link edges (`COLLECTION_LINK_ROW_QUERY_CAP`). Beyond that cap a row keeps the
+older resolved-or-unknown fallback and is never silently promoted to gold.
 
 A relation link inside a base is styled as *unverified* (white) while an
 equivalent wikilink in a markdown note is styled as *resolved* (gold). Same
@@ -75,38 +78,64 @@ visibly unresolved when the target really is missing.
 
 **The other half is untouched, and it is the half you reported.** When you open
 a `.base` file directly in the Library, nothing changed. `LibraryPreviewPane`
-mounts `<BasePreview>` with no embed options at all, so it falls back to the
-row-scoped resolver that can only ever answer `resolved` or `unknown` — never
-`unresolved` — and most links in that pane still render white. The colour
-difference between the base pane and a note is still there.
+mounted `<BasePreview>` with no embed options at all, so it fell back to a
+row-scoped resolver that could only answer `resolved` or `unknown` — never
+`unresolved` — and most links in that pane rendered white. `f3a9154de` closed
+this: the resolver now fetches the link graph per loaded row's path and checks
+those edges before the old title/id/basename fallback.
 
-**A commit message overstated this, and it is recorded rather than quietly
-inherited.** `15f60b861` says the Q8 work *"also fixes WL-1 where base links
-rendered white while identical note links rendered gold."* It does not — it
-fixes WL-1 in embedded views only. ADR-083 itself says the opposite twice, and
-says it deliberately: D8 states *"WL-1 itself is not fixed here"*, and §7.3
-*"Embedded views inherit WL-1 in whichever form Q8 chooses. This ADR does not
-fix WL-1 and must not paper over it."* The ADR is right and the commit message
-is wrong. The entry stays open on that basis.
+**A commit message overstated this once, and the record is kept rather than
+quietly dropped now that the defect is closed.** `15f60b861` said the Q8 work
+*"also fixes WL-1 where base links rendered white while identical note links
+rendered gold."* It did not — it fixed WL-1 in embedded views only, and ADR-083
+said so twice and deliberately: D8 states *"WL-1 itself is not fixed here"*, and
+§7.3 *"Embedded views inherit WL-1 in whichever form Q8 chooses. This ADR does
+not fix WL-1 and must not paper over it."* The ADR was right and that commit
+message was wrong. The standalone half was closed later, by `f3a9154de`, which
+is a different commit doing different work — so the correction stands even
+though the outcome is now the one the earlier message claimed.
 
-**What remains:** decide whether the standalone base pane should also load the
-collection link graph (the same `loadGraph` the note reader uses), or whether a
-base opened on its own is accepted as a surface that cannot verify beyond its
-own rows — in which case `unknown` needs to look different from both other
-states, and the limitation needs saying in the UI.
+**How it was fixed, and the trap that was avoided.** Mirroring the note reader
+literally — asking for the `.base` file's OWN outbound links — would have been a
+no-op: `pkg/knowledge/graph.go` only ever opens markdown as a link source, so a
+`.base` file's links answer is always empty. That change would have shipped,
+passed review and fixed nothing. The wikilink actually lives in each ROW's own
+markdown file, so the resolver queries per row path instead.
+
+**What remains:** rows beyond the 40-row cap still cannot answer `unresolved`.
+That is a deliberate honesty bound, not an oversight — the three-state model
+exists to stop a base claiming verification it does not have, and fixing the
+COLOUR without fixing the FACTS would be the dishonesty it prevents. If large
+collections make the cap visible in practice, `unknown` needs to look different
+from both other states and the limitation needs saying in the UI.
 
 ---
 
 ### WL-2 — `[[Daniel Piatkowski]]` renders as plain text in some notes
 **Severity:** medium · **Area:** Library SPA (render path selection) · **Reported by:** founder
-**Status: OPEN — and the blocker is REPRODUCTION, not implementation.**
+**Status: FIXED (`57501bca6`) — reproduced on a FOURTH surface nobody had named.**
 
-Nothing has been built for this and nothing should be until the surface is
-reproduced. No commit on this branch touches it (`git log --grep=WL-2` returns
-only the commit that first wrote this entry). The mechanism below is confirmed,
-but it names three different possible causes with three different fixes, and
-building for the wrong one costs more than waiting. A reproduction attempt is
-in progress; its result decides which fix, if any, is right.
+The blocker really was reproduction, and holding the build until it landed was
+the right call: all three candidate causes named below were wrong, and each was
+closed by evidence rather than by argument. A `.md` file in a plain folder
+already routes through `KnowledgeNoteView`, which says "link target not
+verified" rather than showing brackets; the mounted vault was detected as a
+knowledge base immediately; and frontmatter IS the content involved, but not on
+any surface previously named.
+
+The surface is the **Library search results**. Searching the founder's own vault
+for `Daniel Piatkowski` rendered, verbatim:
+`owner: "[[Daniel Piatkowski]]" share_class: ordinary …`
+
+A search snippet is a RAW BYTE EXCERPT from the search engine — it never renders
+markdown — and `NoteRow`/`RecordRow` piped it straight into `highlightQuery`, a
+plain-text splitter with no wikilink awareness. This entry's own text predicted
+exactly that: *"if the founder saw `[[...]]` where frontmatter lives, a DIFFERENT
+surface is rendering frontmatter as text."*
+
+The fix imports the note reader's own parser rather than writing a second one,
+and renders the display text as PLAIN TEXT rather than a link — a search excerpt
+cannot honestly claim the resolved/unresolved verdict a real note render can.
 
 Some notes show the raw wikilink notation `[[Daniel Piatkowski]]` as literal
 text, brackets included, instead of a link.
@@ -257,8 +286,8 @@ code rather than assumed:
   15-module dashboard does not fire 15 simultaneous queries at the single Go
   binary.
 - **Links inside an embedded view resolve against the note's graph** — your Q8
-  ruling. See WL-1 above for the half of that which is fixed and the half which
-  is not.
+  ruling. See WL-1 above; both halves are now fixed, subject to that entry's
+  stated 40-row query cap.
 
 **Honestly not done, and stated in the shipping commit rather than discovered
 later:** local filter/sort inside an embedded view (ADR-083 EMB-047). No filter
@@ -286,7 +315,7 @@ this pattern.
 Opening a `.base` file directly works: `preview/BasePreview.tsx` renders it as its
 views rather than a download.
 
-**What is missing.** `KbWikilinkOptions` (`preview/knowledgeMarkdown.tsx:344`)
+**What was missing.** `KbWikilinkOptions` (`preview/knowledgeMarkdown.tsx::KbWikilinkOptions`)
 exposes exactly one embed hook — `resolveEmbedUrl?: (target) => string |
 undefined` — documented as *"Resolves an embedded ATTACHMENT (`![[diagram.png]]`)
 to a URL the browser can load."* There is no branch for a `.base#View` target
@@ -317,21 +346,23 @@ mapping and that is worth knowing up front rather than mid-implementation.
 
 ## Summary
 
-Status re-verified against the code at `4e2ef3dbb` on 2026-09-11 — not against
+Status re-verified against the code at `9cb1153e4` on 2026-09-11 — not against
 the commit messages that claimed the fixes.
 
 | ID | Title | Severity | Status | Commit |
 |---|---|---|---|---|
-| WL-1 | Base links render white; note links render gold | Medium | **Partly fixed — still Open** in the standalone base pane; fixed inside an embedded view | `15f60b861` (embedded half only) |
-| WL-2 | Raw `[[wikilink]]` text in some notes | Medium | **Open — blocked on reproduction, not on implementation** | — |
+| WL-1 | Base links render white; note links render gold | Medium | **Fixed**, bounded — embedded half, then the standalone base pane; rows past a 40-row cap keep the older resolved-or-unknown fallback | `15f60b861` (embedded), `f3a9154de` (standalone) |
+| WL-2 | Raw `[[wikilink]]` text in some notes | Medium | **Fixed** — reproduced in Library search results, not in a note render | `57501bca6` |
 | WL-3 | New KB dialog still shows a Location field | Low | **Fixed** | `65f8254d2` |
 | WL-4 | A knowledge base can be created inside another | High | **Fixed** — one shared check, both paths | `7a9317376` |
 | WL-5 | Base views cannot be embedded in a note (dashboards) | High | **Fixed** — dashboards render | `15f60b861`, `a7992fa2d`, `368188a0d`, `0263b7629` |
 
-**The root theme this list opened with still holds, and now names what is
-left.** Wikilink rendering was correct on the note surface and partial
-everywhere else. The note surface's mechanism has since been pushed into
-embedded views (WL-5, and WL-1's embedded half), which is the bulk of the value.
-The two remaining gaps are the two surfaces that still do not use it: a `.base`
-file opened on its own (WL-1), and whatever surface renders a note without
-wikilink parsing at all (WL-2, still unreproduced).
+**The root theme this list opened with held all the way through, and the list
+is now closed.** Wikilink rendering was correct on the note surface and partial
+everywhere else, and every fix here consisted of pushing the note surface's own
+mechanism outwards rather than writing a second one: into embedded views (WL-5
+and WL-1's embedded half), into a standalone `.base` pane (WL-1's other half),
+and into search result rows (WL-2). The one surface that deliberately does NOT
+adopt it wholesale is search, which renders display text as plain text because
+an excerpt cannot honestly claim a resolution verdict. What is left is not a
+surface but a bound: rows past WL-1's 40-row query cap.

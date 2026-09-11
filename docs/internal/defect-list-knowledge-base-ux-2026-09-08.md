@@ -459,10 +459,12 @@ client-side parse was chosen over a contract change. And the precedence question
 explicitly: the cell link stops the click from reaching the row.
 
 **One consequence that became its own defect.** `ViewCellLink` reuses the note
-reader's colours but a view can only resolve against the rows it loaded, so most
-links in a base render as unverified white. That is WL-1, and it is still open
-for a base opened on its own — see
-`defect-list-wikilink-rendering-2026-09-08.md`.
+reader's colours, but a view could originally only resolve against the rows it
+had loaded, so most links in a base rendered as unverified white. That is WL-1.
+It is now fixed for both surfaces — inside an embedded view and in a base opened
+on its own — subject to a stated cap of 40 rows queried for link edges, beyond
+which a row keeps the older resolved-or-unknown fallback rather than being
+promoted to gold. See `defect-list-wikilink-rendering-2026-09-08.md`.
 
 Two problems in the same surface, and the inconsistency is what makes it jarring:
 clicking a record hit in SEARCH opens the note (correct), but clicking the same
