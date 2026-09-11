@@ -32,6 +32,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/records"
@@ -122,18 +123,22 @@ func TestKnowledgeEditLink_RelationArgumentRefusedAndNoteUntouched(t *testing.T)
 				"target": "B", "relation": tc.relation, "expect_version": v,
 			})
 
-			require.True(t, res.IsError,
+			// The BYTES are checked FIRST, and deliberately so. "The write
+			// did not land" is the actual claim; the error code is only how
+			// the caller is told. Asserting IsError first would abort the
+			// subtest on a regression and leave the far more informative
+			// evidence — what the note now contains — unreported, and it
+			// would leave the byte check entirely unexercised by exactly the
+			// regression it exists to catch.
+			after := a4Read(t, root, "Real.md")
+			assert.Equal(t, before, after,
+				"a refused op link must not write ANY byte of the note")
+			assert.NotContains(t, after, "[[B]]",
+				"the relation-writing branch of op link appears to be back")
+
+			assert.True(t, res.IsError,
 				"op link must refuse 'relation': the frontmatter-property mode was removed, got: %s",
 				res.ForLLM)
-
-			// The load-bearing assertion. Byte-for-byte, because "the write
-			// did not land" is the actual claim being made.
-			require.Equal(t, before, a4Read(t, root, "Real.md"),
-				"a refused op link must not write ANY byte of the note")
-			// Belt and braces on the one thing a reinstated branch would add,
-			// phrased so the failure message names the regression directly.
-			require.NotContains(t, a4Read(t, root, "Real.md"), "[[B]]",
-				"the relation-writing branch of op link appears to be back")
 		})
 	}
 }
