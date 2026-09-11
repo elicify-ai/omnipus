@@ -144,6 +144,25 @@ function resolveEditTarget(
   }
 }
 
+/** True when this row/cell pair would actually be offered an inline editor.
+ *
+ *  Exported so a PART can decide whether a cell is worth rendering at all
+ *  BEFORE it reaches EditableCell. ListPart needs exactly that: it hides a
+ *  detail whose value is empty, which without this check also hides the
+ *  editor for an editable-but-absent property — making "clear this field" a
+ *  ONE-WAY DOOR (ADR-083 D3.2 treats an absent property as a legitimate edit
+ *  target, and §4.2c's empty-`values` clear exists to reach it).
+ *
+ *  It delegates to resolveEditTarget rather than re-listing its conditions,
+ *  so the part and the cell can never disagree about what is editable. */
+export function canEditCell(
+  context: RecordEditContext | undefined,
+  row: VaultFindRow,
+  cell: VaultFindCell,
+): boolean {
+  return resolveEditTarget(context, row, cell) !== undefined
+}
+
 /** One editable cell type's value, in the shape RecordWriteRequest accepts.
  *
  *  The `default` arm is a COMPILE-TIME guard, not defensive runtime code:

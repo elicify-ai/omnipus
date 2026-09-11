@@ -9,7 +9,7 @@ import type { VaultFindRow, ViewResultPart } from '@/lib/api/generated/openapi-t
 import { cellValue, findCell, rowExcludedFromTotals, rowsByPath, FILE_NAME_PROPERTY } from './viewResultData'
 import { ExcludedRowMark, GroupHeaderLabel, TotalsFooter } from './PartChrome'
 import { CellText, type ViewCellLinkResolver } from './ViewCellLink'
-import { EditableCell, type RecordEditContext } from './RecordFieldEditor'
+import { EditableCell, canEditCell, type RecordEditContext } from './RecordFieldEditor'
 
 function detailProperty(part: ViewResultPart): string | undefined {
   return (part.columns ?? []).find((c) => c !== FILE_NAME_PROPERTY)
@@ -60,7 +60,13 @@ function ListRow({
       ) : (
         <span className="min-w-0 truncate text-[var(--color-secondary)]">{row.title}</span>
       )}
-      {detailValue !== '' && (
+      {/* An empty detail is hidden — EXCEPT when it is an editable property,
+          where hiding it would make clearing the field irreversible from the
+          list (ADR-083 D3.2). TablePart already offers an editor for an
+          empty editable cell; this keeps the two parts agreeing. A row with
+          no editContext, or an empty NON-editable detail, renders exactly as
+          before: nothing at all. */}
+      {(detailValue !== '' || (detailCell !== undefined && canEditCell(editContext, row, detailCell))) && (
         <span className="min-w-0 truncate text-[12px] text-[var(--color-muted)]">
           ·{' '}
           {detailCell !== undefined ? (
