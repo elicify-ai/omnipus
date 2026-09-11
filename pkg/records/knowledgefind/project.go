@@ -38,10 +38,12 @@ func renderRow(q *query, s survivor) generated.VaultFindRow {
 		if !ok {
 			continue
 		}
-		row.Cells = append(row.Cells, generated.VaultFindCell{
+		cell := generated.VaultFindCell{
 			Property: prop.Name,
 			Value:    renderValue(pv),
-		})
+		}
+		applyCellMetadata(&cell, prop)
+		row.Cells = append(row.Cells, cell)
 	}
 
 	// BORROWED RELATIONS (D2 / FR-124). A `join` names a relation property whose
@@ -78,6 +80,45 @@ func renderRow(q *query, s survivor) generated.VaultFindRow {
 		}
 	}
 	return row
+}
+
+// applyCellMetadata fills in a VaultFindCell's editor-gating metadata from the
+// resolved property that produced it (ADR-083 CW-5, EMB-088/EMB-094): type,
+// values, derived and relation. All four stay OMITTED — never a placeholder
+// zero value — for whatever this call does not set, per the field's own
+// "absence, not a placeholder, is how 'anything the definition does not
+// describe' is represented" rule.
+//
+// prop is never nil here: renderRow only calls this once it already has a
+// resolved *records.Property for the cell (the `ok` guard on s.values[prop.Name]
+// happens before this call, and every entry in q.renderProperties() is itself
+// a resolved declaration — a schema property, a namespace.go file.* synthesis,
+// or a view's formula.* synthesis).
+func applyCellMetadata(cell *generated.VaultFindCell, prop *records.Property) {
+	t := generated.VaultFindCellType(prop.Type)
+	cell.Type = &t
+
+	if vals := prop.EnumValueDefs(); len(vals) > 0 {
+		cell.Values = &vals
+	}
+
+	// DERIVED covers two disjoint sources of "computed, not stored": a saved
+	// view's own formula (Property.Formula set — namespace.go's formulaProps)
+	// and the twelve file.* virtual properties (namespace.go's composite,
+	// records.FileProperty) — neither is ever read out of the record's own
+	// frontmatter (ADR-068 D9). A file.* property carries no Formula source
+	// text (it has no expression to hold one), so the namespace prefix is the
+	// second, independent test this flag needs; Formula alone would miss it.
+	if prop.Formula != "" || strings.HasPrefix(prop.Name, records.FileNamespace) {
+		cell.Derived = boolPtr(true)
+	}
+
+	// RELATION is its own flag, distinct from Type, so a client does not have
+	// to enumerate "relation" and "person" itself to find the one gate that
+	// matters: RecordWriteRequest refuses both (ADR-068 FR-045).
+	if prop.Type == records.TypeRelation || prop.Type == records.TypePerson {
+		cell.Relation = boolPtr(true)
+	}
 }
 
 func isJoined(q *query, name string) bool {

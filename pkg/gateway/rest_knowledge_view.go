@@ -167,7 +167,7 @@ func (a *restAPI) handleKnowledgeViewResult(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	jsonOK(w, buildViewResult(r.Context(), env, viewName))
+	jsonOK(w, buildViewResult(r.Context(), env, viewName, col.Root))
 }
 
 // ---------------------------------------------------------------------------
@@ -250,7 +250,7 @@ type viewResultBuilder struct {
 	out           *gen.ViewResult
 }
 
-func buildViewResult(ctx context.Context, env vaultprops.FindEnv, name string) gen.ViewResult {
+func buildViewResult(ctx context.Context, env vaultprops.FindEnv, name, collectionRoot string) gen.ViewResult {
 	out := newViewResult(name)
 
 	v, ok := env.Views.Get(name)
@@ -314,11 +314,45 @@ func buildViewResult(ctx context.Context, env vaultprops.FindEnv, name string) g
 	if refused := b.collectRows(name); refused != nil {
 		return *refused
 	}
+	attachRowVersionTokens(out.Rows, collectionRoot)
 
 	for _, src := range parts {
 		out.Parts = append(out.Parts, b.buildPart(src))
 	}
 	return out
+}
+
+// attachRowVersionTokens fills in VaultFindRow.VersionToken for every row this
+// answer carries, from the SAME opaque content-hash scheme
+// KnowledgeConflictError and VaultRecord use (pkg/knowledge/version.go's
+// ComputeVersionToken/ReadNoteVersion — ADR-083 CW-6, EMB-086). Without it, an
+// inline editor drawn from a view answer would need one extra read per row
+// before it could send a RecordWriteRequest, and that extra read opens a
+// fresh race window between it and the write — the exact lost-update shape
+// the version-token mechanism exists to close.
+//
+// Best-effort, per row: a path whose version cannot be read (the collection
+// itself failed to open, or the file was removed between the query and this
+// pass) simply keeps VersionToken unset. That is not a degraded answer — the
+// field is documented as OPTIONAL for precisely this case, and an editor that
+// finds it absent already knows to fall back to opening the note instead of
+// writing through this row.
+func attachRowVersionTokens(rows []gen.VaultFindRow, collectionRoot string) {
+	if len(rows) == 0 {
+		return
+	}
+	col, err := knowledge.OpenCollection(collectionRoot)
+	if err != nil {
+		return
+	}
+	for i := range rows {
+		v, verr := knowledge.ReadNoteVersion(col, rows[i].Path)
+		if verr != nil || !v.Exists {
+			continue
+		}
+		token := string(v.Token)
+		rows[i].VersionToken = &token
+	}
 }
 
 // buildSelect widens the view's own column selection so every property a part

@@ -123,10 +123,19 @@ func (a *restAPI) handleKnowledge(w http.ResponseWriter, r *http.Request, worksp
 		return
 	}
 
-	sub := ""
-	if len(rest) == 1 {
+	sub, extra := "", ""
+	switch {
+	case len(rest) == 0:
+	case len(rest) == 1:
 		sub = rest[0]
-	} else if len(rest) > 1 {
+	// ADR-083 Step 5: "records/{id}" is the ONLY two-segment sub-path this
+	// dispatcher accepts. The length check has to name it, not just allow a
+	// second segment generally: every other sub-path here is one segment, so
+	// a general rule would turn URLs that used to 404 (/knowledge/find/junk)
+	// into silent successes that ignore the trailing segment.
+	case len(rest) == 2 && rest[0] == "records" && rest[1] != "":
+		sub, extra = rest[0], rest[1]
+	default:
 		http.NotFound(w, r)
 		return
 	}
@@ -168,6 +177,21 @@ func (a *restAPI) handleKnowledge(w http.ResponseWriter, r *http.Request, worksp
 			return
 		}
 		a.handleKnowledgeBaseViews(w, r, workspaceID)
+	case "record-schema":
+		if r.Method != http.MethodGet {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleKnowledgeRecordSchema(w, r, workspaceID)
+	case "records":
+		switch {
+		case extra == "" && r.Method == http.MethodPost:
+			a.handleKnowledgeRecordWrite(w, r, workspaceID)
+		case extra != "" && r.Method == http.MethodGet:
+			a.handleKnowledgeRecordGet(w, r, workspaceID, extra)
+		default:
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
 	default:
 		http.NotFound(w, r)
 	}

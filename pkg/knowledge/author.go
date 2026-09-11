@@ -859,6 +859,45 @@ func SetProperty(key, value string) NoteEdit {
 	}
 }
 
+// RemoveProperty returns an edit that deletes ONE frontmatter property
+// entirely — its key line and every continuation line fmFindKey attributes
+// to it — leaving every other byte of the note untouched.
+//
+// It exists for ADR-068 D3.2 / ADR-083 EMB-085: a RecordWriteRequest whose
+// values array is empty CLEARS the property, and D3.2 defines "cleared" as
+// ABSENT, the same state a key that was never written is in — not a
+// present-but-empty placeholder. SetPropertyList's "key: []" is the right
+// splice for a DECLARED empty list elsewhere in this package (R-3, the
+// general-purpose knowledge_edit tool), but it is the wrong one here: D3.2's
+// contract is that an empty values array reads back exactly like the
+// property was never set, for a scalar and a list property alike, and the
+// only splice that satisfies that for both shapes is removing the key.
+//
+// Idempotent: a key that is not present leaves src unchanged, matching
+// AddListValue's own defined behaviour for the parallel case.
+func RemoveProperty(key string) NoteEdit {
+	return func(src []byte) ([]byte, error) {
+		if err := authorValidatePropertyKey(key); err != nil {
+			return nil, err
+		}
+		block, err := fmParse(src)
+		if err != nil {
+			return nil, err
+		}
+		if !block.present {
+			return src, nil
+		}
+		start, end, found := fmFindKey(src, block, key)
+		if !found {
+			return src, nil
+		}
+		out := make([]byte, 0, len(src)-(end-start))
+		out = append(out, src[:start]...)
+		out = append(out, src[end:]...)
+		return out, nil
+	}
+}
+
 // AppendSection returns an edit that appends a level-2 section to the note.
 func AppendSection(heading, body string) NoteEdit { return AppendSectionAt(2, heading, body) }
 
