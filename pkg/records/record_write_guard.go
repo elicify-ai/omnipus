@@ -100,14 +100,23 @@ var WriteRefusalCodes = []WriteRefusalCode{
 // Property is carried separately from Message even though Message names it
 // too: a door that wants to report the field a form should highlight needs
 // the name as data, not as a substring to parse back out of English prose.
+//
+// IT IS DELIBERATELY NOT AN `error`. It carried an `Error() string` method
+// briefly and that was a mistake worth naming, because the cost is invisible:
+// the moment this satisfies the error interface, the shortest correct-looking
+// thing a caller can write is `return refusal` into some `error` return, and
+// at that point the Code and Property — the two fields the whole design
+// exists to carry — are flattened into a string nobody can branch on again.
+// A refusal is a VERDICT, returned beside a value rather than in the error
+// position, and every door is expected to translate it into its own
+// vocabulary: pkg/gateway maps Code to an HTTP status and an audit reason, and
+// an agent-facing door would map it to a tool result. Neither wants a bare
+// string.
 type WriteRefusal struct {
 	Code     WriteRefusalCode
 	Property string
 	Message  string
 }
-
-// Error makes a refusal usable as an error by callers that want one.
-func (r *WriteRefusal) Error() string { return r.Message }
 
 // PropertyWriteKind is what a validated entry MEANS on disk.
 type PropertyWriteKind int
