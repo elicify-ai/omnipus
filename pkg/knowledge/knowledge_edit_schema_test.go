@@ -61,7 +61,7 @@ func TestKnowledgeEditSetPropertyEdit_UnparsableFrontmatterStillRefusesTheWrite(
 	set := records.NewSchemaSet()
 	unparsable := []byte("---\ntitle: Old\n\nbody with no closing fence\n")
 
-	edit := knowledgeEditSetPropertyEdit(set, nil, "title", []string{"New"}, false, nil)
+	edit := knowledgeEditSetPropertyEdit(set, nil, "title", []string{"New"}, false, knowledgeEditRelationRefused, nil)
 	_, err := edit(unparsable)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrFrontmatterUnterminated,

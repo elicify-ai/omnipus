@@ -862,14 +862,28 @@ func TestKnowledge_NoLanguageModelInTheGraphPath(t *testing.T) {
 	// so part C's pin needed no new entries for these two either; this
 	// addition is purely part B's file allow-list.
 	//
+	// knowledge_edit_relation.go (ADR-068 D15/FR-045 — the RECORDS FR-045
+	// about relation write verbs, NOT this file's ADR-067 FR-045 about
+	// language models; the two specs reuse the number) is the ninth adapter.
+	// It is knowledge_edit's op "relation" split into its own file for size,
+	// so it is the same tool adapter knowledge_edit.go already is — its
+	// Execute-side entry point (execRelation) is a method on that file's
+	// EditTool. It does no indexing, resolution or link rewriting: the
+	// byte-level work is delegated to knowledge_edit_list.go's splice
+	// primitives, which are outside this file's closure. Its only reasons to
+	// import pkg/tools are ToolResult/NewToolResult for its own tool-adapter
+	// response — both already on allowedToolsSelectors below, so part C's
+	// pin needed no new entries; this addition is purely part B's file
+	// allow-list, exactly like the eight entries above.
+	//
 	// This stays an EXPLICIT literal rather than a "*_tools.go" pattern: the
 	// point of the guard is that adding pkg/tools to a new file is a decision
 	// somebody has to make on purpose, and a pattern would silently admit the
 	// next file that happened to be named to fit.
 	want := []string{
 		"authoring_tools.go", "knowledge_base_create.go", "knowledge_configure.go",
-		"knowledge_configure_create_view.go", "knowledge_edit.go", "knowledge_list.go",
-		"knowledge_restructure.go", "scope_turn.go", "tools.go",
+		"knowledge_configure_create_view.go", "knowledge_edit.go", "knowledge_edit_relation.go",
+		"knowledge_list.go", "knowledge_restructure.go", "scope_turn.go", "tools.go",
 	}
 	if strings.Join(toolsImporters, ",") != strings.Join(want, ",") {
 		t.Fatalf("pkg/tools is imported by %v, want exactly %v. It is the only import here whose own "+

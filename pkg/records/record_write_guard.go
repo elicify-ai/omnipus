@@ -144,6 +144,59 @@ type PropertyWrite struct {
 	Values   []string
 }
 
+// ---------------------------------------------------------------------------
+// THE TWO RULE PREDICATES BOTH DOORS SHARE
+//
+// CheckRecordPropertyWrites below is not callable from the agent door, and
+// that is a fact about SHAPES rather than a failure of will: it takes
+// []generated.RecordPropertyValue (a wire type the agent door never
+// constructs — knowledge_edit receives plain strings out of a tool-call
+// argument map) and it bundles FOUR more rules the agent door must NOT
+// inherit. Two of those would be outright regressions there: the
+// list-shrink guard (§4.6) would refuse set_property's `list_op: remove`,
+// whose entire purpose is to shrink a list by one, and the identity-key
+// refusal duplicates a check knowledge_edit already applies with its own
+// wording. A third, the arity refusal, deliberately reads differently on
+// the agent door (it names the schema FILE to edit, which is actionable for
+// an agent and meaningless to a browser form).
+//
+// So what is shared is what CAN be shared without either door lying: the
+// two PREDICATES that decide whether a rule applies at all. The DECISION
+// lives here, once. The refusal WORDING stays per-door, because the two
+// doors must say different things — a browser is told to use a different
+// request type, an agent is told the exact op and arguments to retry with,
+// and collapsing those into one string would leave one of them useless.
+//
+// What drifts, if these are copied rather than shared, is exactly this:
+// what COUNTS as derived, and what COUNTS as a relation. Add a second
+// formula-bearing field or a third relation-shaped PropertyType and a
+// copied check goes quietly out of date on whichever door nobody edited.
+// These two functions are the only place either question is answered.
+// ---------------------------------------------------------------------------
+
+// IsDerivedProperty reports whether prop's value is COMPUTED rather than
+// stored — FR-046's rule, as a predicate rather than a refusal.
+//
+// A nil prop answers false: "no declaration" is not "a derived
+// declaration", and a caller that failed to resolve a property has an
+// unknown-property refusal to give, not this one.
+func IsDerivedProperty(prop *Property) bool {
+	return prop != nil && prop.Formula != ""
+}
+
+// IsRelationProperty reports whether prop holds relation edges — FR-045's
+// rule, as a predicate rather than a refusal.
+//
+// TypePerson is included and that is the whole reason this is a function
+// rather than an inline `== TypeRelation`: a person property is a relation
+// to whatever record type the vault uses for people (schema.go's own
+// TypePerson comment), so it carries every one of the list-replacement
+// hazards FR-045 exists to prevent. A door that checked only TypeRelation
+// would enforce half the rule and report full compliance.
+func IsRelationProperty(prop *Property) bool {
+	return prop != nil && (prop.Type == TypeRelation || prop.Type == TypePerson)
+}
+
 // CheckRecordPropertyWrites validates every entry against sc's declarations
 // and returns what each one means, or the FIRST refusal.
 //
@@ -213,15 +266,16 @@ func CheckRecordPropertyWrites(sc *Schema, props []generated.RecordPropertyValue
 				fmt.Sprintf("%s declares no property %q; declared properties are %s",
 					sc.Type, name, strings.Join(sc.PropertyNames(), ", "))}
 		}
-		if prop.Formula != "" {
+		if IsDerivedProperty(prop) {
 			return nil, &WriteRefusal{RefusalDerivedProperty, name,
 				fmt.Sprintf("%s.%s is a derived value, computed rather than stored; it cannot be written", sc.Type, name)}
 		}
-		if prop.Type == TypeRelation || prop.Type == TypePerson {
+		if IsRelationProperty(prop) {
 			return nil, &WriteRefusal{RefusalRelationProperty, name,
 				fmt.Sprintf("%s.%s is a %s property; relations and person properties are not writable through this request — "+
-					"they are modified through RelationWriteRequest's explicit add/remove/replace verbs (a future write door, not yet implemented)",
-					sc.Type, name, prop.Type)}
+					"they are modified through RelationWriteRequest's explicit add/remove/replace verbs (on the agent door, "+
+					"knowledge_edit's op %q)",
+					sc.Type, name, prop.Type, "relation")}
 		}
 
 		if len(item.Values) == 0 {
