@@ -241,8 +241,8 @@ func TestAuditLogFromDefault_IsNotSettableFromOperatorJSON(t *testing.T) {
 	// And it must never be written back out.
 	out := filepath.Join(t.TempDir(), "out.json")
 	cfg.Sandbox.AuditLogFromDefault = true
-	if err := SaveConfig(out, cfg); err != nil {
-		t.Fatalf("SaveConfig: %v", err)
+	if saveErr := SaveConfig(out, cfg); saveErr != nil {
+		t.Fatalf("SaveConfig: %v", saveErr)
 	}
 	raw, err := os.ReadFile(out)
 	if err != nil {
