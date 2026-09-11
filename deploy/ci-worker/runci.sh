@@ -705,26 +705,22 @@ EOF
   # Observed 2026-09-11: 7 failed / 1 passed on preview-headed while the other
   # 14 shards were green, on specs the branch had not touched.
   #
-  # xvfb is already installed in the image for exactly this reason and was
-  # simply never wired up. `xvfb-run -a` picks a free display number, so
-  # concurrent shards cannot collide on one. It wraps EVERY shard rather than
-  # only the headed one: headless Chromium ignores DISPLAY, so this costs the
-  # others nothing, and a single path means a future headed spec cannot land
-  # in a shard that silently lacks a display.
-  local xvfb=()
-  if command -v xvfb-run >/dev/null 2>&1; then
-    xvfb=(xvfb-run -a)
-  else
-    echo "WARNING: xvfb-run not found — the preview-headed shard WILL fail at browserType.launch, and that failure is not a code defect" >&2
-  fi
-
+  # Xvfb is already installed in the image for exactly this reason and was
+  # simply never wired up. run_e2e starts ONE Xvfb and exports DISPLAY before
+  # any shard launches, so every shard inherits it: headless Chromium ignores
+  # DISPLAY and pays nothing, and a single path means a headed spec added later
+  # cannot land in a shard that silently lacks a display.
+  #
+  # NOT `xvfb-run`, which is also installed: it shells out to `xauth`, which is
+  # NOT in this image, and fails with "xauth command not found" (measured).
+  # Xvfb itself has no such dependency.
   OMNIPUS_HOME="$home" \
   OMNIPUS_URL="http://localhost:$port" \
   OMNIPUS_AUTH_FILE="$authfile" \
   OMNIPUS_SKIP_MANIFEST_PATH="/tmp/e2e-$name-results/skip-manifest.json" \
   OPENROUTER_API_KEY="$key" \
   OPENROUTER_API_KEY_CI="$key" \
-    "${xvfb[@]}" npx playwright test $specs $pwargs
+    npx playwright test $specs $pwargs
 }
 
 run_e2e() {
@@ -732,6 +728,26 @@ run_e2e() {
   KEY_A="${OPENROUTER_API_KEY:?e2e gate requires OPENROUTER_API_KEY Fly secret}"
   KEY_B="${OPENROUTER_API_KEY_B:-$KEY_A}"
   KEY_C="${OPENROUTER_API_KEY_C:-$KEY_A}"
+
+  # One virtual display for every shard (see _e2e_run_shard's comment for why).
+  # Reaped by exact pid on the way out; never pkill-by-pattern on this box.
+  if [ -z "${DISPLAY:-}" ] && command -v Xvfb >/dev/null 2>&1; then
+    Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &
+    _XVFB_PID=$!
+    export DISPLAY=:99
+    # Give the server a moment, then confirm it is actually up rather than
+    # assuming: a dead Xvfb and no Xvfb look identical to a launching browser.
+    sleep 2
+    if kill -0 "$_XVFB_PID" 2>/dev/null; then
+      log "e2e: virtual display :99 up (pid $_XVFB_PID)"
+    else
+      echo "WARNING: Xvfb died on startup — the preview-headed shard will fail at browserType.launch, and that is an ENVIRONMENT failure, not a code defect. See /tmp/xvfb.log" >&2
+      unset DISPLAY _XVFB_PID
+    fi
+  elif [ -z "${DISPLAY:-}" ]; then
+    echo "WARNING: no Xvfb on this box — the preview-headed shard will fail at browserType.launch, and that is an ENVIRONMENT failure, not a code defect" >&2
+  fi
+  trap '[ -n "${_XVFB_PID:-}" ] && kill "$_XVFB_PID" 2>/dev/null; return' RETURN
 
   _e2e_build || return 1
 
