@@ -373,7 +373,7 @@ func TestKnowledgeRecordSchema_ReportsABrokenSchemaFile(t *testing.T) {
 
 	// The healthy type in the same vault must still load: a reporting change
 	// must not cost the caller the types that were fine.
-	var names []string
+	names := make([]string, 0, len(out.Types))
 	for _, ty := range out.Types {
 		names = append(names, ty.Type)
 	}

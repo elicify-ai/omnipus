@@ -36,7 +36,6 @@ import (
 // rather than against a hand-kept member list that could itself drift.
 func TestWirePropertyType_EveryDeclaredTypeIsValidInAllFourWireEnums(t *testing.T) {
 	for _, pt := range PropertyTypes {
-		pt := pt
 		t.Run(string(pt), func(t *testing.T) {
 			defType := WirePropertyDefType(pt)
 			if !defType.Valid() {
@@ -109,7 +108,6 @@ func TestWirePropertyTypeString_PanicsOnAnUndeclaredType(t *testing.T) {
 func TestWireEnumValueGroup_MapsEveryDeclaredGroupAndOmitsAnythingElse(t *testing.T) {
 	t.Run("every declared group maps to a valid, round-tripping wire value", func(t *testing.T) {
 		for _, g := range EnumGroups {
-			g := g
 			t.Run(g, func(t *testing.T) {
 				got, ok := WireEnumValueGroup(g)
 				if !ok {

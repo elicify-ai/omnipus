@@ -47,13 +47,13 @@ func TestNoteVersion_TokenIfPresent(t *testing.T) {
 	t.Run("Exists=true: the token and ok=true are returned", func(t *testing.T) {
 		// The real minter, not a hand-typed literal: ties this branch to
 		// whatever ComputeVersionToken actually produces today.
-		real := ComputeVersionToken([]byte("some content"))
-		nv := NoteVersion{Path: "some/note.md", Exists: true, Token: real}
+		minted := ComputeVersionToken([]byte("some content"))
+		nv := NoteVersion{Path: "some/note.md", Exists: true, Token: minted}
 
 		tok, ok := nv.TokenIfPresent()
 
 		require.True(t, ok)
-		assert.Equal(t, real, tok)
+		assert.Equal(t, minted, tok)
 	})
 }
 
