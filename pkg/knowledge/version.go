@@ -235,6 +235,48 @@ func (e *LockTimeoutError) Error() string {
 // Unwrap exposes the sentinel.
 func (e *LockTimeoutError) Unwrap() error { return ErrLockTimeout }
 
+// IsWellFormedVersionToken reports whether raw has one of the two shapes this
+// package ever MINTS: the absent sentinel, or the "v1:" prefix followed by
+// exactly versionTokenHexLen lower-case hex characters.
+//
+// THIS IS NOT A CRACK IN "TOKENS ARE OPAQUE" (FR-107). Opacity is a rule for
+// CALLERS: never parse a token, never order them, never construct one. This
+// function lives in the package that MINTS them, which is the one place
+// entitled to know the encoding — the same place ComputeVersionToken and
+// checkVersion already are.
+//
+// It exists so a write door can tell "malformed" from "stale", which are
+// different faults with different remedies and different HTTP answers
+// (ADR-083 §4.2a(c)). The case it was written for is a client that forgot to
+// strip JSON quotes and sends `"v1:9f2a…"`, quotes included. Compared as an
+// opaque string that simply mismatches, so the natural answer is 409 — and
+// the client then re-reads, forgets to strip the quotes again, and conflicts
+// FOREVER, with every attempt logged as a genuine version conflict against a
+// record no second writer ever touched. §4.2a(c): "never 409, because
+// otherwise a client that forgot to strip the quotes gets a conflict
+// indistinguishable from a real one, forever."
+//
+// A token this server did not issue cannot be a STALE token it issued. 400.
+func IsWellFormedVersionToken(raw string) bool {
+	if raw == string(TokenAbsent) {
+		return true
+	}
+	if !strings.HasPrefix(raw, versionTokenPrefix) {
+		return false
+	}
+	hexPart := raw[len(versionTokenPrefix):]
+	if len(hexPart) != versionTokenHexLen {
+		return false
+	}
+	for i := 0; i < len(hexPart); i++ {
+		c := hexPart[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // NoteVersion is the state of one note at one moment.
 type NoteVersion struct {
 	// Path is the collection-relative, slash-separated path.
@@ -249,6 +291,32 @@ type NoteVersion struct {
 	// ModTime is the file's modification time. Same status as Size: carried,
 	// never decisive (FR-107).
 	ModTime time.Time
+}
+
+// TokenIfPresent returns the note's token and true, or ok=false when there is
+// no file there.
+//
+// IT EXISTS TO MAKE ONE PARTICULAR MISTAKE UNWRITEABLE (ADR-083 review F5).
+// TokenAbsent and a real token are the same Go type and the same wire type —
+// they differ only in spelling — so `token := nv.Token`, written without
+// first checking Exists, compiles, reads naturally, and is wrong. What it
+// produces is a row that carries a path, an id AND `version_token:
+// "v1:absent"` for a note that was deleted between a directory walk and this
+// read. A client cannot tell that from a live row: it offers an editor, sends
+// the absent-sentinel as its expected version, and the server answers 409
+// "this changed while you were editing" about a record nobody touched — a
+// conflict with no second writer, which no amount of retrying resolves and
+// which the audit log records as a genuine version_conflict.
+//
+// Reaching the token through this method makes the Exists check not merely
+// documented but syntactically unavoidable. Prefer it at every call site that
+// puts a token on the wire; read the fields directly only where "absent" is
+// itself the answer being computed.
+func (v NoteVersion) TokenIfPresent() (VersionToken, bool) {
+	if !v.Exists {
+		return "", false
+	}
+	return v.Token, true
 }
 
 // ComputeVersionToken derives the token for a note's content.

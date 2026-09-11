@@ -35,7 +35,7 @@ properties:
     description: >
       ADR-067 D14's opaque content-hash token for that record. A stale token is
       REFUSED and the refusal AUDITED (FR-043, FR-044).
-    example: "sha256:3d1c9a7e5b2f4806"
+    example: "v1:9f2a7c4081e3b5d6a0c1f2e3b4d5a6c7"
   property:
     type: string
     minLength: 1

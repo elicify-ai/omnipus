@@ -634,6 +634,28 @@ type EditNoteResult struct {
 	// disturbed and no sync tool is woken up for a no-op.
 	Changed bool
 	Bytes   int
+
+	// Content is the note's bytes AS OF THIS EDIT — the exact bytes Version
+	// is the token of, captured INSIDE the write lock.
+	//
+	// It exists so a caller that must answer "what does the record hold now"
+	// does not re-read the file after the lock is released (ADR-083 review
+	// F8/H5). That re-read is wrong in two independent ways, and both have
+	// already shipped on this branch once (defect R-1/B1, fixed at b9149a615):
+	//
+	//	CORRECTNESS  a writer landing between the unlock and the re-read makes
+	//	             the response carry THEIR field values beside OUR token.
+	//	             The client renders that value and stores that token; its
+	//	             next edit is refused with a 409 nobody can explain.
+	//
+	//	HONESTY      a transient read failure after a write that COMMITTED
+	//	             turns a successful save into a 500. The user retypes and
+	//	             saves again with a now-stale token, and gets the same
+	//	             inexplicable conflict.
+	//
+	// Nil when Changed is false only in the sense that it then holds the
+	// unchanged bytes — it is always the content Version describes.
+	Content []byte
 }
 
 // EditNote reads a note, applies the edits, and writes the result atomically —
@@ -758,6 +780,7 @@ func EditNote(fsys LinkFS, c *Collection, req EditNoteRequest) (EditNoteResult, 
 				RelPath: rel, AbsPath: abs,
 				Version: priorVersion, PriorVersion: priorVersion,
 				Changed: false, Bytes: len(before),
+				Content: append([]byte(nil), before...),
 			}
 			return nil
 		}
@@ -790,6 +813,7 @@ func EditNote(fsys LinkFS, c *Collection, req EditNoteRequest) (EditNoteResult, 
 			RelPath: rel, AbsPath: abs,
 			Version: NoteContentVersion(after), PriorVersion: priorVersion,
 			Changed: true, Bytes: len(after),
+			Content: append([]byte(nil), after...),
 		}
 		return nil
 	})
@@ -873,11 +897,34 @@ func SetProperty(key, value string) NoteEdit {
 // property was never set, for a scalar and a list property alike, and the
 // only splice that satisfies that for both shapes is removing the key.
 //
-// Idempotent: a key that is not present leaves src unchanged, matching
-// AddListValue's own defined behaviour for the parallel case.
+// Idempotent: a key that is not present leaves src unchanged — the state was
+// already "cleared". That mirrors AddListValue's OTHER idempotent case (a
+// value already present leaves src unchanged), NOT its absent-key case, which
+// is deliberately not a no-op at all: AddListValue on an absent key produces a
+// fresh one-item list. The two cases are named explicitly here because the
+// earlier wording said only "the parallel case", which reads as the absent-key
+// one and describes the opposite of what AddListValue does.
+//
+// THE RECORD-IDENTITY KEYS ARE REFUSED (ADR-083 review M8). `type` and `id`
+// are not ordinary properties whose removal clears a value — they are what
+// makes a note a record (D1) and what makes it findable and unique (D7).
+// Removing either succeeds silently at the YAML level and is catastrophic
+// above it: a record with no `id` is invisible to findVaultRecordByID, so it
+// can never be read or written again through the record doors, AND it becomes
+// invisible to the identity allocator's collision check — which then mints
+// that same identifier to a SECOND record, breaking the "unique within its
+// type" invariant the allocator's own comment claims to hold. The refusal
+// lives here, at the splice, rather than only at the gateway door, because
+// every caller of this edit has the same exposure: the reachable route is a
+// schema that happens to declare a property literally named `id` (an external
+// system's identifier is a plausible thing to want), which nothing else
+// forbids.
 func RemoveProperty(key string) NoteEdit {
 	return func(src []byte) ([]byte, error) {
 		if err := authorValidatePropertyKey(key); err != nil {
+			return nil, err
+		}
+		if err := authorRefuseRecordIdentityKey("remove", key); err != nil {
 			return nil, err
 		}
 		block, err := fmParse(src)
@@ -1132,6 +1179,33 @@ func authorValidatePropertyKey(key string) error {
 	}
 	if strings.HasPrefix(key, "#") || strings.HasPrefix(key, "-") {
 		return fmt.Errorf("%w: key %q starts with a YAML structural character", ErrInvalidProperty, key)
+	}
+	return nil
+}
+
+// authorRefuseRecordIdentityKey refuses an edit that would delete or overwrite
+// the two frontmatter keys a record's identity is made of (ADR-083 review M8).
+//
+// It is separate from authorValidatePropertyKey because the two answer
+// different questions. That one asks "can this key be written as YAML at all"
+// — a syntax rule that applies to every note in the vault, record or not.
+// This one asks "may this particular key be touched by this particular
+// operation", which is a RECORD rule: `type` is what makes a note a record
+// (ADR-068 D1) and `id` is D7's identifier, unique within its type. Both are
+// perfectly legal YAML keys, which is exactly why a syntax check cannot catch
+// them.
+//
+// Deliberately NOT applied to SetProperty: seeding `type` and `id` is how a
+// record is created in the first place (the record create door assembles
+// frontmatter with exactly those two calls). The asymmetry is the point —
+// writing an identity is a create, removing one is a corruption.
+func authorRefuseRecordIdentityKey(op, key string) error {
+	switch key {
+	case records.RecordTypeKey, records.RecordIDKey, records.RecordIDKeyNamespaced:
+		return fmt.Errorf("%w: cannot %s %q — it carries the record's identity "+
+			"(ADR-068 D1/D7); a record with no type is not a record, and a record with no id "+
+			"can never be found or written again and lets its identifier be minted to another record",
+			ErrInvalidProperty, op, key)
 	}
 	return nil
 }

@@ -360,7 +360,14 @@ func describeDeclaration(p *records.Property) string {
 // a per-record exclusion, which is the right direction to be wrong in.
 func untypedProperty(name string, decls []untypedDeclaration) *records.Property {
 	if len(decls) == 0 {
-		return &records.Property{Name: name, Type: records.TypeText, Many: true}
+		// Undeclared is set, and it is the whole reason the field exists
+		// (ADR-083 review M10/F9). `text`/`many` here are a WORKING
+		// ASSUMPTION so a filter leaf and a sort key have something to read —
+		// not a fact any schema in this vault asserted. Without the marker
+		// the assumption reached the wire as VaultFindCell.type, which the
+		// contract reserves for a genuinely declared type and which a client
+		// is told it may rely on.
+		return &records.Property{Name: name, Type: records.TypeText, Many: true, Undeclared: true}
 	}
 	base := decls[0].prop
 	prop := &records.Property{

@@ -34,7 +34,7 @@ import (
 //
 // pkg/knowledge was complete, tested and reachable by NOTHING: the binary did
 // not import it at all. This file is one of the two seams that connect it —
-// the operator's four read endpoints:
+// the operator's knowledge endpoints:
 //
 //	GET  /api/v1/library/{workspace_id}/knowledge          detection + identity
 //	POST /api/v1/library/{workspace_id}/knowledge/find      human vault search (notes+records+views+attachments, rest_knowledge_find.go — US-5/ADR-081 retired the former relevance-search endpoint here; this is the ONE surviving human search)
@@ -42,6 +42,12 @@ import (
 //	GET  /api/v1/library/{workspace_id}/knowledge/outline   heading outline
 //	GET  /api/v1/library/{workspace_id}/knowledge/view      saved-view result (rest_knowledge_view.go)
 //	GET  /api/v1/library/{workspace_id}/knowledge/base-views a .base file's imported views (rest_knowledge_base_views.go)
+//	GET  /api/v1/library/{workspace_id}/knowledge/record-schema declared record types (ADR-083 CW-4, rest_knowledge_record.go)
+//	GET  /api/v1/library/{workspace_id}/knowledge/records/{id}  one typed record (CW-4, rest_knowledge_record.go)
+//	POST /api/v1/library/{workspace_id}/knowledge/records     create/update one record by splice (CW-7, rest_knowledge_record.go)
+//
+// The list is exhaustive and is deliberately a LIST rather than a count; see
+// handleKnowledge's own comment for why.
 //
 // Every one of them CALLS pkg/knowledge. None of them reimplements it: link
 // resolution, containment, the index, the incompleteness report and the
@@ -109,7 +115,16 @@ func (a *restAPI) HandleLibraryTree(w http.ResponseWriter, r *http.Request) {
 	a.HandleLibrary(w, r)
 }
 
-// handleKnowledge dispatches the four knowledge endpoints of one workspace.
+// handleKnowledge dispatches this workspace's knowledge sub-paths: detection
+// (the empty sub-path), find, graph, outline, view, base-views, record-schema
+// and records/{id}.
+//
+// EIGHT, and the count is spelled out as a list rather than a number because
+// the number went stale twice — it said "four" while six cases existed, and
+// ADR-083 Step 5 then added the last two without touching it. A list cannot
+// drift silently in the same way: adding a case beside a comment that names
+// every case reads as an omission, where adding one beside a bare count reads
+// as nothing at all.
 func (a *restAPI) handleKnowledge(w http.ResponseWriter, r *http.Request, workspaceID string, rest []string) {
 	if err := validateEntityID(workspaceID); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid workspace ID")

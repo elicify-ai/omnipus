@@ -215,7 +215,68 @@ type EnumValue struct {
 	Label string
 	// Group is D4's optional lifecycle bucket (open / done / cancelled) so
 	// "is this finished?" is answerable across types with different vocabularies.
+	//
+	// CLOSED, and validated at load (parseEnumValue): the empty string means
+	// ungrouped, and anything else must be one of EnumGroups. It was a
+	// free-form string until the ADR-083 review, and that combination — a
+	// free-form Go string feeding a three-member wire enum — is what made one
+	// mistyped word in one vault file blank an entire dashboard. See
+	// WireEnumValueGroup (wire.go) for the second half of the fix.
 	Group string
+}
+
+// EnumGroup* are D4's closed lifecycle bucket vocabulary. They exist as
+// constants, rather than as three string literals spread over the parser, the
+// wire converter and the tests, because the wire enum
+// (contracts/components/schemas/EnumValueDef.yaml) is closed to exactly these
+// three and there must be ONE list in Go that the wire list is checked against.
+const (
+	EnumGroupOpen      = "open"
+	EnumGroupDone      = "done"
+	EnumGroupCancelled = "cancelled"
+)
+
+// EnumGroups is the closed set, in the wire schema's declaration order.
+//
+// It is the named source of truth WireEnumValueGroup's switch is pinned
+// against by a test, following the discipline
+// pkg/gateway/rest_knowledge.go's knowledgeEdgeUnresolvedReason established
+// for the same class of Go-constant-to-closed-wire-enum mapping.
+var EnumGroups = []string{EnumGroupOpen, EnumGroupDone, EnumGroupCancelled}
+
+// IsEnumGroup reports whether group is one of the declared lifecycle buckets.
+// The EMPTY STRING IS NOT ONE — it is the separate, legitimate "ungrouped"
+// state, and a caller that wants to allow it must say so itself rather than
+// having this function quietly fold the two together.
+func IsEnumGroup(group string) bool {
+	for _, g := range EnumGroups {
+		if group == g {
+			return true
+		}
+	}
+	return false
+}
+
+// SchemaRejectionCodes is the closed set of rejection codes, in declaration
+// order.
+//
+// It exists so a consumer that must map EVERY code onto some other
+// vocabulary — the gateway's RecordProblemCode, today — can be pinned against
+// this slice by a test instead of discovering a new member the first time an
+// operator's broken schema file vanishes silently from an API answer. That is
+// exactly how the seven-of-nine drop the ADR-083 review found (H2/F9) came
+// about: the mapping was written once, against the members that existed, with
+// nothing to fail when the set grew.
+var SchemaRejectionCodes = []SchemaRejectionCode{
+	RejectUnreadable,
+	RejectInvalidYAML,
+	RejectMissingVersion,
+	RejectUnsupportedVersion,
+	RejectMissingType,
+	RejectDuplicateType,
+	RejectNoProperties,
+	RejectBadProperty,
+	RejectUnknownKey,
 }
 
 // Property is one declared property of one record type.
@@ -227,6 +288,25 @@ type Property struct {
 	// becomes a list, and a list property is never silently a scalar; both
 	// directions are reported with the expected shape named.
 	Many bool
+
+	// Undeclared marks a Property that NO schema in scope actually declares —
+	// one an untyped query SYNTHESISED (knowledgefind/namespace.go's
+	// untypedProperty, the `len(decls) == 0` branch) so that a filter leaf and
+	// a sort key have some declaration to read for an ordinary frontmatter key.
+	//
+	// It is NEVER set by LoadSchemas: a Property parsed from a schema file is
+	// by definition declared. It is not the same thing as "synthetic" — the
+	// twelve `file.*` virtuals and a view's `formula.*` properties are also
+	// constructed in code, but each carries a REAL type this codebase defined
+	// and is a fact a client may rely on. This flag means only: "the Type and
+	// Many below are a working assumption, not something the vault asserted."
+	//
+	// Consumers that put a property's type on the wire MUST honour it by
+	// omitting the field (ADR-083 review M10/F9): VaultFindCell.type is
+	// contractually reserved for a declared type, and stamping a guess there
+	// tells a client the opposite of the truth about a field it is explicitly
+	// warned never to guess about.
+	Undeclared bool
 
 	// Required means a record must carry a value. Absent (or explicitly null)
 	// then fails validation.
@@ -1500,10 +1580,28 @@ func parseEnumValue(n yaml.Node, position int) (EnumValue, error) {
 		if strings.TrimSpace(long.Name) == "" {
 			return EnumValue{}, fmt.Errorf("enum value at position %d declares no `name`", position)
 		}
+		// D4's lifecycle bucket is a CLOSED set, and it is checked HERE, at
+		// the operator's own file, because this is the only place a wrong
+		// value can be reported back to the person who wrote it (the
+		// rejection surfaces as a RecordProblem on GET .../record-schema).
+		//
+		// Before the ADR-083 review this field accepted anything, and the
+		// consequence was invisible and total: the value was cast unchecked
+		// into a three-member wire enum, the SPA's Zod validator rejected the
+		// whole response, and the entire dashboard went blank for one
+		// mistyped word — with no server error and nothing naming the file.
+		// A rejection here costs the operator one named, fixable file; the
+		// alternative cost them every view in the vault with no explanation.
+		group := strings.TrimSpace(long.Group)
+		if group != "" && !IsEnumGroup(group) {
+			return EnumValue{}, fmt.Errorf(
+				"enum value %q at position %d declares group %q; `group` is a closed set — use one of %s, or omit it",
+				long.Name, position, long.Group, strings.Join(EnumGroups, ", "))
+		}
 		return EnumValue{
 			Name:  long.Name,
 			Label: strings.TrimSpace(long.Label),
-			Group: long.Group,
+			Group: group,
 		}, nil
 	}
 	return EnumValue{}, fmt.Errorf("enum value at position %d must be a name or a {name, group} mapping", position)

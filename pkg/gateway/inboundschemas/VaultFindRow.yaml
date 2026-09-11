@@ -105,4 +105,4 @@ properties:
       producing this row does not yet compute it — an inline editor MUST
       treat an absent token the same as an ungoverned field: no direct write
       from this row, open the note instead.
-    example: "sha256:3d1c9a7e5b2f4806"
+    example: "v1:9f2a7c4081e3b5d6a0c1f2e3b4d5a6c7"
