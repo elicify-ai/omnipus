@@ -2,12 +2,31 @@
 
 Reproduced live in Playwright against the UAT instance on port 5177, build
 `1bd993220`. Screenshots and the full evidence chain are recorded per defect.
-**This file documents; it does not fix.**
+
+> **Status pass, 2026-09-11.** All three entries below were re-checked against
+> the code on `integrate/library-improvements-v0.1.1` at `4e2ef3dbb`, not
+> against the commit messages that claimed the fixes. Defects found by review
+> during the same work — none of which reached you as a symptom — are recorded
+> in `defect-list-embedded-content-review-2026-09-11.md`.
 
 ---
 
 ### HP-1 — HTML preview never renders: the SPA's token minter is hardcoded `null`
-**Severity:** high · **Area:** Library SPA · **Status:** Open · **REPRODUCED**
+**Severity:** high · **Area:** Library SPA · **Status: FIXED** — `1069c7389`,
+verified in code 2026-09-11 · originally **REPRODUCED**
+
+**What you get now:** opening an `.html` file in the Library actually renders
+the page, in production and not only in tests. **Verified:** the one line this
+entry blamed is gone —
+`const PREVIEW_TOKEN_MINTER: MintLibraryPreviewToken = mintLibraryPreviewToken`
+(`LibraryPreviewPane.tsx`), no longer `| null = null`. The missing client
+wrapper now exists: `mintLibraryPreviewToken` in `src/lib/api.ts` posts to
+`/library/preview-token`. The type itself no longer permits `null` in the
+production default, so the shape that shipped this defect cannot recur silently;
+a test may still pass `mintPreviewToken={null}` explicitly to exercise the
+unavailable state.
+
+The original entry, for the record, follows.
 
 Opening any `.html` file in the Library preview pane shows:
 
@@ -58,7 +77,26 @@ the PRODUCTION default is non-null.
 ---
 
 ### HP-2 — the isolation CSP emits an IPv6 source every browser rejects
-**Severity:** low-medium · **Area:** pkg/gateway · **Status:** Open · **REPRODUCED**
+**Severity:** low-medium · **Area:** pkg/gateway · **Status: FIXED** —
+`734eeab8f`, verified in code 2026-09-11 · originally **REPRODUCED**
+
+**What you get now:** no console errors on an HTML preview, so a real security
+warning is no longer buried under six decoy ones. **Verified:**
+`libraryIsolationSources` (`pkg/gateway/library_isolation_policy.go`) no longer
+emits `::1` in any form. The alias list is literally
+`[]string{"127.0.0.1", "localhost"}`, with a comment in the code stating that
+`::1` must not be re-added and why — so a later contributor cannot restore it
+believing it was an oversight.
+
+**Two things worth knowing about how it was fixed.** First, every candidate
+spelling was measured, not assumed: bracketed, unbracketed, expanded and
+percent-encoded forms were all tested against three browser engines and all
+rejected, so the source was **dropped** rather than re-spelled. Second, the
+second half of this defect — that a reader reaching the gateway over IPv6
+loopback was not allow-listed — is **accepted, not fixed, and is now visible**:
+a non-loopback IPv6 origin collapses the policy to `'self'` and logs a warning
+at boot, rather than emitting a source the browser silently discards. The IPv6
+loopback reader still gets the two expressible aliases.
 
 Every HTML preview logs **six** console errors, one per directive:
 
@@ -103,15 +141,43 @@ loosening it re-opens the exposure ADR-067 was written to close.
 
 ## Summary
 
-| ID | Title | Severity | Status |
-|---|---|---|---|
-| HP-1 | HTML preview dead in production; minter hardcoded `null` | High | Open — reproduced, root cause is one line |
-| HP-2 | CSP emits an invalid `[::1]` source; 6 console errors per preview | Low-med | Open — reproduced |
+Status re-verified against the code at `4e2ef3dbb` on 2026-09-11.
+
+| ID | Title | Severity | Status | Commit |
+|---|---|---|---|---|
+| HP-1 | HTML preview dead in production; minter hardcoded `null` | High | **Fixed** | `1069c7389` |
+| HP-2 | CSP emits an invalid `[::1]` source; 6 console errors per preview | Low-med | **Fixed** — source dropped; IPv6 gap now warns instead of failing silently | `734eeab8f` |
+| CI-2 | Firefox mutation control fails intermittently, blocking CI | High | **Fixed** — race closed, no retry added | `aa19487c8` |
 
 ---
 
 ### CI-2 — Firefox `mutation control` in preview-isolation fails intermittently, blocking CI
-**Severity:** high (blocks a green CI) · **Area:** e2e harness · **Status:** Open · **OBSERVED**
+**Severity:** high (blocks a green CI) · **Area:** e2e harness · **Status: FIXED**
+— `aa19487c8`, verified in code 2026-09-11 · originally **OBSERVED**
+
+**What you get now:** the test that proves the isolation suite can see a leak at
+all no longer fails at random, and it was fixed without weakening it.
+**Verified:** `driveMutant` in `tests/e2e/preview-isolation.spec.ts` now calls
+`page.goto(..., { waitUntil: 'commit' })` instead of waiting for the full page
+load. The seven-vector assertion the control exists for is unchanged.
+
+**The mechanism turned out to be exactly the hypothesis this entry recorded.**
+The test page, under the no-policy control, navigates itself — that is the
+behaviour being provoked. The test was still waiting for the original
+navigation to finish when the page navigated itself away, and Firefox reports
+that as an aborted request. Resolving as soon as the response starts arriving —
+before the page's own script has run — removes the window in which the two can
+collide. Every later step already waits on its own signal, so nothing depended
+on the longer wait.
+
+**No retry was added, as this entry insisted.** A retry would have turned a
+loud, honest failure into an absorbed flake and quietly weakened the evidence
+behind the whole isolation suite.
+
+**One honesty note carried forward from the fix:** the original intermittent
+failure was never reproduced locally. The fix is reasoned from the test fixture
+and validated by repeat runs on all three browsers, not by watching the failure
+disappear.
 
 Full CI on `1bd993220` (2026-09-09): **12 gates exit 0**, e2e 16 shards, one hard
 failure with `retries: 0`:
@@ -175,3 +241,10 @@ plan, and runs — but both its tests are placeholders, so the browser's own PDF
 type-confusion handling is currently asserted by nothing. That is declared in the
 test names rather than hidden, and it is the SAME ADR-067 Wave 3 that HP-1's
 missing mint client belongs to.
+
+> **RESOLVED 2026-09-11 — `4e2ef3dbb`.** The placeholders are gone. The three
+> security specs that ran green while asserting nothing now contain 15 tests and
+> 136 assertions against a real gateway on real browsers, including the PDF
+> type-confusion case this paragraph named. Full entry, including the two real
+> browser findings it turned up, is R-10 in
+> `defect-list-embedded-content-review-2026-09-11.md`.

@@ -3,14 +3,23 @@
 Wikilink rendering (WL-1, WL-2) and knowledge-base creation (WL-3, WL-4).
 
 Founder findings from retesting build `94bb13e61`. Companion to
-`defect-list-knowledge-base-ux-2026-09-08.md`. **This file documents; it does
-not fix.** Each entry says what was verified in code and what was not.
+`defect-list-knowledge-base-ux-2026-09-08.md` and
+`defect-list-embedded-content-review-2026-09-11.md`. Each entry says what was
+verified in code and what was not.
+
+> **Status pass, 2026-09-11.** Every entry below was re-checked against the
+> code on `integrate/library-improvements-v0.1.1` at `4e2ef3dbb`, not against
+> the commit messages that claimed the fixes. A status says **Fixed** only
+> where the change is visible in the file the defect names. Commit hashes are
+> cited so any claim here can be re-checked in one command.
 
 ---
 
 ### WL-1 — links in a base render WHITE; the same links in a note render GOLD
 **Severity:** medium · **Area:** Library SPA (base/view cells) · **Reported by:** founder
-**Status:** Open · **Confirmed in code**
+**Status: PARTLY FIXED — still Open on the surface it was reported from.**
+Fixed inside an embedded view (`15f60b861`); unchanged when a `.base` file is
+opened directly in the Library.
 
 A relation link inside a base is styled as *unverified* (white) while an
 equivalent wikilink in a markdown note is styled as *resolved* (gold). Same
@@ -52,11 +61,52 @@ make `unknown` visually distinct from BOTH resolved and unresolved, and document
 that a base cannot verify beyond its own rows — but that is a worse product than
 resolving properly.
 
+#### What actually shipped — and what did not (verified 2026-09-11)
+
+**Half of this is fixed.** Your Q8 ruling on ADR-083 said an embedded base view
+should resolve its links against the graph of the note you are reading, not
+against the handful of rows that view happened to load. That is now true in the
+code: `KbBaseEmbedContent` (`preview/knowledgeMarkdown.tsx`) hands the note
+reader's own resolver down to `BasePreview`, and `BasePreview` takes it over
+completely when supplied (`BasePreview.tsx`, the `resolveWikilink` memo:
+`if (embed?.resolveWikilink) return embed.resolveWikilink`). So inside a
+dashboard, a link tells the truth and is coloured by it — gold when it resolves,
+visibly unresolved when the target really is missing.
+
+**The other half is untouched, and it is the half you reported.** When you open
+a `.base` file directly in the Library, nothing changed. `LibraryPreviewPane`
+mounts `<BasePreview>` with no embed options at all, so it falls back to the
+row-scoped resolver that can only ever answer `resolved` or `unknown` — never
+`unresolved` — and most links in that pane still render white. The colour
+difference between the base pane and a note is still there.
+
+**A commit message overstated this, and it is recorded rather than quietly
+inherited.** `15f60b861` says the Q8 work *"also fixes WL-1 where base links
+rendered white while identical note links rendered gold."* It does not — it
+fixes WL-1 in embedded views only. ADR-083 itself says the opposite twice, and
+says it deliberately: D8 states *"WL-1 itself is not fixed here"*, and §7.3
+*"Embedded views inherit WL-1 in whichever form Q8 chooses. This ADR does not
+fix WL-1 and must not paper over it."* The ADR is right and the commit message
+is wrong. The entry stays open on that basis.
+
+**What remains:** decide whether the standalone base pane should also load the
+collection link graph (the same `loadGraph` the note reader uses), or whether a
+base opened on its own is accepted as a surface that cannot verify beyond its
+own rows — in which case `unknown` needs to look different from both other
+states, and the limitation needs saying in the UI.
+
 ---
 
 ### WL-2 — `[[Daniel Piatkowski]]` renders as plain text in some notes
 **Severity:** medium · **Area:** Library SPA (render path selection) · **Reported by:** founder
-**Status:** Open · **Mechanism confirmed; exact surface NOT reproduced**
+**Status: OPEN — and the blocker is REPRODUCTION, not implementation.**
+
+Nothing has been built for this and nothing should be until the surface is
+reproduced. No commit on this branch touches it (`git log --grep=WL-2` returns
+only the commit that first wrote this entry). The mechanism below is confirmed,
+but it names three different possible causes with three different fixes, and
+building for the wrong one costs more than waiting. A reproduction attempt is
+in progress; its result decides which fix, if any, is right.
 
 Some notes show the raw wikilink notation `[[Daniel Piatkowski]]` as literal
 text, brackets included, instead of a link.
@@ -97,7 +147,13 @@ in the body text or in a properties/metadata area?
 
 ### WL-3 — the New knowledge base dialog still shows a Location field
 **Severity:** low · **Area:** Library SPA · **Reported by:** founder
-**Status:** Open · **Confirmed in code**
+**Status: FIXED** — `65f8254d2`, verified in code 2026-09-11.
+
+**What you get now:** the New knowledge base dialog asks for a name and nothing
+else, exactly like New folder. **Verified:** `LibraryNewVaultDialog.tsx` renders
+one `<Label>` in the whole file — `Name`. The `Location` label and the
+`destinationLabel()` helper are gone; the workspace and the parent directory
+come from where you are standing, as props.
 
 KB-3 removed the workspace picker and the free-text path box, but left a
 read-only **Location** line showing the destination. The founder's instruction
@@ -121,7 +177,23 @@ destination text.
 
 ### WL-4 — a knowledge base can be created INSIDE another knowledge base
 **Severity:** high · **Area:** pkg/knowledge (both UI and agent paths) · **Reported by:** founder
-**Status:** Open · **Confirmed in code**
+**Status: FIXED** — `7a9317376`, verified in code 2026-09-11.
+
+**What you get now:** creating a knowledge base inside another one is refused,
+from the Library and from an agent alike. **Verified:** `CreateInWorkspace`
+(`pkg/knowledge/detect.go`) now calls `ancestorKnowledgeBase`, which walks the
+target's parent chain up to and including the workspace root and returns a new
+`ErrNestedKnowledgeBase` naming the enclosing knowledge base. It was fixed in
+the one shared function, as this entry asked, so both the SPA handler and the
+`knowledge_base_create` tool inherit it rather than each carrying their own copy
+of the rule. Two details worth knowing: the walk correctly treats "the workspace
+root itself is a knowledge base" as its own case rather than folding it into
+"not found", and a parent directory that does not exist on disk yet is skipped
+instead of erroring.
+
+**Still undecided, as this entry predicted:** what happens to a knowledge base
+that is *already* nested on an existing install. New nesting is refused;
+existing nesting is neither detected nor migrated.
 
 Nothing prevents creating a knowledge base nested inside an existing one. This
 must be blocked, and blocked in ONE place so both callers inherit it.
@@ -158,7 +230,40 @@ separate decision and should be stated rather than discovered later.
 
 ### WL-5 — a Base VIEW cannot be embedded inside a note (`![[Tasks.base#View]]`)
 **Severity:** high · **Area:** Library SPA (markdown embed resolution) · **Reported by:** founder
-**Status:** Open · **Confirmed in code — MISSING CAPABILITY, not a bad import**
+**Status: FIXED** — `15f60b861` (the capability), on `a7992fa2d` / `368188a0d`
+(the resolver and the inline renderer it needed) and `0263b7629` (the query
+ceiling that makes a 15-module dashboard safe). Verified in code 2026-09-11.
+
+**What you get now:** your dashboards render. A note containing
+`![[Tasks.base#Needs Daniel]]` mounts the real base view, with real data, inline
+in the note. **Verified:** `KbBaseEmbedMount` / `KbBaseEmbedContent` in
+`preview/knowledgeMarkdown.tsx` resolve the file, match the written view name
+against the server's own view labels (`baseViewMatch.ts`), and mount the SAME
+`BasePreview` the full-screen pane uses — not a second renderer that could drift
+from it.
+
+The decisions this entry asked to be made were made, and each is visible in the
+code rather than assumed:
+
+- **A missing view is visibly unresolved, never an empty box.** A fragment that
+  matches nothing says so and lists the view names that do exist.
+- **An ambiguous fragment refuses and names both matches** rather than silently
+  picking one.
+- **No fragment at all** shows the first view and says in a caption that the
+  embed did not choose it.
+- **Nothing loads until you scroll to it** (`LazyEmbedMount`), and N embeds of
+  the same file share ONE network request.
+- **At most four view queries run at once** (`viewEvaluationPool`), so a
+  15-module dashboard does not fire 15 simultaneous queries at the single Go
+  binary.
+- **Links inside an embedded view resolve against the note's graph** — your Q8
+  ruling. See WL-1 above for the half of that which is fixed and the half which
+  is not.
+
+**Honestly not done, and stated in the shipping commit rather than discovered
+later:** local filter/sort inside an embedded view (ADR-083 EMB-047). No filter
+or sort controls exist anywhere in the view renderer yet, so there was nothing
+to make embed-local.
 
 The founder's dashboards compose themselves out of embedded Base views. Example:
 `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/e-vault-fix/07-Dashboards/Founder Cockpit.md`
@@ -212,16 +317,21 @@ mapping and that is worth knowing up front rather than mid-implementation.
 
 ## Summary
 
-| ID | Title | Severity | Status |
-|---|---|---|---|
-| WL-1 | Base links render white; note links render gold | Medium | Open — cause confirmed |
-| WL-2 | Raw `[[wikilink]]` text in some notes | Medium | Open — mechanism confirmed, surface unreproduced |
-| WL-3 | New KB dialog still shows a Location field | Low | Open — confirmed |
-| WL-4 | A knowledge base can be created inside another | High | Open — confirmed, both paths |
-| WL-5 | Base views cannot be embedded in a note (dashboards) | High | Open — missing capability, import is fine |
+Status re-verified against the code at `4e2ef3dbb` on 2026-09-11 — not against
+the commit messages that claimed the fixes.
 
-**Both trace to the same root theme** as the KB-8 work: wikilink rendering is
-correct on the note surface and partial everywhere else. WL-1 is a resolver
-scoped too narrowly; WL-2 is a render path that never parses wikilinks at all.
-Fixing them together, by making the note surface's mechanism the single one every
-surface uses, is likely cheaper than two separate fixes.
+| ID | Title | Severity | Status | Commit |
+|---|---|---|---|---|
+| WL-1 | Base links render white; note links render gold | Medium | **Partly fixed — still Open** in the standalone base pane; fixed inside an embedded view | `15f60b861` (embedded half only) |
+| WL-2 | Raw `[[wikilink]]` text in some notes | Medium | **Open — blocked on reproduction, not on implementation** | — |
+| WL-3 | New KB dialog still shows a Location field | Low | **Fixed** | `65f8254d2` |
+| WL-4 | A knowledge base can be created inside another | High | **Fixed** — one shared check, both paths | `7a9317376` |
+| WL-5 | Base views cannot be embedded in a note (dashboards) | High | **Fixed** — dashboards render | `15f60b861`, `a7992fa2d`, `368188a0d`, `0263b7629` |
+
+**The root theme this list opened with still holds, and now names what is
+left.** Wikilink rendering was correct on the note surface and partial
+everywhere else. The note surface's mechanism has since been pushed into
+embedded views (WL-5, and WL-1's embedded half), which is the bulk of the value.
+The two remaining gaps are the two surfaces that still do not use it: a `.base`
+file opened on its own (WL-1), and whatever surface renders a note without
+wikilink parsing at all (WL-2, still unreproduced).

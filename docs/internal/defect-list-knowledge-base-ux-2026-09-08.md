@@ -1,10 +1,17 @@
 # Defect list — knowledge base & grep UX (2026-09-08)
 
 Findings from founder review and an agent field-test of the `grep` tool, on
-`integrate/library-improvements-v0.1.1`. **This file documents; it does not
-fix.** Every claim below was checked against the code — the "Evidence" line
-says what was actually observed, and where a reported finding turned out not
-to be a defect, that is recorded too rather than quietly dropped.
+`integrate/library-improvements-v0.1.1`. Every claim below was checked against
+the code — the "Evidence" line says what was actually observed, and where a
+reported finding turned out not to be a defect, that is recorded too rather
+than quietly dropped.
+
+> **Status pass, 2026-09-11.** Every entry was re-checked against the code at
+> `4e2ef3dbb`, not against the commit messages that claimed the fixes. KB-1
+> through KB-8 are Fixed with commits cited. CI-1 stays Open — its cause is
+> still undetermined and nothing on this branch addresses it. Defects found by
+> review during the same work are recorded in
+> `defect-list-embedded-content-review-2026-09-11.md`.
 
 Naming follows ADR-082: the product concept is a **knowledge base**. Phase 1
 of that rename (user-visible copy) has landed; identifiers, wire types and the
@@ -16,6 +23,17 @@ on-disk `.omnipus-vault` marker are still the old name and are Phase 2/3 work.
 
 ### KB-1 — no way for an agent to create a knowledge base
 **Severity:** high · **Area:** knowledge tools · **Reported by:** founder
+**Status: FIXED** — `4d1771ba9`, verified in code 2026-09-11.
+
+**What you get now:** ask an agent to set up a knowledge base and it can.
+**Verified:** `pkg/knowledge/knowledge_base_create.go` defines a tool named
+`knowledge_base_create`, and it reuses the same `CreateInWorkspace` the Library
+"+" menu calls rather than duplicating creation logic — which is what later made
+WL-4's nesting refusal a one-place fix covering both surfaces.
+
+**The naming collision this entry flagged was resolved the honest way:** the
+old `knowledge_create`, which makes a *note*, was renamed to say so. An agent
+reaching for the obvious verb now gets the object it expects.
 
 An agent has sixteen `knowledge_*` tools and not one of them creates a
 knowledge base. `knowledge_create` creates a **note inside an existing**
@@ -46,6 +64,21 @@ against adding a distinctly-named creation tool.
 
 ### KB-2 — no intuitive way for an agent to list the knowledge bases it can reach
 **Severity:** high · **Area:** knowledge tools / filesystem tools · **Reported by:** founder
+**Status: FIXED** — `4d1771ba9`, verified in code 2026-09-11.
+
+**Both options were built, not one.** This entry offered (a) a `knowledge_list`
+tool, (b) marking the type in `list_directory`, or (c) both — noting that (b)
+helps an agent that is browsing and (a) helps one that is not.
+
+**Verified:** `pkg/knowledge/knowledge_list.go` exists and the tool is seeded
+into the core agents' tool families. And `list_directory`
+(`pkg/tools/filesystem.go`) now marks a knowledge base as `KB:` instead of
+`DIR:`, with its own description telling the model what to do next.
+
+**The detection rule is shared, not re-invented** — the marker names
+`list_directory` checks are pinned by a test to the ones `pkg/knowledge` itself
+uses, so the agent's view of "what is a knowledge base" cannot drift from the
+Library's.
 
 There is no `knowledge_list`. The only existing route to the answer is
 `knowledge_describe`, which renders a `COLLECTIONS in scope (n): …` line — but
@@ -75,6 +108,19 @@ knowledge base reached through a mount is detected today and must stay so.
 
 ### KB-3 — the New knowledge base dialog asks for a location it should already know
 **Severity:** medium · **Area:** Library SPA · **Reported by:** founder
+**Status: FIXED** — `4d7b41311`, completed by `65f8254d2` (WL-3). Verified in
+code 2026-09-11.
+
+**What you get now:** the dialog asks for a name and creates the knowledge base
+where you are standing, exactly like New folder. **Verified:**
+`LibraryNewVaultDialog.tsx` renders a single label, `Name`; the workspace and
+the parent directory arrive as props from the Library's current location.
+
+**Worth recording, because it took two passes.** This fix first removed the
+workspace picker and the free-text path box but kept a read-only **Location**
+line, on the reasoning that removing the picker should not make the destination
+invisible. You overruled that; WL-3 tracks the second pass that removed the line
+too.
 
 The dialog has three fields: **Name** (correct), a **workspace** dropdown, and
 a free-text **"Folder within the workspace (optional)"** path box. Two of the
@@ -97,6 +143,14 @@ for the workspace root". Component: `LibraryNewVaultDialog.tsx`.
 
 ### KB-4 — "New workspace" should not appear in the Library create menu
 **Severity:** low · **Area:** Library SPA · **Reported by:** founder
+**Status: FIXED** — `4d7b41311`, verified in code 2026-09-11.
+
+**What you get now:** the Library "+" menu no longer offers New workspace, so
+there is no mis-click between it and New knowledge base. **Verified:**
+`LibraryCreateMenu.tsx` contains no workspace-creation entry, and carries a
+comment naming this defect and stating that the sidebar's inline row is the one
+sanctioned entry point — so it is recorded as a decision rather than as
+something that fell out during a refactor.
 
 Workspaces are created from the **sidebar**. Offering "New workspace" in the
 Library "+" menu is a second, redundant entry point for an object that is not
@@ -115,6 +169,19 @@ sanctioned path.
 
 ### KB-5 — the active workspace is collapsed in the sidebar
 **Severity:** low · **Area:** Sidebar SPA · **Reported by:** founder (UAT run)
+**Status: FIXED** — `4d7b41311`, verified in code 2026-09-11.
+
+**What you get now:** the workspace you are working in is already open when the
+app loads. **Verified:** `Sidebar.tsx` seeds its expansion state with the active
+workspace (`new Set(activeWorkspaceId ? [activeWorkspaceId] : [])`) instead of
+an empty set.
+
+**The two questions this entry raised were both answered, and answered in the
+direction that respects a deliberate collapse.** Switching workspaces expands
+the newly-active one and does *not* collapse the previous one. And a manual
+collapse survives: nothing re-adds a workspace to the set until the active
+workspace actually changes, so the naive "always expand the active one" that
+would fight you is not what was built.
 
 The sidebar's workspace accordion opens with **every** workspace collapsed,
 including the one currently active. The workspace you are working in is the one
@@ -138,6 +205,39 @@ collapsed it.
 
 ### KB-6 — search results give no signal about what is relevant, and show too little to judge
 **Severity:** medium · **Area:** Library SPA (+ contract for part of it) · **Reported by:** founder (UAT run)
+**Status: FIXED** — `8a13fb216` (engine) and `05207246b` (wire + UI). Verified
+in code 2026-09-11.
+
+**What you get now:** a search result set you can judge at a glance. Each of the
+five causes below was addressed, and the ratified design was followed rather
+than approximated:
+
+| Part | What shipped | Verified in |
+|---|---|---|
+| (a) One hit = one matching line | A matching file collapses to ONE row carrying a match count | `FileSearchHit.match_count`, rendered as an "N matches" badge |
+| (b) Relevance thrown away | Coverage chips — *"2 of 2"*, naming which of your own words the hit contains | `vaultCoverage` / `CoverageChips` in `LibrarySearchBar.tsx` |
+| (c) Too little context | The match plus a line either side | `useFileSearch.ts` now requests `context_lines: 1` |
+| (d) Term not highlighted | The matched words are marked in titles, paths and excerpts | `highlightQuery` in `LibrarySearchBar.tsx` |
+| (e) No source marker | Not needed — confirmed | see below |
+
+**Your explicit "NOT wanted" was honoured.** No raw relevance number is
+displayed anywhere. The signal is coverage chips plus ordering, which is what
+the ratified design asked for — a figure like `0.83` would have looked
+authoritative and meant nothing between two searches.
+
+**On (e), the source marker — this entry told us to verify before building, and
+verifying is what happened.** The suspicion was right: knowledge base results
+and plain file results are genuinely separate modes in the UI, never mixed in
+one list, so a per-row "where did this come from" marker would have labelled
+something that was never ambiguous. Nothing was built, and that is the correct
+outcome rather than a gap. Should you ever see the two mixed in one list, that
+is a different defect and needs reproducing.
+
+**One honest limit.** Highlighting and coverage are computed in the browser from
+the words you typed, not from offsets the search engine reports. That is the
+cheap option this entry recommended taking first, and it is approximate at the
+edges — an unusual case-folding or stemming match may highlight slightly
+differently from what the engine actually matched.
 
 Searching a real knowledge base returns a long flat list of title-plus-one-line
 rows. Nothing indicates which document actually matters, the matched term is
@@ -246,6 +346,31 @@ many results, and no signal about which matter.
 
 ### KB-7 — multi-word queries behave badly, in OPPOSITE ways per engine; no fuzziness anywhere
 **Severity:** high · **Area:** knowledge index + filegrep engine · **Reported by:** founder (UAT run)
+**Status: FIXED** — `8a13fb216` (engine) and `05207246b` (wire + UI). Verified
+in code 2026-09-11.
+
+**What you get now:** `investment report` returns the notes that mention both
+words, not the 29% of your knowledge base that mentions either.
+
+**Verified, per half:**
+
+- **Knowledge base search is AND-first with an OR fallback.** `bm25fPool`
+  (`pkg/knowledge/rank.go`) runs an all-terms query first and only falls back to
+  the loose any-term query when the strict one returns nothing — so a
+  too-narrow query degrades instead of dead-ending, exactly as this entry asked.
+- **Typo tolerance exists.** `pkg/knowledge/index.go` now calls
+  `SetFuzziness(1)`, with a boost that ranks a fuzzy match below an exact one,
+  so precision does not collapse invisibly.
+- **File search matches multiple terms across a whole file**, not only within
+  one line (`pkg/filegrep/matcher.go`, one matcher per word). This is what makes
+  KB-6(a)'s per-file collapse meaningful: a file matching all your words becomes
+  one row with a count, instead of thirty rows or no rows at all.
+
+**The nuance this entry identified turned out to be the important one.** The
+ranking was never broken — the engine already weighted rare words higher. What
+failed was that its judgment never reached the screen. So the two halves shipped
+together, as this entry said they must: AND-first cuts the result set, coverage
+chips (KB-6) make what survives legible.
 
 A single word searches fine. Multiple words do not — and the reason differs by
 which engine answers, so the surface feels inconsistent for reasons a user
@@ -320,6 +445,24 @@ the eye. The two belong in one piece of work.
 
 ### KB-8 — records in a base are not clickable, and relation fields render raw `[[wikilinks]]`
 **Severity:** medium · **Area:** Library SPA (base/view rendering) · **Reported by:** founder (UAT run)
+**Status: FIXED** — `3b05db1df`, wired through by `abf2839f5`. Verified in code
+2026-09-11.
+
+**What you get now:** a record row in a base opens its note, and a relation cell
+shows **Korn Ferry** as a link instead of the literal text `[[Korn Ferry]]`.
+**Verified:** `viewparts/ViewCellLink.tsx` exists and is consumed by
+`TablePart`, `ListPart` and the shared `ViewPartsRenderer`.
+
+**The two decisions this entry said to settle first were settled.** The
+client-side parse was chosen over a contract change. And the precedence question
+— a click on a link cell must not *also* open the row underneath — is handled
+explicitly: the cell link stops the click from reaching the row.
+
+**One consequence that became its own defect.** `ViewCellLink` reuses the note
+reader's colours but a view can only resolve against the rows it loaded, so most
+links in a base render as unverified white. That is WL-1, and it is still open
+for a base opened on its own — see
+`defect-list-wikilink-rendering-2026-09-08.md`.
 
 Two problems in the same surface, and the inconsistency is what makes it jarring:
 clicking a record hit in SEARCH opens the note (correct), but clicking the same
@@ -368,7 +511,8 @@ before assuming this is view-only.
 ### DEFECT-G1 — a path pointing at a file produces a false "not found" error
 **Severity:** medium (reported low; raised — the message misleads rather than
 merely refusing) · **Area:** `pkg/tools/grep.go` · **Reported by:** agent field test
-**Status: FIXED** — merged, verified. Scoping to a single file now works
+**Status: FIXED** — `9c3203b9c`, with the error wording completed by
+`0fd331b9c`. Merged, verified. Scoping to a single file now works
 (the file's parent is opened as the confined root and the walk is narrowed to
 that one entry, with globs and ignore rules still applying). Remaining
 refusals name what is actually true: *does not exist* / *permission denied* /
@@ -406,7 +550,7 @@ workspace*. A file scope must not bypass the secret carve-out.
 ### OBS-G1 — a glob that matches nothing fails silently
 **Severity:** medium (reported as an observation; raised to defect — see below)
 · **Area:** `pkg/tools/grep.go` · **Reported by:** agent field test
-**Status: FIXED** — merged, verified. A zero-hit result now states how many
+**Status: FIXED** — `9c3203b9c`. Merged, verified. A zero-hit result now states how many
 entries the globs excluded before any match was attempted, and explains the
 anchoring rule when the excluded count dominates. The count also appears in
 the stats footer on non-empty results. Bare filenames are still NOT
@@ -453,20 +597,29 @@ test that did not reproduce the documented condition.
 
 ## Summary
 
-| ID | Title | Severity | Status |
-|---|---|---|---|
-| KB-1 | No agent-facing knowledge base creation | High | Open |
-| KB-2 | No intuitive way to list reachable knowledge bases | High | Open |
-| KB-3 | New knowledge base dialog asks for known context | Medium | Open |
-| KB-4 | "New workspace" shown in Library create menu | Low | Open |
-| KB-5 | Active workspace collapsed in the sidebar | Low | Open |
-| KB-6 | Search results: no relevance signal, too little context, no source marker | Medium | Open |
-| KB-7 | Multi-word queries broken in opposite ways per engine; no fuzziness | High | Open |
-| KB-8 | Records in a base not clickable; relation fields show raw `[[wikilinks]]` | Medium | **Fixed** |
-| CI-1 | e2e conformance-replan: supervisor never calls plan_correct | High | Open — cause undetermined |
-| DEFECT-G1 | `path` at a file gives a false "not found" | Medium | **Fixed** |
-| OBS-G1 | Glob matching nothing fails silently | Medium | **Fixed** |
-| DOC-1 | Concurrency doc claim | — | Closed — not a defect |
+Status re-verified against the code at `4e2ef3dbb` on 2026-09-11 — not against
+the commit messages that claimed the fixes.
+
+| ID | Title | Severity | Status | Commit |
+|---|---|---|---|---|
+| KB-1 | No agent-facing knowledge base creation | High | **Fixed** | `4d1771ba9` |
+| KB-2 | No intuitive way to list reachable knowledge bases | High | **Fixed** — both options built | `4d1771ba9` |
+| KB-3 | New knowledge base dialog asks for known context | Medium | **Fixed** | `4d7b41311`, `65f8254d2` |
+| KB-4 | "New workspace" shown in Library create menu | Low | **Fixed** | `4d7b41311` |
+| KB-5 | Active workspace collapsed in the sidebar | Low | **Fixed** | `4d7b41311` |
+| KB-6 | Search results: no relevance signal, too little context, no source marker | Medium | **Fixed** — (e) confirmed unnecessary, not skipped | `8a13fb216`, `05207246b` |
+| KB-7 | Multi-word queries broken in opposite ways per engine; no fuzziness | High | **Fixed** | `8a13fb216`, `05207246b` |
+| KB-8 | Records in a base not clickable; relation fields show raw `[[wikilinks]]` | Medium | **Fixed** | `3b05db1df`, `abf2839f5` |
+| CI-1 | e2e conformance-replan: supervisor never calls plan_correct | High | **Open — cause still undetermined** | — |
+| DEFECT-G1 | `path` at a file gives a false "not found" | Medium | **Fixed** | `9c3203b9c`, `0fd331b9c` |
+| OBS-G1 | Glob matching nothing fails silently | Medium | **Fixed** | `9c3203b9c` |
+| DOC-1 | Concurrency doc claim | — | Closed — not a defect | — |
+
+**CI-1 is deliberately still open.** It is an intermittent failure in a test
+driven by a language model, and the check that would tell us which of the
+candidate causes is real has never been run. A pass on a retry is not evidence
+the underlying problem is gone, so it stays open until someone runs that check.
+No commit on this branch touches it.
 
 ---
 
@@ -487,6 +640,10 @@ than fixed silently.
 
 ### CI-1 — e2e `llm-conformance-replan` fails: supervisor never calls `plan_correct` (OPEN, cause undetermined)
 **Severity:** high (blocks a green CI) · **Area:** plan supervision / tool surface · **Found by:** CI run on 031e7a583
+**Status: STILL OPEN** — re-confirmed 2026-09-11 at `4e2ef3dbb`. No commit on
+this branch addresses it (`git log --grep=CI-1` returns only the two commits
+that wrote this entry). The discriminator named at the end of this entry has
+still not been run, so the cause is still undetermined.
 
 `Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED-RETRY`
 failed 3 times (original + 2 retries), each attempt taking 5-13 minutes:
