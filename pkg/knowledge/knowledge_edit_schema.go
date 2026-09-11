@@ -47,6 +47,64 @@ var (
 	// ErrPropertyValue means one element failed type, enum or shape
 	// validation (records.ParseValue).
 	ErrPropertyValue = errors.New("knowledge: value does not conform to the declared property")
+	// ErrDerivedProperty is FR-046 on the agent door: the property carries a
+	// formula, so its value is computed and never stored. No caller — web or
+	// agent — may write one.
+	ErrDerivedProperty = errors.New("knowledge: property is derived and cannot be written")
+	// ErrRelationProperty is FR-045 on the agent door: a relation or person
+	// property is written through knowledge_edit's op "relation" and its
+	// three explicit verbs, never by sending a whole value.
+	ErrRelationProperty = errors.New("knowledge: relation properties are written through op \"relation\"")
+)
+
+// knowledgeEditRelationPosture says whether FR-045 applies to ONE validation
+// call. It is a named type rather than a bool because the two answers are not
+// "on" and "off" — they are two different, separately-argued situations, and
+// a reader at a call site needs to see which one it picked without counting
+// `true`s.
+//
+// # Why this is per-call and not global
+//
+// FR-045's rationale, quoted from ADR-083 §1540, is that relations "are
+// modified through RelationWriteRequest's three explicit verbs, because a
+// read-then-write round trip silently replaces a relation list". That names
+// a specific hazard — an existing list of edges, some put there by another
+// writer, replaced wholesale by a caller who only meant to change one. The
+// refusal belongs exactly where that hazard is reachable, and nowhere else:
+// applied more widely it stops being a data-integrity rule and starts being
+// a capability the agent door simply lacks.
+//
+// Two write paths CANNOT reach the hazard, and both are deliberately allowed:
+//
+//   - CREATE. knowledge_edit's op "create" refuses outright when the file
+//     already exists (author.go's ErrNoteExists), so there is no prior list
+//     of edges in existence to replace and no other writer to lose. Refusing
+//     here would also break every note created from a TEMPLATE that mentions
+//     a relation property, because create validates the whole ASSEMBLED
+//     frontmatter — template bytes included — not just the caller's own
+//     `frontmatter` argument. That is a large capability loss bought for no
+//     integrity gain.
+//   - The EXPLICIT VERBS themselves. op "link" with `relation`, and op
+//     "relation", are add/remove/replace verbs: they are the replacement
+//     FR-045 points callers towards, so they cannot also be subject to it.
+//
+// The path that CAN reach the hazard is set_property — in both its modes —
+// and that is where the refusal fires.
+type knowledgeEditRelationPosture int
+
+const (
+	// knowledgeEditRelationRefused is FR-045 in force: a relation or person
+	// property is refused, with the op to use instead named in the message.
+	//
+	// It is the ZERO VALUE on purpose. A validation call added later that
+	// forgets to state its posture gets the safe answer — a refusal an agent
+	// can read its way out of — rather than silently opting itself out of the
+	// rule.
+	knowledgeEditRelationRefused knowledgeEditRelationPosture = iota
+	// knowledgeEditRelationAllowed is a caller that is ITSELF one of FR-045's
+	// sanctioned paths: a create, or one of the explicit relation verbs. See
+	// the type comment for why each is out of the rule's reach.
+	knowledgeEditRelationAllowed
 )
 
 // knowledgeEditGovernanceReason distinguishes WHY a write's record type did
@@ -205,11 +263,46 @@ func knowledgeEditResolveSchema(set *records.SchemaSet, report *records.SchemaLo
 // one place is what "the same sentinel errors and message quality — do not
 // invent a second error vocabulary" (G1's brief) means in code: there is
 // only one vocabulary because there is only one function that speaks it.
-func knowledgeEditValidatePropertyAgainstSchema(schema *records.Schema, typeName, property string, values []string, isList bool) error {
+// The two refusals below run BEFORE arity and before value conformance, in
+// the same precedence CheckRecordPropertyWrites uses on the web door
+// (FR-046 then FR-045), and for the same reason its doc comment gives: a
+// derived property has no meaningful "arity to satisfy", so reporting an
+// arity mismatch for one would send a caller off to fix the wrong thing.
+// Both read the property's OWN declaration off the resolved schema, never a
+// claim the caller made about itself.
+func knowledgeEditValidatePropertyAgainstSchema(schema *records.Schema, typeName, property string, values []string, isList bool, posture knowledgeEditRelationPosture) error {
 	prop, ok := schema.Property(property)
 	if !ok {
 		return fmt.Errorf("%w: %s declares no property %q; declared properties are %s",
 			ErrUnknownProperty, typeName, property, strings.Join(schema.PropertyNames(), ", "))
+	}
+	// FR-046, shared with the web door through records.IsDerivedProperty.
+	//
+	// ⚠️ AS ON THE WEB DOOR, THIS IS UNREACHABLE FROM LoadSchemas TODAY AND
+	// MUST NOT BE DELETED AS DEAD CODE. A schema file declaring `formula:`
+	// is refused at load (schema.go's propertyDeclKeys), so no *Schema that
+	// this package loads can carry one. It is defence in depth held against
+	// a *Schema reaching here from somewhere else — records' own saved-view
+	// namespace synthesis already constructs Formula-bearing properties.
+	// record_write_guard.go's CheckRecordPropertyWrites carries the same
+	// branch for the same reason; the two are now one predicate.
+	if records.IsDerivedProperty(prop) {
+		return fmt.Errorf("%w: %s.%s is a derived value, computed from other properties rather than "+
+			"stored — no caller can write one, because a stored value goes stale the moment anything it "+
+			"derives from changes. Drop %q from this write; knowledge_read reports the computed value",
+			ErrDerivedProperty, typeName, property, property)
+	}
+	// FR-045, shared with the web door through records.IsRelationProperty.
+	// See knowledgeEditRelationPosture for which callers pass which posture
+	// and the argument for each.
+	if posture == knowledgeEditRelationRefused && records.IsRelationProperty(prop) {
+		return fmt.Errorf("%w: %s.%s is a %s property, and set_property cannot write one — sending a value "+
+			"replaces the whole list, silently discarding edges another writer added (ADR-068 FR-045). "+
+			"Use op \"relation\" instead: same collection, path and expect_version as this call, plus "+
+			"property: %q, relation_op: \"add\", \"remove\" or \"replace\", and targets: a list of note "+
+			"names or paths. \"add\" and \"remove\" leave the rest of the list untouched; \"replace\" "+
+			"discards it on purpose",
+			ErrRelationProperty, typeName, property, prop.Type, property)
 	}
 	if isList != prop.Many {
 		schemaPath := records.VaultMarkerDirName + "/" + records.RecordsDirName + "/" + typeName + ".yaml"
@@ -255,7 +348,11 @@ func knowledgeEditValidatePropertyAgainstSchema(schema *records.Schema, typeName
 // is for callers (e.g. execCreate's per-pair splice loop) that compute their
 // own governance note separately, over the fully assembled note, rather than
 // per property.
-func knowledgeEditValidateValue(set *records.SchemaSet, report *records.SchemaLoadReport, src []byte, property string, values []string, isList bool, gov *knowledgeEditGovernance) error {
+// posture is FR-045's applicability for THIS caller — see
+// knowledgeEditRelationPosture. It is threaded rather than decided here
+// because this function cannot tell a set_property from an op "relation":
+// both arrive as "one property, some values, against this note's schema".
+func knowledgeEditValidateValue(set *records.SchemaSet, report *records.SchemaLoadReport, src []byte, property string, values []string, isList bool, posture knowledgeEditRelationPosture, gov *knowledgeEditGovernance) error {
 	schema, typeName, reason, detail := knowledgeEditResolveSchema(set, report, src)
 	if reason != knowledgeEditGoverned {
 		if gov != nil {
@@ -266,7 +363,7 @@ func knowledgeEditValidateValue(set *records.SchemaSet, report *records.SchemaLo
 	if gov != nil {
 		*gov = knowledgeEditGovernance{Reason: knowledgeEditGoverned, TypeName: typeName}
 	}
-	return knowledgeEditValidatePropertyAgainstSchema(schema, typeName, property, values, isList)
+	return knowledgeEditValidatePropertyAgainstSchema(schema, typeName, property, values, isList, posture)
 }
 
 // knowledgeEditPropertyDeclared reports whether property is declared AT ALL on
@@ -303,9 +400,23 @@ func knowledgeEditPropertyDeclared(set *records.SchemaSet, report *records.Schem
 // knowledgeEditSetPropertyEdit composes schema validation with the low-level
 // splice: a NoteEdit that refuses (leaving src untouched) when the value
 // does not conform, and otherwise delegates to the scalar or list splice.
-func knowledgeEditSetPropertyEdit(set *records.SchemaSet, report *records.SchemaLoadReport, property string, values []string, isList bool, gov *knowledgeEditGovernance) NoteEdit {
+//
+// posture is threaded rather than fixed because this constructor has TWO
+// callers that sit on opposite sides of FR-045 — which is not obvious from
+// its name, and cost a real regression to discover:
+//
+//   - execSetProperty passes knowledgeEditRelationRefused. That is the exact
+//     read-then-write shape the rule exists to stop.
+//   - execCreate's per-pair splice loop passes knowledgeEditRelationAllowed.
+//     It reuses this constructor purely to get the same validate-then-splice
+//     composition for each `frontmatter` pair of a note being CREATED, and a
+//     create cannot reach FR-045's hazard at all (see
+//     knowledgeEditRelationPosture). Hardcoding the refusal here made
+//     `op: create` with a relation in its frontmatter fail outright — a
+//     capability loss, not an enforcement win.
+func knowledgeEditSetPropertyEdit(set *records.SchemaSet, report *records.SchemaLoadReport, property string, values []string, isList bool, posture knowledgeEditRelationPosture, gov *knowledgeEditGovernance) NoteEdit {
 	return func(src []byte) ([]byte, error) {
-		if err := knowledgeEditValidateValue(set, report, src, property, values, isList, gov); err != nil {
+		if err := knowledgeEditValidateValue(set, report, src, property, values, isList, posture, gov); err != nil {
 			return nil, err
 		}
 		if isList {
@@ -317,9 +428,20 @@ func knowledgeEditSetPropertyEdit(set *records.SchemaSet, report *records.Schema
 
 // knowledgeEditListOpEdit composes schema validation with AddListValue /
 // RemoveListValue for set_property's list_op mode.
+//
+// FR-045 is IN FORCE here (knowledgeEditRelationRefused) even though list_op
+// is itself additive and non-destructive, which is worth the sentence it
+// costs to justify. The reason is not that `list_op: add` is dangerous — it
+// is not. It is that list_op operates on RAW STRINGS with no relation
+// semantics at all: it will not wrap a bare target as a wikilink, will not
+// enforce a declared relation's cardinality, and cannot tell a relation
+// property from a tag list. Leaving it as a second, quieter way to write
+// relations would mean the two paths diverge on every relation-specific
+// rule op "relation" enforces, and an agent that found this one first would
+// never discover the other. One way in, and the refusal names it.
 func knowledgeEditListOpEdit(set *records.SchemaSet, report *records.SchemaLoadReport, property, value string, add bool, gov *knowledgeEditGovernance) NoteEdit {
 	return func(src []byte) ([]byte, error) {
-		if err := knowledgeEditValidateValue(set, report, src, property, []string{value}, true, gov); err != nil {
+		if err := knowledgeEditValidateValue(set, report, src, property, []string{value}, true, knowledgeEditRelationRefused, gov); err != nil {
 			return nil, err
 		}
 		if add {
@@ -364,7 +486,12 @@ func knowledgeEditLinkPropertyEdit(set *records.SchemaSet, report *records.Schem
 	return func(src []byte) ([]byte, error) {
 		declared, many := knowledgeEditPropertyDeclared(set, report, src, property)
 		add := !declared || many
-		if err := knowledgeEditValidateValue(set, report, src, property, []string{wikilink}, add, gov); err != nil {
+		// FR-045 does NOT apply (knowledgeEditRelationAllowed): op "link"
+		// with `relation` is one of the explicit verbs the rule directs
+		// callers towards — it adds an edge, it does not send a whole list.
+		// Refusing it would delete a working capability and point the agent
+		// at a replacement it was already using.
+		if err := knowledgeEditValidateValue(set, report, src, property, []string{wikilink}, add, knowledgeEditRelationAllowed, gov); err != nil {
 			return nil, err
 		}
 		if add {
@@ -456,7 +583,17 @@ func knowledgeEditValidateAssembledFrontmatter(set *records.SchemaSet, report *r
 				"frontmatter.%s: %w: is a mapping, not a single value or a list",
 				key, ErrPropertyValue)
 		}
-		if err := knowledgeEditValidatePropertyAgainstSchema(schema, typeName, key, values, isList); err != nil {
+		// FR-045 does NOT apply (knowledgeEditRelationAllowed). This pass
+		// runs only on a CREATE, which author.go refuses outright when the
+		// file already exists (ErrNoteExists) — so there is no prior list of
+		// edges to replace and no other writer's additions to lose, which is
+		// the entire hazard FR-045 names. Enforcing it here would instead
+		// break every note created from a TEMPLATE that mentions a relation
+		// property, because this pass validates the whole ASSEMBLED
+		// frontmatter — template and raw-body bytes included, not just the
+		// caller's own `frontmatter` argument. FR-046 above still applies:
+		// a derived value is wrong to store whether or not the note is new.
+		if err := knowledgeEditValidatePropertyAgainstSchema(schema, typeName, key, values, isList, knowledgeEditRelationAllowed); err != nil {
 			return knowledgeEditGovernance{}, fmt.Errorf("frontmatter.%s: %w", key, err)
 		}
 	}

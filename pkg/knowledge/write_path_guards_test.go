@@ -210,6 +210,18 @@ func veWriteOps(t *testing.T) []veWriteOp {
 		{op: opEmbed, extraFor: func(v string) map[string]any {
 			return map[string]any{"target": veEmbedTargetRelPath, "section": "Refs", "expect_version": v}
 		}},
+		// relation names an UNDECLARED property on purpose, exactly as
+		// opLink's row names an arbitrary "Somewhere Else" target: these
+		// notes carry no record type, so nothing constrains `related` and
+		// the row exercises the SAME guard (on `path`) every other row
+		// does, rather than tripping over a schema refusal first and
+		// proving nothing about the guard under test.
+		{op: opRelation, extraFor: func(v string) map[string]any {
+			return map[string]any{
+				"property": "related", "relation_op": relationOpAdd,
+				"targets": []any{"Somewhere Else"}, "expect_version": v,
+			}
+		}},
 	}
 	covered := make([]string, 0, len(all))
 	for _, o := range all {

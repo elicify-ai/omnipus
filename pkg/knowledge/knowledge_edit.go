@@ -95,11 +95,20 @@ const (
 	// this op is zero lines, in both the global ceiling and every per-agent
 	// seed — TestKnowledgeToolPolicy_CatalogueUnchangedByEmbedOp pins it).
 	opEmbed = "embed"
+	// opRelation is ADR-068 D15/FR-045: the three explicit relation verbs
+	// (add / remove / replace) on a frontmatter relation or person property.
+	// Like opEmbed it is an OPERATION on this tool, never a ninth tool name —
+	// the tool-policy diff is ZERO LINES in both the global ceiling and every
+	// per-agent seed, and TestKnowledgeToolPolicy_CatalogueUnchangedByEmbedOp
+	// (set equality over the eight knowledge_* names) pins that for this op
+	// too. See knowledge_edit_relation.go's header for the Hard Constraint #6
+	// argument in full.
+	opRelation = "relation"
 )
 
 // knowledgeEditOps lists the accepted ops, in the order they are documented —
 // used to render "supported ops are ..." in a refusal.
-var knowledgeEditOps = []string{opCreate, opSetProperty, opAppendSection, opLink, opReplaceBody, opEmbed}
+var knowledgeEditOps = []string{opCreate, opSetProperty, opAppendSection, opLink, opReplaceBody, opEmbed, opRelation}
 
 // knowledgeEditRedirect names the EXACT refusal for an op that belongs to a
 // different tool by construction (C-A: writes bytes into a file the caller
@@ -144,6 +153,13 @@ var editArgNames = []string{
 	// — reserved for the deferred PDF-page-fragment kind (US-12/EMB-105),
 	// never silently ignored in the meantime (see execEmbed).
 	"view", "target_heading", "target_block", "width", "page",
+	// relation (FR-045). 'relation_op' is named distinctly from 'list_op'
+	// (set_property's own add/remove sub-verb) because the two accept
+	// different verb sets — list_op has no "replace" — and from 'relation'
+	// (op link's relation PROPERTY NAME, which this op calls 'property',
+	// matching RelationWriteRequest's own field). 'targets' is plural and a
+	// LIST, distinct from op link's and op embed's singular 'target'.
+	"relation_op", "targets",
 }
 
 // editOpArgs is the CLOSED, PER-OPERATION argument set each op actually
@@ -174,6 +190,7 @@ var editOpArgs = map[string][]string{
 		"op", "collection", "path", "expect_version",
 		"target", "section", "view", "target_heading", "target_block", "width", "page",
 	},
+	opRelation: {"op", "collection", "path", "expect_version", "property", "relation_op", "targets"},
 }
 
 // EditTool is knowledge_edit.
@@ -198,7 +215,8 @@ func (t *EditTool) Description() string {
 		"template), set a frontmatter property (a single value or a whole list), add or " +
 		"remove one list item, append a section, link to another note, embed a picture, " +
 		"PDF, note, or a saved data view under a heading (the correct notation is written " +
-		"for you, after checking the target exists), or replace part of a note's body by " +
+		"for you, after checking the target exists), add or remove relation links on a " +
+		"property without sending the whole list back, or replace part of a note's body by " +
 		"anchor text or line range. Never touches a second file, never renames or deletes " +
 		"anything, and never changes what OTHER notes mean — use knowledge_restructure or " +
 		"knowledge_configure for those. Every write after the first on a note requires the " +
@@ -258,13 +276,14 @@ func (t *EditTool) Parameters() map[string]any {
 
 			// set_property
 			"property": map[string]any{
-				"type":        "string",
-				"description": "set_property: the property name, e.g. 'status'.",
+				"type": "string",
+				"description": "set_property: the property name, e.g. 'status'. relation: the " +
+					"relation or person property to change, e.g. 'company'.",
 			},
 			"value": map[string]any{
 				"description": "set_property: the property's new value — a single value, or a " +
 					"list for a many-valued property. With list_op set, the ONE value to add " +
-					"or remove.",
+					"or remove. Cannot write a relation or person property — use op 'relation'.",
 			},
 			"list_op": map[string]any{
 				"type": "string",
@@ -362,6 +381,25 @@ func (t *EditTool) Parameters() map[string]any {
 				"description": "embed: reserved for a future PDF page-fragment embed. NOT " +
 					"supported yet — refused if given, on every target kind.",
 			},
+
+			// relation (FR-045)
+			"relation_op": map[string]any{
+				"type": "string",
+				"enum": knowledgeEditRelationOps,
+				"description": "relation: which change to make. 'add' adds the targets and " +
+					"leaves every existing one in place. 'remove' removes them and leaves the " +
+					"rest in place. 'replace' DISCARDS every existing target and stores only " +
+					"the ones you send — use it only when you mean to, and send an empty " +
+					"'targets' list to clear the property entirely.",
+			},
+			"targets": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string"},
+				"description": "relation: the notes to link to, by name or path — the " +
+					"'[[...]]' notation is written for you. Adding a target that is already " +
+					"there, or removing one that is not, changes nothing and is not an error, " +
+					"so you never need to read the list first to add or remove one.",
+			},
 		},
 		"required": []string{"op", "path"},
 	}
@@ -412,6 +450,8 @@ func (t *EditTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 		return t.execReplaceBody(ctx, target, args)
 	case opEmbed:
 		return t.execEmbed(ctx, target, args)
+	case opRelation:
+		return t.execRelation(ctx, target, args)
 	default:
 		return t.refuseOp(target, op)
 	}
@@ -497,7 +537,11 @@ func (t *EditTool) execCreate(ctx context.Context, target mutationTarget, args m
 		// whatever `type:` this same call set, and the schema for it is
 		// resolvable from the bytes as they stand right now.
 		values, isList := knowledgeEditAutoSplitCommaList(set, content, p.Key, p.Values, p.IsList)
-		next, eerr := knowledgeEditSetPropertyEdit(set, report, p.Key, values, isList, nil)(content)
+		// knowledgeEditRelationAllowed: this is a CREATE. FR-045's hazard —
+		// replacing a relation list another writer contributed to — cannot
+		// exist on a note that does not exist yet, and refusing here would
+		// stop an agent authoring a record with its relations in one call.
+		next, eerr := knowledgeEditSetPropertyEdit(set, report, p.Key, values, isList, knowledgeEditRelationAllowed, nil)(content)
 		if eerr != nil {
 			return t.deps.refuse(AuthorOpCreate, target, []string{rel},
 				fmt.Sprintf("frontmatter.%s: %v", p.Key, eerr))
@@ -644,7 +688,10 @@ func (t *EditTool) execSetProperty(ctx context.Context, target mutationTarget, a
 		// closure, against the `src` EditNote hands it, not out here.
 		edit = func(src []byte) ([]byte, error) {
 			splitValues, splitIsList := knowledgeEditAutoSplitCommaList(set, src, property, values, isList)
-			return knowledgeEditSetPropertyEdit(set, report, property, splitValues, splitIsList, &gov)(src)
+			// knowledgeEditRelationRefused: set_property is the door FR-045
+			// closes — a caller sending the value it wants the property to
+			// end up holding takes a relation list's other edges with it.
+			return knowledgeEditSetPropertyEdit(set, report, property, splitValues, splitIsList, knowledgeEditRelationRefused, &gov)(src)
 		}
 	}
 
@@ -1240,6 +1287,18 @@ type EditData struct {
 	Heading  string
 	Target   string
 	Relation string
+	// RelationOp is op=relation's verb — "add", "remove" or "replace"
+	// (FR-045). A DELIBERATELY separate field from ListOp (set_property's
+	// own add/remove sub-verb) even though both render as a verb word: the
+	// two accept different verb sets, and collapsing them would let a
+	// "replace" render through a field whose own documented values never
+	// include one.
+	RelationOp string
+	// Targets is op=relation's targets, as the caller named them — the bare
+	// note names, not the "[[...]]" wikilinks actually written. The reply
+	// echoes what was ASKED FOR so a caller can see its own input reflected
+	// back; the stored notation is an implementation detail it did not send.
+	Targets []string
 	// Notation is the exact embed markdown text op=embed composed and
 	// wrote (US-11) — e.g. "![[Tasks.base#Needs Daniel]]". Empty for every
 	// other op.
@@ -1306,6 +1365,17 @@ func RenderEdit(d EditData) string {
 		fmt.Fprintf(&b, "REPLACE_BODY (%s)\n", changedWord(d.Changed))
 	case opEmbed:
 		fmt.Fprintf(&b, "EMBED %s under %q (%s)\n", d.Notation, d.Section, changedWord(d.Changed))
+	case opRelation:
+		// The verb is rendered in the caller's own vocabulary ("RELATION
+		// ADD") rather than translated to a past-tense English word, so the
+		// reply names the argument to send again rather than one to
+		// translate back.
+		targets := strings.Join(d.Targets, ", ")
+		if targets == "" {
+			targets = "(none — cleared)"
+		}
+		fmt.Fprintf(&b, "RELATION %s %s -> %s (%s)\n",
+			strings.ToUpper(d.RelationOp), d.Property, targets, changedWord(d.Changed))
 	}
 	if d.SchemaNote != "" {
 		fmt.Fprintf(&b, "%s\n", d.SchemaNote)
