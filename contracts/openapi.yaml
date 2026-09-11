@@ -381,8 +381,51 @@ components:
       $ref: ./components/schemas/RecordGroupKey.yaml
     RecordProblem:
       $ref: ./components/schemas/RecordProblem.yaml
+    # RecordWriteRequest is a discriminated union hosted INLINE here (not in a
+    # schema file), following the ADR-034 precedent for AgentCreateRequest:
+    # oapi-codegen only generates named variant types + As/From accessors when
+    # the oneOf members are internal component refs — external file refs inside
+    # a oneOf are inlined as anonymous structs and the generated code does not
+    # compile. The two variants below remain the single source of truth for
+    # which fields each operation carries.
     RecordWriteRequest:
-      $ref: ./components/schemas/RecordWriteRequest.yaml
+      description: >
+        Body for POST .../knowledge/records. Discriminated by `mode`, because
+        CREATE and UPDATE are two operations with different required fields
+        and different consequences, and the flat shape this replaced could not
+        tell them apart.
+
+
+        THE DEFECT THIS CLOSES. The flat request required only `type` and
+        `properties`, leaving `id`, `path` and `version_token` as three
+        independent optionals — so `id` present meant update and `id` absent
+        meant create. A caller that MEANT to update and lost its `id` (a bug,
+        a dropped field, a response shape that changed) was silently
+        reinterpreted as a create: it wrote a DUPLICATE note, DISCARDED the
+        version token it had supplied, and got a success back. Nothing in the
+        contract could refuse it, because the request it sent was a perfectly
+        valid create.
+
+
+        Now the caller states the operation and the server checks the fields
+        against it. `version_token` is required on update and rejected on
+        create; `path` is required on create and rejected on update. A field
+        sent on the wrong variant is a 400 that names it, never a field
+        quietly ignored — and a quietly ignored `version_token` is the one
+        that matters, since a caller that sent one believed it was protected
+        against a concurrent write when it was not.
+      oneOf:
+        - $ref: '#/components/schemas/RecordWriteRequestCreate'
+        - $ref: '#/components/schemas/RecordWriteRequestUpdate'
+      discriminator:
+        propertyName: mode
+        mapping:
+          create: '#/components/schemas/RecordWriteRequestCreate'
+          update: '#/components/schemas/RecordWriteRequestUpdate'
+    RecordWriteRequestCreate:
+      $ref: ./components/schemas/RecordWriteRequestCreate.yaml
+    RecordWriteRequestUpdate:
+      $ref: ./components/schemas/RecordWriteRequestUpdate.yaml
     RelationWriteRequest:
       $ref: ./components/schemas/RelationWriteRequest.yaml
     ViewGroupBy:
@@ -9374,9 +9417,15 @@ paths:
         which carries this contract's guards.
 
 
-        `id` ABSENT means create (`path` then required, the identifier is
-        server-minted). `id` PRESENT means update, and `version_token` is
-        then REQUIRED: a stale token is refused with 409 and the typed
+        `mode` SAYS WHICH OPERATION THIS IS — it is never inferred from
+        which optional fields happen to be set. `mode: create` requires
+        `path` and mints the identifier server-side (FR-036); `mode: update`
+        requires `id` and `version_token`. A field belonging to the other
+        variant is a 400 naming it, so an update that lost its `id` can no
+        longer land as a duplicate note with its version token discarded.
+
+
+        On update a stale token is refused with 409 and the typed
         KnowledgeConflictError body naming the path and both versions
         (EMB-086), the field is left untouched on disk (FR-042), and the
         refusal is audited. A refused write is never retried automatically
@@ -9386,8 +9435,10 @@ paths:
         RELATIONS AND PERSON PROPERTIES ARE NOT WRITABLE HERE (ADR-068
         FR-045) — see RelationWriteRequest — and a property this record
         type's schema describes as derived is rejected, not honoured (D9,
-        FR-046). A record's title and path are never editable through this
-        request once `id` is present (EMB-089).
+        FR-046). A record's title and path are never editable through an
+        update (EMB-089) — `path` is not an accepted field on that variant
+        at all, so a caller that believed it was moving the note is told
+        so rather than having the field ignored.
       tags:
       - Knowledge
       security:
@@ -9408,7 +9459,7 @@ paths:
       responses:
         '200':
           description: >
-            UPDATE (`id` was present): the record as it stands after the
+            UPDATE (`mode: update`): the record as it stands after the
             write, including its new version_token.
           content:
             application/json:
@@ -9416,7 +9467,7 @@ paths:
                 $ref: '#/components/schemas/VaultRecord'
         '201':
           description: >
-            CREATE (`id` was absent): the newly created record, carrying the
+            CREATE (`mode: create`): the newly created record, carrying the
             server-minted identifier (FR-036) and its first version_token.
             Distinguished from 200 because the two outcomes of this one
             operation differ in a way a caller acts on — a create produced an

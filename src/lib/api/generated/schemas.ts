@@ -534,11 +534,18 @@ type RecordAggregateResult = {
   value?: RecordValue | undefined;
   excluded_records?: number | undefined;
 };
-type RecordWriteRequest = {
+type RecordWriteRequest = RecordWriteRequestCreate | RecordWriteRequestUpdate;
+type RecordWriteRequestCreate = {
+  mode: "create";
   type: string;
-  id?: string | undefined;
-  path?: string | undefined;
-  version_token?: string | undefined;
+  path: string;
+  properties: Array<RecordPropertyValue>;
+};
+type RecordWriteRequestUpdate = {
+  mode: "update";
+  type: string;
+  id: string;
+  version_token: string;
   properties: Array<RecordPropertyValue>;
 };
 type ViewPart = {
@@ -4950,17 +4957,29 @@ export const VaultRecord: z.ZodType<VaultRecord> = z.object({
   version_token: z.string().min(1).optional(),
   properties: z.array(RecordPropertyValue),
 });
-export const RecordWriteRequest: z.ZodType<RecordWriteRequest> = z.object({
-  type: z.string().min(1),
-  id: z.string().min(1).optional(),
-  path: z.string().min(1).optional(),
-  version_token: z
-    .string()
-    .min(1)
-    .regex(/^v1:(absent|[0-9a-f]{32})$/)
-    .optional(),
-  properties: z.array(RecordPropertyValue).min(1),
-});
+export const RecordWriteRequestCreate =
+  z.object({
+    mode: z.literal("create"),
+    type: z.string().min(1),
+    path: z.string().min(1),
+    properties: z.array(RecordPropertyValue).min(1),
+  }) satisfies z.ZodType<RecordWriteRequestCreate>;
+export const RecordWriteRequestUpdate =
+  z.object({
+    mode: z.literal("update"),
+    type: z.string().min(1),
+    id: z.string().min(1),
+    version_token: z
+      .string()
+      .min(1)
+      .regex(/^v1:(absent|[0-9a-f]{32})$/),
+    properties: z.array(RecordPropertyValue).min(1),
+  }) satisfies z.ZodType<RecordWriteRequestUpdate>;
+export const RecordWriteRequest =
+  z.discriminatedUnion("mode", [
+    RecordWriteRequestCreate,
+    RecordWriteRequestUpdate,
+  ]) satisfies z.ZodType<RecordWriteRequest>;
 export const KnowledgeConflictError = z.object({
   error: z.string().min(1),
   code: z.literal("knowledge_version_conflict"),
@@ -8333,9 +8352,11 @@ ADR-068 D0: Omnipus ships no record types of its own. An empty &#x60;types&#x60;
     alias: "writeVaultRecord",
     description: `CW-7 (ADR-083 EMB-085, EMB-086, EMB-087). Wires RecordWriteRequest — previously reachable only from an agent-facing record-write tool — to the gateway/SPA boundary, as the ONE write door an inline record editor (US-10) uses: the same lock, version compare-and-swap, atomic write and audit path an agent&#x27;s write already goes through (EMB-085). This is deliberately NOT the whole-file Library save endpoint and NOT the raw frontmatter property-setter, neither of which carries this contract&#x27;s guards.
 
-&#x60;id&#x60; ABSENT means create (&#x60;path&#x60; then required, the identifier is server-minted). &#x60;id&#x60; PRESENT means update, and &#x60;version_token&#x60; is then REQUIRED: a stale token is refused with 409 and the typed KnowledgeConflictError body naming the path and both versions (EMB-086), the field is left untouched on disk (FR-042), and the refusal is audited. A refused write is never retried automatically by the server (EMB-087) — the caller decides.
+&#x60;mode&#x60; SAYS WHICH OPERATION THIS IS — it is never inferred from which optional fields happen to be set. &#x60;mode: create&#x60; requires &#x60;path&#x60; and mints the identifier server-side (FR-036); &#x60;mode: update&#x60; requires &#x60;id&#x60; and &#x60;version_token&#x60;. A field belonging to the other variant is a 400 naming it, so an update that lost its &#x60;id&#x60; can no longer land as a duplicate note with its version token discarded.
 
-RELATIONS AND PERSON PROPERTIES ARE NOT WRITABLE HERE (ADR-068 FR-045) — see RelationWriteRequest — and a property this record type&#x27;s schema describes as derived is rejected, not honoured (D9, FR-046). A record&#x27;s title and path are never editable through this request once &#x60;id&#x60; is present (EMB-089).
+On update a stale token is refused with 409 and the typed KnowledgeConflictError body naming the path and both versions (EMB-086), the field is left untouched on disk (FR-042), and the refusal is audited. A refused write is never retried automatically by the server (EMB-087) — the caller decides.
+
+RELATIONS AND PERSON PROPERTIES ARE NOT WRITABLE HERE (ADR-068 FR-045) — see RelationWriteRequest — and a property this record type&#x27;s schema describes as derived is rejected, not honoured (D9, FR-046). A record&#x27;s title and path are never editable through an update (EMB-089) — &#x60;path&#x60; is not an accepted field on that variant at all, so a caller that believed it was moving the note is told so rather than having the field ignored.
 `,
     requestFormat: "json",
     parameters: [

@@ -249,7 +249,16 @@ export function EditableCell({
     setSaving(true)
     setError(undefined)
     try {
+      // `mode: 'update'` is STATED, not implied by carrying an `id`. The
+      // contract used to infer the operation from which optionals were set,
+      // so an update that lost its `id` — a bug here, a changed response
+      // shape upstream — silently became a CREATE: a duplicate note, the
+      // version token discarded, and a success toast. The inline editor only
+      // ever edits a record that already exists, so it only ever has one
+      // mode to name, and naming it is what makes the other outcome
+      // impossible rather than merely unlikely.
       const written = await writeVaultRecord(target.workspaceId, {
+        mode: 'update',
         type: target.recordType,
         id: target.recordId,
         version_token: versionToken,

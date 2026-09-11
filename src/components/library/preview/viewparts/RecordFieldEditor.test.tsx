@@ -213,6 +213,13 @@ describe('RecordFieldEditor — writes', () => {
     const [wsArg, body] = mockedWrite.mock.calls[0]
     expect(wsArg).toBe('ws-1')
     expect(body).toMatchObject({
+      // `mode` is asserted, not assumed. The inline editor only ever edits a
+      // record that already exists, so every write it sends must say
+      // `update`; one that said `create` (or said nothing, under the old
+      // shape that inferred the operation from which fields were present)
+      // would write a DUPLICATE note and discard the version token, behind a
+      // success.
+      mode: 'update',
       type: 'company',
       id: 'CO-0142',
       version_token: 'sha256:aaa',
@@ -321,6 +328,13 @@ describe('RecordFieldEditor — 409 conflict', () => {
     // conflict's own follow-up read returned — never the stale one the
     // first, refused attempt sent.
     const secondBody = mockedWrite.mock.calls[1][1]
+    // A retry is still an UPDATE. Narrowing on the discriminator is what
+    // makes `version_token` reachable at all now, and the assertion earns
+    // its place independently: a retry that had become a create would write
+    // a duplicate note rather than reapplying the edit, and would carry no
+    // token to be stale or fresh.
+    expect(secondBody.mode).toBe('update')
+    if (secondBody.mode !== 'update') throw new Error('expected an update body')
     expect(secondBody).toMatchObject({ version_token: 'sha256:fresh' })
     expect(secondBody.version_token).not.toBe('sha256:aaa')
   })

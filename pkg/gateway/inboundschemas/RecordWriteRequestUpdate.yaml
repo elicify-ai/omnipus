@@ -1,6 +1,21 @@
-title: RecordWriteRequest
+title: RecordWriteRequestUpdate
 description: >
-  A typed, validated write to one record (ADR-068 D14, FR-040 to FR-044).
+  UPDATE one existing record's properties, by splice, under a version
+  compare-and-swap (ADR-068 D14, FR-040 to FR-044, ADR-083 EMB-085/EMB-086).
+
+  THE CALLER SAYS `mode: update`. It is not inferred from the presence of
+  `id`. In the flat shape this replaced, an update that lost its `id` — a
+  bug, a dropped field, a response shape that changed — silently became a
+  CREATE: it wrote a duplicate note at whatever `path` happened to be set,
+  discarded the `version_token` the caller had supplied, and returned
+  success. A caller now states which operation it wants, so that mistake is
+  a 400 naming the missing field instead of a second note nobody asked for.
+
+  `path` IS NOT ACCEPTED HERE (`additionalProperties: false`). The `id`
+  already locates the record, and a rename is a separate operation — a
+  `path` sent alongside an `id` could only ever be ignored, and a caller
+  that sent one believed it was moving the note (EMB-089: a record's title
+  and path are never editable through this request).
 
   A write is a SPLICE, never a re-serialisation. Comments, key order, blank
   lines and quoting style survive, and the file is byte-identical outside the
@@ -21,41 +36,49 @@ description: >
 type: object
 additionalProperties: false
 required:
+  - mode
   - type
+  - id
+  - version_token
   - properties
 properties:
+  mode:
+    type: string
+    enum:
+      - update
+    description: >
+      Discriminator. Must be exactly "update" for this variant.
+    example: "update"
   type:
     type: string
     minLength: 1
-    description: The record type being written. Always required, on create and update alike.
+    description: >
+      The record type being written. Always required, on create and update
+      alike. A record whose stored type differs from this is refused rather
+      than rewritten — naming the wrong type is a caller error, not an
+      instruction to change the record's type.
     example: "company"
   id:
     type: string
     minLength: 1
     description: >
-      The record to update. ABSENT MEANS CREATE, in which case `path` is
-      required and the identifier is minted by the server (FR-036) — never
-      supplied by the caller, so two concurrent creators cannot choose the
-      same id. When present, `version_token` is required too.
+      The record to update. REQUIRED here — the identifier is what locates
+      the record, and it is never supplied on a create, where the server
+      mints it (FR-036) so two concurrent creators cannot choose the same
+      one.
     example: "CO-0142"
-  path:
-    type: string
-    minLength: 1
-    description: >
-      Vault-relative path of the note. Required on create; ignored on update,
-      where the id already locates the record and a rename is a separate
-      operation.
-    example: "CRM/Companies/Acme Ltd.md"
   version_token:
     type: string
     minLength: 1
     pattern: '^v1:(absent|[0-9a-f]{32})$'
     description: >
       ADR-067 D14's opaque content-hash token, as returned on the record that
-      is being updated. REQUIRED whenever `id` is present: a stale token means
-      the file changed since it was read, and the write is REFUSED and the
-      refusal AUDITED (FR-043, FR-044) rather than overwriting an edit nobody
-      saw. Omitted only on create, where there is no prior version.
+      is being updated. REQUIRED on every update: a stale token means the file
+      changed since it was read, and the write is REFUSED and the refusal
+      AUDITED (FR-043, FR-044) rather than overwriting an edit nobody saw.
+      There is no variant of this operation that updates without one — that
+      was the point of splitting create from update, since an optional token
+      is one a caller can lose without being told.
 
       THE `pattern` IS ON THIS INBOUND FIELD AND DELIBERATELY NOT ON THE THREE
       OUTBOUND ONES (VaultRecord, VaultFindRow, KnowledgeConflictError), which
@@ -84,6 +107,11 @@ properties:
       property (D3.2). A write of a list into a scalar property, or of a value
       outside a closed enum, is rejected with the expected shape named
       (FR-006, FR-011, FR-042).
+
+      The record's `type` and `id` cannot be named here (ADR-068 D1/D7):
+      writing through the identity keys would rename the record, and clearing
+      one would leave it unreachable through every record door and invisible
+      to the identifier allocator's collision check.
     items:
       $ref: "./RecordPropertyValue.yaml"
       x-go-type: RecordPropertyValue

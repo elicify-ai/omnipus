@@ -159,7 +159,7 @@ func TestKnowledgeRecordWrite_ListPropertyShrinkRefused(t *testing.T) {
 	token := listRecordVersionToken(t, api, ws)
 
 	body := map[string]any{
-		"type": "widget", "id": "WD-0001", "version_token": token,
+		"mode": "update", "type": "widget", "id": "WD-0001", "version_token": token,
 		"properties": []map[string]any{
 			{"property": "tags", "values": []map[string]any{
 				// Exactly what an inline editor built from the joined cell
@@ -193,7 +193,7 @@ func TestKnowledgeRecordWrite_ListPropertyWholeListAndClearStillWork(t *testing.
 		token := listRecordVersionToken(t, api, ws)
 
 		body := map[string]any{
-			"type": "widget", "id": "WD-0001", "version_token": token,
+			"mode": "update", "type": "widget", "id": "WD-0001", "version_token": token,
 			"properties": []map[string]any{
 				{"property": "tags", "values": []map[string]any{
 					{"type": "text", "text": "alpha"},
@@ -217,7 +217,7 @@ func TestKnowledgeRecordWrite_ListPropertyWholeListAndClearStillWork(t *testing.
 		token := listRecordVersionToken(t, api, ws)
 
 		body := map[string]any{
-			"type": "widget", "id": "WD-0001", "version_token": token,
+			"mode": "update", "type": "widget", "id": "WD-0001", "version_token": token,
 			// D3.2's explicit clear. The caller plainly asked for it, so it is
 			// not the silent collapse the guard exists to stop.
 			"properties": []map[string]any{{"property": "tags", "values": []map[string]any{}}},
@@ -315,7 +315,7 @@ func TestKnowledgeRecordWrite_IdentityPropertyRefused(t *testing.T) {
 
 	for _, key := range []string{"id", "type"} {
 		body := map[string]any{
-			"type": "widget", "id": "WD-0001", "version_token": token,
+			"mode": "update", "type": "widget", "id": "WD-0001", "version_token": token,
 			// The empty values array is D3.2's CLEAR — the shape that reaches
 			// RemoveProperty and deletes the key line outright.
 			"properties": []map[string]any{{"property": key, "values": []map[string]any{}}},
@@ -415,6 +415,7 @@ func TestKnowledgeRecordCreate_ExistingPathIsNotAServerError(t *testing.T) {
 	api, ws, _, auditDir := buildRecordTestVaultWithAuditor(t)
 
 	body := map[string]any{
+		"mode": "create",
 		"type": "widget",
 		// w1.md already exists in the fixture vault.
 		"path": "w1.md",
@@ -443,6 +444,7 @@ func TestKnowledgeRecordCreate_MintsAndReturns201(t *testing.T) {
 	api, ws, vault := buildRecordTestVault(t)
 
 	body := map[string]any{
+		"mode": "create",
 		"type": "widget",
 		"path": "new-widget.md",
 		"properties": []map[string]any{
@@ -540,32 +542,32 @@ func TestKnowledgeRecordWrite_EveryRefusalIsAudited(t *testing.T) {
 	}{
 		{
 			name:   "no type",
-			body:   map[string]any{"properties": []map[string]any{{"property": "name", "values": []map[string]any{{"type": "text", "text": "x"}}}}},
+			body:   map[string]any{"mode": "create", "properties": []map[string]any{{"property": "name", "values": []map[string]any{{"type": "text", "text": "x"}}}}},
 			status: http.StatusBadRequest,
 			reason: recordRefusalInvalidRequest,
 		},
 		{
 			name:   "empty properties",
-			body:   map[string]any{"type": "widget", "properties": []map[string]any{}},
+			body:   map[string]any{"mode": "create", "type": "widget", "properties": []map[string]any{}},
 			status: http.StatusBadRequest,
 			reason: recordRefusalInvalidRequest,
 		},
 		{
 			name:   "create with no path",
-			body:   map[string]any{"type": "widget", "properties": []map[string]any{{"property": "name", "values": []map[string]any{{"type": "text", "text": "x"}}}}},
+			body:   map[string]any{"mode": "create", "type": "widget", "properties": []map[string]any{{"property": "name", "values": []map[string]any{{"type": "text", "text": "x"}}}}},
 			status: http.StatusBadRequest,
 			reason: recordRefusalInvalidRequest,
 		},
 		{
 			name: "unknown record type",
-			body: map[string]any{"type": "sprocket", "path": "x.md",
+			body: map[string]any{"mode": "create", "type": "sprocket", "path": "x.md",
 				"properties": []map[string]any{{"property": "name", "values": []map[string]any{{"type": "text", "text": "x"}}}}},
 			status: http.StatusBadRequest,
 			reason: recordRefusalTypeUnknown,
 		},
 		{
 			name: "unknown property",
-			body: map[string]any{"type": "widget", "path": "x.md",
+			body: map[string]any{"mode": "create", "type": "widget", "path": "x.md",
 				"properties": []map[string]any{{"property": "nope", "values": []map[string]any{{"type": "text", "text": "x"}}}}},
 			status: http.StatusBadRequest,
 			reason: recordRefusalPropertyUnknown,
@@ -696,7 +698,7 @@ func TestRecordWriteAndAgentWriteShareOneLockKey(t *testing.T) {
 // test.
 func recordNameWrite(token, name string) map[string]any {
 	return map[string]any{
-		"type": "widget", "id": "WD-0001", "version_token": token,
+		"mode": "update", "type": "widget", "id": "WD-0001", "version_token": token,
 		"properties": []map[string]any{
 			{"property": "name", "values": []map[string]any{{"type": "text", "text": name}}},
 		},

@@ -11,8 +11,11 @@
 package gateway
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -566,33 +569,158 @@ func (a *restAPI) handleKnowledgeRecordWrite(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	var req gen.RecordWriteRequest
+	// THE OPERATION IS DECLARED, NEVER INFERRED (the create/update split).
+	//
+	// This used to decode one flat RecordWriteRequest and then ask `if req.Id
+	// != nil` to decide what the caller meant. Under that shape an UPDATE
+	// that lost its `id` — a client bug, a dropped field, an upstream
+	// response whose shape changed — was not an error: it was a valid
+	// CREATE. It wrote a duplicate note at whatever `path` was set, silently
+	// discarded the `version_token` the caller had supplied precisely to
+	// protect against a concurrent write, and answered 201. Nothing in the
+	// contract could refuse it, because nothing in the contract said which
+	// of the two operations the caller wanted.
+	//
+	// So `mode` says. The dispatch below is the ADR-034 pattern (peek the
+	// discriminator from the RAW body, then strictly decode into the NAMED
+	// variant struct, never through the generated union wrapper's accessors)
+	// — the same one createAgent uses for AgentCreateRequest, and the same
+	// one CLAUDE.md Constraint #8 requires of every discriminated union here.
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
-	if !decodeAndValidate(w, r, "RecordWriteRequest", &req, validateEnabled) {
-		// decodeAndValidate has already written the 400. Audited here because
-		// the refused population is what answers "was anything attempted
-		// against this vault" (review H4), and a malformed-body flood is
-		// exactly the case where that question gets asked.
-		a.logRecordWriteRefusedAs(r, actor, workspaceID, "", "", "", recordRefusalInvalidRequest)
+
+	// 1 MB, matching decodeAndValidate's own cap — this handler reads the
+	// body itself (the peek needs the raw bytes twice) and must not become
+	// the one JSON route on this dispatcher with no limit.
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		a.refuseRecordWrite(w, r, actor, workspaceID, "", "", "", &recordWriteRefusal{
+			http.StatusBadRequest, recordRefusalInvalidRequest, "could not read request body"})
 		return
 	}
-	typeName := strings.TrimSpace(req.Type)
-	if typeName == "" {
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		a.refuseRecordWrite(w, r, actor, workspaceID, "", "", "", &recordWriteRefusal{
-			http.StatusBadRequest, recordRefusalInvalidRequest, "type is required"})
-		return
-	}
-	if len(req.Properties) == 0 {
-		a.refuseRecordWrite(w, r, actor, workspaceID, "", "", "", &recordWriteRefusal{
-			http.StatusBadRequest, recordRefusalInvalidRequest, "properties must not be empty"})
+			http.StatusBadRequest, recordRefusalInvalidRequest, "request body is required"})
 		return
 	}
 
-	if req.Id != nil && strings.TrimSpace(*req.Id) != "" {
-		a.handleRecordUpdate(w, r, actor, workspaceID, typeName, strings.TrimSpace(*req.Id), req)
+	var modePeek struct {
+		Mode *string `json:"mode"`
+	}
+	if err := json.Unmarshal(raw, &modePeek); err != nil {
+		// Audited because the refused population is what answers "was
+		// anything attempted against this vault" (review H4), and a
+		// malformed-body flood is exactly when that gets asked.
+		a.refuseRecordWrite(w, r, actor, workspaceID, "", "", "", &recordWriteRefusal{
+			http.StatusBadRequest, recordRefusalInvalidRequest, "invalid JSON body"})
 		return
 	}
-	a.handleRecordCreate(w, r, actor, workspaceID, typeName, req)
+	const modeErrMsg = `mode is required and must be "create" or "update" — ` +
+		`a write no longer infers which one it is from whether id or path happens to be set`
+	if modePeek.Mode == nil {
+		a.refuseRecordWrite(w, r, actor, workspaceID, "", "", "", &recordWriteRefusal{
+			http.StatusBadRequest, recordRefusalInvalidRequest, modeErrMsg})
+		return
+	}
+
+	switch *modePeek.Mode {
+	case string(gen.Create):
+		var req gen.RecordWriteRequestCreate
+		if !a.decodeRecordWriteVariant(w, r, actor, workspaceID, raw, "RecordWriteRequestCreate", &req, validateEnabled) {
+			return
+		}
+		typeName, ok := a.recordWriteCommonFields(w, r, actor, workspaceID, req.Type, len(req.Properties))
+		if !ok {
+			return
+		}
+		a.handleRecordCreate(w, r, actor, workspaceID, typeName, req)
+	case string(gen.Update):
+		var req gen.RecordWriteRequestUpdate
+		if !a.decodeRecordWriteVariant(w, r, actor, workspaceID, raw, "RecordWriteRequestUpdate", &req, validateEnabled) {
+			return
+		}
+		typeName, ok := a.recordWriteCommonFields(w, r, actor, workspaceID, req.Type, len(req.Properties))
+		if !ok {
+			return
+		}
+		id := strings.TrimSpace(req.Id)
+		if id == "" {
+			a.refuseRecordWrite(w, r, actor, workspaceID, "", "", "", &recordWriteRefusal{
+				http.StatusBadRequest, recordRefusalInvalidRequest, "id is required when mode is update"})
+			return
+		}
+		a.handleRecordUpdate(w, r, actor, workspaceID, typeName, id, req)
+	default:
+		a.refuseRecordWrite(w, r, actor, workspaceID, "", "", "", &recordWriteRefusal{
+			http.StatusBadRequest, recordRefusalInvalidRequest, modeErrMsg})
+	}
+}
+
+// decodeRecordWriteVariant strictly decodes raw into the named generated
+// variant struct, audits and answers 400 on failure.
+//
+// DisallowUnknownFields RUNS UNCONDITIONALLY, independent of
+// gateway.validate_inbound (which defaults to false). That is the mechanism
+// that makes the split's central promise true on every deployment rather
+// than only on opted-in ones: `version_token` on a create, or `path` on an
+// update, is a NAMED 400 instead of a field quietly dropped. Quietly
+// dropping either is the precise failure the split exists to end — a caller
+// that sent a version token believed it was protected against a concurrent
+// write, and a server that ignored it left it believing that.
+//
+// When validate_inbound IS enabled, the full-body JSON Schema check runs
+// first for richer errors, exactly as createAgent does.
+func (a *restAPI) decodeRecordWriteVariant(
+	w http.ResponseWriter, r *http.Request, actor, workspaceID string,
+	raw []byte, variantName string, out any, validateEnabled bool,
+) bool {
+	if validateEnabled {
+		if errMsg, serverErr := validateBodyAgainstSchema(variantName, raw); errMsg != "" {
+			if serverErr {
+				a.logRecordWriteRefusedAs(r, actor, workspaceID, "", "", "", recordRefusalInvalidRequest)
+				jsonErr(w, http.StatusInternalServerError, "inbound schema unavailable")
+				return false
+			}
+			a.refuseRecordWrite(w, r, actor, workspaceID, "", "", "", &recordWriteRefusal{
+				http.StatusBadRequest, recordRefusalInvalidRequest,
+				fmt.Sprintf("request body does not match schema %s: %s", variantName, errMsg)})
+			return false
+		}
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(out); err != nil {
+		msg := "invalid JSON body"
+		if strings.Contains(err.Error(), "unknown field") {
+			msg = fmt.Sprintf("field not allowed on this write mode: %v — see the %s schema", err, variantName)
+		}
+		a.refuseRecordWrite(w, r, actor, workspaceID, "", "", "", &recordWriteRefusal{
+			http.StatusBadRequest, recordRefusalInvalidRequest, msg})
+		return false
+	}
+	return true
+}
+
+// recordWriteCommonFields checks the two fields both variants carry.
+//
+// They stay a runtime check rather than resting on the schema's own
+// `minLength: 1` / `minItems: 1`, because those only bind when
+// validate_inbound is on: a `type` of "   " decodes to a non-empty Go string
+// and would otherwise reach schema lookup as a record type nobody declared.
+func (a *restAPI) recordWriteCommonFields(
+	w http.ResponseWriter, r *http.Request, actor, workspaceID, rawType string, propertyCount int,
+) (string, bool) {
+	typeName := strings.TrimSpace(rawType)
+	if typeName == "" {
+		a.refuseRecordWrite(w, r, actor, workspaceID, "", "", "", &recordWriteRefusal{
+			http.StatusBadRequest, recordRefusalInvalidRequest, "type is required"})
+		return "", false
+	}
+	if propertyCount == 0 {
+		a.refuseRecordWrite(w, r, actor, workspaceID, "", "", "", &recordWriteRefusal{
+			http.StatusBadRequest, recordRefusalInvalidRequest, "properties must not be empty"})
+		return "", false
+	}
+	return typeName, true
 }
 
 // recordWriteTokenRefusal checks the SHAPE of a supplied version token, which
@@ -635,7 +763,7 @@ func recordWriteTokenRefusal(raw string) *recordWriteRefusal {
 // re-read the file after the lock was released and pair those bytes with the
 // token from inside it — the shape of defect R-1/B1, fixed once on this
 // branch already. See EditNoteResult.Content for both things that goes wrong.
-func (a *restAPI) handleRecordUpdate(w http.ResponseWriter, r *http.Request, actor, workspaceID, typeName, id string, req gen.RecordWriteRequest) {
+func (a *restAPI) handleRecordUpdate(w http.ResponseWriter, r *http.Request, actor, workspaceID, typeName, id string, req gen.RecordWriteRequestUpdate) {
 	if err := validateEntityID(id); err != nil {
 		a.refuseRecordWrite(w, r, actor, workspaceID, "", "", id, &recordWriteRefusal{
 			http.StatusBadRequest, recordRefusalInvalidRequest, "invalid record id: " + err.Error()})
@@ -668,12 +796,20 @@ func (a *restAPI) handleRecordUpdate(w http.ResponseWriter, r *http.Request, act
 	// absent or empty one is a 400, never a silent bypass — it is a
 	// different failure from a STALE one (409): the caller never told us
 	// which version it believed it was replacing at all.
-	if req.VersionToken == nil || strings.TrimSpace(*req.VersionToken) == "" {
+	//
+	// The contract now carries that requirement too — `version_token` is a
+	// REQUIRED field on RecordWriteRequestUpdate rather than one of three
+	// independent optionals, so it decodes into a plain string. This check
+	// survives as the WHITESPACE case: `"   "` satisfies a required field
+	// and satisfies `minLength: 1`, and without this it would reach the
+	// compare-and-swap as a token that simply does not match, answering 409
+	// and blaming a concurrent editor who does not exist.
+	if strings.TrimSpace(req.VersionToken) == "" {
 		a.refuseRecordWrite(w, r, actor, workspaceID, found.scoped.Name, found.relPath, id, &recordWriteRefusal{
-			http.StatusBadRequest, recordRefusalVersionMissing, "version_token is required when id is present"})
+			http.StatusBadRequest, recordRefusalVersionMissing, "version_token is required when mode is update"})
 		return
 	}
-	expectVersion := strings.TrimSpace(*req.VersionToken)
+	expectVersion := strings.TrimSpace(req.VersionToken)
 	if refusal := recordWriteTokenRefusal(expectVersion); refusal != nil {
 		a.refuseRecordWrite(w, r, actor, workspaceID, found.scoped.Name, found.relPath, id, refusal)
 		return
@@ -739,13 +875,17 @@ func (a *restAPI) handleRecordUpdate(w http.ResponseWriter, r *http.Request, act
 // the first place, and holding the counter open across the file write would
 // make a crash between them reuse an id that a note on disk already carries,
 // which is the failure that actually matters.
-func (a *restAPI) handleRecordCreate(w http.ResponseWriter, r *http.Request, actor, workspaceID, typeName string, req gen.RecordWriteRequest) {
-	if req.Path == nil || strings.TrimSpace(*req.Path) == "" {
+func (a *restAPI) handleRecordCreate(w http.ResponseWriter, r *http.Request, actor, workspaceID, typeName string, req gen.RecordWriteRequestCreate) {
+	// `path` is a REQUIRED field on RecordWriteRequestCreate, so it decodes
+	// into a plain string; this check survives as the whitespace case, which
+	// a required field and `minLength: 1` both admit and which would
+	// otherwise reach CreateNote as an empty relative path.
+	if strings.TrimSpace(req.Path) == "" {
 		a.refuseRecordWrite(w, r, actor, workspaceID, "", "", "", &recordWriteRefusal{
-			http.StatusBadRequest, recordRefusalInvalidRequest, "path is required when id is absent"})
+			http.StatusBadRequest, recordRefusalInvalidRequest, "path is required when mode is create"})
 		return
 	}
-	relPath := strings.TrimSpace(*req.Path)
+	relPath := strings.TrimSpace(req.Path)
 
 	scope := knowledge.ResolveScope(a.homePath, workspaceID)
 	sc, ok := scope.Select("")
@@ -869,237 +1009,108 @@ func (a *restAPI) handleRecordCreate(w http.ResponseWriter, r *http.Request, act
 	jsonCreated(w, buildVaultRecordWire(schema, rec, res.RelPath, res.Version))
 }
 
-// buildRecordPropertyEdits validates every RecordPropertyValue against sc's
-// declaration — through records.ParseValue, the SAME authority
-// pkg/knowledge/knowledge_edit_schema.go's knowledgeEditValidatePropertyAgainstSchema
-// uses for the agent-facing write door, so the two can never disagree about
-// what a valid value looks like — and composes the matching splice edits.
+// buildRecordPropertyEdits turns validated property writes into splice edits.
 //
-// `current` is the record as it stands on disk, or nil on a create. It is
-// read for exactly one purpose: the arity-drop guard below, which cannot be
-// evaluated without knowing what the property already holds.
+// THE RULES THAT DECIDE WHETHER A PROPERTY MAY BE WRITTEN AT ALL NO LONGER
+// LIVE HERE. They moved to records.CheckRecordPropertyWrites, one layer down,
+// and this function is now the ADAPTER between that verdict and this door's
+// two vocabularies: HTTP status codes and audit reason tokens.
 //
-// THE SERVER-SIDE REFUSALS ARE HERE, AND THEY RUN BEFORE arity or value
-// conformance is even checked. All of them read the property's OWN
-// declaration off the resolved schema — never a flag the request claims about
-// itself — because the client is not a party this endpoint trusts to have
-// respected VaultFindCell.derived/.relation/.many; those exist so the UI
-// knows what to OFFER, not so the server can skip checking.
+// Why they moved (architecture review, and the founder approved doing it now
+// rather than when it next hurt): those four refusals — derived (FR-046),
+// relation/person (FR-045), the arity guards, and enum conformance — are
+// rules about WHAT A CALLER MAY CHANGE. An agent-facing record write cannot
+// import a gateway handler, so leaving them here guaranteed a second,
+// hand-written copy the day one was built, and two copies of a permission
+// rule do not stay equal. The drift is not hypothetical: pkg/knowledge's
+// knowledge_edit door already validates arity and values against the same
+// schema while enforcing NEITHER FR-045 nor FR-046 today.
 //
-//	FR-046  a property carrying a Formula declaration is refused.
-//	FR-045  a "relation" or "person" property is refused.
-//	D1/D7   `type` and `id` are refused — see the identity guard.
-//	§4.6    a LIST-VALUED property is refused when the write would SHRINK the
-//	        list — see the arity-drop guard.
+// `current` is the record as it stands on disk, or nil on a create; it is
+// read only by the list-shrink guard, which cannot be evaluated without
+// knowing what the property already holds.
 //
-// ⚠️ THE FR-046 BRANCH IS UNREACHABLE THROUGH THIS ENDPOINT TODAY, AND MUST
-// NOT BE DELETED AS DEAD CODE (review M3/F14). Every *records.Schema that
-// reaches this function comes from records.LoadSchemas, which CANNOT produce
-// a Formula-bearing property at all: a schema file declaring `formula:` on a
-// property is refused at load (schema.go's propertyDeclKeys). The guarantee
-// that makes the branch unreachable therefore lives in a DIFFERENT PACKAGE
-// from the branch — so a reader working only in this file has every reason to
-// think it is live, and a reader who checks has every reason to think it is
-// dead. It is neither: it is defence in depth held in reserve, against the
-// day a *Schema reaches here from somewhere other than LoadSchemas (a saved
-// view's namespace synthesis already constructs Formula-bearing properties,
-// one package away). See records.Property.Wire's doc comment for the other
-// half of this argument.
+// The edit CONSTRUCTORS stay here on purpose. knowledge.NoteEdit lives one
+// layer ABOVE pkg/records (pkg/knowledge imports pkg/records, never the
+// reverse), so a guard that returned NoteEdits could not live where both
+// doors can reach it. pkg/records decides what the write MEANS; each door
+// decides how to splice it.
 func buildRecordPropertyEdits(sc *records.Schema, props []gen.RecordPropertyValue, current *records.Record) ([]knowledge.NoteEdit, *recordWriteRefusal) {
-	edits := make([]knowledge.NoteEdit, 0, len(props))
-	seen := make(map[string]bool, len(props))
-	for _, item := range props {
-		name := strings.TrimSpace(item.Property)
-		if name == "" {
-			return nil, &recordWriteRefusal{http.StatusBadRequest, recordRefusalInvalidValue, "a property entry must name a property"}
-		}
-		if seen[name] {
-			return nil, &recordWriteRefusal{http.StatusBadRequest, recordRefusalInvalidValue,
-				fmt.Sprintf("property %q is named more than once in the same write", name)}
-		}
-		seen[name] = true
-
-		// D1/D7: the identity keys are refused BEFORE the schema is even
-		// consulted, because the refusal does not depend on what the schema
-		// says (review M8). A schema is free to declare a property literally
-		// named `id` — an external system's identifier is a plausible thing to
-		// model — and nothing else in the stack forbids it. Writing through it
-		// would rename the record; clearing it (an empty values array) would
-		// DELETE the record's identifier, making it unreachable through every
-		// record door AND invisible to the allocator's collision check, which
-		// would then hand the same identifier to a second record. All behind
-		// a 200.
-		if refusal := recordIdentityKeyRefusal(sc, name); refusal != nil {
-			return nil, refusal
-		}
-
-		prop, ok := sc.Property(name)
-		if !ok {
-			return nil, &recordWriteRefusal{http.StatusBadRequest, recordRefusalPropertyUnknown,
-				fmt.Sprintf("%s declares no property %q; declared properties are %s", sc.Type, name, strings.Join(sc.PropertyNames(), ", "))}
-		}
-		// FR-046: derived values are never written. Checked before the
-		// relation check and before arity — a formula property has no
-		// meaningful "arity to satisfy" refusal, so this is the single
-		// clearest reason to report first.
-		if prop.Formula != "" {
-			return nil, &recordWriteRefusal{http.StatusBadRequest, recordRefusalDerivedProperty,
-				fmt.Sprintf("%s.%s is a derived value, computed rather than stored; it cannot be written", sc.Type, name)}
-		}
-		// FR-045: relation and person properties are not writable here.
-		if prop.Type == records.TypeRelation || prop.Type == records.TypePerson {
-			return nil, &recordWriteRefusal{http.StatusBadRequest, recordRefusalRelationProperty,
-				fmt.Sprintf("%s.%s is a %s property; relations and person properties are not writable through this request — "+
-					"they are modified through RelationWriteRequest's explicit add/remove/replace verbs (a future write door, not yet implemented)",
-					sc.Type, name, prop.Type)}
-		}
-
-		if len(item.Values) == 0 {
-			// D3.2/EMB-085: an empty values array CLEARS the property.
-			edits = append(edits, knowledge.RemoveProperty(name))
-			continue
-		}
-
-		values := make([]string, 0, len(item.Values))
-		for i, rv := range item.Values {
-			text, ok := recordValueText(rv, prop.Type)
-			if !ok {
-				return nil, &recordWriteRefusal{http.StatusBadRequest, recordRefusalInvalidValue,
-					fmt.Sprintf("%s.%s[%d] does not carry a %s value", sc.Type, name, i, prop.Type)}
-			}
-			values = append(values, text)
-		}
-		if !prop.Many && len(values) != 1 {
-			return nil, &recordWriteRefusal{http.StatusBadRequest, recordRefusalInvalidValue,
-				fmt.Sprintf("%s.%s holds one value; got %d — send a single value, or declare many: true", sc.Type, name, len(values))}
-		}
-		if refusal := listArityDropRefusal(sc, prop, current, len(values)); refusal != nil {
-			return nil, refusal
-		}
-		for _, v := range values {
-			node := records.Node{Kind: records.KindScalar, Text: v}
-			if _, verr := records.ParseValue(prop, node); verr != nil {
-				msg := fmt.Sprintf("%s.%s holds %q, which is not %s", sc.Type, name, v, verr.Expected)
-				if len(verr.Permitted) > 0 {
-					msg += "; permitted values are " + strings.Join(verr.Permitted, ", ")
-				}
-				return nil, &recordWriteRefusal{http.StatusBadRequest, recordRefusalInvalidValue, msg}
-			}
-		}
-		if prop.Many {
-			edits = append(edits, knowledge.SetPropertyList(name, values))
-		} else {
-			edits = append(edits, knowledge.SetPropertyScalarChecked(name, values[0]))
-		}
+	writes, refusal := records.CheckRecordPropertyWrites(sc, props, current)
+	if refusal != nil {
+		return nil, recordWriteRefusalFromGuard(refusal)
 	}
-	if len(edits) == 0 {
-		return nil, &recordWriteRefusal{http.StatusBadRequest, recordRefusalInvalidValue, "properties must not be empty"}
+	edits := make([]knowledge.NoteEdit, 0, len(writes))
+	for _, wv := range writes {
+		switch wv.Kind {
+		case records.PropertyWriteClear:
+			// D3.2/EMB-085: an empty values array CLEARS the property.
+			edits = append(edits, knowledge.RemoveProperty(wv.Property))
+		case records.PropertyWriteList:
+			edits = append(edits, knowledge.SetPropertyList(wv.Property, wv.Values))
+		default:
+			edits = append(edits, knowledge.SetPropertyScalarChecked(wv.Property, wv.Values[0]))
+		}
 	}
 	return edits, nil
 }
 
-// recordIdentityKeyRefusal refuses a write naming `type`, `id` or `omni_id`.
+// guardRefusalReasons maps every records.WriteRefusalCode onto this door's
+// audit reason token, and every one of them answers 400.
 //
-// A second, independent copy of the guard knowledge.RemoveProperty enforces at
-// the splice, and deliberately so: this one exists to give the CLIENT a
-// truthful, specific 400 with a distinct audit reason, where the splice-level
-// one exists to protect every OTHER caller of the edit primitives. Neither
-// makes the other redundant — a guard that only the HTTP door applies protects
-// nothing an agent does, and a guard that only the splice applies surfaces as
-// a generic 500.
-func recordIdentityKeyRefusal(sc *records.Schema, name string) *recordWriteRefusal {
-	switch name {
-	case records.RecordTypeKey, records.RecordIDKey, records.RecordIDKeyNamespaced:
-		return &recordWriteRefusal{http.StatusBadRequest, recordRefusalIdentityProperty,
-			fmt.Sprintf("%s.%s carries the record's identity and cannot be written or cleared through this request "+
-				"(ADR-068 D1/D7): a record with no type is not a record, and a record with no id can never be "+
-				"found again and lets its identifier be minted to a second record", sc.Type, name)}
-	}
-	return nil
+// A MAP WITH A TEST, NOT A SWITCH WITH A DEFAULT (the wire.go discipline,
+// applied to a refusal vocabulary). A switch's default arm would silently
+// give a newly-added code some other code's reason, and the only symptom
+// would be an operator grepping the audit log for `relation_property` and
+// finding writes that were refused for something else entirely. The test
+// TestGuardRefusalReasonsCoverEveryCode walks records.WriteRefusalCodes and
+// fails if this map does not name all of them.
+//
+// Every guard refusal is 400 because every one of them is a fault in the
+// REQUEST that the caller alone can fix — a property that cannot be written,
+// a value the declaration does not permit, an arity that would lose data.
+// None of them depends on server state, so none of them is retryable and
+// none is a 409 or a 503; those outcomes belong to the version compare and
+// the lock, which run after this.
+var guardRefusalReasons = map[records.WriteRefusalCode]string{
+	records.RefusalPropertyUnknown:  recordRefusalPropertyUnknown,
+	records.RefusalDerivedProperty:  recordRefusalDerivedProperty,
+	records.RefusalRelationProperty: recordRefusalRelationProperty,
+	records.RefusalListProperty:     recordRefusalListProperty,
+	records.RefusalIdentityProperty: recordRefusalIdentityProperty,
+	records.RefusalInvalidValue:     recordRefusalInvalidValue,
 }
 
-// listArityDropRefusal is §4.6's "a list-valued property gets no editor",
-// enforced where a client cannot bypass it (ADR-083 review C1).
+// recordWriteRefusalFromGuard carries a shared-guard verdict into this door's
+// (status, audit reason, message) triple.
 //
-// THE DATA LOSS IT PREVENTS, concretely. A `many: true` property holding
-// `[alpha, beta]` renders on the wire as the single string "alpha, beta" —
-// VaultFindCell.value is one rendered string whatever the arity. An editor
-// offered on that cell sends back ONE value, and SetPropertyList replaces the
-// WHOLE list span: two tags become one tag whose text is "alpha, beta". HTTP
-// 200, audit `decision: allow`, and the reader never sees that anything was
-// lost. Worse for a `many` ENUM, where the joined text matches no declared
-// member, so picking any real option from the dropdown drops the rest.
-//
-// THE RULE IS "MUST NOT SHRINK", NOT "MUST NOT TOUCH", and that choice is
-// deliberate. §4.2c is explicit that the absence of a list editor is "a scope
-// decision, not a platform limit ... a scope decision with a way forward,
-// rather than a wall" — so refusing every write to every list property would
-// build the wall the ADR had just declined to build, and would break a future
-// multi-value control that legitimately sends the whole list. What must never
-// happen is a write that silently discards values the record already holds. So:
-//
-//	N == 0   allowed. An empty values array is D3.2's explicit CLEAR, not a
-//	         silent collapse; the caller plainly asked for it.
-//	N >= K   allowed. The caller sent at least as many values as are stored,
-//	         which is a deliberate whole-list write, not a joined string.
-//	0 < N < K  REFUSED. The only way to reach this is a client treating the
-//	         joined rendering as a single value.
-//
-// K is counted from the record's CONFORMING values, which is the same
-// population a re-read would return — a non-conforming element is already
-// absent from what the client was shown, so it cannot be what the client
-// meant to preserve.
-func listArityDropRefusal(sc *records.Schema, prop *records.Property, current *records.Record, sending int) *recordWriteRefusal {
-	if !prop.Many || current == nil || sending == 0 {
-		return nil
+// An UNMAPPED code falls back to invalid_value rather than panicking or
+// answering 500: a refusal whose reason token is imperfect is still a
+// correct, truthful 400 to the caller, where a panic would turn a rejected
+// write into a dropped connection. The test above is what keeps the fallback
+// unreachable; this branch is what keeps an unreachable case from being a
+// crash if it ever is reached.
+func recordWriteRefusalFromGuard(refusal *records.WriteRefusal) *recordWriteRefusal {
+	reason, ok := guardRefusalReasons[refusal.Code]
+	if !ok {
+		logger.WarnCF("rest", "knowledge: record write guard returned an unmapped refusal code",
+			map[string]any{"code": string(refusal.Code), "property": refusal.Property})
+		reason = recordRefusalInvalidValue
 	}
-	held := len(records.ResolveProperty(*current, prop).Values)
-	if sending >= held {
-		return nil
-	}
-	return &recordWriteRefusal{http.StatusBadRequest, recordRefusalListProperty,
-		fmt.Sprintf("%s.%s is a list holding %d values and this write sends %d, which would discard the rest. "+
-			"A list-valued property has no inline editor (ADR-083 §4.6) precisely because its cell renders as one "+
-			"joined string: send every value the list should end up with, or an empty values array to clear it",
-			sc.Type, prop.Name, held, sending)}
+	return &recordWriteRefusal{http.StatusBadRequest, reason, refusal.Message}
 }
 
-// recordValueText extracts the plain scalar text SetProperty/ParseValue need
-// from a wire RecordValue, per the SCHEMA's declared type — not the value's
-// own optional `type` field, which the write-request contract explicitly
-// makes advisory ("the schema is the authority").
-func recordValueText(rv gen.RecordValue, propType records.PropertyType) (string, bool) {
-	switch propType {
-	case records.TypeText:
-		if rv.Text != nil {
-			return *rv.Text, true
-		}
-	case records.TypeEnum:
-		if rv.Enum != nil {
-			return *rv.Enum, true
-		}
-	case records.TypeDate:
-		if rv.Date != nil {
-			return *rv.Date, true
-		}
-	case records.TypeInteger:
-		if rv.Integer != nil {
-			return *rv.Integer, true
-		}
-	case records.TypeDecimal:
-		if rv.Decimal != nil {
-			return *rv.Decimal, true
-		}
-	case records.TypeCheckbox:
-		if rv.Checkbox != nil {
-			if *rv.Checkbox {
-				return "true", true
-			}
-			return "false", true
-		}
-	}
-	return "", false
-}
+// recordIdentityKeyRefusal, listArityDropRefusal and recordValueText USED TO
+// LIVE HERE. They are now records.CheckRecordPropertyWrites' internals
+// (pkg/records/record_write_guard.go), together with the FR-045/FR-046
+// refusals they sat beside — moved so the agent-facing record write can
+// reach the same implementation instead of growing a second copy.
+//
+// Only recordValueText kept an exported identity across the move, as
+// records.PropertyValueText: deciding WHICH field of a wire RecordValue
+// counts is a function of the schema's declared type, so it is part of
+// validation rather than of splicing, and a door that re-derived it could
+// disagree with the guard about what the caller sent.
 
 // finishRecordWriteError resolves the outcome of an EditNote/CreateNote call
 // and writes the matching HTTP response — mirroring

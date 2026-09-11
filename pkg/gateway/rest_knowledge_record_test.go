@@ -241,6 +241,7 @@ func TestKnowledgeRecordWrite_SuccessfulUpdate(t *testing.T) {
 	oldToken := widgetVersionToken(t, api, ws)
 
 	body := map[string]any{
+		"mode":          "update",
 		"type":          "widget",
 		"id":            "WD-0001",
 		"version_token": oldToken,
@@ -289,6 +290,7 @@ func TestKnowledgeRecordWrite_StaleTokenIs409(t *testing.T) {
 	// with an input that can never reach it in production.
 	const staleToken = "v1:0000000000000000000000000000dead"
 	body := map[string]any{
+		"mode":          "update",
 		"type":          "widget",
 		"id":            "WD-0001",
 		"version_token": staleToken,
@@ -321,6 +323,7 @@ func TestKnowledgeRecordWrite_AbsentTokenIs400(t *testing.T) {
 	require.NoError(t, err)
 
 	body := map[string]any{
+		"mode": "update",
 		"type": "widget",
 		"id":   "WD-0001",
 		"properties": []map[string]any{
@@ -348,6 +351,7 @@ func TestKnowledgeRecordWrite_RelationPropertyRefused(t *testing.T) {
 	token := widgetVersionToken(t, api, ws)
 
 	body := map[string]any{
+		"mode":          "update",
 		"type":          "widget",
 		"id":            "WD-0001",
 		"version_token": token,
@@ -408,6 +412,7 @@ func TestKnowledgeRecordWrite_ConcurrentUpdatesOnlyOneWins(t *testing.T) {
 
 	race := func(name string) *httptest.ResponseRecorder {
 		body := map[string]any{
+			"mode":          "update",
 			"type":          "widget",
 			"id":            "WD-0001",
 			"version_token": token,
