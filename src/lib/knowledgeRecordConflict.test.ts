@@ -37,15 +37,22 @@ import type { components } from './api/generated/openapi-types'
 
 type RecordWriteRequest = components['schemas']['RecordWriteRequest']
 
-// A VALID update body: `id` present means update, so the contract requires a
-// `version_token`, and the token must match the minted shape
-// (`^v1:(absent|[0-9a-f]{32})$`) or the client-side schema rejects it before
-// any request is made.
+// A VALID update body. `mode: 'update'` is REQUIRED and carries the meaning
+// that `id`-present used to imply: the request shape became a discriminated
+// union so that an update missing its `id` can no longer be silently reread as
+// a create (which minted a duplicate note and discarded the version token).
+// An update must carry `id` + `version_token` and must NOT carry `path`.
+//
+// The token must match the minted shape (`^v1:(absent|[0-9a-f]{32})$`) or the
+// client-side schema rejects it before any request is made.
+type RecordWriteUpdate = Extract<RecordWriteRequest, { mode: 'update' }>
+
 const STALE_TOKEN = 'v1:0123456789abcdef0123456789abcdef'
 const FRESH_TOKEN = 'v1:fedcba9876543210fedcba9876543210'
 
-function updateBody(overrides: Partial<RecordWriteRequest> = {}): RecordWriteRequest {
+function updateBody(overrides: Partial<RecordWriteUpdate> = {}): RecordWriteUpdate {
   return {
+    mode: 'update',
     type: 'company',
     id: 'CO-0142',
     version_token: STALE_TOKEN,
