@@ -494,6 +494,80 @@ describe('LibrarySearchBar — excerpt-unavailable note hits (US-1 AS-4)', () =>
   })
 })
 
+describe('LibrarySearchBar — WL-2: no raw [[wikilink]] notation in search results', () => {
+  // Reproduction: the founder's real vault has frontmatter like
+  // `owner: "[[Daniel Piatkowski]]"` — an ordinary wikilink typed OUTSIDE any
+  // note body. The search engine returns a raw excerpt around the matched
+  // term (it never renders markdown), so a note hit's `snippet` can carry the
+  // wikilink notation verbatim. Before the fix, NoteRow rendered `hit.snippet`
+  // through `highlightQuery` alone — a plain-text split/highlight with no
+  // wikilink awareness — so the brackets reached the screen exactly as
+  // written on disk. This is the surface WL-2's own writeup flagged but could
+  // not name: "if the founder saw [[...]] where frontmatter lives, a
+  // different surface is rendering frontmatter as text."
+  it('shows a wikilink inside a note snippet as its display text, never as raw brackets', async () => {
+    renderBar({
+      res: response({
+        notes: [
+          {
+            path: '01-Areas/CRM/LinkedIn.md',
+            title: 'LinkedIn',
+            snippet: 'owner: "[[Daniel Piatkowski]]" website: https://www.linkedin.com',
+          },
+        ],
+      }),
+    })
+    type('Daniel Piatkowski')
+
+    await waitFor(() =>
+      expect(getByFullText('owner: "Daniel Piatkowski" website: https://www.linkedin.com')).toBeInTheDocument(),
+    )
+    // The literal notation must never reach the DOM — not even split across
+    // highlight spans (getByFullText already proves the exact joined text
+    // above; this is the direct, unambiguous check for the notation itself).
+    expect(screen.queryByText(/\[\[.*\]\]/)).toBeNull()
+  })
+
+  it('resolves a wikilink alias to its alias text, not the raw target', async () => {
+    renderBar({
+      res: response({
+        notes: [
+          {
+            path: '05-Maps/Entities/Daniel Piatkowski.md',
+            title: 'Daniel Piatkowski',
+            snippet: 'decided_by: "[[Daniel Piatkowski|the founder]]" status: accepted',
+          },
+        ],
+      }),
+    })
+    type('founder')
+
+    await waitFor(() =>
+      expect(getByFullText('decided_by: "the founder" status: accepted')).toBeInTheDocument(),
+    )
+    expect(screen.queryByText(/\[\[.*\]\]/)).toBeNull()
+  })
+
+  it('strips wikilink notation from a record cell value the same way', async () => {
+    renderBar({
+      res: response({
+        records: [
+          {
+            path: 'crm/linkedin.md',
+            title: 'LinkedIn',
+            record_type: 'company',
+            cells: [{ property: 'owner', value: '[[Daniel Piatkowski]]' }],
+          },
+        ],
+      }),
+    })
+    type('linkedin')
+
+    await waitFor(() => expect(getByFullText('owner: Daniel Piatkowski')).toBeInTheDocument())
+    expect(screen.queryByText(/\[\[.*\]\]/)).toBeNull()
+  })
+})
+
 describe('LibrarySearchBar — server-authored statement and coverage (US-1 AS-1/AS-2, FR-036)', () => {
   it('shows the server statement, in the reading flow, ahead of a partial answer', async () => {
     const statement = 'Searched 4,120 of 12,880 notes — indexing is still running.'
