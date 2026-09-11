@@ -199,10 +199,20 @@ func TestRelation_FR045_CreateStillAcceptsRelations(t *testing.T) {
 	require.Contains(t, got, "[[Beta]]")
 }
 
-// TestRelation_FR045_LinkOpStillWorks pins op "link"'s relation mode, which
-// is one of the explicit verbs FR-045 points callers at and therefore cannot
-// itself be subject to the rule.
-func TestRelation_FR045_LinkOpStillWorks(t *testing.T) {
+// TestRelation_FR045_OpRelationIsTheOnlyWayIn pins FR-045's end state from
+// this file's side: op "relation" performs the write that op "link" with a
+// `relation` argument used to, and that older door is now shut.
+//
+// The two halves are asserted in ONE test on purpose. They are a single
+// claim — "exactly one way in" — and splitting them lets a future change
+// satisfy each half separately: reinstating link's branch while op "relation"
+// still works would leave a green suite and two ways to write one property,
+// which is precisely the state this removal existed to end.
+//
+// The byte-level proof of the refusal lives in
+// TestKnowledgeEditLink_RelationArgumentRefusedAndNoteUntouched
+// (knowledge_edit_link_test.go); this is the FR-045 narrative anchor.
+func TestRelation_FR045_OpRelationIsTheOnlyWayIn(t *testing.T) {
 	home, ws, root := a4Fixture(t, "kb")
 	relSchema(t, root)
 	deps, _ := a4Deps(home)
@@ -210,15 +220,29 @@ func TestRelation_FR045_LinkOpStillWorks(t *testing.T) {
 
 	a4Note(t, root, "Deal.md", "---\ntype: deal\npartners:\n  - \"[[Alpha]]\"\n---\nBody.\n")
 
-	res := tool.Execute(a4Ctx("mia", ws), map[string]any{
+	// The door that closed.
+	refused := tool.Execute(a4Ctx("mia", ws), map[string]any{
 		"collection": "kb", "op": "link", "path": "Deal.md",
 		"target": "Beta", "relation": "partners",
 		"expect_version": a4Version(t, root, "Deal.md"),
 	})
-	require.False(t, res.IsError, "op link with a relation must keep working: %s", res.ForLLM)
+	require.True(t, refused.IsError,
+		"op link's relation mode was removed; op \"relation\" replaces it: %s", refused.ForLLM)
+	require.NotContains(t, a4Read(t, root, "Deal.md"), "[[Beta]]",
+		"the refused call must not have written the edge")
+
+	// The door that is open, doing the same job — and, as FR-045 requires,
+	// leaving the rest of the list in place.
+	added := tool.Execute(a4Ctx("mia", ws), map[string]any{
+		"collection": "kb", "op": "relation", "path": "Deal.md",
+		"property": "partners", "relation_op": relationOpAdd,
+		"targets":        []any{"Beta"},
+		"expect_version": a4Version(t, root, "Deal.md"),
+	})
+	require.False(t, added.IsError, "op relation must add the edge: %s", added.ForLLM)
 
 	got := a4Read(t, root, "Deal.md")
-	require.Contains(t, got, "[[Alpha]]", "link must not discard the existing edge")
+	require.Contains(t, got, "[[Alpha]]", "add must not discard the existing edge")
 	require.Contains(t, got, "[[Beta]]")
 }
 

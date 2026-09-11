@@ -74,7 +74,10 @@ var (
 // applied more widely it stops being a data-integrity rule and starts being
 // a capability the agent door simply lacks.
 //
-// Two write paths CANNOT reach the hazard, and both are deliberately allowed:
+// Two write paths CANNOT reach the hazard, and both are deliberately allowed.
+// (There were THREE until op "link"'s `relation` mode was removed — it was
+// add-only, so it could not reach the hazard either, but an add-only half of
+// a verb set is not a way in, and a relation property now has exactly one.)
 //
 //   - CREATE. knowledge_edit's op "create" refuses outright when the file
 //     already exists (author.go's ErrNoteExists), so there is no prior list
@@ -84,9 +87,9 @@ var (
 //     frontmatter — template bytes included — not just the caller's own
 //     `frontmatter` argument. That is a large capability loss bought for no
 //     integrity gain.
-//   - The EXPLICIT VERBS themselves. op "link" with `relation`, and op
-//     "relation", are add/remove/replace verbs: they are the replacement
-//     FR-045 points callers towards, so they cannot also be subject to it.
+//   - The EXPLICIT VERBS themselves. op "relation" IS the add/remove/replace
+//     verb set FR-045 points callers towards, so it cannot also be subject
+//     to it.
 //
 // The path that CAN reach the hazard is set_property — in both its modes —
 // and that is where the refusal fires.
@@ -102,8 +105,8 @@ const (
 	// rule.
 	knowledgeEditRelationRefused knowledgeEditRelationPosture = iota
 	// knowledgeEditRelationAllowed is a caller that is ITSELF one of FR-045's
-	// sanctioned paths: a create, or one of the explicit relation verbs. See
-	// the type comment for why each is out of the rule's reach.
+	// sanctioned paths: a create, or op "relation"'s explicit verbs. See the
+	// type comment for why each is out of the rule's reach.
 	knowledgeEditRelationAllowed
 )
 
@@ -366,37 +369,6 @@ func knowledgeEditValidateValue(set *records.SchemaSet, report *records.SchemaLo
 	return knowledgeEditValidatePropertyAgainstSchema(schema, typeName, property, values, isList, posture)
 }
 
-// knowledgeEditPropertyDeclared reports whether property is declared AT ALL on
-// src's own record type, and — only when it is — whether that declaration
-// says many-valued. Used by the link operation to decide whether linking
-// through a relation property ADDS to a list or OVERWRITES a scalar.
-//
-// declared is false whenever nothing constrains this property's cardinality
-// at all: no declared `type:`, a declared type with no matching schema
-// file (whether never declared or rejected at load time), or a schema that
-// does not mention this property. FR-005 calls that state "ordinary notes
-// are unconstrained" — and an ordinary note is exactly what most link
-// targets are, since a relation is routinely put on a note whose author
-// never wrote (or needed) a records/*.yaml for it. When declared is false,
-// many is meaningless and always returned false; callers must branch on
-// declared first.
-//
-// Earlier, this reported one bool (knowledgeEditPropertyMany) collapsing
-// "explicitly declared single-valued" and "nothing declared at all" into
-// the same false — see the correction on knowledgeEditLinkPropertyEdit below
-// for why that collapse was itself the defect.
-func knowledgeEditPropertyDeclared(set *records.SchemaSet, report *records.SchemaLoadReport, src []byte, property string) (declared, many bool) {
-	schema, _, reason, _ := knowledgeEditResolveSchema(set, report, src)
-	if reason != knowledgeEditGoverned {
-		return false, false
-	}
-	prop, ok := schema.Property(property)
-	if !ok {
-		return false, false
-	}
-	return true, prop.Many
-}
-
 // knowledgeEditSetPropertyEdit composes schema validation with the low-level
 // splice: a NoteEdit that refuses (leaving src untouched) when the value
 // does not conform, and otherwise delegates to the scalar or list splice.
@@ -448,56 +420,6 @@ func knowledgeEditListOpEdit(set *records.SchemaSet, report *records.SchemaLoadR
 			return AddListValue(property, value)(src)
 		}
 		return RemoveListValue(property, value)(src)
-	}
-}
-
-// knowledgeEditLinkPropertyEdit composes schema validation with a relation
-// write. Its arity decision (ADD vs. SET) is spec-argued in the file
-// header's D5 citation ("Cardinality is declared and enforced (many: true
-// or not)"): cardinality is a property of the SCHEMA's declaration, and the
-// only case where this file has a genuine declaration to enforce is when
-// the record's own type resolves to a schema that declares this property.
-//
-//   - Declared many: true  -> ADD. The schema says this relation holds more
-//     than one edge; the tool named "link" adds an edge, per its own
-//     description ("link to another note").
-//   - Declared many: false -> SET (overwrite, still guarded by
-//     SetPropertyScalarChecked's list-shape refusal). The schema declares a
-//     single-edge slot on purpose; replacing that one edge is what
-//     "enforced" cardinality of one means, and is what op: link's caller
-//     asking to link a NEW target to that slot intends.
-//   - Not declared at all (no type, an undeclared type, or a schema that
-//     never mentions this property) -> ADD, not SET. FR-005's "ordinary
-//     notes are unconstrained" describes what the SCHEMA layer permits, not
-//     what op: link should assume about the caller's intent — an
-//     undeclared property carries no cardinality-of-one guarantee to honour,
-//     so treating it as one is not enforcing a declaration, it is inventing
-//     one, and the direction that invention took here (overwrite) is the
-//     one that can silently destroy a list of existing relations with a
-//     tool whose own name and rendered reply ("LINK x -> y") look additive.
-//     ADD is the failure-safe default for the undeclared case: adding to an
-//     absent key creates a fresh one-item list (AddListValue's own defined
-//     behaviour), and AddListValue itself still refuses — rather than
-//     silently promotes — an existing SCALAR value, so a genuinely
-//     single-valued undeclared property is protected too; only a caller who
-//     explicitly wants that conversion (set_property with a list value)
-//     performs it.
-func knowledgeEditLinkPropertyEdit(set *records.SchemaSet, report *records.SchemaLoadReport, property, wikilink string, gov *knowledgeEditGovernance) NoteEdit {
-	return func(src []byte) ([]byte, error) {
-		declared, many := knowledgeEditPropertyDeclared(set, report, src, property)
-		add := !declared || many
-		// FR-045 does NOT apply (knowledgeEditRelationAllowed): op "link"
-		// with `relation` is one of the explicit verbs the rule directs
-		// callers towards — it adds an edge, it does not send a whole list.
-		// Refusing it would delete a working capability and point the agent
-		// at a replacement it was already using.
-		if err := knowledgeEditValidateValue(set, report, src, property, []string{wikilink}, add, knowledgeEditRelationAllowed, gov); err != nil {
-			return nil, err
-		}
-		if add {
-			return AddListValue(property, wikilink)(src)
-		}
-		return SetPropertyScalarChecked(property, wikilink)(src)
 	}
 }
 

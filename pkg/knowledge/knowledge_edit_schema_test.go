@@ -67,15 +67,3 @@ func TestKnowledgeEditSetPropertyEdit_UnparsableFrontmatterStillRefusesTheWrite(
 	assert.ErrorIs(t, err, ErrFrontmatterUnterminated,
 		"the write must still be refused, even though schema validation itself found nothing to check")
 }
-
-// TestKnowledgeEditPropertyDeclared_UnparsableFrontmatterIsNotDeclared covers
-// the sibling caller of knowledgeEditResolveSchema (the link operation's arity
-// lookup), which must agree with knowledgeEditValidateValue on this case.
-func TestKnowledgeEditPropertyDeclared_UnparsableFrontmatterIsNotDeclared(t *testing.T) {
-	set := records.NewSchemaSet()
-	unparsable := []byte("---\ntitle: Old\n\nbody with no closing fence\n")
-
-	declared, many := knowledgeEditPropertyDeclared(set, nil, unparsable, "title")
-	assert.False(t, declared)
-	assert.False(t, many)
-}

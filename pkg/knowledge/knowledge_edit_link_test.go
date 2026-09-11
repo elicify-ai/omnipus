@@ -1,10 +1,23 @@
-// Omnipus — tests for knowledge_edit's op: link relation semantics (code review
-// B finding 5): knowledgeEditLinkPropertyEdit's arity decision (ADD vs.
-// overwrite) must be driven by whether the record's OWN schema actually
-// declares the property, not by collapsing "explicitly declared
-// single-valued" and "nothing declared at all" into the same answer. See
-// knowledgeEditLinkPropertyEdit's doc comment in vault_edit_schema.go for the
-// full spec argument (D5: "Cardinality is declared and enforced").
+// Omnipus — tests for knowledge_edit's op "link" after its `relation` mode was
+// removed.
+//
+// op "link" once had TWO modes, selected by whether a `relation` argument was
+// present: without it, a body wikilink; with it, a splice into that
+// frontmatter relation property. The second mode is gone — op "relation"
+// (knowledge_edit_relation.go) is the single way in for a relation property,
+// because it carries the whole verb set (add / remove / replace) where link
+// only ever added.
+//
+// This file therefore pins TWO things that must not drift apart:
+//
+//  1. THE REMOVAL IS REAL, NOT COSMETIC. The refusal tests below assert on the
+//     BYTES OF THE NOTE, not merely on res.IsError. A refusal that still wrote
+//     the property would satisfy an IsError-only assertion, and so would a
+//     reinstated relation branch that happened to also report an error. The
+//     file must come back byte-identical.
+//  2. THE BODY-WIKILINK MODE IS UNTOUCHED. op "link" WITHOUT `relation` is a
+//     different feature that was never in scope for the removal, and the
+//     surviving tests here fail if stripping the relation branch damaged it.
 //
 // Run: CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 ./pkg/knowledge/
 //
@@ -26,8 +39,10 @@ import (
 
 // veRelationSchema writes a "widget" record schema declaring TWO relation
 // properties: "related" as many-valued, "owner" as single-valued (many
-// absent, which FR-006 says means scalar) — so a test can pick which
-// declared cardinality it wants against the same collection.
+// absent, which FR-006 says means scalar). Both cardinalities are kept
+// because the removed branch treated them DIFFERENTLY (add vs. overwrite),
+// so a reinstated branch could come back in either shape — and each must be
+// caught.
 func veRelationSchema(t *testing.T, root string) {
 	t.Helper()
 	dir := filepath.Join(root, records.VaultMarkerDirName, records.RecordsDirName)
@@ -41,178 +56,228 @@ func veRelationSchema(t *testing.T, root string) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "widget.yaml"), []byte(yaml), 0o600))
 }
 
-// TestKnowledgeEditLink_DeclaredMany_AppendsExistingList is the case the code
-// already handled correctly before this fix (many: true), kept as a
-// not-a-regression anchor: the list must survive and grow by one, in
-// either YAML style.
-func TestKnowledgeEditLink_DeclaredMany_AppendsExistingList(t *testing.T) {
+// ---------------------------------------------------------------------------
+// The removal — `relation` is refused, and nothing is written
+// ---------------------------------------------------------------------------
+
+// TestKnowledgeEditLink_RelationArgumentRefusedAndNoteUntouched is the
+// the test that must DIE if the removed branch is ever restored. It runs the
+// exact call shapes that branch used to serve — declared many-valued,
+// declared single-valued, and undeclared — and requires, for every one of
+// them, that the note's bytes are EXACTLY what they were before the call.
+//
+// Why the byte comparison rather than `require.False(t, changed)`: the removed
+// code path reported its writes through the SAME success/failure channel as
+// everything else, so any assertion phrased in terms of the tool's own report
+// can be satisfied by a reinstated branch that reports honestly. The file on
+// disk cannot be talked around. Restore knowledgeEditLinkPropertyEdit and
+// re-wire execLink's `relation != ""` branch and every subtest here fails on
+// the content assertion, not merely on the error one.
+func TestKnowledgeEditLink_RelationArgumentRefusedAndNoteUntouched(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		body string
+		name     string
+		body     string
+		relation string
+		schema   bool
 	}{
-		{"flow", "---\ntype: widget\nrelated: [\"[[A]]\", \"[[C]]\"]\n---\nBody.\n"},
-		{"block", "---\ntype: widget\nrelated:\n  - \"[[A]]\"\n  - \"[[C]]\"\n---\nBody.\n"},
+		{
+			name:     "declared_many_valued",
+			body:     "---\ntype: widget\nrelated:\n  - \"[[A]]\"\n  - \"[[C]]\"\n---\nBody.\n",
+			relation: "related",
+			schema:   true,
+		},
+		{
+			name:     "declared_single_valued",
+			body:     "---\ntype: widget\nowner: \"[[A]]\"\n---\nBody.\n",
+			relation: "owner",
+			schema:   true,
+		},
+		{
+			name:     "undeclared_property_no_schema_at_all",
+			body:     "---\nrelated:\n  - \"[[A]]\"\n  - \"[[C]]\"\n---\nBody.\n",
+			relation: "related",
+			schema:   false,
+		},
+		{
+			name:     "undeclared_property_absent_key",
+			body:     "---\nstatus: draft\n---\nBody.\n",
+			relation: "related",
+			schema:   false,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home, ws, root := a4Fixture(t, "kb")
-			veRelationSchema(t, root)
+			if tc.schema {
+				veRelationSchema(t, root)
+			}
 			deps, _ := a4Deps(home)
 			tool := veTool(deps)
 			a4Note(t, root, "Real.md", tc.body)
+
+			before := a4Read(t, root, "Real.md")
 			v := a4Version(t, root, "Real.md")
 
 			res := tool.Execute(a4Ctx("mia", ws), map[string]any{
 				"collection": "kb", "op": "link", "path": "Real.md",
-				"target": "B", "relation": "related", "expect_version": v,
+				"target": "B", "relation": tc.relation, "expect_version": v,
 			})
-			require.False(t, res.IsError, "declared many:true must not be refused: %s", res.ForLLM)
-			got := a4Read(t, root, "Real.md")
-			for _, want := range []string{"[[A]]", "[[C]]", "[[B]]"} {
-				if !strings.Contains(got, want) {
-					t.Fatalf("expected %s to survive/appear, got: %s", want, got)
-				}
-			}
-			if !strings.Contains(res.ForLLM, "LINK related -> B (changed)") {
-				t.Fatalf("expected an additive-reading reply, got: %s", res.ForLLM)
-			}
+
+			require.True(t, res.IsError,
+				"op link must refuse 'relation': the frontmatter-property mode was removed, got: %s",
+				res.ForLLM)
+
+			// The load-bearing assertion. Byte-for-byte, because "the write
+			// did not land" is the actual claim being made.
+			require.Equal(t, before, a4Read(t, root, "Real.md"),
+				"a refused op link must not write ANY byte of the note")
+			// Belt and braces on the one thing a reinstated branch would add,
+			// phrased so the failure message names the regression directly.
+			require.NotContains(t, a4Read(t, root, "Real.md"), "[[B]]",
+				"the relation-writing branch of op link appears to be back")
 		})
 	}
 }
 
-// TestKnowledgeEditLink_DeclaredSingle_OverwritesDeclaredSlot is the OTHER half
-// of D5's "declared AND enforced": a property the schema explicitly
-// declares as single-valued (no `many:`) is a cardinality-of-one slot on
-// purpose, and linking a new target into it is meant to replace the one
-// edge — that is what "enforced" means for a scalar relation, not a bug.
-func TestKnowledgeEditLink_DeclaredSingle_OverwritesDeclaredSlot(t *testing.T) {
+// TestKnowledgeEditLink_RelationRefusalNamesTheReplacement pins the CONTENT of
+// the refusal, not just its existence.
+//
+// An agent that has learned the old form has to be able to retry correctly
+// from this message alone — it cannot read an ADR, and a bare "link does not
+// read relation" (which is what the generic per-op argument sweep would have
+// produced had the dedicated refusal not been added ahead of it) tells it
+// what is wrong without telling it what to do instead. Every argument name
+// the replacement call needs is required here, so that rewording the message
+// into something less actionable fails.
+func TestKnowledgeEditLink_RelationRefusalNamesTheReplacement(t *testing.T) {
 	home, ws, root := a4Fixture(t, "kb")
-	veRelationSchema(t, root)
+	relSchema(t, root)
 	deps, _ := a4Deps(home)
 	tool := veTool(deps)
-	a4Note(t, root, "Real.md", "---\ntype: widget\nowner: \"[[A]]\"\n---\nBody.\n")
-	v := a4Version(t, root, "Real.md")
+	a4Note(t, root, "Deal.md", "---\ntype: deal\npartners:\n  - \"[[Alpha]]\"\n---\nBody.\n")
 
 	res := tool.Execute(a4Ctx("mia", ws), map[string]any{
-		"collection": "kb", "op": "link", "path": "Real.md",
-		"target": "B", "relation": "owner", "expect_version": v,
+		"collection": "kb", "op": "link", "path": "Deal.md",
+		"target": "Beta", "relation": "partners",
+		"expect_version": a4Version(t, root, "Deal.md"),
 	})
-	require.False(t, res.IsError, "declared single-valued relation must overwrite, not refuse: %s", res.ForLLM)
-	want := "---\ntype: widget\nowner: \"[[B]]\"\n---\nBody.\n"
-	if got := a4Read(t, root, "Real.md"); got != want {
-		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
-	}
-}
+	require.True(t, res.IsError)
 
-// TestKnowledgeEditLink_DeclaredSingle_ButFileHoldsAList_Refuses is the
-// interaction between this fix and finding 4's: a note whose data has
-// drifted from its own schema (declared single-valued, but the file on
-// disk actually holds a list) must be REFUSED, not silently clobbered —
-// SetPropertyScalarChecked's list-shape guard is still the layer deciding
-// this, unchanged by the arity routing fix.
-func TestKnowledgeEditLink_DeclaredSingle_ButFileHoldsAList_Refuses(t *testing.T) {
-	home, ws, root := a4Fixture(t, "kb")
-	veRelationSchema(t, root)
-	deps, _ := a4Deps(home)
-	tool := veTool(deps)
-	body := "---\ntype: widget\nowner: [\"[[A]]\", \"[[C]]\"]\n---\nBody.\n"
-	a4Note(t, root, "Real.md", body)
-	v := a4Version(t, root, "Real.md")
-
-	res := tool.Execute(a4Ctx("mia", ws), map[string]any{
-		"collection": "kb", "op": "link", "path": "Real.md",
-		"target": "B", "relation": "owner", "expect_version": v,
-	})
-	if !res.IsError {
-		t.Fatalf("expected a refusal (declared single-valued but file holds a list), got success: %s", res.ForLLM)
-	}
-	if got := a4Read(t, root, "Real.md"); got != body {
-		t.Fatalf("a refused write must leave the file byte-identical, got: %s", got)
-	}
-}
-
-// TestKnowledgeEditLink_UndeclaredProperty_AppendsRatherThanOverwrites is code
-// review B finding 5's own reproduction: a property that is NOT declared by
-// any resolvable schema — the case of an ordinary note (FR-005: "ordinary
-// notes are unconstrained") — used to be treated as arity-false
-// (knowledgeEditPropertyMany's old collapse) and overwritten, destroying every
-// existing relation. It must now append, in both YAML styles.
-func TestKnowledgeEditLink_UndeclaredProperty_AppendsRatherThanOverwrites(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		body string
-	}{
-		{"flow_no_schema_at_all", "---\nrelated: [\"[[A]]\", \"[[C]]\"]\n---\nBody.\n"},
-		{"block_no_schema_at_all", "---\nrelated:\n  - \"[[A]]\"\n  - \"[[C]]\"\n---\nBody.\n"},
+	for _, want := range []string{
+		`op "relation"`, // the op to use
+		"property",      // where the old 'relation' value goes
+		"relation_op",   // the verb argument
+		`"add"`,         // the verbs themselves
+		`"remove"`,
+		`"replace"`,
+		"targets", // the plural, list-shaped target argument
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			home, ws, root := a4Fixture(t, "kb")
-			// Deliberately NOT calling veRelationSchema: this is an
-			// ordinary, schema-free note — the exact case the finding
-			// names ("EVERY property on an ordinary note").
-			deps, _ := a4Deps(home)
-			tool := veTool(deps)
-			a4Note(t, root, "Real.md", tc.body)
-			v := a4Version(t, root, "Real.md")
-
-			res := tool.Execute(a4Ctx("mia", ws), map[string]any{
-				"collection": "kb", "op": "link", "path": "Real.md",
-				"target": "B", "relation": "related", "expect_version": v,
-			})
-			require.False(t, res.IsError, "an undeclared relation property must append, not refuse: %s", res.ForLLM)
-			got := a4Read(t, root, "Real.md")
-			for _, want := range []string{"[[A]]", "[[C]]", "[[B]]"} {
-				if !strings.Contains(got, want) {
-					t.Fatalf("finding 5: existing relation destroyed — expected %s to survive, got: %s", want, got)
-				}
-			}
-		})
+		require.Contains(t, res.ForLLM, want,
+			"the refusal must name %s so an agent can retry from the error text alone: %s",
+			want, res.ForLLM)
 	}
 }
 
-// TestKnowledgeEditLink_UndeclaredProperty_AbsentKey_CreatesOneItemList proves
-// the failure-safe default chosen for the undeclared case (route through
-// AddListValue) behaves sanely on a fresh key too: no prior value, no
-// destruction question, just a new one-item list.
-func TestKnowledgeEditLink_UndeclaredProperty_AbsentKey_CreatesOneItemList(t *testing.T) {
+// TestKnowledgeEditLink_RelationRefusedEvenWhenEmpty pins that PRESENCE, not
+// emptiness, is what is refused.
+//
+// `relation: ""` is a caller whose property name resolved to nothing —
+// a template that did not expand, a variable that came back empty. Running it
+// as a body wikilink would do something other than what it asked and report
+// success, which is the silent-wrong-write class this package refuses
+// everywhere else.
+func TestKnowledgeEditLink_RelationRefusedEvenWhenEmpty(t *testing.T) {
 	home, ws, root := a4Fixture(t, "kb")
 	deps, _ := a4Deps(home)
 	tool := veTool(deps)
 	a4Note(t, root, "Real.md", "---\nstatus: draft\n---\nBody.\n")
-	v := a4Version(t, root, "Real.md")
 
+	before := a4Read(t, root, "Real.md")
 	res := tool.Execute(a4Ctx("mia", ws), map[string]any{
 		"collection": "kb", "op": "link", "path": "Real.md",
-		"target": "B", "relation": "related", "expect_version": v,
+		"target": "B", "relation": "", "expect_version": a4Version(t, root, "Real.md"),
 	})
-	require.False(t, res.IsError, "linking a fresh relation property must succeed: %s", res.ForLLM)
-	want := "---\nstatus: draft\nrelated:\n  - \"[[B]]\"\n---\nBody.\n"
-	if got := a4Read(t, root, "Real.md"); got != want {
-		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
-	}
+
+	require.True(t, res.IsError, "an empty 'relation' is still 'relation': %s", res.ForLLM)
+	require.Equal(t, before, a4Read(t, root, "Real.md"),
+		"a refused call must not fall through to the body-wikilink mode")
 }
 
-// TestKnowledgeEditLink_UndeclaredProperty_ExistingScalar_Refuses proves the
-// undeclared-property default (append) does not silently promote an
-// existing single value into a list either — AddListValue's own defined
-// refusal for a scalar-shaped span still applies, so a genuinely
-// single-valued undeclared property is protected from an accidental shape
-// change, not just from destruction.
-func TestKnowledgeEditLink_UndeclaredProperty_ExistingScalar_Refuses(t *testing.T) {
+// TestKnowledgeEditLink_RelationNotAdvertisedInSchema pins that the tool stops
+// OFFERING the argument, not merely refusing it.
+//
+// A model picks its arguments from the parameter schema. Leaving 'relation'
+// declared while refusing it at runtime would keep every model sending it
+// forever and turn a removal into a permanent error loop.
+func TestKnowledgeEditLink_RelationNotAdvertisedInSchema(t *testing.T) {
+	require.NotContains(t, editArgNames, "relation",
+		"'relation' is refused by name; it must not be an accepted argument")
+	require.NotContains(t, editOpArgs[opLink], "relation",
+		"op link's own argument set must no longer carry 'relation'")
+
+	params := NewEditTool(AuthoringDeps{}).Parameters()
+	props, ok := params["properties"].(map[string]any)
+	require.True(t, ok, "parameters must declare a properties object")
+	require.NotContains(t, props, "relation",
+		"the model-facing schema must not advertise an argument the tool refuses")
+}
+
+// ---------------------------------------------------------------------------
+// The scope boundary — the BODY wikilink mode is untouched
+// ---------------------------------------------------------------------------
+
+// TestKnowledgeEditLink_BodyWikilinkStillWorks is the other half of the
+// removal's contract, and the reason the removal was scoped the way it was.
+//
+// op "link" WITHOUT `relation` inserts a wikilink into the note's BODY. It
+// shares nothing with the removed mode but the op name — a different
+// primitive (AddWikilink, which splices a markdown list item under a heading)
+// writing to a different part of the file. If stripping the relation branch
+// had taken this with it, this test is what says so.
+func TestKnowledgeEditLink_BodyWikilinkStillWorks(t *testing.T) {
 	home, ws, root := a4Fixture(t, "kb")
 	deps, _ := a4Deps(home)
 	tool := veTool(deps)
-	body := "---\nrelated: \"[[A]]\"\n---\nBody.\n"
-	a4Note(t, root, "Real.md", body)
-	v := a4Version(t, root, "Real.md")
+	a4Note(t, root, "Real.md", "---\nstatus: draft\n---\nBody.\n")
 
 	res := tool.Execute(a4Ctx("mia", ws), map[string]any{
 		"collection": "kb", "op": "link", "path": "Real.md",
-		"target": "B", "relation": "related", "expect_version": v,
+		"target": "Somewhere Else", "expect_version": a4Version(t, root, "Real.md"),
 	})
-	if !res.IsError {
-		t.Fatalf("expected a refusal (existing scalar, undeclared property), got success: %s", res.ForLLM)
-	}
-	if got := a4Read(t, root, "Real.md"); got != body {
-		t.Fatalf("a refused write must leave the file byte-identical, got: %s", got)
-	}
+	require.False(t, res.IsError, "the body-wikilink mode must keep working: %s", res.ForLLM)
+
+	got := a4Read(t, root, "Real.md")
+	require.Contains(t, got, "[[Somewhere Else]]")
+	// The link belongs in the BODY. Frontmatter ends at the second fence;
+	// everything the wikilink mode writes must land after it — this is the
+	// assertion that distinguishes the surviving feature from the removed one
+	// rather than merely finding the text anywhere in the file.
+	_, body, found := strings.Cut(strings.TrimPrefix(got, "---\n"), "\n---\n")
+	require.True(t, found, "note should still have terminated frontmatter: %s", got)
+	require.Contains(t, body, "[[Somewhere Else]]",
+		"op link writes a BODY wikilink; it must not land in frontmatter")
+}
+
+// TestKnowledgeEditLink_BodyWikilinkHonoursAliasAndSection pins the two
+// arguments that only the surviving mode reads. They were declared alongside
+// `relation` in the same parameter block, so a removal that over-reached
+// would most plausibly have taken one of them too.
+func TestKnowledgeEditLink_BodyWikilinkHonoursAliasAndSection(t *testing.T) {
+	home, ws, root := a4Fixture(t, "kb")
+	deps, _ := a4Deps(home)
+	tool := veTool(deps)
+	a4Note(t, root, "Real.md", "---\nstatus: draft\n---\nBody.\n\n## See also\n\n")
+
+	res := tool.Execute(a4Ctx("mia", ws), map[string]any{
+		"collection": "kb", "op": "link", "path": "Real.md",
+		"target": "Target Note", "alias": "the target", "section": "See also",
+		"expect_version": a4Version(t, root, "Real.md"),
+	})
+	require.False(t, res.IsError, "alias and section must still be read: %s", res.ForLLM)
+
+	got := a4Read(t, root, "Real.md")
+	require.Contains(t, got, "[[Target Note|the target]]", "alias must be rendered")
+	idx := strings.Index(got, "## See also")
+	require.Positive(t, idx, "the section heading should still be present: %s", got)
+	require.Contains(t, got[idx:], "[[Target Note|the target]]",
+		"the link must be placed under the named section")
 }
