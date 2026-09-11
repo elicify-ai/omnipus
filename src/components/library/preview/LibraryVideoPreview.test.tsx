@@ -5,8 +5,9 @@
 // inline variant, following the same shape LibraryImagePreview.test.tsx and
 // LibraryAudioPreview.test.tsx already use for their own variant contracts.
 
-import { describe, it, expect } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, vi } from 'vitest'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { LibraryVideoPreview } from './LibraryVideoPreview'
 // URL ORACLE. `libraryDownloadUrl` is deliberately NOT mocked or re-called
 // here: the real one builds its query string with `URLSearchParams`, which
@@ -114,5 +115,100 @@ describe('video — a source the browser refuses', () => {
 
     fireEvent.error(screen.getByTestId('library-video-element'))
     expect(screen.getByTestId('library-video-unplayable')).toHaveTextContent(/download it instead/i)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Review I12 — EMB-027's "exactly one renderer per kind", for VIDEO
+// ---------------------------------------------------------------------------
+
+// LibraryAudioPreview.test.tsx proves the pane and the inline embed reach the
+// SAME module. There was no counterpart for video, and the gap is not
+// theoretical: a reintroduced private `<video>` inside LibraryPreviewPane
+// would carry the same `library-video-preview` testid the pane's own test
+// queries, so every existing assertion would still pass while two renderers
+// shipped. check-no-duplicate-renderer.sh does not cover video either, so
+// this test is currently the only thing that would notice.
+
+describe('LibraryVideoPreview — single definition used by both surfaces (EMB-027, review I12)', () => {
+  it('the pane and the inline embed both render through the SAME module', async () => {
+    vi.resetModules()
+    const mountedVariants: string[] = []
+
+    vi.doMock('./LibraryVideoPreview', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./LibraryVideoPreview')>()
+      return {
+        ...actual,
+        LibraryVideoPreview: (props: Parameters<typeof actual.LibraryVideoPreview>[0]) => {
+          mountedVariants.push(props.variant ?? 'pane')
+          return actual.LibraryVideoPreview(props)
+        },
+      }
+    })
+    // Every OTHER static preview surface LibraryPreviewPane imports, stubbed
+    // to a no-op so mounting it for a VIDEO entry pulls in none of their real
+    // dependencies (mermaid, shiki, CodeMirror, BasePreview, pdfjs-dist).
+    vi.doMock('./BasePreview', () => ({ BasePreview: () => null }))
+    vi.doMock('./LibraryImagePreview', () => ({ LibraryImagePreview: () => null }))
+    vi.doMock('./LibraryAudioPreview', () => ({ LibraryAudioPreview: () => null }))
+    vi.doMock('./LibraryPdfPreview', () => ({ LibraryPdfPreview: () => null }))
+    vi.doMock('./LibraryMarkdownPreview', () => ({ LibraryMarkdownPreview: () => null }))
+    vi.doMock('./LibraryMermaidPreview', () => ({ LibraryMermaidPreview: () => null }))
+    vi.doMock('./LibraryCodePreview', () => ({ LibraryCodePreview: () => null }))
+    vi.doMock('./LibraryTextPreview', () => ({ LibraryTextPreview: () => null }))
+    vi.doMock('./LibraryDownloadCard', () => ({ LibraryDownloadCard: () => null }))
+    vi.doMock('@/lib/api', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@/lib/api')>()
+      return {
+        ...actual,
+        mintLibraryPreviewToken: vi.fn(),
+        fetchLibraryContent: vi.fn(),
+        fetchLibraryEntries: vi.fn().mockResolvedValue([ENTRY]),
+      }
+    })
+
+    const { LibraryPreviewPane } = await import('../LibraryPreviewPane')
+    const { KbVideoEmbedMount } = await import('./KbVideoEmbedMount')
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const pane = render(
+      <QueryClientProvider client={qc}>
+        <LibraryPreviewPane
+          workspaceId="ws-1"
+          entry={ENTRY}
+          onClose={() => {}}
+          onDownload={() => {}}
+          mintPreviewToken={null}
+        />
+      </QueryClientProvider>,
+    )
+    await waitFor(() => expect(mountedVariants).toContain('pane'))
+    pane.unmount()
+
+    const embed = render(
+      <QueryClientProvider client={qc}>
+        <KbVideoEmbedMount workspaceId="ws-1" workspacePath="video/clip.mp4" />
+      </QueryClientProvider>,
+    )
+    await waitFor(() => expect(mountedVariants).toContain('inline'))
+    embed.unmount()
+
+    // Both consumers went through the ONE mocked module. If either held a
+    // private duplicate instead, its variant would never appear here.
+    expect(mountedVariants).toContain('pane')
+    expect(mountedVariants).toContain('inline')
+
+    vi.doUnmock('./LibraryVideoPreview')
+    vi.doUnmock('./BasePreview')
+    vi.doUnmock('./LibraryImagePreview')
+    vi.doUnmock('./LibraryAudioPreview')
+    vi.doUnmock('./LibraryPdfPreview')
+    vi.doUnmock('./LibraryMarkdownPreview')
+    vi.doUnmock('./LibraryMermaidPreview')
+    vi.doUnmock('./LibraryCodePreview')
+    vi.doUnmock('./LibraryTextPreview')
+    vi.doUnmock('./LibraryDownloadCard')
+    vi.doUnmock('@/lib/api')
+    vi.resetModules()
   })
 })
