@@ -549,13 +549,34 @@ test.describe("ADR-067 §10.7 — the SPA's Content-Security-Policy, measured", 
       '<!doctype html><html><body><h1>embedded</h1></body></html>',
     )
     await openLibraryEntry(page, wsId, 'csp-audit-page.html')
-    await expect(page.getByTestId('library-html-preview-unavailable')).toBeVisible({
-      timeout: 20_000,
-    })
+
+    // PREVIEW_TOKEN_MINTER HAS LANDED, so this is the extended assertion the
+    // previous version of this block asked a future reader to write.
+    //
+    // It used to assert the "preview unavailable" notice and `iframe count ===
+    // 0`. Both went stale with the HP-1 fix: the pane now always mints through
+    // mintLibraryPreviewToken, so the unavailable branch is unreachable in
+    // production (LibraryPreviewPane's own comment says so) and a frame IS
+    // created. Left as it was, this test demanded the feature stay broken.
+    //
+    // What A6 actually measures survives the change, and is what is asserted
+    // now: the SPA refuses to be framed, and the Library's own HTML preview
+    // does not frame the SPA handler — it points at the token-scoped isolated
+    // endpoint on a path the SPA never serves from.
+    const frame = page.getByTestId('library-html-preview-frame')
+    await expect(frame).toBeVisible({ timeout: 20_000 })
+
+    const src = await frame.getAttribute('src')
+    expect(src, 'the preview frame must load from the isolated token path').toMatch(
+      /^\/library-preview\/[^/]+\//,
+    )
     expect(
-      await page.locator('iframe').count(),
-      'no iframe is created today — when PREVIEW_TOKEN_MINTER lands, extend this assertion ' +
-        'to check the frame loads from the isolated preview endpoint and not the SPA handler',
-    ).toBe(0)
+      src,
+      'the preview frame must NOT point at the SPA handler — that is the framing A6 forbids',
+    ).not.toMatch(/^\/(?:#|index\.html|$)/)
+
+    // Every frame on the page is that one preview frame: no second iframe
+    // quietly embedding the SPA alongside it.
+    expect(await page.locator('iframe').count(), 'exactly one frame, the preview').toBe(1)
   })
 })
