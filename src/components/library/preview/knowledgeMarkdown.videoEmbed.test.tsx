@@ -87,8 +87,14 @@ describe('a markdown IMAGE naming a video is recognised the same way, and a wiki
     renderNote(`![Demo](${VIDEO_URL})\n\n![[internal.png]]`, {
       resolveEmbedUrl: (target) =>
         target === 'internal.png'
-          ? { state: 'resolved', url: 'https://example.test/internal.png' }
-          : { state: 'unresolved' },
+          ? {
+              state: 'resolved',
+              url: 'https://example.test/internal.png',
+              path: 'internal.png',
+              workspaceId: 'ws-1',
+              workspacePath: 'work/internal.png',
+            }
+          : { state: 'unresolved', reason: `no file in this collection matches "${target}"` },
     })
 
     // Positive half: the scheme-bearing IMAGE destination mounted the

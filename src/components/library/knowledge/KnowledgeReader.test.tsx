@@ -278,3 +278,51 @@ describe('the note renders through the KB composition, not a plain one', () => {
     expect(link.getAttribute('href')).toBe('/#/library?workspace=ws-1&path=notes/plan.md')
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The query-fence context props actually reach the markdown composition
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// A SURVIVING MUTANT found by the test-coverage review: deleting
+// `workspaceId={workspaceId}` / `collectionId={collectionId}` from the
+// `KnowledgeBaseMarkdown` call here makes every ```query fence in every note
+// silently degrade to a plain code block, and 208 tests stayed green.
+// KnowledgeReader is the ONLY component that threads those two values into
+// the composition, so nothing else can catch it.
+
+describe('KnowledgeReader — a ```query fence gets its workspace/collection context (mutation: drop either prop)', () => {
+  const QUERY_NOTE = '# Plan\n\n```query\nquarterly report\n```\n'
+
+  it('mounts the live query fence when BOTH ids are supplied', () => {
+    render(
+      <KnowledgeReader
+        content={QUERY_NOTE}
+        path="notes/plan.md"
+        layout="wide"
+        workspaceId="ws-1"
+        collectionId="kb_1"
+      />,
+    )
+
+    // The live embed mounted: one of its own states is on screen, and the
+    // "this cannot run" marker is NOT.
+    const live =
+      screen.queryByTestId('kb-query-fence-waiting') ??
+      screen.queryByTestId('kb-query-fence-loading') ??
+      screen.queryByTestId('kb-query-fence-results') ??
+      screen.queryByTestId('kb-query-fence-no-results')
+    expect(live).not.toBeNull()
+    expect(screen.queryByTestId('kb-query-fence-inert')).not.toBeInTheDocument()
+  })
+
+  it('paired negative — with the ids ABSENT the fence renders the stated "cannot run here" marker instead', () => {
+    render(<KnowledgeReader content={QUERY_NOTE} path="notes/plan.md" layout="wide" />)
+
+    expect(screen.getByTestId('kb-query-fence-inert')).toBeInTheDocument()
+    expect(screen.getByTestId('kb-query-fence-inert-reason')).toHaveTextContent(
+      /can only run inside a knowledge base/i,
+    )
+    expect(screen.queryByTestId('kb-query-fence-waiting')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('kb-query-fence-loading')).not.toBeInTheDocument()
+  })
+})

@@ -22,9 +22,17 @@
 //     this is the mutation-tested case in the task report.
 
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { libraryDownloadUrl } from '@/lib/api'
+// URL ORACLE. `libraryDownloadUrl` is deliberately NOT mocked or re-called
+// here: the real one builds its query string with `URLSearchParams`, which
+// percent-encodes the path separator. A hand-written mock re-implemented it
+// WITHOUT that (asserting a URL production never emits), and calling the real
+// function on BOTH sides of an assertion is self-referential — it agrees with
+// itself no matter what the builder does. The literal below is the real
+// builder's actual output, so a change to how download URLs are built fails
+// this test.
+const EXPECTED_SRC = '/api/v1/library/ws-1/download?path=audio%2Fpodcast.mp3'
 import type { LibraryEntry } from '@/lib/api'
 
 const ENTRY: LibraryEntry = {
@@ -44,7 +52,7 @@ describe('LibraryAudioPreview — pane variant (default, unchanged from before e
     const wrap = screen.getByTestId('library-audio-preview')
     const audio = wrap.querySelector('audio')
     expect(audio).toHaveAttribute('controls')
-    expect(audio).toHaveAttribute('src', libraryDownloadUrl('ws-1', ENTRY.path))
+    expect(audio).toHaveAttribute('src', EXPECTED_SRC)
   })
 
   it('carries data-variant="pane" when no variant prop is given', async () => {
@@ -60,7 +68,7 @@ describe('LibraryAudioPreview — inline variant (EMB-027: same renderer, EMB-02
     render(<LibraryAudioPreview workspaceId="ws-1" entry={ENTRY} variant="inline" />)
     expect(screen.getByTestId('library-audio-preview').querySelector('audio')).toHaveAttribute(
       'src',
-      libraryDownloadUrl('ws-1', ENTRY.path),
+      EXPECTED_SRC,
     )
   })
 
@@ -124,7 +132,6 @@ describe('LibraryAudioPreview — single definition used by both surfaces (Step 
       const actual = await importOriginal<typeof import('@/lib/api')>()
       return {
         ...actual,
-        libraryDownloadUrl: (wsId: string, path: string) => `/api/v1/library/${wsId}/download?path=${path}`,
         mintLibraryPreviewToken: vi.fn(),
         fetchLibraryContent: vi.fn(),
         fetchLibraryEntries: vi.fn().mockResolvedValue([ENTRY]),
@@ -173,5 +180,48 @@ describe('LibraryAudioPreview — single definition used by both surfaces (Step 
     vi.doUnmock('./LibraryDownloadCard')
     vi.doUnmock('@/lib/api')
     vi.resetModules()
+  })
+})
+
+// ── An undecodable source is stated, not rendered as a dead player (M6) ─────
+//
+// The element's own fallback CHILDREN fire only when the browser does not
+// support the element TYPE — never when the SOURCE fails, which is the case
+// that actually happens. `libraryPreviewKind.ts` maps `.avi`/`.mkv` to video
+// and `.flac`/`.opus` to audio, and no browser plays all of them; the URL can
+// also 404 after the 30s-stale listing or 401 after a session expires. Step 6
+// mounts these INSIDE notes, so without this the reader gets a dead control
+// bar or a black box in the middle of their prose with nothing naming it.
+
+describe('audio — a source the browser refuses', () => {
+  it('replaces the player with a stated failure naming the file, plus a real download link', async () => {
+    const { LibraryAudioPreview } = await import('./LibraryAudioPreview')
+    render(<LibraryAudioPreview workspaceId="ws-1" entry={ENTRY} />)
+
+    // Positive control first: the element IS there before anything fails.
+    const el = screen.getByTestId('library-audio-element')
+    expect(el).toBeInTheDocument()
+    expect(screen.queryByTestId('library-audio-unplayable')).not.toBeInTheDocument()
+
+    fireEvent.error(el)
+
+    const notice = screen.getByTestId('library-audio-unplayable')
+    expect(notice).toHaveTextContent(/could not play/i)
+    expect(notice).toHaveTextContent('podcast.mp3')
+    const link = notice.querySelector('a')
+    expect(link).not.toBeNull()
+    expect(link).toHaveAttribute('href', EXPECTED_SRC)
+    expect(link).toHaveAttribute('download')
+
+    // And the dead element is GONE — not left sitting underneath the notice.
+    expect(screen.queryByTestId('library-audio-element')).not.toBeInTheDocument()
+  })
+
+  it('shows the same stated failure in the INLINE variant, which is the one Step 6 mounts inside notes', async () => {
+    const { LibraryAudioPreview } = await import('./LibraryAudioPreview')
+    render(<LibraryAudioPreview workspaceId="ws-1" entry={ENTRY} variant="inline" />)
+
+    fireEvent.error(screen.getByTestId('library-audio-element'))
+    expect(screen.getByTestId('library-audio-unplayable')).toHaveTextContent(/download it instead/i)
   })
 })

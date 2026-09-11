@@ -325,3 +325,235 @@ describe('RecordFieldEditor — 409 conflict', () => {
     expect(secondBody.version_token).not.toBe('sha256:aaa')
   })
 })
+
+// ── The conflict path's FAILURE branch (silent-failure audit C1) ────────────
+//
+// The happy conflict path above is already covered. What was not: what the
+// reader sees when the follow-up `fetchVaultRecord` — the read whose ENTIRE
+// job is to show them the server's current value — fails. That was an empty
+// catch, and the render it produced was the worst available one.
+
+function conflictError() {
+  return new KnowledgeRecordConflictError(
+    {
+      error: 'changed on disk',
+      code: 'knowledge_version_conflict',
+      path: 'CRM/Companies/Acme Ltd.md',
+      expected_version: 'sha256:aaa',
+      actual_version: 'sha256:fresh',
+    },
+    JSON.stringify({ error: 'conflict' }),
+  )
+}
+
+describe('RecordFieldEditor — the post-conflict re-read fails', () => {
+  it('states the read failed instead of showing the pre-edit value under a "this changed" banner', async () => {
+    mockedWrite.mockRejectedValue(conflictError())
+    mockedFetch.mockRejectedValue(new Error('network down'))
+
+    render(<TablePart part={tablePart()} rows={[makeRow()]} editContext={EDIT_CONTEXT} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit notes' }))
+    const input = screen.getByTestId('viewpart-cell-editor-text')
+    fireEvent.change(input, { target: { value: 'my local edit' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(mockedFetch).toHaveBeenCalledTimes(1))
+
+    // 1. The failure is VISIBLE. Previously: nothing at all — no error
+    //    element, no role=alert, no console entry.
+    const err = await screen.findByTestId('viewpart-cell-error')
+    expect(err.textContent ?? '').toMatch(/could not be read/i)
+    // …and it names the real underlying cause too, not just the situation.
+    expect(err.textContent ?? '').toContain('network down')
+
+    // 2. The conflict banner is NOT up. Its claim is "here is the server's
+    //    current value", and with no successful re-read there is no such
+    //    value — showing it beside the reader's own pre-edit copy asserted
+    //    something false.
+    expect(screen.queryByTestId('viewpart-cell-conflict')).not.toBeInTheDocument()
+    expect(screen.queryByText('This changed while you were editing.')).not.toBeInTheDocument()
+  })
+
+  it('positive control — a re-read that SUCCEEDS still shows the conflict banner with the SERVER value', async () => {
+    mockedWrite.mockRejectedValue(conflictError())
+    mockedFetch.mockResolvedValue(
+      vaultRecord({
+        version_token: 'sha256:fresh',
+        properties: [{ property: 'notes', values: [{ type: 'text', text: 'the other writer value' }] }],
+      }),
+    )
+
+    render(<TablePart part={tablePart()} rows={[makeRow()]} editContext={EDIT_CONTEXT} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Edit notes' }))
+    const input = screen.getByTestId('viewpart-cell-editor-text')
+    fireEvent.change(input, { target: { value: 'my local edit' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    const banner = await screen.findByTestId('viewpart-cell-conflict')
+    expect(banner.textContent).toContain('This changed while you were editing.')
+    // The SERVER's value, not the pre-edit one and not the local edit.
+    expect(banner.textContent).toContain('the other writer value')
+    expect(banner.textContent).not.toContain('Introduced via referral')
+    expect(screen.queryByTestId('viewpart-cell-error')).not.toBeInTheDocument()
+  })
+
+  it('after a failed re-read the next write is REFUSED locally — the stale token never reaches the server again', async () => {
+    mockedWrite.mockRejectedValue(conflictError())
+    mockedFetch.mockRejectedValue(new Error('network down'))
+
+    render(<TablePart part={tablePart()} rows={[makeRow()]} editContext={EDIT_CONTEXT} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Edit notes' }))
+    const input = screen.getByTestId('viewpart-cell-editor-text')
+    fireEvent.change(input, { target: { value: 'my local edit' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await screen.findByTestId('viewpart-cell-error')
+
+    // Reopen and try again. The old behaviour re-sent `sha256:aaa` forever,
+    // 409ing every time under the same unexplained banner.
+    fireEvent.click(screen.getByRole('button', { name: 'Edit notes' }))
+    const again = screen.getByTestId('viewpart-cell-editor-text')
+    fireEvent.change(again, { target: { value: 'second attempt' } })
+    fireEvent.keyDown(again, { key: 'Enter' })
+
+    await waitFor(() => expect(screen.getByTestId('viewpart-cell-error').textContent ?? '').toMatch(/version/i))
+    // Still exactly ONE write: the second never left the browser.
+    expect(mockedWrite).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ── A 200 that carries no version_token (silent-failure audit H1) ───────────
+
+describe('RecordFieldEditor — a successful write whose response omits version_token', () => {
+  const TOKENLESS = {
+    id: 'CO-0142',
+    type: 'company',
+    path: 'CRM/Companies/Acme Ltd.md',
+    title: 'Acme Ltd',
+    properties: [{ property: 'notes', values: [{ type: 'text', text: 'saved value' }] }],
+  } as VaultRecord
+
+  it('still reports the write upward (the only thing that invalidates caches) and states the anomaly', async () => {
+    const onFieldWritten = vi.fn()
+    mockedWrite.mockResolvedValue(TOKENLESS)
+
+    render(<TablePart part={tablePart()} rows={[makeRow()]} editContext={{ ...EDIT_CONTEXT, onFieldWritten }} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Edit notes' }))
+    const input = screen.getByTestId('viewpart-cell-editor-text')
+    fireEvent.change(input, { target: { value: 'saved value' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(mockedWrite).toHaveBeenCalledTimes(1))
+    await screen.findByText('saved value')
+
+    // 1. The callback FIRED. It used to sit inside `if (version_token !==
+    //    undefined)`, so no cache was invalidated and a second embed of the
+    //    same view kept showing the old value indefinitely.
+    expect(onFieldWritten).toHaveBeenCalledTimes(1)
+    expect(onFieldWritten.mock.calls[0][0]).toMatchObject({
+      path: 'CRM/Companies/Acme Ltd.md',
+      recordId: 'CO-0142',
+      property: 'notes',
+      value: 'saved value',
+      versionToken: undefined,
+    })
+
+    // 2. The anomaly is stated, not rendered as a clean success.
+    expect((await screen.findByTestId('viewpart-cell-error')).textContent ?? '').toMatch(
+      /version could not be confirmed/i,
+    )
+  })
+
+  it('and the next edit is refused locally rather than re-sending the pre-write token', async () => {
+    mockedWrite.mockResolvedValue(TOKENLESS)
+
+    render(<TablePart part={tablePart()} rows={[makeRow()]} editContext={EDIT_CONTEXT} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Edit notes' }))
+    const first = screen.getByTestId('viewpart-cell-editor-text')
+    fireEvent.change(first, { target: { value: 'saved value' } })
+    fireEvent.keyDown(first, { key: 'Enter' })
+    await waitFor(() => expect(mockedWrite).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit notes' }))
+    const second = screen.getByTestId('viewpart-cell-editor-text')
+    fireEvent.change(second, { target: { value: 'second edit' } })
+    fireEvent.keyDown(second, { key: 'Enter' })
+
+    // No second call at all. Previously call #2 carried `sha256:aaa`, the
+    // PRE-write token, and 409'd.
+    await waitFor(() => expect(screen.getByTestId('viewpart-cell-error').textContent ?? '').toMatch(/version/i))
+    expect(mockedWrite).toHaveBeenCalledTimes(1)
+  })
+
+  it('positive control — a response WITH a token reports it upward and lets the next edit through carrying the NEW token', async () => {
+    const onFieldWritten = vi.fn()
+    mockedWrite.mockResolvedValue(
+      vaultRecord({
+        version_token: 'sha256:bbb',
+        properties: [{ property: 'notes', values: [{ type: 'text', text: 'saved value' }] }],
+      }),
+    )
+
+    render(<TablePart part={tablePart()} rows={[makeRow()]} editContext={{ ...EDIT_CONTEXT, onFieldWritten }} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Edit notes' }))
+    const first = screen.getByTestId('viewpart-cell-editor-text')
+    fireEvent.change(first, { target: { value: 'saved value' } })
+    fireEvent.keyDown(first, { key: 'Enter' })
+    await waitFor(() => expect(mockedWrite).toHaveBeenCalledTimes(1))
+
+    expect(onFieldWritten).toHaveBeenCalledWith(expect.objectContaining({ versionToken: 'sha256:bbb' }))
+    expect(screen.queryByTestId('viewpart-cell-error')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit notes' }))
+    const second = screen.getByTestId('viewpart-cell-editor-text')
+    fireEvent.change(second, { target: { value: 'second edit' } })
+    fireEvent.keyDown(second, { key: 'Enter' })
+    await waitFor(() => expect(mockedWrite).toHaveBeenCalledTimes(2))
+    expect(mockedWrite.mock.calls[1][1]).toMatchObject({ version_token: 'sha256:bbb' })
+  })
+})
+
+// ── EMB-089: a record's title and path are never editable ───────────────────
+
+describe('RecordFieldEditor — title and path are never editable (EMB-089)', () => {
+  it('renders the row title as plain text with no editor, while an ordinary property in the SAME row does get one', () => {
+    // The structural guarantee is that `file.name` has no entry in
+    // `row.cells`, so no VaultFindCell is ever constructed for it — exactly
+    // the kind of guarantee a refactor removes silently, and it had no test.
+    // Asserted against BEHAVIOUR (what renders), not internals, so it
+    // survives `isEditableCell` becoming a real type guard.
+    render(<TablePart part={tablePart()} rows={[makeRow()]} editContext={EDIT_CONTEXT} />)
+
+    // The title IS displayed…
+    expect(screen.getByText('Acme Ltd')).toBeInTheDocument()
+    // …and carries no editor of any kind.
+    expect(screen.queryByRole('button', { name: 'Edit file.name' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Edit title' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Edit path' })).not.toBeInTheDocument()
+
+    // Positive half, same fixture: an ordinary property DOES. Without it, a
+    // component rendering no editors anywhere would pass all three above.
+    expect(screen.getByRole('button', { name: 'Edit notes' })).toBeInTheDocument()
+    expect(screen.getByTestId('viewpart-cell-editor-enum')).toBeInTheDocument()
+  })
+
+  it('a schema that DECLARES a property named "title" gets an editor for that property — the row identity title still does not', () => {
+    const base = makeRow()
+    const row = makeRow({
+      cells: [...base.cells, cell('title', 'a declared property called title', { type: 'text' })],
+    })
+    const part: ViewResultPart = {
+      part: 'table',
+      source: { part: 'table' },
+      columns: ['file.name', 'status', 'notes', 'title'],
+    }
+    render(<TablePart part={part} rows={[row]} editContext={EDIT_CONTEXT} />)
+
+    // The row identity title still renders as text.
+    expect(screen.getByText('Acme Ltd')).toBeInTheDocument()
+    // The DECLARED property named `title` is an ordinary editable cell, and
+    // editing it addresses the PROPERTY's value, never the row's identity.
+    fireEvent.click(screen.getByRole('button', { name: 'Edit title' }))
+    expect(screen.getByTestId('viewpart-cell-editor-text')).toHaveValue('a declared property called title')
+  })
+})

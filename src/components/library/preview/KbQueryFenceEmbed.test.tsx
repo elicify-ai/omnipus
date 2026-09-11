@@ -127,3 +127,167 @@ describe('KbQueryFenceEmbed', () => {
     expect(searchVault).not.toHaveBeenCalled()
   })
 })
+
+// ── Regressions from the silent-failure audit (H6/M11, M3, M2) and the
+//    test-coverage review (I13) ─────────────────────────────────────────────
+
+describe('KbQueryFenceEmbed — states that used to render as nothing, or as a lie', () => {
+  beforeEach(() => {
+    vi.mocked(searchVault).mockReset()
+  })
+
+  it('renders ATTACHMENT hits it counts — a fence matching only attachments no longer shows "(2)" above an empty list (H6)', async () => {
+    vi.mocked(searchVault).mockResolvedValue(
+      emptyResponse({
+        attachments: [
+          { path: 'assets/spec.pdf', name: 'spec.pdf' },
+          { path: 'assets/Q3-report.xlsx', name: 'Q3-report.xlsx' },
+        ],
+      }),
+    )
+    renderEmbed('quarterly report')
+
+    const box = await screen.findByTestId('kb-query-fence-results')
+    // The count and the list AGREE. `totalHits` included attachments while
+    // the <ul> had no branch for them, so this box said "(2)" over zero rows
+    // — and, because the count was non-zero, the honest "No results" state
+    // was skipped too.
+    expect(box).toHaveTextContent('(2)')
+    expect(box.querySelectorAll('li')).toHaveLength(2)
+    // Both matches are NAMEABLE, which is the whole point.
+    expect(box).toHaveTextContent('spec.pdf')
+    expect(box).toHaveTextContent('Q3-report.xlsx')
+    expect(screen.getAllByTestId('kb-query-fence-attachment-hit')).toHaveLength(2)
+  })
+
+  it('counts and renders attachments ALONGSIDE the other kinds, so the header total matches the row count exactly', async () => {
+    vi.mocked(searchVault).mockResolvedValue(
+      emptyResponse({
+        notes: [{ path: 'notes/a.md', title: 'Landlock notes' }],
+        records: [{ path: 'records/r1.md', title: 'Sandbox record', cells: [] }],
+        views: [{ view: 'v1', label: 'Sandbox board' }],
+        attachments: [{ path: 'assets/spec.pdf', name: 'spec.pdf' }],
+      }),
+    )
+    renderEmbed()
+
+    const box = await screen.findByTestId('kb-query-fence-results')
+    expect(box).toHaveTextContent('(4)')
+    expect(box.querySelectorAll('li')).toHaveLength(4)
+  })
+
+  it('renders the incomplete-index notice AND the partial results it already holds (M3)', async () => {
+    vi.mocked(searchVault).mockResolvedValue(
+      emptyResponse({
+        complete: false,
+        complete_reason: 'index catching up',
+        notes: [{ path: 'notes/a.md', title: 'Landlock notes' }],
+        records: [{ path: 'records/r1.md', title: 'Sandbox record', cells: [] }],
+      }),
+    )
+    renderEmbed()
+
+    // The notice is up…
+    const incomplete = await screen.findByTestId('kb-query-fence-incomplete')
+    expect(incomplete).toHaveTextContent(/still indexing/i)
+
+    // …and the two real hits it already had are NOT thrown away. The early
+    // return discarded them, which is strictly less honest than "here is
+    // what we have so far, and it may be incomplete".
+    expect(screen.getByTestId('kb-query-fence-results')).toBeInTheDocument()
+    expect(screen.getByText('Landlock notes')).toBeInTheDocument()
+    expect(screen.getByText('Sandbox record')).toBeInTheDocument()
+  })
+
+  it('an INCOMPLETE answer with no hits shows only the notice — it never claims "No results", which it cannot know', async () => {
+    vi.mocked(searchVault).mockResolvedValue(emptyResponse({ complete: false }))
+    renderEmbed('nothing matched yet')
+
+    expect(await screen.findByTestId('kb-query-fence-incomplete')).toBeInTheDocument()
+    expect(screen.queryByTestId('kb-query-fence-no-results')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('kb-query-fence-results')).not.toBeInTheDocument()
+  })
+
+  it('positive control — a COMPLETE empty answer still says "No results", and shows no incomplete notice', async () => {
+    vi.mocked(searchVault).mockResolvedValue(emptyResponse())
+    renderEmbed('nothing matches this')
+
+    expect(await screen.findByTestId('kb-query-fence-no-results')).toHaveTextContent('nothing matches this')
+    expect(screen.queryByTestId('kb-query-fence-incomplete')).not.toBeInTheDocument()
+  })
+
+  it('strips [[wikilink]] notation out of a snippet — the same WL-2 defect the Library search bar fixed, same field, same engine (I13)', async () => {
+    vi.mocked(searchVault).mockResolvedValue(
+      emptyResponse({
+        notes: [
+          {
+            path: 'notes/a.md',
+            title: 'Acme Ltd',
+            // A raw byte excerpt of frontmatter, exactly as the engine
+            // returns it — brackets and all.
+            snippet: 'owner: "[[Daniel Piatkowski]]" — renewal in Q3',
+          },
+        ],
+      }),
+    )
+    renderEmbed('renewal')
+
+    const hit = await screen.findByTestId('kb-query-fence-note-hit')
+    expect(hit).toHaveTextContent('Daniel Piatkowski')
+    expect(hit.textContent ?? '').not.toContain('[[')
+    expect(hit.textContent ?? '').not.toContain(']]')
+    // Plain text, never a link: a search excerpt cannot claim a
+    // resolved/unresolved verdict.
+    expect(hit.querySelector('a')).toBeNull()
+  })
+
+  it('renders an alias-bearing wikilink in a snippet as its ALIAS, matching what the note reader would show', async () => {
+    vi.mocked(searchVault).mockResolvedValue(
+      emptyResponse({
+        notes: [{ path: 'notes/a.md', title: 'A', snippet: 'see [[CRM/Acme Ltd|Acme]] for detail' }],
+      }),
+    )
+    renderEmbed('detail')
+
+    const hit = await screen.findByTestId('kb-query-fence-note-hit')
+    expect(hit).toHaveTextContent('see Acme for detail')
+    expect(hit.textContent ?? '').not.toContain('CRM/Acme Ltd')
+  })
+})
+
+describe('KbQueryFenceEmbed — a pending-but-not-loading query renders SOMETHING (M2)', () => {
+  beforeEach(() => {
+    vi.mocked(searchVault).mockReset()
+  })
+
+  it('renders a visible waiting box when the query is paused (offline), never an invisible hole in the note', async () => {
+    // `networkMode: 'online'` is react-query's default; with the browser
+    // offline a pending query is PAUSED: isLoading false, isError false,
+    // data undefined. The old `return null` rendered the fence as nothing at
+    // all — no box, no border, no text — so a reader saw a gap where a query
+    // block used to be with no indication anything was meant to be there.
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false, networkMode: 'online' } },
+    })
+    vi.mocked(searchVault).mockReturnValue(new Promise(() => {}))
+    const onlineSpy = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+    try {
+      render(
+        <QueryClientProvider client={qc}>
+          <KbQueryFenceEmbed workspaceId="ws-1" collectionId="kb_1" query="landlock" />
+        </QueryClientProvider>,
+      )
+      // Whichever of the two non-empty states it lands in, SOMETHING with a
+      // border and words is on screen. The assertion that matters is that
+      // the component never returns null for a fence the author wrote.
+      await waitFor(() => {
+        const shown =
+          screen.queryByTestId('kb-query-fence-waiting') ?? screen.queryByTestId('kb-query-fence-loading')
+        expect(shown).not.toBeNull()
+        expect((shown?.textContent ?? '').trim().length).toBeGreaterThan(0)
+      })
+    } finally {
+      onlineSpy.mockRestore()
+    }
+  })
+})

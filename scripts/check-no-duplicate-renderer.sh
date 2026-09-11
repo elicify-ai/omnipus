@@ -1,12 +1,25 @@
 #!/usr/bin/env bash
 # check-no-duplicate-renderer.sh
 #
-# Regression guard for ADR-083 (embedded-content spec, Step 6 / EMB-027):
-# "There MUST be exactly one renderer per kind, shared between the
-# full-screen pane and the inline embed. No inline-only copy may be
-# created." `LibraryAudioPreview` used to be a private, un-exported
-# function INSIDE `src/components/library/LibraryPreviewPane.tsx` — it was
-# extracted into its own module, `src/components/library/preview/
+# Regression guard for ONE component, `LibraryAudioPreview` — the single
+# EMB-027 regression this repo has actually hit.
+#
+# The rule it is derived from is broader than what this script enforces.
+# ADR-083 (embedded-content spec, Step 6 / EMB-027) says: "There MUST be
+# exactly one renderer per kind, shared between the full-screen pane and the
+# inline embed. No inline-only copy may be created." This script does NOT
+# check that invariant across kinds: a duplicate `LibraryVideoPreview`,
+# `LibraryImagePreview` or `LibraryPdfPreview` introduced by a bad merge
+# passes it silently. Read the name `check-no-duplicate-renderer.sh` as "the
+# duplicate-renderer check we have", not "the duplicate-renderer check".
+# Extending it means either a second invocation with a different
+# CANONICAL/pattern pair, or generalising this script to take them as
+# arguments; `check-no-duplicate-renderer.test.sh` (which only ever plants
+# and removes a `LibraryAudioPreview` duplicate) would need the same.
+#
+# The specific history: `LibraryAudioPreview` used to be a private,
+# un-exported function INSIDE `src/components/library/LibraryPreviewPane.tsx`
+# — it was extracted into its own module, `src/components/library/preview/
 # LibraryAudioPreview.tsx`, specifically so the inline embed
 # (`KbAudioEmbedMount.tsx`) could mount the SAME definition the pane uses.
 #
@@ -64,8 +77,12 @@ if [ ! -f "$CANONICAL" ]; then
   exit 2
 fi
 
-# `-l` lists matching FILES only (never prints the line, so this script's
-# own doc comment above — which names the function — cannot match itself).
+# This script cannot match its OWN doc comment (which names the function)
+# because the scan is confined to `src/` with `--include='*.ts' --include=
+# '*.tsx'`, and this file is `scripts/*.sh`. `-l` is here only to print
+# FILENAMES rather than lines, which is what the loop below consumes — it is
+# not what prevents self-matching, and an earlier version of this comment
+# claimed it was.
 MATCHES=$(grep -rlE '^(export )?function LibraryAudioPreview\(|^(export )?const LibraryAudioPreview =' \
   --include='*.ts' --include='*.tsx' \
   src/ 2>/dev/null || true)

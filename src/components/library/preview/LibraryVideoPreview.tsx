@@ -19,9 +19,11 @@
 // apply one to, so a stray size segment on a video embed is inert by
 // construction rather than merely "ignored by convention".
 
+import { useState } from 'react'
 import { libraryDownloadUrl } from '@/lib/api'
 import type { LibraryEntry } from '@/lib/api'
 import type { LibraryPreviewVariant } from './libraryPreviewVariant'
+import { MediaUnplayableNotice, mediaPreviewContainerClass } from './mediaPreviewStates'
 
 interface LibraryVideoPreviewProps {
   workspaceId: string
@@ -31,21 +33,31 @@ interface LibraryVideoPreviewProps {
 
 export function LibraryVideoPreview({ workspaceId, entry, variant = 'pane' }: LibraryVideoPreviewProps) {
   const src = libraryDownloadUrl(workspaceId, entry.path)
-  const inline = variant === 'inline'
+  // See mediaPreviewStates.tsx's header: `.mkv` and `.avi` both classify as
+  // this kind and neither plays in every browser, so an undecodable source
+  // is the ordinary case, not the exotic one. Without this, the reader gets a
+  // black rectangle inside their note that does nothing when pressed.
+  const [failed, setFailed] = useState(false)
   return (
     <div
-      className={
-        inline
-          ? 'flex items-center justify-center'
-          : 'flex flex-1 min-h-0 items-center justify-center overflow-auto bg-[var(--color-surface-0)] p-4'
-      }
+      className={mediaPreviewContainerClass(variant)}
       data-testid="library-video-preview"
       data-variant={variant}
     >
-      { }
-      <video controls src={src} className="max-h-full max-w-full rounded-md">
-        Your browser does not support playing this video. Use Download instead.
-      </video>
+      {failed ? (
+        <MediaUnplayableNotice kind="video" name={entry.path} href={src} />
+      ) : (
+        /* No <track>: a workspace video file carries no caption track to attach. */
+        <video
+          controls
+          src={src}
+          onError={() => setFailed(true)}
+          className="max-h-full max-w-full rounded-md"
+          data-testid="library-video-element"
+        >
+          Your browser does not support playing this video. Use Download instead.
+        </video>
+      )}
     </div>
   )
 }

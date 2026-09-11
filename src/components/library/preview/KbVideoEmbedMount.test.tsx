@@ -28,7 +28,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
-    libraryDownloadUrl: (wsId: string, path: string) => `/api/v1/library/${wsId}/download?path=${path}`,
     fetchLibraryEntries: vi.fn(),
   }
 })
@@ -52,7 +51,7 @@ describe('KbVideoEmbedMount', () => {
     const video = await screen.findByTestId('library-video-preview')
     expect(video.querySelector('video')).toHaveAttribute(
       'src',
-      '/api/v1/library/ws-1/download?path=video/clip.mp4',
+      '/api/v1/library/ws-1/download?path=video%2Fclip.mp4',
     )
     expect(screen.queryByTestId('kb-embed-mount-loading')).not.toBeInTheDocument()
     expect(screen.queryByTestId('kb-embed-mount-error')).not.toBeInTheDocument()
@@ -66,8 +65,8 @@ describe('KbVideoEmbedMount', () => {
     expect(screen.queryByTestId('library-video-preview')).not.toBeInTheDocument()
   })
 
-  it('shows a visible, named error and a working retry when the entry cannot be found', async () => {
-    vi.mocked(fetchLibraryEntries).mockResolvedValue([])
+  it('shows a visible, named error and a working retry when the listing request FAILS', async () => {
+    vi.mocked(fetchLibraryEntries).mockRejectedValue(new Error('listing failed'))
     renderMount()
 
     const error = await screen.findByTestId('kb-embed-mount-error')
@@ -77,6 +76,19 @@ describe('KbVideoEmbedMount', () => {
     vi.mocked(fetchLibraryEntries).mockResolvedValueOnce([ENTRY])
     error.querySelector('button')?.click()
     await screen.findByTestId('library-video-preview')
+  })
+
+  // Silent-failure audit M1: a listing that SUCCEEDED without this file is a
+  // rename/delete, not a failed request — its own words, and no Retry that
+  // cannot work.
+  it('shows the distinct "missing" state, with no Retry, when the listing succeeded without the file', async () => {
+    vi.mocked(fetchLibraryEntries).mockResolvedValue([{ ...ENTRY, name: 'other.mp4', path: 'video/other.mp4' }])
+    renderMount()
+
+    const missing = await screen.findByTestId('kb-embed-mount-missing')
+    expect(missing.querySelector('button')).toBeNull()
+    expect(screen.queryByTestId('kb-embed-mount-error')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('library-video-preview')).not.toBeInTheDocument()
   })
 
   it('shows the SAME visible error when the directory listing request itself fails', async () => {

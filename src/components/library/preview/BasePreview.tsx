@@ -478,11 +478,28 @@ export function BasePreview({
     return nodes
   }, [collectionLinkQueries])
 
+  // WL-1's fix is only as good as the evidence behind it, and every one of
+  // these queries is `retry: false`. A failed one contributes no edges and,
+  // until now, said nothing — so the resolver silently dropped back to the
+  // old row-title-match tier that can only answer `resolved` or `unknown`,
+  // and every relation cell went white again. That is EXACTLY the symptom
+  // WL-1 was written to fix, reappearing with nothing on screen to show the
+  // fix had stopped working. Counted here and stated once at page level
+  // below — the same "handled ONE page-level statement, never per embed"
+  // treatment `graph_unavailable` already gets in the note reader.
+  const failedCollectionLinkQueries = useMemo(
+    () => collectionLinkQueries.filter((q) => q.isError).length,
+    [collectionLinkQueries],
+  )
+
   // ADR-083 EMB-048/WL-1: an embed's own `resolveWikilink` (the note reader's
-  // real link graph) takes over completely when supplied — never merged with
-  // the row-scoped fallback below, which can only ever answer `resolved` or
-  // `unknown` and therefore renders a genuinely broken link as merely
-  // unverified.
+  // real link graph) takes over completely when supplied. The row-scoped
+  // fallback below is no longer resolved-or-unknown-only: it now checks each
+  // loaded row's own link-graph edges FIRST and can return a real
+  // `unresolved` verdict from that evidence. Only rows beyond
+  // `COLLECTION_LINK_ROW_QUERY_CAP` — and cells whose graph query failed,
+  // which the banner above the table reports — fall through to the older
+  // guess, which renders a genuinely broken link as merely unverified.
   const resolveWikilink = useMemo(() => {
     if (embed?.resolveWikilink) return embed.resolveWikilink
     if (!result) return undefined
@@ -695,6 +712,37 @@ export function BasePreview({
         </div>
       )}
 
+      {/* WL-1 honesty surface. ONE page-level statement when any of the
+          per-row link-graph queries failed — never one marker per cell, which
+          is how the note reader treats `graph_unavailable` too. Without it,
+          the whole collection-wide resolver degrades back to its pre-WL-1
+          behaviour (relation cells rendering white/unverified) with nothing
+          on screen to say the evidence never arrived; the queries are
+          `retry: false`, so a single blip is enough to trigger it. */}
+      {failedCollectionLinkQueries > 0 && (
+        <div
+          data-testid="base-preview-link-graph-degraded"
+          className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-warning)]/10 px-3 py-2 text-[11px] leading-snug text-[var(--color-warning)]"
+        >
+          <span>
+            Link checking is incomplete for {failedCollectionLinkQueries}{' '}
+            {failedCollectionLinkQueries === 1 ? 'row' : 'rows'} — their links show as unverified
+            rather than confirmed broken.
+          </span>
+          <button
+            type="button"
+            tabIndex={0}
+            onClick={() => {
+              for (const q of collectionLinkQueries) if (q.isError) void q.refetch()
+            }}
+            data-testid="base-preview-link-graph-retry"
+            className="shrink-0 rounded border border-current px-2 py-0.5 text-[10px] uppercase tracking-wide hover:opacity-80"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* Body: the selected view's evaluated result. */}
       <div className="flex-1 overflow-auto bg-[var(--color-surface-0)]">
         {resultQueued ? (
@@ -739,8 +787,62 @@ export function BasePreview({
             // is now stale. Invalidate rather than patching in place: the server
             // owns derived columns, and a locally-patched row would show a stale
             // computed value beside a fresh one.
-            onFieldWritten={() => {
-              void queryClient.invalidateQueries({ queryKey: resultQueryKey, exact: true })
+            //
+            // ADR-083 §4.5 names FOUR caches, and this used to invalidate one
+            // — the exact view key that hosted the edit, with `exact: true`.
+            // Two embeds of the SAME view share that key, so the headline
+            // scenario worked and hid the rest: a different saved view over
+            // the same collection (the dashboard shape this ADR exists for)
+            // kept showing the old value indefinitely, and the written note's
+            // own body, outline and backlink rail kept pre-write frontmatter.
+            // The two doc comments upstream described all four, which made it
+            // worse than a plain omission — the next reader would believe it
+            // was handled.
+            onFieldWritten={(written) => {
+              // (1) Every view-result query for THIS COLLECTION, not one
+              //     view. Prefix match, deliberately without `exact`: the key
+              //     shape is [...,'view-result', collectionId, viewName], so
+              //     dropping the view name matches every view over it. Still
+              //     scoped to the collection — §4.5 is explicit that a
+              //     blanket sweep would re-evaluate every mounted view on the
+              //     page for a one-field edit.
+              void queryClient.invalidateQueries({
+                queryKey: ['library', workspaceId, 'knowledge', 'view-result', collectionId],
+              })
+              // (2)-(4) The WRITTEN NOTE's own per-note caches. `written.path`
+              //     was previously discarded; it is the only thing that makes
+              //     this addressable without a new wire field. It is
+              //     COLLECTION-relative (it comes straight off `VaultFindRow.
+              //     path`, the same value `collectionLinkRowPaths` feeds to
+              //     the graph endpoint), so the two WORKSPACE-keyed caches go
+              //     through `toWorkspacePath` and the collection-keyed graph
+              //     does not. Per-note, never collection-wide — §4.5 again: a
+              //     collection-wide sweep would refetch every open note for a
+              //     one-field edit.
+              const collectionRelPath = written.path
+              const workspacePath = toWorkspacePath(collectionRelPath)
+              void queryClient.invalidateQueries({
+                queryKey: libraryQueryKeys.content(workspaceId, workspacePath),
+                exact: true,
+              })
+              void queryClient.invalidateQueries({
+                queryKey: ['library', 'knowledge', 'outline', workspaceId, workspacePath],
+                exact: true,
+              })
+              // The links graph is cached under TWO key shapes today — the
+              // note reader's (`KnowledgeNoteView`) and this pane's own row
+              // queries above. Both are invalidated because both can be
+              // holding the pre-write answer for this note; unifying the two
+              // shapes is a separate change and skipping either here would
+              // leave a real stale rail behind.
+              void queryClient.invalidateQueries({
+                queryKey: ['library', 'knowledge', 'graph', 'links', workspaceId, collectionId, collectionRelPath],
+                exact: true,
+              })
+              void queryClient.invalidateQueries({
+                queryKey: ['library', workspaceId, 'knowledge', 'graph', 'links', collectionId, collectionRelPath],
+                exact: true,
+              })
             }}
           />
         ) : null}
