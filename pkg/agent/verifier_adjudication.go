@@ -26,12 +26,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
@@ -137,22 +140,67 @@ func currentVerifierSessionRegistry() VerifierSessionPublisher {
 // scheme (ADR-052 FR-037, F1: a prior version of this file constructed the
 // prefix ad hoc here while plan_engine.go's Stop fan-out enumerated raw ids,
 // so Stop never found a live verifier session at all).
+// SCOPE IS CONSULTED FIRST (review finding 3, 2026-09-11). This used to be a
+// flat TaskID -> PlanID -> goal ladder with no reference to in.Scope at all,
+// which was correct only while the three ids were mutually exclusive. ADR-086
+// C-08 ended that: validate() now LEGALISES a goal-scope input carrying
+// TaskID (a running task's own goal), so the flat ladder registered a
+// task-owned goal's verifier under "task:<id>" while `/goal clear`
+// (goal_loop.go's cancelGoalVerifierIfAny) and the duplicate-dispatch guard
+// (goal_triggers.go's goalAdjudicationInFlight) both looked up
+// verifierUnitForGoal(sessionID). Two consequences, both silent: `/goal
+// clear` could never cancel that verifier, and the in-flight guard missed, so
+// a second concurrent adjudication for the same goal was admitted.
+//
+// WHICH id the goal arm keys on also changed, and deliberately: it is the
+// ACTIVE CHAT SESSION id (GoalSessionID), because that is the id BOTH
+// lookups pass — they are reached from a chat session, not from a goal
+// record, and neither is in a position to resolve a GoalID. Keying the
+// registration on GoalID (C-08's original intent) while the lookups key on
+// the session id is the same disagreement in a second place. GoalID remains
+// the fallback for a goal-scope caller that has only that.
+//
+// The scope-less ladder is preserved verbatim as the default arm: several
+// callers (and the pinned tests) construct a JudgeCriteriaInput with ids but
+// no Scope, and their keys must not move.
 func verifierUnitID(in JudgeCriteriaInput) string {
+	switch in.Scope {
+	case task.VerdictScopeTask:
+		if in.TaskID != "" {
+			return verifierUnitForTask(in.TaskID)
+		}
+	case task.VerdictScopePlan:
+		if in.PlanID != "" {
+			return verifierUnitForPlan(in.PlanID)
+		}
+	case task.VerdictScopeGoal:
+		// The collision-free /goal unit key (FR-037): /goal clear and the
+		// in-flight guard look exactly this up. TaskID is IGNORED here even
+		// when set — a task-owned goal is still a goal (ADR-086: task goals
+		// and chat goals behave identically), and its own task-scope
+		// adjudication keys on "task:<id>" separately.
+		if in.GoalSessionID != "" {
+			return verifierUnitForGoal(in.GoalSessionID)
+		}
+		if in.GoalID != "" {
+			return verifierUnitForGoal(in.GoalID)
+		}
+		return "goal-agent:" + in.AssigneeAgentID
+	}
+
+	// No (or unrecognised) Scope: the historical precedence ladder.
 	if in.TaskID != "" {
 		return verifierUnitForTask(in.TaskID)
 	}
 	if in.PlanID != "" {
 		return verifierUnitForPlan(in.PlanID)
 	}
-	if in.GoalSessionID != "" {
-		// The collision-free /goal unit key (FR-037): the chat session that
-		// carries the goal condition. /goal clear looks this up to cancel an
-		// in-flight goal verifier.
-		return verifierUnitForGoal(in.GoalSessionID)
+	if id := in.goalScopeCorrelatingID(); id != "" {
+		return verifierUnitForGoal(id)
 	}
 	// Defensive fallback for a goal-scope caller that somehow passed no
-	// session id — a per-agent key so the verifier still gets SOME registry
-	// entry rather than none.
+	// correlating id — a per-agent key so the verifier still gets SOME
+	// registry entry rather than none.
 	return "goal-agent:" + in.AssigneeAgentID
 }
 
@@ -338,7 +386,12 @@ func (al *AgentLoop) sessionWindowText(store *session.UnifiedStore, sessionID st
 		logger.WarnCF("agent", "verifier: could not read session for window feed", fields)
 		return ""
 	}
-	return renderVerifierWindowText(entries, budgetTokens)
+	// FR-105: redact tier-1 tool-call parameters/errors through the SAME
+	// RegisterSensitiveValues path every other tool-result-derived text the
+	// Judge sees already goes through (judge.go's evidenceStore() redact
+	// closure) — this feed puts recipients/tokens/paths in front of a model
+	// that did not previously see them.
+	return renderVerifierWindowText(entries, budgetTokens, withTierOneRedact(al.tierOneRedactFn()))
 }
 
 // goalSessionWindowText renders the transcript window for a chat /goal
@@ -443,22 +496,85 @@ func (al *AgentLoop) taskSessionWindowText(taskID, assigneeAgentID string) strin
 // resolves that same class of criterion deterministically, with no LLM
 // verifier dispatch at all — this rendering exists for whatever a prose
 // criterion's own window still needs.
-func renderTranscriptEntriesForWindow(entries []session.TranscriptEntry) []providers.Message {
-	out := make([]providers.Message, 0, len(entries))
+//
+// FR-105/FR-106 (ADR-084 revision 9, D14, wave E10): tool calls now render
+// as "{tool, parameters, status, error}" (judge_evidence_tiers.go's
+// formatTierOneToolCall), durable fields only, bounded and optionally
+// redacted per opts — replacing the old name+status-only summary (C26's
+// defect: "the change is at renderTranscriptEntriesForWindow"). Signature
+// stays backward-compatible (opts is a variadic tail) because
+// verifier_adjudication_test.go — E9's write-set, not this wave's — calls
+// this function directly with the old one-argument form; every such call
+// keeps compiling and keeps its old behaviour (redact defaults to
+// identity, below the 32 KiB drop threshold every existing test fixture
+// is far under).
+func renderTranscriptEntriesForWindow(
+	entries []session.TranscriptEntry, opts ...tierOneRenderOption,
+) []providers.Message {
+	var ropts tierOneRenderOptions
+	for _, opt := range opts {
+		opt(&ropts)
+	}
+	redact := ropts.redact
+
+	type item struct {
+		msg      providers.Message
+		toolCall bool
+		bytes    int
+	}
+	items := make([]item, 0, len(entries))
 	for _, e := range entries {
 		if strings.TrimSpace(e.Content) != "" {
 			role := e.Role
 			if role == "" {
 				role = "assistant"
 			}
-			out = append(out, providers.Message{Role: role, Content: e.Content})
+			items = append(items, item{msg: providers.Message{Role: role, Content: e.Content}})
 		}
 		for _, tc := range e.ToolCalls {
-			out = append(out, providers.Message{
-				Role:    "assistant",
-				Content: fmt.Sprintf("[tool_call] %s -> %s", tc.Tool, tc.Status),
+			content := formatTierOneToolCall(tc, redact)
+			items = append(items, item{
+				msg:      providers.Message{Role: "assistant", Content: content},
+				toolCall: true,
+				bytes:    len(content),
 			})
 		}
+	}
+
+	// FR-105's 32 KiB whole-tier-1-block bound: drop the OLDEST tool-call
+	// summaries first — never a narration/content message — until the
+	// surviving tool-call bytes fit, recording how many were dropped.
+	total := 0
+	for _, it := range items {
+		if it.toolCall {
+			total += it.bytes
+		}
+	}
+	dropped := 0
+	if total > tierOneBlockByteLimit {
+		kept := make([]item, 0, len(items))
+		for _, it := range items {
+			if it.toolCall && total > tierOneBlockByteLimit {
+				total -= it.bytes
+				dropped++
+				continue
+			}
+			kept = append(kept, it)
+		}
+		items = kept
+	}
+
+	out := make([]providers.Message, 0, len(items)+1)
+	if dropped > 0 {
+		out = append(out, providers.Message{
+			Role: "assistant",
+			Content: fmt.Sprintf(
+				"[tier-1 evidence] %d earlier tool-call summaries dropped — the 32 KiB tier-1 "+
+					"evidence block cap was reached (JUDGE-FR-105)", dropped),
+		})
+	}
+	for _, it := range items {
+		out = append(out, it.msg)
 	}
 	return out
 }
@@ -470,8 +586,10 @@ func renderTranscriptEntriesForWindow(entries []session.TranscriptEntry) []provi
 // older is dropped. Renders the kept tail as plain "role: content" lines —
 // this is prompt TEXT for the verifier's user message, not a message list
 // sent to a provider directly.
-func renderVerifierWindowText(entries []session.TranscriptEntry, budgetTokens int) string {
-	msgs := renderTranscriptEntriesForWindow(entries)
+func renderVerifierWindowText(
+	entries []session.TranscriptEntry, budgetTokens int, opts ...tierOneRenderOption,
+) string {
+	msgs := renderTranscriptEntriesForWindow(entries, opts...)
 	if len(msgs) == 0 {
 		return ""
 	}
@@ -502,11 +620,17 @@ func renderVerifierWindowText(entries []session.TranscriptEntry, budgetTokens in
 // turn dispatched for in is authorized to read via the inspect_session tool
 // (tools.WithVerifierSessionScope/VerifierSessionScopeAllows,
 // pkg/tools/base.go) — engine-set, never client-suppliable. Per scope: task
-// -> that task's own session only; plan -> that plan's member sessions only
-// (GS-04: no single "plan session" exists); goal -> the chat session
-// carrying the goal condition only. Returns nil (authorizes nothing —
-// VerifierSessionScopeAllows fails closed on an unset/empty scope) when the
-// relevant id(s) cannot be resolved.
+// -> that task's own session PLUS every descendant session at any depth
+// (D1a, FR-010/FR-011); plan -> each member session PLUS its own
+// descendants (GS-04: no single "plan session" exists; FR-012); goal -> the
+// chat session carrying the goal condition PLUS its descendants (FR-010).
+// Delegated work (a subagent turn a worker spawned) writes to its OWN child
+// session (ADR-057 D1/W11), so without the descendant walk a criterion
+// whose real evidence lives in delegated work could never be reached by
+// inspect_session at all — see goalDescendantSessionIDs' own doc comment
+// (C4/D1a) for the durable, transitive walker this reuses unmodified.
+// Returns nil (authorizes nothing — VerifierSessionScopeAllows fails closed
+// on an unset/empty scope) when the relevant root id(s) cannot be resolved.
 func (al *AgentLoop) resolveVerifierSessionScope(in JudgeCriteriaInput) []string {
 	switch in.Scope {
 	case task.VerdictScopeTask:
@@ -518,7 +642,7 @@ func (al *AgentLoop) resolveVerifierSessionScope(in JudgeCriteriaInput) []string
 		if err != nil || t == nil || t.SessionID == "" {
 			return nil
 		}
-		return []string{t.SessionID}
+		return al.scopeWithDescendants(in.AssigneeAgentID, []string{t.SessionID})
 	case task.VerdictScopePlan:
 		ts := GetTaskStore(al)
 		if ts == nil || in.PlanID == "" {
@@ -530,21 +654,93 @@ func (al *AgentLoop) resolveVerifierSessionScope(in JudgeCriteriaInput) []string
 				map[string]any{"plan_id": in.PlanID, "error": err.Error()})
 			return nil
 		}
-		var sessions []string
+		var roots []string
 		for i := range members {
 			if members[i].SessionID != "" {
-				sessions = append(sessions, members[i].SessionID)
+				roots = append(roots, members[i].SessionID)
 			}
 		}
-		return sessions
+		return al.scopeWithDescendants(in.AssigneeAgentID, roots)
 	case task.VerdictScopeGoal:
 		if in.GoalSessionID == "" {
 			return nil
 		}
-		return []string{in.GoalSessionID}
+		return al.scopeWithDescendants(in.AssigneeAgentID, []string{in.GoalSessionID})
 	default:
 		return nil
 	}
+}
+
+// allSessionsForDescendantWalk enumerates every session this AgentLoop can
+// see, from BOTH the shared store (where live chat/task/goal sessions are
+// written today) AND the assignee agent's own legacy per-agent store — they
+// are genuinely TWO DIFFERENT *session.UnifiedStore instances (GetAgentStore's
+// own doc comment: "kept for legacy per-agent session access"; GetSessionStore's:
+// "the shared UnifiedStore for new sessions"), not a fallback pair where one
+// subsumes the other. A parent/child edge written under one store's session
+// directory is invisible to the other's ListSessions, so the descendant
+// walk (D1a) must see the UNION or it silently misses real delegated-work
+// sessions — the same 2026-09-06 UAT defect class goalSessionWindowText's
+// STORE RESOLUTION note already documents for a single-session read; this is
+// its list-enumeration counterpart. A read error on either store degrades
+// that store's contribution to empty (WARN-logged) rather than failing the
+// whole walk.
+func (al *AgentLoop) allSessionsForDescendantWalk(assigneeAgentID string) []*session.UnifiedMeta {
+	var all []*session.UnifiedMeta
+	seen := make(map[string]bool)
+	add := func(store *session.UnifiedStore, label string) {
+		if store == nil {
+			return
+		}
+		metas, err := store.ListSessions()
+		if err != nil {
+			logger.WarnCF("agent",
+				"verifier: could not list sessions for inspect_session descendant scope",
+				map[string]any{"store": label, "error": err.Error()})
+			return
+		}
+		for _, m := range metas {
+			if m == nil || seen[m.ID] {
+				continue
+			}
+			seen[m.ID] = true
+			all = append(all, m)
+		}
+	}
+	add(al.GetSessionStore(), "shared")
+	if assigneeAgentID != "" {
+		add(al.GetAgentStore(assigneeAgentID), "per-agent")
+	}
+	return all
+}
+
+// scopeWithDescendants resolves rootIDs plus every descendant session at
+// any depth (D1a, FR-010–FR-012), via the SAME durable, transitive walker
+// goal_triggers.go's quiet-goal sweep already uses (goalDescendantSessionIDs,
+// C4) — no new pkg/session surface, no second walker implementation.
+//
+// FR-013: neither store being resolvable, or both erroring, degrades the
+// scope to rootIDs ALONE (never wider than what was asked for); it never
+// fails the adjudication itself — inspect_session simply denies anything
+// outside the narrower scope, which is the fail-closed direction (FR-014:
+// a criterion whose evidence lies outside the resolved scope must resolve
+// unmet/unable_to_verify, never met).
+func (al *AgentLoop) scopeWithDescendants(assigneeAgentID string, rootIDs []string) []string {
+	all := al.allSessionsForDescendantWalk(assigneeAgentID)
+	seen := make(map[string]bool, len(rootIDs))
+	var out []string
+	for _, root := range rootIDs {
+		if root == "" {
+			continue
+		}
+		for _, id := range goalDescendantSessionIDs(all, root) {
+			if !seen[id] {
+				seen[id] = true
+				out = append(out, id)
+			}
+		}
+	}
+	return out
 }
 
 // --- Verifier session type stamp (ADR-052 FR-036 — this wave's narrow
@@ -783,6 +979,52 @@ var unjudgeableEscalateFn = func(unitKey, criterionID string) {
 // walks the LIVE filesystem directly and never depends on any commit having
 // happened — correct from a completely unborn HEAD.
 
+// verifierEvidenceScanner builds the MIN-5 secret guard EVERY gitevidence
+// read on the Judge path must carry (review finding 6). Built per call rather
+// than cached: audit.NewSecretScanner compiles a fixed pattern set (cheap,
+// once per adjudication round) and reads the credential registry's replacer
+// LIVE, so a credential registered or rotated since the last round is covered
+// without a cache-invalidation path of our own.
+//
+// The judge path previously called gitevidence.Open(dir) with NO options at
+// all, which left Repo.scanner and Repo.redact both nil — so a file whose
+// content Commit had already refused to stage (its secret guard) was read
+// straight off disk by DiffWorkingTree, classified as an "insert", rendered
+// into the Judge's user message and sent to the external model on every
+// round. That is the wider exposure of the two, and it was the unguarded one.
+//
+// Returns nil only when the scanner cannot be constructed at all (a corrupt
+// compiled pattern set — logged at ERROR). WithSecretScanner(nil) is a
+// documented no-op, so a nil here leaves the Repo unguarded and
+// DiffWorkingTree's own fail-closed guard then refuses the read: the round
+// degrades to "no workspace diff available", never to a leaked one.
+func (al *AgentLoop) verifierEvidenceScanner() *audit.SecretScanner {
+	var (
+		scanner *audit.SecretScanner
+		err     error
+	)
+	if cfg := al.GetConfig(); cfg != nil {
+		// Passed as a concrete *strings.Replacer (never a nil one — see
+		// config.Config.SensitiveDataReplacer, which always builds a real
+		// replacer) so audit's registry layer is genuinely armed.
+		scanner, err = audit.NewSecretScanner(cfg.SensitiveDataReplacer(), nil)
+	} else {
+		// No config reachable (a bare test harness): literal nil, NOT a
+		// typed-nil *strings.Replacer — audit.SecretScanner.hasRegistry
+		// treats a typed nil as "registry present" and would deref it. The
+		// format-pattern layer (sk-…, ghp_…, JWTs, AWS keys) still applies.
+		scanner, err = audit.NewSecretScanner(nil, nil)
+	}
+	if err != nil {
+		logger.ErrorCF("agent",
+			"verifier: could not build the secret scanner for workspace diff evidence — "+
+				"the diff feed will fail closed (no diff evidence) rather than run unguarded",
+			map[string]any{"error": err.Error()})
+		return nil
+	}
+	return scanner
+}
+
 // verifierDiffBoundaryMu guards verifierDiffBoundaryHashMap.
 var verifierDiffBoundaryMu sync.Mutex //nolint:gochecknoglobals // process-wide seam, see the doc comment below.
 
@@ -858,7 +1100,10 @@ func (al *AgentLoop) resolveVerifierDiffText(in JudgeCriteriaInput) (diffText, h
 	if err != nil {
 		return "", "" // invalid workspace id — not a diff-feed concern
 	}
-	repo, err := gitevidence.Open(dir)
+	// The MIN-5 secret guard is MANDATORY on this path (review finding 6):
+	// DiffWorkingTree's output is rendered into the Judge's prompt and sent
+	// to an external model. See verifierEvidenceScanner's doc comment.
+	repo, err := gitevidence.Open(dir, gitevidence.WithSecretScanner(al.verifierEvidenceScanner()))
 	if err != nil {
 		// Nested user repo (ErrNestedRepo) or any other Open error: the git
 		// layer degrades for this workspace (MIN-6). Logged at WARN inside
@@ -938,7 +1183,11 @@ func (al *AgentLoop) resolveGoalScopedDiffEmpty(sessionID, workspaceID string) b
 	if err != nil {
 		return true // invalid workspace id — not a diff-feed concern
 	}
-	repo, err := gitevidence.Open(dir)
+	// Same mandatory guard as resolveVerifierDiffText above. This path only
+	// COUNTS changed files (it never renders a patch), but the Repo it opens
+	// must still be guarded: an unguarded Repo is one accidental
+	// DiffWorkingTree call away from the leak finding 6 describes.
+	repo, err := gitevidence.Open(dir, gitevidence.WithSecretScanner(al.verifierEvidenceScanner()))
 	if err != nil {
 		return true // nested user repo or any other Open error — degrade
 	}
@@ -1083,6 +1332,13 @@ func (al *AgentLoop) runVerifierAdjudication(
 	unitID := verifierUnitID(in)
 	registry := currentVerifierSessionRegistry()
 	sessionKey := fmt.Sprintf("agent:%s:verify:%s", string(coreagent.IDJudge), uuid.New().String())
+	// adjudicationID names THIS adjudication for the whole of its life: it is
+	// stamped on the verifier turn's ctx (JUDGE-FR-084, so every audit entry
+	// the Judge's tool calls produce carries the correlation) and reused as
+	// the investigation-log id below, so "what did the verifier open" is
+	// answerable by joining the audit log to the investigation log on one
+	// value rather than on timestamps.
+	adjudicationID := uuid.New().String()
 	// chatID is created lazily, immediately before its first use below (item
 	// 3, 7-reviewer gate) — NOT here — so a bail on ctx.Err()/Judge-not-
 	// registered/SEC-26-denied never pre-creates an on-disk verifier session
@@ -1121,6 +1377,27 @@ func (al *AgentLoop) runVerifierAdjudication(
 				"unavailable": unavailable,
 			})
 	}()
+
+	// JUDGE-FR-057/FR-057a (review finding 5): god mode floors EVERY tool at
+	// "allow" (Constraint #6's sandbox-off posture), which erases the
+	// verifier's narrow read-only surface and makes FR-058's "mcp_*": deny
+	// stamp resolve to nothing — resolveEffectivePolicyWith short-circuits on
+	// cfg.GodMode before any per-agent map is consulted. An adjudication run
+	// under that posture cannot be trusted, so it is refused BEFORE a verifier
+	// session is created and BEFORE any Judge turn runs, exactly as FR-057
+	// requires. Returned as unavailable (round NOT consumed) carrying the
+	// machine-readable "god_mode: " reason, so the operator sees a distinct,
+	// actionable state — not silence, and not a fail-closed unmet that would
+	// burn the goal's rounds for a posture problem. Deliberately NOT retried
+	// on the backoff schedule: god mode clears by operator action, not by
+	// waiting, and a retry loop would only spin.
+	if reason, refuse := VerifierGodModeRefusalReason(GodModeActive(al.GetConfig())); refuse {
+		logger.ErrorCF("agent",
+			"verifier: adjudication refused — god mode is active (JUDGE-FR-057); "+
+				"no verifier session was created and no Judge turn ran",
+			map[string]any{"unit_id": unitID, "scope": in.Scope, "reason": reason})
+		return nil, "", "", true, reason, nil
+	}
 
 	windowText := al.resolveVerifierWindowText(in)
 
@@ -1212,6 +1489,16 @@ func (al *AgentLoop) runVerifierAdjudication(
 		// (WithVerifierSessionScope's own "empty is unset" contract), which
 		// correctly fails inspect_session closed for every session id.
 		callCtx = tools.WithVerifierSessionScope(callCtx, al.resolveVerifierSessionScope(in))
+		// JUDGE-FR-060/FR-060b (review finding 4): the two ctx seams whose own
+		// doc comments say "the engine sets this where it sets
+		// WithSystemAgentWorkspaceOverride" — and which nothing in production
+		// set, so every Judge turn resolved ReadConfined=false and the
+		// read-confinement ADR-084 exists to impose was never applied (a Judge
+		// turn could read_file any other session's transcript.jsonl), while
+		// the adjudication_id audit correlation was always empty. Set HERE,
+		// at the dispatch, never by a tool.
+		callCtx = tools.WithReadConfined(callCtx, true)
+		callCtx = tools.WithVerifierAdjudicationID(callCtx, adjudicationID)
 		// Product-blocker fix (ADR-052 FR-011/012 x ADR-046 P1, operator
 		// decision "make the judge a member of every workspace"): the Judge
 		// is an IMPLICIT member of every workspace (pkg/workspace's
@@ -1240,8 +1527,9 @@ func (al *AgentLoop) runVerifierAdjudication(
 		} else {
 			callCtx = WithSystemAgentWorkspaceOverride(callCtx, in.WorkspaceID)
 		}
-		content, callErr := al.processTaskDirect(callCtx, judgeInst.ID, prompt, sessionKey, chatID)
+		content, flagged, callErr := al.dispatchVerifierTurn(callCtx, judgeInst, prompt, sessionKey, chatID)
 		cancel()
+		reportVerifierInjectionFlags(unitID, adjudicationID, flagged)
 
 		if callErr != nil {
 			logger.WarnCF("agent", "verifier: turn failed; pausing (D7 unavailability)",
@@ -1276,9 +1564,32 @@ func (al *AgentLoop) runVerifierAdjudication(
 		byID := dedupeJudgeCriteriaAnyUnmetWins(parsed.Criteria)
 		out := make([]task.CriterionVerdict, 0, len(proseCriteria))
 		var missing []string // criteria the verifier RAN on but omitted → unjudgeable
+		// JUDGE-FR-067/FR-069a: one investigation-log id per adjudication —
+		// shared by the structured log line below and every
+		// noteAdjudicationReproducibility call this loop makes, so FR-069a's
+		// "both investigation-log ids" names THIS adjudication and the
+		// PREVIOUS one that produced the memoized outcome it is compared
+		// against. It IS adjudicationID (minted once at the top of this
+		// function, review finding 4) rather than a second uuid minted here,
+		// so the audit entries the Judge's own tool calls carry
+		// (WithVerifierAdjudicationID, JUDGE-FR-084) and this investigation
+		// log join on one shared value.
+		logID := adjudicationID
 		for _, c := range proseCriteria {
 			if pc, found := byID[c.ID]; found {
-				out = append(out, task.CriterionVerdict{CriterionID: c.ID, Met: pc.Met, Reason: pc.Reason, EvidenceQuote: pc.EvidenceQuote})
+				v := verdictFromJudgeResponse(c.ID, pc)
+				// E10: real grounding-based provenance refinement (JUDGE-
+				// FR-065/FR-066) and the D-B-compliant grounding/attribution
+				// REPORTS (FR-006, FR-007a, FR-014a, FR-028, FR-029,
+				// FR-063a) — both layered around verdictFromJudgeResponse's
+				// UNCHANGED body (verifier_provenance.go's own doc comment
+				// explains why it could not be layered inside it), and both
+				// strictly reporting: v.Met/v.Reason are never touched below
+				// this point.
+				v = refineVerdictProvenance(v, c.Text, diffText, evidence)
+				reportGroundingIssues(c, pc, v)
+				noteAdjudicationReproducibility(unitID, c.ID, v.Met, logID)
+				out = append(out, v)
 			} else {
 				// The verifier turn ran and judged OTHER criteria but returned
 				// no verdict for THIS one → criterion_unjudgeable (ran, no
@@ -1290,8 +1601,224 @@ func (al *AgentLoop) runVerifierAdjudication(
 				})
 			}
 		}
+		// JUDGE-FR-067/FR-069 (D7): one structured investigation-log line
+		// per adjudication — see this file's own doc comment and
+		// verifier_provenance.go's for the reported FR-068 capture-source
+		// scope boundary.
+		emitInvestigationLog(
+			unitID, logID, judgeInst.Model, judgeCallTimeout,
+			al.buildInvestigationLogFromJudgeTranscript(judgeInst.ID, chatID),
+		)
 		return out, judgeInst.Model, judgeInst.ID, false, "", missing
 	}
+}
+
+// --- the verifier turn's own dispatch (JUDGE-FR-030/FR-051/FR-052) ---------
+
+// dispatchVerifierTurn runs ONE verifier turn under the Judge's identity and
+// is the ONLY place JUDGE-FR-051's per-adjudication budget and JUDGE-FR-030's
+// tool-result capture are bound to the turn that must honour them.
+//
+// WHY THIS EXISTS AT ALL, rather than the plain al.processTaskDirect call it
+// replaces (review finding 5). Both registries are keyed by
+// turnState.turnID — see verifier_budget.go's package doc comment for the
+// (sound) reasons turnID rather than a context.Context value: the byte-cap
+// consumer is admitToolResult, which is handed a *turnState and no ctx. But
+// turnID is minted INSIDE runAgentLoop (al.newTurnEventScope, "<agentID>-turn
+// -<seq>" off a process-wide atomic), so processTaskDirect's caller cannot
+// know it, cannot predict it, and has nowhere to register anything. The
+// result was that RegisterVerifierBudget and RegisterVerifierCapture had no
+// production call site at all: verifierBudgetForTurn returned nil on every
+// real adjudication, the tool-call/byte caps never fired, and the injection
+// capture accumulated nothing. The existing tests passed because each one
+// registered a budget itself.
+//
+// Owning the turnState here is what closes that: newTurnState mints the
+// turnID, this function registers both handles against it, and only THEN is
+// the turn run. No other mechanism inside this package's reach can bind them
+// before the turn's first tool call.
+//
+// It is a FAITHFUL inlining of processTaskDirect + runAgentLoop for this one
+// dispatch — the processOptions literal below is byte-for-byte the one
+// processTaskDirect builds, so runTurn sees exactly the turn it saw before.
+// The parts of runAgentLoop deliberately NOT reproduced, each because it is
+// meaningless or actively wrong for a verifier turn:
+//
+//   - RecordLastChannel: would record the Judge's throwaway verifier session
+//     as the agent's "last channel" for heartbeat notifications.
+//   - checkGoalLoopAfterTurn: a fresh verifier session never carries a goal;
+//     it was a no-op fast path here, and running the goal loop inside the
+//     Judge's own turn is not a behaviour worth preserving by accident.
+//   - follow-up publishing / PublishOutbound / the deferred goal-adjudication
+//     dispatch: a verifier turn has SendResponse=false and must never enqueue
+//     work or a second adjudication of its own.
+//   - the lastTurnResult snapshot: test observability for ProcessMessage, and
+//     runAgentLoop's own comment names itself the only writer.
+//
+// Returns the turn's final content, the adjudication-level injection flags
+// captured during it (JUDGE-FR-009a — tool-call id -> matched pattern), and
+// any turn error. A nil/empty flags map means nothing was flagged.
+func (al *AgentLoop) dispatchVerifierTurn(
+	ctx context.Context,
+	judgeInst *AgentInstance,
+	prompt, sessionKey, chatID string,
+) (content string, flagged map[string]string, err error) {
+	if hookErr := al.ensureHooksInitialized(ctx); hookErr != nil {
+		return "", nil, fmt.Errorf("verifier turn: hooks: %w", hookErr)
+	}
+	if mcpErr := al.ensureMCPInitialized(ctx); mcpErr != nil {
+		return "", nil, fmt.Errorf("verifier turn: mcp: %w", mcpErr)
+	}
+
+	// Tool context uses the "system" channel so the verifier's tools resolve
+	// the same way processTaskDirect resolved them.
+	turnCtx := tools.WithAgentID(ctx, judgeInst.ID)
+	turnCtx = tools.WithToolContext(turnCtx, "system", "")
+	delegationDepth := tools.ToolDelegationDepth(turnCtx)
+
+	if chatID == "" {
+		chatID = "task:" + sessionKey
+	}
+
+	// An operator who re-points the Judge at an external CLI runs no Omnipus
+	// turn loop at all, so neither cap has a dispatch point to bind to. Fall
+	// back to the shared external-CLI path rather than silently running that
+	// agent on the native engine — and say so, so the missing caps are not
+	// mistaken for caps that never fired.
+	dispatchKind, dispatchErr := runner.ResolveDispatch(executorConfigOf(judgeInst))
+	if dispatchErr != nil {
+		return "", nil, fmt.Errorf("verifier turn: %w", dispatchErr)
+	}
+	if dispatchKind == runner.DispatchKindExternalCLI {
+		logger.WarnCF("agent",
+			"verifier: Judge is configured for an external CLI — the adjudication tool-call/byte caps "+
+				"(JUDGE-FR-051) and the injection capture (JUDGE-FR-030) cannot be enforced for this turn",
+			map[string]any{"judge_agent_id": judgeInst.ID})
+		out, cliErr := al.processTaskDirect(ctx, judgeInst.ID, prompt, sessionKey, chatID)
+		return out, nil, cliErr
+	}
+
+	opts := processOptions{
+		SessionKey:             sessionKey,
+		Channel:                "webchat",
+		ChatID:                 chatID,
+		SenderID:               "task-executor",
+		UserMessage:            prompt,
+		DefaultResponse:        defaultResponse,
+		SendResponse:           false,
+		TranscriptSessionID:    chatID,
+		TranscriptStore:        al.GetAgentStore(judgeInst.ID),
+		InitialDelegationDepth: delegationDepth,
+		IsTaskRun:              true,
+		WorkspaceID:            tools.ToolWorkspaceID(turnCtx),
+	}
+
+	ts := newTurnState(judgeInst, opts, al.newTurnEventScope(judgeInst.ID, sessionKey))
+	if delegationDepth > 0 {
+		ts.depth = delegationDepth
+	}
+	if opts.TranscriptSessionID != "" {
+		resolverKey := "session:" + opts.TranscriptSessionID
+		ts.activeAgentResolver = func() string {
+			if v, ok := al.sessionActiveAgent.Load(resolverKey); ok {
+				if id, ok := v.(string); ok && id != "" {
+					return id
+				}
+			}
+			return ""
+		}
+	}
+
+	// JUDGE-FR-051/FR-052: the caps come from the OPERATOR's JudgeConfig via
+	// its Effective* accessors — never a second copy of the default/clamp
+	// logic — and are unregistered the moment this turn returns, whichever
+	// way it returns.
+	jcfg := al.judgeBudgetConfig()
+	vb := NewVerifierBudget(
+		jcfg.EffectiveToolCallCap(),
+		jcfg.EffectiveByteCapBytes(),
+		jcfg.EffectiveTokenCeiling(),
+		jcfg.JudgeTokenCeilingWarnThreshold(),
+	)
+	RegisterVerifierBudget(ts.turnID, vb)
+	defer UnregisterVerifierBudget(ts.turnID)
+
+	// JUDGE-FR-030/FR-009a: the per-adjudication capture of every tool result
+	// admitted to the model, carrying the injection-signature flags.
+	vc := NewVerifierCapture()
+	RegisterVerifierCapture(ts.turnID, vc)
+	defer UnregisterVerifierCapture(ts.turnID)
+
+	result, runErr := al.runTurn(turnCtx, ts)
+	// Read the flags BEFORE the deferred Unregister — and on every exit path,
+	// including a failed turn: an injection attempt that made the turn fail is
+	// exactly the one worth reporting.
+	flagged = vc.FlaggedToolCallIDs()
+	// JUDGE-FR-082: a CANCELLED adjudication is discarded whole — it must
+	// never be scored. A cancel (Stop, `/goal clear`, a plan Stop fan-out)
+	// reaches this turn through RequestCancelForSession, which claims the
+	// turnState and ends the turn with EMPTY content and, on most paths, NO
+	// error — which the caller would otherwise read as "the verifier ran and
+	// formed no judgment" and turn into a real criterion_unjudgeable verdict
+	// against the work. Reporting it as a turn error instead routes it into
+	// the caller's existing D7 unavailability branch: round not consumed, no
+	// verdict, nothing recorded. ts.cancelFired is the authoritative flag
+	// (turn.go's ClaimCancel sets it), not the end status, because a cancel
+	// can land on several different terminal statuses.
+	if ts.cancelFired.Load() {
+		return "", flagged, fmt.Errorf(
+			"verifier turn cancelled: the adjudication is discarded whole (JUDGE-FR-082)")
+	}
+	if runErr != nil {
+		return "", flagged, runErr
+	}
+	if result.status == TurnEndStatusAborted {
+		// Mirrors runAgentLoop: a user-initiated hard abort returns empty
+		// content with no error (every system-initiated abort already
+		// returned a non-nil error above). The caller treats empty content as
+		// criterion_unjudgeable, which is the honest classification.
+		return "", flagged, nil
+	}
+	return result.finalContent, flagged, nil
+}
+
+// judgeBudgetConfig resolves the operator's JudgeConfig, falling back to a
+// zero JudgeConfig when no config is reachable (a bare test harness). The
+// zero value is not a disabled budget: every Effective* accessor on it
+// returns that field's SHIPPED default, so an unconfigured install still
+// enforces FR-051's 25-call / 2 MiB caps.
+func (al *AgentLoop) judgeBudgetConfig() config.JudgeConfig {
+	if cfg := al.GetConfig(); cfg != nil {
+		return cfg.Judge
+	}
+	return config.JudgeConfig{}
+}
+
+// reportVerifierInjectionFlags surfaces JUDGE-FR-009a's adjudication-level
+// flag: the tool-call ids whose admitted result matched an injection
+// signature, each with the pattern that matched. Reporting only (D-B): a
+// flagged result is already banner-prefixed for the model by admitToolResult;
+// this makes the adjudication-level fact visible to the operator, which it
+// was not while the capture had no production registration at all.
+func reportVerifierInjectionFlags(unitID, adjudicationID string, flagged map[string]string) {
+	if len(flagged) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(flagged))
+	for id := range flagged {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	patterns := make([]string, 0, len(ids))
+	for _, id := range ids {
+		patterns = append(patterns, flagged[id])
+	}
+	logger.WarnCF("agent",
+		"verifier: injection signature(s) detected in tool results admitted during this adjudication (JUDGE-FR-009a)",
+		map[string]any{
+			"unit_id": unitID, "adjudication_id": adjudicationID,
+			"flagged_tool_call_ids": ids, "patterns": patterns,
+		})
 }
 
 // allProseCriterionIDs returns the id of every criterion in cs — used when the
@@ -1322,4 +1849,90 @@ func dedupeJudgeCriteriaAnyUnmetWins(responses []judgeCriterionResponse) map[str
 		byID[c.ID] = c
 	}
 	return byID
+}
+
+// --- FR-070a: mapping a parsed judge response onto a persisted verdict -----
+
+// maxCriterionEvidenceEntries mirrors CriterionVerdict.yaml's `evidence`
+// array maxItems: 50 — enforced here (the same trust boundary
+// maxEvidenceQuoteRunes enforces for a single quote, judge.go) so an
+// over-long self-reported array from the model never reaches persistence.
+const maxCriterionEvidenceEntries = 50
+
+// deriveVerdictProvenance is E9's initial, schema-literal mapping from a
+// verdict's VALIDATED EvidenceSource to its Provenance (JUDGE-FR-065 —
+// CriterionVerdict.yaml's provenance description): deterministic_check
+// when a check/veto decided it, judge_read/diff/transcript/session_read
+// when the Judge's own reading decided it (source mapped 1:1, except
+// file_read -> judge_read — there is no dedicated "file_read" Provenance
+// value), none when neither applies (including an absent/invalid source).
+//
+// E9 wired this exact call site as the literal schema-only mapping
+// TestDeriveVerdictProvenance_SchemaMapping (verifier_adjudication_test.go,
+// E9's write-set — kept passing unmodified, hence the signature stays
+// exactly one argument) pins forever: source alone, no additional context.
+// "Real grounding-based derivation" (JUDGE-FR-065/FR-066/JUDGE-D7, E10) is
+// therefore layered AROUND this call, not inside it —
+// verifier_provenance.go's refineVerdictProvenance runs immediately after
+// this literal mapping, in verdictFromJudgeResponse below, and MAY
+// downgrade its result to task.ProvenanceNone when the reported target
+// looks ungrounded. Still REPORTING-only (D-B): this changes what
+// Provenance a verdict CARRIES, never whether it is Met.
+func deriveVerdictProvenance(source task.VerdictEvidenceSource) task.VerdictProvenance {
+	switch source {
+	case task.EvidenceSourceMachineCheck:
+		return task.ProvenanceDeterministic
+	case task.EvidenceSourceFileRead:
+		return task.ProvenanceJudgeRead
+	case task.EvidenceSourceDiff:
+		return task.ProvenanceDiffRead
+	case task.EvidenceSourceTranscript:
+		return task.ProvenanceTranscriptRead
+	case task.EvidenceSourceSessionRead:
+		return task.ProvenanceSessionRead
+	default:
+		return task.ProvenanceNone
+	}
+}
+
+// verdictFromJudgeResponse maps one parsed judgeCriterionResponse onto its
+// persisted task.CriterionVerdict (JUDGE-FR-070a, C-02's four new fields —
+// EvidenceSource/EvidenceTarget/Provenance/Evidence, deliberately no
+// Outcome field anywhere, D-H). ALL FOUR are OPTIONAL REPORTING fields
+// (D-B): an absent, malformed, or non-verifying value here NEVER gates
+// criterionID's met/unmet — that bool was already decided by pc.Met,
+// straight off the Judge's own reasoning, before this function runs, and
+// nothing below it ever re-decides it.
+func verdictFromJudgeResponse(criterionID string, pc judgeCriterionResponse) task.CriterionVerdict {
+	v := task.CriterionVerdict{
+		CriterionID:   criterionID,
+		Met:           pc.Met,
+		Reason:        pc.Reason,
+		EvidenceQuote: pc.EvidenceQuote,
+	}
+	// Self-reported by the model — validated against the closed enum
+	// (never trusted blindly); an unrecognised value is treated as absent,
+	// exactly like a legacy rubric that never emits one.
+	if src := task.VerdictEvidenceSource(strings.TrimSpace(pc.EvidenceSource)); task.IsValidVerdictEvidenceSource(src) {
+		v.EvidenceSource = src
+	}
+	v.EvidenceTarget = strings.TrimSpace(pc.EvidenceTarget)
+	if len(pc.Evidence) > 0 {
+		entries := pc.Evidence
+		if len(entries) > maxCriterionEvidenceEntries {
+			entries = entries[:maxCriterionEvidenceEntries]
+		}
+		v.Evidence = make([]task.CriterionEvidenceEntry, 0, len(entries))
+		for _, e := range entries {
+			v.Evidence = append(v.Evidence, task.CriterionEvidenceEntry{
+				Part: e.Part, Source: e.Source, Target: e.Target, Quote: e.Quote,
+			})
+		}
+		// FR-071: evidence_quote mirrors evidence[0].quote for readers that
+		// don't know about the new array — keep the top-level field in sync
+		// rather than trusting the model to have set both identically.
+		v.EvidenceQuote = v.Evidence[0].Quote
+	}
+	v.Provenance = deriveVerdictProvenance(v.EvidenceSource)
+	return v
 }

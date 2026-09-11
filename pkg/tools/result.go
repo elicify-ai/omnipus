@@ -127,6 +127,49 @@ type ToolResult struct {
 	// this field (the prose sniff survives only as a legacy fallback for
 	// that case — see interpretBashResult's doc comment).
 	TimedOut bool `json:"timed_out,omitempty"`
+
+	// Deferred, when non-nil, marks this result as a structural deferral —
+	// the tool did not run because a gate is currently held by something
+	// else (ADR-085 BROWSER-FR-012a). It is engine-internal plumbing:
+	// json:"-" because it MUST NOT cross the gateway/SPA boundary
+	// (Constraint #8) — nothing on the wire needs it, and the model-facing
+	// explanation already travels in ForLLM's prose body.
+	//
+	// This exists because before it, there was no non-prose channel from a
+	// tool to the engine: the only way to know a result was a deferral was
+	// to parse ForLLM, which is exactly what a turn-loop ledger (ADR-085
+	// FR-013) must never do — a wording change to the prose would silently
+	// break the count. A consumer decides "is this a deferral" with a nil
+	// check (Deferred != nil), never a value comparison, and narrows on
+	// Deferred.Gate to distinguish which gate deferred it (only
+	// "browser_control" exists today).
+	//
+	// MUST be nil on every non-deferred result — every constructor in this
+	// file leaves it at its zero value; only a gate's own result builder
+	// (pkg/tools/browser/tools.go::controlledResult) populates it.
+	//
+	// Meaningful ONLY on a SYNCHRONOUS result: it rides the tool's own
+	// *ToolResult pointer back through ToolRegistry.Execute and
+	// normalizeToolResult exactly like Err/Messages above, but a result
+	// reconstituted from a stored payload (a background dispatch, an async
+	// notifier round-trip) has crossed a serialisation boundary that
+	// json:"-" deliberately strips.
+	Deferred *ToolDeferral `json:"-"`
+}
+
+// ToolDeferral is the structural discriminator a control-gated tool result
+// carries when the underlying gate is held by something else and the call
+// was refused without running (ADR-085 BROWSER-FR-012a). Gate names the
+// held gate ("browser_control" is the only one today); Reason restates —
+// for a caller that reads the struct instead of ForLLM's prose — why the
+// call was deferred.
+type ToolDeferral struct {
+	// Gate names the control gate that deferred this call, e.g.
+	// "browser_control". Lets a future second deferral source be
+	// distinguished from the first without a schema change.
+	Gate string
+	// Reason restates the human-facing deferral explanation structurally.
+	Reason string
 }
 
 // ContentForLLM returns the normalized textual content to append to the

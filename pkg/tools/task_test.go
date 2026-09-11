@@ -41,6 +41,17 @@ func validCriteriaArg() []any {
 	}
 }
 
+// validDoDArg returns a minimal well-formed "dod" tool-call argument (one
+// prose item), mirroring validCriteriaArg — GOAL-FR-021/D-C makes dod
+// mandatory alongside criteria on create_task. Tests whose concern is
+// something other than the dod requirement itself use this to stay
+// unaffected by it.
+func validDoDArg() []any {
+	return []any{
+		map[string]any{"kind": "prose", "text": "the definition of done is met"},
+	}
+}
+
 // seedWorkspaceDefault writes a minimal workspace JSON with is_default:true under
 // <home>/workspaces/<id>.json so workspace.ResolveDefaultID finds it.
 func seedWorkspaceDefault(t *testing.T, home, id string) {
@@ -246,6 +257,7 @@ func TestTaskCreateTool_WorkspaceFromCtx(t *testing.T) {
 		"prompt":   "do it",
 		"agent_id": "agent-b",
 		"criteria": validCriteriaArg(),
+		"dod":      validDoDArg(),
 	})
 	if result.IsError {
 		t.Fatalf("task_create failed: %s", result.ForLLM)
@@ -304,6 +316,7 @@ func TestTaskCreateTool_StaleCtxWorkspace_LandsOnDefault(t *testing.T) {
 		"prompt":   "do it",
 		"agent_id": "agent-b",
 		"criteria": validCriteriaArg(),
+		"dod":      validDoDArg(),
 	})
 	if result.IsError {
 		t.Fatalf("task_create failed: %s", result.ForLLM)
@@ -345,6 +358,7 @@ func TestTaskCreateTool_WorkspaceFromHome(t *testing.T) {
 		"prompt":   "do it",
 		"agent_id": "agent-b",
 		"criteria": validCriteriaArg(),
+		"dod":      validDoDArg(),
 	})
 	if result.IsError {
 		t.Fatalf("task_create failed: %s", result.ForLLM)
@@ -374,6 +388,7 @@ func TestTaskCreateTool_NoWorkspaceError(t *testing.T) {
 		"prompt":   "do it",
 		"agent_id": "agent-b",
 		"criteria": validCriteriaArg(),
+		"dod":      validDoDArg(),
 	})
 	if !result.IsError {
 		t.Fatal("expected error when no workspace can be resolved")
@@ -398,7 +413,7 @@ func TestTaskCreateTool_DelegationDepthStamped(t *testing.T) {
 	// Root context (no delegation depth) → child stamped generation 1.
 	ctx := WithAgentID(context.Background(), "caller")
 	ctx = WithWorkspaceID(ctx, "ws")
-	res := tool.Execute(ctx, map[string]any{"title": "t1", "prompt": "p", "agent_id": "b", "criteria": validCriteriaArg()})
+	res := tool.Execute(ctx, map[string]any{"title": "t1", "prompt": "p", "agent_id": "b", "criteria": validCriteriaArg(), "dod": validDoDArg()})
 	if res.IsError {
 		t.Fatalf("root create failed: %s", res.ForLLM)
 	}
@@ -409,7 +424,7 @@ func TestTaskCreateTool_DelegationDepthStamped(t *testing.T) {
 
 	// Context at generation 4 → child stamped generation 5.
 	ctx5 := WithDelegationDepth(ctx, 4)
-	res = tool.Execute(ctx5, map[string]any{"title": "t2", "prompt": "p", "agent_id": "b", "criteria": validCriteriaArg()})
+	res = tool.Execute(ctx5, map[string]any{"title": "t2", "prompt": "p", "agent_id": "b", "criteria": validCriteriaArg(), "dod": validDoDArg()})
 	if res.IsError {
 		t.Fatalf("nested create failed: %s", res.ForLLM)
 	}
@@ -443,13 +458,13 @@ func TestTaskCreateTool_DelegationDepthBound(t *testing.T) {
 
 	// At generation 9, a create yields generation 10 == ceiling → allowed.
 	ctxAt9 := WithDelegationDepth(ctx, 9)
-	if res := tool.Execute(ctxAt9, map[string]any{"title": "ok", "prompt": "p", "agent_id": "b", "criteria": validCriteriaArg()}); res.IsError {
+	if res := tool.Execute(ctxAt9, map[string]any{"title": "ok", "prompt": "p", "agent_id": "b", "criteria": validCriteriaArg(), "dod": validDoDArg()}); res.IsError {
 		t.Fatalf("create at the ceiling boundary must be allowed, got: %s", res.ForLLM)
 	}
 
 	// At generation 10, a create would yield generation 11 > ceiling → rejected.
 	ctxAt10 := WithDelegationDepth(ctx, 10)
-	res := tool.Execute(ctxAt10, map[string]any{"title": "blocked", "prompt": "p", "agent_id": "b", "criteria": validCriteriaArg()})
+	res := tool.Execute(ctxAt10, map[string]any{"title": "blocked", "prompt": "p", "agent_id": "b", "criteria": validCriteriaArg(), "dod": validDoDArg()})
 	if !res.IsError {
 		t.Fatal("expected task_create past the depth ceiling to be rejected")
 	}
@@ -552,6 +567,7 @@ func TestJudge_AllMachineCriteria_UnsatisfiableBashPolicy_RejectedAtWrite(t *tes
 				"prompt":   "p",
 				"agent_id": "assignee",
 				"criteria": checkCriterion,
+				"dod":      validDoDArg(),
 			})
 			if tc.wantReject {
 				if !res.IsError {
@@ -590,6 +606,7 @@ func TestTaskTool_CreateWithoutBashPolicyChecker_AllCheckCriteria_FailsClosed(t 
 				"check": map[string]any{"command": "go test ./...", "expected_exit_code": float64(0)},
 			},
 		},
+		"dod": validDoDArg(),
 	})
 	if !res.IsError {
 		t.Fatal("expected an unwired D2 rule 5 checker to fail CLOSED (deny) for an all-check criteria set")
@@ -1204,6 +1221,7 @@ func TestTaskCreate_WithBlockedBy(t *testing.T) {
 		"agent_id":   "agent-b",
 		"blocked_by": []any{blocker.ID},
 		"criteria":   validCriteriaArg(),
+		"dod":        validDoDArg(),
 	})
 	if res.IsError {
 		t.Fatalf("task_create with blocked_by: %s", res.ForLLM)
@@ -1256,6 +1274,7 @@ func TestTaskCreate_BlockedByRejectsNonExistentBlocker(t *testing.T) {
 		"agent_id":   "agent-b",
 		"blocked_by": []any{"nonexistent-blocker-id"},
 		"criteria":   validCriteriaArg(),
+		"dod":        validDoDArg(),
 	})
 	if !res.IsError {
 		t.Fatal("expected error creating task blocked_by a non-existent blocker")
@@ -1293,6 +1312,7 @@ func TestTaskCreate_BlockedByRejectsCrossWorkspace(t *testing.T) {
 		"agent_id":   "agent-b",
 		"blocked_by": []any{blocker.ID},
 		"criteria":   validCriteriaArg(),
+		"dod":        validDoDArg(),
 	})
 	if !res.IsError {
 		t.Fatal("expected cross-workspace rejection at task_create")
@@ -1458,6 +1478,7 @@ func TestTaskCreate_DueRoundTrip(t *testing.T) {
 				"agent_id": "agent-b",
 				"due":      tc.due,
 				"criteria": validCriteriaArg(),
+				"dod":      validDoDArg(),
 			})
 			if res.IsError {
 				t.Fatalf("create_task with valid due %q failed: %s", tc.due, res.ForLLM)
@@ -1515,6 +1536,7 @@ func TestTaskCreate_DueInvalidRFC3339(t *testing.T) {
 				"agent_id": "agent-b",
 				"due":      tc.due,
 				"criteria": validCriteriaArg(),
+				"dod":      validDoDArg(),
 			})
 			if !res.IsError {
 				t.Fatalf("expected error for invalid due %q", tc.due)
@@ -1981,6 +2003,7 @@ func TestTaskCreate_AllowsSubagent3pWorker_WhenDelegationAllows(t *testing.T) {
 		"prompt":   "do it",
 		"agent_id": "external-worker",
 		"criteria": validCriteriaArg(),
+		"dod":      validDoDArg(),
 	})
 
 	if res == nil || res.IsError {
@@ -2081,6 +2104,7 @@ func TestTaskCreateTool_NilStore_FailsClosedInsteadOfPanicking(t *testing.T) {
 		"prompt":   "x",
 		"agent_id": "agent-b",
 		"criteria": validCriteriaArg(),
+		"dod":      validDoDArg(),
 	})
 	if res == nil || !res.IsError {
 		t.Fatalf("expected an ErrorResult for a nil task store, got %+v", res)

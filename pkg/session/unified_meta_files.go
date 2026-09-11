@@ -22,6 +22,20 @@
 // this SAME package in this SAME wave, so every unexported package-level
 // identifier this file introduces is prefixed u5 to rule out a silent
 // redeclaration collision that neither unit would see until integration.
+//
+// ADR-086 GOAL-FR-005 addendum (wave S2, 2026-09): a FIFTH group joined the
+// four above — pending_ask.json (pkg/session/pending_ask.go). PendingAskJSON
+// used to ride inside this file's goal.json group; it moved to its own file
+// ahead of this wave — it is session-scoped interaction state, not goal
+// state. See pending_ask.go's package doc comment for the full rationale.
+//
+// ADR-086 GOAL-FR-005 addendum (wave S6, 2026-09, "the deletion half"): the
+// goal.json group itself — the Goal* fields, u5GoalFile, u5ReadGoalFile,
+// u5WriteGoalLocked — is RETIRED. The goal is now its own stored entity
+// (pkg/goal.Store); nothing about it belongs on a session anymore. This
+// file now splits the ON-DISK representation into THREE independently-
+// writable files — meta.json, stats.json, loop.json — plus S2's
+// pending_ask.json (four total, none of them goal.json).
 package session
 
 import (
@@ -85,43 +99,21 @@ type u5StatsFile struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// u5GoalFile is goal.json's on-disk shape: the Goal* fields, verbatim
-// tags. Carries no UpdatedAt of its own (only stats.json does, FR-053) — a
-// goal round does not bump the session's composed recency (BDD-59).
-// ADR-081 D9/Migration (greenfield, no back-compat): GoalPendingJSON and
-// GoalClarificationJSON — the confirm-gate's pending-draft/clarification-
-// record fields — are REMOVED. A stale value under their old JSON keys
-// ("goal_pending"/"goal_clarification") in an on-disk goal.json is simply
-// ignored by json.Unmarshal (unknown fields are dropped) and disappears on
-// the next write — no shim, no legacy parse path. GoalQuestionRoundsUsed,
-// GoalZeroOutputPushes, and the persisted GoalRoute* group are ADDED
-// (FR-010/FR-014b/FR-031).
-type u5GoalFile struct {
-	GoalID             string `json:"goal_id,omitempty"`
-	GoalCondition      string `json:"goal_condition,omitempty"`
-	GoalRoundsUsed     int    `json:"goal_rounds_used,omitempty"`
-	GoalMaxRounds      int    `json:"goal_max_rounds,omitempty"`
-	GoalLatestReason   string `json:"goal_latest_reason,omitempty"`
-	GoalStartedAt      string `json:"goal_started_at,omitempty"`
-	GoalLastActivityAt string `json:"goal_last_activity_at,omitempty"`
-	GoalCriteriaJSON   string `json:"goal_criteria,omitempty"`
-	// PendingAskJSON (AskUserQuestion durable pending set) rides in the goal
-	// group: pending interaction state, no recency bump (see SessionMeta).
-	// Untouched by ADR-081 D9 — it belongs to the tool, not the deleted
-	// confirm-gate coupling.
-	PendingAskJSON string `json:"pending_ask,omitempty"`
-	// GoalQuestionRoundsUsed/GoalZeroOutputPushes/GoalRoute* — see
-	// SessionMeta's matching fields (daypartition.go) for the full contract.
-	GoalQuestionRoundsUsed int    `json:"goal_question_rounds_used,omitempty"`
-	GoalZeroOutputPushes   int    `json:"goal_zero_output_pushes,omitempty"`
-	GoalRouteChannel       string `json:"goal_route_channel,omitempty"`
-	GoalRouteChatID        string `json:"goal_route_chat_id,omitempty"`
-	GoalRouteSessionKey    string `json:"goal_route_session_key,omitempty"`
-	GoalRouteAgentID       string `json:"goal_route_agent_id,omitempty"`
-}
+// ADR-086 GOAL-FR-005 (wave S6, "the deletion half"): goal.json and its
+// u5GoalFile on-disk shape are RETIRED in full — the Goal* fields left
+// SessionMeta/UnifiedMeta/MetaPatch entirely (daypartition.go/unified.go),
+// so there is no group left for a goal.json shape to carry. u5GoalFile,
+// u5GoalFromMeta, u5ReadGoalFile and u5WriteGoalLocked are deleted together
+// (delivery-plan wave S6 row, R-34): no reader is left behind. A stale
+// goal.json on an existing session directory is simply never opened again
+// by this store — no read, no write, no migration (D-F) — and is left for
+// wave S3's retention sweep to eventually reclaim; this file mints nothing
+// new under that name. PendingAskJSON left this group in wave S2, ahead of
+// this deletion, and lives in its own pending_ask.json (pending_ask.go).
 
 // u5LoopFile is loop.json's on-disk shape: the 9 Loop* fields, verbatim
-// tags. Carries no UpdatedAt of its own, for the same reason as u5GoalFile.
+// tags. Carries no UpdatedAt of its own (only stats.json does, FR-053) — a
+// loop tick does not bump the session's composed recency (BDD-59).
 type u5LoopFile struct {
 	LoopMode           string `json:"loop_mode,omitempty"`
 	LoopPrompt         string `json:"loop_prompt,omitempty"`
@@ -167,26 +159,6 @@ func u5StatsFromMeta(meta *UnifiedMeta) u5StatsFile {
 	return u5StatsFile{SessionStats: meta.Stats, UpdatedAt: meta.UpdatedAt}
 }
 
-func u5GoalFromMeta(meta *UnifiedMeta) u5GoalFile {
-	return u5GoalFile{
-		GoalID:                 meta.GoalID,
-		GoalCondition:          meta.GoalCondition,
-		GoalRoundsUsed:         meta.GoalRoundsUsed,
-		GoalMaxRounds:          meta.GoalMaxRounds,
-		GoalLatestReason:       meta.GoalLatestReason,
-		GoalStartedAt:          meta.GoalStartedAt,
-		GoalLastActivityAt:     meta.GoalLastActivityAt,
-		GoalCriteriaJSON:       meta.GoalCriteriaJSON,
-		PendingAskJSON:         meta.PendingAskJSON,
-		GoalQuestionRoundsUsed: meta.GoalQuestionRoundsUsed,
-		GoalZeroOutputPushes:   meta.GoalZeroOutputPushes,
-		GoalRouteChannel:       meta.GoalRouteChannel,
-		GoalRouteChatID:        meta.GoalRouteChatID,
-		GoalRouteSessionKey:    meta.GoalRouteSessionKey,
-		GoalRouteAgentID:       meta.GoalRouteAgentID,
-	}
-}
-
 func u5LoopFromMeta(meta *UnifiedMeta) u5LoopFile {
 	return u5LoopFile{
 		LoopMode:           meta.LoopMode,
@@ -211,57 +183,45 @@ func u5LaterOf(a, b time.Time) time.Time {
 }
 
 // u5ComposeUnifiedMeta builds one *UnifiedMeta from the four group values
-// (FR-055). Called only by readUnifiedMeta (unified.go) once all four groups
-// have been read/defaulted according to that function's absent-vs-corrupt
-// rules.
-func u5ComposeUnifiedMeta(identity u5IdentityFile, stats u5StatsFile, goal u5GoalFile, loop u5LoopFile) *UnifiedMeta {
+// (FR-055; ADR-086 GOAL-FR-005 added the pendingAsk group in wave S2, and
+// wave S6 removed the goal group entirely — there is no fifth "goal" value
+// left to compose). Called only by readUnifiedMeta (unified.go) once all
+// four groups have been read/defaulted according to that function's
+// absent-vs-corrupt rules.
+func u5ComposeUnifiedMeta(identity u5IdentityFile, stats u5StatsFile, loop u5LoopFile, pendingAsk u5PendingAskFile) *UnifiedMeta {
 	return &UnifiedMeta{
 		SessionMeta: SessionMeta{
-			ID:                     identity.ID,
-			AgentID:                identity.AgentID,
-			Title:                  identity.Title,
-			Status:                 identity.Status,
-			CreatedAt:              identity.CreatedAt,
-			UpdatedAt:              u5LaterOf(identity.UpdatedAt, stats.UpdatedAt),
-			Model:                  identity.Model,
-			Provider:               identity.Provider,
-			Stats:                  stats.SessionStats,
-			WorkspaceID:            identity.WorkspaceID,
-			TaskID:                 identity.TaskID,
-			Channel:                identity.Channel,
-			InstanceID:             identity.InstanceID,
-			PeerID:                 identity.PeerID,
-			Partitions:             identity.Partitions,
-			LastCompactionSummary:  identity.LastCompactionSummary,
-			Owner:                  identity.Owner,
-			AgentIDs:               identity.AgentIDs,
-			ActiveAgentID:          identity.ActiveAgentID,
-			CompactionSummaries:    identity.CompactionSummaries,
-			ParentSessionID:        identity.ParentSessionID,
-			GoalID:                 goal.GoalID,
-			GoalCondition:          goal.GoalCondition,
-			GoalRoundsUsed:         goal.GoalRoundsUsed,
-			GoalMaxRounds:          goal.GoalMaxRounds,
-			GoalLatestReason:       goal.GoalLatestReason,
-			GoalStartedAt:          goal.GoalStartedAt,
-			GoalLastActivityAt:     goal.GoalLastActivityAt,
-			GoalCriteriaJSON:       goal.GoalCriteriaJSON,
-			PendingAskJSON:         goal.PendingAskJSON,
-			GoalQuestionRoundsUsed: goal.GoalQuestionRoundsUsed,
-			GoalZeroOutputPushes:   goal.GoalZeroOutputPushes,
-			GoalRouteChannel:       goal.GoalRouteChannel,
-			GoalRouteChatID:        goal.GoalRouteChatID,
-			GoalRouteSessionKey:    goal.GoalRouteSessionKey,
-			GoalRouteAgentID:       goal.GoalRouteAgentID,
-			LoopMode:               loop.LoopMode,
-			LoopPrompt:             loop.LoopPrompt,
-			LoopRunCount:           loop.LoopRunCount,
-			LoopMaxRuns:            loop.LoopMaxRuns,
-			LoopIntervalMS:         loop.LoopIntervalMS,
-			LoopNextDelayMS:        loop.LoopNextDelayMS,
-			LoopJobID:              loop.LoopJobID,
-			LoopStartedAt:          loop.LoopStartedAt,
-			LoopLastActivityAt:     loop.LoopLastActivityAt,
+			ID:                    identity.ID,
+			AgentID:               identity.AgentID,
+			Title:                 identity.Title,
+			Status:                identity.Status,
+			CreatedAt:             identity.CreatedAt,
+			UpdatedAt:             u5LaterOf(identity.UpdatedAt, stats.UpdatedAt),
+			Model:                 identity.Model,
+			Provider:              identity.Provider,
+			Stats:                 stats.SessionStats,
+			WorkspaceID:           identity.WorkspaceID,
+			TaskID:                identity.TaskID,
+			Channel:               identity.Channel,
+			InstanceID:            identity.InstanceID,
+			PeerID:                identity.PeerID,
+			Partitions:            identity.Partitions,
+			LastCompactionSummary: identity.LastCompactionSummary,
+			Owner:                 identity.Owner,
+			AgentIDs:              identity.AgentIDs,
+			ActiveAgentID:         identity.ActiveAgentID,
+			CompactionSummaries:   identity.CompactionSummaries,
+			ParentSessionID:       identity.ParentSessionID,
+			PendingAskJSON:        pendingAsk.PendingAskJSON,
+			LoopMode:              loop.LoopMode,
+			LoopPrompt:            loop.LoopPrompt,
+			LoopRunCount:          loop.LoopRunCount,
+			LoopMaxRuns:           loop.LoopMaxRuns,
+			LoopIntervalMS:        loop.LoopIntervalMS,
+			LoopNextDelayMS:       loop.LoopNextDelayMS,
+			LoopJobID:             loop.LoopJobID,
+			LoopStartedAt:         loop.LoopStartedAt,
+			LoopLastActivityAt:    loop.LoopLastActivityAt,
 		},
 		Type: identity.Type,
 	}
@@ -296,23 +256,6 @@ func u5ReadStatsFile(sessionDir string) (u5StatsFile, error) {
 	}
 	if err := json.Unmarshal(data, &f); err != nil {
 		return f, fmt.Errorf("parse %q: %w", filepath.Join(sessionDir, "stats.json"), err)
-	}
-	return f, nil
-}
-
-// u5ReadGoalFile reads goal.json. Same absent/corrupt contract as
-// u5ReadStatsFile.
-func u5ReadGoalFile(sessionDir string) (u5GoalFile, error) {
-	var f u5GoalFile
-	data, err := readFileFn(filepath.Join(sessionDir, "goal.json"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return f, nil
-		}
-		return f, fmt.Errorf("read %q: %w", filepath.Join(sessionDir, "goal.json"), err)
-	}
-	if err := json.Unmarshal(data, &f); err != nil {
-		return f, fmt.Errorf("parse %q: %w", filepath.Join(sessionDir, "goal.json"), err)
 	}
 	return f, nil
 }
@@ -438,51 +381,11 @@ func (us *UnifiedStore) u5WriteStatsLocked(sessionID string, meta *UnifiedMeta) 
 	return nil
 }
 
-// u5WriteGoalLocked writes goal.json and updates ONLY the 9 Goal* fields on
-// the cached entry. Never touches meta.json/stats.json/loop.json, and never
-// bumps the composed UpdatedAt (goal.json carries no UpdatedAt of its own,
-// FR-053) — a `/goal` round is not "session activity" for recency-sort
-// purposes (BDD-59).
-func (us *UnifiedStore) u5WriteGoalLocked(sessionID string, meta *UnifiedMeta) error {
-	file := u5GoalFromMeta(meta)
-	data, err := json.MarshalIndent(file, "", "  ")
-	if err != nil {
-		return fmt.Errorf("unified_store: marshal goal.json: %w", err)
-	}
-	goalPath := filepath.Join(us.baseDir, sessionID, "goal.json")
-	if err := fileutil.WithFlock(goalPath, func() error {
-		return writeFileAtomicFn(goalPath, data, 0o600)
-	}); err != nil {
-		return err
-	}
-
-	us.cacheMu.Lock()
-	if cached, ok := us.metaCache[sessionID]; ok {
-		cached.GoalID = meta.GoalID
-		cached.GoalCondition = meta.GoalCondition
-		cached.GoalRoundsUsed = meta.GoalRoundsUsed
-		cached.GoalMaxRounds = meta.GoalMaxRounds
-		cached.GoalLatestReason = meta.GoalLatestReason
-		cached.GoalStartedAt = meta.GoalStartedAt
-		cached.GoalLastActivityAt = meta.GoalLastActivityAt
-		cached.GoalCriteriaJSON = meta.GoalCriteriaJSON
-		cached.PendingAskJSON = meta.PendingAskJSON
-		cached.GoalQuestionRoundsUsed = meta.GoalQuestionRoundsUsed
-		cached.GoalZeroOutputPushes = meta.GoalZeroOutputPushes
-		cached.GoalRouteChannel = meta.GoalRouteChannel
-		cached.GoalRouteChatID = meta.GoalRouteChatID
-		cached.GoalRouteSessionKey = meta.GoalRouteSessionKey
-		cached.GoalRouteAgentID = meta.GoalRouteAgentID
-	} else {
-		us.metaCache[sessionID] = meta.Clone()
-	}
-	us.cacheMu.Unlock()
-	return nil
-}
-
 // u5WriteLoopLocked writes loop.json and updates ONLY the 9 Loop* fields on
-// the cached entry. Same isolation/no-UpdatedAt-bump rationale as
-// u5WriteGoalLocked.
+// the cached entry. Never touches meta.json/stats.json/goal-related/
+// pending_ask.json, and never bumps the composed UpdatedAt (loop.json
+// carries no UpdatedAt of its own, FR-053) — a `/loop` tick is not "session
+// activity" for recency-sort purposes (BDD-59).
 func (us *UnifiedStore) u5WriteLoopLocked(sessionID string, meta *UnifiedMeta) error {
 	file := u5LoopFromMeta(meta)
 	data, err := json.MarshalIndent(file, "", "  ")

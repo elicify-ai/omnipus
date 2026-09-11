@@ -13,7 +13,7 @@ import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/
 //
 // "attempt N/M" is sourced from the real, server-set `Task.attempt_count`
 // wire field (contract C17) against `Task.max_attempts` (or the inherited
-// PlanningConfig.task_max_attempts default of 3) — never fabricated. The
+// PlanningConfig.task_max_attempts default) — never fabricated. The
 // "paused" suffix is likewise grounded in real data: a task's owning Plan
 // (looked up via `Task.plan_id` in the `plans` prop) reporting
 // `state === 'running' && paused_reason` — NOT a fake/always-false flag.
@@ -22,7 +22,12 @@ import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/
 // wave's scope — frame consumption lands with US-12); this card renders the
 // plan-derived pause honestly and simply omits the "paused" suffix when no
 // such data is available, rather than inventing a state.
-export const DEFAULT_TASK_MAX_ATTEMPTS = 3
+// MUST track pkg/config/planning.go's `DefaultTaskMaxAttempts`. It is the
+// DENOMINATOR whenever `Task.max_attempts` is absent, which is the normal
+// "inherit the global" case — so a stale value here renders a task that is
+// running perfectly normally as "attempt 7/3", i.e. already past a ceiling
+// it has not reached. Raised 3 → 20 alongside the backend constant.
+export const DEFAULT_TASK_MAX_ATTEMPTS = 20
 
 export function goalLoopStatusLabel(
   task: Pick<Task, 'attempt_count' | 'max_attempts'>,

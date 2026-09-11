@@ -1,8 +1,10 @@
 package session
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -290,4 +292,144 @@ func TestRetention_ContextMetaRemovedWithJsonl(t *testing.T) {
 	// Active .meta.json must also survive.
 	_, err = os.Stat(activeMeta)
 	assert.NoError(t, err, "active .context/<key>.meta.json must not be removed")
+}
+
+// --- GOAL-FR-043 / C-26 / wave S3: the goalRetentionSweepFn hook ---
+
+// installGoalRetentionSweepFn sets goalRetentionSweepFn for the duration of
+// the test and restores it to nil (the production zero value) via
+// t.Cleanup — mirrors this package's own withLockObserver-style hook
+// swap-and-restore discipline (see pkg/goal/lock_test.go's
+// withLockObserver for the sibling package's identical pattern).
+func installGoalRetentionSweepFn(t *testing.T, fn func(retentionDays int) (int, error)) {
+	t.Helper()
+	goalRetentionSweepFn = fn
+	t.Cleanup(func() { goalRetentionSweepFn = nil })
+}
+
+// TestRetentionSweep_GoalHookInvokedWithSameRetentionDays proves C-26's
+// "same schedule, same retention-days argument": RetentionSweep(N) must
+// call the installed goal hook exactly once, with exactly N.
+func TestRetentionSweep_GoalHookInvokedWithSameRetentionDays(t *testing.T) {
+	store := newUnifiedStoreForTest(t)
+	createSessionFile(t, store, "sess-hook", "2025-01-01.jsonl", 30*24*time.Hour)
+
+	var mu sync.Mutex
+	var calls int
+	var gotDays int
+	installGoalRetentionSweepFn(t, func(days int) (int, error) {
+		mu.Lock()
+		calls++
+		gotDays = days
+		mu.Unlock()
+		return 3, nil
+	})
+
+	_, err := store.RetentionSweep(11)
+	require.NoError(t, err)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, 1, calls, "the goal hook must be invoked exactly once per RetentionSweep call")
+	assert.Equal(t, 11, gotDays, "the goal hook must receive the SAME retentionDays RetentionSweep itself was called with")
+}
+
+// TestRetentionSweep_GoalHookSkippedWhenRetentionDisabled proves the goal
+// hook is not invoked on the retentionDays<=0 no-op path — GOAL-FR-043's
+// "same schedule" includes "disabled is disabled for both stores".
+func TestRetentionSweep_GoalHookSkippedWhenRetentionDisabled(t *testing.T) {
+	store := newUnifiedStoreForTest(t)
+
+	var calls int
+	installGoalRetentionSweepFn(t, func(days int) (int, error) {
+		calls++
+		return 0, nil
+	})
+
+	removed, err := store.RetentionSweep(0)
+	require.NoError(t, err)
+	assert.Equal(t, 0, removed)
+	assert.Equal(t, 0, calls, "retentionDays<=0 must not invoke the goal hook")
+}
+
+// TestRetentionSweep_GoalHookNilIsNoOp proves the default (nil, unwired)
+// hook does not change RetentionSweep's existing behaviour at all — every
+// other test in this file runs with no hook installed and already relies
+// on this, but this test asserts it directly rather than only implicitly.
+func TestRetentionSweep_GoalHookNilIsNoOp(t *testing.T) {
+	store := newUnifiedStoreForTest(t)
+	stale := createSessionFile(t, store, "sess-nohook", "2025-01-01.jsonl", 30*24*time.Hour)
+
+	require.Nil(t, goalRetentionSweepFn, "test hygiene: no earlier test in this package left the hook installed")
+
+	removed, err := store.RetentionSweep(7)
+	require.NoError(t, err)
+	assert.Equal(t, 1, removed)
+	_, statErr := os.Stat(stale)
+	assert.True(t, os.IsNotExist(statErr))
+}
+
+// TestRetentionSweep_GoalHookErrorDoesNotFailSweep proves a failing goal
+// hook is logged, not propagated: the session-file sweep already succeeded
+// by the time the hook runs, so its own outcome must stand regardless of
+// what the goal side reports.
+func TestRetentionSweep_GoalHookErrorDoesNotFailSweep(t *testing.T) {
+	store := newUnifiedStoreForTest(t)
+	stale := createSessionFile(t, store, "sess-hookerr", "2025-01-01.jsonl", 30*24*time.Hour)
+
+	installGoalRetentionSweepFn(t, func(days int) (int, error) {
+		return 0, fmt.Errorf("simulated goal store failure")
+	})
+
+	removed, err := store.RetentionSweep(7)
+	require.NoError(t, err, "a goal-hook error must not surface as RetentionSweep's own error")
+	assert.Equal(t, 1, removed, "the session-file sweep's own result must be unaffected by the goal hook's error")
+	_, statErr := os.Stat(stale)
+	assert.True(t, os.IsNotExist(statErr))
+}
+
+// TestRetentionSweep_GoalHookRunsAfterShardsReleased is C-26's central
+// safety property, restated as a runnable test rather than only a doc
+// comment: the goal hook must be invoked strictly AFTER
+// lockAllSessionShards's hold has been fully released, never nested inside
+// it. This uses the package's own FR-101 lock-order seam
+// (installLockRecorder, unified_lock_adr057_test.go) to record every real
+// shard acquire/release, and has the goal hook snapshot that recorded
+// history the instant it is called — then asserts every shard's MOST
+// RECENT recorded event, at that instant, is a release. This is a direct,
+// deterministic structural check (no timing, no goroutine, nothing that
+// can flake under host load): a hook invoked while any shard is still
+// acquired fails this assertion outright, rather than merely racing a
+// timeout that a slow-but-still-nested implementation could accidentally
+// win.
+func TestRetentionSweep_GoalHookRunsAfterShardsReleased(t *testing.T) {
+	store := newUnifiedStoreForTest(t)
+	createSessionFile(t, store, "sess-order", "2025-01-01.jsonl", 30*24*time.Hour)
+
+	events, restore := installLockRecorder(t)
+	t.Cleanup(restore)
+
+	var hookCalled bool
+	var snapshot []lockEvent
+	installGoalRetentionSweepFn(t, func(days int) (int, error) {
+		hookCalled = true
+		snapshot = append([]lockEvent(nil), (*events)...)
+		return 0, nil
+	})
+
+	_, err := store.RetentionSweep(7)
+	require.NoError(t, err)
+	require.True(t, hookCalled, "test bug: the goal hook was never invoked")
+
+	lastStateByShard := map[uint32]bool{} // true = most recently ACQUIRED (still held)
+	for _, ev := range snapshot {
+		lastStateByShard[ev.shard] = ev.acquire
+	}
+	require.Lenf(t, lastStateByShard, int(u4NumSessionLockShards),
+		"all %d session shards must have been touched (acquired then released) by RetentionSweep's own sweep before the goal hook fires; got %d distinct shards recorded",
+		u4NumSessionLockShards, len(lastStateByShard))
+	for shard, stillAcquired := range lastStateByShard {
+		require.Falsef(t, stillAcquired,
+			"shard %d is still ACQUIRED at the instant the goal hook fires — the goal sweep pass is nested inside lockAllSessionShards's hold rather than running after it releases (C-26 violation)", shard)
+	}
 }

@@ -27,9 +27,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/askuser"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -67,14 +70,55 @@ func allowGoalToolsPolicy(agentInst *AgentInstance) {
 // record directly onto sid — the D3 base predicate's legal transient state
 // (ADR-081 D1), without going through applyGoalCommandPrompt (W1b's own
 // lane) at all.
-func setActiveGoalRecordless(t *testing.T, store *session.UnifiedStore, sid, goalID, condition string) {
+func setActiveGoalRecordless(t *testing.T, _ *session.UnifiedStore, sid, goalID, condition string) {
 	t.Helper()
-	empty := ""
-	if err := store.SetMeta(sid, session.MetaPatch{
-		GoalID: &goalID, GoalCondition: &condition, GoalCriteriaJSON: &empty,
-	}); err != nil {
-		t.Fatalf("SetMeta: %v", err)
+	// ADR-086 (wave S6): the session-meta half of this fixture
+	// (GoalID/GoalCondition/GoalCriteriaJSON) is GONE — the goal is its own
+	// entity, and the REAL, active pkg/goal record built below is now the
+	// whole fixture rather than a pairing alongside session meta
+	// (GOAL-FR-009/FR-010, wave E12). A real set_goal call's WriteRecord
+	// path (goal_record_wiring.go, wave E4) resolves the goal via
+	// GetActiveByOwner, so this record is what every reader finds. Criteria
+	// stays empty to mirror this function's own "recordless" contract (D3's
+	// legal transient state, this function's own name); dod is the same
+	// built-in floor a real activation always gets.
+	gstore := goal.NewStore(config.OmnipusHomeDir())
+	if existing, gerr := gstore.GetActiveByOwner(generated.GoalOwnerKindSession, sid); gerr == nil && existing != nil {
+		return // already paired — a caller that sets this fixture twice for one session
 	}
+	g, nerr := goal.New(generated.GoalOwnerKindSession, sid, generated.ChatCompiled,
+		condition, "", nil, newFloorDoD(), config.DefaultGoalMaxRounds, time.Now().UTC())
+	if nerr != nil {
+		t.Fatalf("setActiveGoalRecordless: goal.New: %v", nerr)
+	}
+	g.GoalID = goalID
+	if cerr := gstore.Create(g); cerr != nil {
+		t.Fatalf("setActiveGoalRecordless: Create: %v", cerr)
+	}
+	if _, aerr := gstore.Update(g.GoalID, func(cur *goal.Goal) error {
+		return cur.Activate(sid, time.Now().UTC())
+	}); aerr != nil {
+		t.Fatalf("setActiveGoalRecordless: Activate: %v", aerr)
+	}
+}
+
+// mustActiveGoalRecord fetches sid's active pkg/goal record. wave R7C
+// (joint delivery plan §3): the ADR-086 re-point target for assertions that
+// used to read a set_goal write off session meta's GoalCriteriaJSON — that
+// dual write is retired (DD-6; goal_record_wiring.go::WriteRecord writes
+// pkg/goal.Store only), so a test proving "the write landed" must now read
+// the record it actually landed on. Shared across this wave's whole
+// write-set (goal_first_move_test.go, goal_flow_integration_test.go,
+// goal_terminal_transition_test.go, conformance_design_test.go) — same
+// package, so one definition suffices.
+func mustActiveGoalRecord(t *testing.T, sid string) *goal.Goal {
+	t.Helper()
+	gstore := goal.NewStore(config.OmnipusHomeDir())
+	g, err := gstore.GetActiveByOwner(generated.GoalOwnerKindSession, sid)
+	if err != nil {
+		t.Fatalf("mustActiveGoalRecord(%q): GetActiveByOwner: %v", sid, err)
+	}
+	return g
 }
 
 // --- test 8: TestGoalTurn_NarrowingPredicateAndSurface ---------------------
@@ -112,11 +156,9 @@ func TestGoalTurn_NarrowingPredicateAndSurface(t *testing.T) {
 
 	t.Run("active_goal_record_already_populated_predicate_false", func(t *testing.T) {
 		store3, sid3 := newGoalTestSession(t, al, agentInst.ID)
-		compiled := `{"intent":"x","prompt":"x","criteria":[{"id":"c1","kind":"prose","judgment":"boolean","text":"t"}]}`
-		cond := "build a game"
-		if err := store3.SetMeta(sid3, session.MetaPatch{GoalCondition: &cond, GoalCriteriaJSON: &compiled}); err != nil {
-			t.Fatal(err)
-		}
+		// ADR-086: a POPULATED record is an active goal record with a
+		// non-empty criteria ladder, not the retired GoalCriteriaJSON string.
+		armGoalRecord(t, sid3, "build a game", recordedGoalCriteria("t"), 0, time.Now())
 		ts := &turnState{agent: agentInst, channel: "webchat", opts: processOptions{
 			TranscriptStore: store3, TranscriptSessionID: sid3, Channel: "webchat",
 		}}
@@ -219,9 +261,13 @@ func TestGoalTurn_NarrowingPredicateAndSurface(t *testing.T) {
 	t.Run("budget_spent_only_set_goal_offered", func(t *testing.T) {
 		store7, sid7 := newGoalTestSession(t, al, agentInst.ID)
 		setActiveGoalRecordless(t, store7, sid7, "goal-7", "a spent-budget goal")
-		spent := 1
-		if err := store7.SetMeta(sid7, session.MetaPatch{GoalQuestionRoundsUsed: &spent}); err != nil {
-			t.Fatal(err)
+		// ADR-086 GOAL-FR-004: the question-round budget lives on the goal
+		// record, not on session meta.
+		if _, uerr := goal.NewStore(config.OmnipusHomeDir()).Update("goal-7", func(cur *goal.Goal) error {
+			cur.QuestionRoundsUsed = 1
+			return nil
+		}); uerr != nil {
+			t.Fatal(uerr)
 		}
 		ts := &turnState{agent: agentInst, channel: "webchat", opts: processOptions{
 			TranscriptStore: store7, TranscriptSessionID: sid7, Channel: "webchat",
@@ -495,16 +541,15 @@ func TestGoalTurn_EndToEnd_NarrowedDoorAndRestoration(t *testing.T) {
 		t.Fatalf("request 1 must NOT carry a tool-choice option — forcing is deleted (D3 amendment), got %#v", first.options["tool_choice"])
 	}
 
-	meta, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
+	// wave R7C (Group 1): the dual write to session meta is retired
+	// (DD-6) — WriteRecord lands on pkg/goal.Store only, so the proof the
+	// write landed reads the goal record, not session meta.
+	rec := mustActiveGoalRecord(t, sid)
+	if len(rec.Criteria) == 0 {
+		t.Fatal("set_goal's write must have landed on the pkg/goal record")
 	}
-	if meta.GoalCriteriaJSON == "" {
-		t.Fatal("set_goal's write must have landed on the session meta")
-	}
-	compiled := loadCompiledGoal(meta.GoalCriteriaJSON)
-	if compiled == nil || compiled.Definition != "Build a tetris clone" {
-		t.Fatalf("the registered record must carry the agent's definition, got %+v", compiled)
+	if rec.Definition != "Build a tetris clone" {
+		t.Fatalf("the registered record must carry the agent's definition, got %+v", rec)
 	}
 
 	second, ok := provider.requestAt(1)
@@ -644,12 +689,9 @@ func TestGoalTurn_QuestionDoorBudgetIncrement(t *testing.T) {
 		t.Fatalf("a successful AskUserQuestion call must park the turn, got status=%v", result.status)
 	}
 
-	meta, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if meta.GoalQuestionRoundsUsed != 1 {
-		t.Fatalf("GoalQuestionRoundsUsed = %d, want 1 after the ask door was taken on a narrowed goal turn", meta.GoalQuestionRoundsUsed)
+	meta := mustActiveGoalRecord(t, sid)
+	if meta.QuestionRoundsUsed != 1 {
+		t.Fatalf("goal record QuestionRoundsUsed = %d, want 1 after the ask door was taken on a narrowed goal turn", meta.QuestionRoundsUsed)
 	}
 
 	// A fresh evaluation on the SAME (now budget-spent) session must narrow

@@ -201,6 +201,34 @@ No new settings tab. The Settings screen has eleven tabs and `PerformanceSection
 
 A goal record is swept on the same retention rule and the same schedule as sessions. This closes the hazard that moving a goal off session metadata into its own store removes it from `UnifiedStore.RetentionSweep` and lets goal records accumulate without bound — which D9's "records are never erased" would otherwise guarantee.
 
+### D15 — The task form's eight changes, fixed by a reference design (operator-ratified 2026-09-10)
+
+D11 (mandatory criteria) and D8 (visible progress) both land on the same two screens, and a review of
+those screens against the code turned up five further inconsistencies that have nothing to do with
+goals but sit in the same fields. Rather than let each be re-litigated during implementation, all
+eight are settled here and pinned to a reference design:
+
+**`docs/internal/design/task-form-criteria-dod-demo.html`** reproduces both shipped surfaces field
+for field and outlines only what changes. It is the visual contract; anything unmarked in it stays
+exactly as it is. Full implementation detail is `goal-entity-spec.md` §I2 (FR-053…FR-060).
+
+The eight: criteria and DoD become required and the fallback hint goes (it exists twice, worded
+differently); the DoD renders through the `dod` prop `CriteriaVerdictList` **already has**; verdicts
+render per criterion, which needs no renderer work at all — only D8's projection actually writing
+`met`/`unmet`; **Prompt is renamed Goal**, because that field is what becomes the goal record;
+Checklist is relabelled **Todos**, matching the data, the API and the component's own comment; the
+**title becomes editable**, which it has never been anywhere in the product despite the API always
+accepting it; **Plan is added to the create form**, which today inherits it invisibly from the
+board's filter; and **Trigger is removed from both forms**.
+
+The trigger removal deserves its own line, because it is the only one that takes a capability off a
+screen. A normal task has no timer — it starts when a human presses Start, when an agent starts it,
+or when a plan reaches it. Time-based starts belong to the calendar, and the board and list already
+exclude every schedule-bearing task, so the control could only ever misfire: on the detail panel,
+picking "Once" writes a default time the user never chose, at which point the task counts as
+scheduled and vanishes from the surface they were standing on. The two **controls** go; the
+`trigger` model field, the calendar's editor and the cron engine all stay.
+
 ## 4. Consequences
 
 - One counter pair, one criteria list, one status vocabulary across chat and task.

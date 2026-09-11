@@ -269,12 +269,49 @@ describe('BrowserLiveView — ADR-040 D2 driveMode refactor regression coverage'
     expect(moveCalls()[0][0]).toMatchObject({ kind: 'mouse_move', x: 40, y: 40 })
   })
 
-  // Reviewer finding (queued-move leak): flushPendingMove now re-validates
-  // the drive gate at FLUSH time, not just at schedule time — a position
-  // queued WHILE driving must not leak into the tab if the agent starts
-  // working in the gap before the animation-frame/timer flush actually
-  // fires.
-  it('drops a queued mouse_move if the agent starts working before the flush fires', () => {
+  // Reviewer finding (queued-move leak): flushPendingMove re-validates the
+  // drive gate at FLUSH time, not just at schedule time — a position queued
+  // WHILE driving must not leak into the tab if the wheel is gone by the time
+  // the pacing timer actually fires.
+  //
+  // ⚠️ The SIGNAL that closes the gate changed with ADR-085; the property did
+  // not. This test used to close the gate with `setAgentWorking('s1', true)`,
+  // because `computeDriveMode`'s ladder put `agent-working` ABOVE
+  // `you-driving`, so an agent turn starting mid-queue revoked the operator's
+  // drive. ADR-085 deliberately inverts that:
+  //
+  //   BROWSER-FR-054 — "`computeDriveMode` MUST give operator-holds-wheel
+  //   priority **over** `agentWorking`. […] **Regression guard:** without
+  //   this, `driveMode` stays `agent-working`, so `canDispatchInput` […]
+  //   returns false for every handler that passes `false` — keyboard, wheel
+  //   and pointermove — and the operator's *continuing* input is inert while
+  //   the panel's chip and cursor claim they are driving."
+  //
+  //   BROWSER-FR-057 — operator-holds-wheel "MUST NOT be cleared by an
+  //   `agentWorking` transition."
+  //
+  //   Operator decision D-G (2026-09-11) — "the person keeps the wheel until
+  //   the agent receives a NEW PROMPT to take it back. […] if the agent's
+  //   other work needs a browser while the wheel is held, the agent OPENS A
+  //   NEW TAB rather than waiting."
+  //
+  // So "the agent starts working" is no longer a case of the agent resuming
+  // this tab — it cannot, the wheel is still the operator's and the agent's
+  // own browser calls are deferred server-side onto another tab. The queued
+  // move is the operator's own continuing input into a tab they still own,
+  // and dropping it would BE the FR-054 defect. That case is now pinned
+  // positively in the sibling test below.
+  //
+  // The gate-closing signals FR-057 DOES keep are Escape, annotate mode, a
+  // failed take, a server `browser_status{state:"released"}` frame
+  // (solicited or unsolicited) and a disconnect. `released` is the sharpest
+  // probe of the flush-time re-validation specifically: unlike the
+  // disconnect path (`onDisconnected` nulls `pendingMoveRef` itself, so that
+  // route would stay green with the re-validation deleted), nothing on the
+  // release path touches the queued position. The `if
+  // (!canDispatchInput(...)) return` inside `flushPendingMove` is the only
+  // thing standing between it and the wire.
+  it('drops a queued mouse_move if the wheel is released before the flush fires', () => {
     const container = mountControllingWithFrame()
 
     act(() => {
@@ -283,9 +320,9 @@ describe('BrowserLiveView — ADR-040 D2 driveMode refactor regression coverage'
     // Still coalescing — nothing sent synchronously.
     expect(moveCalls()).toHaveLength(0)
 
-    // The agent starts working in the gap before the scheduled flush fires.
+    // The server revokes the lock in the gap before the scheduled flush fires.
     act(() => {
-      setAgentWorking('s1', true)
+      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'released' })
     })
 
     act(() => {
@@ -294,6 +331,31 @@ describe('BrowserLiveView — ADR-040 D2 driveMode refactor regression coverage'
 
     // The queued position must NOT have leaked into the tab.
     expect(moveCalls()).toHaveLength(0)
+  })
+
+  // The successor to the retired half of the test above — BROWSER-FR-054 /
+  // FR-057 / D-G, asserted positively so a future "restore the drop" edit
+  // cannot pass this file silently. An agent turn starting while the operator
+  // holds the wheel must leave the queued position on course for the wire,
+  // carrying the coalesced coordinates unchanged.
+  it('still flushes a queued mouse_move when the agent starts working while the operator holds the wheel', () => {
+    const container = mountControllingWithFrame()
+
+    act(() => {
+      fireEvent.pointerMove(container, { clientX: 10, clientY: 10 })
+    })
+    expect(moveCalls()).toHaveLength(0)
+
+    act(() => {
+      setAgentWorking('s1', true)
+    })
+
+    act(() => {
+      vi.runAllTimers()
+    })
+
+    expect(moveCalls()).toHaveLength(1)
+    expect(moveCalls()[0][0]).toMatchObject({ kind: 'mouse_move', x: 10, y: 10 })
   })
 })
 

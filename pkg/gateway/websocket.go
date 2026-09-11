@@ -1956,6 +1956,17 @@ func (h *WSHandler) handleChatMessage(
 		// handler is the "Web WS message handler (authenticated gateway
 		// user)" origination point — always a genuine live user action.
 		UserInitiated: true,
+		// OperatorPrompt (ADR-085 BROWSER-FR-029): a fail-closed sibling of
+		// UserInitiated, set true ONLY here, pkg/gateway/sse.go and
+		// pkg/channels/base.go::HandleMessage — the three sites where the
+		// OPERATOR composed this message on THIS session. It is what
+		// releases a held browser wheel (pkg/agent/loop.go::processMessage,
+		// via AgentLoop.SetBrowserWheelReleaseHook) before the turn begins.
+		// Deliberately NOT reused from UserInitiated (which is also true on
+		// the question-card resume path, where a release would hand the
+		// browser back mid-drive — see ws_ask_user.go, which must NOT set
+		// this field).
+		OperatorPrompt: true,
 	}
 	if agentID != "" {
 		// Format already validated up front, before the kickoff consume step

@@ -556,3 +556,152 @@ func TestToWireType(t *testing.T) {
 		})
 	}
 }
+
+// =====================================================================
+// Wave E1 (ADR-084 D10/D12 catalogue; ADR-085 BROWSER-FR-051) —
+// goal_claim and browser_handover catalogue + per-agent seed correctness.
+// =====================================================================
+
+// TestCatalog_ContainsGoalClaimAndBrowserHandover pins JUDGE-D12 and
+// BROWSER-FR-051's first site: both new tool names must be members of the
+// static catalog, or validateOverrideKeys panics at boot the first time any
+// per-agent seed names them (see override_keys_panic_test.go).
+func TestCatalog_ContainsGoalClaimAndBrowserHandover(t *testing.T) {
+	names := coreagent.AllStaticToolNames()
+	found := map[string]bool{}
+	for _, n := range names {
+		found[n] = true
+	}
+	assert.True(t, found["goal_claim"], "AllStaticToolNames() must contain \"goal_claim\" (JUDGE-D12)")
+	assert.True(t, found["browser_handover"], "AllStaticToolNames() must contain \"browser_handover\" (BROWSER-FR-051)")
+}
+
+// TestSeed_GoalClaimResolvesForEveryAgent pins JUDGE-FR-089's per-agent seed
+// requirement: explicit allow for the core roster, the subagent tier and
+// customs' default allowlist; explicit deny for Judge and PlanSupervisor
+// (via their denyAllThenOverride stamps) and for Worker (via
+// tightenGlobalCeiling) — mirroring set_goal's own seed exactly.
+func TestSeed_GoalClaimResolvesForEveryAgent(t *testing.T) {
+	cfg := &config.Config{}
+	coreagent.SeedConfig(cfg)
+
+	byID := make(map[string]config.AgentConfig, len(cfg.Agents.List))
+	for _, ac := range cfg.Agents.List {
+		byID[ac.ID] = ac
+	}
+
+	allowIDs := []coreagent.CoreAgentID{
+		coreagent.IDMia, coreagent.IDJim, coreagent.IDAva, coreagent.IDRay,
+		coreagent.IDPlanner, coreagent.IDExplorer, coreagent.IDResearcher,
+	}
+	for _, id := range allowIDs {
+		ac, ok := byID[string(id)]
+		require.True(t, ok, "agent %q must be seeded", id)
+		p, present := ac.Tools.Builtin.Policies["goal_claim"]
+		require.True(t, present, "agent %q must have an explicit goal_claim policy", id)
+		assert.Equal(t, config.ToolPolicyAllow, p, "agent %q must resolve goal_claim allow", id)
+	}
+
+	denyIDs := []coreagent.CoreAgentID{coreagent.IDWorker, coreagent.IDJudge, coreagent.IDPlanSupervisor}
+	for _, id := range denyIDs {
+		ac, ok := byID[string(id)]
+		require.True(t, ok, "agent %q must be seeded", id)
+		p, present := ac.Tools.Builtin.Policies["goal_claim"]
+		require.True(t, present, "agent %q must have an explicit goal_claim policy", id)
+		assert.Equal(t, config.ToolPolicyDeny, p, "agent %q must resolve goal_claim deny", id)
+	}
+}
+
+// TestSeed_BrowserHandoverAtAllThreeSites pins BROWSER-FR-051 (C-70): the
+// catalogue name, the global ceiling and the per-agent seeds for every
+// browser-capable agent land in one commit. This wave owns all three sites
+// (the tool BODY and its own registration test are wave B6's, a later
+// round — pkg/coreagent/browser_handover_seed_test.go).
+func TestSeed_BrowserHandoverAtAllThreeSites(t *testing.T) {
+	// Site 1: the catalogue (also covered by
+	// TestCatalog_ContainsGoalClaimAndBrowserHandover above, re-asserted
+	// here so this test is a complete, self-contained proof of FR-051).
+	found := false
+	for _, n := range coreagent.AllStaticToolNames() {
+		if n == "browser_handover" {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "allStaticToolNames must contain browser_handover")
+
+	// Site 2: the global ceiling — allow (a decision, not an inheritance:
+	// browser_upload_file in the same block is "ask").
+	defCfg := config.DefaultConfig()
+	ceilingPolicy, ok := defCfg.Sandbox.ToolPolicies["browser_handover"]
+	require.True(t, ok, "pkg/config/defaults.go must carry a browser_handover ceiling entry")
+	assert.Equal(t, string(config.ToolPolicyAllow), ceilingPolicy, "browser_handover ceiling must be allow")
+
+	// Site 3: the per-agent seeds — every browser-capable agent (Jim, Ray,
+	// Explorer, Researcher) resolves allow.
+	cfg := &config.Config{}
+	coreagent.SeedConfig(cfg)
+	byID := make(map[string]config.AgentConfig, len(cfg.Agents.List))
+	for _, ac := range cfg.Agents.List {
+		byID[ac.ID] = ac
+	}
+	for _, id := range []coreagent.CoreAgentID{coreagent.IDJim, coreagent.IDRay, coreagent.IDExplorer, coreagent.IDResearcher} {
+		ac, ok := byID[string(id)]
+		require.True(t, ok, "agent %q must be seeded", id)
+		p, present := ac.Tools.Builtin.Policies["browser_handover"]
+		require.True(t, present, "browser-capable agent %q must have an explicit browser_handover policy", id)
+		assert.Equal(t, config.ToolPolicyAllow, p, "browser-capable agent %q must resolve browser_handover allow", id)
+	}
+}
+
+// TestSeed_MiaAndAvaResolveDenyForBrowserHandover positively asserts what
+// BROWSER-FR-051 requires as an observable, not an absence: Mia and Ava need
+// no per-agent edit at all because denyAllThenOverride enumerates every
+// catalog name at deny first, but the test must still prove they RESOLVE
+// deny — absence is not the observable, and a future "helpful" edit adding
+// them an allow would produce a silently browser-capable Mia that no test
+// notices otherwise.
+func TestSeed_MiaAndAvaResolveDenyForBrowserHandover(t *testing.T) {
+	cfg := &config.Config{}
+	coreagent.SeedConfig(cfg)
+	byID := make(map[string]config.AgentConfig, len(cfg.Agents.List))
+	for _, ac := range cfg.Agents.List {
+		byID[ac.ID] = ac
+	}
+	for _, id := range []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDAva} {
+		ac, ok := byID[string(id)]
+		require.True(t, ok, "agent %q must be seeded", id)
+		p, present := ac.Tools.Builtin.Policies["browser_handover"]
+		require.True(t, present, "agent %q must have an explicit (denyAllThenOverride-stamped) browser_handover policy", id)
+		assert.Equal(t, config.ToolPolicyDeny, p, "agent %q must resolve browser_handover deny (no browser action set to stand down from)", id)
+	}
+}
+
+// NOTE: JUDGE-FR-058 (the "mcp_*": deny wildcard stamp on the Judge's
+// tool-policy map) is deliberately NOT implemented by this wave and has no
+// test here — see the NOTE at systemAgentSeed's IDJudge case in core.go for
+// why: the joint delivery plan assigns FR-058, together with the one
+// pre-existing test its exact-length assertion would break
+// (judge_seed_test.go), to wave T4 (round 7), and landing the stamp here
+// would leave that currently-green test red for six rounds with nothing in
+// between to fix it.
+
+// TestSeed_JudgeSkillsAllowlistIsNonNilEmpty pins JUDGE-FR-059: the Judge's
+// seeded skill allowlist is a non-nil, EMPTY slice — documentation value
+// only (context.go::skillAllowed already denies a nil-or-empty allowlist),
+// but it must be re-enforced on every boot exactly like PlanSupervisor's,
+// which only happens for a non-nil result.
+func TestSeed_JudgeSkillsAllowlistIsNonNilEmpty(t *testing.T) {
+	cfg := &config.Config{}
+	coreagent.SeedConfig(cfg)
+	var judge *config.AgentConfig
+	for i := range cfg.Agents.List {
+		if cfg.Agents.List[i].ID == string(coreagent.IDJudge) {
+			judge = &cfg.Agents.List[i]
+			break
+		}
+	}
+	require.NotNil(t, judge, "SeedConfig must seed the Judge")
+	require.NotNil(t, judge.Skills, "Judge's seeded Skills must be non-nil (nil means unrestricted)")
+	assert.Empty(t, judge.Skills, "Judge's seeded Skills must be empty")
+}

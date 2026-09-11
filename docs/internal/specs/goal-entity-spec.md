@@ -478,6 +478,91 @@ The re-arm marker (`idleSettling`) means one fire per quiet spell, re-arming onl
 - **FR-047** — `src/components/workspaces/CreateTaskSlideOver.tsx` MUST refuse submission with fewer than one acceptance criterion or fewer than one definition-of-done item, and MUST say which is missing. Its current empty-state hint, which advertises the soft-tier fallback, MUST be removed. The API MUST return HTTP 400 for the same condition so the rule is not interface-only.
 - **FR-048** — The definition-of-done editor MUST exist on the task surface. `pkg/task/task.go` has no DoD field today; the DoD list lives on the task's goal record (FR-003), which is a further reason criteria belong on the goal. Opening a pre-FR-047 task with no criteria MUST NOT block reading it; saving an edit MUST enforce FR-047.
 
+### I2. The task form — the eight decided changes (design demo)
+
+**Reference design:** `docs/internal/design/task-form-criteria-dod-demo.html`. It reproduces both
+shipped surfaces field for field and outlines only what changes: gold solid = new, gold dashed =
+changed, red = removed. Everything unmarked in that page MUST be left exactly as it is. An agent
+implementing this section MUST open the demo first and treat it as the visual contract; where this
+text and the demo disagree, the demo is wrong and this text wins.
+
+**The two surfaces, and which is which.** Creating is
+`src/components/workspaces/CreateTaskSlideOver.tsx`, shared by the workspace board *and* the
+calendar. Editing is `src/components/workspaces/TaskDetailPanel.tsx` (1061 lines), wrapped by
+`TaskDetailSlideOver.tsx`. These are two different components; a change to one is not a change to
+the other. Do **not** mistake either for the calendar's own occurrence slide-over.
+
+**The panel autosaves.** `TaskDetailPanel` writes every field change immediately and shows an
+`AutoSaveIndicator`. It has no footer buttons. Do not add a Save button to it, and do not batch
+edits.
+
+- **FR-053** — **Criteria required, hint removed.** Both surfaces MUST mark acceptance criteria and
+  definition of done as required, using the same `<span className="text-[var(--color-error)]">*</span>`
+  the Title field already uses. The empty-state hint MUST be removed in **both** places — it exists
+  twice with different wording: `CreateTaskSlideOver.tsx`'s `emptyHint` ("No criteria added — this
+  task will be judged against its title and description (D5).") and `TaskDetailPanel.tsx`'s
+  `emptyHint` ("No criteria — this task will be judged against its title and description (D5)."). A
+  grep for `emptyHint` MUST return zero hits carrying that sentence when this is done. The create
+  form replaces it with a plain instruction; the panel needs no replacement. Enforcement is FR-047.
+- **FR-054** — **Definition of Done renders as its own group.** In `CreateTaskSlideOver` it is a
+  second `AcceptanceCriteriaEditor` with identical vocabulary. In `TaskDetailPanel` it MUST be fed
+  to the **existing** `dod` prop on `CriteriaVerdictList`, which already renders a distinctly
+  labelled "Definition of Done" group (`CriteriaVerdictList.tsx`, the `criteria-verdict-dod`
+  block). The panel currently never passes that prop. Do **not** build a new renderer.
+- **FR-055** — **Verdicts render per criterion.** The rows, the tick, the reason line and the
+  evidence expander all ship today in `CriteriaVerdictList`/`CriterionRow`; the only defect is that
+  nothing ever writes `met`/`unmet`, so every criterion shows pending. This FR is satisfied by
+  FR-030–FR-034 (verdict → criterion status) landing, not by touching the renderer. No new
+  component. The one interface change is that the panel MUST pass `dod` (FR-054).
+- **FR-056** — **Prompt is renamed Goal.** `CreateTaskSlideOver`'s label "Prompt" and
+  `TaskDetailPanel`'s "Prompt / Instructions" MUST both read **Goal**. The create form's placeholder
+  changes from "Describe what the agent should do…" to "What should this task achieve?", and the
+  field becomes required. This is a **label** change: the wire field stays `prompt`
+  (`TaskCreateRequest`/`TaskUpdateRequest`), and no contract regeneration is implied. The rename is
+  the point — this field is what becomes the goal record when the task starts its own session
+  (FR-003).
+- **FR-057** — **Checklist is relabelled Todos.** `TaskChecklistField`'s section label and the
+  create form's Checklist label MUST read **Todos**, and the placeholder "Add a checklist item…"
+  becomes "Add a todo…", in both surfaces. The data, the API (`setTaskTodos`) and the component's
+  own header comment already say todos; the label was the last place the other word survived. The
+  component filename and exported symbol MAY stay `TaskChecklistField` — renaming those is
+  out of scope and MUST NOT be bundled in.
+- **FR-058** — **Title becomes editable in the panel.** `TaskDetailPanel` renders the title as
+  `<p className="text-sm font-medium">{task.title}</p>` with no edit control, and no inline rename
+  exists on the board or list either — so a task can be named once and never renamed. The panel MUST
+  offer an editable title following the same pattern its Prompt field already uses (click to edit,
+  or a direct input, autosaved). No backend work: `TaskUpdateRequest` already carries `title` and
+  `pkg/gateway/rest_tasks.go` already applies it (`if req.Title != nil { patch.Title = req.Title }`).
+  This is a missing control, not a missing capability.
+- **FR-059** — **Plan is added to the create form.** `CreateTaskSlideOver` has no Plan control; it
+  takes `planId` as a prop from the board's active plan filter and sends it silently. Creating from
+  an unfiltered board therefore yields a task with no plan, whose only remedy is to save it and
+  reopen the detail panel. The create form MUST offer the same Plan picker the panel has, defaulting
+  to the inherited `planId` when one is passed and to "No plan" otherwise.
+- **FR-060** — **Trigger is REMOVED from both forms.** A normal task has no timer. It starts exactly
+  three ways — a human presses Start, an agent starts it, or a plan reaches it — and none is a
+  schedule. Time-based starts are the calendar's, and `BoardView`/`ListView` **already** exclude
+  every schedule-bearing task via their `isScheduledTrigger` filter, so a task reaching either form
+  is manual by definition. Today the field is actively harmful on the panel: its own comment records
+  that picking "Once" *"hands the task a default at_ms and PATCHes immediately"*, after which the
+  task counts as scheduled, disappears from the board and list, and the field degrades to a
+  read-only calendar link — a choice that ejects the task from the surface the user is standing on,
+  with a time they never picked. Remove the `Trigger` `Field` and its `SmartSelect` from
+  `TaskDetailPanel`, and the Trigger `Label`/`Select` plus its conditional `DateTimePicker` from
+  `CreateTaskSlideOver`. **Scope limit:** this removes the two CONTROLS only. The `trigger` field on
+  the task model, the wire type, the `isScheduledTrigger`/`scheduledTriggerSummary` helpers, the
+  calendar's own editor and the cron engine all stay — the calendar keeps the capability. The
+  panel's read-only branch for an already-scheduled task (the plain-English summary plus "Edit in
+  workspace calendar" link) MUST also stay, since such a task is still reachable here via a
+  dependency chip, subtask row, search result or stale cache.
+
+**Deliberately NOT changed**, so no agent "fixes" them: Status and Workspace stay panel-only (a new
+task always starts in Inbox, and it is created inside a workspace); the attempt budget is not a task
+field (FR-045/FR-046 put it in Settings → Performance, and the panel keeps its existing read-only
+`attempt N/M` line); the Judgment selector stays removed per D-TYPES; and the criteria editor's own
+optional technical check and action-count check keep their present wording and stay attached to a
+criterion rather than standing alone.
+
 ### J. The active-loop cap (D12)
 
 - **FR-049** — Task-owned goals MUST NOT consume the `"goal"` admission slot registered via `pkg/agent/plan_engine.go::RegisterActiveCounter` and bounded by `config.DefaultGlobalActiveLoopCap` (16). Chat goals MUST remain bounded by it unchanged.
@@ -882,6 +967,14 @@ Anything broader — the package suite, `./...`, the race detector — runs in C
 | 50 | `TestNoMigrationPathExists` | Unit | `pkg/session/unified_meta_files_test.go` | FR-050, S-45 |
 | 51 | `TestOrphanGoalStateEndsVisiblyAtBoot` | Integration | `pkg/gateway/goal_orphan_boot_test.go` | FR-051, S-44, S-45 |
 | 52 | `TestTriggerStateKeyedByGoalID` | Unit | `pkg/agent/goal_triggers_test.go` | FR-052, S-47 |
+| 53 | `both forms mark criteria and DoD required and carry no fallback hint` | Unit | `src/components/workspaces/CreateTaskSlideOver.criteria.test.tsx`, `TaskDetailPanel.criteria.test.tsx` | FR-053 |
+| 54 | `panel passes dod to CriteriaVerdictList and the DoD group renders` | Unit | `src/components/workspaces/TaskDetailPanel.dod.test.tsx` | FR-054 |
+| 55 | `a met/unmet criterion renders its tick and reason, not pending` | Unit | `src/components/workspaces/CriteriaVerdictList.status.test.tsx` | FR-055 |
+| 56 | `both forms label the prompt field Goal` | Unit | `src/components/workspaces/taskFormLabels.test.tsx` | FR-056 |
+| 57 | `both forms label the todos field Todos` | Unit | `src/components/workspaces/taskFormLabels.test.tsx` | FR-057 |
+| 58 | `panel renames a task and autosaves it` | Unit | `src/components/workspaces/TaskDetailPanel.title.test.tsx` | FR-058 |
+| 59 | `create form offers a Plan picker and defaults to the inherited planId` | Unit | `src/components/workspaces/CreateTaskSlideOver.plan.test.tsx` | FR-059 |
+| 60 | `neither form renders a Trigger control; the panel keeps its scheduled read-only branch` | Unit | `src/components/workspaces/taskFormNoTrigger.test.tsx` | FR-060 |
 
 ### Test datasets
 
@@ -1092,9 +1185,11 @@ Waves are file-disjoint so they can be implemented in parallel without merge con
 | **W8 — Keeper unification** | W2, W3, W4 | `pkg/agent/goal_loop.go` (gates), `pkg/agent/goal_triggers.go` (drivers, maps), `pkg/agent/task_executor.go` (activation, claim path) | FR-009…FR-020, FR-022, FR-023, FR-052. The behavioural heart; last of the backend waves by design. |
 | **W9 — Routing** | W2, W8 | `pkg/goal/routing.go`, `pkg/agent/goal_triggers.go` (routing helpers) | FR-032…FR-035. |
 | **W10 — Boot detection** | W3 | `pkg/gateway/gateway.go`, `pkg/gateway/goal_orphan_boot.go` (new) | FR-051. |
-| **W11 — SPA: criteria and DoD** | W1, W5 | `src/components/workspaces/CreateTaskSlideOver.tsx`, `AcceptanceCriteriaEditor.tsx`, `DefinitionOfDoneEditor.tsx` (new) | FR-047, FR-048. |
-| **W12 — SPA: budget and settings** | W1, W6 | `src/components/workspaces/GoalBudgetField.tsx` (new), `TaskDetailPanel.tsx`, `src/components/settings/PerformanceSection.tsx` | FR-045, FR-046. |
-| **W13 — SPA: goal card** | W1, W7 | `src/components/chat/GoalEchoCard.tsx`, `GoalPillTray.tsx`, `GoalIndicator.tsx`, `src/components/workspaces/CriteriaVerdictList.tsx` | Renders the moving ticks. |
+| **W11 — SPA: the create form** | W1, W5 | `src/components/workspaces/CreateTaskSlideOver.tsx`, `AcceptanceCriteriaEditor.tsx`, `DefinitionOfDoneEditor.tsx` (new) | FR-047, FR-048, and the create-form half of FR-053, FR-056, FR-057, FR-059, FR-060. |
+| **W12 — SPA: the detail panel** | W1, W6 | `src/components/workspaces/GoalBudgetField.tsx` (new), `TaskDetailPanel.tsx`, `TaskChecklistField.tsx`, `src/components/settings/PerformanceSection.tsx` | FR-045, FR-046, FR-054, FR-058, and the panel half of FR-053, FR-056, FR-057, FR-060. |
+| **W13 — SPA: goal card** | W1, W7 | `src/components/chat/GoalEchoCard.tsx`, `GoalPillTray.tsx`, `GoalIndicator.tsx`, `src/components/workspaces/CriteriaVerdictList.tsx` | Renders the moving ticks. FR-055. |
+
+**The three SPA waves are file-disjoint by construction, and the split cuts across the eight form changes rather than along them** — five of the eight (FR-053, FR-056, FR-057, FR-060, and FR-055's rendering) touch both surfaces. Implement each half in its own wave against the same demo page; do not let one wave edit the other's file to "finish" a change. `TaskChecklistField.tsx` is shared by both surfaces and belongs to **W12 alone**.
 | **W14 — Parity and guard tests** | all | `pkg/agent/goal_parity_test.go`, the three new regression guards in §8 | FR-014 and the merge guards. |
 
 **Critical path:** W1 → W2 → W4 → W7 → W13. **The one ordering that is not negotiable** is W4 before W7: writing per-criterion outcomes into a record that is erased one statement later is the defect ADR-086 D9 exists to prevent, and building them in the other order would produce a passing test suite and a blank goal card.

@@ -22,9 +22,11 @@ import (
 	"testing"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/askuser"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -263,14 +265,11 @@ func TestGoalClarify_WebCardRoundtrip(t *testing.T) {
 			t.Fatalf("the forced first request must offer exactly 2 tools, got %d: %v", len(first.tools), toolNamesOf(first.tools))
 		}
 
-		meta, err := store.GetMeta(sid)
-		if err != nil {
-			t.Fatal(err)
+		meta := mustActiveGoalRecord(t, sid)
+		if meta.QuestionRoundsUsed != 1 {
+			t.Fatalf("goal record QuestionRoundsUsed = %d, want 1 after the ask door was taken", meta.QuestionRoundsUsed)
 		}
-		if meta.GoalQuestionRoundsUsed != 1 {
-			t.Fatalf("GoalQuestionRoundsUsed = %d, want 1 after the ask door was taken", meta.GoalQuestionRoundsUsed)
-		}
-		if meta.GoalCriteriaJSON != "" {
+		if goalRecordCompiledJSON(meta) != "" {
 			t.Fatal("the record must still be empty while the card is parked")
 		}
 
@@ -312,16 +311,14 @@ func TestGoalClarify_WebCardRoundtrip(t *testing.T) {
 			t.Fatal("no request may ever carry a tool-choice option — forcing is deleted (D3 amendment)")
 		}
 
-		afterMeta, err := store.GetMeta(sid)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if afterMeta.GoalCriteriaJSON == "" {
+		// wave R7C (Group 1): the dual write to session meta is retired
+		// (DD-6) — WriteRecord lands on pkg/goal.Store only.
+		rec := mustActiveGoalRecord(t, sid)
+		if len(rec.Criteria) == 0 {
 			t.Fatal("the resumed turn's set_goal call must have registered the record")
 		}
-		compiled := loadCompiledGoal(afterMeta.GoalCriteriaJSON)
-		if compiled == nil || compiled.Definition != "Build a single-player tetris clone" {
-			t.Fatalf("the registered record must reflect the agent's post-answer definition, got %+v", compiled)
+		if rec.Definition != "Build a single-player tetris clone" {
+			t.Fatalf("the registered record must reflect the agent's post-answer definition, got %+v", rec)
 		}
 
 		deadline := time.Now().Add(2 * time.Second)
@@ -407,19 +404,18 @@ func TestGoalClarify_WebCardRoundtrip(t *testing.T) {
 			t.Fatalf("the auto-submit resume turn itself failed: %v", resumeErr)
 		}
 
-		afterMeta, err := store.GetMeta(sid)
-		if err != nil {
-			t.Fatal(err)
+		afterMeta := mustActiveGoalRecord(t, sid)
+		if afterMeta.QuestionRoundsUsed != 1 {
+			t.Fatalf("goal record QuestionRoundsUsed = %d, want 1 — the auto-submit resume must consume the budget exactly like a human answer (S-12)", afterMeta.QuestionRoundsUsed)
 		}
-		if afterMeta.GoalQuestionRoundsUsed != 1 {
-			t.Fatalf("GoalQuestionRoundsUsed = %d, want 1 — the auto-submit resume must consume the budget exactly like a human answer (S-12)", afterMeta.GoalQuestionRoundsUsed)
-		}
-		if afterMeta.GoalCriteriaJSON == "" {
+		// wave R7C (Group 1): the dual write to session meta is retired
+		// (DD-6) — WriteRecord lands on pkg/goal.Store only.
+		rec := mustActiveGoalRecord(t, sid)
+		if len(rec.Criteria) == 0 {
 			t.Fatal("the auto-submit resume's set_goal call must have registered the record")
 		}
-		compiled := loadCompiledGoal(afterMeta.GoalCriteriaJSON)
-		if compiled == nil || compiled.Definition != "Build a single-player tetris clone (default assumptions)" {
-			t.Fatalf("the registered record must reflect the agent's post-resume definition, got %+v", compiled)
+		if rec.Definition != "Build a single-player tetris clone (default assumptions)" {
+			t.Fatalf("the registered record must reflect the agent's post-resume definition, got %+v", rec)
 		}
 
 		second, ok := provider.callAt(1)
@@ -481,11 +477,7 @@ func TestGoalClarify_WebCardRoundtrip(t *testing.T) {
 			t.Fatal("expected goal A's card to be pending")
 		}
 		staleCardID := pending.CardID
-		goalAMeta, err := store.GetMeta(sid)
-		if err != nil {
-			t.Fatal(err)
-		}
-		staleGoalID := goalAMeta.GoalID
+		staleGoalID := mustActiveGoalRecord(t, sid).GoalID
 		if staleGoalID == "" {
 			t.Fatal("goal A must have minted a GoalID")
 		}
@@ -497,11 +489,14 @@ func TestGoalClarify_WebCardRoundtrip(t *testing.T) {
 		// `/goal clear`, both of which supersede a still-active goal's
 		// card; this directly manipulates state to isolate that ONE call
 		// site — new-goal activation — from the other).
-		empty := ""
-		if setMetaErr := store.SetMeta(sid, session.MetaPatch{
-			GoalID: &empty, GoalCondition: &empty, GoalCriteriaJSON: &empty,
-		}); setMetaErr != nil {
-			t.Fatal(setMetaErr)
+		// ADR-086: "goal A ended out-of-band" is a TERMINAL STATUS TRANSITION
+		// on its own retained record (GOAL-FR-027/FR-028), not the
+		// field-zeroing session-meta patch this block used to write — the
+		// three fields it zeroed no longer exist (wave S6). Terminating is
+		// what makes activeGoalForSession stop finding it, which is the
+		// precondition this test needs.
+		if terr := terminateGoalRecordByID(staleGoalID, generated.GoalStateCleared, "ended out-of-band"); terr != nil {
+			t.Fatalf("terminate goal A: %v", terr)
 		}
 		if _, ok := reg.PendingForSession(sid); !ok {
 			t.Fatal("sanity: the stale card must still be genuinely pending before supersession")
@@ -525,12 +520,9 @@ func TestGoalClarify_WebCardRoundtrip(t *testing.T) {
 			t.Fatalf("a late Submit on the cancelled stale card must return ErrNoPending, got %v", submitErr)
 		}
 
-		newMeta, err := store.GetMeta(sid)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if newMeta.GoalCondition != "build a completely different app" {
-			t.Fatalf("the new goal must be genuinely active, got condition=%q", newMeta.GoalCondition)
+		newMeta := mustActiveGoalRecord(t, sid)
+		if newMeta.Prompt != "build a completely different app" {
+			t.Fatalf("the new goal must be genuinely active, got condition=%q", newMeta.Prompt)
 		}
 		if newMeta.GoalID == "" || newMeta.GoalID == staleGoalID {
 			t.Fatalf("the new goal must mint a FRESH GoalID distinct from the superseded one, got %q (stale was %q)", newMeta.GoalID, staleGoalID)
@@ -641,16 +633,14 @@ func TestGoalFlow_EndToEnd_Web(t *testing.T) {
 		t.Fatal("request 1 must NOT carry a tool-choice option — forcing is deleted (D3 amendment)")
 	}
 
-	meta1, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if meta1.GoalCriteriaJSON == "" {
+	// wave R7C (Group 1): the dual write to session meta is retired
+	// (DD-6) — WriteRecord lands on pkg/goal.Store only.
+	rec1 := mustActiveGoalRecord(t, sid)
+	if len(rec1.Criteria) == 0 {
 		t.Fatal("turn 1's set_goal call must have registered the record")
 	}
-	compiled1 := loadCompiledGoal(meta1.GoalCriteriaJSON)
-	if compiled1 == nil || compiled1.Definition != "Build a tiny tetris game" || len(compiled1.Criteria) != 1 {
-		t.Fatalf("the registered record must reflect the agent's first-move definition, got %+v", compiled1)
+	if rec1.Definition != "Build a tiny tetris game" || len(rec1.Criteria) != 1 {
+		t.Fatalf("the registered record must reflect the agent's first-move definition, got %+v", rec1)
 	}
 
 	second, ok := provider.callAt(1)
@@ -684,16 +674,17 @@ func TestGoalFlow_EndToEnd_Web(t *testing.T) {
 		t.Fatal("the steering turn's first request must NOT carry a tool-choice option — the record already exists (predicate false), and no request ever carries one anyway (D3 amendment)")
 	}
 
-	meta2, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
+	// wave R7C (Group 1, cascading): same session-meta dual-write retirement
+	// (DD-6) as the turn-1 registration check above — this assertion was
+	// never reached in the pre-fix confirmation run (turn 1's t.Fatal
+	// stopped the function first), but it reads the identical stale field
+	// and needs the identical re-point.
+	rec2 := mustActiveGoalRecord(t, sid)
+	if rec2.Definition != "Build a tiny dark-themed tetris game" {
+		t.Fatalf("steering must have updated the record's definition, got %+v", rec2)
 	}
-	compiled2 := loadCompiledGoal(meta2.GoalCriteriaJSON)
-	if compiled2 == nil || compiled2.Definition != "Build a tiny dark-themed tetris game" {
-		t.Fatalf("steering must have updated the record's definition, got %+v", compiled2)
-	}
-	if len(compiled2.Criteria) != 2 {
-		t.Fatalf("steering must have ADDED a criterion (dark theme), got %d criteria: %+v", len(compiled2.Criteria), compiled2.Criteria)
+	if len(rec2.Criteria) != 2 {
+		t.Fatalf("steering must have ADDED a criterion (dark theme), got %d criteria: %+v", len(rec2.Criteria), rec2.Criteria)
 	}
 	// set_goal(mode:update)'s tool_result carries a diff summary (D2) —
 	// prove it reached the model on the request that follows.
@@ -705,40 +696,42 @@ func TestGoalFlow_EndToEnd_Web(t *testing.T) {
 		t.Fatal("set_goal(mode:update)'s tool_result must carry an observable diff (D2) reporting what was added")
 	}
 
-	// --- Keeper: force an idle cycle with an UNMET-judging Judge provider. ---
-	// Prime the FR-014b zero-output-triple watermark + a prior transcript
-	// entry so idle settlement adjudicates NORMALLY on the very first check
-	// (goalZeroOutputTripleHolds' own degenerate-baseline rule would
-	// otherwise treat a fresh watermark as "nothing to compare against yet"
-	// and dispatch a bounded continue-push instead of judging) — this
-	// test's concern is the un-wedge invariant (C-7), not the FR-014b push
-	// ladder, which has its own dedicated coverage in
-	// goal_keeper_repairs_test.go.
+	// --- Keeper: force an idle cycle. ---
+	// wave R7C (Group 3): JUDGE-FR-095/FR-097 (D13, landed by E13) retires
+	// claimless idle adjudication outright — a `met` claim is now the SOLE
+	// adjudication trigger (checkGoalLoopAfterTurn). Idle settlement for a
+	// RECORDED goal always routes through the unified push ladder
+	// (settleGoalNormally, goal_triggers.go): a bounded continue-push, never
+	// a verdict, never a round. This rewrites the former
+	// "force-an-adjudication" setup to the push-ladder shape E13 used in
+	// goal_keeper_repairs_test.go's TestPushLadder_RecordedGoal_BoundedThenQuiet
+	// — this test's own concern (the un-wedge invariant, C-7) is unchanged:
+	// it proves a SECOND idle cycle can still fire after the first one's
+	// follow-up turn is processed, not that the Judge runs.
+	//
+	// primeGoalZeroOutputTripleFalse is KEPT even though the zero-output
+	// triple it used to prime (goalZeroOutputTripleHolds) is deleted
+	// outright by the same wave (goal_triggers_test.go's own doc comment on
+	// the symbol) — it still does real, harmless setup (a prior adjudicable
+	// transcript entry) and the function was left in place specifically so
+	// this file keeps compiling across the wave boundary.
 	primeGoalZeroOutputTripleFalse(t, store, sid, agentInst.ID)
-	cp := unmetJudgeProvider("dark theme not yet verified")
+	cp := unmetJudgeProvider("must never be called — JUDGE-FR-095 retires claimless idle adjudication")
 	judgeInst.Provider = cp
 
 	// Rewind GoalLastActivityAt (the quiet-window precondition) into the
-	// past and settle with a REAL time.Now() — NOT an artificially
-	// future-shifted `now`. goalZeroOutputTripleHolds stamps its own
-	// watermark to whatever `now` this call receives; a future-shifted
-	// `now` would set the watermark AHEAD of the real wall-clock timestamps
-	// the intervening turns actually write, making every later transcript
-	// entry look like it happened BEFORE the watermark and wrongly keep
-	// tripping the FR-014b bounded-push branch instead of real
-	// adjudication. Real `now` keeps the watermark and real transcript
-	// timestamps in the same, correctly-ordered clock.
+	// past and settle with a REAL time.Now().
 	rewindGoalLastActivity(t, store, sid)
-	al.goalQuietWindowSettle(time.Now()) // cycle 1
-	if got := cp.callCount(); got != 1 {
-		t.Fatalf("cycle 1: Judge calls = %d, want 1", got)
+	al.goalQuietWindowSettle(time.Now()) // cycle 1: push 1
+	if got := cp.callCount(); got != 0 {
+		t.Fatalf("cycle 1: Judge calls = %d, want 0 (JUDGE-FR-095/FR-097: idle settlement never adjudicates)", got)
 	}
-	afterCycle1, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
+	afterCycle1 := mustActiveGoalRecord(t, sid)
+	if afterCycle1.Round != 0 {
+		t.Fatalf("cycle 1: rounds_used = %d, want 0 (idle settlement must never consume a round, JUDGE-FR-095)", afterCycle1.Round)
 	}
-	if afterCycle1.GoalRoundsUsed != 1 {
-		t.Fatalf("cycle 1: rounds_used = %d, want 1 (a real verdict round was consumed)", afterCycle1.GoalRoundsUsed)
+	if afterCycle1.ZeroOutputPushes != 1 {
+		t.Fatalf("cycle 1: goal record ZeroOutputPushes = %d, want 1 (the unified push ladder dispatched a bounded continue-push)", afterCycle1.ZeroOutputPushes)
 	}
 
 	var steerMsg bus.InboundMessage
@@ -760,42 +753,47 @@ func TestGoalFlow_EndToEnd_Web(t *testing.T) {
 
 	// --- A SECOND idle cycle must be able to fire (C-7). ---
 	//
-	// review-round-1 finding #4(a): the continuation-push turn processed
-	// above ran the scripted provider's plain TEXT response ("Continuing to
-	// work on the unmet items.") — no tool calls, so no adjudicable output
-	// (session.EntryTypeToolCall entry) landed between cycle 1's and cycle
-	// 2's watermarks. The zero-output triple therefore correctly reads
-	// "still zero output" (a bare acknowledgment is not real work), and
-	// cycle 2 dispatches its OWN bounded continue-push rather than a second
-	// Judge call — this is the CORRECT behavior, not a wedge: the un-wedge
-	// invariant itself was already proven above (idleSettling cleared after
-	// the steer turn was accepted). This assertion proves the SECOND cycle
-	// genuinely fires (the push counter advances) rather than silently doing
-	// nothing.
+	// wave R7C: the continuation-push turn processed above (a bare TEXT
+	// reply, "Continuing to work on the unmet items.", no tool calls) does
+	// not reset GoalZeroOutputPushes — nothing in checkGoalLoopAfterTurn's
+	// ordinary-turn path resets a RECORDED goal's push counter; only a
+	// fresh activation or the recordless engine-fallback compile zero it
+	// (goal_loop.go, goal_triggers.go::dispatchGoalFallbackCompile). Under
+	// the unified push ladder every idle cycle for a recorded goal is a
+	// push, never an adjudication (JUDGE-FR-095/FR-097), so the counter is
+	// monotonic across cycles: push 1 (above) then push 2 (below). This
+	// assertion proves the SECOND cycle genuinely fires (the push counter
+	// advances) rather than silently doing nothing — the un-wedge invariant
+	// itself was already proven above (idleSettling cleared after the steer
+	// turn was accepted).
 	rewindGoalLastActivity(t, store, sid)
-	al.goalQuietWindowSettle(time.Now()) // cycle 2
-	if got := cp.callCount(); got != 1 {
-		t.Fatalf("cycle 2: Judge calls = %d, want 1 (unchanged — a bare-text continuation reply is not adjudicable output)", got)
+	al.goalQuietWindowSettle(time.Now()) // cycle 2: push 2
+	if got := cp.callCount(); got != 0 {
+		t.Fatalf("cycle 2: Judge calls = %d, want 0 (unchanged — idle settlement never adjudicates, JUDGE-FR-095)", got)
 	}
-	afterCycle2, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if afterCycle2.GoalZeroOutputPushes != 1 {
-		t.Fatalf("cycle 2: GoalZeroOutputPushes = %d, want 1 (a second full idle cycle must complete — no wedge)",
-			afterCycle2.GoalZeroOutputPushes)
+	afterCycle2 := mustActiveGoalRecord(t, sid)
+	if afterCycle2.ZeroOutputPushes != 2 {
+		t.Fatalf("cycle 2: goal record ZeroOutputPushes = %d, want 2 (a second full idle cycle must complete — no wedge; monotonic push counter, no adjudication ever resets it)",
+			afterCycle2.ZeroOutputPushes)
 	}
 }
 
-// rewindGoalLastActivity pushes sid's GoalLastActivityAt into the past so
-// the idle quiet-window precondition is satisfied for a goalQuietWindowSettle
-// call driven with a REAL time.Now() (see its call sites' doc comment for
-// why a future-shifted `now` is the wrong tool here).
-func rewindGoalLastActivity(t *testing.T, store *session.UnifiedStore, sid string) {
+// rewindGoalLastActivity pushes sid's goal-record LastActivityAt into the
+// past so the idle quiet-window precondition is satisfied for a
+// goalQuietWindowSettle call driven with a REAL time.Now() (see its call
+// sites' doc comment for why a future-shifted `now` is the wrong tool here).
+//
+// ADR-086 GOAL-FR-004: the activity clock is a typed time.Time on the goal's
+// OWN record, not the retired RFC3339 GoalLastActivityAt session-meta field.
+func rewindGoalLastActivity(t *testing.T, _ *session.UnifiedStore, sid string) {
 	t.Helper()
-	past := time.Now().Add(-2 * time.Hour).UTC().Format(time.RFC3339)
-	if err := store.SetMeta(sid, session.MetaPatch{GoalLastActivityAt: &past}); err != nil {
-		t.Fatal(err)
+	g := mustActiveGoalRecord(t, sid)
+	past := time.Now().Add(-2 * time.Hour).UTC()
+	if _, err := goal.NewStore(config.OmnipusHomeDir()).Update(g.GoalID, func(cur *goal.Goal) error {
+		cur.LastActivityAt = past
+		return nil
+	}); err != nil {
+		t.Fatalf("rewindGoalLastActivity(%q): %v", sid, err)
 	}
 }
 
@@ -862,12 +860,14 @@ func TestGoalFlow_EndToEnd_Channel(t *testing.T) {
 			t.Fatal("a channel-origin goal turn must NEVER carry a tool-choice option")
 		}
 
-		meta, err := store.GetMeta(sid)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if meta.GoalCriteriaJSON == "" {
-			t.Fatal("set_goal's write must have landed on the session meta")
+		// wave R7C (Group 1, unlisted occurrence): the identical stale
+		// session-meta assertion found in goal_first_move_test.go and
+		// TestGoalFlow_EndToEnd_Web (same message, same retired DD-6 dual
+		// write) — not one of the plan's four named lines, but the same
+		// bug, caught while running this file's own tests to completion.
+		rec := mustActiveGoalRecord(t, sid)
+		if len(rec.Criteria) == 0 {
+			t.Fatal("set_goal's write must have landed on the pkg/goal record")
 		}
 
 		select {
@@ -927,11 +927,7 @@ func TestGoalFlow_EndToEnd_Channel(t *testing.T) {
 			t.Fatalf("the agent's conversational question must pass through as ordinary chat, got %q", result.finalContent)
 		}
 
-		meta, err := store.GetMeta(sid)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if meta.GoalCriteriaJSON != "" {
+		if goalRecordCompiledJSON(mustActiveGoalRecord(t, sid)) != "" {
 			t.Fatal("no record was registered — the goal must still be recordless")
 		}
 

@@ -9,7 +9,13 @@
 
 import { describe, it, expect } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { CriteriaVerdictList, DEFAULT_TASK_MAX_ATTEMPTS } from './CriteriaVerdictList'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const PLANNING_GO = join(__dirname, '..', '..', '..', 'pkg', 'config', 'planning.go')
 import type { AcceptanceCriterion, JudgeVerdict, EvidenceRecord } from '@/lib/api'
 
 function makeCriterion(overrides: Partial<AcceptanceCriterion> = {}): AcceptanceCriterion {
@@ -68,9 +74,20 @@ describe('CriteriaVerdictList — attempt counter', () => {
     expect(screen.getByTestId('attempt-counter')).toHaveTextContent('attempt 2/3')
   })
 
-  it('falls back to the default max attempts (3) when maxAttempts is absent', () => {
+  it('falls back to the default max attempts when maxAttempts is absent', () => {
     render(<CriteriaVerdictList criteria={[makeCriterion()]} attemptCount={1} />)
     expect(screen.getByTestId('attempt-counter')).toHaveTextContent(`attempt 1/${DEFAULT_TASK_MAX_ATTEMPTS}`)
+  })
+
+  // Anti-drift oracle — see the twin assertion in
+  // TaskCard.goalLoopStatus.test.tsx for the full reasoning. The two SPA
+  // constants are independent declarations, so each needs its own check
+  // against the single backend source of truth.
+  it('DEFAULT_TASK_MAX_ATTEMPTS equals pkg/config/planning.go\'s DefaultTaskMaxAttempts', () => {
+    const go = readFileSync(PLANNING_GO, 'utf-8')
+    const m = go.match(/DefaultTaskMaxAttempts\s*=\s*(\d+)/)
+    expect(m, 'DefaultTaskMaxAttempts not found in pkg/config/planning.go').not.toBeNull()
+    expect(DEFAULT_TASK_MAX_ATTEMPTS).toBe(Number(m![1]))
   })
 
   it('does not render an attempt counter when attemptCount is absent', () => {
@@ -313,5 +330,51 @@ describe('CriteriaVerdictList — Definition of Done (ADR-080 D-DOD)', () => {
   it('omits the dod group entirely when dod is not passed (Task callers unaffected)', () => {
     render(<CriteriaVerdictList criteria={[makeCriterion()]} />)
     expect(screen.queryByTestId('criteria-verdict-dod')).not.toBeInTheDocument()
+  })
+})
+
+// JUDGE-FR-074/FR-076a (joint delivery plan U5 row): the fourth criterion
+// status (`unable_to_verify`) that these two FRs originally introduced was
+// WITHDRAWN by ADR-084 revision 9 — the status vocabulary stays exactly
+// `pending`/`met`/`unmet` (GOAL-FR-037). What survives of both FRs is a pure
+// regression guarantee: a verdict/criterion shape that predates every field
+// this delivery adds must still render exactly as it always has, and the
+// three existing statuses must keep rendering with no new branch. This
+// component was ALREADY zero-diff for that guarantee (C-42) — these tests
+// prove it, they don't newly satisfy it.
+describe('CriteriaVerdictList — FR-074/FR-076a: pre-existing shapes render unchanged', () => {
+  it('renders a pre-D8 verdict unchanged when the new fields are absent (FR-074)', () => {
+    // A verdict recorded before evidence_quote/per-criterion status existed
+    // carries only `reason` on its per_criterion entry — no evidence_quote,
+    // no extra fields. It must render its reason line and nothing else.
+    const criteria = [makeCriterion({ id: 'crit-1', status: 'unmet' })]
+    const verdicts = [
+      makeVerdict({
+        per_criterion: [{ criterion_id: 'crit-1', met: false, reason: 'pre-existing reason only' }],
+      }),
+    ]
+    render(<CriteriaVerdictList criteria={criteria} verdicts={verdicts} />)
+    expect(screen.getByTestId('verdict-reason')).toHaveTextContent('pre-existing reason only')
+    expect(screen.queryByTestId('verdict-evidence-quote')).toBeNull()
+  })
+
+  it('renders a pending / met / unmet criterion exactly as before — no fourth status branch exists (FR-076a)', () => {
+    const criteria = [
+      makeCriterion({ id: 'crit-pending', text: 'Pending one', status: 'pending' }),
+      makeCriterion({ id: 'crit-met', text: 'Met one', status: 'met' }),
+      makeCriterion({ id: 'crit-unmet', text: 'Unmet one', status: 'unmet' }),
+    ]
+    const { container } = render(<CriteriaVerdictList criteria={criteria} />)
+    const rows = container.querySelectorAll('li')
+    expect(rows).toHaveLength(3)
+    // Each row's status icon is visually distinct via its colour class — a
+    // pending/met/unmet mix-up (or a status silently collapsing onto the
+    // pending branch) shows up here even though all three render SOME icon.
+    expect(rows[0].querySelector('svg')?.getAttribute('class')).toMatch(/color-muted/)
+    expect(rows[1].querySelector('svg')?.getAttribute('class')).toMatch(/color-success/)
+    expect(rows[2].querySelector('svg')?.getAttribute('class')).toMatch(/color-error/)
+    expect(screen.getByText('Pending one')).toBeInTheDocument()
+    expect(screen.getByText('Met one')).toBeInTheDocument()
+    expect(screen.getByText('Unmet one')).toBeInTheDocument()
   })
 })

@@ -107,6 +107,11 @@ properties:
       - done
       - failed
       - cleared
+      - judge_refused_god_mode
+      - judge_cas_loss
+      - blocked
+      - claim_overturned
+      - expired
     description: >
       ADR-053 §Contract Surface — "Pill-state enum"/R§8.10 crosswalk
       (originally 8 states, superseding the earlier 4-value
@@ -134,6 +139,32 @@ properties:
       "failed/cancelled/timed_out → failed" rule for the specific case of
       a human choosing to stop; the frontend does not disambiguate via
       `latest_reason`, so the wire state itself must carry the distinction.
+      **Five values ADDED by this delivery (joint ADR-084/ADR-086/ADR-085
+      plan, C-39):** `judge_refused_god_mode` (JUDGE-FR-057a) — the Judge's
+      adjudication was refused because `cfg.GodMode` is true, a distinct
+      operator-actionable state, NOT `judge_unavailable` (which the
+      operator cannot fix by waiting). `judge_cas_loss` (JUDGE-FR-083,
+      named here; the underlying machine-readable reason string stays
+      `cas_loss`) — a `verifier_registry` compare-and-swap loss, a real
+      concurrency event distinguishable from a provider outage, NOT
+      `judge_unavailable`. `blocked` (JUDGE-FR-093) — the agent called
+      `goal_claim` with `status: blocked`: the goal is parked WITHOUT an
+      adjudication and WITHOUT consuming a round, distinct from
+      `waiting_on_user` (`blocked` says "I cannot proceed and it is not a
+      question you can answer", not "I need an answer") — NOT a terminal
+      state, the goal can still receive another frame (OQ-17). Ephemeral,
+      like `waiting_on_user` — cleared by the same operator-message path.
+      `claim_overturned` (JUDGE-FR-102) — a background adjudication
+      disagreed with an earlier claim the operator already saw answered; a
+      state, not an alert, distinct from an ordinary unmet round — NOT
+      terminal (OQ-17): the goal keeps iterating and the steer arrives as
+      an ordinary async turn. `expired` (ADR-086 GOAL-FR-028, OQ-1/OQ-6) —
+      one of the four distinguishable terminal endings a goal record now
+      carries (met/exhausted/expired/cleared, mirroring `Goal.state`): the
+      7-day idle-expiry sweep (D-A) ended this goal with no claim ever
+      made. IS terminal — joins `done`/`failed`/`cleared` as the fourth
+      member of the display-side terminal set (`blocked` and
+      `claim_overturned` deliberately do NOT join it — C-17, OQ-17).
     example: "active"
   producing_session_id:
     type: string

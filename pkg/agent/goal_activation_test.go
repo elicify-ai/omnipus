@@ -69,8 +69,7 @@ func TestGoalActivation_InstantProsePath(t *testing.T) {
 	pe.RegisterActiveCounter("goal", func() (int, error) {
 		admitCalls++
 		if admitCalls == 1 {
-			m, _ := store.GetMeta(sid)
-			gateSawActiveGoal = m != nil && m.GoalCondition != ""
+			gateSawActiveGoal = activeGoalForSession(sid) != nil
 		}
 		return 0, nil
 	})
@@ -88,27 +87,24 @@ func TestGoalActivation_InstantProsePath(t *testing.T) {
 		t.Fatalf("opts.UserMessage = %q, want the raw intent", opts.UserMessage)
 	}
 
-	meta, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
+	meta := goalRecordForSession(t, sid)
 	if meta.GoalID == "" {
 		t.Fatal("instant activation must mint a GoalID")
 	}
-	if meta.GoalCondition != "build me a tetris game" {
-		t.Fatalf("GoalCondition = %q, want the raw intent", meta.GoalCondition)
+	if meta.Prompt != "build me a tetris game" {
+		t.Fatalf("goal record Prompt = %q, want the raw intent", meta.Prompt)
 	}
-	if meta.GoalCriteriaJSON != "" {
-		t.Fatalf("GoalCriteriaJSON must start EMPTY (D3's legal transient state), got %q", meta.GoalCriteriaJSON)
+	if got := goalRecordCompiledJSON(meta); got != "" {
+		t.Fatalf("the goal record's criteria must start EMPTY (D3's legal transient state), got %q", got)
 	}
-	if meta.GoalRoundsUsed != 0 {
-		t.Fatalf("GoalRoundsUsed = %d, want 0", meta.GoalRoundsUsed)
+	if meta.Round != 0 {
+		t.Fatalf("goal record Round = %d, want 0", meta.Round)
 	}
-	if meta.GoalMaxRounds != config.DefaultGoalMaxRounds {
-		t.Fatalf("GoalMaxRounds = %d, want the default", meta.GoalMaxRounds)
+	if meta.MaxRounds != config.DefaultGoalMaxRounds {
+		t.Fatalf("goal record MaxRounds = %d, want the default", meta.MaxRounds)
 	}
-	if meta.GoalStartedAt == "" || meta.GoalLastActivityAt == "" {
-		t.Fatal("GoalStartedAt/GoalLastActivityAt must be stamped on activation")
+	if meta.StartedAt == nil || meta.StartedAt.IsZero() || meta.LastActivityAt.IsZero() {
+		t.Fatal("goal record StartedAt/LastActivityAt must be stamped on activation")
 	}
 	if gateSawActiveGoal {
 		t.Fatal("the admission gate's Admit call must run BEFORE state is written (FR-003), but the goal was already active")
@@ -137,10 +133,7 @@ func TestGoalActivation_InstantProsePath(t *testing.T) {
 	if opts.UserMessage != "actually make it snake instead" {
 		t.Fatalf("restate opts.UserMessage = %q, want the new intent", opts.UserMessage)
 	}
-	afterRestate, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
+	afterRestate := goalRecordForSession(t, sid)
 	if afterRestate.GoalID != firstID {
 		t.Fatalf("restate must NOT mint a new GoalID (FR-001), got %q want %q", afterRestate.GoalID, firstID)
 	}
@@ -180,11 +173,7 @@ func TestGoalActivation_InstantProsePath_CapRefusal(t *testing.T) {
 	if !strings.Contains(reply, "active loops") {
 		t.Fatalf("cap refusal reply = %q, want a cap-reached message", reply)
 	}
-	meta, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if meta.GoalCondition != "" {
+	if goalRecordForSessionOrNil(sid) != nil {
 		t.Fatal("no goal state may be created when admission is refused")
 	}
 	if provider.calls != 0 {
@@ -219,17 +208,15 @@ func TestGoalActivation_MarkerPathPinned(t *testing.T) {
 		t.Fatal("marker path must rewrite opts.UserMessage into round 1")
 	}
 
-	meta, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
+	meta := goalRecordForSession(t, sid)
 	if meta.GoalID == "" {
 		t.Fatal("marker activation must mint a GoalID")
 	}
-	if meta.GoalCriteriaJSON == "" {
+	recordJSON := goalRecordCompiledJSON(meta)
+	if recordJSON == "" {
 		t.Fatal("marker path activates with criteria ALREADY compiled (unlike the prose path's empty start)")
 	}
-	compiled := loadCompiledGoal(meta.GoalCriteriaJSON)
+	compiled := loadCompiledGoal(recordJSON)
 	if compiled == nil || len(compiled.Criteria) == 0 {
 		t.Fatalf("marker path must compile real criteria, got %+v", compiled)
 	}
@@ -263,10 +250,8 @@ func TestGoalRestate_ActiveGoal(t *testing.T) {
 		}
 		al.applyGoalCommandPrompt(context.Background(),
 			bus.InboundMessage{Content: "/goal build a game", UserInitiated: true}, agentInst, &opts)
-		before, err := store.GetMeta(sid)
-		if err != nil {
-			t.Fatal(err)
-		}
+		before := goalRecordForSession(t, sid)
+		beforeRecordJSON := goalRecordCompiledJSON(before)
 
 		matched, handled, reply := al.applyGoalCommandPrompt(context.Background(),
 			bus.InboundMessage{Content: "/goal actually make it multiplayer", UserInitiated: true}, agentInst, &opts)
@@ -279,20 +264,17 @@ func TestGoalRestate_ActiveGoal(t *testing.T) {
 		if opts.UserMessage != "actually make it multiplayer" {
 			t.Fatalf("opts.UserMessage = %q", opts.UserMessage)
 		}
-		after, err := store.GetMeta(sid)
-		if err != nil {
-			t.Fatal(err)
-		}
+		after := goalRecordForSession(t, sid)
 		if after.GoalID != before.GoalID {
 			t.Fatalf("prose restate must not mint a new GoalID, got %q want %q", after.GoalID, before.GoalID)
 		}
-		if after.GoalCondition != "actually make it multiplayer" {
-			t.Fatalf("finding #9: prose restate must patch the durable GoalCondition to the new intent, "+
-				"got %q want %q", after.GoalCondition, "actually make it multiplayer")
+		if after.Prompt != "actually make it multiplayer" {
+			t.Fatalf("finding #9: prose restate must patch the durable goal record's Prompt to the new intent, "+
+				"got %q want %q", after.Prompt, "actually make it multiplayer")
 		}
-		if after.GoalCriteriaJSON != before.GoalCriteriaJSON {
+		if got := goalRecordCompiledJSON(after); got != beforeRecordJSON {
 			t.Fatalf("prose restate must not touch the COMPILED record (the agent updates it via set_goal), got %q want %q",
-				after.GoalCriteriaJSON, before.GoalCriteriaJSON)
+				got, beforeRecordJSON)
 		}
 		if provider.calls != 0 {
 			t.Fatalf("prose restate must make ZERO LLM calls, got %d", provider.calls)
@@ -313,10 +295,8 @@ func TestGoalRestate_ActiveGoal(t *testing.T) {
 		}
 		al.applyGoalCommandPrompt(context.Background(),
 			bus.InboundMessage{Content: "/goal [search: 2]", UserInitiated: true}, agentInst, &opts)
-		before, err := store.GetMeta(sid)
-		if err != nil {
-			t.Fatal(err)
-		}
+		before := goalRecordForSession(t, sid)
+		beforeRecordJSON := goalRecordCompiledJSON(before)
 
 		matched, handled, reply := al.applyGoalCommandPrompt(context.Background(),
 			bus.InboundMessage{Content: "/goal [search: 5]", UserInitiated: true}, agentInst, &opts)
@@ -326,17 +306,15 @@ func TestGoalRestate_ActiveGoal(t *testing.T) {
 		if reply == "" {
 			t.Fatal("marker restate must reply with the updated goal summary")
 		}
-		after, err := store.GetMeta(sid)
-		if err != nil {
-			t.Fatal(err)
-		}
+		after := goalRecordForSession(t, sid)
 		if after.GoalID != before.GoalID {
 			t.Fatalf("marker restate must not mint a new GoalID, got %q want %q", after.GoalID, before.GoalID)
 		}
-		if after.GoalCriteriaJSON == before.GoalCriteriaJSON {
+		afterRecordJSON := goalRecordCompiledJSON(after)
+		if afterRecordJSON == beforeRecordJSON {
 			t.Fatal("marker restate must update the compiled criteria")
 		}
-		compiled := loadCompiledGoal(after.GoalCriteriaJSON)
+		compiled := loadCompiledGoal(afterRecordJSON)
 		if compiled == nil || len(compiled.Criteria) == 0 || compiled.Criteria[0].Behavior == nil ||
 			compiled.Criteria[0].Behavior.EffectiveMinCount() != 5 {
 			t.Fatalf("marker restate must land the NEW min_count=5, got %+v", compiled)
@@ -359,10 +337,8 @@ func TestGoalRestate_ActiveGoal(t *testing.T) {
 		}
 		al.applyGoalCommandPrompt(context.Background(),
 			bus.InboundMessage{Content: "/goal [search: 2]", UserInitiated: true}, agentInst, &opts)
-		before, err := store.GetMeta(sid)
-		if err != nil {
-			t.Fatal(err)
-		}
+		before := goalRecordForSession(t, sid)
+		beforeRecordJSON := goalRecordCompiledJSON(before)
 
 		// bash (hence [tests pass]) is NOT granted — default-deny fail-closed
 		// (CLAUDE.md hard constraint 6) — so the feasibility veto must reject
@@ -375,11 +351,8 @@ func TestGoalRestate_ActiveGoal(t *testing.T) {
 		if !strings.Contains(reply, "rejected") {
 			t.Fatalf("vetoed restate reply = %q, want a rejection message", reply)
 		}
-		after, err := store.GetMeta(sid)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if after.GoalCriteriaJSON != before.GoalCriteriaJSON {
+		after := goalRecordForSession(t, sid)
+		if goalRecordCompiledJSON(after) != beforeRecordJSON {
 			t.Fatal("a vetoed restate must NOT change the persisted record (fail-closed, FR-111/D9)")
 		}
 		if after.GoalID != before.GoalID {
@@ -410,11 +383,7 @@ func TestConfirmInert(t *testing.T) {
 			t.Fatalf("bare 'confirm' must not match the /goal hook at all, got matched=%v handled=%v reply=%q",
 				matched, handled, reply)
 		}
-		meta, err := store.GetMeta(sid)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if meta.GoalCondition != "" {
+		if goalRecordForSessionOrNil(sid) != nil {
 			t.Fatal("bare 'confirm' must not create or change any goal state")
 		}
 	})
@@ -428,11 +397,7 @@ func TestConfirmInert(t *testing.T) {
 		if !strings.Contains(reply, "activate immediately") {
 			t.Fatalf("/goal confirm reply = %q, want the instant-activation notice", reply)
 		}
-		meta, err := store.GetMeta(sid)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if meta.GoalCondition != "" {
+		if goalRecordForSessionOrNil(sid) != nil {
 			t.Fatal("/goal confirm must NEVER activate a goal literally named 'confirm' (grill B3)")
 		}
 	})

@@ -353,3 +353,40 @@ func TestBehaviorScan_ViaPartitionStore_SessionID(t *testing.T) {
 		t.Error("ScanBehaviorCriterion with a nonexistent session id: got nil error, want a read error")
 	}
 }
+
+// TestBehaviorScan_StillCountOnly_NoParameterMatching is JUDGE-FR-107's
+// guard against extension (ADR-084 revision 9, D14 rule 2's retired
+// inference relocated one tier down would be the exact same failure mode:
+// a criterion's wording silently deciding what gets checked). It PASSES
+// TODAY and is retained deliberately, per the judge spec's own Test
+// Matrix row for this oracle — it is a guard against widening, not
+// evidence of new behaviour: the moment `runBehaviorScan`/
+// `ScanBehaviorCriterionEntries` starts reading `Parameters` or `Result`
+// to decide whether a call "really" matches a criterion's prose, this
+// fails. Two successful calls of the SAME declared tool, with
+// dramatically different Parameters (one plausibly on-topic for a
+// send-the-supplier-an-email-shaped criterion, one not) and one call
+// carrying a Result the scan must never look at, count IDENTICALLY —
+// proving the scan is Tool+Status only, exactly as FR-107 requires.
+func TestBehaviorScan_StillCountOnly_NoParameterMatching(t *testing.T) {
+	entries := []session.TranscriptEntry{
+		mkEntry(baseTime, session.ToolCall{
+			ID: "c1", Tool: "send_email", Status: "success",
+			Parameters: map[string]any{"to": "supplier@example.com"},
+			Result:     map[string]any{"unrelated": "irrelevant content — never read, JUDGE-FR-107"},
+		}),
+		mkEntry(baseTime.Add(time.Second), session.ToolCall{
+			ID: "c2", Tool: "send_email", Status: "success",
+			Parameters: map[string]any{"to": "someone-completely-unrelated@example.com"},
+		}),
+	}
+	criterion := BehaviorCriterion{Tool: "send_email", MinCount: intPtr(2), Scope: BehaviorScopeTaskSession}
+	result := ScanBehaviorCriterionEntries(entries, criterion, time.Time{})
+	if !result.Met || result.Observed != 2 {
+		t.Fatalf(
+			"got Met=%v Observed=%d, want Met=true Observed=2 — Parameters/Result must never be "+
+				"read (JUDGE-FR-107): a matcher would have counted only the on-topic call",
+			result.Met, result.Observed,
+		)
+	}
+}

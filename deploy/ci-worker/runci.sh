@@ -118,56 +118,18 @@ run_lint() {
       | sh -s -- -b /cache/go/bin "$GOLANGCI_VERSION" || return 1
   fi
   CGO_ENABLED=0 golangci-lint run --build-tags="$TAGS" || return 1
-  # #615 regression guard: every pkg/tools/browser real-Chrome test must be
-  # gated by the package's own skipIfNoBrowser(t) convention.
-  #
-  # There is deliberately NO -race package-list lockstep check here any more.
-  # That invariant used to be enforced by comparing this file against
-  # .github/workflows/pr.yml with a regex scraper, which could not see the
-  # drift class most likely to produce a false verdict: this file is executed
-  # from /cache/runci.sh on the worker, while the checker read the repo copy.
-  # Both surfaces now consume scripts/race-packages.sh — which the worker gets
-  # from the checkout — so the lists cannot diverge at all. See run_gorace.
-  bash scripts/check-browser-tests-gated.sh || return 1
-  # #618 and #617 regression guards, same reasoning: pr.yml runs each in its
-  # own job, so omitting either here lets the worker report a green lint while
-  # GitHub's is red.
-  bash scripts/check-no-handwritten-wire-types.sh || return 1
-  bash scripts/check-no-tool-error-from-status.sh || return 1
-  # ADR-061 regression guard: the deleted JPEG screencast path must not return.
-  bash scripts/check-no-jpeg-screencast.sh || return 1
-  # ADR-077 regression guard: the deleted fail-closed per-agent tool-policy
-  # backfill (RepairIncompleteToolPolicyCoverage / ValidateAgentOwnToolPolicyCoverage)
-  # must not return.
-  bash scripts/check-no-fail-closed-backfill.sh || return 1
-  # ADR-081 regression guard: the deleted /goal confirm-gate machinery
-  # (confirmPendingGoal / IsGoalConfirm / proposeGoalAmendment / buildGoalPendingNote
-  # / useGoalCompilingIndicator, …) must not return — goals activate instantly,
-  # the agent authors the record via set_goal, steering replaces confirmation.
-  bash scripts/check-no-goal-confirm-gate.sh || return 1
-  # ADR-082 D1 regression guard: the deleted ADR-045 orphan-foreground-turn
-  # watchdog must not return — a turn never depends on a UI connection.
-  # Self-test first (a guard that cannot fail is no guard).
-  bash scripts/check-no-orphan-turn-watchdog.test.sh || return 1
-  bash scripts/check-no-orphan-turn-watchdog.sh || return 1
-  # E2E auth cross-talk guard: no spec may POST /api/v1/auth/login (it rotates the
-  # single-slot session_token_hash and invalidates the shared storageState cookie
-  # for every LATER spec — a failure that lands in an unrelated file). Self-test
-  # first (a guard that cannot fail is no guard).
-  bash scripts/check-e2e-login-crosstalk.sh --self-test || return 1
-  bash scripts/check-e2e-login-crosstalk.sh || return 1
-  # ADR-067 SC-008/SC-009/US-11.AC2 regression guard: no alias, migration or
-  # deprecation machinery in pkg/providers or pkg/config, no folded-away
-  # capabilities package, no bundled SPA catalog. Same reasoning as the guards
-  # above: pr.yml runs it in its own step, so omitting it here lets the worker
-  # report a green lint while GitHub's is red. Self-test first (a guard that
-  # cannot fail is no guard — docs/internal/false-green-patterns.md).
-  bash scripts/check-greenfield-providers.sh --self-test || return 1
-  bash scripts/check-greenfield-providers.sh || return 1
-  # ADR-068 §2.4 regression guard: antigravity / claude-cli / OpenAI device-code
-  # flow leave no trace. Self-check first (a guard that cannot fail is no guard).
-  bash scripts/check-no-removed-providers-selfcheck.sh || return 1
-  bash scripts/check-no-removed-providers.sh
+  # Discovery-based guard suite (ADR-084/085/086 delivery, wave G1,
+  # C-19/C-44/C-45/C-92/C-93): scripts/guards.sh discovers every
+  # scripts/check-*.sh guard, resolves and runs each one's proof-of-failure
+  # companion first, runs every guard regardless of an earlier one's outcome,
+  # and fails if any guard or companion failed, if zero guards were
+  # discovered, or if a non-exempt guard has no companion. This replaced the
+  # ten hand-listed guard invocations that used to live here — pr.yml runs
+  # the SAME script in its own job, so omitting it here would let the worker
+  # report a green lint while GitHub's is red, exactly as the guards it
+  # replaced warned. Adding a guard requires no edit here — see
+  # scripts/guards.sh's header for the full mechanism.
+  bash scripts/guards.sh || return 1
 }
 # Full suite with a flake filter: a package that fails the contended full run but passes when
 # re-run isolated (-p 1) is a timing flake → not a real failure. Fails both = real.

@@ -290,6 +290,28 @@ func streamReplay(
 			continue
 		}
 
+		// ADR-085 BROWSER-FR-043a: a persisted browser-handover waiting-line
+		// entry replays as the SAME frame type FR-042 delivers live
+		// (BrowserHandoverNoticeFrame), never the generic ReplayMessageFrame
+		// the fallthrough below would otherwise produce. Discriminates on
+		// the STAMPED entry.SystemSubtype field alone — never by
+		// prefix-matching entry.Content, which is exactly the anti-pattern
+		// the existing "Handoff:" branch elsewhere in this function is
+		// documented as being (see the FR-043a spec citation). The message
+		// id is the entry's own ID, per FR-044: "the deterministic notice id
+		// rides the existing TranscriptEntry.ID".
+		if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == "browser_handover_notice" {
+			if err2 := emitFrame(generated.BrowserHandoverNoticeFrame{
+				Type:      string(generated.WsFrameTypeBrowserHandoverNotice),
+				SessionId: sessionID,
+				MessageId: entry.ID,
+				Text:      entry.Content,
+			}); err2 != nil {
+				return framesEmitted, err2
+			}
+			continue
+		}
+
 		// Update the running fallback agent ID.
 		if entry.AgentID != "" {
 			lastSeenAgentID = entry.AgentID
@@ -1238,11 +1260,29 @@ func toJudgeVerdictFrame(v task.JudgeVerdict) generated.JudgeVerdictFrame {
 	// dropped. An empty (zero-criteria) verdict must still round-trip as `[]`,
 	// so start from a non-nil, empty slice rather than appending onto a nil
 	// one.
+	//
+	// JUDGE-FR-070a/FR-074 (C-02, F2): four new optional fields —
+	// evidence_source, evidence_target, provenance, evidence[] — mirror
+	// task.CriterionVerdict's new Go fields onto the generated wire shape.
+	// Deliberately no `outcome` field anywhere (D-H, C-02) — Met stays the
+	// only verdict-shape bool. A pre-existing verdict, whose new Go fields
+	// are all zero-valued, produces nil pointers/nil slice here, which
+	// `omitempty` drops from the JSON exactly as before this change
+	// (FR-074): the wire frame for an old verdict is unchanged byte-for-byte.
 	f.PerCriterion = make([]struct {
-		CriterionId   string  `json:"criterion_id"`
-		EvidenceQuote *string `json:"evidence_quote,omitempty"`
-		Met           bool    `json:"met"`
-		Reason        string  `json:"reason"`
+		CriterionId string `json:"criterion_id"`
+		Evidence    []struct {
+			Part   string  `json:"part"`
+			Quote  string  `json:"quote"`
+			Source *string `json:"source,omitempty"`
+			Target *string `json:"target,omitempty"`
+		} `json:"evidence,omitempty"`
+		EvidenceQuote  *string `json:"evidence_quote,omitempty"`
+		EvidenceSource *string `json:"evidence_source,omitempty"`
+		EvidenceTarget *string `json:"evidence_target,omitempty"`
+		Met            bool    `json:"met"`
+		Provenance     *string `json:"provenance,omitempty"`
+		Reason         string  `json:"reason"`
 	}, 0, len(v.PerCriterion))
 	for _, c := range v.PerCriterion {
 		// ADR-074 D7: optional + empty-safe — an empty quote (fail-closed /
@@ -1252,12 +1292,77 @@ func toJudgeVerdictFrame(v task.JudgeVerdict) generated.JudgeVerdictFrame {
 			q := c.EvidenceQuote
 			quote = &q
 		}
+		var evidenceSource *string
+		if c.EvidenceSource != "" {
+			s := string(c.EvidenceSource)
+			evidenceSource = &s
+		}
+		var evidenceTarget *string
+		if c.EvidenceTarget != "" {
+			t := c.EvidenceTarget
+			evidenceTarget = &t
+		}
+		var provenance *string
+		if c.Provenance != "" {
+			p := string(c.Provenance)
+			provenance = &p
+		}
+		var evidence []struct {
+			Part   string  `json:"part"`
+			Quote  string  `json:"quote"`
+			Source *string `json:"source,omitempty"`
+			Target *string `json:"target,omitempty"`
+		}
+		if len(c.Evidence) > 0 {
+			evidence = make([]struct {
+				Part   string  `json:"part"`
+				Quote  string  `json:"quote"`
+				Source *string `json:"source,omitempty"`
+				Target *string `json:"target,omitempty"`
+			}, 0, len(c.Evidence))
+			for _, e := range c.Evidence {
+				var src *string
+				if e.Source != "" {
+					s := e.Source
+					src = &s
+				}
+				var tgt *string
+				if e.Target != "" {
+					t := e.Target
+					tgt = &t
+				}
+				evidence = append(evidence, struct {
+					Part   string  `json:"part"`
+					Quote  string  `json:"quote"`
+					Source *string `json:"source,omitempty"`
+					Target *string `json:"target,omitempty"`
+				}{Part: e.Part, Quote: e.Quote, Source: src, Target: tgt})
+			}
+		}
 		f.PerCriterion = append(f.PerCriterion, struct {
-			CriterionId   string  `json:"criterion_id"`
-			EvidenceQuote *string `json:"evidence_quote,omitempty"`
-			Met           bool    `json:"met"`
-			Reason        string  `json:"reason"`
-		}{CriterionId: c.CriterionID, EvidenceQuote: quote, Met: c.Met, Reason: c.Reason})
+			CriterionId string `json:"criterion_id"`
+			Evidence    []struct {
+				Part   string  `json:"part"`
+				Quote  string  `json:"quote"`
+				Source *string `json:"source,omitempty"`
+				Target *string `json:"target,omitempty"`
+			} `json:"evidence,omitempty"`
+			EvidenceQuote  *string `json:"evidence_quote,omitempty"`
+			EvidenceSource *string `json:"evidence_source,omitempty"`
+			EvidenceTarget *string `json:"evidence_target,omitempty"`
+			Met            bool    `json:"met"`
+			Provenance     *string `json:"provenance,omitempty"`
+			Reason         string  `json:"reason"`
+		}{
+			CriterionId:    c.CriterionID,
+			Evidence:       evidence,
+			EvidenceQuote:  quote,
+			EvidenceSource: evidenceSource,
+			EvidenceTarget: evidenceTarget,
+			Met:            c.Met,
+			Provenance:     provenance,
+			Reason:         c.Reason,
+		})
 	}
 	return f
 }

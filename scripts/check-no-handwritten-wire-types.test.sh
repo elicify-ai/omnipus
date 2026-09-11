@@ -365,13 +365,27 @@ assert_exit_code "ts-agent-session-exit" 0 "$EXIT_CODE"
 assert_output_contains "ts-agent-finding" "Agent" "$OUTPUT"
 assert_output_contains "ts-session-finding" "Session" "$OUTPUT"
 
-# ─── Test 12: TS file outside the two target files — NOT caught ───────────────
+# ─── Test 12: TS file anywhere under src/lib — IS caught (widened scope) ──────
+#
+# This test used to assert the OPPOSITE: that a hand-written wire type in a
+# src/lib file other than api.ts/ws.ts was NOT flagged. That expectation went
+# stale when the guard's scan scope was deliberately widened past those two
+# files — see the guard's own self-test cases ST-12 ("TS z.object schema in any
+# src/lib/*.ts file IS caught (widened scope)") and ST-17 ("TS interface in any
+# src/lib/*.ts file (not just api/ws) is caught"). The guard was right and this
+# companion was never updated, so scripts/guards.sh failed on a stale
+# expectation rather than a real regression.
+#
+# Fixed by correcting the EXPECTATION, never by narrowing the guard: narrowing
+# it back would silently delete real coverage — every src/lib file outside
+# api.ts/ws.ts would become a legal home for a hand-written wire type, which is
+# exactly what Constraint #8 forbids.
 
 echo ""
-echo "Test 12: TS interface in a non-target file is not flagged"
+echo "Test 12: TS interface anywhere under src/lib IS flagged (widened scope)"
 
 setup_ts_fixture "src/lib/some-other.ts" '
-// In a non-target file — should NOT be flagged.
+// Outside api.ts/ws.ts, but still under src/lib — MUST be flagged.
 export interface SomeOtherType {
   foo: string
   bar: number
@@ -383,8 +397,10 @@ setup_ts_fixture "src/lib/ws.ts" '// empty'
 OUTPUT=$(REPO_ROOT="$TMP_DIR" bash "$LINT_SCRIPT" --baseline 2>&1)
 EXIT_CODE=$?
 
+# --baseline REPORTS without failing, so exit stays 0 even though the finding
+# is emitted. Only the finding assertion below was stale, not this one.
 assert_exit_code "ts-nontarget-exit" 0 "$EXIT_CODE"
-assert_output_not_contains "ts-nontarget-not-flagged" "SomeOtherType" "$OUTPUT"
+assert_output_contains "ts-nontarget-is-flagged" "SomeOtherType" "$OUTPUT"
 
 # ─── Test 13: TS re-export type alias — NOT caught ────────────────────────────
 

@@ -181,6 +181,14 @@ func deletePlan(t *testing.T, api *restAPI, id string) *httptest.ResponseRecorde
 	return w
 }
 
+// minimalCriteriaDodJSON is GOAL-FR-021/D-C's minimum satisfying payload
+// fragment (one criterion, one dod item) — appended to a postTask body by
+// every call site below that does not itself exercise the mandatory-
+// criteria/dod gate (that gate has its own dedicated coverage in
+// rest_tasks_criteria_test.go).
+const minimalCriteriaDodJSON = `"criteria":[{"text":"criterion","author":{"kind":"user","id":"tester"},"status":"pending"}],` +
+	`"dod":[{"text":"dod item","author":{"kind":"user","id":"tester"},"status":"pending"}]`
+
 // postTask issues POST /api/v1/tasks and returns the recorder.
 func postTask(t *testing.T, api *restAPI, body string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -234,7 +242,7 @@ func TestPlanCRUD_RoundtripAndProgress(t *testing.T) {
 	assert.Equal(t, "Launch v1 (delayed)", updated.Title)
 
 	// Add a member task and mark it done -> progress should be 1.0.
-	taskBody := `{"workspace_id":"` + wsID + `","title":"member","plan_id":"` + created.Id + `"}`
+	taskBody := `{"workspace_id":"` + wsID + `","title":"member","plan_id":"` + created.Id + `",` + minimalCriteriaDodJSON + `}`
 	wTask := postTask(t, api, taskBody)
 	require.Equal(t, http.StatusCreated, wTask.Code, "body=%s", wTask.Body.String())
 	var createdTask gen.Task
@@ -354,11 +362,21 @@ func TestPlanApprove_MemberCriteriaGateReturns400WithTaskErrors(t *testing.T) {
 	var p gen.Plan
 	require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &p))
 
-	// Member task with ZERO criteria.
-	wTask := postTask(t, api, `{"workspace_id":"`+wsID+`","title":"no criteria task","plan_id":"`+p.Id+`"}`)
-	require.Equal(t, http.StatusCreated, wTask.Code)
-	var offendingTask gen.Task
-	require.NoError(t, json.Unmarshal(wTask.Body.Bytes(), &offendingTask))
+	// Member task with ZERO criteria. GOAL-FR-021/D-C now makes this
+	// unreachable via the CREATE path itself (postTask would 400) — the
+	// only way a member task can still carry zero criteria is a task that
+	// predates the rule (GOAL-FR-023/FR-048 grandfather it), so this test
+	// constructs that state directly on the store rather than through the
+	// gate it is NOT testing here (FR-084's plan-approve gate, below, is).
+	offendingEntity := &task.Task{
+		Title:       "no criteria task",
+		Action:      task.ActionLLM,
+		Status:      task.StatusInbox,
+		WorkspaceID: wsID,
+		PlanID:      p.Id,
+	}
+	require.NoError(t, api.taskStore.Create(offendingEntity))
+	offendingTask := gen.Task{Id: offendingEntity.ID}
 
 	wApprove := postPlanAction(t, api, p.Id, "approve")
 	require.Equal(t, http.StatusBadRequest, wApprove.Code, "body=%s", wApprove.Body.String())
@@ -515,12 +533,12 @@ func TestTaskPlanID_CrossWorkspaceRejected(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, wCross.Code, "body=%s", wCross.Body.String())
 
 	// Same-workspace: task in A referencing plan in A -> 201.
-	wSame := postTask(t, api, `{"workspace_id":"`+wsA+`","title":"same-ws task","plan_id":"`+p.Id+`"}`)
+	wSame := postTask(t, api, `{"workspace_id":"`+wsA+`","title":"same-ws task","plan_id":"`+p.Id+`",`+minimalCriteriaDodJSON+`}`)
 	assert.Equal(t, http.StatusCreated, wSame.Code, "body=%s", wSame.Body.String())
 
 	// PATCH path: create a plain task in B, then try to PATCH its plan_id to
 	// the plan in A -> 400.
-	wPlainTask := postTask(t, api, `{"workspace_id":"`+wsB+`","title":"plain B task"}`)
+	wPlainTask := postTask(t, api, `{"workspace_id":"`+wsB+`","title":"plain B task",`+minimalCriteriaDodJSON+`}`)
 	require.Equal(t, http.StatusCreated, wPlainTask.Code)
 	var plainTask gen.Task
 	require.NoError(t, json.Unmarshal(wPlainTask.Body.Bytes(), &plainTask))

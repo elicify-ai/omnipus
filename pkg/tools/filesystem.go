@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/docextract"
@@ -282,6 +284,138 @@ func guardMetadataPath(workspace, path, op string) *ToolResult {
 	return nil
 }
 
+// --- ADR-084 JUDGE-FR-084: auditing what a reader actually opened ---
+//
+// Before ADR-084 this package audited WRITES (path_audit.go's
+// emitFileWriteAudit) and DENIALS (emitPathAccessDenied) but never a
+// successful read: there was no record anywhere of which files an agent
+// opened. That was tolerable while the only readers were ordinary agents
+// working inside their own workspace. It stops being tolerable once the
+// Judge reads other people's work to decide whether it is done — an operator
+// must be able to answer "what did the verifier open, and what was it
+// refused" from the audit log itself, not from whatever the investigation
+// log happened to keep.
+//
+// Both emitters below carry Details["adjudication_id"] when the turn is a
+// verifier adjudication (tools.VerifierAdjudicationID, an engine-set turn
+// fact). That is the correlation half of JUDGE-FR-084: agent id says WHO,
+// adjudication id says WHICH REVIEW.
+
+// fileReadAuditEvent is the event name for a successful read. It reuses
+// audit.EventFileOp — the same event emitFileWriteAudit uses — and
+// discriminates on Details["op"], exactly as that function does with
+// "write". A new top-level event name would have to be added to
+// pkg/audit's vocabulary (audit.IsValidEventName), which this wave does not
+// own; reusing file_op keeps the read and the write halves of the same
+// story in one queryable event kind and keeps audit.LastWriterForPath
+// correct, since that scan already filters on op == "write".
+const fileReadAuditEvent = audit.EventFileOp
+
+// adjudicationAuditDetails returns the correlation keys for one audit
+// entry's Details map: the adjudication id when this turn is a verifier
+// adjudication, nothing at all otherwise. Returning nothing (rather than an
+// empty-string key) keeps every non-verifier turn's audit row byte-identical
+// to what it was before ADR-084.
+func adjudicationAuditDetails(ctx context.Context, into map[string]any) map[string]any {
+	if adjID := VerifierAdjudicationID(ctx); adjID != "" {
+		into["adjudication_id"] = adjID
+	}
+	return into
+}
+
+// emitFileReadAudit records ONE file_op/op=read entry for a read that was
+// authorized AND actually opened (JUDGE-FR-084).
+//
+// It fires at the point the handle opens, not at the point the tool returns:
+// everything after the open — a binary rejection, a document extraction, a
+// pagination error — happens to bytes the caller already has access to, so
+// the open is the moment the access decision became a real access. Firing
+// later would under-report (a read that errored mid-stream still read), and
+// firing earlier (at resolve time) would over-report a file the caller never
+// managed to open.
+//
+// Best-effort, exactly like emitFileWriteAudit and emitPathAccessDenied: a
+// nil logger is a silent no-op, and a log-write failure is logged rather
+// than returned. An audit append must never fail a read that has already
+// succeeded.
+func emitFileReadAudit(
+	ctx context.Context,
+	auditLog *audit.Logger,
+	toolName string,
+	canonicalPath string,
+	op string,
+) {
+	if auditLog == nil || canonicalPath == "" {
+		return
+	}
+	entry := &audit.Entry{
+		Timestamp: time.Now().UTC(),
+		Event:     fileReadAuditEvent,
+		Decision:  audit.DecisionAllow,
+		AgentID:   ToolAgentID(ctx),
+		SessionID: ToolTranscriptSessionID(ctx),
+		Tool:      toolName,
+		Details: adjudicationAuditDetails(ctx, map[string]any{
+			"path": canonicalPath,
+			"op":   op,
+		}),
+	}
+	if err := auditLog.Log(entry); err != nil {
+		slog.Error("filesystem: read audit log write failed",
+			"error", err, "session_id", entry.SessionID, "agent_id", entry.AgentID, "path", canonicalPath)
+	}
+}
+
+// emitPathAccessDeniedCorrelated is emitPathAccessDenied plus JUDGE-FR-084's
+// adjudication correlation.
+//
+// When the turn carries no adjudication id — every ordinary agent turn — it
+// delegates to emitPathAccessDenied verbatim, so the emitted row is
+// byte-identical to the pre-ADR-084 row and nothing that reads the audit log
+// today sees a change. Only a verifier turn takes the branch below, and the
+// only difference there is one extra Details key.
+//
+// It exists as a separate function rather than a parameter on
+// emitPathAccessDenied because that function lives in path_audit.go, which
+// this wave does not own (see this wave's report). The reason classification
+// and path canonicalisation are shared with it — classifyPathDenialReason
+// and canonicalDeniedPath are the same package-level helpers — so the two
+// cannot drift on the parts that decide anything.
+func emitPathAccessDeniedCorrelated(
+	ctx context.Context,
+	auditLog *audit.Logger,
+	toolName string,
+	rawPath string,
+	validatorErr error,
+	allowPathsLen int,
+) {
+	if auditLog == nil {
+		return
+	}
+	adjID := VerifierAdjudicationID(ctx)
+	if adjID == "" {
+		emitPathAccessDenied(ctx, auditLog, toolName, rawPath, validatorErr, allowPathsLen)
+		return
+	}
+	entry := &audit.Entry{
+		Timestamp: time.Now().UTC(),
+		Event:     PathAccessDeniedEvent,
+		Decision:  audit.DecisionDeny,
+		AgentID:   ToolAgentID(ctx),
+		SessionID: ToolTranscriptSessionID(ctx),
+		Tool:      toolName,
+		Details: map[string]any{
+			"path":            canonicalDeniedPath(rawPath),
+			"reason":          classifyPathDenialReason(validatorErr, allowPathsLen),
+			"adjudication_id": adjID,
+		},
+	}
+	if err := auditLog.Log(entry); err != nil {
+		slog.Error("filesystem: path denial audit log write failed",
+			"error", err, "session_id", entry.SessionID, "agent_id", entry.AgentID)
+	}
+}
+
 type ReadFileTool struct {
 	BaseTool
 	// agentHome is the agent's fixed home directory (the pre-ADR-046-rename
@@ -430,7 +564,10 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	handle, err := ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpRead, path, t.patterns)
 	if err != nil {
-		emitPathAccessDenied(ctx, t.auditLogger, t.Name(), path, err, t.allowPathsLen)
+		// JUDGE-FR-084: a refusal is the half of "what did the verifier try
+		// to open" that matters most, so it is audited with the same
+		// adjudication correlation as a successful read.
+		emitPathAccessDeniedCorrelated(ctx, t.auditLogger, t.Name(), path, err, t.allowPathsLen)
 		return PermissionDeniedResult(t.Name(), err, err.Error())
 	}
 	defer handle.Close()
@@ -438,11 +575,22 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	file, err := handle.Open()
 	if err != nil {
 		// Emit a path.access_denied audit entry on workspace-guard rejections.
-		// emitPathAccessDenied is a no-op when t.auditLogger is nil (best-effort).
-		emitPathAccessDenied(ctx, t.auditLogger, t.Name(), path, err, t.allowPathsLen)
+		// The emitter is a no-op when t.auditLogger is nil (best-effort).
+		emitPathAccessDeniedCorrelated(ctx, t.auditLogger, t.Name(), path, err, t.allowPathsLen)
 		return ErrorResult(err.Error())
 	}
 	defer file.Close()
+
+	// JUDGE-FR-084: the read is authorized AND open — record it. See
+	// emitFileReadAudit for why this is the emission point. The resolved
+	// path is logged, not the caller's spelling, so two agents reading the
+	// same file through different relative paths produce comparable rows;
+	// RealPath is advisory only (it is not re-checked at I/O time) but that
+	// is exactly right for an audit record, which describes what was
+	// resolved rather than re-deciding it.
+	if resolved, realErr := handle.RealPath(); realErr == nil {
+		emitFileReadAudit(ctx, t.auditLogger, t.Name(), resolved, "read")
+	}
 
 	// measure total size
 	totalSize := int64(-1) // -1 means unknown
@@ -866,6 +1014,17 @@ type ListDirTool struct {
 	agentHome string
 	restrict  bool
 	patterns  []*regexp.Regexp
+	// auditLogger receives the JUDGE-FR-084 listing and denial entries.
+	// Nil means audit logging is disabled (best-effort), which is also the
+	// state of a tool constructed outside a registry.
+	//
+	// Before ADR-084 this tool had no audit logger at all: a list_directory
+	// refusal was invisible everywhere. That gap is load-bearing for the
+	// Judge specifically, because JUDGE-FR-060's read confinement governs
+	// FSOpList as well as FSOpRead — an unaudited list_directory refusal is
+	// precisely the event an operator needs to see when the verifier reaches
+	// for a path outside its confinement.
+	auditLogger *audit.Logger
 }
 
 func NewListDirTool(workspace string, restrict bool, allowPaths ...[]*regexp.Regexp) *ListDirTool {
@@ -878,6 +1037,18 @@ func NewListDirTool(workspace string, restrict bool, allowPaths ...[]*regexp.Reg
 		restrict:  restrict,
 		patterns:  patterns,
 	}
+}
+
+// SetAuditLogger injects an audit.Logger so that listing and
+// path.access_denied events are emitted (JUDGE-FR-084). Satisfies the
+// auditLoggerAware contract the ToolRegistry uses to propagate its logger,
+// so no call site has to wire this by hand. Calling it on a nil ListDirTool
+// is a no-op.
+func (t *ListDirTool) SetAuditLogger(l *audit.Logger) {
+	if t == nil {
+		return
+	}
+	t.auditLogger = l
 }
 
 func (t *ListDirTool) Name() string {
@@ -950,14 +1121,28 @@ func (t *ListDirTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 
 	handle, err := ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpList, path, t.patterns)
 	if err != nil {
+		// JUDGE-FR-084. len(t.patterns) is the allow-list length this tool
+		// was constructed with — the same discriminator ReadFileTool passes
+		// as t.allowPathsLen, which it caches at construction for the same
+		// value.
+		emitPathAccessDeniedCorrelated(ctx, t.auditLogger, t.Name(), path, err, len(t.patterns))
 		return PermissionDeniedResult(t.Name(), err, err.Error())
 	}
 	defer handle.Close()
 
 	entries, err := handle.ReadDir()
 	if err != nil {
+		emitPathAccessDeniedCorrelated(ctx, t.auditLogger, t.Name(), path, err, len(t.patterns))
 		return ErrorResult(err.Error())
 	}
+
+	// JUDGE-FR-084: the listing was authorized and actually read. Recorded
+	// with op="list" so a query can tell "opened this file" from "enumerated
+	// this directory" without inspecting the tool name.
+	if resolved, realErr := handle.RealPath(); realErr == nil {
+		emitFileReadAudit(ctx, t.auditLogger, t.Name(), resolved, "list")
+	}
+
 	return formatDirEntries(entries, int(offset), int(limit))
 }
 

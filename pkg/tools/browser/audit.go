@@ -71,25 +71,54 @@ var writeClassBrowserTools = map[string]bool{
 	"browser_upload_file":   true,
 }
 
-// readOnlyBrowserTools is the complement: the four tools that observe without
-// acting. They are never audited per call. Listed explicitly rather than
-// derived, so that a NEW browser tool belongs to neither set and audit_test.go
-// says so instead of silently defaulting it into the exempt half.
-var readOnlyBrowserTools = map[string]bool{
-	"browser_list_tabs":  true,
+// captureBrowserTools is the CAPTURE class (ADR-085 D5/FR-033/FR-035): the
+// three tools that observe the page without injecting input, but which —
+// under ADR-085 D1's "the agent keeps running" turn model — could otherwise
+// capture pixels/text/DOM off a page a human is actively typing into. They
+// call controlledResult (they ARE control-gated, unlike the exempt roster
+// below) but are neither write-leased nor per-call audited: capturing is not
+// an action the workspace's browser took, so recordBrowserAction refuses
+// them exactly as it refuses any non-write-class name. This is the
+// THREE-WAY split ADR-085 R3-a/FR-035 introduces, replacing the two-way
+// gated/exempt classification: action (gated + leased + audited), capture
+// (gated, unleased, unaudited), exempt (none of the three).
+var captureBrowserTools = map[string]bool{
 	"browser_screenshot": true,
 	"browser_get_text":   true,
-	"browser_wait":       true,
-	// ADR-075 D2 FR-038 — browser_snapshot is read-only. It calls neither
-	// controlledResult nor the write lease, so it belongs here and NOT in the
-	// write-class set. It emits its OWN metadata-only browser_snapshot event
-	// (FR-028) rather than a browser_action row: the two answer different
-	// questions and recordBrowserAction refuses a non-write-class name by
-	// design.
+	// ADR-075 D2 FR-038 — browser_snapshot moved here from the exempt roster
+	// under ADR-085: still metadata-only for AUDIT purposes (it keeps its
+	// own browser_snapshot event, FR-028, never a browser_action row), but
+	// now control-gated so a snapshot cannot describe a page mid-drive by a
+	// human (BROWSER-FR-033/FR-035a).
 	"browser_snapshot": true,
+}
+
+// exemptBrowserTools is the EXEMPT class: the tools that call neither
+// controlledResult nor the write lease and are never audited per call.
+// Listed explicitly rather than derived, so that a NEW browser tool belongs
+// to none of the three sets and audit_test.go/control_gate_membership_test.go
+// say so instead of silently defaulting it into this one. Its previous name,
+// readOnlyBrowserTools, described a two-way split this file no longer has —
+// captureBrowserTools above is ALSO read-only in the sense of never
+// mutating the page, but is gated where this roster is not; "exempt from
+// the control gate" is the only property every member of THIS map shares.
+var exemptBrowserTools = map[string]bool{
+	"browser_list_tabs": true,
+	"browser_wait":      true,
+	// ADR-085 — browser_handover is exempt for its OWN reason, stated here
+	// because this file's convention is that shared membership must never
+	// imply a shared rationale. It is the tool that GIVES the wheel to a
+	// human, so gating it on who currently holds the wheel is circular: the
+	// agent could not hand over at precisely the moment handing over is what
+	// it needs to do. Same shape of reason as browser_handle_dialog below,
+	// and none of the read-only ones. This roster is asserted to match
+	// control_gate_membership_test.go's declaredControlGateExemptions, which
+	// carries the same reason in prose — change one and the test fails.
+	"browser_handover": true,
 	// ADR-075 D2 FR-035 — browser_handle_dialog is exempt for a DIFFERENT
-	// reason from everything else in this map, and the difference is worth
-	// stating rather than letting the shared membership imply sameness.
+	// reason from browser_list_tabs/browser_wait, and the difference is
+	// worth stating rather than letting the shared membership imply
+	// sameness.
 	//
 	// It is NOT read-only: HandleJavaScriptDialog changes what the page is
 	// doing. It is exempt because it is the RECOVERY verb. The browser_click
@@ -97,12 +126,13 @@ var readOnlyBrowserTools = map[string]bool{
 	// wedge — and it holds the write lease; controlledResult would defer the
 	// dialog tool for the whole wedge window, and a human on the same tab has
 	// no button either. Gating a recovery verb behind the mechanisms the fault
-	// disables is a deadlock, not a safety property.
+	// disables is a deadlock, not a safety property (ADR-085 R4-c / FR-034,
+	// unchanged from ADR-075's original A17 reasoning).
 	//
-	// It is listed HERE rather than left out of both maps because the
-	// biconditional test treats an unclassified tool as a defect: a tool in
-	// neither set has an undecided audit treatment, which is exactly how a new
-	// tool would default silently into the exempt half.
+	// It is listed HERE rather than left out of every map because the
+	// three-way biconditional test treats an unclassified tool as a defect: a
+	// tool in none of the three sets has an undecided audit treatment, which
+	// is exactly how a new tool would default silently into the exempt half.
 	"browser_handle_dialog": true,
 }
 
@@ -175,6 +205,49 @@ func (b *browserAudit) recordBrowserAction(
 	}
 	if err := log.Log(entry); err != nil {
 		slog.Error("browser audit: action log write failed",
+			"error", err, "tool", toolName, "workspace_id", key.WorkspaceID())
+	}
+}
+
+// recordControlDeferral writes the ADR-085 BROWSER-FR-061/FR-062 audit
+// record for one control-gate deferral: a WARN event carrying the
+// workspace/browsing-key, the ROOT CHAT session id (not a turn id — there is
+// none in the tool context; see FR-061's doc), the viewer id of whoever
+// currently holds the wheel ("" for a handover-pending stand-down with no
+// interactive holder), and the tool name that was deferred. Emitted from
+// THIS package's deferral path (controlledResult, and — once B6 lands the
+// tool — browser_handover), never from pkg/gateway/browser_ws.go's take
+// handler: at take time no tool has deferred yet and the handler has no way
+// to know which one later will.
+//
+// sessionID (FR-061's "viewer id") is deliberately named separately from
+// tools.ToolCallID(ctx), which is recorded alongside it to pin the
+// individual call precisely — the two answer different questions ("who is
+// blocking this?" vs "which exact call was blocked?").
+func (b *browserAudit) recordControlDeferral(
+	ctx context.Context, mgr *BrowserManager, key BrowsingKey, rootChatSessionID, holderViewerID, toolName string,
+) {
+	log := b.auditLogger()
+	if log == nil {
+		return
+	}
+	entry := &audit.Entry{
+		Timestamp: time.Now().UTC(),
+		Event:     audit.EventBrowserControlDeferred,
+		Decision:  audit.DecisionDeny,
+		AgentID:   tools.ToolAgentID(ctx),
+		SessionID: tools.ToolTranscriptSessionID(ctx),
+		Tool:      toolName,
+		Details: map[string]any{
+			"workspace_id":         key.WorkspaceID(),
+			"browsing_key":         key.String(),
+			"root_chat_session_id": rootChatSessionID,
+			"holder_viewer_id":     holderViewerID,
+			"tool_call_id":         tools.ToolCallID(ctx),
+		},
+	}
+	if err := log.Log(entry); err != nil {
+		slog.Error("browser audit: control-deferral log write failed",
 			"error", err, "tool", toolName, "workspace_id", key.WorkspaceID())
 	}
 }

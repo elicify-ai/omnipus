@@ -160,6 +160,14 @@ replayed (`pkg/gateway/replay.go`'s `EvidenceQuote *string` frame field) and ren
 (`src/components/workspaces/CriteriaVerdictList.tsx`, three tests in
 `CriteriaVerdictList.test.tsx` asserting present / absent / empty behaviour).
 
+> **The renderer is not the work.** `CriteriaVerdictList`/`CriterionRow` already draw the tick, the
+> judge's reason line and the evidence expander, and already render a "Definition of Done" group
+> when given a `dod` prop. Every criterion shows pending purely because nothing writes `CritMet` /
+> `CritUnmet`. So the interface half of this is: write the statuses, and have `TaskDetailPanel` pass
+> `dod` (which it never does today). Do not build a new component. The eight decided task-form
+> changes, with the reference design, are `goal-entity-spec.md` §I2 (FR-053…FR-060) and ADR-086 D15;
+> the visual contract is `docs/internal/design/task-form-criteria-dod-demo.html`.
+
 Changing that string into an object `{text, source}` breaks: every verdict already on disk, the
 replay frame, the SPA render, and the ADR-074 D7 500-rune bound that
 `pkg/agent/judge.go::truncateEvidenceQuote` enforces against `maxLength: 500`.

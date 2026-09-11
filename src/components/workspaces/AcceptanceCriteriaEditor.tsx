@@ -15,6 +15,8 @@ import type { AcceptanceCriterion } from '@/lib/api'
 type BehaviorScope = NonNullable<AcceptanceCriterion['behavior']>['scope']
 type Judgment = AcceptanceCriterion['judgment']
 
+const DEFAULT_INPUT_ARIA_LABEL = 'What must be true when this is done?'
+
 interface AcceptanceCriteriaEditorProps {
   criteria: AcceptanceCriterion[]
   onChange: (criteria: AcceptanceCriterion[]) => void
@@ -22,6 +24,16 @@ interface AcceptanceCriteriaEditorProps {
   currentAuthor: { kind: 'agent' | 'user'; id: string }
   /** Shown when the collection is empty (D5 soft-tier hint for human/UI creation). */
   emptyHint?: string
+  /**
+   * Overrides the accessible name of the plain-language text input.
+   * `DefinitionOfDoneEditor.tsx` sets this to "Definition of Done item"
+   * (matches `task-form-criteria-dod-demo.html`) so that when Acceptance
+   * criteria and Definition of Done both render on the same form, their two
+   * text inputs are not indistinguishable to a screen reader — the visible
+   * placeholder text stays identical in both places. Defaults to the
+   * original wording.
+   */
+  inputAriaLabel?: string
 }
 
 /**
@@ -71,7 +83,7 @@ function parseIntStrict(raw: string): number | null {
  * either expander is open, with a hint explaining why. Only a plain
  * (`prose`) criterion keeps the free boolean/quantitative/artifact choice.
  */
-export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, emptyHint }: AcceptanceCriteriaEditorProps) {
+export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, emptyHint, inputAriaLabel }: AcceptanceCriteriaEditorProps) {
   const [text, setText] = useState('')
   const [error, setError] = useState('')
   // Which payload expander is open — at most one; null = plain prose add.
@@ -254,7 +266,7 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
 
       <div className="flex flex-col gap-1.5 rounded-md border border-dashed border-[var(--color-border)] p-2">
         <Input
-          aria-label="What must be true when this is done?"
+          aria-label={inputAriaLabel ?? DEFAULT_INPUT_ARIA_LABEL}
           value={text}
           onChange={(e) => { setText(e.target.value); setError('') }}
           placeholder="What must be true when this is done?"

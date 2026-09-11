@@ -224,10 +224,18 @@ function SystemMessage() {
   // identical storeMsg lookup a few components up.
   const storeMsg = useChatStore((s) => s.messagesById[message.id])
   const isGoalAck = !!storeMsg?.goalAckGoalId
+  // ADR-085 BROWSER-FR-042/FR-044 (wave B8, C-90): the browser-handover
+  // waiting notice is the same kind of synthetic `role: 'system'`
+  // ChatMessage, this time carrying `browserHandoverNoticeId` (chat.ts's
+  // `case 'browser_handover_notice'` handler, buildBrowserHandoverInsertion)
+  // — copying the shipped two-site `isGoalAck` pattern exactly. The e2e spec
+  // (tests/e2e/browser-control-handover.spec.ts) names this discriminator
+  // as its positive observable.
+  const isBrowserHandoverNotice = !!storeMsg?.browserHandoverNoticeId
   return (
     <MessagePrimitive.Root
       className="flex justify-center py-2"
-      data-testid={isGoalAck ? 'goal-ack-line' : undefined}
+      data-testid={isGoalAck ? 'goal-ack-line' : isBrowserHandoverNotice ? 'browser-handover-notice' : undefined}
     >
       <div className="text-xs text-[var(--color-muted)] bg-[var(--color-surface-2)] px-3 py-1 rounded-full">
         <MessagePrimitive.Parts>
@@ -1079,11 +1087,14 @@ function VirtualSystemMessageRow({ message }: { message: ChatMessage }) {
   // Operator-reported UX fix, 2026-09-08: see SystemMessage's identical
   // discriminator (live path) for the full rationale.
   const isGoalAck = !!message.goalAckGoalId
+  // ADR-085 BROWSER-FR-042/FR-044 (wave B8, C-90): see SystemMessage's
+  // identical isBrowserHandoverNotice discriminator for the full rationale.
+  const isBrowserHandoverNotice = !!message.browserHandoverNoticeId
   return (
     <div
       data-message-role="system"
       data-message-id={message.id}
-      data-testid={isGoalAck ? 'goal-ack-line' : undefined}
+      data-testid={isGoalAck ? 'goal-ack-line' : isBrowserHandoverNotice ? 'browser-handover-notice' : undefined}
       className="flex justify-center py-2"
     >
       <div className="text-xs text-[var(--color-muted)] bg-[var(--color-surface-2)] px-3 py-1 rounded-full">

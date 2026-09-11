@@ -30,6 +30,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/commands"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/constants"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/memory"
@@ -2433,6 +2434,14 @@ func registerSharedTools(
 				// pkg/tools/browser/pool_ttl_config_reachability_test.go.
 				browserCfg.IdleCloseTTL = cfg.Tools.Browser.EffectiveIdleCloseTTL()
 				browserCfg.CacheTrimInterval = cfg.Tools.Browser.EffectiveCacheTrimInterval()
+				// ADR-085 BROWSER-FR-031a/FR-052: the LiveViewRegistry
+				// idle-release sweeper's window and the take-control
+				// enablement flag it reads on every tick — see
+				// browser.BrowserConfig's doc comments on both fields.
+				browserCfg.ControlIdleReleaseSec = time.Duration(
+					cfg.Tools.Browser.EffectiveControlIdleReleaseSec(),
+				) * time.Second
+				browserCfg.TakeControlEnabled = cfg.Tools.Browser.TakeControlEnabled
 				// Start page: an operator override wins; otherwise default to
 				// the gateway's own served start page so a fresh tab lands
 				// somewhere branded and legible instead of about:blank (a blank
@@ -7704,6 +7713,16 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		Metadata: msg.Metadata,
 	}
 
+	// ADR-085 BROWSER-FR-029: release a held browser wheel BEFORE this turn
+	// begins, if and only if msg.OperatorPrompt is true (set ONLY at the
+	// three operator-originated publish sites: websocket.go, sse.go,
+	// channels/base.go::HandleMessage — never here, never by the bus, never
+	// by the async notifier or a goal-loop follow-up). A nil hook (no
+	// gateway wired — headless/test builds) is a silent no-op. See
+	// browser_deferral.go for the hook's registration and the fail-closed
+	// contract on OperatorPrompt itself.
+	invokeBrowserWheelReleaseHookIfOperatorPrompt(ctx, msg, transcriptSessionID)
+
 	// FR-025: reset idle ticker on every user turn, using transcript session ID
 	// when available (web-chat sessions). This starts the ticker on the first
 	// turn and resets it on every subsequent turn.
@@ -8295,10 +8314,13 @@ func (al *AgentLoop) runAgentLoop(
 		return "", nil
 	}
 
-	// ADR-049 D6/D7 (US-8): judge-gated /goal round advance. Fast no-op
-	// unless opts.TranscriptSessionID's session carries an active goal; may
-	// append a steering follow-up to result.followUps, published by the loop
-	// immediately below exactly like any other follow-up.
+	// ADR-049 D6/D7 (US-8) / ADR-084 revision 9 D13 (JUDGE-FR-098, this
+	// wave): judge-gated /goal round advance. Fast no-op unless
+	// opts.TranscriptSessionID's session carries an active goal; may append
+	// a steering follow-up to result.followUps (published by the loop
+	// immediately below exactly like any other follow-up), and — on a
+	// resolved `met` claim — records a DEFERRED adjudication on
+	// result.goalDeferredAdjudication instead of running the Judge itself.
 	al.checkGoalLoopAfterTurn(ctx, agent, opts, &result)
 
 	for _, followUp := range result.followUps {
@@ -8327,6 +8349,18 @@ func (al *AgentLoop) runAgentLoop(
 			logger.ErrorCF("agent", "Failed to publish outbound response after turn",
 				map[string]any{"channel": opts.Channel, "chat_id": opts.ChatID, "error": err.Error()})
 		}
+	}
+
+	// JUDGE-FR-098 (D13, this wave): dispatch a claim-triggered adjudication
+	// ONLY here — strictly after the operator's answer has been published
+	// above — and in its own goroutine, so this turn returns to its caller
+	// without waiting for the Judge. This is the whole of FR-098's
+	// reordering mechanism; the dispatch itself (context.Background()-
+	// derived timeout, async-notifier steer delivery) lives in
+	// dispatchDeferredGoalAdjudication (goal_loop.go).
+	if result.goalDeferredAdjudication != nil {
+		work := result.goalDeferredAdjudication
+		go al.dispatchDeferredGoalAdjudication(work)
 	}
 
 	if result.finalContent != "" {
@@ -8426,28 +8460,52 @@ func isMessagingChannel(channel string) bool {
 // predicate must agree with, so both sides carry the identical value.
 const goalForcingWebChannel = "webchat"
 
-// goalTurnRecordState reads sessionID's current goal state via
-// ts.opts.TranscriptStore — the single read both evaluateGoalForcing (every
+// goalTurnRecordState reads the turn session's current goal state from
+// pkg/goal — the single read both evaluateGoalForcing (every
 // iteration since the D3 amendment, 2026-09-08 — no longer iteration==1
 // only) and the mid-turn rubric-note budget estimate (goalRubricNoteForBudget,
 // every iteration) share, so the two can never disagree about what "the
 // record is still empty" means. holds is
-// ADR-081 D3's base predicate: an active goal (GoalCondition set) whose
-// compiled record is still empty (GoalCriteriaJSON unset) — the transient
-// window between instant activation (D1) and the working agent's own
-// set_goal authorship. meta is nil whenever holds is false.
-func goalTurnRecordState(ts *turnState) (holds bool, meta *session.UnifiedMeta) {
-	if ts == nil || ts.opts.TranscriptStore == nil || ts.opts.TranscriptSessionID == "" {
+// ADR-081 D3's base predicate: an active goal whose compiled record is still
+// empty — the transient window between instant activation (D1) and the
+// working agent's own set_goal authorship. rec is nil whenever holds is
+// false.
+//
+// DD-6 (round-6 production blocker, ADR-086, fixed by wave E13): "the
+// compiled record is still empty" used to be read straight off session
+// meta's GoalCriteriaJSON — but a set_goal TOOL call's WriteRecord
+// (goal_record_wiring.go, wave E4) was re-pointed onto pkg/goal.Store and
+// writes NO session meta at all (GOAL-FR-004/FR-005), so a real working
+// agent that registered its record via the tool left this session-meta
+// field permanently empty: the narrowed first-move door never lifted for
+// the rest of the goal. Fixed by reading the SAME pkg/goal-backed accessor
+// set_goal itself uses (agentLoopGoalRecordAccess.ReadGoalState,
+// goal_record_wiring.go) — recordJSON is "" exactly when the session's
+// ACTIVE goal record's own criteria list is still empty, whether that
+// record was activated via the /goal command (goal_loop.go) or a task run
+// (task_executor.go::activateTaskGoal). The REJECTED alternative — making
+// WriteRecord mirror the criteria back onto session meta — would reinstate
+// precisely the dual-write ADR-086 exists to delete; not implemented here.
+//
+// ADR-086 (S6) completes that re-point: the "is this a goal turn at all"
+// half used to read session meta's GoalCondition, which no longer exists.
+// Both halves now come from ONE lookup of the ACTIVE goal record bound to
+// this session (activeGoalForSession, goal_record_wiring.go) — its
+// existence answers the first question and its own criteria list answers
+// the second, so the two can no longer disagree even in principle, and the
+// predicate covers a task-owned goal as well as a chat-owned one.
+func goalTurnRecordState(al *AgentLoop, ts *turnState) (holds bool, rec *goal.Goal) {
+	if al == nil || ts == nil || ts.opts.TranscriptStore == nil || ts.opts.TranscriptSessionID == "" {
 		return false, nil
 	}
-	m, err := ts.opts.TranscriptStore.GetMeta(ts.opts.TranscriptSessionID)
-	if err != nil || m == nil {
+	g := activeGoalForSession(ts.opts.TranscriptSessionID)
+	if g == nil {
 		return false, nil
 	}
-	if strings.TrimSpace(m.GoalCondition) == "" || strings.TrimSpace(m.GoalCriteriaJSON) != "" {
+	if len(g.Criteria) > 0 {
 		return false, nil
 	}
-	return true, m
+	return true, g
 }
 
 // goalForcingNarrowTools returns the ADR-081 D3 Layer 1 narrowed tool pair:
@@ -8573,7 +8631,7 @@ func (al *AgentLoop) evaluateGoalForcing(
 	ts *turnState, iteration int, policyFiltered []tools.Tool,
 ) goalForcingDecision {
 	var d goalForcingDecision
-	holds, meta := goalTurnRecordState(ts)
+	holds, rec := goalTurnRecordState(al, ts)
 	if !holds {
 		// Covers both "not a goal turn at all" and "a PRIOR request's
 		// set_goal already wrote the record" — goalTurnRecordState reads
@@ -8590,15 +8648,15 @@ func (al *AgentLoop) evaluateGoalForcing(
 		// narrowed again.
 		d.rubric = true
 		d.sessionID = ts.opts.TranscriptSessionID
-		d.goalID = meta.GoalID
-		d.questionRoundsUsed = meta.GoalQuestionRoundsUsed
+		d.goalID = rec.GoalID
+		d.questionRoundsUsed = rec.QuestionRoundsUsed
 		d.isWebchat = ts.channel == goalForcingWebChannel
 		return d
 	}
 	d.rubric = true
 	d.sessionID = ts.opts.TranscriptSessionID
-	d.goalID = meta.GoalID
-	d.questionRoundsUsed = meta.GoalQuestionRoundsUsed
+	d.goalID = rec.GoalID
+	d.questionRoundsUsed = rec.QuestionRoundsUsed
 	d.isWebchat = ts.channel == goalForcingWebChannel
 
 	setGoalAllowed, askAllowed := false, false
@@ -8679,14 +8737,21 @@ func (al *AgentLoop) bumpGoalQuestionRoundsUsed(d goalForcingDecision) {
 	if d.sessionID == "" {
 		return
 	}
-	store := al.ResolveSessionStore(d.sessionID)
-	if store == nil {
-		logger.WarnCF("agent", "goal: could not persist the spent question-round budget — session store unresolvable",
-			map[string]any{"component": "goal", "session_id": d.sessionID, "goal_id": d.goalID})
+	// ADR-086 (GOAL-FR-004): the question-round budget is the goal record's
+	// own QuestionRoundsUsed counter, relocated off the retired session-meta
+	// GoalQuestionRoundsUsed field — which is also what keeps it attached to
+	// the GOAL generation (a restate never re-mints the record) rather than
+	// to the session.
+	if d.goalID == "" {
+		logger.WarnCF("agent", "goal: could not persist the spent question-round budget — no goal id on the forcing decision",
+			map[string]any{"component": "goal", "session_id": d.sessionID})
 		return
 	}
 	newCount := d.questionRoundsUsed + 1
-	if err := store.SetMeta(d.sessionID, session.MetaPatch{GoalQuestionRoundsUsed: &newCount}); err != nil {
+	if _, err := resolveGoalRecordStore().Update(d.goalID, func(cur *goal.Goal) error {
+		cur.QuestionRoundsUsed = newCount
+		return nil
+	}); err != nil {
 		logger.WarnCF("agent", "goal: could not persist the spent question-round budget",
 			map[string]any{"component": "goal", "session_id": d.sessionID, "goal_id": d.goalID, "error": err.Error()})
 		return
@@ -8712,7 +8777,7 @@ func (al *AgentLoop) bumpGoalQuestionRoundsUsed(d goalForcingDecision) {
 // OTHER ephemeral note in that enumeration is measured), and remains safe
 // either way: it can only ever match or over-estimate, never under-count.
 func (al *AgentLoop) goalRubricNoteForBudget(ts *turnState) string {
-	holds, _ := goalTurnRecordState(ts)
+	holds, _ := goalTurnRecordState(al, ts)
 	isWebchat := ts != nil && ts.channel == goalForcingWebChannel
 	return buildGoalRubricInjectionNote(holds, isWebchat)
 }
@@ -8767,6 +8832,16 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// The session key is a routing key; the transcript session ID is the
 	// real session directory (e.g., "session_01KP30THP63YFESKGECYYHYQWY").
 	turnCtx = tools.WithTranscriptSessionID(turnCtx, ts.opts.TranscriptSessionID)
+	// ADR-085 BROWSER-FR-021: stamp the ROOT chat session id (ADR-057
+	// routingSessionID, inherited verbatim through a whole delegation
+	// subtree) so pkg/tools/browser/tools.go::controlledResult can evaluate
+	// its FR-020 second coverage check — the tab set the live panel would
+	// hold the lock on for the chat this turn (or its delegated ancestor)
+	// belongs to — even for a delegated child driving its OWN tab set
+	// (FR-023). A turn with no root chat (cron/heartbeat/task) stamps "",
+	// which controlledResult's own doc comment documents as "skip that
+	// check entirely" (fails open, never closed).
+	turnCtx = withBrowserRootChatSessionID(turnCtx, ts)
 	// Inject the session owner so sysagent tools (system.workspace.create,
 	// system.task.create) can stamp the owner on newly created entities
 	// (Rule-2 of the sysagent ownership rule, SEC-2/#406).
@@ -10897,6 +10972,61 @@ turnLoop:
 			toolName := ts.agent.Tools.UnsanitizeToolName(tc.Name)
 			toolArgs := cloneStringAnyMap(tc.Arguments)
 
+			// pkg/agent/verifier_budget.go::VerifierBudget (JUDGE-FR-051/
+			// FR-052): once a verifier adjudication's tool-call or byte cap
+			// has been reached by every call already admitted this turn,
+			// refuse EVERY further tool call here — before the quarantine
+			// gate, before any hook, before dispatch — with a tool-result
+			// message telling the Judge the cap was reached and to conclude
+			// with the evidence already gathered. The turn is NEVER killed
+			// (FR-052): this is an ordinary refused tool-result, the same
+			// shape as the serialised-tool-argument-bound refusal further
+			// below, and the loop continues so the Judge's next assistant
+			// message can still emit its verdict.
+			// verifierBudgetForTurn returns nil for every non-verifier turn
+			// (the overwhelming majority — an ordinary chat turn's turnID
+			// was never registered), and CheckCap on a nil *VerifierBudget
+			// is a no-op, so this costs one map lookup on the hot path and
+			// nothing more.
+			if vb := verifierBudgetForTurn(ts.turnID); vb != nil {
+				if refusal, capped := vb.CheckCap(); capped {
+					logger.WarnCF("agent", "verifier tool call refused: adjudication budget cap reached (JUDGE-FR-051/FR-052)",
+						map[string]any{
+							"agent_id": ts.agent.ID,
+							"tool":     toolName,
+						})
+					// ADR-066 D4: refused results enter through the choke
+					// point on the builtin-failure surface (FR-009).
+					// SkipVerifierBudgetAccounting is set because this
+					// result exists ONLY because the cap was already
+					// reached — it must not itself count toward that same
+					// cap.
+					refusedMsg := al.admitToolResult(ts, toolResultAdmission{
+						Tool: tc.Name, ToolCallID: tc.ID, Content: refusal, IsError: true, ParallelN: len(normalizedToolCalls),
+						SkipVerifierBudgetAccounting: true,
+					}).Message
+					messages = append(messages, refusedMsg)
+					// ADR-066 D6 (T066-13): the window check runs after EVERY
+					// admitted result — empty-only mid-turn, Skip never
+					// moves; a thrash-guard fire ends the turn typed with no
+					// further provider call (FR-032).
+					if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+						res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+						turnStatus = status
+						return res, exitErr
+					}
+					al.emitEvent(
+						EventKindToolExecSkipped,
+						ts.eventMeta("runTurn", "turn.tool.skipped"),
+						ToolExecSkippedPayload{
+							Tool:   toolName,
+							Reason: refusal,
+						},
+					)
+					continue
+				}
+			}
+
 			// ADR-058 fix: ledgerToolName is the PRE-HOOK tool name, captured
 			// before hooks.BeforeTool below gets a chance to run. Every
 			// recordToolDenial/recordQuarantineReplay call for THIS call must
@@ -10962,6 +11092,38 @@ turnLoop:
 				if used, exhausted := ts.recordQuarantineReplay(ledgerToolName); exhausted {
 					turnStatus = TurnEndStatusAborted
 					return al.abortTurnForToolDenialBudget(ts, ledgerToolName, qReason, used)
+				}
+				continue
+			}
+
+			// ADR-085 BROWSER-FR-016/FR-016a: once this turn's control-gate
+			// deferral bound (BROWSER-FR-014, N=3) has been reached, every
+			// LATER control-gated browser tool call short-circuits HERE —
+			// before hooks.BeforeTool, before dispatch, before any CDP
+			// contact, no lease acquisition, no audit action row, no entry
+			// into pkg/tools/browser at all. This is a SEPARATE ledger and
+			// refusal from the quarantine gate immediately above: it shares
+			// this tool-dispatch point and nothing else (see loop.go's
+			// shared-file-chain doc). Never mixes with turnDenialBudget.
+			if isBrowserControlGatedTool(ledgerToolName) && ts.browserControlGateExhausted() {
+				al.emitEvent(
+					EventKindToolExecSkipped,
+					ts.eventMeta("runTurn", "turn.tool.skipped"),
+					ToolExecSkippedPayload{
+						Tool:   toolName,
+						Reason: "browser_control_gate_exhausted",
+					},
+				)
+				exhaustedMsg := browserControlGateExhaustedMessage(toolName)
+				settleAskToolCallTranscript(ts, session.ToolCallID(tc.ID), toolName, toolArgs, exhaustedMsg)
+				admittedMsg := al.admitToolResult(ts, toolResultAdmission{
+					Tool: tc.Name, ToolCallID: tc.ID, Content: exhaustedMsg, IsError: false, ParallelN: len(normalizedToolCalls),
+				}).Message
+				messages = append(messages, admittedMsg)
+				if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+					res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+					turnStatus = status
+					return res, exitErr
 				}
 				continue
 			}
@@ -11713,6 +11875,19 @@ turnLoop:
 
 			if toolResult == nil {
 				toolResult = tools.ErrorResult("hook returned nil tool result")
+			}
+
+			// ADR-085 BROWSER-FR-012a/FR-013/FR-015: a REAL dispatch (not the
+			// FR-016 short-circuit above, which never reaches here) came back
+			// deferred by the browser control gate. Record it on this turn's
+			// ledger via the STRUCTURAL Deferred field alone — never by
+			// parsing ForLLM's prose — and, on exactly the call that reaches
+			// BROWSER-FR-014's bound (the third), append FR-015's terminal
+			// instruction to this one result's own ForLLM.
+			if toolResult.Deferred != nil && toolResult.Deferred.Gate == browserControlDeferralGate {
+				if _, justReachedBound := ts.recordBrowserControlDeferral(); justReachedBound {
+					toolResult.ForLLM += browserControlGateBoundReachedNote
+				}
 			}
 
 			// UAT fix (fix/uat-defects-2026-08-22, Defect 1): update this

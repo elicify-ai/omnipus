@@ -64,7 +64,8 @@ export type WsFrameType =
   | "plan_status"
   | "judge_verdict"
   | "ask_user_question"
-  | "ask_user_answer";
+  | "ask_user_answer"
+  | "browser_handover_notice";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
@@ -705,7 +706,7 @@ export interface GoalStatusFrame {
   latest_reason: string;
   active_loops: number;
   cap: number;
-  state: "queued" | "active" | "waiting_on_user" | "judge_unavailable" | "re-planning" | "judging" | "done" | "failed" | "cleared";
+  state: "queued" | "active" | "waiting_on_user" | "judge_unavailable" | "re-planning" | "judging" | "done" | "failed" | "cleared" | "judge_refused_god_mode" | "judge_cas_loss" | "blocked" | "claim_overturned" | "expired";
   producing_session_id?: string;
   criteria?: Array<{
     id?: string;
@@ -728,6 +729,7 @@ export interface GoalStatusFrame {
       id: string;
     };
     status: "pending" | "met" | "unmet";
+    clause_count?: number;
   }>;
   dod?: Array<{
     id?: string;
@@ -750,6 +752,7 @@ export interface GoalStatusFrame {
       id: string;
     };
     status: "pending" | "met" | "unmet";
+    clause_count?: number;
   }>;
 }
 
@@ -786,10 +789,26 @@ export interface JudgeVerdictFrame {
     met: boolean;
     reason: string;
     evidence_quote?: string;
+    evidence_source?: "diff" | "transcript" | "machine_check" | "file_read" | "session_read";
+    evidence_target?: string;
+    provenance?: "judge_read" | "deterministic_check" | "diff" | "transcript" | "session_read" | "none";
+    evidence?: Array<{
+      part: string;
+      source?: "diff" | "transcript" | "machine_check" | "file_read" | "session_read";
+      target?: string;
+      quote: string;
+    }>;
   }>;
   model: string;
   judged_at: string;
   judge_agent_id: string;
+}
+
+export interface BrowserHandoverNoticeFrame {
+  type: "browser_handover_notice";
+  session_id: string;
+  message_id: string;
+  text: string;
 }
 
 export interface ErrorPayload {
@@ -860,7 +879,8 @@ export type WsFrame =
   | GoalStatusFrame
   | LoopStatusFrame
   | PlanStatusFrame
-  | JudgeVerdictFrame;
+  | JudgeVerdictFrame
+  | BrowserHandoverNoticeFrame;
 
 // ── Client → server frames ──────────────────────────────────────────────────
 
@@ -931,4 +951,5 @@ export type ServerFrame =
   | GoalStatusFrame
   | LoopStatusFrame
   | PlanStatusFrame
-  | JudgeVerdictFrame;
+  | JudgeVerdictFrame
+  | BrowserHandoverNoticeFrame;

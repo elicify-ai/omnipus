@@ -36,11 +36,12 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -209,12 +210,9 @@ func TestGoalForcing_FailedNarrowedCallDoesNotReleaseDoor(t *testing.T) {
 		}
 	}
 
-	meta, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if meta.GoalCriteriaJSON != "" {
-		t.Fatalf("the failed call must not have written a record, got %q", meta.GoalCriteriaJSON)
+	meta := mustActiveGoalRecord(t, sid)
+	if got := goalRecordCompiledJSON(meta); got != "" {
+		t.Fatalf("the failed call must not have written a record, got %q", got)
 	}
 }
 
@@ -248,10 +246,13 @@ func TestGoalForcing_SuccessfulSetGoalReleasesImmediately(t *testing.T) {
 	}
 
 	// Simulate iteration 1's set_goal call succeeding — write the record
-	// directly, exactly as SetGoalTool.Execute would on success.
-	compiled := `{"intent":"x","prompt":"x","criteria":[{"id":"c1","kind":"prose","judgment":"boolean","text":"t"}]}`
-	if err := store.SetMeta(sid, session.MetaPatch{GoalCriteriaJSON: &compiled}); err != nil {
-		t.Fatalf("SetMeta: %v", err)
+	// directly, exactly as SetGoalTool.Execute would on success. ADR-086: it
+	// lands on the goal's own record (GOAL-FR-003's typed lists), not on the
+	// retired GoalCriteriaJSON session-meta string.
+	if _, uerr := goal.NewStore(config.OmnipusHomeDir()).Update("goal-success-1", func(cur *goal.Goal) error {
+		return cur.SetCriteria(recordedGoalCriteria("t"), time.Now().UTC())
+	}); uerr != nil {
+		t.Fatalf("write goal record: %v", uerr)
 	}
 
 	d2 := al.evaluateGoalForcing(ts, 2, agentInst.Tools.GetAll())
@@ -330,15 +331,12 @@ func TestGoalForcing_ParkedAskUserQuestionReleasesDoor(t *testing.T) {
 		t.Fatal("a parked turn must never trip the bounded escape")
 	}
 
-	meta, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if meta.GoalCriteriaJSON != "" {
+	meta := mustActiveGoalRecord(t, sid)
+	if goalRecordCompiledJSON(meta) != "" {
 		t.Fatal("the question, not set_goal, was the first move — the record must still be empty")
 	}
-	if meta.GoalQuestionRoundsUsed != 1 {
-		t.Fatalf("GoalQuestionRoundsUsed = %d, want 1", meta.GoalQuestionRoundsUsed)
+	if meta.QuestionRoundsUsed != 1 {
+		t.Fatalf("goal record QuestionRoundsUsed = %d, want 1", meta.QuestionRoundsUsed)
 	}
 }
 

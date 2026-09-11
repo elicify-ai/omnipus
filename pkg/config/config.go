@@ -183,6 +183,14 @@ type Config struct {
 	// from a boot snapshot. See context_settings.go.
 	Context ContextSettings `json:"context" yaml:"-"`
 
+	// Judge holds ADR-084's verifier-turn budget and timeout controls: the
+	// judge turn timeout (FR-049/FR-050), the per-adjudication tool-call and
+	// byte caps (FR-051/FR-052), and the per-adjudication token/cost ceiling
+	// (FR-081). See JudgeConfig's own doc comment for the Effective*
+	// accessors every consumer MUST use instead of reading the raw fields —
+	// an unset (zero) field means the shipped default, never zero itself.
+	Judge JudgeConfig `json:"judge,omitempty" yaml:"-"`
+
 	// SeededSkillGrants records which one-shot skill-allowlist migrations have
 	// already run on this install (ADR-074 D4). Each entry is a marker string
 	// (e.g. "adr074-define-done"); the migration that owns a marker checks
@@ -4096,6 +4104,66 @@ type BrowserToolConfig struct {
 	// with CPU to spare — see WarmCaptureAtBoot's cost note. Ignored entirely
 	// when WarmCaptureAtBoot is false.
 	WarmCaptureIdleSec int `json:"warm_capture_idle_sec" env:"OMNIPUS_TOOLS_BROWSER_WARM_CAPTURE_IDLE_SEC"`
+
+	// ControlIdleReleaseSec (ADR-085 FR-031a) is how long a held browser
+	// wheel may sit with no proof of life — no input, no attach/detach, no
+	// ViewerHeartbeat, no live media track — before the registry's sweeper
+	// releases it back to the agent. Matches LeaseWaitSec / IdleTTLSec's
+	// naming directly above in this same block. Default 900 seconds.
+	//
+	// Like IdleTTLSec, an unset (zero) field means the shipped default —
+	// "unset means 0" is never the rule this package uses (see
+	// EffectiveIdleCloseTTL / EffectiveCacheTrimInterval above and
+	// EffectiveLeaseWaitSec in lease_wait_clamp.go, none of which have a
+	// pkg/config/defaults.go entry either — the browser-control-handover
+	// spec's own §"Deployment / runtime" is explicit that this key follows
+	// the same "translation happens at the reader" rule and takes NO
+	// defaults.go entry, unlike the judge budget keys below).
+	//
+	// The spec's prose also says "0 disables expiry, for an operator who
+	// genuinely wants an indefinite hold" — but a plain Go int cannot tell
+	// an omitted key apart from an explicit 0 (both decode to the zero
+	// value), so treating 0 as "disable" would silently disable the safety
+	// window on every fresh install (no defaults.go entry means a
+	// freshly-seeded config.json carries exactly 0 here) and defeat the
+	// entire point of FR-031a. EffectiveControlIdleReleaseSec below resolves
+	// that tension by using a NEGATIVE value as the explicit "disable
+	// expiry" sentinel instead of 0 — an operator who wants an indefinite
+	// hold sets e.g. -1. This is a deliberate deviation from the spec's
+	// literal wording, reported as a spec defect rather than silently
+	// implemented either way.
+	ControlIdleReleaseSec int `json:"control_idle_release" env:"OMNIPUS_TOOLS_BROWSER_CONTROL_IDLE_RELEASE"`
+}
+
+// defaultControlIdleReleaseSec is FR-031a's shipped default: 900 seconds
+// (15 minutes) of no proof of life before a held wheel is released back to
+// the agent. Applied whenever ControlIdleReleaseSec is unset (its Go zero
+// value) — see the field's own doc comment for why this differs from the
+// spec's literal "0 disables" wording.
+const defaultControlIdleReleaseSec = 900
+
+// EffectiveControlIdleReleaseSec resolves tools.browser.control_idle_release
+// into the seconds value FR-031a's idle sweeper should actually use:
+//
+//   - unset (0)  -> defaultControlIdleReleaseSec (900)
+//   - negative   -> 0, the "disable expiry" sentinel this accessor defines
+//     (see ControlIdleReleaseSec's doc comment for why 0 itself cannot serve
+//     that role)
+//   - positive   -> the configured value, unchanged (no ceiling — an
+//     operator who wants a longer hold window is not clamped)
+//
+// The caller (pkg/agent/loop.go's registerSharedTools, wave B123) treats a
+// returned 0 as "disabled" and anything > 0 as the window in seconds — the
+// same >0-means-active convention IdleTTLSec's own reader already uses.
+func (c BrowserToolConfig) EffectiveControlIdleReleaseSec() int {
+	switch {
+	case c.ControlIdleReleaseSec == 0:
+		return defaultControlIdleReleaseSec
+	case c.ControlIdleReleaseSec < 0:
+		return 0
+	default:
+		return c.ControlIdleReleaseSec
+	}
 }
 
 // EffectiveIdleCloseTTL resolves tools.browser.idle_close_ttl into the duration
@@ -4325,10 +4393,6 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	if validateErr := validateRemovedKeys(data); validateErr != nil {
 		return nil, validateErr
 	}
-	// F11: gateway.orphaned_turn_grace_seconds (ADR-045, deleted by ADR-082
-	// D1) is silently dropped by json.Unmarshal like any unknown key — this
-	// never blocks load, it only tells the operator the key does nothing.
-	warnIfLegacyOrphanGraceKeyPresent(data)
 	if len(data) <= 10 {
 		logger.Warn(fmt.Sprintf("content is [%s]", string(data)))
 		c := DefaultConfig()
@@ -4511,6 +4575,12 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// above — a bare pod's first boot has no config.json at all, which is
 	// exactly when the devpod fallback needs to fire.
 	seedPublicURLFromEnv(cfg)
+
+	// JUDGE-FR-050: a judge turn timeout above the goal/plan judge-round
+	// bound it runs inside can never fire — clamp it, loudly, before the
+	// boot validator below (which does not know about this cross-field
+	// relationship) runs.
+	applyJudgeTimeoutRoundClamp(cfg)
 
 	// Apply defaults and validate bounds for all security-relevant fields
 	// (FR-001, FR-002a, numeric sandbox fields, AuthMismatchLogLevel).
@@ -4912,4 +4982,190 @@ func MemoryPressureHighFromSignalsForTest(available, total uint64) func() (bool,
 		}
 		return used > memoryPressureRatioThreshold, true
 	}
+}
+
+// --- ADR-084 D9: judge turn timeout, per-adjudication caps, cost ceiling ---
+//
+// JudgeConfig holds the operator-configurable bounds on one verifier
+// (tool-using Judge) adjudication: how long its turn may run (FR-049,
+// clamped by FR-050 against the per-round bound it lives inside), how many
+// tool calls and how many bytes of tool-result content it may spend
+// (FR-051), and its overall token/cost ceiling with a WARN at 75% of it
+// (FR-081). Enforcement of the caps happens in
+// pkg/agent/verifier_budget.go/loop.go (wave E2) and their FR-052 refusal;
+// the timeout constant itself is wired into the actual verifier dispatch by
+// pkg/agent/judge.go (wave E9) — this struct supplies the declared,
+// defaulted, clamped VALUE only.
+//
+// Every field's zero value means "unset — apply the shipped default",
+// matching BrowserToolConfig's LeaseWaitSec/IdleTTLSec/IdleCloseTTLSec
+// convention immediately above: read a field's Effective* accessor, never
+// the raw field, and see pkg/config/defaults.go (wave E1) for the seeded
+// values a fresh install writes so an operator sees real numbers rather
+// than nothing in a dumped config.
+type JudgeConfig struct {
+	// TimeoutSec bounds one verifier turn's wall-clock time (FR-049).
+	// Zero means the shipped default (420 s). A configured value above the
+	// 900 s hard ceiling is silently clamped to it by EffectiveTimeoutSec;
+	// a configured value above the goal/plan judge-round bound it lives
+	// inside is additionally clamped, WITH A WARN, at config load — see
+	// applyJudgeTimeoutRoundClamp (FR-050).
+	TimeoutSec int `json:"timeout_sec,omitempty"`
+
+	// ToolCallCap bounds the number of tool calls one adjudication's
+	// verifier turn may make (FR-051). Zero means the shipped default (25).
+	// A configured value above the 60-call hard ceiling is clamped to it.
+	ToolCallCap int `json:"tool_call_cap,omitempty"`
+
+	// ByteCapBytes bounds the total bytes of tool-result content one
+	// adjudication's verifier turn may accumulate (FR-051). Zero means the
+	// shipped default (2 MiB). A configured value above the 8 MiB hard
+	// ceiling is clamped to it.
+	ByteCapBytes int64 `json:"byte_cap_bytes,omitempty"`
+
+	// TokenCeiling bounds one adjudication's cumulative prompt+completion
+	// token usage (FR-081). Zero means the shipped default (120,000). A WARN
+	// is logged once per adjudication at 75% of this ceiling
+	// (VerifierBudget.RecordTokens, pkg/agent/verifier_budget.go). No hard
+	// ceiling is imposed on the configured value — an operator who wants a
+	// more expensive adjudication is not clamped, only warned.
+	TokenCeiling int `json:"token_ceiling,omitempty"`
+}
+
+// Shipped defaults and hard ceilings for JudgeConfig's four fields
+// (JUDGE-FR-049, FR-050, FR-051, FR-081) are declared in
+// pkg/config/defaults.go (wave E1: DefaultJudgeTimeoutSeconds,
+// JudgeTimeoutHardCeilingSeconds, DefaultJudgeToolCallCap,
+// JudgeToolCallCapCeiling, DefaultJudgeByteCapBytes,
+// JudgeByteCapCeilingBytes, DefaultJudgeTokenCeiling) — "exported now, ahead
+// of their consumer" per that file's own doc comment, specifically so this
+// wave (E2) would consume them rather than mint a second set. Only the
+// WARN-threshold fraction and the FR-050 round-timeout mirror are new here;
+// they have no defaults.go counterpart because neither is a JudgeConfig
+// field's default value.
+const (
+	// judgeTokenCeilingWarnNumerator/Denominator is FR-081's "WARN at 75%"
+	// threshold, expressed as an integer fraction so the comparison in
+	// pkg/agent/verifier_budget.go never touches floating point.
+	judgeTokenCeilingWarnNumerator   = 75
+	judgeTokenCeilingWarnDenominator = 100
+
+	// judgeTimeoutRoundCeilingSec mirrors pkg/agent/goal_loop.go's
+	// goalJudgeRoundTimeout (itself pkg/agent/plan_engine.go's
+	// planJudgeRoundTimeout, 10 minutes) — the per-round bound a verifier
+	// turn's own timeout must never exceed (FR-050: "a per-turn bound above
+	// the per-round bound can never fire"). Declared here rather than
+	// imported because pkg/agent already imports pkg/config; importing the
+	// reverse would be a cycle. This mirrors the existing precedent at
+	// pkg/agent/goal_loop.go's own goalJudgeRoundTimeout doc comment ("Mirrors
+	// plan_engine.go's planJudgeRoundTimeout exactly, same 10-minute…") —
+	// two independent constants kept in step by convention, not by the
+	// compiler. If either mirrored value ever changes, this one must change
+	// with it; TestJudgeTimeout_RoundClampMirrorsGoalJudgeRoundTimeout pins
+	// the number so a drift is caught here rather than as a
+	// timeout-that-never-clamps in production.
+	judgeTimeoutRoundCeilingSec = 600
+)
+
+// EffectiveTimeoutSec resolves JudgeConfig.TimeoutSec into the seconds value
+// FR-049 requires: unset (<=0) becomes the 420 s default, and anything above
+// the 900 s hard ceiling is clamped down to it. This is the FR-049 clamp
+// only; FR-050's additional clamp against the goal/plan judge-round bound is
+// applied to the stored field at config load (applyJudgeTimeoutRoundClamp),
+// not here, because that clamp needs to WARN exactly once per load rather
+// than on every read.
+func (c JudgeConfig) EffectiveTimeoutSec() int {
+	v := c.TimeoutSec
+	if v <= 0 {
+		v = DefaultJudgeTimeoutSeconds
+	}
+	if v > JudgeTimeoutHardCeilingSeconds {
+		v = JudgeTimeoutHardCeilingSeconds
+	}
+	return v
+}
+
+// EffectiveToolCallCap resolves JudgeConfig.ToolCallCap per FR-051: unset
+// (<=0) becomes the 25-call default, and anything above the 60-call hard
+// ceiling is clamped down to it.
+func (c JudgeConfig) EffectiveToolCallCap() int {
+	v := c.ToolCallCap
+	if v <= 0 {
+		v = DefaultJudgeToolCallCap
+	}
+	if v > JudgeToolCallCapCeiling {
+		v = JudgeToolCallCapCeiling
+	}
+	return v
+}
+
+// EffectiveByteCapBytes resolves JudgeConfig.ByteCapBytes per FR-051: unset
+// (<=0) becomes the 2 MiB default, and anything above the 8 MiB hard
+// ceiling is clamped down to it.
+func (c JudgeConfig) EffectiveByteCapBytes() int64 {
+	v := c.ByteCapBytes
+	if v <= 0 {
+		v = DefaultJudgeByteCapBytes
+	}
+	if v > JudgeByteCapCeilingBytes {
+		v = JudgeByteCapCeilingBytes
+	}
+	return v
+}
+
+// EffectiveTokenCeiling resolves JudgeConfig.TokenCeiling per FR-081: unset
+// (<=0) becomes the 120,000-token default. No hard ceiling is applied to an
+// operator-configured value.
+func (c JudgeConfig) EffectiveTokenCeiling() int {
+	if c.TokenCeiling <= 0 {
+		return DefaultJudgeTokenCeiling
+	}
+	return c.TokenCeiling
+}
+
+// judgeTokenCeilingWarnThreshold returns the token count at which FR-081's
+// 75%-of-ceiling WARN fires, for the given effective ceiling.
+func (c JudgeConfig) judgeTokenCeilingWarnThreshold() int64 {
+	return int64(c.EffectiveTokenCeiling()) * judgeTokenCeilingWarnNumerator / judgeTokenCeilingWarnDenominator
+}
+
+// JudgeTokenCeilingWarnThreshold is judgeTokenCeilingWarnThreshold exported
+// for pkg/agent/verifier_budget.go (a different package), which needs FR-081's
+// 75% mark to log its one-time WARN without duplicating the arithmetic.
+func (c JudgeConfig) JudgeTokenCeilingWarnThreshold() int64 {
+	return c.judgeTokenCeilingWarnThreshold()
+}
+
+// applyJudgeTimeoutRoundClamp is FR-050: "Config load MUST reject (or clamp
+// with a WARN) a judge timeout greater than goalJudgeRoundTimeout, because a
+// per-turn bound above the per-round bound can never fire." This project's
+// established convention (ClampLeaseWait, lease_wait_clamp.go — the sibling
+// clamp this function is modeled on, same file family) is clamp + loud WARN
+// over reject, so that is what this does: mutate the STORED field down to
+// judgeTimeoutRoundCeilingSec when the effective (already FR-049-clamped)
+// value exceeds it, and log why. Called once per loadConfigInternal call,
+// after every other field default/clamp has run, so the WARN's "configured"
+// number is the operator's actual input rather than an intermediate
+// default.
+//
+// Logs via raw slog.Warn, matching ClampLeaseWait's own choice in this same
+// file family — NOT pkg/logger (zerolog-backed, a different sink), so a test
+// harness that intercepts slog.Default() (this package's own
+// captureWarnings, node_memory_warn_test.go) observes this WARN the same way
+// it already observes ClampLeaseWait's.
+func applyJudgeTimeoutRoundClamp(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	effective := cfg.Judge.EffectiveTimeoutSec()
+	if effective <= judgeTimeoutRoundCeilingSec {
+		return
+	}
+	slog.Warn("config.judge.timeout_sec is configured above the goal/plan judge-round timeout it runs inside and has been lowered — a per-turn bound above the per-round bound can never fire (JUDGE-FR-050)",
+		"configured_timeout_sec", cfg.Judge.TimeoutSec,
+		"effective_timeout_sec", effective,
+		"round_ceiling_sec", judgeTimeoutRoundCeilingSec,
+		"applied_timeout_sec", judgeTimeoutRoundCeilingSec,
+	)
+	cfg.Judge.TimeoutSec = judgeTimeoutRoundCeilingSec
 }

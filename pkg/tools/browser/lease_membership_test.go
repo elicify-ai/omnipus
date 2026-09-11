@@ -12,10 +12,17 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// lease_membership_test.go — FR-019a, the biconditional.
-//
-// The rule is: a browser_* tool takes the write lease IF AND ONLY IF it is
-// gated by the ADR-038 D6 human-control lock.
+// lease_membership_test.go — FR-019a, AMENDED by ADR-085 R3-a/FR-036: the
+// biconditional is now "leased iff ACTION-class", not "leased iff
+// control-gated". The two used to coincide (§14 rule 3's original
+// two-way split), but ADR-085 D5 adds three CAPTURE-class tools
+// (browser_screenshot/get_text/snapshot) that defer under the SAME
+// human-control lock without ever taking the write lease — capturing pixels
+// or text is not a page mutation, so it never needs to serialise behind
+// another tool's in-flight write. What survives from the original rule:
+// every LEASED tool is still control-gated (action ⊆ gated); what does not
+// survive: control-gated no longer implies leased (gated = action ∪
+// capture, a strictly larger set).
 //
 // The previous rule was "every tool that mutates page or tab state acquires the
 // lease, and the exemption list is exactly these five" — which contradicted
@@ -155,7 +162,7 @@ func TestWriteLease_EveryActionToolIsLeased(t *testing.T) {
 	// raises this number when #659 closes.
 	require.Len(t, names, 16, "the browser tool surface is sixteen registered tools")
 
-	var leasedCount, exemptCount int
+	var lockedCount, leasedCount int
 	for name := range names {
 		t.Run(name, func(t *testing.T) {
 			args := minimalArgsFor(name)
@@ -172,34 +179,54 @@ func TestWriteLease_EveryActionToolIsLeased(t *testing.T) {
 			require.NotNil(t, leaseResult)
 			defersUnderLease := strings.Contains(leaseResult.ForLLM, leaseDeferralMarker)
 
-			require.Equal(t, defersUnderLock, defersUnderLease,
-				"%s defers under the control lock = %v but under the write lease = %v. "+
-					"A tool must take the lease IF AND ONLY IF it is control-gated (FR-019a): a tool "+
-					"leased but ungated lets an agent act while a human drives; a tool gated but "+
-					"unleased lets two turns interleave CDP commands on one page.",
-				name, defersUnderLock, defersUnderLease)
+			// FR-036 (ADR-085, amending FR-019a): leased IFF action-class —
+			// no longer leased IFF control-gated. writeClassBrowserTools is
+			// exactly the action-class roster.
+			wantLeased := writeClassBrowserTools[name]
+			require.Equal(t, wantLeased, defersUnderLease,
+				"%s defers under the write lease = %v, want %v. A tool must take the lease IF AND "+
+					"ONLY IF it is ACTION-class (FR-036): a tool leased but not action-class lets a "+
+					"capture serialise behind an unrelated write; an action tool that is unleased "+
+					"lets two turns interleave CDP commands on one page.",
+				name, defersUnderLease, wantLeased)
+
+			// What survives the FR-036 amendment from the original
+			// biconditional: every leased tool is still control-gated
+			// (action ⊆ gated). What does not survive: the converse — a
+			// capture-class tool is gated (defers under lock) without ever
+			// being leased.
+			if defersUnderLease {
+				require.True(t, defersUnderLock,
+					"%s takes the write lease but does not defer under the control lock — every "+
+						"leased (action-class) tool must also be control-gated", name)
+			}
 
 			if defersUnderLock {
+				lockedCount++
+			}
+			if defersUnderLease {
 				leasedCount++
-			} else {
-				exemptCount++
 			}
 		})
 	}
 
-	// Ten leased: the seven shipped (navigate, click, type, evaluate,
-	// switch_tab, close_tab, open_tab) plus D2's three interaction verbs
-	// (select_option, press_key, hover). Six exempt: the four shipped
-	// read-only tools (screenshot, get_text, wait, list_tabs) plus
-	// browser_snapshot, read-only by requirement (D2 FR-038), plus
-	// browser_handle_dialog, exempt for a DIFFERENT reason (D2 FR-035): it is
-	// the recovery verb, and gating it behind the mechanisms the wedge
+	// Thirteen defer under the control lock: the ten action-class tools
+	// (navigate, click, type, evaluate, switch_tab, close_tab, open_tab,
+	// select_option, press_key, hover) PLUS ADR-085's three newly-gated
+	// capture-class tools (screenshot, get_text, snapshot). Ten of those
+	// thirteen also take the write lease — the action-class ones only.
+	// Three registered tools defer under NEITHER gate: browser_list_tabs and
+	// browser_wait (genuinely read-only, no ADR-085 exposure), and
+	// browser_handle_dialog, exempt for a DIFFERENT reason (D2 FR-035): it
+	// is the recovery verb, and gating it behind the mechanisms the wedge
 	// disables is a deadlock, not a safety property.
 	//
 	// They are asserted so that a build in which BOTH gates stopped working
-	// cannot pass the biconditional above by agreeing on "never defers".
-	require.Equal(t, 10, leasedCount, "ten registered tools are control-gated and therefore leased")
-	require.Equal(t, 6, exemptCount, "six registered tools are exempt from both gates")
+	// cannot pass the per-tool assertions above by agreeing on "never
+	// defers".
+	require.Equal(t, 13, lockedCount,
+		"thirteen registered tools defer under a held control lock (action ∪ capture, ADR-085 FR-036)")
+	require.Equal(t, 10, leasedCount, "ten registered tools are action-class and therefore leased")
 }
 
 // TestRegister_NoTakeControlTool is FR-070's structural half: acquisition of the

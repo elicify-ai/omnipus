@@ -22,48 +22,22 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/gitevidence"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // setGoalRecordArmed is setGoalRoundsArmed's RECORDED-goal counterpart: a
-// non-empty GoalCriteriaJSON (one prose criterion), so the zero-output
-// triple path (FR-014b) is reached instead of the recordless nudge ladder
-// (FR-014/D6c).
-func setGoalRecordArmed(t *testing.T, store *session.UnifiedStore, sid, condition string, roundsUsed int, lastActivity time.Time) {
+// non-empty criteria ladder on the goal record (one prose criterion), so the
+// zero-output triple path (FR-014b) is reached instead of the recordless
+// nudge ladder (FR-014/D6c).
+//
+// ADR-086: the ladder now lives on the goal's own pkg/goal record, not on
+// session meta's retired GoalCriteriaJSON string — see armGoalRecord
+// (goal_triggers_test.go) for the full mapping.
+func setGoalRecordArmed(t *testing.T, _ *session.UnifiedStore, sid, condition string, roundsUsed int, lastActivity time.Time) {
 	t.Helper()
-	criteria := `{"intent":"x","prompt":"x","criteria":[{"id":"c1","kind":"prose","text":"do it","judgment":"boolean"}]}`
-	maxRounds := 5
-	past := lastActivity.UTC().Format(time.RFC3339)
-	if err := store.SetMeta(sid, session.MetaPatch{
-		GoalCondition:      &condition,
-		GoalCriteriaJSON:   &criteria,
-		GoalRoundsUsed:     &roundsUsed,
-		GoalMaxRounds:      &maxRounds,
-		GoalLastActivityAt: &past,
-		GoalStartedAt:      &past,
-	}); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// primeGoalOutputWatermark seeds sid's zero-output-triple watermark
-// (review-round-1 finding #4(b)'s fix: the FIRST-EVER observation for a
-// session now conservatively reads "not zero" — no free push on unknown
-// history, see goalZeroOutputTripleHolds's doc comment) so tests that
-// exercise the BOUNDED PUSH LADDER itself can start from "a baseline
-// observation already happened" — exactly what a prior idle cycle (or
-// pre-restart gateway uptime) would have established — without that priming
-// step itself consuming a push slot or a Judge round. Tests proving the
-// missing-watermark behavior directly (the restart row) deliberately do NOT
-// call this.
-func primeGoalOutputWatermark(t *testing.T, al *AgentLoop, store *session.UnifiedStore, sid string) {
-	t.Helper()
-	meta, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	al.goalZeroOutputTripleHolds(store, meta, time.Now())
+	armGoalRecord(t, sid, condition, recordedGoalCriteria(condition), roundsUsed, lastActivity)
 }
 
 // rewindGoalActivity simulates "a new idle cycle can fire" between two
@@ -76,30 +50,40 @@ func primeGoalOutputWatermark(t *testing.T, al *AgentLoop, store *session.Unifie
 // dispatch would have done — push GoalLastActivityAt into the past (the
 // quiet-window-elapsed precondition) and clear the idleSettling marker (the
 // FR-102 re-arm) — without needing a full turn round-trip, so the ladder
-// tests can assert cycle-over-cycle counter behavior in isolation.
+// tests can assert cycle-over-cycle counter behavior in isolation. idleSettling
+// is keyed by GOAL ID (DD-7(b), E13), so this re-reads the record's GoalID
+// rather than assuming it equals sid.
+//
+// ADR-086: the activity clock is the goal record's own LastActivityAt
+// (GOAL-FR-004), not session meta's retired GoalLastActivityAt.
 func rewindGoalActivity(t *testing.T, al *AgentLoop, store *session.UnifiedStore, sid string) {
 	t.Helper()
-	past := time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
-	if err := store.SetMeta(sid, session.MetaPatch{GoalLastActivityAt: &past}); err != nil {
-		t.Fatal(err)
-	}
-	al.goalMarkIdleSettling(sid, false)
+	gid := rewindGoalActivityTimeOnly(t, store, sid)
+	al.goalMarkIdleSettling(gid, false)
 }
 
 // rewindGoalActivityTimeOnly is rewindGoalActivity's real-clearing
-// counterpart (review-round-1, keeper-wedge fix): it pushes
-// GoalLastActivityAt into the past (the quiet-window-elapsed precondition)
-// but deliberately does NOT touch the idleSettling marker. Use this instead
-// of rewindGoalActivity whenever the point of the test IS whether the
-// production code path (not test scaffolding) actually clears the marker —
-// rewindGoalActivity's manual al.goalMarkIdleSettling(sid, false) would mask
-// a real wedge instead of proving it's fixed.
-func rewindGoalActivityTimeOnly(t *testing.T, store *session.UnifiedStore, sid string) {
+// counterpart (review-round-1, keeper-wedge fix): it pushes the goal
+// record's LastActivityAt into the past (the quiet-window-elapsed
+// precondition) but deliberately does NOT touch the idleSettling marker. Use
+// this instead of rewindGoalActivity whenever the point of the test IS
+// whether the production code path (not test scaffolding) actually clears
+// the marker — rewindGoalActivity's manual al.goalMarkIdleSettling(gid,
+// false) would mask a real wedge instead of proving it's fixed.
+//
+// Returns the goal id it rewound, so rewindGoalActivity can key the marker
+// off it without a second lookup.
+func rewindGoalActivityTimeOnly(t *testing.T, _ *session.UnifiedStore, sid string) string {
 	t.Helper()
-	past := time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
-	if err := store.SetMeta(sid, session.MetaPatch{GoalLastActivityAt: &past}); err != nil {
-		t.Fatal(err)
+	g := goalRecordForSession(t, sid)
+	past := time.Now().Add(-1 * time.Hour).UTC()
+	if _, err := goal.NewStore(config.OmnipusHomeDir()).Update(g.GoalID, func(cur *goal.Goal) error {
+		cur.LastActivityAt = past
+		return nil
+	}); err != nil {
+		t.Fatalf("rewindGoalActivityTimeOnly(%q): %v", sid, err)
 	}
+	return g.GoalID
 }
 
 // =========================== D6a: in-flight suppression (FR-013) ==========
@@ -114,7 +98,7 @@ func TestIdleSettlement_InFlightSuppression(t *testing.T) {
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
-	al.recordGoalRouting(sid, "webchat", "c1", "sk1", agentInst.ID)
+	al.recordGoalRouting(sid, "", "webchat", "c1", "sk1", agentInst.ID)
 	setGoalRoundsArmed(t, store, sid, "goal in-flight own turn", 0, time.Now().Add(-1*time.Hour))
 
 	cp := unmetJudgeProvider("must not fire while the turn is live")
@@ -135,12 +119,9 @@ func TestIdleSettlement_InFlightSuppression(t *testing.T) {
 	if got := cp.callCount(); got != 0 {
 		t.Fatalf("in-flight own turn must suppress idle settlement; Judge calls = %d, want 0", got)
 	}
-	after, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.GoalLastActivityAt == "" {
-		t.Fatal("in-flight suppression must re-arm the quiet window (bump GoalLastActivityAt)")
+	after := goalRecordForSession(t, sid)
+	if after.LastActivityAt.IsZero() {
+		t.Fatal("in-flight suppression must re-arm the quiet window (bump the goal record's LastActivityAt)")
 	}
 
 	// Fire again immediately: the re-arm must prevent a second attempt even
@@ -163,7 +144,7 @@ func TestIdleSettlement_InFlightSuppression_DelegatedDescendant(t *testing.T) {
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
-	al.recordGoalRouting(sid, "webchat", "c1", "sk1", agentInst.ID)
+	al.recordGoalRouting(sid, "", "webchat", "c1", "sk1", agentInst.ID)
 	setGoalRoundsArmed(t, store, sid, "goal delegate in-flight", 0, time.Now().Add(-1*time.Hour))
 
 	cp := unmetJudgeProvider("must not fire while the delegate is live")
@@ -213,19 +194,14 @@ func TestKeeper_ParkedCardSuppression(t *testing.T) {
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
-	al.recordGoalRouting(sid, "webchat", "c1", "sk1", agentInst.ID)
-	// A RECORDED goal (not recordless — setGoalRecordArmed), with its
-	// zero-output watermark PRIMED up front (review-round-1 finding #4(b):
-	// an un-primed first-ever observation now conservatively adjudicates
-	// instead of pushing — that is its own dedicated test — so priming here
-	// keeps THIS test isolated to its own concern: does suppression
-	// genuinely lift and normal keeper processing resume). Once suppression
-	// lifts, the expected next action is a bounded continue-push, not an
-	// immediate Judge call.
+	al.recordGoalRouting(sid, "", "webchat", "c1", "sk1", agentInst.ID)
+	// A RECORDED goal (not recordless — setGoalRecordArmed). JUDGE-FR-095/
+	// FR-097 (D13, this wave): the idle path never adjudicates any more —
+	// once suppression lifts, the expected next action is ALWAYS a bounded
+	// continue-push, never a Judge call.
 	setGoalRecordArmed(t, store, sid, "goal parked card", 0, time.Now().Add(-1*time.Hour))
-	primeGoalOutputWatermark(t, al, store, sid)
 
-	cp := unmetJudgeProvider("must not fire while a card is parked")
+	cp := unmetJudgeProvider("must not fire — D13 retires idle adjudication")
 	judgeInst.Provider = cp
 	reg := &fakeParkedCardRegistry{pending: map[string]bool{sid: true}}
 	al.SetAskUserRegistry(reg)
@@ -234,12 +210,9 @@ func TestKeeper_ParkedCardSuppression(t *testing.T) {
 	if got := cp.callCount(); got != 0 {
 		t.Fatalf("parked card must suppress idle settlement; Judge calls = %d, want 0", got)
 	}
-	after, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.GoalZeroOutputPushes != 0 {
-		t.Fatalf("parked card must ALSO suppress the nudge/push ladder; GoalZeroOutputPushes = %d, want 0", after.GoalZeroOutputPushes)
+	after := goalRecordForSession(t, sid)
+	if after.ZeroOutputPushes != 0 {
+		t.Fatalf("parked card must ALSO suppress the nudge/push ladder; goal record ZeroOutputPushes = %d, want 0", after.ZeroOutputPushes)
 	}
 
 	// The card is answered (the registry stops reporting it pending) — the
@@ -252,13 +225,10 @@ func TestKeeper_ParkedCardSuppression(t *testing.T) {
 	if got := cp.callCount(); got != 0 {
 		t.Fatalf("Judge calls = %d, want 0 (the first post-suppression check is a bounded push, not a verdict)", got)
 	}
-	after2, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after2.GoalZeroOutputPushes != 1 {
-		t.Fatalf("after the card clears: GoalZeroOutputPushes = %d, want 1 (suppression must lift and normal keeper processing resume)",
-			after2.GoalZeroOutputPushes)
+	after2 := goalRecordForSession(t, sid)
+	if after2.ZeroOutputPushes != 1 {
+		t.Fatalf("after the card clears: goal record ZeroOutputPushes = %d, want 1 (suppression must lift and normal keeper processing resume)",
+			after2.ZeroOutputPushes)
 	}
 }
 
@@ -304,58 +274,36 @@ func TestKeeper_SenderGateUnwedged_TwoFullIdleCycles(t *testing.T) {
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
-	al.recordGoalRouting(sid, "webchat", "c1", "sk1", agentInst.ID)
+	al.recordGoalRouting(sid, "", "webchat", "c1", "sk1", agentInst.ID)
 	setGoalRecordArmed(t, store, sid, "goal wedge regression", 0, time.Now().Add(-1*time.Hour))
 
-	cp := unmetJudgeProvider("not yet")
+	cp := unmetJudgeProvider("must never be called — D13 retires idle adjudication")
 	judgeInst.Provider = cp
 
-	// This test targets D6b's sender-gate fix specifically, not FR-014b's
-	// zero-output triple (which has its own dedicated tests) — prime a
-	// watermark + a genuine prior ADJUDICABLE transcript entry (a tool call
-	// — review-round-1 finding #4(a): a bare text entry no longer counts,
-	// see sessionHasTranscriptOutputSince) so the triple evaluates FALSE
-	// from the start (an un-primed goal-id's true FIRST observation would
-	// otherwise also evaluate FALSE per finding #4(b), but for a DIFFERENT
-	// reason — "no watermark yet" rather than "real output since the
-	// watermark" — and this test wants the latter, deliberately, so it
-	// stays a clean regression test for D6b alone).
-	seedWatermark := time.Now().Add(-2 * time.Hour)
-	goalTriggersSingleton.mu.Lock()
-	goalTriggersSingleton.outputWatermarks[sid] = seedWatermark
-	goalTriggersSingleton.mu.Unlock()
-	if err := store.AppendTranscriptStrict(sid, session.TranscriptEntry{
-		ID: "seed-work", Type: session.EntryTypeToolCall,
-		ToolCalls: []session.ToolCall{{ID: "tc1", Tool: "bash", Status: "success"}},
-		Timestamp: time.Now().Add(-90 * time.Minute), AgentID: agentInst.ID,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	// --- Cycle 1: idle fires, unmet verdict, steer re-injected. ---
+	// --- Cycle 1: idle fires, dispatches a bounded continue-push, steer
+	// re-injected via the SAME async-notifier sender-gate mechanism D6b
+	// fixed — JUDGE-FR-095/FR-097 (D13, this wave) means this is now the
+	// ONLY thing the idle path ever does; it never reaches the Judge. ---
 	al.goalQuietWindowSettle(time.Now())
-	if got := cp.callCount(); got != 1 {
-		t.Fatalf("cycle 1: Judge calls = %d, want 1", got)
+	if got := cp.callCount(); got != 0 {
+		t.Fatalf("cycle 1: Judge calls = %d, want 0 (D13: idle never judges)", got)
 	}
-	after1, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after1.GoalRoundsUsed != 1 {
-		t.Fatalf("cycle 1: rounds_used = %d, want 1", after1.GoalRoundsUsed)
+	after1 := goalRecordForSession(t, sid)
+	if after1.ZeroOutputPushes != 1 {
+		t.Fatalf("cycle 1: pushes = %d, want 1", after1.ZeroOutputPushes)
 	}
 
 	var steerMsg bus.InboundMessage
 	select {
 	case steerMsg = <-al.bus.InboundChan():
 	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for the idle-steer follow-up to be published")
+		t.Fatal("timed out waiting for the idle-push follow-up to be published")
 	}
 	if steerMsg.Channel != "system" {
-		t.Fatalf("idle-steer channel = %q, want %q", steerMsg.Channel, "system")
+		t.Fatalf("idle-push channel = %q, want %q", steerMsg.Channel, "system")
 	}
 	if steerMsg.Sender.CanonicalID != goalLoopFollowUpSenderID {
-		t.Fatalf("D6b: idle-steer sender = %q, want %q — the un-wedge fix stamps the goal-loop sentinel",
+		t.Fatalf("D6b: idle-push sender = %q, want %q — the un-wedge fix stamps the goal-loop sentinel",
 			steerMsg.Sender.CanonicalID, goalLoopFollowUpSenderID)
 	}
 
@@ -363,33 +311,22 @@ func TestKeeper_SenderGateUnwedged_TwoFullIdleCycles(t *testing.T) {
 		t.Fatalf("processSystemMessage: %v", processErr)
 	}
 
-	if al.goalIsIdleSettling(sid) {
-		t.Fatal("D6b: idleSettling must clear once the steer turn passes the origin gate — the keeper must not wedge")
+	meta := goalRecordForSession(t, sid)
+	if al.goalIsIdleSettling(meta.GoalID) {
+		t.Fatal("D6b: idleSettling must clear once the push turn passes the origin gate — the keeper must not wedge")
 	}
 
-	// --- Cycle 2: rewind activity and prove a SECOND full cycle completes. ---
-	//
-	// review-round-1 finding #4(a): processSystemMessage above ran the
-	// steer turn through mockProvider, which always returns bare TEXT with
-	// no tool calls ("Mock response") — no adjudicable output landed between
-	// cycle 1's and cycle 2's watermarks. The zero-output triple therefore
-	// correctly reads "still zero output", and cycle 2 dispatches its own
-	// bounded continue-push rather than a second Judge call — the un-wedge
-	// invariant itself was already proven above (idleSettling cleared). This
-	// assertion proves the SECOND cycle genuinely fires (the push counter
-	// advances) rather than silently doing nothing.
+	// --- Cycle 2: rewind activity and prove a SECOND full cycle completes
+	// (a second bounded push, still bounded by goalZeroOutputPushMax). ---
 	rewindGoalActivity(t, al, store, sid)
 	al.goalQuietWindowSettle(time.Now())
-	if got := cp.callCount(); got != 1 {
-		t.Fatalf("cycle 2: Judge calls = %d, want 1 (unchanged — a bare-text steer reply is not adjudicable output)", got)
+	if got := cp.callCount(); got != 0 {
+		t.Fatalf("cycle 2: Judge calls = %d, want 0", got)
 	}
-	after2, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after2.GoalZeroOutputPushes != 1 {
-		t.Fatalf("cycle 2: GoalZeroOutputPushes = %d, want 1 (a second full idle cycle must complete — no wedge)",
-			after2.GoalZeroOutputPushes)
+	after2 := goalRecordForSession(t, sid)
+	if after2.ZeroOutputPushes != 2 {
+		t.Fatalf("cycle 2: pushes = %d, want 2 (a second full idle cycle must complete — no wedge)",
+			after2.ZeroOutputPushes)
 	}
 }
 
@@ -404,38 +341,37 @@ func TestGoalRouting_PersistedAndRehydratedAfterRestart(t *testing.T) {
 	resetGoalTriggerStateForTest()
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
-	store, sid := newGoalTestSession(t, al, agentInst.ID)
+	_, sid := newGoalTestSession(t, al, agentInst.ID)
+	gid := activateTestGoalRecord(t, sid, "route test")
 
-	al.recordGoalRouting(sid, "telegram", "chat-42", "sk-42", agentInst.ID)
+	al.recordGoalRouting(sid, gid, "telegram", "chat-42", "sk-42", agentInst.ID)
 
 	route := goalTriggers().routeFor(sid)
 	if route.channel != "telegram" || route.chatID != "chat-42" {
 		t.Fatalf("in-memory route = %+v, want channel=telegram chat_id=chat-42", route)
 	}
 
-	meta, err := store.GetMeta(sid)
+	// GOAL-FR-032/FR-033/FR-034 (E12): channel/chatID now persist on the
+	// goal's OWN record, not on four session-meta GoalRoute* fields.
+	// sessionKey/agentID have no persisted copy any more — they survive
+	// only in the in-memory map for this process's own lifetime.
+	gs := goal.NewStore(config.OmnipusHomeDir())
+	persisted, err := gs.Get(gid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.GoalRouteChannel != "telegram" || meta.GoalRouteChatID != "chat-42" ||
-		meta.GoalRouteSessionKey != "sk-42" || meta.GoalRouteAgentID != agentInst.ID {
-		t.Fatalf("recordGoalRouting must persist all four GoalRoute* fields; got channel=%q chat_id=%q session_key=%q agent_id=%q",
-			meta.GoalRouteChannel, meta.GoalRouteChatID, meta.GoalRouteSessionKey, meta.GoalRouteAgentID)
+	if persisted.RouteChannel != "telegram" || persisted.RouteChatID != "chat-42" {
+		t.Fatalf("recordGoalRouting must persist channel/chat_id onto the goal record; got channel=%q chat_id=%q",
+			persisted.RouteChannel, persisted.RouteChatID)
 	}
 
 	// Simulate a gateway restart: wipe ALL in-memory trigger state, INCLUDING
-	// the routing map and the session-store resolver.
+	// the routing map.
 	resetGoalTriggerStateForTest()
-
-	// A post-restart routine tick (goalQuietWindowSettle runs regardless of
-	// any specific goal's own activation) re-wires the session-store
-	// resolver, exactly as it would on a real cold boot — see
-	// sessionStoreResolver's doc comment.
-	al.goalQuietWindowSettle(time.Now())
 
 	rehydrated := goalTriggers().routeFor(sid)
 	if rehydrated.channel != "telegram" || rehydrated.chatID != "chat-42" {
-		t.Fatalf("FR-031: rehydrated route = %+v, want channel=telegram chat_id=chat-42 — a restart must not silently disable routing", rehydrated)
+		t.Fatalf("FR-031/FR-034: rehydrated route = %+v, want channel=telegram chat_id=chat-42 — a restart must not silently disable routing", rehydrated)
 	}
 
 	goalTriggersSingleton.mu.Lock()
@@ -447,32 +383,33 @@ func TestGoalRouting_PersistedAndRehydratedAfterRestart(t *testing.T) {
 }
 
 // TestGoalRouting_MissingBothSides_WarnsAndSetsLatestReason proves FR-031's
-// failure mode: a route missing on BOTH the in-memory map and the persisted
-// fields must never degrade silently — it writes a one-line GoalLatestReason
-// note.
+// failure mode: a route missing on BOTH the in-memory map and the goal
+// record's persisted fields must never degrade silently — it writes a
+// one-line LatestReason note onto the goal record (GOAL-FR-034/FR-035,
+// E12 — was session meta's GoalLatestReason before this wave).
 func TestGoalRouting_MissingBothSides_WarnsAndSetsLatestReason(t *testing.T) {
 	resetGoalTriggerStateForTest()
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
-	store, sid := newGoalTestSession(t, al, agentInst.ID)
-
-	// Wire the resolver WITHOUT ever calling recordGoalRouting — a goal
-	// whose routing was truly never captured (or lost) on either side.
-	goalTriggersSingleton.mu.Lock()
-	goalTriggersSingleton.sessionStoreResolver = al.GetSessionStore
-	goalTriggersSingleton.mu.Unlock()
+	_, sid := newGoalTestSession(t, al, agentInst.ID)
+	// An active goal record exists (as every real activation now creates
+	// one), but recordGoalRouting was never called against it — routing is
+	// missing on BOTH sides, exactly the precondition routeFor's WARN+write
+	// branch requires.
+	gid := activateTestGoalRecord(t, sid, "route test")
 
 	route := goalTriggers().routeFor(sid)
 	if route.channel != "" || route.chatID != "" {
 		t.Fatalf("route = %+v, want the zero value (nothing was ever recorded)", route)
 	}
 
-	meta, err := store.GetMeta(sid)
+	gs := goal.NewStore(config.OmnipusHomeDir())
+	g, err := gs.Get(gid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.GoalLatestReason != goalRoutingLostReason {
-		t.Fatalf("GoalLatestReason = %q, want %q (FR-031: never degrade silently)", meta.GoalLatestReason, goalRoutingLostReason)
+	if g.LatestReason != goal.RoutingLostReason {
+		t.Fatalf("goal record LatestReason = %q, want %q (FR-031/FR-035: never degrade silently)", g.LatestReason, goal.RoutingLostReason)
 	}
 }
 
@@ -497,28 +434,24 @@ func TestGoalRouting_MissingRoute_NeverStompsAFreshVerdictReason(t *testing.T) {
 	goalTriggersSingleton.mu.Unlock()
 
 	setGoalRecordArmed(t, store, sid, "goal missing route", 0, time.Now().Add(-1*time.Hour))
-	meta, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
+	meta := goalRecordForSession(t, sid)
 
 	const verdictReason = "the criterion is not yet demonstrated"
 	judgeInst.Provider = unmetJudgeProvider(verdictReason)
 
-	// Mirrors settleGoalNormally's own call shape: adjudicate (writes the
-	// fresh verdict reason) -> unmet -> deliverSteer ->
-	// dispatchGoalAsyncFollowUp -> routeFor (finds routing missing on both
-	// sides) — all inside this one call.
-	al.runGoalAdjudication(context.Background(), agentInst, "", sid, store, meta, "", al.idleSteerDeliverer(sid))
+	// Mirrors the deferred claim path's own call shape (D13, this wave):
+	// adjudicate (writes the fresh verdict reason) -> unmet -> deliverSteer
+	// -> dispatchGoalAsyncFollowUp -> routeFor (finds routing missing on
+	// both sides) — all inside this one call.
+	al.runGoalAdjudication(context.Background(), agentInst, "", sid, store, meta,
+		"[goal:evidence] the criterion is not yet demonstrated",
+		al.idleSteerDeliverer(sid, meta.GoalID, goalIdleSettleSourceKind))
 
-	after, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.GoalLatestReason != verdictReason {
+	after := goalRecordForSession(t, sid)
+	if after.LatestReason != verdictReason {
 		t.Fatalf("finding #10: GoalLatestReason = %q, want the fresh verdict reason %q — "+
 			"a missing-route steer delivery must never stomp it with the generic routing-lost note",
-			after.GoalLatestReason, verdictReason)
+			after.LatestReason, verdictReason)
 	}
 }
 
@@ -535,34 +468,28 @@ func TestKeeper_NudgeLadderToFallback(t *testing.T) {
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
-	al.recordGoalRouting(sid, "webchat", "c1", "sk1", agentInst.ID)
+	al.recordGoalRouting(sid, "", "webchat", "c1", "sk1", agentInst.ID)
 	setGoalRoundsArmed(t, store, sid, "make the tests pass", 0, time.Now().Add(-1*time.Hour))
 
-	cp := unmetJudgeProvider("not called during the recordless nudge phase; called once post-fallback (first-ever triple observation)")
+	cp := unmetJudgeProvider("must never be called — nudging and the D13 push ladder never touch the Judge")
 	judgeInst.Provider = cp
 
 	al.goalQuietWindowSettle(time.Now()) // nudge 1
-	after1, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
+	after1 := goalRecordForSession(t, sid)
+	if after1.ZeroOutputPushes != 1 {
+		t.Fatalf("after nudge 1: goal record ZeroOutputPushes = %d, want 1", after1.ZeroOutputPushes)
 	}
-	if after1.GoalZeroOutputPushes != 1 {
-		t.Fatalf("after nudge 1: GoalZeroOutputPushes = %d, want 1", after1.GoalZeroOutputPushes)
-	}
-	if after1.GoalCriteriaJSON != "" {
+	if goalRecordCompiledJSON(after1) != "" {
 		t.Fatal("after nudge 1: the goal must still be recordless")
 	}
 
 	rewindGoalActivity(t, al, store, sid)
 	al.goalQuietWindowSettle(time.Now()) // nudge 2
-	after2, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
+	after2 := goalRecordForSession(t, sid)
+	if after2.ZeroOutputPushes != 2 {
+		t.Fatalf("after nudge 2: goal record ZeroOutputPushes = %d, want 2", after2.ZeroOutputPushes)
 	}
-	if after2.GoalZeroOutputPushes != 2 {
-		t.Fatalf("after nudge 2: GoalZeroOutputPushes = %d, want 2", after2.GoalZeroOutputPushes)
-	}
-	if after2.GoalCriteriaJSON != "" {
+	if goalRecordCompiledJSON(after2) != "" {
 		t.Fatal("after nudge 2: the goal must still be recordless")
 	}
 	if got := cp.callCount(); got != 0 {
@@ -571,26 +498,24 @@ func TestKeeper_NudgeLadderToFallback(t *testing.T) {
 
 	rewindGoalActivity(t, al, store, sid)
 	al.goalQuietWindowSettle(time.Now()) // exhausted — engine fallback compile
-	after3, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after3.GoalCriteriaJSON == "" {
+	after3 := goalRecordForSession(t, sid)
+	if goalRecordCompiledJSON(after3) == "" {
 		t.Fatal("FR-017: after N=2 nudges, the engine's fallback compile must register a record")
 	}
-	if after3.GoalZeroOutputPushes != 0 {
-		t.Fatalf("engine-authored fallback registration must reset the shared push counter; got %d, want 0", after3.GoalZeroOutputPushes)
+	if after3.ZeroOutputPushes != 0 {
+		t.Fatalf("engine-authored fallback registration must reset the shared push counter; got %d, want 0", after3.ZeroOutputPushes)
 	}
 	// D7/FR-018 (wave-2 integration): the engine's fallback COMPILE runs on
 	// the Judge system agent's model, so the judge PROVIDER legitimately
-	// serves at most one call here — the compile, not an adjudication. The
-	// "never judged" invariant is asserted structurally instead: no verdict
-	// round was ever consumed and no judge reason was recorded.
+	// serves at most one call here — the compile, not an adjudication. Under
+	// D13 that compile call is now the ONLY way this provider is ever
+	// touched anywhere in this test — idle settlement itself never reaches
+	// the Judge, so this bound is now exact rather than a "<=1" allowance.
 	if got := cp.callCount(); got > 1 {
 		t.Fatalf("Judge-provider calls = %d, want <=1 (the single D7 fallback compile) — a recordless goal is never adjudicated", got)
 	}
-	if after3.GoalRoundsUsed != 0 {
-		t.Fatalf("GoalRoundsUsed = %d, want 0 — the fallback compile must not consume a verdict round", after3.GoalRoundsUsed)
+	if after3.Round != 0 {
+		t.Fatalf("GoalRoundsUsed = %d, want 0 — the fallback compile must not consume a verdict round", after3.Round)
 	}
 	callsAfterFallback := cp.callCount() // 0 or 1 (the compile, see the comment above) — baseline for the delta check below
 
@@ -606,25 +531,21 @@ func TestKeeper_NudgeLadderToFallback(t *testing.T) {
 	// wedges this assertion instead of being silently masked.
 	rewindGoalActivityTimeOnly(t, store, sid)
 	al.goalQuietWindowSettle(time.Now()) // must still fire post-fallback, or the keeper is wedged
-	after4, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
+	after4 := goalRecordForSession(t, sid)
+	// The goal is now RECORDED (goalRecordCompiledJSON(after3) != ""), so a firing
+	// cycle routes through the unified push ladder (JUDGE-FR-095/FR-097,
+	// D13, this wave) — it dispatches a bounded continue-push, NEVER the
+	// Judge. A wedged keeper would do NEITHER — it would leave the push
+	// counter untouched (the goalIsIdleSettling early-return in
+	// maybeSettleGoalIdle never reaches ANY of this code).
+	if got := cp.callCount(); got != callsAfterFallback {
+		t.Fatalf("post-fallback idle cycle invoked the Judge: calls = %d, want unchanged at %d (D13: idle never judges)",
+			got, callsAfterFallback)
 	}
-	// The goal is now RECORDED (after3.GoalCriteriaJSON != ""), so a firing
-	// cycle routes through the FR-014b zero-output triple. This is the
-	// FIRST-EVER triple observation for this session (no watermark yet) —
-	// per review-round-1 finding #4(b), that now conservatively reads "not
-	// zero" (assume active, never a free push), so this cycle adjudicates
-	// NORMALLY (a real Judge call, a round consumed) rather than pushing. A
-	// wedged keeper would do NEITHER — it would leave both counters
-	// untouched and never call the Judge at all (the goalIsIdleSettling
-	// early-return in maybeSettleGoalIdle never reaches ANY of this code).
-	if got := cp.callCount(); got != callsAfterFallback+1 {
-		t.Fatalf("post-fallback idle cycle did not fire (keeper wedged at goalIsIdleSettling): Judge calls = %d, want %d (baseline %d + 1 new adjudication)",
-			got, callsAfterFallback+1, callsAfterFallback)
-	}
-	if after4.GoalRoundsUsed != 1 {
-		t.Fatalf("post-fallback idle cycle: GoalRoundsUsed = %d, want 1 (normal adjudication consumes a round)", after4.GoalRoundsUsed)
+	if after4.ZeroOutputPushes != 1 {
+		t.Fatalf("post-fallback idle cycle did not fire (keeper wedged at goalIsIdleSettling): pushes = %d, want 1 "+
+			"(the fallback registration reset the shared counter to 0, so this is the RECORDED ladder's own first push)",
+			after4.ZeroOutputPushes)
 	}
 }
 
@@ -642,7 +563,7 @@ func TestKeeper_NudgeLadderToFallback_ChannelOrigin_GetsOneFormattedEcho(t *test
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
-	al.recordGoalRouting(sid, "telegram", "chat-fallback-1", "sk1", agentInst.ID)
+	al.recordGoalRouting(sid, "", "telegram", "chat-fallback-1", "sk1", agentInst.ID)
 	setGoalRoundsArmed(t, store, sid, "make the tests pass", 0, time.Now().Add(-1*time.Hour))
 
 	cp := unmetJudgeProvider("fallback compile reason")
@@ -654,11 +575,8 @@ func TestKeeper_NudgeLadderToFallback_ChannelOrigin_GetsOneFormattedEcho(t *test
 	rewindGoalActivity(t, al, store, sid)
 	al.goalQuietWindowSettle(time.Now()) // exhausted — engine fallback compile
 
-	after, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.GoalCriteriaJSON == "" {
+	after := goalRecordForSession(t, sid)
+	if goalRecordCompiledJSON(after) == "" {
 		t.Fatal("setup: the fallback compile must have registered a record")
 	}
 
@@ -677,357 +595,77 @@ func TestKeeper_NudgeLadderToFallback_ChannelOrigin_GetsOneFormattedEcho(t *test
 	}
 }
 
-// =============== FR-014b: the zero-adjudicable-output triple ==============
+// =============== JUDGE-FR-095/FR-097: the unified push ladder (D13) =======
+//
+// This section replaces the FR-014b zero-adjudicable-output-triple suite:
+// ADR-084 revision 9 D13 retires claimless idle adjudication entirely (a
+// `met` claim is the sole trigger now, JUDGE-FR-095), which collapses the
+// triple's two branches — "zero output" and "genuine output but still
+// quiet" — into one, since BOTH used to lead to real adjudication once the
+// triple went false, and neither can any more (JUDGE-FR-097). The triple
+// itself (goalZeroOutputTripleHolds), its evidence/diff/output terms
+// (goalZeroEvidenceRecords, goalHasTranscriptOutputSince,
+// sessionHasTranscriptOutputSince) and the watermark-priming helper this
+// suite used to need are deleted outright, not merely unreferenced.
 
-// TestZeroOutputTriple_RecordedGoal_BoundedPushesThenNormalAdjudication
-// proves FR-014b's core shape: a RECORDED goal with zero evidence, zero
-// goal-scoped diff (unbound goal — the diff term degenerates), and zero
-// transcript output consumes no round and dispatches a bounded continue-push
-// — at most goalZeroOutputPushMax (2) times — after which idle settlement
-// adjudicates NORMALLY (a fail-closed verdict is legitimate, consumes a
-// round, so the rounds bound eventually terminates the loop). Starts from a
-// PRIMED watermark (review-round-1 finding #4(b): the true first-ever
-// observation never pushes — that is its own dedicated row,
-// TestZeroOutputTriple_FirstObservation_NoWatermark_NeverPushes below) so
-// this test isolates the bounded-push ladder itself.
-func TestZeroOutputTriple_RecordedGoal_BoundedPushesThenNormalAdjudication(t *testing.T) {
+// TestPushLadder_RecordedGoal_BoundedThenQuiet proves FR-097's core shape: a
+// RECORDED goal at idle dispatches a bounded continue-push — never a
+// verdict, never a round — up to goalZeroOutputPushMax (2) times, after
+// which the ladder goes quiet: NO further push, and (FR-095's own text)
+// NEVER a fall-through to an adjudication. Past the budget the goal's sole
+// remaining terminator is the multi-day idle-expiry sweep (D-A, owned by
+// E8) — this test proves the "leave it quiet" half of that contract, not
+// the sweep itself.
+func TestPushLadder_RecordedGoal_BoundedThenQuiet(t *testing.T) {
 	resetGoalTriggerStateForTest()
 	withShortIdleWindow(t, 2*time.Second)
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
-	al.recordGoalRouting(sid, "webchat", "c1", "sk1", agentInst.ID)
-	setGoalRecordArmed(t, store, sid, "goal zero output", 0, time.Now().Add(-1*time.Hour))
+	al.recordGoalRouting(sid, "", "webchat", "c1", "sk1", agentInst.ID)
+	setGoalRecordArmed(t, store, sid, "goal push ladder", 0, time.Now().Add(-1*time.Hour))
 
-	cp := unmetJudgeProvider("only reached once the push budget is spent")
+	cp := unmetJudgeProvider("must never be called — FR-095 retires claimless adjudication")
 	judgeInst.Provider = cp
 
-	primeGoalOutputWatermark(t, al, store, sid)
 	al.goalQuietWindowSettle(time.Now()) // push 1
-	after1, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
+	after1 := goalRecordForSession(t, sid)
+	if after1.ZeroOutputPushes != 1 || after1.Round != 0 {
+		t.Fatalf("push 1: pushes=%d (want 1) rounds=%d (want 0)", after1.ZeroOutputPushes, after1.Round)
 	}
-	if after1.GoalZeroOutputPushes != 1 {
-		t.Fatalf("push 1: GoalZeroOutputPushes = %d, want 1", after1.GoalZeroOutputPushes)
-	}
-	if after1.GoalRoundsUsed != 0 || cp.callCount() != 0 {
-		t.Fatalf("push 1 must consume no round and never call the Judge; rounds=%d judge_calls=%d",
-			after1.GoalRoundsUsed, cp.callCount())
+	if cp.callCount() != 0 {
+		t.Fatalf("push 1 must never call the Judge; got %d", cp.callCount())
 	}
 
 	rewindGoalActivity(t, al, store, sid)
-	al.goalQuietWindowSettle(time.Now()) // push 2
-	after2, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after2.GoalZeroOutputPushes != 2 {
-		t.Fatalf("push 2: GoalZeroOutputPushes = %d, want 2", after2.GoalZeroOutputPushes)
+	al.goalQuietWindowSettle(time.Now()) // push 2 (budget: goalZeroOutputPushMax == 2)
+	after2 := goalRecordForSession(t, sid)
+	if after2.ZeroOutputPushes != 2 {
+		t.Fatalf("push 2: pushes = %d, want 2", after2.ZeroOutputPushes)
 	}
 	if got := cp.callCount(); got != 0 {
 		t.Fatalf("push 2 must still never call the Judge; got %d", got)
 	}
 
-	rewindGoalActivity(t, al, store, sid)
-	al.goalQuietWindowSettle(time.Now()) // budget spent — normal adjudication
-	after3, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := cp.callCount(); got != 1 {
-		t.Fatalf("after the push budget is spent, the Judge must be called; got %d, want 1", got)
-	}
-	if after3.GoalRoundsUsed != 1 {
-		t.Fatalf("normal adjudication must consume a round; rounds_used = %d, want 1", after3.GoalRoundsUsed)
-	}
-}
-
-// TestZeroOutputTriple_RestartClearsWatermark_NextCycleNeverPushes is
-// review-round-1 finding #4(b)'s restart row: a gateway restart wipes the
-// in-memory outputWatermarks map, and the NEXT idle cycle after a restart
-// must NOT award a free push — unknown history is treated as "assume
-// active", never as "assume idle" (goalZeroOutputTripleHolds's doc comment).
-// This REPLACES the pre-fix behavior this test used to assert (the
-// PERSISTED push streak "surviving" a restart by resuming pushes
-// immediately) — that was exactly the bug: a genuinely idle-vs-busy-during-
-// the-outage goal is indistinguishable from the missing watermark, so
-// resuming pushes blindly burned a bounded slot on zero evidence. The fix
-// instead routes the first post-restart cycle through NORMAL adjudication
-// (a real Judge call) and resets the now-moot push counter — FR-014b's own
-// "reset whenever the triple evaluates false at an idle" rule, applied
-// consistently. A SUBSEQUENT cycle, once the watermark is re-established
-// from that first post-restart observation, resumes the bounded-push ladder
-// normally.
-func TestZeroOutputTriple_RestartClearsWatermark_NextCycleNeverPushes(t *testing.T) {
-	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
-	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
-	store, sid := newGoalTestSession(t, al, agentInst.ID)
-	al.recordGoalRouting(sid, "webchat", "c1", "sk1", agentInst.ID)
-	setGoalRecordArmed(t, store, sid, "goal restart test", 0, time.Now().Add(-1*time.Hour))
-
-	cp := unmetJudgeProvider("called once the post-restart cycle correctly adjudicates instead of pushing")
-	judgeInst.Provider = cp
-
-	primeGoalOutputWatermark(t, al, store, sid)
-	al.goalQuietWindowSettle(time.Now()) // push 1 (pre-restart)
-	after1, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after1.GoalZeroOutputPushes != 1 {
-		t.Fatalf("push 1: GoalZeroOutputPushes = %d, want 1", after1.GoalZeroOutputPushes)
-	}
-
-	// --- Simulate a gateway restart: wipe ALL in-memory trigger state,
-	// including outputWatermarks. Routing is re-established the same way a
-	// fresh routeFor rehydration would (FR-031); the marker-clear inside
-	// rewindGoalActivity below stands in for a completed dispatch, exactly
-	// as documented on that helper — unrelated to finding #4, which is about
-	// the watermark, not the idleSettling marker. ---
-	resetGoalTriggerStateForTest()
-	al.recordGoalRouting(sid, "webchat", "c1", "sk1", agentInst.ID)
-
-	rewindGoalActivity(t, al, store, sid)
-	al.goalQuietWindowSettle(time.Now()) // first post-restart cycle: watermark gone
-	after2, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after2.GoalZeroOutputPushes != 0 {
-		t.Fatalf("first post-restart cycle: GoalZeroOutputPushes = %d, want 0 — "+
-			"a missing watermark must NEVER award a free push, and FR-014b resets the counter "+
-			"once the triple evaluates false", after2.GoalZeroOutputPushes)
-	}
-	if got := cp.callCount(); got != 1 {
-		t.Fatalf("first post-restart cycle must adjudicate normally (unknown history = assume active), "+
-			"not push: Judge calls = %d, want 1", got)
-	}
-	if after2.GoalRoundsUsed != 1 {
-		t.Fatalf("first post-restart cycle: GoalRoundsUsed = %d, want 1 (normal adjudication consumes a round)",
-			after2.GoalRoundsUsed)
-	}
-
-	// A SECOND post-restart cycle has a real watermark again (seeded by the
-	// first post-restart observation above) — the bounded-push ladder
-	// resumes normally.
+	// Budget now spent. FR-095/097: MUST NOT push a third time and MUST NOT
+	// fall through to an adjudication — the ladder goes quiet.
 	rewindGoalActivity(t, al, store, sid)
 	al.goalQuietWindowSettle(time.Now())
-	after3, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
+	after3 := goalRecordForSession(t, sid)
+	if after3.ZeroOutputPushes != 2 {
+		t.Fatalf("after budget spent: pushes = %d, want unchanged at 2 (no third push)", after3.ZeroOutputPushes)
 	}
-	if after3.GoalZeroOutputPushes != 1 {
-		t.Fatalf("second post-restart cycle: GoalZeroOutputPushes = %d, want 1 — "+
-			"the ladder must resume normally once a real watermark exists again", after3.GoalZeroOutputPushes)
-	}
-	if got := cp.callCount(); got != 1 {
-		t.Fatalf("second post-restart cycle must still push, not adjudicate again: Judge calls = %d, want 1", got)
-	}
-}
-
-// TestZeroOutputTriple_FirstObservation_NoWatermark_NeverPushes is
-// review-round-1 finding #4(b)'s narrowest form of the restart row: with
-// fresh trigger state (no priming, no watermark at all — the true first-ever
-// observation for this goal-id), the VERY FIRST idle cycle must never award
-// a free push; it adjudicates normally instead.
-func TestZeroOutputTriple_FirstObservation_NoWatermark_NeverPushes(t *testing.T) {
-	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
-	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
-	store, sid := newGoalTestSession(t, al, agentInst.ID)
-	al.recordGoalRouting(sid, "webchat", "c1", "sk1", agentInst.ID)
-	setGoalRecordArmed(t, store, sid, "goal fresh state", 0, time.Now().Add(-1*time.Hour))
-
-	cp := unmetJudgeProvider("called on the very first observation — unknown history assumes active")
-	judgeInst.Provider = cp
-
-	al.goalQuietWindowSettle(time.Now()) // the true first-ever observation — no priming
-	after, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.GoalZeroOutputPushes != 0 {
-		t.Fatalf("GoalZeroOutputPushes = %d, want 0 — the first-ever observation must never push", after.GoalZeroOutputPushes)
-	}
-	if got := cp.callCount(); got != 1 {
-		t.Fatalf("the first-ever observation must adjudicate normally instead of pushing: Judge calls = %d, want 1", got)
-	}
-}
-
-// TestZeroOutputTriple_TranscriptOutputBreaksIt proves the triple correctly
-// reads "not zero" once REAL ADJUDICABLE transcript output (a tool call —
-// review-round-1 finding #4(a): only session.EntryTypeToolCall entries
-// count, never a bare text message) lands between checks, and that the push
-// counter resets to 0 (FR-014b's reset rule: "whenever the triple evaluates
-// false at an idle").
-func TestZeroOutputTriple_TranscriptOutputBreaksIt(t *testing.T) {
-	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
-	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
-	store, sid := newGoalTestSession(t, al, agentInst.ID)
-	al.recordGoalRouting(sid, "webchat", "c1", "sk1", agentInst.ID)
-	setGoalRecordArmed(t, store, sid, "goal with real output", 0, time.Now().Add(-1*time.Hour))
-
-	cp := unmetJudgeProvider("real output must trigger normal adjudication")
-	judgeInst.Provider = cp
-
-	primeGoalOutputWatermark(t, al, store, sid)
-	al.goalQuietWindowSettle(time.Now()) // push 1
-	if got := cp.callCount(); got != 0 {
-		t.Fatalf("push 1: Judge calls = %d, want 0", got)
-	}
-
-	if err := store.AppendTranscriptStrict(sid, session.TranscriptEntry{
-		ID: "real-work", Type: session.EntryTypeToolCall,
-		ToolCalls: []session.ToolCall{{ID: "tc1", Tool: "bash", Status: "success"}},
-		Timestamp: time.Now(), AgentID: agentInst.ID,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	rewindGoalActivity(t, al, store, sid)
-	al.goalQuietWindowSettle(time.Now())
-	if got := cp.callCount(); got != 1 {
-		t.Fatalf("real tool-call output must break the triple and trigger normal adjudication; Judge calls = %d, want 1", got)
-	}
-	after, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.GoalZeroOutputPushes != 0 {
-		t.Fatalf("the push counter must reset once the triple evaluates false at an idle; got %d, want 0", after.GoalZeroOutputPushes)
-	}
-}
-
-// TestZeroOutputTriple_BareTextAcknowledgment_DoesNotBreakIt is
-// review-round-1 finding #4(a)'s bare-ack row: a plain text-only assistant
-// reply carrying no tool calls (e.g. an acknowledgment of the keeper's own
-// push prompt) must NOT count as adjudicable output — the triple keeps
-// holding, so pushes continue up to the bound, exactly as if nothing had
-// been said at all. push → bare-text reply → triple still holds → second
-// push → budget spent → third idle cycle adjudicates normally.
-func TestZeroOutputTriple_BareTextAcknowledgment_DoesNotBreakIt(t *testing.T) {
-	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
-	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
-	store, sid := newGoalTestSession(t, al, agentInst.ID)
-	al.recordGoalRouting(sid, "webchat", "c1", "sk1", agentInst.ID)
-	setGoalRecordArmed(t, store, sid, "goal with a bare ack", 0, time.Now().Add(-1*time.Hour))
-
-	cp := unmetJudgeProvider("only reached once the push budget is spent")
-	judgeInst.Provider = cp
-
-	primeGoalOutputWatermark(t, al, store, sid)
-	al.goalQuietWindowSettle(time.Now()) // push 1
-	after1, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after1.GoalZeroOutputPushes != 1 {
-		t.Fatalf("push 1: GoalZeroOutputPushes = %d, want 1", after1.GoalZeroOutputPushes)
-	}
-
-	// The agent (or the keeper's own prompt) produces a plain text-only
-	// entry — no ToolCalls, so Type stays the default (EntryTypeMessage).
-	// Neither a keeper-authored prompt nor a bare acknowledgment is
-	// adjudicable work.
-	if appendErr := store.AppendTranscriptStrict(sid, session.TranscriptEntry{
-		ID: "bare-ack", Role: "assistant", Content: "Sure, continuing.",
-		Timestamp: time.Now(), AgentID: agentInst.ID,
-	}); appendErr != nil {
-		t.Fatal(appendErr)
-	}
-
-	rewindGoalActivity(t, al, store, sid)
-	al.goalQuietWindowSettle(time.Now()) // push 2 — the bare ack must not have broken the triple
-	after2, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after2.GoalZeroOutputPushes != 2 {
-		t.Fatalf("push 2: GoalZeroOutputPushes = %d, want 2 — a bare text-only reply must not count as adjudicable output",
-			after2.GoalZeroOutputPushes)
+	if after3.Round != 0 {
+		t.Fatalf("after budget spent: rounds = %d, want 0 (FR-095/097 forbid the claimless adjudication fall-through)", after3.Round)
 	}
 	if got := cp.callCount(); got != 0 {
-		t.Fatalf("push 2 must still never call the Judge; got %d", got)
-	}
-
-	rewindGoalActivity(t, al, store, sid)
-	al.goalQuietWindowSettle(time.Now()) // 3rd cycle: budget spent — normal adjudication
-	after3, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := cp.callCount(); got != 1 {
-		t.Fatalf("3rd cycle (budget spent): Judge calls = %d, want 1", got)
-	}
-	if after3.GoalRoundsUsed != 1 {
-		t.Fatalf("3rd cycle: GoalRoundsUsed = %d, want 1", after3.GoalRoundsUsed)
+		t.Fatalf("after budget spent: Judge calls = %d, want 0 — the goal is left quiet, not judged", got)
 	}
 }
 
-// TestGoalZeroOutputTriple_DescendantTranscriptCounts proves US-6 A2/FR-014b:
-// a goal whose agent delegated ALL of its work — the ROOT session's own
-// transcript stays silent, but a delegated CHILD session's transcript has
-// real ADJUDICABLE output (a tool call — review-round-1 finding #4(a): a
-// bare text message does not count, see sessionHasTranscriptOutputSince) —
-// must NOT read as zero output. Descendants are resolved via the DURABLE
-// ParentSessionID chain (goalDescendantSessionIDs), not the in-memory
-// turnState scan FR-013 uses.
-func TestGoalZeroOutputTriple_DescendantTranscriptCounts(t *testing.T) {
-	resetGoalTriggerStateForTest()
-	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
-	store, sid := newGoalTestSession(t, al, agentInst.ID)
-
-	childMeta, err := store.NewSession(session.SessionTypeChat, "webchat", agentInst.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	childID := childMeta.ID
-	if err := store.SetMeta(childID, session.MetaPatch{ParentSessionID: &sid}); err != nil {
-		t.Fatal(err)
-	}
-
-	watermark := time.Now().Add(-1 * time.Hour)
-
-	if al.goalHasTranscriptOutputSince(store, sid, watermark) {
-		t.Fatal("precondition: neither session has any output yet")
-	}
-
-	if err := store.AppendTranscriptStrict(childID, session.TranscriptEntry{
-		ID: "delegate-work", Type: session.EntryTypeToolCall,
-		ToolCalls: []session.ToolCall{{ID: "tc1", Tool: "bash", Status: "success"}},
-		Timestamp: time.Now(), AgentID: agentInst.ID,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	if !al.goalHasTranscriptOutputSince(store, sid, watermark) {
-		t.Fatal("US-6 A2/FR-014b: a delegated child's adjudicable output must count as the goal's own output — " +
-			"a goal that delegated everything is WORKING, not empty")
-	}
-
-	// A bare text-only reply on the SAME child, by contrast, must NOT count
-	// (finding #4(a)) — proves this test isn't accidentally passing on ANY
-	// entry, only on adjudicable ones.
-	watermark2 := time.Now()
-	if err := store.AppendTranscriptStrict(childID, session.TranscriptEntry{
-		ID: "delegate-ack", Role: "assistant", Content: "on it",
-		Timestamp: time.Now(), AgentID: agentInst.ID,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if al.goalHasTranscriptOutputSince(store, sid, watermark2) {
-		t.Fatal("a bare text-only descendant entry must NOT count as adjudicable output")
-	}
-}
+// JUDGE-FR-095's two required oracles (TestQuietWindow_MakesZeroJudgeCalls,
+// TestRunGoalAdjudication_RejectsEmptyClaimText) live in
+// goal_triggers_adr084_test.go, per the joint delivery plan's own naming.
 
 // TestResolveGoalScopedDiffEmpty_UnboundGoalDegenerates proves FR-014b's
 // stated degenerate case: an unbound chat goal (empty WorkspaceID) has no

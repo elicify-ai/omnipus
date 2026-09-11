@@ -12,14 +12,17 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -59,6 +62,115 @@ func newGoalTestSession(t *testing.T, al *AgentLoop, agentID string) (*session.U
 	return store, meta.ID
 }
 
+// activateTestGoalRecord creates and activates a minimal pkg/goal record
+// for sid — the test-side mirror of createAndActivateSessionGoalRecord
+// (goal_loop.go, GOAL-FR-009/010/011, wave E12). Most of this suite's test
+// sessions are built directly via newGoalTestSession/SetMeta rather than
+// through a real `/goal` command turn, so they carry no durable goal record
+// unless a test asks for one explicitly — any assertion that now reads the
+// goal record (routing, verdict-on-record checks) needs this first. Returns
+// the minted goal id.
+func activateTestGoalRecord(t *testing.T, sid, intent string) string {
+	t.Helper()
+	gid := newGoalID()
+	g, err := goal.New(generated.GoalOwnerKindSession, sid, generated.ChatCompiled,
+		intent, "", nil, newFloorDoD(), config.DefaultGoalMaxRounds, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("activateTestGoalRecord: goal.New: %v", err)
+	}
+	g.GoalID = gid
+	gs := goal.NewStore(config.OmnipusHomeDir())
+	if cerr := gs.Create(g); cerr != nil {
+		t.Fatalf("activateTestGoalRecord: Create: %v", cerr)
+	}
+	if _, uerr := gs.Update(gid, func(cur *goal.Goal) error {
+		return cur.Activate(sid, time.Now().UTC())
+	}); uerr != nil {
+		t.Fatalf("activateTestGoalRecord: Activate: %v", uerr)
+	}
+	return gid
+}
+
+// goalRecordForSession reads back the ACTIVE pkg/goal record BOUND to sid —
+// the ADR-086 replacement for the retired session-meta Goal* fields every
+// assertion in this suite used to read off *session.UnifiedMeta (wave S6
+// deleted them; activeGoalForSession, goal_record_wiring.go, is the single
+// entry predicate production code now shares). It FAILS the test when no
+// active record exists, so an assertion that used to read a populated meta
+// field can never silently degrade into reading a zero value off a record
+// that was never created.
+//
+// Field mapping, for readers comparing against the pre-ADR-086 assertions:
+//
+//	meta.GoalID                 -> g.GoalID
+//	meta.GoalCondition          -> g.Prompt
+//	meta.GoalRoundsUsed         -> g.Round
+//	meta.GoalMaxRounds          -> g.MaxRounds
+//	meta.GoalCriteriaJSON       -> goalRecordCompiledJSON(g)
+//	meta.GoalLatestReason       -> g.LatestReason
+//	meta.GoalStartedAt          -> g.StartedAt   (now a *time.Time)
+//	meta.GoalLastActivityAt     -> g.LastActivityAt
+//	meta.GoalZeroOutputPushes   -> g.ZeroOutputPushes
+//	meta.GoalQuestionRoundsUsed -> g.QuestionRoundsUsed
+func goalRecordForSession(t *testing.T, sid string) *goal.Goal {
+	t.Helper()
+	g := activeGoalForSession(sid)
+	if g == nil {
+		t.Fatalf("goalRecordForSession: no ACTIVE goal record is bound to session %q", sid)
+	}
+	return g
+}
+
+// goalRecordForSessionOrNil is goalRecordForSession without the fatal — for
+// the assertions that deliberately check a session carries NO active goal
+// (the old `meta.GoalCondition == ""` check). A nil return is the ADR-086
+// equivalent of that empty string.
+func goalRecordForSessionOrNil(sid string) *goal.Goal { return activeGoalForSession(sid) }
+
+// mustGoalRecord reads ONE goal record by id regardless of its state — the
+// reader for assertions about a goal that has reached a TERMINAL state,
+// which activeGoalForSession deliberately stops finding (Terminate moves the
+// record out of active).
+func mustGoalRecord(t *testing.T, gid string) *goal.Goal {
+	t.Helper()
+	g, err := goal.NewStore(config.OmnipusHomeDir()).Get(gid)
+	if err != nil {
+		t.Fatalf("mustGoalRecord %q: %v", gid, err)
+	}
+	return g
+}
+
+// setGoalRecordRound forces the ACTIVE goal record's Round counter to n —
+// the ADR-086 replacement for the `SetMeta(sid, MetaPatch{GoalRoundsUsed:
+// &n})` arrange step several tests use to pre-age a goal's budget.
+func setGoalRecordRound(t *testing.T, sid string, n int) {
+	t.Helper()
+	g := goalRecordForSession(t, sid)
+	if _, err := goal.NewStore(config.OmnipusHomeDir()).Update(g.GoalID, func(cur *goal.Goal) error {
+		cur.Round = n
+		return nil
+	}); err != nil {
+		t.Fatalf("setGoalRecordRound(%q, %d): %v", sid, n, err)
+	}
+}
+
+// clearGoalRecordCriteria empties the ACTIVE goal record's criteria ladder —
+// the ADR-086 replacement for the `SetMeta(sid, MetaPatch{GoalCriteriaJSON:
+// &""})` arrange step the judge tests use to exercise the back-compat
+// fallback (compiledGoalCriteriaFor's single "goal-condition" prose
+// criterion). Kept EXPLICIT rather than relying on activation happening to
+// leave the list empty, so the precondition each of those tests depends on
+// stays visible at its own call site.
+func clearGoalRecordCriteria(t *testing.T, sid string) {
+	t.Helper()
+	g := goalRecordForSession(t, sid)
+	if _, err := goal.NewStore(config.OmnipusHomeDir()).Update(g.GoalID, func(cur *goal.Goal) error {
+		return cur.SetCriteria(nil, time.Now().UTC())
+	}); err != nil {
+		t.Fatalf("clearGoalRecordCriteria(%q): %v", sid, err)
+	}
+}
+
 // activatePendingGoal is a compatibility name (ADR-081 D1: instant
 // activation — there is no more pending/confirm step) kept so the ~33
 // call sites across the goal test suite that call it right after an
@@ -67,28 +179,68 @@ func newGoalTestSession(t *testing.T, al *AgentLoop, agentID string) (*session.U
 // `/goal <intent>` call activated it in the SAME turn.
 func activatePendingGoal(t *testing.T, _ *AgentLoop, _ *AgentInstance, opts *processOptions) {
 	t.Helper()
-	meta, err := opts.TranscriptStore.GetMeta(opts.TranscriptSessionID)
-	if err != nil {
-		t.Fatalf("activatePendingGoal: GetMeta: %v", err)
-	}
-	if meta.GoalCondition == "" {
+	if activeGoalForSession(opts.TranscriptSessionID) == nil {
 		t.Fatal("activatePendingGoal: goal must already be ACTIVE (ADR-081 D1 instant activation)")
 	}
 }
 
+// recordedGoalCriterionID is the id setGoalRoundsArmedRecorded /
+// setGoalRecordArmed persist for their single prose criterion.
+//
+// Before ADR-086 those helpers persisted the id "goal-condition" straight
+// into session meta's GoalCriteriaJSON string, which nothing validated. A
+// pkg/goal record validates: "goal-condition" is one of GOAL-FR-007's three
+// RESERVED, never-persisted criterion ids (pkg/goal/criteria.go's
+// validateCriteriaList rejects it outright), because it belongs to
+// compiledGoalCriteriaFor's synthesized back-compat criterion, not to a
+// stored ladder. So a recorded goal now carries a real, non-reserved id and
+// the canned judge providers below answer for BOTH forms — see
+// cannedJudgeVerdictJSON.
+const recordedGoalCriterionID = "a0000000-0000-4000-8000-000000000001"
+
+// cannedJudgeVerdictJSON renders the fixed judge response every canned
+// provider in this suite returns: one verdict per id the goal loop can put
+// in front of the Judge, all with the same met value and reason.
+//
+// Verdicts are matched to criteria BY ID (verifier_adjudication.go's
+// byID[c.ID] lookup) — an id the response omits resolves
+// "criterion_unjudgeable", met=false. The judged set differs by path:
+//
+//   - EMPTY criteria ladder -> compiledGoalCriteriaFor synthesizes the single
+//     "goal-condition" criterion (DoD is dropped with it, since
+//     goalRecordCompiledJSON returns "" for a criteria-less record).
+//   - RECORDED ladder -> criteria UNION DoD (ADR-080 D-DOD's judged-set union
+//     seam), i.e. recordedGoalCriterionID plus newFloorDoD's two fixed
+//     "goal-dod-floor-*" sentinels, which every real record carries because
+//     Goal.Validate requires a non-empty DoD.
+//
+// Answering all four ids keeps ONE pair of canned providers usable on both
+// paths. Ids absent from the judged set are simply never looked up, so the
+// extra entries are inert — the met/unmet outcome each test asserts is
+// exactly the one it asserted before.
+func cannedJudgeVerdictJSON(met bool, reason string) string {
+	ids := []string{
+		"goal-condition",
+		recordedGoalCriterionID,
+		"goal-dod-floor-no-secrets",
+		"goal-dod-floor-grounded-claims",
+	}
+	items := make([]string, 0, len(ids))
+	for _, id := range ids {
+		items = append(items, fmt.Sprintf(`{"id":%q,"met":%t,"reason":%q}`, id, met, reason))
+	}
+	return fmt.Sprintf(`{"met": %t, "criteria": [%s]}`, met, strings.Join(items, ","))
+}
+
 func metJudgeProvider(reason string) *fakeJudgeProvider {
 	return &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
-		return &providers.LLMResponse{
-			Content: `{"met": true, "criteria": [{"id":"goal-condition","met":true,"reason":"` + reason + `"}]}`,
-		}, nil
+		return &providers.LLMResponse{Content: cannedJudgeVerdictJSON(true, reason)}, nil
 	}}
 }
 
 func unmetJudgeProvider(reason string) *fakeJudgeProvider {
 	return &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
-		return &providers.LLMResponse{
-			Content: `{"met": false, "criteria": [{"id":"goal-condition","met":false,"reason":"` + reason + `"}]}`,
-		}, nil
+		return &providers.LLMResponse{Content: cannedJudgeVerdictJSON(false, reason)}, nil
 	}}
 }
 
@@ -123,18 +275,15 @@ func TestGoalCommand_SetRewritesUserMessage(t *testing.T) {
 	if opts.UserMessage != "make the tests pass" {
 		t.Fatalf("opts.UserMessage = %q, want the raw intent", opts.UserMessage)
 	}
-	after, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.GoalCondition != "make the tests pass" || after.GoalRoundsUsed != 0 || after.GoalMaxRounds != config.DefaultGoalMaxRounds {
+	after := goalRecordForSession(t, sid)
+	if after.Prompt != "make the tests pass" || after.Round != 0 || after.MaxRounds != config.DefaultGoalMaxRounds {
 		t.Fatalf("unexpected goal state: %+v", after)
 	}
 	if after.GoalID == "" {
 		t.Fatal("instant activation must mint a GoalID")
 	}
-	if after.GoalCriteriaJSON != "" {
-		t.Fatalf("GoalCriteriaJSON must start EMPTY on instant activation, got %q", after.GoalCriteriaJSON)
+	if got := goalRecordCompiledJSON(after); got != "" {
+		t.Fatalf("the goal record's criteria must start EMPTY on instant activation, got %q", got)
 	}
 }
 
@@ -156,12 +305,8 @@ func TestGoalCommand_ReplaceOnSet(t *testing.T) {
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal condition A", UserInitiated: true}, agentInst, &opts)
 	activatePendingGoal(t, al, agentInst, &opts)
-	before, _ := store.GetMeta(sid)
-	firstID := before.GoalID
-	oneRound := 1
-	if err := store.SetMeta(sid, session.MetaPatch{GoalRoundsUsed: &oneRound}); err != nil {
-		t.Fatal(err)
-	}
+	firstID := goalRecordForSession(t, sid).GoalID
+	setGoalRecordRound(t, sid, 1)
 
 	// A prose restate rewrites the working prompt and continues the turn —
 	// no confirm ritual, no amendment echo — and patches the durable
@@ -177,20 +322,17 @@ func TestGoalCommand_ReplaceOnSet(t *testing.T) {
 	if opts.UserMessage != "condition B" {
 		t.Fatalf("opts.UserMessage = %q, want the restated intent", opts.UserMessage)
 	}
-	after, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.GoalCondition != "condition B" {
+	after := goalRecordForSession(t, sid)
+	if after.Prompt != "condition B" {
 		t.Fatalf("finding #9: condition after restate = %q, want it patched to the new intent %q "+
-			"(keeper prompts/status/fallback all cite GoalCondition — leaving it stale would have them "+
-			"cite the superseded intent forever)", after.GoalCondition, "condition B")
+			"(keeper prompts/status/fallback all cite the goal record's Prompt — leaving it stale would have "+
+			"them cite the superseded intent forever)", after.Prompt, "condition B")
 	}
 	if after.GoalID != firstID {
 		t.Fatalf("restate must NOT mint a new GoalID (FR-001), got %q want %q", after.GoalID, firstID)
 	}
-	if after.GoalRoundsUsed != 1 {
-		t.Fatalf("restate must not reset rounds (no new generation), got %d", after.GoalRoundsUsed)
+	if after.Round != 1 {
+		t.Fatalf("restate must not reset rounds (no new generation), got %d", after.Round)
 	}
 }
 
@@ -237,8 +379,8 @@ func TestGoalCommand_StatusAndClear(t *testing.T) {
 		// restate that leaves the already-active goal in place; later
 		// iterations: a goalless fresh activation. Either way the goal is
 		// ACTIVE immediately after the single call above.
-		if mid, merr := store.GetMeta(sid); merr != nil || mid.GoalCondition == "" {
-			t.Fatalf("%s: setup — goal must be active before the clear (err=%v)", verb, merr)
+		if goalRecordForSessionOrNil(sid) == nil {
+			t.Fatalf("%s: setup — goal must be active before the clear", verb)
 		}
 		matched, handled, reply = al.applyGoalCommandPrompt(context.Background(),
 			bus.InboundMessage{Content: "/goal " + verb, UserInitiated: true}, agentInst, &opts)
@@ -248,12 +390,8 @@ func TestGoalCommand_StatusAndClear(t *testing.T) {
 		if !strings.Contains(reply, "cleared") {
 			t.Fatalf("%s reply = %q, want a cleared confirmation", verb, reply)
 		}
-		after, err := store.GetMeta(sid)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if after.GoalCondition != "" {
-			t.Fatalf("%s: goal condition still set: %q", verb, after.GoalCondition)
+		if after := goalRecordForSessionOrNil(sid); after != nil {
+			t.Fatalf("%s: goal is still ACTIVE: %q", verb, after.Prompt)
 		}
 	}
 }
@@ -282,11 +420,7 @@ func TestGoalCommand_AdmissionRefusal(t *testing.T) {
 	if !strings.Contains(reply, "active loops") {
 		t.Fatalf("reply = %q, want a cap-reached message", reply)
 	}
-	after, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.GoalCondition != "" {
+	if goalRecordForSessionOrNil(sid) != nil {
 		t.Fatal("goal must not be set when admission is refused")
 	}
 }
@@ -393,11 +527,8 @@ func TestGoalLoop_MetVerdict_ClearsGoalAndWritesVerdict(t *testing.T) {
 	activatePendingGoal(t, al, agentInst, &opts)
 	// Phase-2 compile stored a UUID-IDed criteria ladder; the canned met-judge
 	// provider echoes the legacy "goal-condition" ID, so exercise the back-compat
-	// fallback (compiledGoalCriteriaFor with empty GoalCriteriaJSON).
-	emptyCriteria := ""
-	if err := store.SetMeta(sid, session.MetaPatch{GoalCriteriaJSON: &emptyCriteria}); err != nil {
-		t.Fatal(err)
-	}
+	// fallback (compiledGoalCriteriaFor on a record with an EMPTY criteria list).
+	clearGoalRecordCriteria(t, sid)
 
 	judgeInst.Provider = metJudgeProvider("tests pass")
 
@@ -407,12 +538,17 @@ func TestGoalLoop_MetVerdict_ClearsGoalAndWritesVerdict(t *testing.T) {
 	result := &turnResult{finalContent: "[goal:evidence] all tests green\nGOAL_STATUS: met"}
 	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, result)
 
-	after, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
+	// JUDGE-FR-098 (D13, this wave): the adjudication is recorded as
+	// deferred work, not run synchronously — dispatch it now (simulating
+	// runAgentLoop's own post-delivery goroutine call) to exercise the
+	// SAME met-verdict behavior this test proves.
+	if result.goalDeferredAdjudication == nil {
+		t.Fatal("a met+evidence claim must record deferred adjudication work")
 	}
-	if after.GoalCondition != "" {
-		t.Fatalf("goal should be cleared on a met verdict, still: %q", after.GoalCondition)
+	al.dispatchDeferredGoalAdjudication(result.goalDeferredAdjudication)
+
+	if after := goalRecordForSessionOrNil(sid); after != nil {
+		t.Fatalf("goal should be cleared on a met verdict, still ACTIVE: %q", after.Prompt)
 	}
 	if len(result.followUps) != 0 {
 		t.Fatalf("a met verdict must not schedule a follow-up round, got %d", len(result.followUps))
@@ -447,15 +583,15 @@ func TestGoalLoop_UnmetVerdict_AdvancesRoundAndFeedsForward(t *testing.T) {
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
 	activatePendingGoal(t, al, agentInst, &opts)
-	// Phase-2 compile produced a UUID-IDed criteria ladder in GoalCriteriaJSON.
+	// JUDGE-FR-099 (D13, this wave): the deferred adjudication's steer is
+	// delivered via the async-notifier, which needs routing to resolve.
+	al.recordGoalRouting(sid, "", "webchat", "c1", "sk1", agentInst.ID)
+	// Phase-2 compile produced a UUID-IDed criteria ladder on the goal record.
 	// The canned judge providers below echo the legacy "goal-condition" ID, so
-	// exercise the back-compat fallback (compiledGoalCriteriaFor with empty
-	// GoalCriteriaJSON → single "goal-condition" prose criterion) — this tests
+	// exercise the back-compat fallback (compiledGoalCriteriaFor on an EMPTY
+	// criteria list → single "goal-condition" prose criterion) — this tests
 	// the pre-Phase-2 session path that checkGoalLoopAfterTurn still serves.
-	emptyCriteria := ""
-	if err := store.SetMeta(sid, session.MetaPatch{GoalCriteriaJSON: &emptyCriteria}); err != nil {
-		t.Fatal(err)
-	}
+	clearGoalRecordCriteria(t, sid)
 
 	judgeInst.Provider = unmetJudgeProvider("3 tests still failing")
 
@@ -465,31 +601,53 @@ func TestGoalLoop_UnmetVerdict_AdvancesRoundAndFeedsForward(t *testing.T) {
 	result := &turnResult{finalContent: "[goal:evidence] ran suite, 3 still red\nGOAL_STATUS: met"}
 	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, result)
 
-	after, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
+	// JUDGE-FR-098 (D13, this wave): dispatch the deferred adjudication
+	// (simulating runAgentLoop's own post-delivery goroutine call).
+	if result.goalDeferredAdjudication == nil {
+		t.Fatal("a met+evidence claim must record deferred adjudication work")
 	}
-	if after.GoalCondition == "" {
+	if len(result.followUps) != 0 {
+		t.Fatalf("checkGoalLoopAfterTurn itself must not append a followUp on a deferred claim — "+
+			"the steer only exists once the deferred adjudication runs; got %d", len(result.followUps))
+	}
+	al.dispatchDeferredGoalAdjudication(result.goalDeferredAdjudication)
+
+	after := goalRecordForSessionOrNil(sid)
+	if after == nil {
 		t.Fatal("goal must remain active after an unmet verdict under the round bound")
 	}
-	if after.GoalRoundsUsed != 1 {
-		t.Fatalf("rounds_used = %d, want 1", after.GoalRoundsUsed)
+	if after.Round != 1 {
+		t.Fatalf("rounds_used = %d, want 1", after.Round)
 	}
-	if !strings.Contains(after.GoalLatestReason, "3 tests still failing") {
-		t.Fatalf("latest reason = %q, want to contain the judge's reason", after.GoalLatestReason)
+	if !strings.Contains(after.LatestReason, "3 tests still failing") {
+		t.Fatalf("latest reason = %q, want to contain the judge's reason", after.LatestReason)
 	}
-	if len(result.followUps) != 1 {
-		t.Fatalf("expected exactly 1 follow-up round, got %d", len(result.followUps))
+
+	// JUDGE-FR-099 (D13, this wave): the deferred adjudication's steer is
+	// delivered via the async-notifier (idleSteerDeliverer ->
+	// dispatchGoalAsyncFollowUp -> Notify -> bus.PublishInbound), NOT
+	// result.followUps — by the time this runs, this turn's own followUps
+	// have already been published and read by nobody again.
+	var fu bus.InboundMessage
+	select {
+	case fu = <-al.bus.InboundChan():
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the deferred steer to be published via the async-notifier")
 	}
-	fu := result.followUps[0]
 	if !strings.Contains(fu.Content, "3 tests still failing") {
-		t.Fatalf("follow-up content = %q, want the judge reason fed forward as steering (FR-043 pattern)", fu.Content)
+		t.Fatalf("steer content = %q, want the judge reason fed forward as steering (FR-043 pattern)", fu.Content)
 	}
 	if fu.UserInitiated {
 		t.Fatal("a re-injected continuation must NOT be UserInitiated (Gap #8)")
 	}
-	if fu.SessionID != sid {
-		t.Fatalf("follow-up session_id = %q, want %q (same session)", fu.SessionID, sid)
+	if fu.Sender.CanonicalID != goalLoopFollowUpSenderID {
+		t.Fatalf("steer sender = %q, want %q (JUDGE-FR-099's origin-gate sentinel)", fu.Sender.CanonicalID, goalLoopFollowUpSenderID)
+	}
+	// The async-notifier carries the transcript session id via
+	// AsyncTranscriptSessionID (async_notifier.go's Notify), never
+	// InboundMessage.SessionID — a field this async path never populates.
+	if fu.AsyncTranscriptSessionID != sid {
+		t.Fatalf("follow-up async_transcript_session_id = %q, want %q (same session)", fu.AsyncTranscriptSessionID, sid)
 	}
 }
 
@@ -520,10 +678,7 @@ func TestGoalLoop_ScheduledTurn_DoesNotAdvanceGoal(t *testing.T) {
 	}}
 	judgeInst.Provider = judgeFake
 
-	before, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := goalRecordForSession(t, sid)
 
 	// Mimics ProcessScheduled's own processOptions literal (loop.go ~L5156):
 	// built directly, so UserInitiated and SenderID are both left at their
@@ -537,15 +692,12 @@ func TestGoalLoop_ScheduledTurn_DoesNotAdvanceGoal(t *testing.T) {
 	result := &turnResult{finalContent: "scheduled run output, unrelated to the goal"}
 	al.checkGoalLoopAfterTurn(context.Background(), agentInst, scheduledOpts, result)
 
-	after, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.GoalRoundsUsed != before.GoalRoundsUsed {
+	after := goalRecordForSession(t, sid)
+	if after.Round != before.Round {
 		t.Fatalf("rounds_used changed from %d to %d — a scheduled/loop turn must not consume a goal round",
-			before.GoalRoundsUsed, after.GoalRoundsUsed)
+			before.Round, after.Round)
 	}
-	if after.GoalCondition != before.GoalCondition {
+	if after.Prompt != before.Prompt {
 		t.Fatal("goal condition changed — a scheduled/loop turn must not touch the goal at all")
 	}
 	if len(result.followUps) != 0 {
@@ -553,6 +705,51 @@ func TestGoalLoop_ScheduledTurn_DoesNotAdvanceGoal(t *testing.T) {
 	}
 	if judgeFake.callCount() != 0 {
 		t.Fatal("judge must not have been called")
+	}
+}
+
+// TestGoalLoop_TaskRunTurn_AdvancesTaskOwnedGoal proves GOAL-FR-015 (E12):
+// unlike TestGoalLoop_ScheduledTurn_DoesNotAdvanceGoal's plain scheduled/loop
+// turn (IsTaskRun=false, UserInitiated=false — excluded), a TASK RUN's own
+// dispatched turn (IsTaskRun=true, UserInitiated=false, SenderID=
+// "task-executor" — exactly loop.go's processTaskDirect literal) on a
+// task-owned goal's own session DOES reach checkGoalLoopAfterTurn's ordinary-
+// turn branch and bumps the goal's activity clock — GOAL-FR-013's "one code
+// path" requires the after-turn hook to apply to a task-owned goal exactly
+// like a chat-owned one.
+func TestGoalLoop_TaskRunTurn_AdvancesTaskOwnedGoal(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	tk, _ := seedDefiningTaskGoal(t, al, "t-goal-loop-task-run", "native-agent")
+	sid, err := al.taskExecutor.createTaskSessionSync(tk)
+	if err != nil {
+		t.Fatalf("createTaskSessionSync: %v", err)
+	}
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	store := al.GetAgentStore(tk.AgentID)
+
+	if activeGoalForSession(sid) == nil {
+		t.Fatal("test setup: the task-owned goal must already be bound ACTIVE to this session")
+	}
+	// Push the activity clock into the past first (rewindGoalActivity's own
+	// precedent, elsewhere in this suite) — asserting "changed" against a
+	// same-instant activation timestamp would be flaky, not a real signal.
+	rewindGoalActivityTimeOnly(t, store, sid)
+	before := goalRecordForSession(t, sid)
+
+	// Mirrors processTaskDirect's own processOptions literal (loop.go):
+	// IsTaskRun=true, UserInitiated left false, SenderID="task-executor".
+	taskRunOpts := processOptions{
+		TranscriptStore: store, TranscriptSessionID: sid,
+		Channel: "webchat", ChatID: "task:" + sid, SenderID: "task-executor",
+		IsTaskRun: true,
+	}
+	result := &turnResult{finalContent: "made some progress on the task, no claim yet"}
+	al.checkGoalLoopAfterTurn(context.Background(), agentInst, taskRunOpts, result)
+
+	after := goalRecordForSession(t, sid)
+	if after.LastActivityAt.Equal(before.LastActivityAt) {
+		t.Fatal("a task run's own turn must bump the task-owned goal's activity clock — " +
+			"the origin gate must admit opts.IsTaskRun turns (GOAL-FR-015)")
 	}
 }
 
@@ -573,6 +770,7 @@ func TestGoalLoop_ReInjectedFollowUp_AdvancesGoal(t *testing.T) {
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &goalOpts)
 	activatePendingGoal(t, al, agentInst, &goalOpts)
+	al.recordGoalRouting(sid, "", "webchat", "c1", "sk1", agentInst.ID)
 
 	judgeInst.Provider = unmetJudgeProvider("still not there")
 
@@ -592,14 +790,15 @@ func TestGoalLoop_ReInjectedFollowUp_AdvancesGoal(t *testing.T) {
 	// gated out (only non-user-origin gating, not a claim-blocking gate).
 	result := &turnResult{finalContent: "[goal:evidence] tried again\nGOAL_STATUS: met"}
 	al.checkGoalLoopAfterTurn(context.Background(), agentInst, followUpOpts, result)
-
-	after, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
+	if result.goalDeferredAdjudication == nil {
+		t.Fatal("a met+evidence claim must record deferred adjudication work")
 	}
-	if after.GoalRoundsUsed != 1 {
+	al.dispatchDeferredGoalAdjudication(result.goalDeferredAdjudication)
+
+	after := goalRecordForSession(t, sid)
+	if after.Round != 1 {
 		t.Fatalf("rounds_used = %d, want 1 — the goal loop's own re-injected follow-up must still advance "+
-			"the round", after.GoalRoundsUsed)
+			"the round", after.Round)
 	}
 }
 
@@ -622,7 +821,7 @@ func TestGoalLoop_PostTurnCorrection_NudgesImmediatelyWhenUnregistered(t *testin
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
-	al.recordGoalRouting(sid, "webchat", "c1", "sk1", agentInst.ID)
+	al.recordGoalRouting(sid, "", "webchat", "c1", "sk1", agentInst.ID)
 	setActiveGoalRecordless(t, store, sid, "goal-nudge-1", "build a tetris game")
 
 	var mu sync.Mutex
@@ -642,13 +841,10 @@ func TestGoalLoop_PostTurnCorrection_NudgesImmediatelyWhenUnregistered(t *testin
 	result := &turnResult{finalContent: "sure, let me think about this"}
 	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, result)
 
-	after, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.GoalZeroOutputPushes != 1 {
-		t.Fatalf("GoalZeroOutputPushes = %d, want 1 immediately after the turn — the correction must not "+
-			"wait for the idle quiet window", after.GoalZeroOutputPushes)
+	after := goalRecordForSession(t, sid)
+	if after.ZeroOutputPushes != 1 {
+		t.Fatalf("goal record ZeroOutputPushes = %d, want 1 immediately after the turn — the correction must "+
+			"not wait for the idle quiet window", after.ZeroOutputPushes)
 	}
 
 	mu.Lock()
@@ -673,17 +869,13 @@ func TestGoalLoop_PostTurnCorrection_NoNudgeWhenRegistered(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
-	al.recordGoalRouting(sid, "webchat", "c1", "sk1", agentInst.ID)
+	al.recordGoalRouting(sid, "", "webchat", "c1", "sk1", agentInst.ID)
 
-	goalID := "goal-registered-1"
-	cond := "build a tetris game"
-	compiled := `{"intent":"x","prompt":"x","definition":"Build a tetris clone",` +
-		`"criteria":[{"id":"c1","kind":"prose","judgment":"boolean","text":"the game renders"}]}`
-	if err := store.SetMeta(sid, session.MetaPatch{
-		GoalID: &goalID, GoalCondition: &cond, GoalCriteriaJSON: &compiled,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	// ADR-086: a REGISTERED goal is an active pkg/goal record whose criteria
+	// ladder is non-empty — the state the retired
+	// `GoalCriteriaJSON: &compiled` session-meta patch used to represent.
+	armGoalRecord(t, sid, "build a tetris game",
+		recordedGoalCriteria("the game renders"), 0, time.Now())
 
 	var mu sync.Mutex
 	var events []AsyncNotifyEvent
@@ -700,12 +892,9 @@ func TestGoalLoop_PostTurnCorrection_NoNudgeWhenRegistered(t *testing.T) {
 	result := &turnResult{finalContent: "working on it now"}
 	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, result)
 
-	after, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.GoalZeroOutputPushes != 0 {
-		t.Fatalf("GoalZeroOutputPushes = %d, want 0 — the record is registered, nothing to correct", after.GoalZeroOutputPushes)
+	after := goalRecordForSession(t, sid)
+	if after.ZeroOutputPushes != 0 {
+		t.Fatalf("goal record ZeroOutputPushes = %d, want 0 — the record is registered, nothing to correct", after.ZeroOutputPushes)
 	}
 
 	mu.Lock()
@@ -728,7 +917,7 @@ func TestGoalLoop_PostTurnCorrection_ParkedCardSuppressesNudge(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
-	al.recordGoalRouting(sid, "webchat", "c1", "sk1", agentInst.ID)
+	al.recordGoalRouting(sid, "", "webchat", "c1", "sk1", agentInst.ID)
 	setActiveGoalRecordless(t, store, sid, "goal-parked-1", "build a tetris game")
 
 	al.SetAskUserRegistry(&fakeParkedCardRegistry{pending: map[string]bool{sid: true}})
@@ -748,12 +937,9 @@ func TestGoalLoop_PostTurnCorrection_ParkedCardSuppressesNudge(t *testing.T) {
 	result := &turnResult{finalContent: "let me ask you something first"}
 	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, result)
 
-	after, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.GoalZeroOutputPushes != 0 {
-		t.Fatalf("GoalZeroOutputPushes = %d, want 0 — a parked card must suppress the immediate nudge", after.GoalZeroOutputPushes)
+	after := goalRecordForSession(t, sid)
+	if after.ZeroOutputPushes != 0 {
+		t.Fatalf("goal record ZeroOutputPushes = %d, want 0 — a parked card must suppress the immediate nudge", after.ZeroOutputPushes)
 	}
 
 	mu.Lock()
@@ -776,34 +962,41 @@ func TestGoalLoop_RoundCap_StopsAndClearsWithHandover(t *testing.T) {
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
 	activatePendingGoal(t, al, agentInst, &opts)
+	al.recordGoalRouting(sid, "", "webchat", "c1", "sk1", agentInst.ID)
 	judgeInst.Provider = unmetJudgeProvider("still unmet")
 
 	// ADR-053 Phase-2 (FR-101): each round advances on a CLAIM, not a bare
 	// turn. Round 1 = a claim the judge finds unmet.
 	r1 := &turnResult{finalContent: "[goal:evidence] attempt 1\nGOAL_STATUS: met"}
 	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, r1)
-	after1, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
+	if r1.goalDeferredAdjudication == nil {
+		t.Fatal("round 1: a met+evidence claim must record deferred adjudication work")
 	}
-	if after1.GoalCondition == "" || after1.GoalRoundsUsed != 1 {
+	al.dispatchDeferredGoalAdjudication(r1.goalDeferredAdjudication)
+	after1 := goalRecordForSessionOrNil(sid)
+	if after1 == nil || after1.Round != 1 {
 		t.Fatalf("round 1 (< bound=2): unexpected state %+v", after1)
 	}
-	if len(r1.followUps) != 1 {
-		t.Fatalf("round 1: expected a follow-up round, got %d", len(r1.followUps))
+	// JUDGE-FR-099: the steer is delivered via the async-notifier now.
+	select {
+	case <-al.bus.InboundChan():
+	case <-time.After(2 * time.Second):
+		t.Fatal("round 1: expected a follow-up round delivered via the async-notifier")
 	}
 
 	r2 := &turnResult{finalContent: "[goal:evidence] attempt 2\nGOAL_STATUS: met"}
 	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, r2)
-	after2, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
+	if r2.goalDeferredAdjudication == nil {
+		t.Fatal("round 2: a met+evidence claim must record deferred adjudication work")
 	}
-	if after2.GoalCondition != "" {
+	al.dispatchDeferredGoalAdjudication(r2.goalDeferredAdjudication)
+	if after2 := goalRecordForSessionOrNil(sid); after2 != nil {
 		t.Fatal("round 2 (== bound=2): goal must be cleared (bound reached)")
 	}
-	if len(r2.followUps) != 0 {
-		t.Fatal("round == bound must NOT schedule a further follow-up round")
+	select {
+	case fu := <-al.bus.InboundChan():
+		t.Fatalf("round == bound must NOT schedule a further follow-up round, got %+v", fu)
+	case <-time.After(200 * time.Millisecond):
 	}
 
 	entries, err := store.ReadTranscript(sid)
@@ -847,15 +1040,12 @@ func TestGoalLoop_JudgeUnavailable_DoesNotConsumeRound(t *testing.T) {
 	result := &turnResult{finalContent: "still working on it"}
 	al.checkGoalLoopAfterTurn(ctx, agentInst, opts, result)
 
-	after, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.GoalRoundsUsed != 0 {
-		t.Fatalf("rounds_used = %d, want 0 (judge unavailability must not consume a round, D7)", after.GoalRoundsUsed)
-	}
-	if after.GoalCondition == "" {
+	after := goalRecordForSessionOrNil(sid)
+	if after == nil {
 		t.Fatal("goal must remain active when the judge is unavailable")
+	}
+	if after.Round != 0 {
+		t.Fatalf("rounds_used = %d, want 0 (judge unavailability must not consume a round, D7)", after.Round)
 	}
 	if len(result.followUps) != 0 {
 		t.Fatal("judge unavailability must not schedule a follow-up round")
@@ -915,12 +1105,8 @@ func TestGoalLoop_JudgeThrottled_BoundedByOwnTimeout_NotCallerCtx(t *testing.T) 
 			"bounded timeout — it is hanging on the caller's (deadline-less) ctx instead of its own")
 	}
 
-	after, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.GoalRoundsUsed != 0 {
-		t.Fatalf("rounds_used = %d, want 0 (judge unavailability must not consume a round, D7)", after.GoalRoundsUsed)
+	if after := goalRecordForSession(t, sid); after.Round != 0 {
+		t.Fatalf("rounds_used = %d, want 0 (judge unavailability must not consume a round, D7)", after.Round)
 	}
 	if len(result.followUps) != 0 {
 		t.Fatal("judge unavailability must not schedule a follow-up round")
@@ -1155,22 +1341,19 @@ func TestGoal_IdleExpiry_7d(t *testing.T) {
 	}
 
 	now := time.Now().UTC()
-	stillActiveAt := now.Add(-(6*24 + 23) * time.Hour).Format(time.RFC3339) // 6d23h idle
-	expiredAt := now.Add(-7 * 24 * time.Hour).Format(time.RFC3339)          // exactly 7d idle
+	stillActiveAt := now.Add(-(6*24 + 23) * time.Hour) // 6d23h idle
+	expiredAt := now.Add(-7 * 24 * time.Hour)          // exactly 7d idle
 
-	newGoalSession := func(condition, lastActivity string) string {
+	// ADR-086: the sweep selects on pkg/goal.Store.ListActive() and compares
+	// the RECORD's own LastActivityAt/StartedAt (effectiveGoalActivity), so
+	// the fixture is a real active goal record per session rather than the
+	// retired GoalCondition/GoalStartedAt/GoalLastActivityAt meta patch.
+	newGoalSession := func(condition string, lastActivity time.Time) string {
 		meta, err := store.NewSession(session.SessionTypeChat, "webchat", agentInst.ID)
 		if err != nil {
 			t.Fatalf("NewSession: %v", err)
 		}
-		if err := store.SetMeta(meta.ID, session.MetaPatch{
-			GoalCondition:      &condition,
-			GoalMaxRounds:      intPtr(config.DefaultGoalMaxRounds),
-			GoalStartedAt:      &lastActivity,
-			GoalLastActivityAt: &lastActivity,
-		}); err != nil {
-			t.Fatalf("SetMeta: %v", err)
-		}
+		armGoalRecord(t, meta.ID, condition, nil, 0, lastActivity)
 		return meta.ID
 	}
 
@@ -1179,19 +1362,10 @@ func TestGoal_IdleExpiry_7d(t *testing.T) {
 
 	al.goalIdleExpirySweep(config.PlanningConfig{}, now)
 
-	stillActive, err := store.GetMeta(stillActiveSID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stillActive.GoalCondition == "" {
+	if goalRecordForSessionOrNil(stillActiveSID) == nil {
 		t.Fatal("a goal idle for 6d23h must NOT be expired (under the 7-day bound)")
 	}
-
-	expired, err := store.GetMeta(expiredSID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if expired.GoalCondition != "" {
+	if goalRecordForSessionOrNil(expiredSID) != nil {
 		t.Fatal("a goal idle for exactly 7d must be idle-expired (cleared)")
 	}
 }
@@ -1337,10 +1511,7 @@ func TestGoalId_StableAcrossLifecycle_NewGenerationAfterClear(t *testing.T) {
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal condition A", UserInitiated: true}, agentInst, &opts)
 	activatePendingGoal(t, al, agentInst, &opts)
-	meta1, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
+	meta1 := goalRecordForSession(t, sid)
 	if meta1.GoalID == "" {
 		t.Fatal("a freshly-set goal must carry a non-empty GoalID")
 	}
@@ -1354,20 +1525,14 @@ func TestGoalId_StableAcrossLifecycle_NewGenerationAfterClear(t *testing.T) {
 	if !matched || handled {
 		t.Fatalf("restate: matched=%v handled=%v, want matched=true handled=false", matched, handled)
 	}
-	metaAmended, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
+	metaAmended := goalRecordForSession(t, sid)
 	if metaAmended.GoalID != firstID {
 		t.Fatalf("restate must keep the same goal-id, got %q want %q", metaAmended.GoalID, firstID)
 	}
 
 	// An ordinary (non-claim) worker turn re-emits the SAME goal-id.
 	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, &turnResult{finalContent: "still working"})
-	metaAfterTurn, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
+	metaAfterTurn := goalRecordForSession(t, sid)
 	if metaAfterTurn.GoalID != firstID {
 		t.Fatalf("an ordinary turn must not change the goal-id, got %q want %q", metaAfterTurn.GoalID, firstID)
 	}
@@ -1377,10 +1542,7 @@ func TestGoalId_StableAcrossLifecycle_NewGenerationAfterClear(t *testing.T) {
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal condition B", UserInitiated: true}, agentInst, &opts)
 	activatePendingGoal(t, al, agentInst, &opts)
-	meta2, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
+	meta2 := goalRecordForSession(t, sid)
 	if meta2.GoalID == "" {
 		t.Fatal("the second goal must also carry a non-empty GoalID")
 	}
@@ -1445,39 +1607,52 @@ func TestGoalBudgets_ResetAcrossGenerations(t *testing.T) {
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal goal A prose intent", UserInitiated: true}, agentInst, &opts)
 	activatePendingGoal(t, al, agentInst, &opts)
-	metaA, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
+	metaA := goalRecordForSession(t, sid)
 	if metaA.GoalID == "" {
 		t.Fatal("setup: goal A must be active")
 	}
-	if metaA.GoalQuestionRoundsUsed != 0 || metaA.GoalZeroOutputPushes != 0 {
+	if metaA.QuestionRoundsUsed != 0 || metaA.ZeroOutputPushes != 0 {
 		t.Fatalf("setup: a freshly-activated goal must start with both budgets at 0, got question=%d pushes=%d",
-			metaA.GoalQuestionRoundsUsed, metaA.GoalZeroOutputPushes)
+			metaA.QuestionRoundsUsed, metaA.ZeroOutputPushes)
 	}
 
 	// Spend both budgets on goal A — simulating a question round taken
-	// (FR-010) and the zero-output push streak exhausted (FR-014b).
-	spent := 1
-	maxed := goalZeroOutputPushMax
-	if setMetaErr := store.SetMeta(sid, session.MetaPatch{
-		GoalQuestionRoundsUsed: &spent,
-		GoalZeroOutputPushes:   &maxed,
-	}); setMetaErr != nil {
-		t.Fatal(setMetaErr)
+	// (FR-010) and the zero-output push streak exhausted (FR-014b). ADR-086
+	// GOAL-FR-004 relocated both counters off session meta onto the goal's
+	// OWN record, so they are spent there.
+	if _, uerr := goal.NewStore(config.OmnipusHomeDir()).Update(metaA.GoalID, func(cur *goal.Goal) error {
+		cur.QuestionRoundsUsed = 1
+		cur.ZeroOutputPushes = goalZeroOutputPushMax
+		return nil
+	}); uerr != nil {
+		t.Fatal(uerr)
 	}
 
 	// --- Clear goal A. ---
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal clear", UserInitiated: true}, agentInst, &opts)
-	metaCleared, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
+
+	// ADR-086 re-point of this checkpoint. Pre-ADR-086 the budgets were
+	// SESSION-scoped, so the only way goal B could avoid inheriting goal A's
+	// spend was for clearGoal to zero them on the session — which is what
+	// this block used to assert. Under GOAL-FR-027/FR-028 a clear is a
+	// STATUS TRANSITION on a RETAINED record, explicitly "never an erasure":
+	// goal A keeps its spent counters forever, and a zeroing assertion here
+	// would now assert the exact opposite of the ADR. The invariant that
+	// replaced it — and the one that actually protects goal B — is that the
+	// counters are PER-RECORD, so assert both halves: A is terminal and has
+	// RETAINED its spend (non-erasure), and no goal is active any more.
+	if goalRecordForSessionOrNil(sid) != nil {
+		t.Fatal("clear: no goal may remain ACTIVE on this session after /goal clear")
 	}
-	if metaCleared.GoalQuestionRoundsUsed != 0 || metaCleared.GoalZeroOutputPushes != 0 {
-		t.Fatalf("clearGoal must zero both budgets: question=%d pushes=%d",
-			metaCleared.GoalQuestionRoundsUsed, metaCleared.GoalZeroOutputPushes)
+	clearedA := mustGoalRecord(t, metaA.GoalID)
+	if clearedA.State != generated.GoalStateCleared {
+		t.Fatalf("goal A state after /goal clear = %q, want %q", clearedA.State, generated.GoalStateCleared)
+	}
+	if clearedA.QuestionRoundsUsed != 1 || clearedA.ZeroOutputPushes != goalZeroOutputPushMax {
+		t.Fatalf("GOAL-FR-027 non-erasure: a terminated record must RETAIN its spent budgets, "+
+			"got question=%d pushes=%d, want question=1 pushes=%d",
+			clearedA.QuestionRoundsUsed, clearedA.ZeroOutputPushes, goalZeroOutputPushMax)
 	}
 
 	// --- Goal B: a brand new activation on the SAME session must have the
@@ -1485,20 +1660,17 @@ func TestGoalBudgets_ResetAcrossGenerations(t *testing.T) {
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal goal B prose intent", UserInitiated: true}, agentInst, &opts)
 	activatePendingGoal(t, al, agentInst, &opts)
-	metaB, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
+	metaB := goalRecordForSession(t, sid)
 	if metaB.GoalID == "" || metaB.GoalID == metaA.GoalID {
 		t.Fatalf("goal B must be a fresh generation (new GoalID), got %q (goal A was %q)", metaB.GoalID, metaA.GoalID)
 	}
-	if metaB.GoalQuestionRoundsUsed != 0 {
-		t.Fatalf("goal B: GoalQuestionRoundsUsed = %d, want 0 — the ask door must be fresh, not inherited from goal A",
-			metaB.GoalQuestionRoundsUsed)
+	if metaB.QuestionRoundsUsed != 0 {
+		t.Fatalf("goal B: QuestionRoundsUsed = %d, want 0 — the ask door must be fresh, not inherited from goal A",
+			metaB.QuestionRoundsUsed)
 	}
-	if metaB.GoalZeroOutputPushes != 0 {
-		t.Fatalf("goal B: GoalZeroOutputPushes = %d, want 0 — fresh push budget, not inherited from goal A",
-			metaB.GoalZeroOutputPushes)
+	if metaB.ZeroOutputPushes != 0 {
+		t.Fatalf("goal B: ZeroOutputPushes = %d, want 0 — fresh push budget, not inherited from goal A",
+			metaB.ZeroOutputPushes)
 	}
 }
 

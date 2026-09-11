@@ -1430,6 +1430,63 @@ func (e ContextWindowSource) Valid() bool {
 	}
 }
 
+// Defines values for CriterionVerdictEvidenceSource.
+const (
+	CriterionVerdictEvidenceSourceDiff         CriterionVerdictEvidenceSource = "diff"
+	CriterionVerdictEvidenceSourceFileRead     CriterionVerdictEvidenceSource = "file_read"
+	CriterionVerdictEvidenceSourceMachineCheck CriterionVerdictEvidenceSource = "machine_check"
+	CriterionVerdictEvidenceSourceSessionRead  CriterionVerdictEvidenceSource = "session_read"
+	CriterionVerdictEvidenceSourceTranscript   CriterionVerdictEvidenceSource = "transcript"
+)
+
+// Valid indicates whether the value is a known member of the CriterionVerdictEvidenceSource enum.
+func (e CriterionVerdictEvidenceSource) Valid() bool {
+	switch e {
+	case CriterionVerdictEvidenceSourceDiff:
+		return true
+	case CriterionVerdictEvidenceSourceFileRead:
+		return true
+	case CriterionVerdictEvidenceSourceMachineCheck:
+		return true
+	case CriterionVerdictEvidenceSourceSessionRead:
+		return true
+	case CriterionVerdictEvidenceSourceTranscript:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CriterionVerdictProvenance.
+const (
+	CriterionVerdictProvenanceDeterministicCheck CriterionVerdictProvenance = "deterministic_check"
+	CriterionVerdictProvenanceDiff               CriterionVerdictProvenance = "diff"
+	CriterionVerdictProvenanceJudgeRead          CriterionVerdictProvenance = "judge_read"
+	CriterionVerdictProvenanceNone               CriterionVerdictProvenance = "none"
+	CriterionVerdictProvenanceSessionRead        CriterionVerdictProvenance = "session_read"
+	CriterionVerdictProvenanceTranscript         CriterionVerdictProvenance = "transcript"
+)
+
+// Valid indicates whether the value is a known member of the CriterionVerdictProvenance enum.
+func (e CriterionVerdictProvenance) Valid() bool {
+	switch e {
+	case CriterionVerdictProvenanceDeterministicCheck:
+		return true
+	case CriterionVerdictProvenanceDiff:
+		return true
+	case CriterionVerdictProvenanceJudgeRead:
+		return true
+	case CriterionVerdictProvenanceNone:
+		return true
+	case CriterionVerdictProvenanceSessionRead:
+		return true
+	case CriterionVerdictProvenanceTranscript:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DefaultModelWindowSource.
 const (
 	DefaultModelWindowSourceCatalog  DefaultModelWindowSource = "catalog"
@@ -1964,27 +2021,6 @@ func (e GlobalToolPoliciesPolicies) Valid() bool {
 	}
 }
 
-// Defines values for GoalBindingKind.
-const (
-	GoalBindingKindPlan    GoalBindingKind = "plan"
-	GoalBindingKindSession GoalBindingKind = "session"
-	GoalBindingKindTask    GoalBindingKind = "task"
-)
-
-// Valid indicates whether the value is a known member of the GoalBindingKind enum.
-func (e GoalBindingKind) Valid() bool {
-	switch e {
-	case GoalBindingKindPlan:
-		return true
-	case GoalBindingKindSession:
-		return true
-	case GoalBindingKindTask:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for GoalCriteriaAuthorKind.
 const (
 	GoalCriteriaAuthorKindAgent GoalCriteriaAuthorKind = "agent"
@@ -2231,6 +2267,123 @@ func (e GoalDodStatus) Valid() bool {
 	}
 }
 
+// Defines values for GoalLatestClaimStatus.
+const (
+	GoalLatestClaimStatusBlocked       GoalLatestClaimStatus = "blocked"
+	GoalLatestClaimStatusMet           GoalLatestClaimStatus = "met"
+	GoalLatestClaimStatusWaitingOnUser GoalLatestClaimStatus = "waiting_on_user"
+)
+
+// Valid indicates whether the value is a known member of the GoalLatestClaimStatus enum.
+func (e GoalLatestClaimStatus) Valid() bool {
+	switch e {
+	case GoalLatestClaimStatusBlocked:
+		return true
+	case GoalLatestClaimStatusMet:
+		return true
+	case GoalLatestClaimStatusWaitingOnUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalLatestVerdictPerCriterionEvidenceSource.
+const (
+	GoalLatestVerdictPerCriterionEvidenceSourceDiff         GoalLatestVerdictPerCriterionEvidenceSource = "diff"
+	GoalLatestVerdictPerCriterionEvidenceSourceFileRead     GoalLatestVerdictPerCriterionEvidenceSource = "file_read"
+	GoalLatestVerdictPerCriterionEvidenceSourceMachineCheck GoalLatestVerdictPerCriterionEvidenceSource = "machine_check"
+	GoalLatestVerdictPerCriterionEvidenceSourceSessionRead  GoalLatestVerdictPerCriterionEvidenceSource = "session_read"
+	GoalLatestVerdictPerCriterionEvidenceSourceTranscript   GoalLatestVerdictPerCriterionEvidenceSource = "transcript"
+)
+
+// Valid indicates whether the value is a known member of the GoalLatestVerdictPerCriterionEvidenceSource enum.
+func (e GoalLatestVerdictPerCriterionEvidenceSource) Valid() bool {
+	switch e {
+	case GoalLatestVerdictPerCriterionEvidenceSourceDiff:
+		return true
+	case GoalLatestVerdictPerCriterionEvidenceSourceFileRead:
+		return true
+	case GoalLatestVerdictPerCriterionEvidenceSourceMachineCheck:
+		return true
+	case GoalLatestVerdictPerCriterionEvidenceSourceSessionRead:
+		return true
+	case GoalLatestVerdictPerCriterionEvidenceSourceTranscript:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalLatestVerdictPerCriterionProvenance.
+const (
+	GoalLatestVerdictPerCriterionProvenanceDeterministicCheck GoalLatestVerdictPerCriterionProvenance = "deterministic_check"
+	GoalLatestVerdictPerCriterionProvenanceDiff               GoalLatestVerdictPerCriterionProvenance = "diff"
+	GoalLatestVerdictPerCriterionProvenanceJudgeRead          GoalLatestVerdictPerCriterionProvenance = "judge_read"
+	GoalLatestVerdictPerCriterionProvenanceNone               GoalLatestVerdictPerCriterionProvenance = "none"
+	GoalLatestVerdictPerCriterionProvenanceSessionRead        GoalLatestVerdictPerCriterionProvenance = "session_read"
+	GoalLatestVerdictPerCriterionProvenanceTranscript         GoalLatestVerdictPerCriterionProvenance = "transcript"
+)
+
+// Valid indicates whether the value is a known member of the GoalLatestVerdictPerCriterionProvenance enum.
+func (e GoalLatestVerdictPerCriterionProvenance) Valid() bool {
+	switch e {
+	case GoalLatestVerdictPerCriterionProvenanceDeterministicCheck:
+		return true
+	case GoalLatestVerdictPerCriterionProvenanceDiff:
+		return true
+	case GoalLatestVerdictPerCriterionProvenanceJudgeRead:
+		return true
+	case GoalLatestVerdictPerCriterionProvenanceNone:
+		return true
+	case GoalLatestVerdictPerCriterionProvenanceSessionRead:
+		return true
+	case GoalLatestVerdictPerCriterionProvenanceTranscript:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalLatestVerdictScope.
+const (
+	GoalLatestVerdictScopeGoal GoalLatestVerdictScope = "goal"
+	GoalLatestVerdictScopePlan GoalLatestVerdictScope = "plan"
+	GoalLatestVerdictScopeTask GoalLatestVerdictScope = "task"
+)
+
+// Valid indicates whether the value is a known member of the GoalLatestVerdictScope enum.
+func (e GoalLatestVerdictScope) Valid() bool {
+	switch e {
+	case GoalLatestVerdictScopeGoal:
+		return true
+	case GoalLatestVerdictScopePlan:
+		return true
+	case GoalLatestVerdictScopeTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalOwnerKind.
+const (
+	GoalOwnerKindSession GoalOwnerKind = "session"
+	GoalOwnerKindTask    GoalOwnerKind = "task"
+)
+
+// Valid indicates whether the value is a known member of the GoalOwnerKind enum.
+func (e GoalOwnerKind) Valid() bool {
+	switch e {
+	case GoalOwnerKindSession:
+		return true
+	case GoalOwnerKindTask:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for GoalSource.
 const (
 	ChatCompiled GoalSource = "chat_compiled"
@@ -2254,10 +2407,12 @@ func (e GoalSource) Valid() bool {
 
 // Defines values for GoalState.
 const (
-	GoalStateActive  GoalState = "active"
-	GoalStateCleared GoalState = "cleared"
-	GoalStateDone    GoalState = "done"
-	GoalStateFailed  GoalState = "failed"
+	GoalStateActive    GoalState = "active"
+	GoalStateCleared   GoalState = "cleared"
+	GoalStateDefining  GoalState = "defining"
+	GoalStateExhausted GoalState = "exhausted"
+	GoalStateExpired   GoalState = "expired"
+	GoalStateMet       GoalState = "met"
 )
 
 // Valid indicates whether the value is a known member of the GoalState enum.
@@ -2267,9 +2422,361 @@ func (e GoalState) Valid() bool {
 		return true
 	case GoalStateCleared:
 		return true
-	case GoalStateDone:
+	case GoalStateDefining:
 		return true
-	case GoalStateFailed:
+	case GoalStateExhausted:
+		return true
+	case GoalStateExpired:
+		return true
+	case GoalStateMet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalSupersededCriteriaCriteriaAuthorKind.
+const (
+	GoalSupersededCriteriaCriteriaAuthorKindAgent GoalSupersededCriteriaCriteriaAuthorKind = "agent"
+	GoalSupersededCriteriaCriteriaAuthorKindUser  GoalSupersededCriteriaCriteriaAuthorKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the GoalSupersededCriteriaCriteriaAuthorKind enum.
+func (e GoalSupersededCriteriaCriteriaAuthorKind) Valid() bool {
+	switch e {
+	case GoalSupersededCriteriaCriteriaAuthorKindAgent:
+		return true
+	case GoalSupersededCriteriaCriteriaAuthorKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalSupersededCriteriaCriteriaBehaviorScope.
+const (
+	GoalSupersededCriteriaCriteriaBehaviorScopeAttempt     GoalSupersededCriteriaCriteriaBehaviorScope = "attempt"
+	GoalSupersededCriteriaCriteriaBehaviorScopeTaskSession GoalSupersededCriteriaCriteriaBehaviorScope = "task_session"
+)
+
+// Valid indicates whether the value is a known member of the GoalSupersededCriteriaCriteriaBehaviorScope enum.
+func (e GoalSupersededCriteriaCriteriaBehaviorScope) Valid() bool {
+	switch e {
+	case GoalSupersededCriteriaCriteriaBehaviorScopeAttempt:
+		return true
+	case GoalSupersededCriteriaCriteriaBehaviorScopeTaskSession:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalSupersededCriteriaCriteriaJudgment.
+const (
+	GoalSupersededCriteriaCriteriaJudgmentArtifact     GoalSupersededCriteriaCriteriaJudgment = "artifact"
+	GoalSupersededCriteriaCriteriaJudgmentBoolean      GoalSupersededCriteriaCriteriaJudgment = "boolean"
+	GoalSupersededCriteriaCriteriaJudgmentQuantitative GoalSupersededCriteriaCriteriaJudgment = "quantitative"
+)
+
+// Valid indicates whether the value is a known member of the GoalSupersededCriteriaCriteriaJudgment enum.
+func (e GoalSupersededCriteriaCriteriaJudgment) Valid() bool {
+	switch e {
+	case GoalSupersededCriteriaCriteriaJudgmentArtifact:
+		return true
+	case GoalSupersededCriteriaCriteriaJudgmentBoolean:
+		return true
+	case GoalSupersededCriteriaCriteriaJudgmentQuantitative:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalSupersededCriteriaCriteriaKind.
+const (
+	GoalSupersededCriteriaCriteriaKindBehavior GoalSupersededCriteriaCriteriaKind = "behavior"
+	GoalSupersededCriteriaCriteriaKindCheck    GoalSupersededCriteriaCriteriaKind = "check"
+	GoalSupersededCriteriaCriteriaKindProse    GoalSupersededCriteriaCriteriaKind = "prose"
+)
+
+// Valid indicates whether the value is a known member of the GoalSupersededCriteriaCriteriaKind enum.
+func (e GoalSupersededCriteriaCriteriaKind) Valid() bool {
+	switch e {
+	case GoalSupersededCriteriaCriteriaKindBehavior:
+		return true
+	case GoalSupersededCriteriaCriteriaKindCheck:
+		return true
+	case GoalSupersededCriteriaCriteriaKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalSupersededCriteriaCriteriaProvenance.
+const (
+	GoalSupersededCriteriaCriteriaProvenanceFloor     GoalSupersededCriteriaCriteriaProvenance = "floor"
+	GoalSupersededCriteriaCriteriaProvenanceInferred  GoalSupersededCriteriaCriteriaProvenance = "inferred"
+	GoalSupersededCriteriaCriteriaProvenanceStated    GoalSupersededCriteriaCriteriaProvenance = "stated"
+	GoalSupersededCriteriaCriteriaProvenanceWorkspace GoalSupersededCriteriaCriteriaProvenance = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the GoalSupersededCriteriaCriteriaProvenance enum.
+func (e GoalSupersededCriteriaCriteriaProvenance) Valid() bool {
+	switch e {
+	case GoalSupersededCriteriaCriteriaProvenanceFloor:
+		return true
+	case GoalSupersededCriteriaCriteriaProvenanceInferred:
+		return true
+	case GoalSupersededCriteriaCriteriaProvenanceStated:
+		return true
+	case GoalSupersededCriteriaCriteriaProvenanceWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalSupersededCriteriaCriteriaStatus.
+const (
+	GoalSupersededCriteriaCriteriaStatusMet     GoalSupersededCriteriaCriteriaStatus = "met"
+	GoalSupersededCriteriaCriteriaStatusPending GoalSupersededCriteriaCriteriaStatus = "pending"
+	GoalSupersededCriteriaCriteriaStatusUnmet   GoalSupersededCriteriaCriteriaStatus = "unmet"
+)
+
+// Valid indicates whether the value is a known member of the GoalSupersededCriteriaCriteriaStatus enum.
+func (e GoalSupersededCriteriaCriteriaStatus) Valid() bool {
+	switch e {
+	case GoalSupersededCriteriaCriteriaStatusMet:
+		return true
+	case GoalSupersededCriteriaCriteriaStatusPending:
+		return true
+	case GoalSupersededCriteriaCriteriaStatusUnmet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalSupersededCriteriaDodAuthorKind.
+const (
+	GoalSupersededCriteriaDodAuthorKindAgent GoalSupersededCriteriaDodAuthorKind = "agent"
+	GoalSupersededCriteriaDodAuthorKindUser  GoalSupersededCriteriaDodAuthorKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the GoalSupersededCriteriaDodAuthorKind enum.
+func (e GoalSupersededCriteriaDodAuthorKind) Valid() bool {
+	switch e {
+	case GoalSupersededCriteriaDodAuthorKindAgent:
+		return true
+	case GoalSupersededCriteriaDodAuthorKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalSupersededCriteriaDodBehaviorScope.
+const (
+	GoalSupersededCriteriaDodBehaviorScopeAttempt     GoalSupersededCriteriaDodBehaviorScope = "attempt"
+	GoalSupersededCriteriaDodBehaviorScopeTaskSession GoalSupersededCriteriaDodBehaviorScope = "task_session"
+)
+
+// Valid indicates whether the value is a known member of the GoalSupersededCriteriaDodBehaviorScope enum.
+func (e GoalSupersededCriteriaDodBehaviorScope) Valid() bool {
+	switch e {
+	case GoalSupersededCriteriaDodBehaviorScopeAttempt:
+		return true
+	case GoalSupersededCriteriaDodBehaviorScopeTaskSession:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalSupersededCriteriaDodJudgment.
+const (
+	GoalSupersededCriteriaDodJudgmentArtifact     GoalSupersededCriteriaDodJudgment = "artifact"
+	GoalSupersededCriteriaDodJudgmentBoolean      GoalSupersededCriteriaDodJudgment = "boolean"
+	GoalSupersededCriteriaDodJudgmentQuantitative GoalSupersededCriteriaDodJudgment = "quantitative"
+)
+
+// Valid indicates whether the value is a known member of the GoalSupersededCriteriaDodJudgment enum.
+func (e GoalSupersededCriteriaDodJudgment) Valid() bool {
+	switch e {
+	case GoalSupersededCriteriaDodJudgmentArtifact:
+		return true
+	case GoalSupersededCriteriaDodJudgmentBoolean:
+		return true
+	case GoalSupersededCriteriaDodJudgmentQuantitative:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalSupersededCriteriaDodKind.
+const (
+	GoalSupersededCriteriaDodKindBehavior GoalSupersededCriteriaDodKind = "behavior"
+	GoalSupersededCriteriaDodKindCheck    GoalSupersededCriteriaDodKind = "check"
+	GoalSupersededCriteriaDodKindProse    GoalSupersededCriteriaDodKind = "prose"
+)
+
+// Valid indicates whether the value is a known member of the GoalSupersededCriteriaDodKind enum.
+func (e GoalSupersededCriteriaDodKind) Valid() bool {
+	switch e {
+	case GoalSupersededCriteriaDodKindBehavior:
+		return true
+	case GoalSupersededCriteriaDodKindCheck:
+		return true
+	case GoalSupersededCriteriaDodKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalSupersededCriteriaDodProvenance.
+const (
+	GoalSupersededCriteriaDodProvenanceFloor     GoalSupersededCriteriaDodProvenance = "floor"
+	GoalSupersededCriteriaDodProvenanceInferred  GoalSupersededCriteriaDodProvenance = "inferred"
+	GoalSupersededCriteriaDodProvenanceStated    GoalSupersededCriteriaDodProvenance = "stated"
+	GoalSupersededCriteriaDodProvenanceWorkspace GoalSupersededCriteriaDodProvenance = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the GoalSupersededCriteriaDodProvenance enum.
+func (e GoalSupersededCriteriaDodProvenance) Valid() bool {
+	switch e {
+	case GoalSupersededCriteriaDodProvenanceFloor:
+		return true
+	case GoalSupersededCriteriaDodProvenanceInferred:
+		return true
+	case GoalSupersededCriteriaDodProvenanceStated:
+		return true
+	case GoalSupersededCriteriaDodProvenanceWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalSupersededCriteriaDodStatus.
+const (
+	GoalSupersededCriteriaDodStatusMet     GoalSupersededCriteriaDodStatus = "met"
+	GoalSupersededCriteriaDodStatusPending GoalSupersededCriteriaDodStatus = "pending"
+	GoalSupersededCriteriaDodStatusUnmet   GoalSupersededCriteriaDodStatus = "unmet"
+)
+
+// Valid indicates whether the value is a known member of the GoalSupersededCriteriaDodStatus enum.
+func (e GoalSupersededCriteriaDodStatus) Valid() bool {
+	switch e {
+	case GoalSupersededCriteriaDodStatusMet:
+		return true
+	case GoalSupersededCriteriaDodStatusPending:
+		return true
+	case GoalSupersededCriteriaDodStatusUnmet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalTerminalHistoryState.
+const (
+	GoalTerminalHistoryStateCleared   GoalTerminalHistoryState = "cleared"
+	GoalTerminalHistoryStateExhausted GoalTerminalHistoryState = "exhausted"
+	GoalTerminalHistoryStateExpired   GoalTerminalHistoryState = "expired"
+	GoalTerminalHistoryStateMet       GoalTerminalHistoryState = "met"
+)
+
+// Valid indicates whether the value is a known member of the GoalTerminalHistoryState enum.
+func (e GoalTerminalHistoryState) Valid() bool {
+	switch e {
+	case GoalTerminalHistoryStateCleared:
+		return true
+	case GoalTerminalHistoryStateExhausted:
+		return true
+	case GoalTerminalHistoryStateExpired:
+		return true
+	case GoalTerminalHistoryStateMet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalTerminalHistoryVerdictPerCriterionEvidenceSource.
+const (
+	GoalTerminalHistoryVerdictPerCriterionEvidenceSourceDiff         GoalTerminalHistoryVerdictPerCriterionEvidenceSource = "diff"
+	GoalTerminalHistoryVerdictPerCriterionEvidenceSourceFileRead     GoalTerminalHistoryVerdictPerCriterionEvidenceSource = "file_read"
+	GoalTerminalHistoryVerdictPerCriterionEvidenceSourceMachineCheck GoalTerminalHistoryVerdictPerCriterionEvidenceSource = "machine_check"
+	GoalTerminalHistoryVerdictPerCriterionEvidenceSourceSessionRead  GoalTerminalHistoryVerdictPerCriterionEvidenceSource = "session_read"
+	GoalTerminalHistoryVerdictPerCriterionEvidenceSourceTranscript   GoalTerminalHistoryVerdictPerCriterionEvidenceSource = "transcript"
+)
+
+// Valid indicates whether the value is a known member of the GoalTerminalHistoryVerdictPerCriterionEvidenceSource enum.
+func (e GoalTerminalHistoryVerdictPerCriterionEvidenceSource) Valid() bool {
+	switch e {
+	case GoalTerminalHistoryVerdictPerCriterionEvidenceSourceDiff:
+		return true
+	case GoalTerminalHistoryVerdictPerCriterionEvidenceSourceFileRead:
+		return true
+	case GoalTerminalHistoryVerdictPerCriterionEvidenceSourceMachineCheck:
+		return true
+	case GoalTerminalHistoryVerdictPerCriterionEvidenceSourceSessionRead:
+		return true
+	case GoalTerminalHistoryVerdictPerCriterionEvidenceSourceTranscript:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalTerminalHistoryVerdictPerCriterionProvenance.
+const (
+	GoalTerminalHistoryVerdictPerCriterionProvenanceDeterministicCheck GoalTerminalHistoryVerdictPerCriterionProvenance = "deterministic_check"
+	GoalTerminalHistoryVerdictPerCriterionProvenanceDiff               GoalTerminalHistoryVerdictPerCriterionProvenance = "diff"
+	GoalTerminalHistoryVerdictPerCriterionProvenanceJudgeRead          GoalTerminalHistoryVerdictPerCriterionProvenance = "judge_read"
+	GoalTerminalHistoryVerdictPerCriterionProvenanceNone               GoalTerminalHistoryVerdictPerCriterionProvenance = "none"
+	GoalTerminalHistoryVerdictPerCriterionProvenanceSessionRead        GoalTerminalHistoryVerdictPerCriterionProvenance = "session_read"
+	GoalTerminalHistoryVerdictPerCriterionProvenanceTranscript         GoalTerminalHistoryVerdictPerCriterionProvenance = "transcript"
+)
+
+// Valid indicates whether the value is a known member of the GoalTerminalHistoryVerdictPerCriterionProvenance enum.
+func (e GoalTerminalHistoryVerdictPerCriterionProvenance) Valid() bool {
+	switch e {
+	case GoalTerminalHistoryVerdictPerCriterionProvenanceDeterministicCheck:
+		return true
+	case GoalTerminalHistoryVerdictPerCriterionProvenanceDiff:
+		return true
+	case GoalTerminalHistoryVerdictPerCriterionProvenanceJudgeRead:
+		return true
+	case GoalTerminalHistoryVerdictPerCriterionProvenanceNone:
+		return true
+	case GoalTerminalHistoryVerdictPerCriterionProvenanceSessionRead:
+		return true
+	case GoalTerminalHistoryVerdictPerCriterionProvenanceTranscript:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoalTerminalHistoryVerdictScope.
+const (
+	GoalTerminalHistoryVerdictScopeGoal GoalTerminalHistoryVerdictScope = "goal"
+	GoalTerminalHistoryVerdictScopePlan GoalTerminalHistoryVerdictScope = "plan"
+	GoalTerminalHistoryVerdictScopeTask GoalTerminalHistoryVerdictScope = "task"
+)
+
+// Valid indicates whether the value is a known member of the GoalTerminalHistoryVerdictScope enum.
+func (e GoalTerminalHistoryVerdictScope) Valid() bool {
+	switch e {
+	case GoalTerminalHistoryVerdictScopeGoal:
+		return true
+	case GoalTerminalHistoryVerdictScopePlan:
+		return true
+	case GoalTerminalHistoryVerdictScopeTask:
 		return true
 	default:
 		return false
@@ -2345,6 +2852,63 @@ func (e IntegrationProviderUpdateRequestKind) Valid() bool {
 	case IntegrationProviderUpdateRequestKindSearch:
 		return true
 	case IntegrationProviderUpdateRequestKindVoice:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for JudgeVerdictPerCriterionEvidenceSource.
+const (
+	JudgeVerdictPerCriterionEvidenceSourceDiff         JudgeVerdictPerCriterionEvidenceSource = "diff"
+	JudgeVerdictPerCriterionEvidenceSourceFileRead     JudgeVerdictPerCriterionEvidenceSource = "file_read"
+	JudgeVerdictPerCriterionEvidenceSourceMachineCheck JudgeVerdictPerCriterionEvidenceSource = "machine_check"
+	JudgeVerdictPerCriterionEvidenceSourceSessionRead  JudgeVerdictPerCriterionEvidenceSource = "session_read"
+	JudgeVerdictPerCriterionEvidenceSourceTranscript   JudgeVerdictPerCriterionEvidenceSource = "transcript"
+)
+
+// Valid indicates whether the value is a known member of the JudgeVerdictPerCriterionEvidenceSource enum.
+func (e JudgeVerdictPerCriterionEvidenceSource) Valid() bool {
+	switch e {
+	case JudgeVerdictPerCriterionEvidenceSourceDiff:
+		return true
+	case JudgeVerdictPerCriterionEvidenceSourceFileRead:
+		return true
+	case JudgeVerdictPerCriterionEvidenceSourceMachineCheck:
+		return true
+	case JudgeVerdictPerCriterionEvidenceSourceSessionRead:
+		return true
+	case JudgeVerdictPerCriterionEvidenceSourceTranscript:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for JudgeVerdictPerCriterionProvenance.
+const (
+	JudgeVerdictPerCriterionProvenanceDeterministicCheck JudgeVerdictPerCriterionProvenance = "deterministic_check"
+	JudgeVerdictPerCriterionProvenanceDiff               JudgeVerdictPerCriterionProvenance = "diff"
+	JudgeVerdictPerCriterionProvenanceJudgeRead          JudgeVerdictPerCriterionProvenance = "judge_read"
+	JudgeVerdictPerCriterionProvenanceNone               JudgeVerdictPerCriterionProvenance = "none"
+	JudgeVerdictPerCriterionProvenanceSessionRead        JudgeVerdictPerCriterionProvenance = "session_read"
+	JudgeVerdictPerCriterionProvenanceTranscript         JudgeVerdictPerCriterionProvenance = "transcript"
+)
+
+// Valid indicates whether the value is a known member of the JudgeVerdictPerCriterionProvenance enum.
+func (e JudgeVerdictPerCriterionProvenance) Valid() bool {
+	switch e {
+	case JudgeVerdictPerCriterionProvenanceDeterministicCheck:
+		return true
+	case JudgeVerdictPerCriterionProvenanceDiff:
+		return true
+	case JudgeVerdictPerCriterionProvenanceJudgeRead:
+		return true
+	case JudgeVerdictPerCriterionProvenanceNone:
+		return true
+	case JudgeVerdictPerCriterionProvenanceSessionRead:
+		return true
+	case JudgeVerdictPerCriterionProvenanceTranscript:
 		return true
 	default:
 		return false
@@ -2555,6 +3119,21 @@ func (e MessageStatus) Valid() bool {
 	}
 }
 
+// Defines values for MessageSystemSubtype.
+const (
+	MessageSystemSubtypeBrowserHandoverNotice MessageSystemSubtype = "browser_handover_notice"
+)
+
+// Valid indicates whether the value is a known member of the MessageSystemSubtype enum.
+func (e MessageSystemSubtype) Valid() bool {
+	switch e {
+	case MessageSystemSubtypeBrowserHandoverNotice:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MessageToolCallsContentState.
 const (
 	MessageToolCallsContentStateCapped  MessageToolCallsContentState = "capped"
@@ -2636,6 +3215,63 @@ func (e MessageType) Valid() bool {
 	case MessageTypeToolCall:
 		return true
 	case MessageTypeTurnCanceled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageVerdictPerCriterionEvidenceSource.
+const (
+	MessageVerdictPerCriterionEvidenceSourceDiff         MessageVerdictPerCriterionEvidenceSource = "diff"
+	MessageVerdictPerCriterionEvidenceSourceFileRead     MessageVerdictPerCriterionEvidenceSource = "file_read"
+	MessageVerdictPerCriterionEvidenceSourceMachineCheck MessageVerdictPerCriterionEvidenceSource = "machine_check"
+	MessageVerdictPerCriterionEvidenceSourceSessionRead  MessageVerdictPerCriterionEvidenceSource = "session_read"
+	MessageVerdictPerCriterionEvidenceSourceTranscript   MessageVerdictPerCriterionEvidenceSource = "transcript"
+)
+
+// Valid indicates whether the value is a known member of the MessageVerdictPerCriterionEvidenceSource enum.
+func (e MessageVerdictPerCriterionEvidenceSource) Valid() bool {
+	switch e {
+	case MessageVerdictPerCriterionEvidenceSourceDiff:
+		return true
+	case MessageVerdictPerCriterionEvidenceSourceFileRead:
+		return true
+	case MessageVerdictPerCriterionEvidenceSourceMachineCheck:
+		return true
+	case MessageVerdictPerCriterionEvidenceSourceSessionRead:
+		return true
+	case MessageVerdictPerCriterionEvidenceSourceTranscript:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageVerdictPerCriterionProvenance.
+const (
+	MessageVerdictPerCriterionProvenanceDeterministicCheck MessageVerdictPerCriterionProvenance = "deterministic_check"
+	MessageVerdictPerCriterionProvenanceDiff               MessageVerdictPerCriterionProvenance = "diff"
+	MessageVerdictPerCriterionProvenanceJudgeRead          MessageVerdictPerCriterionProvenance = "judge_read"
+	MessageVerdictPerCriterionProvenanceNone               MessageVerdictPerCriterionProvenance = "none"
+	MessageVerdictPerCriterionProvenanceSessionRead        MessageVerdictPerCriterionProvenance = "session_read"
+	MessageVerdictPerCriterionProvenanceTranscript         MessageVerdictPerCriterionProvenance = "transcript"
+)
+
+// Valid indicates whether the value is a known member of the MessageVerdictPerCriterionProvenance enum.
+func (e MessageVerdictPerCriterionProvenance) Valid() bool {
+	switch e {
+	case MessageVerdictPerCriterionProvenanceDeterministicCheck:
+		return true
+	case MessageVerdictPerCriterionProvenanceDiff:
+		return true
+	case MessageVerdictPerCriterionProvenanceJudgeRead:
+		return true
+	case MessageVerdictPerCriterionProvenanceNone:
+		return true
+	case MessageVerdictPerCriterionProvenanceSessionRead:
+		return true
+	case MessageVerdictPerCriterionProvenanceTranscript:
 		return true
 	default:
 		return false
@@ -5066,6 +5702,21 @@ func (e SessionDetailMessagesStatus) Valid() bool {
 	}
 }
 
+// Defines values for SessionDetailMessagesSystemSubtype.
+const (
+	SessionDetailMessagesSystemSubtypeBrowserHandoverNotice SessionDetailMessagesSystemSubtype = "browser_handover_notice"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesSystemSubtype enum.
+func (e SessionDetailMessagesSystemSubtype) Valid() bool {
+	switch e {
+	case SessionDetailMessagesSystemSubtypeBrowserHandoverNotice:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SessionDetailMessagesToolCallsContentState.
 const (
 	SessionDetailMessagesToolCallsContentStateCapped  SessionDetailMessagesToolCallsContentState = "capped"
@@ -5147,6 +5798,63 @@ func (e SessionDetailMessagesType) Valid() bool {
 	case SessionDetailMessagesTypeToolCall:
 		return true
 	case SessionDetailMessagesTypeTurnCanceled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesVerdictPerCriterionEvidenceSource.
+const (
+	SessionDetailMessagesVerdictPerCriterionEvidenceSourceDiff         SessionDetailMessagesVerdictPerCriterionEvidenceSource = "diff"
+	SessionDetailMessagesVerdictPerCriterionEvidenceSourceFileRead     SessionDetailMessagesVerdictPerCriterionEvidenceSource = "file_read"
+	SessionDetailMessagesVerdictPerCriterionEvidenceSourceMachineCheck SessionDetailMessagesVerdictPerCriterionEvidenceSource = "machine_check"
+	SessionDetailMessagesVerdictPerCriterionEvidenceSourceSessionRead  SessionDetailMessagesVerdictPerCriterionEvidenceSource = "session_read"
+	SessionDetailMessagesVerdictPerCriterionEvidenceSourceTranscript   SessionDetailMessagesVerdictPerCriterionEvidenceSource = "transcript"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesVerdictPerCriterionEvidenceSource enum.
+func (e SessionDetailMessagesVerdictPerCriterionEvidenceSource) Valid() bool {
+	switch e {
+	case SessionDetailMessagesVerdictPerCriterionEvidenceSourceDiff:
+		return true
+	case SessionDetailMessagesVerdictPerCriterionEvidenceSourceFileRead:
+		return true
+	case SessionDetailMessagesVerdictPerCriterionEvidenceSourceMachineCheck:
+		return true
+	case SessionDetailMessagesVerdictPerCriterionEvidenceSourceSessionRead:
+		return true
+	case SessionDetailMessagesVerdictPerCriterionEvidenceSourceTranscript:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesVerdictPerCriterionProvenance.
+const (
+	SessionDetailMessagesVerdictPerCriterionProvenanceDeterministicCheck SessionDetailMessagesVerdictPerCriterionProvenance = "deterministic_check"
+	SessionDetailMessagesVerdictPerCriterionProvenanceDiff               SessionDetailMessagesVerdictPerCriterionProvenance = "diff"
+	SessionDetailMessagesVerdictPerCriterionProvenanceJudgeRead          SessionDetailMessagesVerdictPerCriterionProvenance = "judge_read"
+	SessionDetailMessagesVerdictPerCriterionProvenanceNone               SessionDetailMessagesVerdictPerCriterionProvenance = "none"
+	SessionDetailMessagesVerdictPerCriterionProvenanceSessionRead        SessionDetailMessagesVerdictPerCriterionProvenance = "session_read"
+	SessionDetailMessagesVerdictPerCriterionProvenanceTranscript         SessionDetailMessagesVerdictPerCriterionProvenance = "transcript"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesVerdictPerCriterionProvenance enum.
+func (e SessionDetailMessagesVerdictPerCriterionProvenance) Valid() bool {
+	switch e {
+	case SessionDetailMessagesVerdictPerCriterionProvenanceDeterministicCheck:
+		return true
+	case SessionDetailMessagesVerdictPerCriterionProvenanceDiff:
+		return true
+	case SessionDetailMessagesVerdictPerCriterionProvenanceJudgeRead:
+		return true
+	case SessionDetailMessagesVerdictPerCriterionProvenanceNone:
+		return true
+	case SessionDetailMessagesVerdictPerCriterionProvenanceSessionRead:
+		return true
+	case SessionDetailMessagesVerdictPerCriterionProvenanceTranscript:
 		return true
 	default:
 		return false
@@ -6167,6 +6875,129 @@ func (e TaskCriteriaStatus) Valid() bool {
 	}
 }
 
+// Defines values for TaskDodAuthorKind.
+const (
+	TaskDodAuthorKindAgent TaskDodAuthorKind = "agent"
+	TaskDodAuthorKindUser  TaskDodAuthorKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the TaskDodAuthorKind enum.
+func (e TaskDodAuthorKind) Valid() bool {
+	switch e {
+	case TaskDodAuthorKindAgent:
+		return true
+	case TaskDodAuthorKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskDodBehaviorScope.
+const (
+	TaskDodBehaviorScopeAttempt     TaskDodBehaviorScope = "attempt"
+	TaskDodBehaviorScopeTaskSession TaskDodBehaviorScope = "task_session"
+)
+
+// Valid indicates whether the value is a known member of the TaskDodBehaviorScope enum.
+func (e TaskDodBehaviorScope) Valid() bool {
+	switch e {
+	case TaskDodBehaviorScopeAttempt:
+		return true
+	case TaskDodBehaviorScopeTaskSession:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskDodJudgment.
+const (
+	TaskDodJudgmentArtifact     TaskDodJudgment = "artifact"
+	TaskDodJudgmentBoolean      TaskDodJudgment = "boolean"
+	TaskDodJudgmentQuantitative TaskDodJudgment = "quantitative"
+)
+
+// Valid indicates whether the value is a known member of the TaskDodJudgment enum.
+func (e TaskDodJudgment) Valid() bool {
+	switch e {
+	case TaskDodJudgmentArtifact:
+		return true
+	case TaskDodJudgmentBoolean:
+		return true
+	case TaskDodJudgmentQuantitative:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskDodKind.
+const (
+	TaskDodKindBehavior TaskDodKind = "behavior"
+	TaskDodKindCheck    TaskDodKind = "check"
+	TaskDodKindProse    TaskDodKind = "prose"
+)
+
+// Valid indicates whether the value is a known member of the TaskDodKind enum.
+func (e TaskDodKind) Valid() bool {
+	switch e {
+	case TaskDodKindBehavior:
+		return true
+	case TaskDodKindCheck:
+		return true
+	case TaskDodKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskDodProvenance.
+const (
+	TaskDodProvenanceFloor     TaskDodProvenance = "floor"
+	TaskDodProvenanceInferred  TaskDodProvenance = "inferred"
+	TaskDodProvenanceStated    TaskDodProvenance = "stated"
+	TaskDodProvenanceWorkspace TaskDodProvenance = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the TaskDodProvenance enum.
+func (e TaskDodProvenance) Valid() bool {
+	switch e {
+	case TaskDodProvenanceFloor:
+		return true
+	case TaskDodProvenanceInferred:
+		return true
+	case TaskDodProvenanceStated:
+		return true
+	case TaskDodProvenanceWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskDodStatus.
+const (
+	TaskDodStatusMet     TaskDodStatus = "met"
+	TaskDodStatusPending TaskDodStatus = "pending"
+	TaskDodStatusUnmet   TaskDodStatus = "unmet"
+)
+
+// Valid indicates whether the value is a known member of the TaskDodStatus enum.
+func (e TaskDodStatus) Valid() bool {
+	switch e {
+	case TaskDodStatusMet:
+		return true
+	case TaskDodStatusPending:
+		return true
+	case TaskDodStatusUnmet:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskRollupStatus.
 const (
 	TaskRollupStatusBlocked    TaskRollupStatus = "blocked"
@@ -6428,6 +7259,129 @@ func (e TaskCreateRequestCriteriaStatus) Valid() bool {
 	}
 }
 
+// Defines values for TaskCreateRequestDodAuthorKind.
+const (
+	TaskCreateRequestDodAuthorKindAgent TaskCreateRequestDodAuthorKind = "agent"
+	TaskCreateRequestDodAuthorKindUser  TaskCreateRequestDodAuthorKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the TaskCreateRequestDodAuthorKind enum.
+func (e TaskCreateRequestDodAuthorKind) Valid() bool {
+	switch e {
+	case TaskCreateRequestDodAuthorKindAgent:
+		return true
+	case TaskCreateRequestDodAuthorKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskCreateRequestDodBehaviorScope.
+const (
+	TaskCreateRequestDodBehaviorScopeAttempt     TaskCreateRequestDodBehaviorScope = "attempt"
+	TaskCreateRequestDodBehaviorScopeTaskSession TaskCreateRequestDodBehaviorScope = "task_session"
+)
+
+// Valid indicates whether the value is a known member of the TaskCreateRequestDodBehaviorScope enum.
+func (e TaskCreateRequestDodBehaviorScope) Valid() bool {
+	switch e {
+	case TaskCreateRequestDodBehaviorScopeAttempt:
+		return true
+	case TaskCreateRequestDodBehaviorScopeTaskSession:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskCreateRequestDodJudgment.
+const (
+	TaskCreateRequestDodJudgmentArtifact     TaskCreateRequestDodJudgment = "artifact"
+	TaskCreateRequestDodJudgmentBoolean      TaskCreateRequestDodJudgment = "boolean"
+	TaskCreateRequestDodJudgmentQuantitative TaskCreateRequestDodJudgment = "quantitative"
+)
+
+// Valid indicates whether the value is a known member of the TaskCreateRequestDodJudgment enum.
+func (e TaskCreateRequestDodJudgment) Valid() bool {
+	switch e {
+	case TaskCreateRequestDodJudgmentArtifact:
+		return true
+	case TaskCreateRequestDodJudgmentBoolean:
+		return true
+	case TaskCreateRequestDodJudgmentQuantitative:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskCreateRequestDodKind.
+const (
+	TaskCreateRequestDodKindBehavior TaskCreateRequestDodKind = "behavior"
+	TaskCreateRequestDodKindCheck    TaskCreateRequestDodKind = "check"
+	TaskCreateRequestDodKindProse    TaskCreateRequestDodKind = "prose"
+)
+
+// Valid indicates whether the value is a known member of the TaskCreateRequestDodKind enum.
+func (e TaskCreateRequestDodKind) Valid() bool {
+	switch e {
+	case TaskCreateRequestDodKindBehavior:
+		return true
+	case TaskCreateRequestDodKindCheck:
+		return true
+	case TaskCreateRequestDodKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskCreateRequestDodProvenance.
+const (
+	TaskCreateRequestDodProvenanceFloor     TaskCreateRequestDodProvenance = "floor"
+	TaskCreateRequestDodProvenanceInferred  TaskCreateRequestDodProvenance = "inferred"
+	TaskCreateRequestDodProvenanceStated    TaskCreateRequestDodProvenance = "stated"
+	TaskCreateRequestDodProvenanceWorkspace TaskCreateRequestDodProvenance = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the TaskCreateRequestDodProvenance enum.
+func (e TaskCreateRequestDodProvenance) Valid() bool {
+	switch e {
+	case TaskCreateRequestDodProvenanceFloor:
+		return true
+	case TaskCreateRequestDodProvenanceInferred:
+		return true
+	case TaskCreateRequestDodProvenanceStated:
+		return true
+	case TaskCreateRequestDodProvenanceWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskCreateRequestDodStatus.
+const (
+	TaskCreateRequestDodStatusMet     TaskCreateRequestDodStatus = "met"
+	TaskCreateRequestDodStatusPending TaskCreateRequestDodStatus = "pending"
+	TaskCreateRequestDodStatusUnmet   TaskCreateRequestDodStatus = "unmet"
+)
+
+// Valid indicates whether the value is a known member of the TaskCreateRequestDodStatus enum.
+func (e TaskCreateRequestDodStatus) Valid() bool {
+	switch e {
+	case TaskCreateRequestDodStatusMet:
+		return true
+	case TaskCreateRequestDodStatusPending:
+		return true
+	case TaskCreateRequestDodStatusUnmet:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskCreateRequestSurface.
 const (
 	TaskCreateRequestSurfaceHeartbeat TaskCreateRequestSurface = "heartbeat"
@@ -6674,6 +7628,129 @@ func (e TaskUpdateRequestCriteriaStatus) Valid() bool {
 	case TaskUpdateRequestCriteriaStatusPending:
 		return true
 	case TaskUpdateRequestCriteriaStatusUnmet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskUpdateRequestDodAuthorKind.
+const (
+	TaskUpdateRequestDodAuthorKindAgent TaskUpdateRequestDodAuthorKind = "agent"
+	TaskUpdateRequestDodAuthorKindUser  TaskUpdateRequestDodAuthorKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the TaskUpdateRequestDodAuthorKind enum.
+func (e TaskUpdateRequestDodAuthorKind) Valid() bool {
+	switch e {
+	case TaskUpdateRequestDodAuthorKindAgent:
+		return true
+	case TaskUpdateRequestDodAuthorKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskUpdateRequestDodBehaviorScope.
+const (
+	Attempt     TaskUpdateRequestDodBehaviorScope = "attempt"
+	TaskSession TaskUpdateRequestDodBehaviorScope = "task_session"
+)
+
+// Valid indicates whether the value is a known member of the TaskUpdateRequestDodBehaviorScope enum.
+func (e TaskUpdateRequestDodBehaviorScope) Valid() bool {
+	switch e {
+	case Attempt:
+		return true
+	case TaskSession:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskUpdateRequestDodJudgment.
+const (
+	Artifact     TaskUpdateRequestDodJudgment = "artifact"
+	Boolean      TaskUpdateRequestDodJudgment = "boolean"
+	Quantitative TaskUpdateRequestDodJudgment = "quantitative"
+)
+
+// Valid indicates whether the value is a known member of the TaskUpdateRequestDodJudgment enum.
+func (e TaskUpdateRequestDodJudgment) Valid() bool {
+	switch e {
+	case Artifact:
+		return true
+	case Boolean:
+		return true
+	case Quantitative:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskUpdateRequestDodKind.
+const (
+	Behavior TaskUpdateRequestDodKind = "behavior"
+	Check    TaskUpdateRequestDodKind = "check"
+	Prose    TaskUpdateRequestDodKind = "prose"
+)
+
+// Valid indicates whether the value is a known member of the TaskUpdateRequestDodKind enum.
+func (e TaskUpdateRequestDodKind) Valid() bool {
+	switch e {
+	case Behavior:
+		return true
+	case Check:
+		return true
+	case Prose:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskUpdateRequestDodProvenance.
+const (
+	TaskUpdateRequestDodProvenanceFloor     TaskUpdateRequestDodProvenance = "floor"
+	TaskUpdateRequestDodProvenanceInferred  TaskUpdateRequestDodProvenance = "inferred"
+	TaskUpdateRequestDodProvenanceStated    TaskUpdateRequestDodProvenance = "stated"
+	TaskUpdateRequestDodProvenanceWorkspace TaskUpdateRequestDodProvenance = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the TaskUpdateRequestDodProvenance enum.
+func (e TaskUpdateRequestDodProvenance) Valid() bool {
+	switch e {
+	case TaskUpdateRequestDodProvenanceFloor:
+		return true
+	case TaskUpdateRequestDodProvenanceInferred:
+		return true
+	case TaskUpdateRequestDodProvenanceStated:
+		return true
+	case TaskUpdateRequestDodProvenanceWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskUpdateRequestDodStatus.
+const (
+	TaskUpdateRequestDodStatusMet     TaskUpdateRequestDodStatus = "met"
+	TaskUpdateRequestDodStatusPending TaskUpdateRequestDodStatus = "pending"
+	TaskUpdateRequestDodStatusUnmet   TaskUpdateRequestDodStatus = "unmet"
+)
+
+// Valid indicates whether the value is a known member of the TaskUpdateRequestDodStatus enum.
+func (e TaskUpdateRequestDodStatus) Valid() bool {
+	switch e {
+	case TaskUpdateRequestDodStatusMet:
+		return true
+	case TaskUpdateRequestDodStatusPending:
+		return true
+	case TaskUpdateRequestDodStatusUnmet:
 		return true
 	default:
 		return false
@@ -7219,28 +8296,28 @@ func (e GetTokenStatsParamsPeriod) Valid() bool {
 
 // Defines values for ListTasksParamsStatus.
 const (
-	ListTasksParamsStatusBlocked    ListTasksParamsStatus = "blocked"
-	ListTasksParamsStatusDone       ListTasksParamsStatus = "done"
-	ListTasksParamsStatusFailed     ListTasksParamsStatus = "failed"
-	ListTasksParamsStatusInProgress ListTasksParamsStatus = "in_progress"
-	ListTasksParamsStatusInbox      ListTasksParamsStatus = "inbox"
-	ListTasksParamsStatusNext       ListTasksParamsStatus = "next"
+	Blocked    ListTasksParamsStatus = "blocked"
+	Done       ListTasksParamsStatus = "done"
+	Failed     ListTasksParamsStatus = "failed"
+	InProgress ListTasksParamsStatus = "in_progress"
+	Inbox      ListTasksParamsStatus = "inbox"
+	Next       ListTasksParamsStatus = "next"
 )
 
 // Valid indicates whether the value is a known member of the ListTasksParamsStatus enum.
 func (e ListTasksParamsStatus) Valid() bool {
 	switch e {
-	case ListTasksParamsStatusBlocked:
+	case Blocked:
 		return true
-	case ListTasksParamsStatusDone:
+	case Done:
 		return true
-	case ListTasksParamsStatusFailed:
+	case Failed:
 		return true
-	case ListTasksParamsStatusInProgress:
+	case InProgress:
 		return true
-	case ListTasksParamsStatusInbox:
+	case Inbox:
 		return true
-	case ListTasksParamsStatusNext:
+	case Next:
 		return true
 	default:
 		return false
@@ -7249,16 +8326,16 @@ func (e ListTasksParamsStatus) Valid() bool {
 
 // Defines values for ListTasksParamsSurface.
 const (
-	Heartbeat ListTasksParamsSurface = "heartbeat"
-	User      ListTasksParamsSurface = "user"
+	ListTasksParamsSurfaceHeartbeat ListTasksParamsSurface = "heartbeat"
+	ListTasksParamsSurfaceUser      ListTasksParamsSurface = "user"
 )
 
 // Valid indicates whether the value is a known member of the ListTasksParamsSurface enum.
 func (e ListTasksParamsSurface) Valid() bool {
 	switch e {
-	case Heartbeat:
+	case ListTasksParamsSurfaceHeartbeat:
 		return true
-	case User:
+	case ListTasksParamsSurfaceUser:
 		return true
 	default:
 		return false
@@ -7357,6 +8434,9 @@ type AcceptanceCriterion struct {
 		ExpectedExitCode int `json:"expected_exit_code"`
 	} `json:"check,omitempty"`
 
+	// ClauseCount JUDGE-FR-006b — the number of distinct clauses in this criterion's `text`, computed once by `pkg/task/criterion.go::normalizeCriteria` when the criterion is created or updated (never recomputed at adjudication time — see FR-006b's rationale: a count derived at judging time would let the judged party shrink a failing multi-clause criterion into fewer clauses to reduce its own evidence bar). OPTIONAL here only in the sense that a criterion loaded before this field existed carries none until its own next load-time backfill; the server always persists an explicit value going forward, the same precedent as `status`'s own `CritPending` backfill. Consumed exclusively as a grounding-evidence REPORTING signal (how many distinctly-grounded evidence entries the Judge's investigation found) — per operator decision D-B, grounding is never a proof gate, and this field NEVER changes a verdict from `met` to anything else.
+	ClauseCount *int `json:"clause_count,omitempty"`
+
 	// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 	Id *string `json:"id,omitempty"`
 
@@ -7369,7 +8449,7 @@ type AcceptanceCriterion struct {
 	// Provenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
 	Provenance *AcceptanceCriterionProvenance `json:"provenance,omitempty"`
 
-	// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+	// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
 	Status AcceptanceCriterionStatus `json:"status"`
 
 	// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
@@ -7391,7 +8471,7 @@ type AcceptanceCriterionKind string
 // AcceptanceCriterionProvenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
 type AcceptanceCriterionProvenance string
 
-// AcceptanceCriterionStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+// AcceptanceCriterionStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
 type AcceptanceCriterionStatus string
 
 // AcceptanceCriterionInput Authoring-time (request) shape of a Definition-of-Done criterion — ADR-074 D2. Identical field set to `AcceptanceCriterion` (the canonical response schema), except `kind` is optional here: when omitted, the server infers it from the payload (a `check` payload implies `kind: check`, a `behavior` payload implies `kind: behavior`, no payload implies `kind: prose`). A criterion omitting `kind` while carrying BOTH payloads is rejected 400 (ambiguous), and an EXPLICIT `kind` mismatching its payload stays a 400 (shape rules unchanged). The server always persists an explicit kind, so every criterion in a response carries one.
@@ -7429,6 +8509,9 @@ type AcceptanceCriterionInput struct {
 		ExpectedExitCode int `json:"expected_exit_code"`
 	} `json:"check,omitempty"`
 
+	// ClauseCount JUDGE-FR-006b — server-computed on create/update by `pkg/task/criterion.go::normalizeCriteria`; NOT author-supplied (present on this input shape only for field-set equality with `AcceptanceCriterion.yaml` — see this file's own header comment). A `mode:update` that LOWERS a criterion's persisted clause count while a verdict for that criterion id exists is rejected with a stated reason (FR-006b). Consumed exclusively as a grounding-evidence REPORTING signal (D-B) — never a proof gate.
+	ClauseCount *int `json:"clause_count,omitempty"`
+
 	// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 	Id *string `json:"id,omitempty"`
 
@@ -7441,7 +8524,7 @@ type AcceptanceCriterionInput struct {
 	// Provenance ADR-080 D-DOD. The authority layer this criterion (typically a DoD item) was derived from. ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored elsewhere. Never required.
 	Provenance *AcceptanceCriterionInputProvenance `json:"provenance,omitempty"`
 
-	// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+	// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`.
 	Status AcceptanceCriterionInputStatus `json:"status"`
 
 	// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
@@ -7463,7 +8546,7 @@ type AcceptanceCriterionInputKind string
 // AcceptanceCriterionInputProvenance ADR-080 D-DOD. The authority layer this criterion (typically a DoD item) was derived from. ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored elsewhere. Never required.
 type AcceptanceCriterionInputProvenance string
 
-// AcceptanceCriterionInputStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+// AcceptanceCriterionInputStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`.
 type AcceptanceCriterionInputStatus string
 
 // ActivityEvent A single activity event as returned by GET /activity. Events represent notable runtime occurrences (session starts, task lifecycle changes) from the last 24 hours, returned in reverse-chronological order (max 50 entries).
@@ -9125,15 +10208,45 @@ type CriterionVerdict struct {
 	// CriterionId ID of the AcceptanceCriterion this verdict judges.
 	CriterionId string `json:"criterion_id"`
 
-	// EvidenceQuote ADR-074 D7 — the verbatim evidence excerpt the judge grounded this verdict in, copied out of the UNTRUSTED-DATA region of its input (diff/window/claim) per the rubric's quote-before-verdict instruction. Optional and empty-safe: absent/empty on every fail-closed verdict, every pre-D7 persisted verdict, and installs whose Judge soul predates the quote-emitting rubric. Truncated rune-safe to 500 code points at the parser. UNTRUSTED CONTENT — any re-emission into another agent's prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as inert quoted text.
+	// Evidence JUDGE-FR-006 — one entry per clause of the criterion this verdict judges, each answering that clause with its own grounding excerpt. NEW, OPTIONAL, sibling field alongside `evidence_quote` (FR-006's own wording) — `evidence_quote` keeps its existing type/length/optionality unchanged for every reader that does not know about this field (C2); when `evidence` is present the engine populates `evidence_quote` from `evidence[0].quote` so no existing persisted-verdict reader, replay frame or SPA render is affected. A criterion with no machine-checkable form and no located evidence for one or more of its clauses is still the NORMAL case and may still be `met` on the Judge's reasoned conviction (GOAL-FR-038/FR-039, D-B) — this array is a REPORTING obligation the Judge uses to show its work and flag any clause it could not ground, never a gate that can turn a `met` into an `unmet`.
+	Evidence *[]struct {
+		// Part The clause text (a substring of the criterion's own `text`) this entry answers.
+		Part string `json:"part"`
+
+		// Quote The verbatim, rune-truncated (500 code points) grounding excerpt for this clause. UNTRUSTED CONTENT — same framing obligation as `evidence_quote` above. MAY be empty when the Judge could not locate grounding for this clause and is reporting that gap rather than fabricating a quote (D-B: an empty/failed entry here is reported, not fabricated, and never by itself flips the overall verdict).
+		Quote string `json:"quote"`
+
+		// Source Where this clause's grounding excerpt came from. Plain string here (not a closed enum, unlike the verdict-level `evidence_source` above) — a codegen constraint (oapi-codegen cannot auto-name two same-shaped nested enum types across this document without a shared top-level schema, which is out of this wave's write-set) and, independently, a defensible one: this per-entry value is a REPORTING detail (D-B), never compared against by code the way the top-level `evidence_source` is (FR-066's derivation).
+		Source *string `json:"source,omitempty"`
+
+		// Target The specific artifact this clause's excerpt was read from.
+		Target *string `json:"target,omitempty"`
+	} `json:"evidence,omitempty"`
+
+	// EvidenceQuote ADR-074 D7 — the verbatim evidence excerpt the judge grounded this verdict in, copied out of the UNTRUSTED-DATA region of its input (diff/window/claim) per the rubric's quote-before-verdict instruction. Optional and empty-safe: absent/empty on every fail-closed verdict, every pre-D7 persisted verdict, and installs whose Judge soul predates the quote-emitting rubric. Truncated rune-safe to 500 code points at the parser. UNTRUSTED CONTENT — any re-emission into another agent's prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as inert quoted text. FR-071: when `evidence` (below) is present, `evidence_quote` MUST equal `evidence[0].quote`.
 	EvidenceQuote *string `json:"evidence_quote,omitempty"`
+
+	// EvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
+	EvidenceSource *CriterionVerdictEvidenceSource `json:"evidence_source,omitempty"`
+
+	// EvidenceTarget JUDGE-FR-065 — the specific artifact the grounding evidence was read from (a file path, a diff hunk's changed file, a transcript tool-call id, …), paired with `evidence_source`. OPTIONAL REPORTING field only (D-B) — never a proof gate.
+	EvidenceTarget *string `json:"evidence_target,omitempty"`
 
 	// Met Whether this criterion was satisfied. Fail-closed default `false` — absence of evidence never defaults to `true` (NFR-2).
 	Met bool `json:"met"`
 
+	// Provenance JUDGE-FR-065 — the investigation-log provenance of this verdict: `deterministic_check` when a veto or check evidence decided it; `judge_read`/`diff`/`transcript`/`session_read` mapped from the validated `evidence_source` when the Judge's own reading decided it; `none` when neither applies (e.g. a fail-closed verdict, or a legacy rubric that emits no `evidence_source`). OPTIONAL REPORTING field only (D-B) — the Judge's authority to rule `met` on reasoned conviction alone is never conditioned on this field being present or non-`none`.
+	Provenance *CriterionVerdictProvenance `json:"provenance,omitempty"`
+
 	// Reason The judge's rationale for this criterion, fed forward as steering context on the next attempt when `met` is false.
 	Reason string `json:"reason"`
 }
+
+// CriterionVerdictEvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
+type CriterionVerdictEvidenceSource string
+
+// CriterionVerdictProvenance JUDGE-FR-065 — the investigation-log provenance of this verdict: `deterministic_check` when a veto or check evidence decided it; `judge_read`/`diff`/`transcript`/`session_read` mapped from the validated `evidence_source` when the Judge's own reading decided it; `none` when neither applies (e.g. a fail-closed verdict, or a legacy rubric that emits no `evidence_source`). OPTIONAL REPORTING field only (D-B) — the Judge's authority to rule `met` on reasoned conviction alone is never conditioned on this field being present or non-`none`.
+type CriterionVerdictProvenance string
 
 // DayBucket One aggregated day of a recurring task's occurrences, returned by `GET /api/v1/tasks/occurrences` when a query-tz day has more than 3 occurrences in an overview-range (span > 8×24h) request (D6). Occurrence counting and `day_start_ms` are both evaluated in the query's `tz` (the viewer's zone) regardless of the rule's own `tz` — the day-boundary authority for bucketing is always the caller's zone.
 type DayBucket struct {
@@ -9966,16 +11079,13 @@ type GlobalToolPolicies struct {
 // GlobalToolPoliciesPolicies defines model for GlobalToolPolicies.Policies.
 type GlobalToolPoliciesPolicies string
 
-// Goal The unified goal / criteria record (ADR-053 §Contract Surface, S1 — "one criteria model, two authors"). A chat `/goal`, a standalone Task's criteria, and a Plan's DoD are all judged against the SAME `AcceptanceCriterion` model (REUSED, never duplicated — a second goal store is a DoD-11 blocking finding). Authored two ways: `chat_compiled` (agent-compiled from user intent via the SMART goal compiler, US-3) or `task_explicit`/`plan_dod` (explicit at task/plan creation).
+// Goal The unified goal / criteria record (ADR-086 D1 — a goal is its own stored entity, addressed by its own id, and is NOT represented as fields on a session or a task; ADR-053 §Contract Surface, S1 — "one criteria model, two authors"). A chat `/goal` and a standalone Task's criteria are judged against the SAME `AcceptanceCriterion` model (REUSED, never duplicated — a second goal store is a DoD-11 blocking finding). Authored two ways: `chat_compiled` (agent-compiled from user intent via the SMART goal compiler, US-3) or `task_explicit` (explicit at task creation). TYPE-ONLY on the wire (D-E, 2026-09-11, OQ-2 ANSWERED): registered in `components.schemas` and referenced by NO path — there is no `GET`/`PATCH /api/v1/goals/{id}` and no `GoalUpdateRequest.yaml`, in this delivery or as a follow-up. The SPA reaches goal state through `GoalStatusFrame` (WS) and through the task shapes' `dod`/`criteria`. RESHAPED from the pre-existing four-field stub (`binding_kind [session|task|plan]`/`binding_id`/`attempts_max`/`judge_rounds_max`/ `state [active|done|failed|cleared]`) by this delivery — see the joint ADR-084/ADR-085/ADR-086 delivery plan's C-05, R-14, R-31, OQ-1.
 type Goal struct {
-	// AttemptsMax Attempt ceiling before the goal loop wakes the owner (3 native / 6 default per session_messaging config, restart-gated).
-	AttemptsMax int `json:"attempts_max"`
+	// ActiveSessionId GOAL-FR-006 — the id of the session this goal is currently active in, once `state != defining`. Absent while `state == defining`. Cleared (never re-pointed) once the goal reaches a terminal state — the terminal record still names the session that carried it via the LAST value this field held before the transition, per the `terminal_history`/replay-anchored transcript, not via a live pointer that could dangle (EC-10).
+	ActiveSessionId *string `json:"active_session_id,omitempty"`
 
-	// BindingId The session/task/plan id this goal is bound to, per `binding_kind`.
-	BindingId string `json:"binding_id"`
-
-	// BindingKind SHAPE DECISION (flagged for review): the spec describes `binding` as `oneOf session_id | task_id | plan_id`. A bare `oneOf` of untagged strings has no discriminator, so it is split into this enum tag plus `binding_id` below — mirrors the same pattern used for `SessionLifecycleRecord.owner_scope_kind`/`owner_scope_id`.
-	BindingKind GoalBindingKind `json:"binding_kind"`
+	// AttemptsUsed GOAL-FR-006 — attempts consumed so far against this goal's owner's attempt ceiling (a distinct counter from `round` — `TestAttemptsVsRounds_DistinctBrakes` asserts the two counters are distinct, not that their numbers differ, R-03). Reset to 0 when a terminal task-owned goal re-enters `active` on task re-run (R-04).
+	AttemptsUsed *int `json:"attempts_used,omitempty"`
 
 	// CreatedAt RFC3339 timestamp this goal was set/created.
 	CreatedAt time.Time `json:"created_at"`
@@ -10015,6 +11125,9 @@ type Goal struct {
 			ExpectedExitCode int `json:"expected_exit_code"`
 		} `json:"check,omitempty"`
 
+		// ClauseCount JUDGE-FR-006b — the number of distinct clauses in this criterion's `text`, computed once by `pkg/task/criterion.go::normalizeCriteria` when the criterion is created or updated (never recomputed at adjudication time — see FR-006b's rationale: a count derived at judging time would let the judged party shrink a failing multi-clause criterion into fewer clauses to reduce its own evidence bar). OPTIONAL here only in the sense that a criterion loaded before this field existed carries none until its own next load-time backfill; the server always persists an explicit value going forward, the same precedent as `status`'s own `CritPending` backfill. Consumed exclusively as a grounding-evidence REPORTING signal (how many distinctly-grounded evidence entries the Judge's investigation found) — per operator decision D-B, grounding is never a proof gate, and this field NEVER changes a verdict from `met` to anything else.
+		ClauseCount *int `json:"clause_count,omitempty"`
+
 		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 		Id *string `json:"id,omitempty"`
 
@@ -10027,14 +11140,14 @@ type Goal struct {
 		// Provenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
 		Provenance *GoalCriteriaProvenance `json:"provenance,omitempty"`
 
-		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
 		Status GoalCriteriaStatus `json:"status"`
 
 		// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
 		Text string `json:"text"`
 	} `json:"criteria"`
 
-	// Definition The compiled SMART restatement of `prompt` (US-3 echo-confirm) — distinct from the raw prompt. Absent for `task_explicit`/`plan_dod` sources, which have no separate compile step.
+	// Definition The compiled SMART restatement of `prompt` (US-3 echo-confirm) — distinct from the raw prompt. Absent for `task_explicit` sources, which have no separate compile step.
 	Definition *string `json:"definition,omitempty"`
 
 	// Dod ADR-080 D-DOD — the goal's Definition of Done, DISTINCT from `criteria`: generic standing quality gates (e.g. no secrets in the output) vs. outcome-specific checks. `AcceptanceCriterion`-shaped (judged identically) but modelled as its own array, mirroring the existing `Plan.dod` precedent — never mixed into `criteria`. REQUIRED with `minItems: 1` — the compiler's built-in floor layer guarantees at least one item on every newly-compiled goal. A pre-ADR-080 persisted goal with no `dod` is backfilled with the built-in floor DoD at load time (before this schema validates), so a legacy goal always satisfies `minItems: 1` too. The Judge evaluates `criteria` UNION `dod` together.
@@ -10072,6 +11185,9 @@ type Goal struct {
 			ExpectedExitCode int `json:"expected_exit_code"`
 		} `json:"check,omitempty"`
 
+		// ClauseCount JUDGE-FR-006b — the number of distinct clauses in this criterion's `text`, computed once by `pkg/task/criterion.go::normalizeCriteria` when the criterion is created or updated (never recomputed at adjudication time — see FR-006b's rationale: a count derived at judging time would let the judged party shrink a failing multi-clause criterion into fewer clauses to reduce its own evidence bar). OPTIONAL here only in the sense that a criterion loaded before this field existed carries none until its own next load-time backfill; the server always persists an explicit value going forward, the same precedent as `status`'s own `CritPending` backfill. Consumed exclusively as a grounding-evidence REPORTING signal (how many distinctly-grounded evidence entries the Judge's investigation found) — per operator decision D-B, grounding is never a proof gate, and this field NEVER changes a verdict from `met` to anything else.
+		ClauseCount *int `json:"clause_count,omitempty"`
+
 		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 		Id *string `json:"id,omitempty"`
 
@@ -10084,7 +11200,7 @@ type Goal struct {
 		// Provenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
 		Provenance *GoalDodProvenance `json:"provenance,omitempty"`
 
-		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
 		Status GoalDodStatus `json:"status"`
 
 		// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
@@ -10094,24 +11210,329 @@ type Goal struct {
 	// GoalId Unique goal identifier.
 	GoalId string `json:"goal_id"`
 
-	// JudgeRoundsMax Adjudication-round ceiling (R§8.9 — one round = one adjudication, claim-triggered or idle-settled).
-	JudgeRoundsMax int `json:"judge_rounds_max"`
+	// LastActivityAt GOAL-FR-006 — RFC3339 timestamp of the most recent activity on this goal (a claim, an adjudication, a criteria update). Drives the 7-day idle-expiry sweep (D-A) for BOTH owner kinds identically, and is the clock the goal's own retention (A-8: "the goal's own `last_activity_at` against the session retention window") measures against for a task-owned goal, which has no session lifecycle of its own to borrow a clock from. Initialised to `created_at`.
+	LastActivityAt time.Time `json:"last_activity_at"`
+
+	// LatestClaim GOAL-FR-006 — a snapshot of the most recent `goal_claim` tool call against this goal (JUDGE §D12's reliable claim channel). Absent until the first claim. Does not itself carry a verdict — see `latest_verdict` below, set only once the claim's adjudication completes.
+	LatestClaim *struct {
+		ClaimedAt time.Time `json:"claimed_at"`
+
+		// Evidence The claim's own evidence text. Required and non-empty (whitespace-trimmed) at the call when `status == met` (JUDGE machine-verifiable constraint); ignored otherwise. This is a snapshot of what was submitted, not a grounding excerpt — distinct from `CriterionVerdict.evidence`.
+		Evidence *string `json:"evidence,omitempty"`
+
+		// Status JUDGE machine-verifiable constraint — `goal_claim.status` enum is exactly these three values.
+		Status GoalLatestClaimStatus `json:"status"`
+	} `json:"latest_claim,omitempty"`
+
+	// LatestReason GOAL-FR-006 — most recent judge reason fed forward as steering (evaluator-optimizer pattern), mirroring `GoalStatusFrame.latest_reason`. Empty/absent before the first round completes.
+	LatestReason *string `json:"latest_reason,omitempty"`
+
+	// LatestVerdict A single judge adjudication of a task attempt or plan round (ADR-049 D2/D4). Persisted alongside the run and also emitted as (a) a session-transcript entry (`Message.type: judge_verdict`, `Message.verdict`) and (b) a live `JudgeVerdictFrame` WS push — both carriers share this exact shape so they cannot silently disagree (review Q3). Absence of a verdict never defaults to success (NFR-2, fail-closed): a judge that is merely unavailable (throttled/cost-capped/provider error/timeout) does NOT produce a JudgeVerdict at all — the loop pauses and retries instead (ADR D7).
+	LatestVerdict *struct {
+		// Id Server-set verdict identifier (UUID).
+		Id string `json:"id"`
+
+		// JudgeAgentId ID of the Judge System Agent that produced this verdict (NFR-5 correlation — usage metering is attributed to this `agent_id` alongside the plan/task/goal correlation IDs).
+		JudgeAgentId string `json:"judge_agent_id"`
+
+		// JudgedAt RFC 3339 UTC timestamp when the verdict was produced.
+		JudgedAt time.Time `json:"judged_at"`
+
+		// Met Overall PASS/FAIL verdict across all criteria. Fail-closed default `false` — absence of a verdict never defaults to `true` (NFR-2).
+		Met bool `json:"met"`
+
+		// Model Judge model used to produce this verdict (transparency / NFR-5 metering).
+		Model string `json:"model"`
+
+		// PerCriterion Per-criterion outcomes making up the overall verdict.
+		PerCriterion []struct {
+			// CriterionId ID of the AcceptanceCriterion this verdict judges.
+			CriterionId string `json:"criterion_id"`
+
+			// Evidence JUDGE-FR-006 — one entry per clause of the criterion this verdict judges, each answering that clause with its own grounding excerpt. NEW, OPTIONAL, sibling field alongside `evidence_quote` (FR-006's own wording) — `evidence_quote` keeps its existing type/length/optionality unchanged for every reader that does not know about this field (C2); when `evidence` is present the engine populates `evidence_quote` from `evidence[0].quote` so no existing persisted-verdict reader, replay frame or SPA render is affected. A criterion with no machine-checkable form and no located evidence for one or more of its clauses is still the NORMAL case and may still be `met` on the Judge's reasoned conviction (GOAL-FR-038/FR-039, D-B) — this array is a REPORTING obligation the Judge uses to show its work and flag any clause it could not ground, never a gate that can turn a `met` into an `unmet`.
+			Evidence *[]struct {
+				// Part The clause text (a substring of the criterion's own `text`) this entry answers.
+				Part string `json:"part"`
+
+				// Quote The verbatim, rune-truncated (500 code points) grounding excerpt for this clause. UNTRUSTED CONTENT — same framing obligation as `evidence_quote` above. MAY be empty when the Judge could not locate grounding for this clause and is reporting that gap rather than fabricating a quote (D-B: an empty/failed entry here is reported, not fabricated, and never by itself flips the overall verdict).
+				Quote string `json:"quote"`
+
+				// Source Where this clause's grounding excerpt came from. Plain string here (not a closed enum, unlike the verdict-level `evidence_source` above) — a codegen constraint (oapi-codegen cannot auto-name two same-shaped nested enum types across this document without a shared top-level schema, which is out of this wave's write-set) and, independently, a defensible one: this per-entry value is a REPORTING detail (D-B), never compared against by code the way the top-level `evidence_source` is (FR-066's derivation).
+				Source *string `json:"source,omitempty"`
+
+				// Target The specific artifact this clause's excerpt was read from.
+				Target *string `json:"target,omitempty"`
+			} `json:"evidence,omitempty"`
+
+			// EvidenceQuote ADR-074 D7 — the verbatim evidence excerpt the judge grounded this verdict in, copied out of the UNTRUSTED-DATA region of its input (diff/window/claim) per the rubric's quote-before-verdict instruction. Optional and empty-safe: absent/empty on every fail-closed verdict, every pre-D7 persisted verdict, and installs whose Judge soul predates the quote-emitting rubric. Truncated rune-safe to 500 code points at the parser. UNTRUSTED CONTENT — any re-emission into another agent's prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as inert quoted text. FR-071: when `evidence` (below) is present, `evidence_quote` MUST equal `evidence[0].quote`.
+			EvidenceQuote *string `json:"evidence_quote,omitempty"`
+
+			// EvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
+			EvidenceSource *GoalLatestVerdictPerCriterionEvidenceSource `json:"evidence_source,omitempty"`
+
+			// EvidenceTarget JUDGE-FR-065 — the specific artifact the grounding evidence was read from (a file path, a diff hunk's changed file, a transcript tool-call id, …), paired with `evidence_source`. OPTIONAL REPORTING field only (D-B) — never a proof gate.
+			EvidenceTarget *string `json:"evidence_target,omitempty"`
+
+			// Met Whether this criterion was satisfied. Fail-closed default `false` — absence of evidence never defaults to `true` (NFR-2).
+			Met bool `json:"met"`
+
+			// Provenance JUDGE-FR-065 — the investigation-log provenance of this verdict: `deterministic_check` when a veto or check evidence decided it; `judge_read`/`diff`/`transcript`/`session_read` mapped from the validated `evidence_source` when the Judge's own reading decided it; `none` when neither applies (e.g. a fail-closed verdict, or a legacy rubric that emits no `evidence_source`). OPTIONAL REPORTING field only (D-B) — the Judge's authority to rule `met` on reasoned conviction alone is never conditioned on this field being present or non-`none`.
+			Provenance *GoalLatestVerdictPerCriterionProvenance `json:"provenance,omitempty"`
+
+			// Reason The judge's rationale for this criterion, fed forward as steering context on the next attempt when `met` is false.
+			Reason string `json:"reason"`
+		} `json:"per_criterion"`
+
+		// PlanId Plan being judged. Present when `scope == plan`.
+		PlanId *string `json:"plan_id,omitempty"`
+
+		// Round Attempt/round index (ADR D7 — a "round" is one worker turn plus its judge evaluation).
+		Round int `json:"round"`
+
+		// Scope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
+		Scope GoalLatestVerdictScope `json:"scope"`
+
+		// TaskId Task being judged. Present when `scope == task`.
+		TaskId *string `json:"task_id,omitempty"`
+	} `json:"latest_verdict,omitempty"`
+
+	// MaxRounds GOAL-FR-024/MV-1, D-D/D-E (2026-09-11, operator-ratified) — the SINGLE budget ceiling for this goal's adjudication rounds, collapsed from the pre-existing separate `attempts_max`/`judge_rounds_max` pair (R14/C-05). Defaults to 20 (no schema `default:` here — this field is `required`, and combining `default:` with `required` makes openapi-zod-client emit an optional `.default()` input type that conflicts with the plain required TS type; see AcceptanceCriterionInput.yaml's header comment for the sibling codegen trap on an OPTIONAL field). There is NO per-goal override anywhere on the wire (D-E retires GOAL-FR-046/US-8 in full): this value is always the ONE global "goal tries" setting under Settings → Performance (`PerformanceSettings.yaml`'s `goal_max_rounds`), governing a task-owned and a session-owned goal IDENTICALLY — there is no writable per-goal budget field on this schema, `Task.yaml`, `TaskUpdateRequest.yaml` or anywhere else. The distinct `attempts` counter (task retry attempts, separate from adjudication rounds) is NOT modelled here — it stays on the task/session's own attempt machinery; the `2 × effective budget` hard ceiling there is an independent divergence brake, not a second goal budget (R-03).
+	MaxRounds int `json:"max_rounds"`
+
+	// OwnerId The session/task id this goal is bound to, per `owner_kind`. RENAMED from the pre-existing `binding_id` (R-14).
+	OwnerId string `json:"owner_id"`
+
+	// OwnerKind GOAL-FR-002 — a goal MUST reference exactly one owner, as an owner kind plus an owner id; owner kind MUST be part of the persisted record, not inferred. RENAMED from the pre-existing `binding_kind` (R-14: a rename, not a widening) and NARROWED from three values to two (R-31): `plan` is dropped. A Plan's own DoD is judged with NO goal record involved at all — criterion statuses are projected directly onto the plan member's own DoD list, using the same explicit, logged no-op discipline already required for the ephemeral soft-tier criterion (goal spec FR-040). `Goal.OwnerID` is unique per owner for the `task` kind — one goal per task for the task's whole life; a terminal task-owned goal re-enters `active` on task re-run rather than a new goal being minted (R-04, see `state` and `terminal_history` below). A `session`-owned goal has no such re-entry edge — a terminal chat goal stays terminal.
+	OwnerKind GoalOwnerKind `json:"owner_kind"`
 
 	// Prompt The raw user intent this goal was set/compiled from.
 	Prompt string `json:"prompt"`
 
-	// Round Adjudications consumed so far (R§8.9). The stored integer is preserved unchanged across the upgrade from the legacy "one turn + judge" round definition — only the increment site moved.
+	// QuestionRoundsUsed GOAL-FR-004 — the keeper's own durable clarification-question door counter (today the session-level `goal_question_rounds_used`), relocated onto the goal record so it applies identically to both owner kinds (GOAL-FR-015/FR-020).
+	QuestionRoundsUsed int `json:"question_rounds_used"`
+
+	// Round Adjudications consumed so far (R§8.9 — one round = one adjudication, claim-triggered or idle-settled). The stored integer is preserved unchanged across the upgrade from the legacy "one turn + judge" round definition — only the increment site moved. Reset to 0 when a terminal task-owned goal re-enters `active` on task re-run (R-04).
 	Round *int `json:"round,omitempty"`
 
-	// Source How this goal's criteria were authored.
+	// RouteChannel GOAL-FR-034 — the channel a keeper follow-up for this goal is delivered through (e.g. "telegram", "discord"), surviving from the pre-existing session-level `goal_route_channel`. `dispatchGoalAsyncFollowUp` aborts without either `route_channel` or `route_chat_id`. Absent for a goal whose owner has never needed an async follow-up (e.g. webchat delivery, which stays session-addressed per ADR-082 and does not use this field, GOAL-FR-035).
+	RouteChannel *string `json:"route_channel,omitempty"`
+
+	// RouteChatId GOAL-FR-034 — the chat/peer id within `route_channel` a keeper follow-up for this goal is delivered to, surviving from the pre-existing session-level `goal_route_chat_id`.
+	RouteChatId *string `json:"route_chat_id,omitempty"`
+
+	// Source How this goal's criteria were authored. `plan_dod` is retained on the wire for forward-compatibility even though no `owner_kind: plan` goal record exists any more (see `owner_kind` above) — a Plan's DoD never reaches this enum today.
 	Source GoalSource `json:"source"`
 
-	// State SHAPE DECISION (flagged for review): the spec lists a bare `state` field with no enumerated values. This 4-value set is the persisted GOAL record's OWN lifecycle (active while iterating; done on a met verdict; failed on rounds/attempts/budget exhaustion; cleared via `/goal clear`) — deliberately narrower than and distinct from the 8-state pill-display enum (`GoalStatusFrame.state`, R§8.10), which derives its richer display states from this state PLUS the session's own lifecycle PLUS ephemeral engine-phase signals. Do not conflate the two.
-	State GoalState `json:"state"`
-}
+	// StartedAt GOAL-FR-006 — RFC3339 timestamp this goal was last ACTIVATED (GOAL-FR-010). Absent while `state == defining`. Reset to a fresh timestamp on a task-owned goal's terminal → active re-entry (R-04).
+	StartedAt *time.Time `json:"started_at,omitempty"`
 
-// GoalBindingKind SHAPE DECISION (flagged for review): the spec describes `binding` as `oneOf session_id | task_id | plan_id`. A bare `oneOf` of untagged strings has no discriminator, so it is split into this enum tag plus `binding_id` below — mirrors the same pattern used for `SessionLifecycleRecord.owner_scope_kind`/`owner_scope_id`.
-type GoalBindingKind string
+	// State GOAL-FR-006/FR-027/FR-028, R-14 (a RENAME of the pre-existing 4-value set, not a widening: `done` → `met`, `failed` → `exhausted`, plus two new values). `defining` — the goal exists, is readable and editable, and MUST NOT run (ADR-086 D2/D3, GOAL-FR-009): a task holds its goal in this phase from task creation until the task starts. `active` — activated and iterating (GOAL-FR-010: activation binds the goal to exactly one session and starts the loop). `met` — terminal, a verdict satisfied every criterion. `exhausted` — terminal, the round/attempt/budget ceiling was reached with no `met` verdict. `expired` — terminal, the 7-day idle-expiry sweep ended a goal that never claimed (D-A) — EC-10: a goal record whose active session was swept by retention is also terminal-expired at the next sweep rather than left pointing at a missing session. `cleared` — terminal, a deliberate user-initiated `/goal clear` (not a failure, mirrors `GoalStatusFrame.state`'s existing `cleared`/`failed` split). Ending a goal is a STATUS TRANSITION on a retained record, never field-zeroing erasure (GOAL-FR-027/FR-028): the record survives every terminal transition with its criteria, their final statuses, the verdict, the reason and any handover intact. This 4-value set is deliberately narrower than and distinct from the richer `GoalStatusFrame.state` display enum (R§8.10), which derives additional ephemeral engine-phase and lifecycle-overlay states from this state PLUS the owning session's own lifecycle. Do not conflate the two. A `task`-owned goal's ONLY re-entry edge is terminal → `active` on task re-run (R-04); a `session`-owned goal has no such edge and stays terminal once ended.
+	State GoalState `json:"state"`
+
+	// SupersededCriteria GOAL-FR-006 — the superseded-criteria history: prior `criteria`/`dod` sets this goal carried before a `set_goal(mode: update)` steering revision replaced them (ADR-081). Empty/absent for a goal never revised. Distinct from `terminal_history` below, which records prior COMPLETED RUNS of a re-run task-owned goal, not prior criteria revisions of the current run.
+	SupersededCriteria *[]struct {
+		Criteria []struct {
+			// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
+			Author struct {
+				// Id Agent ID or username of the author.
+				Id string `json:"id"`
+
+				// Kind Whether this criterion was authored by an agent or a human user.
+				Kind GoalSupersededCriteriaCriteriaAuthorKind `json:"kind"`
+			} `json:"author"`
+
+			// Behavior Present iff `kind == behavior` (400 if present with a different `kind` — no mixed shape); required iff `kind == behavior` (400 if absent). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
+			Behavior *struct {
+				// MaxCount Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
+				MaxCount *int `json:"max_count,omitempty"`
+
+				// MinCount Minimum number of successful calls of `tool` required within `scope`.
+				MinCount *int `json:"min_count,omitempty"`
+
+				// Scope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+				Scope *GoalSupersededCriteriaCriteriaBehaviorScope `json:"scope,omitempty"`
+
+				// Tool Name of the tool whose successful-call count is checked.
+				Tool string `json:"tool"`
+			} `json:"behavior,omitempty"`
+
+			// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
+			Check *struct {
+				// Command Shell command run through the assignee's `bash` tool.
+				Command string `json:"command"`
+
+				// ExpectedExitCode Exit code that counts as PASS (`met`) for this check.
+				ExpectedExitCode int `json:"expected_exit_code"`
+			} `json:"check,omitempty"`
+
+			// ClauseCount JUDGE-FR-006b — the number of distinct clauses in this criterion's `text`, computed once by `pkg/task/criterion.go::normalizeCriteria` when the criterion is created or updated (never recomputed at adjudication time — see FR-006b's rationale: a count derived at judging time would let the judged party shrink a failing multi-clause criterion into fewer clauses to reduce its own evidence bar). OPTIONAL here only in the sense that a criterion loaded before this field existed carries none until its own next load-time backfill; the server always persists an explicit value going forward, the same precedent as `status`'s own `CritPending` backfill. Consumed exclusively as a grounding-evidence REPORTING signal (how many distinctly-grounded evidence entries the Judge's investigation found) — per operator decision D-B, grounding is never a proof gate, and this field NEVER changes a verdict from `met` to anything else.
+			ClauseCount *int `json:"clause_count,omitempty"`
+
+			// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
+			Id *string `json:"id,omitempty"`
+
+			// Judgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+			Judgment GoalSupersededCriteriaCriteriaJudgment `json:"judgment"`
+
+			// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
+			Kind GoalSupersededCriteriaCriteriaKind `json:"kind"`
+
+			// Provenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+			Provenance *GoalSupersededCriteriaCriteriaProvenance `json:"provenance,omitempty"`
+
+			// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
+			Status GoalSupersededCriteriaCriteriaStatus `json:"status"`
+
+			// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
+			Text string `json:"text"`
+		} `json:"criteria"`
+		Dod []struct {
+			// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
+			Author struct {
+				// Id Agent ID or username of the author.
+				Id string `json:"id"`
+
+				// Kind Whether this criterion was authored by an agent or a human user.
+				Kind GoalSupersededCriteriaDodAuthorKind `json:"kind"`
+			} `json:"author"`
+
+			// Behavior Present iff `kind == behavior` (400 if present with a different `kind` — no mixed shape); required iff `kind == behavior` (400 if absent). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
+			Behavior *struct {
+				// MaxCount Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
+				MaxCount *int `json:"max_count,omitempty"`
+
+				// MinCount Minimum number of successful calls of `tool` required within `scope`.
+				MinCount *int `json:"min_count,omitempty"`
+
+				// Scope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+				Scope *GoalSupersededCriteriaDodBehaviorScope `json:"scope,omitempty"`
+
+				// Tool Name of the tool whose successful-call count is checked.
+				Tool string `json:"tool"`
+			} `json:"behavior,omitempty"`
+
+			// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
+			Check *struct {
+				// Command Shell command run through the assignee's `bash` tool.
+				Command string `json:"command"`
+
+				// ExpectedExitCode Exit code that counts as PASS (`met`) for this check.
+				ExpectedExitCode int `json:"expected_exit_code"`
+			} `json:"check,omitempty"`
+
+			// ClauseCount JUDGE-FR-006b — the number of distinct clauses in this criterion's `text`, computed once by `pkg/task/criterion.go::normalizeCriteria` when the criterion is created or updated (never recomputed at adjudication time — see FR-006b's rationale: a count derived at judging time would let the judged party shrink a failing multi-clause criterion into fewer clauses to reduce its own evidence bar). OPTIONAL here only in the sense that a criterion loaded before this field existed carries none until its own next load-time backfill; the server always persists an explicit value going forward, the same precedent as `status`'s own `CritPending` backfill. Consumed exclusively as a grounding-evidence REPORTING signal (how many distinctly-grounded evidence entries the Judge's investigation found) — per operator decision D-B, grounding is never a proof gate, and this field NEVER changes a verdict from `met` to anything else.
+			ClauseCount *int `json:"clause_count,omitempty"`
+
+			// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
+			Id *string `json:"id,omitempty"`
+
+			// Judgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+			Judgment GoalSupersededCriteriaDodJudgment `json:"judgment"`
+
+			// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
+			Kind GoalSupersededCriteriaDodKind `json:"kind"`
+
+			// Provenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+			Provenance *GoalSupersededCriteriaDodProvenance `json:"provenance,omitempty"`
+
+			// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
+			Status GoalSupersededCriteriaDodStatus `json:"status"`
+
+			// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
+			Text string `json:"text"`
+		} `json:"dod"`
+		SupersededAt time.Time `json:"superseded_at"`
+	} `json:"superseded_criteria,omitempty"`
+
+	// TerminalHistory R-04 (goal spec A-2/EC-1) — for a `task`-owned goal that is reused across a re-run after its prior run ended (the SAME goal, its `attempts_used`/`round` reset to 0, per `owner_kind`'s description): the prior run's terminal outcome is APPENDED here rather than overwritten, so a task's full adjudication history survives every re-run. A `session`-owned goal never re-enters `active` from terminal, so this array stays empty for it. Ordered oldest-first.
+	TerminalHistory *[]struct {
+		// AttemptsUsed Attempts consumed in that prior run.
+		AttemptsUsed *int      `json:"attempts_used,omitempty"`
+		EndedAt      time.Time `json:"ended_at"`
+
+		// Round Rounds consumed in that prior run.
+		Round *int `json:"round,omitempty"`
+
+		// State The terminal state this prior run ended in.
+		State          GoalTerminalHistoryState `json:"state"`
+		TerminalReason *string                  `json:"terminal_reason,omitempty"`
+
+		// Verdict A single judge adjudication of a task attempt or plan round (ADR-049 D2/D4). Persisted alongside the run and also emitted as (a) a session-transcript entry (`Message.type: judge_verdict`, `Message.verdict`) and (b) a live `JudgeVerdictFrame` WS push — both carriers share this exact shape so they cannot silently disagree (review Q3). Absence of a verdict never defaults to success (NFR-2, fail-closed): a judge that is merely unavailable (throttled/cost-capped/provider error/timeout) does NOT produce a JudgeVerdict at all — the loop pauses and retries instead (ADR D7).
+		Verdict *struct {
+			// Id Server-set verdict identifier (UUID).
+			Id string `json:"id"`
+
+			// JudgeAgentId ID of the Judge System Agent that produced this verdict (NFR-5 correlation — usage metering is attributed to this `agent_id` alongside the plan/task/goal correlation IDs).
+			JudgeAgentId string `json:"judge_agent_id"`
+
+			// JudgedAt RFC 3339 UTC timestamp when the verdict was produced.
+			JudgedAt time.Time `json:"judged_at"`
+
+			// Met Overall PASS/FAIL verdict across all criteria. Fail-closed default `false` — absence of a verdict never defaults to `true` (NFR-2).
+			Met bool `json:"met"`
+
+			// Model Judge model used to produce this verdict (transparency / NFR-5 metering).
+			Model string `json:"model"`
+
+			// PerCriterion Per-criterion outcomes making up the overall verdict.
+			PerCriterion []struct {
+				// CriterionId ID of the AcceptanceCriterion this verdict judges.
+				CriterionId string `json:"criterion_id"`
+
+				// Evidence JUDGE-FR-006 — one entry per clause of the criterion this verdict judges, each answering that clause with its own grounding excerpt. NEW, OPTIONAL, sibling field alongside `evidence_quote` (FR-006's own wording) — `evidence_quote` keeps its existing type/length/optionality unchanged for every reader that does not know about this field (C2); when `evidence` is present the engine populates `evidence_quote` from `evidence[0].quote` so no existing persisted-verdict reader, replay frame or SPA render is affected. A criterion with no machine-checkable form and no located evidence for one or more of its clauses is still the NORMAL case and may still be `met` on the Judge's reasoned conviction (GOAL-FR-038/FR-039, D-B) — this array is a REPORTING obligation the Judge uses to show its work and flag any clause it could not ground, never a gate that can turn a `met` into an `unmet`.
+				Evidence *[]struct {
+					// Part The clause text (a substring of the criterion's own `text`) this entry answers.
+					Part string `json:"part"`
+
+					// Quote The verbatim, rune-truncated (500 code points) grounding excerpt for this clause. UNTRUSTED CONTENT — same framing obligation as `evidence_quote` above. MAY be empty when the Judge could not locate grounding for this clause and is reporting that gap rather than fabricating a quote (D-B: an empty/failed entry here is reported, not fabricated, and never by itself flips the overall verdict).
+					Quote string `json:"quote"`
+
+					// Source Where this clause's grounding excerpt came from. Plain string here (not a closed enum, unlike the verdict-level `evidence_source` above) — a codegen constraint (oapi-codegen cannot auto-name two same-shaped nested enum types across this document without a shared top-level schema, which is out of this wave's write-set) and, independently, a defensible one: this per-entry value is a REPORTING detail (D-B), never compared against by code the way the top-level `evidence_source` is (FR-066's derivation).
+					Source *string `json:"source,omitempty"`
+
+					// Target The specific artifact this clause's excerpt was read from.
+					Target *string `json:"target,omitempty"`
+				} `json:"evidence,omitempty"`
+
+				// EvidenceQuote ADR-074 D7 — the verbatim evidence excerpt the judge grounded this verdict in, copied out of the UNTRUSTED-DATA region of its input (diff/window/claim) per the rubric's quote-before-verdict instruction. Optional and empty-safe: absent/empty on every fail-closed verdict, every pre-D7 persisted verdict, and installs whose Judge soul predates the quote-emitting rubric. Truncated rune-safe to 500 code points at the parser. UNTRUSTED CONTENT — any re-emission into another agent's prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as inert quoted text. FR-071: when `evidence` (below) is present, `evidence_quote` MUST equal `evidence[0].quote`.
+				EvidenceQuote *string `json:"evidence_quote,omitempty"`
+
+				// EvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
+				EvidenceSource *GoalTerminalHistoryVerdictPerCriterionEvidenceSource `json:"evidence_source,omitempty"`
+
+				// EvidenceTarget JUDGE-FR-065 — the specific artifact the grounding evidence was read from (a file path, a diff hunk's changed file, a transcript tool-call id, …), paired with `evidence_source`. OPTIONAL REPORTING field only (D-B) — never a proof gate.
+				EvidenceTarget *string `json:"evidence_target,omitempty"`
+
+				// Met Whether this criterion was satisfied. Fail-closed default `false` — absence of evidence never defaults to `true` (NFR-2).
+				Met bool `json:"met"`
+
+				// Provenance JUDGE-FR-065 — the investigation-log provenance of this verdict: `deterministic_check` when a veto or check evidence decided it; `judge_read`/`diff`/`transcript`/`session_read` mapped from the validated `evidence_source` when the Judge's own reading decided it; `none` when neither applies (e.g. a fail-closed verdict, or a legacy rubric that emits no `evidence_source`). OPTIONAL REPORTING field only (D-B) — the Judge's authority to rule `met` on reasoned conviction alone is never conditioned on this field being present or non-`none`.
+				Provenance *GoalTerminalHistoryVerdictPerCriterionProvenance `json:"provenance,omitempty"`
+
+				// Reason The judge's rationale for this criterion, fed forward as steering context on the next attempt when `met` is false.
+				Reason string `json:"reason"`
+			} `json:"per_criterion"`
+
+			// PlanId Plan being judged. Present when `scope == plan`.
+			PlanId *string `json:"plan_id,omitempty"`
+
+			// Round Attempt/round index (ADR D7 — a "round" is one worker turn plus its judge evaluation).
+			Round int `json:"round"`
+
+			// Scope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
+			Scope GoalTerminalHistoryVerdictScope `json:"scope"`
+
+			// TaskId Task being judged. Present when `scope == task`.
+			TaskId *string `json:"task_id,omitempty"`
+		} `json:"verdict,omitempty"`
+	} `json:"terminal_history,omitempty"`
+
+	// TerminalReason GOAL-FR-028 — the reason this goal reached its current terminal `state`, distinct from `latest_reason` (which tracks the latest ROUND's judge reason, not why the goal itself ended): e.g. "idle expiry after 7 days of inactivity with no claim", "round budget (20) exhausted", "cleared by operator". Absent while the goal is not terminal. Exactly one terminal frame is emitted per ending (GOAL-FR-028) and this field is set in the same transition.
+	TerminalReason *string `json:"terminal_reason,omitempty"`
+
+	// ZeroOutputPushes GOAL-FR-004 — the keeper's own durable recordless-nudge / zero-output-push streak counter (today the session-level `goal_zero_output_pushes`, bound `goalZeroOutputPushMax = 2`), relocated onto the goal record so it applies identically to a task-owned and a session-owned goal (GOAL-FR-015/FR-017).
+	ZeroOutputPushes int `json:"zero_output_pushes"`
+}
 
 // GoalCriteriaAuthorKind Whether this criterion was authored by an agent or a human user.
 type GoalCriteriaAuthorKind string
@@ -10128,7 +11549,7 @@ type GoalCriteriaKind string
 // GoalCriteriaProvenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
 type GoalCriteriaProvenance string
 
-// GoalCriteriaStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+// GoalCriteriaStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
 type GoalCriteriaStatus string
 
 // GoalDodAuthorKind Whether this criterion was authored by an agent or a human user.
@@ -10146,14 +11567,77 @@ type GoalDodKind string
 // GoalDodProvenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
 type GoalDodProvenance string
 
-// GoalDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+// GoalDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
 type GoalDodStatus string
 
-// GoalSource How this goal's criteria were authored.
+// GoalLatestClaimStatus JUDGE machine-verifiable constraint — `goal_claim.status` enum is exactly these three values.
+type GoalLatestClaimStatus string
+
+// GoalLatestVerdictPerCriterionEvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
+type GoalLatestVerdictPerCriterionEvidenceSource string
+
+// GoalLatestVerdictPerCriterionProvenance JUDGE-FR-065 — the investigation-log provenance of this verdict: `deterministic_check` when a veto or check evidence decided it; `judge_read`/`diff`/`transcript`/`session_read` mapped from the validated `evidence_source` when the Judge's own reading decided it; `none` when neither applies (e.g. a fail-closed verdict, or a legacy rubric that emits no `evidence_source`). OPTIONAL REPORTING field only (D-B) — the Judge's authority to rule `met` on reasoned conviction alone is never conditioned on this field being present or non-`none`.
+type GoalLatestVerdictPerCriterionProvenance string
+
+// GoalLatestVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
+type GoalLatestVerdictScope string
+
+// GoalOwnerKind GOAL-FR-002 — a goal MUST reference exactly one owner, as an owner kind plus an owner id; owner kind MUST be part of the persisted record, not inferred. RENAMED from the pre-existing `binding_kind` (R-14: a rename, not a widening) and NARROWED from three values to two (R-31): `plan` is dropped. A Plan's own DoD is judged with NO goal record involved at all — criterion statuses are projected directly onto the plan member's own DoD list, using the same explicit, logged no-op discipline already required for the ephemeral soft-tier criterion (goal spec FR-040). `Goal.OwnerID` is unique per owner for the `task` kind — one goal per task for the task's whole life; a terminal task-owned goal re-enters `active` on task re-run rather than a new goal being minted (R-04, see `state` and `terminal_history` below). A `session`-owned goal has no such re-entry edge — a terminal chat goal stays terminal.
+type GoalOwnerKind string
+
+// GoalSource How this goal's criteria were authored. `plan_dod` is retained on the wire for forward-compatibility even though no `owner_kind: plan` goal record exists any more (see `owner_kind` above) — a Plan's DoD never reaches this enum today.
 type GoalSource string
 
-// GoalState SHAPE DECISION (flagged for review): the spec lists a bare `state` field with no enumerated values. This 4-value set is the persisted GOAL record's OWN lifecycle (active while iterating; done on a met verdict; failed on rounds/attempts/budget exhaustion; cleared via `/goal clear`) — deliberately narrower than and distinct from the 8-state pill-display enum (`GoalStatusFrame.state`, R§8.10), which derives its richer display states from this state PLUS the session's own lifecycle PLUS ephemeral engine-phase signals. Do not conflate the two.
+// GoalState GOAL-FR-006/FR-027/FR-028, R-14 (a RENAME of the pre-existing 4-value set, not a widening: `done` → `met`, `failed` → `exhausted`, plus two new values). `defining` — the goal exists, is readable and editable, and MUST NOT run (ADR-086 D2/D3, GOAL-FR-009): a task holds its goal in this phase from task creation until the task starts. `active` — activated and iterating (GOAL-FR-010: activation binds the goal to exactly one session and starts the loop). `met` — terminal, a verdict satisfied every criterion. `exhausted` — terminal, the round/attempt/budget ceiling was reached with no `met` verdict. `expired` — terminal, the 7-day idle-expiry sweep ended a goal that never claimed (D-A) — EC-10: a goal record whose active session was swept by retention is also terminal-expired at the next sweep rather than left pointing at a missing session. `cleared` — terminal, a deliberate user-initiated `/goal clear` (not a failure, mirrors `GoalStatusFrame.state`'s existing `cleared`/`failed` split). Ending a goal is a STATUS TRANSITION on a retained record, never field-zeroing erasure (GOAL-FR-027/FR-028): the record survives every terminal transition with its criteria, their final statuses, the verdict, the reason and any handover intact. This 4-value set is deliberately narrower than and distinct from the richer `GoalStatusFrame.state` display enum (R§8.10), which derives additional ephemeral engine-phase and lifecycle-overlay states from this state PLUS the owning session's own lifecycle. Do not conflate the two. A `task`-owned goal's ONLY re-entry edge is terminal → `active` on task re-run (R-04); a `session`-owned goal has no such edge and stays terminal once ended.
 type GoalState string
+
+// GoalSupersededCriteriaCriteriaAuthorKind Whether this criterion was authored by an agent or a human user.
+type GoalSupersededCriteriaCriteriaAuthorKind string
+
+// GoalSupersededCriteriaCriteriaBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+type GoalSupersededCriteriaCriteriaBehaviorScope string
+
+// GoalSupersededCriteriaCriteriaJudgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+type GoalSupersededCriteriaCriteriaJudgment string
+
+// GoalSupersededCriteriaCriteriaKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
+type GoalSupersededCriteriaCriteriaKind string
+
+// GoalSupersededCriteriaCriteriaProvenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+type GoalSupersededCriteriaCriteriaProvenance string
+
+// GoalSupersededCriteriaCriteriaStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
+type GoalSupersededCriteriaCriteriaStatus string
+
+// GoalSupersededCriteriaDodAuthorKind Whether this criterion was authored by an agent or a human user.
+type GoalSupersededCriteriaDodAuthorKind string
+
+// GoalSupersededCriteriaDodBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+type GoalSupersededCriteriaDodBehaviorScope string
+
+// GoalSupersededCriteriaDodJudgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+type GoalSupersededCriteriaDodJudgment string
+
+// GoalSupersededCriteriaDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
+type GoalSupersededCriteriaDodKind string
+
+// GoalSupersededCriteriaDodProvenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+type GoalSupersededCriteriaDodProvenance string
+
+// GoalSupersededCriteriaDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
+type GoalSupersededCriteriaDodStatus string
+
+// GoalTerminalHistoryState The terminal state this prior run ended in.
+type GoalTerminalHistoryState string
+
+// GoalTerminalHistoryVerdictPerCriterionEvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
+type GoalTerminalHistoryVerdictPerCriterionEvidenceSource string
+
+// GoalTerminalHistoryVerdictPerCriterionProvenance JUDGE-FR-065 — the investigation-log provenance of this verdict: `deterministic_check` when a veto or check evidence decided it; `judge_read`/`diff`/`transcript`/`session_read` mapped from the validated `evidence_source` when the Judge's own reading decided it; `none` when neither applies (e.g. a fail-closed verdict, or a legacy rubric that emits no `evidence_source`). OPTIONAL REPORTING field only (D-B) — the Judge's authority to rule `met` on reasoned conviction alone is never conditioned on this field being present or non-`none`.
+type GoalTerminalHistoryVerdictPerCriterionProvenance string
+
+// GoalTerminalHistoryVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
+type GoalTerminalHistoryVerdictScope string
 
 // GodModeStatus O14 god-mode runtime state, returned by GET /api/v1/gateway/god-mode. God mode is the single global "bypass-permissions" switch: when enabled every agent's tool policy is floored at "allow" (no prompts), the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting are never disabled. The per-agent overrides are non-destructive: switching god mode off restores prior behavior exactly.
 type GodModeStatus struct {
@@ -10349,11 +11833,35 @@ type JudgeVerdict struct {
 		// CriterionId ID of the AcceptanceCriterion this verdict judges.
 		CriterionId string `json:"criterion_id"`
 
-		// EvidenceQuote ADR-074 D7 — the verbatim evidence excerpt the judge grounded this verdict in, copied out of the UNTRUSTED-DATA region of its input (diff/window/claim) per the rubric's quote-before-verdict instruction. Optional and empty-safe: absent/empty on every fail-closed verdict, every pre-D7 persisted verdict, and installs whose Judge soul predates the quote-emitting rubric. Truncated rune-safe to 500 code points at the parser. UNTRUSTED CONTENT — any re-emission into another agent's prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as inert quoted text.
+		// Evidence JUDGE-FR-006 — one entry per clause of the criterion this verdict judges, each answering that clause with its own grounding excerpt. NEW, OPTIONAL, sibling field alongside `evidence_quote` (FR-006's own wording) — `evidence_quote` keeps its existing type/length/optionality unchanged for every reader that does not know about this field (C2); when `evidence` is present the engine populates `evidence_quote` from `evidence[0].quote` so no existing persisted-verdict reader, replay frame or SPA render is affected. A criterion with no machine-checkable form and no located evidence for one or more of its clauses is still the NORMAL case and may still be `met` on the Judge's reasoned conviction (GOAL-FR-038/FR-039, D-B) — this array is a REPORTING obligation the Judge uses to show its work and flag any clause it could not ground, never a gate that can turn a `met` into an `unmet`.
+		Evidence *[]struct {
+			// Part The clause text (a substring of the criterion's own `text`) this entry answers.
+			Part string `json:"part"`
+
+			// Quote The verbatim, rune-truncated (500 code points) grounding excerpt for this clause. UNTRUSTED CONTENT — same framing obligation as `evidence_quote` above. MAY be empty when the Judge could not locate grounding for this clause and is reporting that gap rather than fabricating a quote (D-B: an empty/failed entry here is reported, not fabricated, and never by itself flips the overall verdict).
+			Quote string `json:"quote"`
+
+			// Source Where this clause's grounding excerpt came from. Plain string here (not a closed enum, unlike the verdict-level `evidence_source` above) — a codegen constraint (oapi-codegen cannot auto-name two same-shaped nested enum types across this document without a shared top-level schema, which is out of this wave's write-set) and, independently, a defensible one: this per-entry value is a REPORTING detail (D-B), never compared against by code the way the top-level `evidence_source` is (FR-066's derivation).
+			Source *string `json:"source,omitempty"`
+
+			// Target The specific artifact this clause's excerpt was read from.
+			Target *string `json:"target,omitempty"`
+		} `json:"evidence,omitempty"`
+
+		// EvidenceQuote ADR-074 D7 — the verbatim evidence excerpt the judge grounded this verdict in, copied out of the UNTRUSTED-DATA region of its input (diff/window/claim) per the rubric's quote-before-verdict instruction. Optional and empty-safe: absent/empty on every fail-closed verdict, every pre-D7 persisted verdict, and installs whose Judge soul predates the quote-emitting rubric. Truncated rune-safe to 500 code points at the parser. UNTRUSTED CONTENT — any re-emission into another agent's prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as inert quoted text. FR-071: when `evidence` (below) is present, `evidence_quote` MUST equal `evidence[0].quote`.
 		EvidenceQuote *string `json:"evidence_quote,omitempty"`
+
+		// EvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
+		EvidenceSource *JudgeVerdictPerCriterionEvidenceSource `json:"evidence_source,omitempty"`
+
+		// EvidenceTarget JUDGE-FR-065 — the specific artifact the grounding evidence was read from (a file path, a diff hunk's changed file, a transcript tool-call id, …), paired with `evidence_source`. OPTIONAL REPORTING field only (D-B) — never a proof gate.
+		EvidenceTarget *string `json:"evidence_target,omitempty"`
 
 		// Met Whether this criterion was satisfied. Fail-closed default `false` — absence of evidence never defaults to `true` (NFR-2).
 		Met bool `json:"met"`
+
+		// Provenance JUDGE-FR-065 — the investigation-log provenance of this verdict: `deterministic_check` when a veto or check evidence decided it; `judge_read`/`diff`/`transcript`/`session_read` mapped from the validated `evidence_source` when the Judge's own reading decided it; `none` when neither applies (e.g. a fail-closed verdict, or a legacy rubric that emits no `evidence_source`). OPTIONAL REPORTING field only (D-B) — the Judge's authority to rule `met` on reasoned conviction alone is never conditioned on this field being present or non-`none`.
+		Provenance *JudgeVerdictPerCriterionProvenance `json:"provenance,omitempty"`
 
 		// Reason The judge's rationale for this criterion, fed forward as steering context on the next attempt when `met` is false.
 		Reason string `json:"reason"`
@@ -10371,6 +11879,12 @@ type JudgeVerdict struct {
 	// TaskId Task being judged. Present when `scope == task`.
 	TaskId *string `json:"task_id,omitempty"`
 }
+
+// JudgeVerdictPerCriterionEvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
+type JudgeVerdictPerCriterionEvidenceSource string
+
+// JudgeVerdictPerCriterionProvenance JUDGE-FR-065 — the investigation-log provenance of this verdict: `deterministic_check` when a veto or check evidence decided it; `judge_read`/`diff`/`transcript`/`session_read` mapped from the validated `evidence_source` when the Judge's own reading decided it; `none` when neither applies (e.g. a fail-closed verdict, or a legacy rubric that emits no `evidence_source`). OPTIONAL REPORTING field only (D-B) — the Judge's authority to rule `met` on reasoned conviction alone is never conditioned on this field being present or non-`none`.
+type JudgeVerdictPerCriterionProvenance string
 
 // JudgeVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 type JudgeVerdictScope string
@@ -10949,6 +12463,9 @@ type Message struct {
 	// Summary Compaction summary text (present only on type=compaction entries).
 	Summary *string `json:"summary,omitempty"`
 
+	// SystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not a browser-handover notice. Enum of exactly one value today so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same `BrowserHandoverNoticeFrame` type on replay as was emitted live (BROWSER-FR-043a).
+	SystemSubtype *MessageSystemSubtype `json:"system_subtype,omitempty"`
+
 	// Timestamp RFC3339 timestamp when this entry was recorded.
 	Timestamp time.Time `json:"timestamp"`
 
@@ -11017,11 +12534,35 @@ type Message struct {
 			// CriterionId ID of the AcceptanceCriterion this verdict judges.
 			CriterionId string `json:"criterion_id"`
 
-			// EvidenceQuote ADR-074 D7 — the verbatim evidence excerpt the judge grounded this verdict in, copied out of the UNTRUSTED-DATA region of its input (diff/window/claim) per the rubric's quote-before-verdict instruction. Optional and empty-safe: absent/empty on every fail-closed verdict, every pre-D7 persisted verdict, and installs whose Judge soul predates the quote-emitting rubric. Truncated rune-safe to 500 code points at the parser. UNTRUSTED CONTENT — any re-emission into another agent's prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as inert quoted text.
+			// Evidence JUDGE-FR-006 — one entry per clause of the criterion this verdict judges, each answering that clause with its own grounding excerpt. NEW, OPTIONAL, sibling field alongside `evidence_quote` (FR-006's own wording) — `evidence_quote` keeps its existing type/length/optionality unchanged for every reader that does not know about this field (C2); when `evidence` is present the engine populates `evidence_quote` from `evidence[0].quote` so no existing persisted-verdict reader, replay frame or SPA render is affected. A criterion with no machine-checkable form and no located evidence for one or more of its clauses is still the NORMAL case and may still be `met` on the Judge's reasoned conviction (GOAL-FR-038/FR-039, D-B) — this array is a REPORTING obligation the Judge uses to show its work and flag any clause it could not ground, never a gate that can turn a `met` into an `unmet`.
+			Evidence *[]struct {
+				// Part The clause text (a substring of the criterion's own `text`) this entry answers.
+				Part string `json:"part"`
+
+				// Quote The verbatim, rune-truncated (500 code points) grounding excerpt for this clause. UNTRUSTED CONTENT — same framing obligation as `evidence_quote` above. MAY be empty when the Judge could not locate grounding for this clause and is reporting that gap rather than fabricating a quote (D-B: an empty/failed entry here is reported, not fabricated, and never by itself flips the overall verdict).
+				Quote string `json:"quote"`
+
+				// Source Where this clause's grounding excerpt came from. Plain string here (not a closed enum, unlike the verdict-level `evidence_source` above) — a codegen constraint (oapi-codegen cannot auto-name two same-shaped nested enum types across this document without a shared top-level schema, which is out of this wave's write-set) and, independently, a defensible one: this per-entry value is a REPORTING detail (D-B), never compared against by code the way the top-level `evidence_source` is (FR-066's derivation).
+				Source *string `json:"source,omitempty"`
+
+				// Target The specific artifact this clause's excerpt was read from.
+				Target *string `json:"target,omitempty"`
+			} `json:"evidence,omitempty"`
+
+			// EvidenceQuote ADR-074 D7 — the verbatim evidence excerpt the judge grounded this verdict in, copied out of the UNTRUSTED-DATA region of its input (diff/window/claim) per the rubric's quote-before-verdict instruction. Optional and empty-safe: absent/empty on every fail-closed verdict, every pre-D7 persisted verdict, and installs whose Judge soul predates the quote-emitting rubric. Truncated rune-safe to 500 code points at the parser. UNTRUSTED CONTENT — any re-emission into another agent's prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as inert quoted text. FR-071: when `evidence` (below) is present, `evidence_quote` MUST equal `evidence[0].quote`.
 			EvidenceQuote *string `json:"evidence_quote,omitempty"`
+
+			// EvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
+			EvidenceSource *MessageVerdictPerCriterionEvidenceSource `json:"evidence_source,omitempty"`
+
+			// EvidenceTarget JUDGE-FR-065 — the specific artifact the grounding evidence was read from (a file path, a diff hunk's changed file, a transcript tool-call id, …), paired with `evidence_source`. OPTIONAL REPORTING field only (D-B) — never a proof gate.
+			EvidenceTarget *string `json:"evidence_target,omitempty"`
 
 			// Met Whether this criterion was satisfied. Fail-closed default `false` — absence of evidence never defaults to `true` (NFR-2).
 			Met bool `json:"met"`
+
+			// Provenance JUDGE-FR-065 — the investigation-log provenance of this verdict: `deterministic_check` when a veto or check evidence decided it; `judge_read`/`diff`/`transcript`/`session_read` mapped from the validated `evidence_source` when the Judge's own reading decided it; `none` when neither applies (e.g. a fail-closed verdict, or a legacy rubric that emits no `evidence_source`). OPTIONAL REPORTING field only (D-B) — the Judge's authority to rule `met` on reasoned conviction alone is never conditioned on this field being present or non-`none`.
+			Provenance *MessageVerdictPerCriterionProvenance `json:"provenance,omitempty"`
 
 			// Reason The judge's rationale for this criterion, fed forward as steering context on the next attempt when `met` is false.
 			Reason string `json:"reason"`
@@ -11053,6 +12594,9 @@ type MessageRole string
 // MessageStatus Completion status of this message turn.
 type MessageStatus string
 
+// MessageSystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not a browser-handover notice. Enum of exactly one value today so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same `BrowserHandoverNoticeFrame` type on replay as was emitted live (BROWSER-FR-043a).
+type MessageSystemSubtype string
+
 // MessageToolCallsContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
 type MessageToolCallsContentState string
 
@@ -11061,6 +12605,12 @@ type MessageToolCallsStatus string
 
 // MessageType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
 type MessageType string
+
+// MessageVerdictPerCriterionEvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
+type MessageVerdictPerCriterionEvidenceSource string
+
+// MessageVerdictPerCriterionProvenance JUDGE-FR-065 — the investigation-log provenance of this verdict: `deterministic_check` when a veto or check evidence decided it; `judge_read`/`diff`/`transcript`/`session_read` mapped from the validated `evidence_source` when the Judge's own reading decided it; `none` when neither applies (e.g. a fail-closed verdict, or a legacy rubric that emits no `evidence_source`). OPTIONAL REPORTING field only (D-B) — the Judge's authority to rule `met` on reasoned conviction alone is never conditioned on this field being present or non-`none`.
+type MessageVerdictPerCriterionProvenance string
 
 // MessageVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 type MessageVerdictScope string
@@ -11415,6 +12965,9 @@ type PerformanceSettings struct {
 	// EffectiveMaxParallelAgents The resolved value actually in use. When max_parallel_agents_configured is true this is the operator's own value (from config or the OMNIPUS_MAX_PARALLEL_AGENTS env var). When it is false, this is the physical OS-thread-safety backstop and NOT a capacity recommendation — a client must not present it as one; render the automatic, memory-bounded state instead. Always present in responses; absent in requests.
 	EffectiveMaxParallelAgents *int `json:"effective_max_parallel_agents,omitempty"`
 
+	// GoalMaxRounds GOAL-FR-024/FR-045, MV-1, D-D/D-E (2026-09-11, operator-ratified) — the SINGLE, GLOBAL adjudication-round ceiling for EVERY goal, task and chat identically. Default 20. THERE IS NO PER-GOAL OVERRIDE anywhere in this delivery — GOAL-FR-046 ("a human-editable budget control for a goal's per-goal override") and GOAL-US-8 ("an operator can give a goal more room") are RETIRED in full. This is the ONE control: `Goal.max_rounds` on every goal record resolves from this value alone (`pkg/config/planning.go::EffectiveGoalMaxRounds`, unmodified signature — NQ-2). Lives under Settings → Performance (`src/components/settings/PerformanceSection.tsx`, GOAL-FR-045) — no new settings tab. Always present in responses.
+	GoalMaxRounds *int `json:"goal_max_rounds,omitempty"`
+
 	// MaxParallelAgents Maximum number of tasks/subagents that may run concurrently on the dispatch path. There is no longer a computed default: 0 on disk means "not configured", and is surfaced here as the resolved effective value (see effective_max_parallel_agents and max_parallel_agents_configured) because 0 is an internal sentinel that is never a real concurrency value. When nothing is configured, concurrency is bounded by live available memory at the moment each agent turn is admitted, and the number reported here is a PHYSICAL OS-thread-safety backstop rather than an estimate of what this machine can run. There is NO policy ceiling: an explicitly configured value is always honored as given (never silently clamped — only a floor of 1 applies), including a value above the physical backstop, which is honored in full with a server-side warning logged rather than being lowered. Overridden by the OMNIPUS_MAX_PARALLEL_AGENTS env var.
 	MaxParallelAgents *int `json:"max_parallel_agents,omitempty"`
 
@@ -11427,6 +12980,9 @@ type PerformanceSettings struct {
 
 // PerformanceSettingsUpdate Request body for PUT /api/v1/performance. Partial update — only supplied fields are modified.
 type PerformanceSettingsUpdate struct {
+	// GoalMaxRounds New value for the SINGLE, GLOBAL goal-adjudication-round ceiling (GOAL-FR-024/FR-045, D-D/D-E) — governs task goals and chat goals identically; there is no per-goal override anywhere (GOAL-FR-046/ US-8 retired). Rejected below 1. Omitted = unchanged (partial update).
+	GoalMaxRounds *int `json:"goal_max_rounds,omitempty"`
+
 	// MaxParallelAgents New value for the maximum concurrent task/subagent dispatch cap — the SINGLE authority for agent concurrency (concurrency-gate consolidation, 2026-08-04). Set to 0 to restore the auto-detected default (sized from available memory, floored so a small box still functions). Any other value is honored EXACTLY as given — there is no ceiling; a value is never silently lowered. (Fixed 2026-08-04: this field previously declared `minimum: 2`, which contradicted this very description's "set to 0" instruction and would have rejected 0 under schema validation — corrected alongside the ceiling removal since both are the same field.)
 	MaxParallelAgents *int `json:"max_parallel_agents,omitempty"`
 
@@ -11505,6 +13061,9 @@ type Plan struct {
 			ExpectedExitCode int `json:"expected_exit_code"`
 		} `json:"check,omitempty"`
 
+		// ClauseCount JUDGE-FR-006b — the number of distinct clauses in this criterion's `text`, computed once by `pkg/task/criterion.go::normalizeCriteria` when the criterion is created or updated (never recomputed at adjudication time — see FR-006b's rationale: a count derived at judging time would let the judged party shrink a failing multi-clause criterion into fewer clauses to reduce its own evidence bar). OPTIONAL here only in the sense that a criterion loaded before this field existed carries none until its own next load-time backfill; the server always persists an explicit value going forward, the same precedent as `status`'s own `CritPending` backfill. Consumed exclusively as a grounding-evidence REPORTING signal (how many distinctly-grounded evidence entries the Judge's investigation found) — per operator decision D-B, grounding is never a proof gate, and this field NEVER changes a verdict from `met` to anything else.
+		ClauseCount *int `json:"clause_count,omitempty"`
+
 		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 		Id *string `json:"id,omitempty"`
 
@@ -11517,7 +13076,7 @@ type Plan struct {
 		// Provenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
 		Provenance *PlanDodProvenance `json:"provenance,omitempty"`
 
-		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
 		Status PlanDodStatus `json:"status"`
 
 		// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
@@ -11618,7 +13177,7 @@ type PlanDodKind string
 // PlanDodProvenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
 type PlanDodProvenance string
 
-// PlanDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+// PlanDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
 type PlanDodStatus string
 
 // PlanFailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
@@ -11700,6 +13259,9 @@ type PlanCreateRequest struct {
 			ExpectedExitCode int `json:"expected_exit_code"`
 		} `json:"check,omitempty"`
 
+		// ClauseCount JUDGE-FR-006b — server-computed on create/update by `pkg/task/criterion.go::normalizeCriteria`; NOT author-supplied (present on this input shape only for field-set equality with `AcceptanceCriterion.yaml` — see this file's own header comment). A `mode:update` that LOWERS a criterion's persisted clause count while a verdict for that criterion id exists is rejected with a stated reason (FR-006b). Consumed exclusively as a grounding-evidence REPORTING signal (D-B) — never a proof gate.
+		ClauseCount *int `json:"clause_count,omitempty"`
+
 		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 		Id *string `json:"id,omitempty"`
 
@@ -11712,7 +13274,7 @@ type PlanCreateRequest struct {
 		// Provenance ADR-080 D-DOD. The authority layer this criterion (typically a DoD item) was derived from. ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored elsewhere. Never required.
 		Provenance *PlanCreateRequestDodProvenance `json:"provenance,omitempty"`
 
-		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`.
 		Status PlanCreateRequestDodStatus `json:"status"`
 
 		// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
@@ -11750,7 +13312,7 @@ type PlanCreateRequestDodKind string
 // PlanCreateRequestDodProvenance ADR-080 D-DOD. The authority layer this criterion (typically a DoD item) was derived from. ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored elsewhere. Never required.
 type PlanCreateRequestDodProvenance string
 
-// PlanCreateRequestDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+// PlanCreateRequestDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`.
 type PlanCreateRequestDodStatus string
 
 // PlanListResponse List response for GET /workspaces/{id}/plans (mirrors the removed MilestoneListResponse).
@@ -11825,6 +13387,9 @@ type PlanListResponse struct {
 				ExpectedExitCode int `json:"expected_exit_code"`
 			} `json:"check,omitempty"`
 
+			// ClauseCount JUDGE-FR-006b — the number of distinct clauses in this criterion's `text`, computed once by `pkg/task/criterion.go::normalizeCriteria` when the criterion is created or updated (never recomputed at adjudication time — see FR-006b's rationale: a count derived at judging time would let the judged party shrink a failing multi-clause criterion into fewer clauses to reduce its own evidence bar). OPTIONAL here only in the sense that a criterion loaded before this field existed carries none until its own next load-time backfill; the server always persists an explicit value going forward, the same precedent as `status`'s own `CritPending` backfill. Consumed exclusively as a grounding-evidence REPORTING signal (how many distinctly-grounded evidence entries the Judge's investigation found) — per operator decision D-B, grounding is never a proof gate, and this field NEVER changes a verdict from `met` to anything else.
+			ClauseCount *int `json:"clause_count,omitempty"`
+
 			// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 			Id *string `json:"id,omitempty"`
 
@@ -11837,7 +13402,7 @@ type PlanListResponse struct {
 			// Provenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
 			Provenance *PlanListResponsePlansDodProvenance `json:"provenance,omitempty"`
 
-			// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+			// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
 			Status PlanListResponsePlansDodStatus `json:"status"`
 
 			// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
@@ -11942,7 +13507,7 @@ type PlanListResponsePlansDodKind string
 // PlanListResponsePlansDodProvenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
 type PlanListResponsePlansDodProvenance string
 
-// PlanListResponsePlansDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+// PlanListResponsePlansDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
 type PlanListResponsePlansDodStatus string
 
 // PlanListResponsePlansFailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
@@ -12034,6 +13599,9 @@ type PlanRestartResponse struct {
 				ExpectedExitCode int `json:"expected_exit_code"`
 			} `json:"check,omitempty"`
 
+			// ClauseCount JUDGE-FR-006b — the number of distinct clauses in this criterion's `text`, computed once by `pkg/task/criterion.go::normalizeCriteria` when the criterion is created or updated (never recomputed at adjudication time — see FR-006b's rationale: a count derived at judging time would let the judged party shrink a failing multi-clause criterion into fewer clauses to reduce its own evidence bar). OPTIONAL here only in the sense that a criterion loaded before this field existed carries none until its own next load-time backfill; the server always persists an explicit value going forward, the same precedent as `status`'s own `CritPending` backfill. Consumed exclusively as a grounding-evidence REPORTING signal (how many distinctly-grounded evidence entries the Judge's investigation found) — per operator decision D-B, grounding is never a proof gate, and this field NEVER changes a verdict from `met` to anything else.
+			ClauseCount *int `json:"clause_count,omitempty"`
+
 			// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 			Id *string `json:"id,omitempty"`
 
@@ -12046,7 +13614,7 @@ type PlanRestartResponse struct {
 			// Provenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
 			Provenance *PlanRestartResponsePlanDodProvenance `json:"provenance,omitempty"`
 
-			// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+			// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
 			Status PlanRestartResponsePlanDodStatus `json:"status"`
 
 			// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
@@ -12151,7 +13719,7 @@ type PlanRestartResponsePlanDodKind string
 // PlanRestartResponsePlanDodProvenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
 type PlanRestartResponsePlanDodProvenance string
 
-// PlanRestartResponsePlanDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+// PlanRestartResponsePlanDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
 type PlanRestartResponsePlanDodStatus string
 
 // PlanRestartResponsePlanFailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
@@ -12219,6 +13787,9 @@ type PlanUpdateRequest struct {
 			ExpectedExitCode int `json:"expected_exit_code"`
 		} `json:"check,omitempty"`
 
+		// ClauseCount JUDGE-FR-006b — server-computed on create/update by `pkg/task/criterion.go::normalizeCriteria`; NOT author-supplied (present on this input shape only for field-set equality with `AcceptanceCriterion.yaml` — see this file's own header comment). A `mode:update` that LOWERS a criterion's persisted clause count while a verdict for that criterion id exists is rejected with a stated reason (FR-006b). Consumed exclusively as a grounding-evidence REPORTING signal (D-B) — never a proof gate.
+		ClauseCount *int `json:"clause_count,omitempty"`
+
 		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 		Id *string `json:"id,omitempty"`
 
@@ -12231,7 +13802,7 @@ type PlanUpdateRequest struct {
 		// Provenance ADR-080 D-DOD. The authority layer this criterion (typically a DoD item) was derived from. ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored elsewhere. Never required.
 		Provenance *PlanUpdateRequestDodProvenance `json:"provenance,omitempty"`
 
-		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`.
 		Status PlanUpdateRequestDodStatus `json:"status"`
 
 		// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
@@ -12266,7 +13837,7 @@ type PlanUpdateRequestDodKind string
 // PlanUpdateRequestDodProvenance ADR-080 D-DOD. The authority layer this criterion (typically a DoD item) was derived from. ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored elsewhere. Never required.
 type PlanUpdateRequestDodProvenance string
 
-// PlanUpdateRequestDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+// PlanUpdateRequestDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`.
 type PlanUpdateRequestDodStatus string
 
 // PlanUpdateRequestState Requested state transition. Validated against the canonical plan state machine (Plan.yaml `state` description); illegal transitions are rejected 400.
@@ -13448,6 +15019,9 @@ type SessionDetail struct {
 		// Summary Compaction summary text (present only on type=compaction entries).
 		Summary *string `json:"summary,omitempty"`
 
+		// SystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not a browser-handover notice. Enum of exactly one value today so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same `BrowserHandoverNoticeFrame` type on replay as was emitted live (BROWSER-FR-043a).
+		SystemSubtype *SessionDetailMessagesSystemSubtype `json:"system_subtype,omitempty"`
+
 		// Timestamp RFC3339 timestamp when this entry was recorded.
 		Timestamp time.Time `json:"timestamp"`
 
@@ -13516,11 +15090,35 @@ type SessionDetail struct {
 				// CriterionId ID of the AcceptanceCriterion this verdict judges.
 				CriterionId string `json:"criterion_id"`
 
-				// EvidenceQuote ADR-074 D7 — the verbatim evidence excerpt the judge grounded this verdict in, copied out of the UNTRUSTED-DATA region of its input (diff/window/claim) per the rubric's quote-before-verdict instruction. Optional and empty-safe: absent/empty on every fail-closed verdict, every pre-D7 persisted verdict, and installs whose Judge soul predates the quote-emitting rubric. Truncated rune-safe to 500 code points at the parser. UNTRUSTED CONTENT — any re-emission into another agent's prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as inert quoted text.
+				// Evidence JUDGE-FR-006 — one entry per clause of the criterion this verdict judges, each answering that clause with its own grounding excerpt. NEW, OPTIONAL, sibling field alongside `evidence_quote` (FR-006's own wording) — `evidence_quote` keeps its existing type/length/optionality unchanged for every reader that does not know about this field (C2); when `evidence` is present the engine populates `evidence_quote` from `evidence[0].quote` so no existing persisted-verdict reader, replay frame or SPA render is affected. A criterion with no machine-checkable form and no located evidence for one or more of its clauses is still the NORMAL case and may still be `met` on the Judge's reasoned conviction (GOAL-FR-038/FR-039, D-B) — this array is a REPORTING obligation the Judge uses to show its work and flag any clause it could not ground, never a gate that can turn a `met` into an `unmet`.
+				Evidence *[]struct {
+					// Part The clause text (a substring of the criterion's own `text`) this entry answers.
+					Part string `json:"part"`
+
+					// Quote The verbatim, rune-truncated (500 code points) grounding excerpt for this clause. UNTRUSTED CONTENT — same framing obligation as `evidence_quote` above. MAY be empty when the Judge could not locate grounding for this clause and is reporting that gap rather than fabricating a quote (D-B: an empty/failed entry here is reported, not fabricated, and never by itself flips the overall verdict).
+					Quote string `json:"quote"`
+
+					// Source Where this clause's grounding excerpt came from. Plain string here (not a closed enum, unlike the verdict-level `evidence_source` above) — a codegen constraint (oapi-codegen cannot auto-name two same-shaped nested enum types across this document without a shared top-level schema, which is out of this wave's write-set) and, independently, a defensible one: this per-entry value is a REPORTING detail (D-B), never compared against by code the way the top-level `evidence_source` is (FR-066's derivation).
+					Source *string `json:"source,omitempty"`
+
+					// Target The specific artifact this clause's excerpt was read from.
+					Target *string `json:"target,omitempty"`
+				} `json:"evidence,omitempty"`
+
+				// EvidenceQuote ADR-074 D7 — the verbatim evidence excerpt the judge grounded this verdict in, copied out of the UNTRUSTED-DATA region of its input (diff/window/claim) per the rubric's quote-before-verdict instruction. Optional and empty-safe: absent/empty on every fail-closed verdict, every pre-D7 persisted verdict, and installs whose Judge soul predates the quote-emitting rubric. Truncated rune-safe to 500 code points at the parser. UNTRUSTED CONTENT — any re-emission into another agent's prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as inert quoted text. FR-071: when `evidence` (below) is present, `evidence_quote` MUST equal `evidence[0].quote`.
 				EvidenceQuote *string `json:"evidence_quote,omitempty"`
+
+				// EvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
+				EvidenceSource *SessionDetailMessagesVerdictPerCriterionEvidenceSource `json:"evidence_source,omitempty"`
+
+				// EvidenceTarget JUDGE-FR-065 — the specific artifact the grounding evidence was read from (a file path, a diff hunk's changed file, a transcript tool-call id, …), paired with `evidence_source`. OPTIONAL REPORTING field only (D-B) — never a proof gate.
+				EvidenceTarget *string `json:"evidence_target,omitempty"`
 
 				// Met Whether this criterion was satisfied. Fail-closed default `false` — absence of evidence never defaults to `true` (NFR-2).
 				Met bool `json:"met"`
+
+				// Provenance JUDGE-FR-065 — the investigation-log provenance of this verdict: `deterministic_check` when a veto or check evidence decided it; `judge_read`/`diff`/`transcript`/`session_read` mapped from the validated `evidence_source` when the Judge's own reading decided it; `none` when neither applies (e.g. a fail-closed verdict, or a legacy rubric that emits no `evidence_source`). OPTIONAL REPORTING field only (D-B) — the Judge's authority to rule `met` on reasoned conviction alone is never conditioned on this field being present or non-`none`.
+				Provenance *SessionDetailMessagesVerdictPerCriterionProvenance `json:"provenance,omitempty"`
 
 				// Reason The judge's rationale for this criterion, fed forward as steering context on the next attempt when `met` is false.
 				Reason string `json:"reason"`
@@ -13661,6 +15259,9 @@ type SessionDetailMessagesRole string
 // SessionDetailMessagesStatus Completion status of this message turn.
 type SessionDetailMessagesStatus string
 
+// SessionDetailMessagesSystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not a browser-handover notice. Enum of exactly one value today so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same `BrowserHandoverNoticeFrame` type on replay as was emitted live (BROWSER-FR-043a).
+type SessionDetailMessagesSystemSubtype string
+
 // SessionDetailMessagesToolCallsContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
 type SessionDetailMessagesToolCallsContentState string
 
@@ -13669,6 +15270,12 @@ type SessionDetailMessagesToolCallsStatus string
 
 // SessionDetailMessagesType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
 type SessionDetailMessagesType string
+
+// SessionDetailMessagesVerdictPerCriterionEvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
+type SessionDetailMessagesVerdictPerCriterionEvidenceSource string
+
+// SessionDetailMessagesVerdictPerCriterionProvenance JUDGE-FR-065 — the investigation-log provenance of this verdict: `deterministic_check` when a veto or check evidence decided it; `judge_read`/`diff`/`transcript`/`session_read` mapped from the validated `evidence_source` when the Judge's own reading decided it; `none` when neither applies (e.g. a fail-closed verdict, or a legacy rubric that emits no `evidence_source`). OPTIONAL REPORTING field only (D-B) — the Judge's authority to rule `met` on reasoned conviction alone is never conditioned on this field being present or non-`none`.
+type SessionDetailMessagesVerdictPerCriterionProvenance string
 
 // SessionDetailMessagesVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 type SessionDetailMessagesVerdictScope string
@@ -14559,7 +16166,7 @@ type Task struct {
 	// CreatedBy Username (or agent ID) that created the task. Set server-side at creation; read-only.
 	CreatedBy string `json:"created_by"`
 
-	// Criteria Acceptance criteria (Definition of Done) for this task (ADR-049 D2/D5/FR-3). Agent-created tasks require at least one; UI/human creation is soft (falls back to judging title+description when empty). Immutable once a recurring Trigger run has started (per-run snapshot).
+	// Criteria Acceptance criteria for this task (ADR-049 D2/D5/FR-3). GOAL-FR-021/ D-C (2026-09-11, operator-ratified): creating OR editing a task through the API or the interface now requires at least one criterion AND at least one `dod` item (see `dod` below) — the prior "UI/human creation is soft, falls back to judging title+description" behaviour is RETIRED for every NEW creation/edit going forward (GOAL-FR-047, enforced at the API with a 400, not schema-only). GOAL-FR-023: a task created before this rule with no criteria continues to run and continues to be judged by the ephemeral soft-tier criterion — the rule binds at creation and at edit only, never retroactively. Immutable once a recurring Trigger run has started (per-run snapshot). ADR-086 D5: this list itself now REFERENCES the task's goal record rather than being a second persisted list (GOAL-FR-029) — an implementation detail this wire shape is unaffected by.
 	Criteria *[]struct {
 		// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
 		Author struct {
@@ -14594,6 +16201,9 @@ type Task struct {
 			ExpectedExitCode int `json:"expected_exit_code"`
 		} `json:"check,omitempty"`
 
+		// ClauseCount JUDGE-FR-006b — the number of distinct clauses in this criterion's `text`, computed once by `pkg/task/criterion.go::normalizeCriteria` when the criterion is created or updated (never recomputed at adjudication time — see FR-006b's rationale: a count derived at judging time would let the judged party shrink a failing multi-clause criterion into fewer clauses to reduce its own evidence bar). OPTIONAL here only in the sense that a criterion loaded before this field existed carries none until its own next load-time backfill; the server always persists an explicit value going forward, the same precedent as `status`'s own `CritPending` backfill. Consumed exclusively as a grounding-evidence REPORTING signal (how many distinctly-grounded evidence entries the Judge's investigation found) — per operator decision D-B, grounding is never a proof gate, and this field NEVER changes a verdict from `met` to anything else.
+		ClauseCount *int `json:"clause_count,omitempty"`
+
 		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 		Id *string `json:"id,omitempty"`
 
@@ -14606,7 +16216,7 @@ type Task struct {
 		// Provenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
 		Provenance *TaskCriteriaProvenance `json:"provenance,omitempty"`
 
-		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
 		Status TaskCriteriaStatus `json:"status"`
 
 		// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
@@ -14615,6 +16225,63 @@ type Task struct {
 
 	// Description Optional free-form task description (human-facing notes).
 	Description *string `json:"description,omitempty"`
+
+	// Dod GOAL-FR-003/FR-048 — this task's Definition of Done, DISTINCT from `criteria` (mirrors `Goal.dod`/`Plan.dod`): generic standing quality gates vs. outcome-specific checks, judged identically but never mixed into `criteria`. NEW field (ADR-086): `pkg/task/task.go` had no DoD field before this delivery — the list lives on the task's goal record. GOAL-FR-021/D-C: mandatory (>= 1 item) at creation and at edit, enforced with a 400 at the API, same as `criteria`. GOAL-FR-048: opening a pre-existing task with no `dod` MUST NOT block reading it; saving an edit enforces the rule.
+	Dod *[]struct {
+		// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
+		Author struct {
+			// Id Agent ID or username of the author.
+			Id string `json:"id"`
+
+			// Kind Whether this criterion was authored by an agent or a human user.
+			Kind TaskDodAuthorKind `json:"kind"`
+		} `json:"author"`
+
+		// Behavior Present iff `kind == behavior` (400 if present with a different `kind` — no mixed shape); required iff `kind == behavior` (400 if absent). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
+		Behavior *struct {
+			// MaxCount Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
+			MaxCount *int `json:"max_count,omitempty"`
+
+			// MinCount Minimum number of successful calls of `tool` required within `scope`.
+			MinCount *int `json:"min_count,omitempty"`
+
+			// Scope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+			Scope *TaskDodBehaviorScope `json:"scope,omitempty"`
+
+			// Tool Name of the tool whose successful-call count is checked.
+			Tool string `json:"tool"`
+		} `json:"behavior,omitempty"`
+
+		// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
+		Check *struct {
+			// Command Shell command run through the assignee's `bash` tool.
+			Command string `json:"command"`
+
+			// ExpectedExitCode Exit code that counts as PASS (`met`) for this check.
+			ExpectedExitCode int `json:"expected_exit_code"`
+		} `json:"check,omitempty"`
+
+		// ClauseCount JUDGE-FR-006b — the number of distinct clauses in this criterion's `text`, computed once by `pkg/task/criterion.go::normalizeCriteria` when the criterion is created or updated (never recomputed at adjudication time — see FR-006b's rationale: a count derived at judging time would let the judged party shrink a failing multi-clause criterion into fewer clauses to reduce its own evidence bar). OPTIONAL here only in the sense that a criterion loaded before this field existed carries none until its own next load-time backfill; the server always persists an explicit value going forward, the same precedent as `status`'s own `CritPending` backfill. Consumed exclusively as a grounding-evidence REPORTING signal (how many distinctly-grounded evidence entries the Judge's investigation found) — per operator decision D-B, grounding is never a proof gate, and this field NEVER changes a verdict from `met` to anything else.
+		ClauseCount *int `json:"clause_count,omitempty"`
+
+		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
+		Id *string `json:"id,omitempty"`
+
+		// Judgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+		Judgment TaskDodJudgment `json:"judgment"`
+
+		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
+		Kind TaskDodKind `json:"kind"`
+
+		// Provenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+		Provenance *TaskDodProvenance `json:"provenance,omitempty"`
+
+		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
+		Status TaskDodStatus `json:"status"`
+
+		// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
+		Text string `json:"text"`
+	} `json:"dod,omitempty"`
 
 	// Due Optional deadline (RFC 3339 UTC) for task completion. Separate from `trigger` — `due` is a target date, `trigger` is what fires the run.
 	Due *time.Time `json:"due,omitempty"`
@@ -14628,7 +16295,7 @@ type Task struct {
 	// JudgeRounds ADR-053 §Contract Surface — "Budget / bounds". Per-task adjudication rounds consumed so far, mirroring `Plan.judge_rounds` at task/goal scope (R§8.9 — one round = one adjudication, claim-triggered or idle-settled). Distinct from `attempt_count`, which tracks retry attempts, not adjudications.
 	JudgeRounds *int `json:"judge_rounds,omitempty"`
 
-	// MaxAttempts Per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9). Null/absent inherits the global `PlanningConfig.task_max_attempts` default (3).
+	// MaxAttempts Per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9). Null/absent inherits the global `PlanningConfig.task_max_attempts` default (20).
 	MaxAttempts *int `json:"max_attempts,omitempty"`
 
 	// Owner Username of the user who owns this task. Set server-side at creation; read-only.
@@ -14755,8 +16422,26 @@ type TaskCriteriaKind string
 // TaskCriteriaProvenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
 type TaskCriteriaProvenance string
 
-// TaskCriteriaStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+// TaskCriteriaStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
 type TaskCriteriaStatus string
+
+// TaskDodAuthorKind Whether this criterion was authored by an agent or a human user.
+type TaskDodAuthorKind string
+
+// TaskDodBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+type TaskDodBehaviorScope string
+
+// TaskDodJudgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+type TaskDodJudgment string
+
+// TaskDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
+type TaskDodKind string
+
+// TaskDodProvenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+type TaskDodProvenance string
+
+// TaskDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
+type TaskDodStatus string
 
 // TaskRollupStatus Current status of the child run.
 type TaskRollupStatus string
@@ -14808,7 +16493,7 @@ type TaskCreateRequest struct {
 	// BlockedBy Task IDs this task depends on (depends-on / blocked_by). Each must exist and must not create a cycle (validated at creation).
 	BlockedBy *[]string `json:"blocked_by,omitempty"`
 
-	// Criteria Optional initial acceptance criteria (Definition of Done, ADR-049 D2/D5/FR-3). Agent tool paths reject a create with zero criteria; human/UI creation may leave this empty (soft tier). Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload.
+	// Criteria Initial acceptance criteria (ADR-049 D2/D5/FR-3). GOAL-FR-021/D-C (2026-09-11, operator-ratified): creation through the API or the interface now REQUIRES at least one criterion AND at least one `dod` item (see `dod` below) — the prior "human/UI creation may leave this empty (soft tier)" behaviour is RETIRED for new creates; the server returns HTTP 400 when either is empty (GOAL-FR-047, not enforced as a JSON-Schema `minItems` here — agent tool paths and the REST handler share one 400 rejection, not two shapes of it). Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload.
 	Criteria *[]struct {
 		// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
 		Author struct {
@@ -14843,6 +16528,9 @@ type TaskCreateRequest struct {
 			ExpectedExitCode int `json:"expected_exit_code"`
 		} `json:"check,omitempty"`
 
+		// ClauseCount JUDGE-FR-006b — server-computed on create/update by `pkg/task/criterion.go::normalizeCriteria`; NOT author-supplied (present on this input shape only for field-set equality with `AcceptanceCriterion.yaml` — see this file's own header comment). A `mode:update` that LOWERS a criterion's persisted clause count while a verdict for that criterion id exists is rejected with a stated reason (FR-006b). Consumed exclusively as a grounding-evidence REPORTING signal (D-B) — never a proof gate.
+		ClauseCount *int `json:"clause_count,omitempty"`
+
 		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 		Id *string `json:"id,omitempty"`
 
@@ -14855,7 +16543,7 @@ type TaskCreateRequest struct {
 		// Provenance ADR-080 D-DOD. The authority layer this criterion (typically a DoD item) was derived from. ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored elsewhere. Never required.
 		Provenance *TaskCreateRequestCriteriaProvenance `json:"provenance,omitempty"`
 
-		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`.
 		Status TaskCreateRequestCriteriaStatus `json:"status"`
 
 		// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
@@ -14865,13 +16553,70 @@ type TaskCreateRequest struct {
 	// Description Optional free-form description.
 	Description *string `json:"description,omitempty"`
 
+	// Dod GOAL-FR-003/FR-021/FR-048/D-C — this task's Definition of Done, DISTINCT from `criteria`. NEW field (ADR-086). Required (>= 1 item, enforced with a 400, not schema-only — see `criteria` above) at creation. Items use the authoring-time `AcceptanceCriterionInput` shape, same as `criteria`.
+	Dod *[]struct {
+		// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
+		Author struct {
+			// Id Agent ID or username of the author.
+			Id string `json:"id"`
+
+			// Kind Whether this criterion was authored by an agent or a human user.
+			Kind TaskCreateRequestDodAuthorKind `json:"kind"`
+		} `json:"author"`
+
+		// Behavior Present iff the effective kind is `behavior` (400 if present with another effective kind — no mixed shape). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
+		Behavior *struct {
+			// MaxCount Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
+			MaxCount *int `json:"max_count,omitempty"`
+
+			// MinCount Minimum number of successful calls of `tool` required within `scope`.
+			MinCount *int `json:"min_count,omitempty"`
+
+			// Scope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+			Scope *TaskCreateRequestDodBehaviorScope `json:"scope,omitempty"`
+
+			// Tool Name of the tool whose successful-call count is checked.
+			Tool string `json:"tool"`
+		} `json:"behavior,omitempty"`
+
+		// Check Present iff the effective kind is `check` (400 if present with another effective kind — no mixed shape). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
+		Check *struct {
+			// Command Shell command run through the assignee's `bash` tool.
+			Command string `json:"command"`
+
+			// ExpectedExitCode Exit code that counts as PASS (`met`) for this check.
+			ExpectedExitCode int `json:"expected_exit_code"`
+		} `json:"check,omitempty"`
+
+		// ClauseCount JUDGE-FR-006b — server-computed on create/update by `pkg/task/criterion.go::normalizeCriteria`; NOT author-supplied (present on this input shape only for field-set equality with `AcceptanceCriterion.yaml` — see this file's own header comment). A `mode:update` that LOWERS a criterion's persisted clause count while a verdict for that criterion id exists is rejected with a stated reason (FR-006b). Consumed exclusively as a grounding-evidence REPORTING signal (D-B) — never a proof gate.
+		ClauseCount *int `json:"clause_count,omitempty"`
+
+		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
+		Id *string `json:"id,omitempty"`
+
+		// Judgment ADR-080 D-TYPES. What SHAPE of claim this criterion is — `boolean`, `quantitative`, or `artifact` — orthogonal to `kind` (the verification MECHANISM). OPTIONAL on this input shape: when omitted, the server infers it from the effective `kind` via `task.InferJudgment` — `check` => `boolean`, `behavior` => `quantitative`, `prose` => `boolean` (the default for the honestly-subjective catch-all). An EXPLICIT `judgment` that mismatches a technical `kind` (e.g. `judgment: artifact` with `kind: check`) is a 400. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+		Judgment *TaskCreateRequestDodJudgment `json:"judgment,omitempty"`
+
+		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. OPTIONAL on this input shape (ADR-074 D2): when omitted, inferred from the payload — `check` payload => `check`, `behavior` payload => `behavior`, no payload => `prose`. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+		Kind *TaskCreateRequestDodKind `json:"kind,omitempty"`
+
+		// Provenance ADR-080 D-DOD. The authority layer this criterion (typically a DoD item) was derived from. ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored elsewhere. Never required.
+		Provenance *TaskCreateRequestDodProvenance `json:"provenance,omitempty"`
+
+		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`.
+		Status TaskCreateRequestDodStatus `json:"status"`
+
+		// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
+		Text string `json:"text"`
+	} `json:"dod,omitempty"`
+
 	// Due Optional deadline (RFC 3339 UTC).
 	Due *time.Time `json:"due,omitempty"`
 
 	// IsJoin ADR-053 §Contract Surface — true marks this member as an authored join/assemble member with its own criteria. Absent/false is the common case — no schema `default:` (see `Task.yaml`'s `is_join` for why: combining `default:` with an absent-from-`required` field makes openapi-typescript emit it as non-optional regardless).
 	IsJoin *bool `json:"is_join,omitempty"`
 
-	// MaxAttempts Per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9). Null/absent inherits the global `PlanningConfig.task_max_attempts` default (3).
+	// MaxAttempts Per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9). Null/absent inherits the global `PlanningConfig.task_max_attempts` default (20).
 	MaxAttempts *int `json:"max_attempts,omitempty"`
 
 	// ParentTaskId Optional parent task ID — set when creating a subtask (delegation / decomposition child).
@@ -14965,8 +16710,26 @@ type TaskCreateRequestCriteriaKind string
 // TaskCreateRequestCriteriaProvenance ADR-080 D-DOD. The authority layer this criterion (typically a DoD item) was derived from. ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored elsewhere. Never required.
 type TaskCreateRequestCriteriaProvenance string
 
-// TaskCreateRequestCriteriaStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+// TaskCreateRequestCriteriaStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`.
 type TaskCreateRequestCriteriaStatus string
+
+// TaskCreateRequestDodAuthorKind Whether this criterion was authored by an agent or a human user.
+type TaskCreateRequestDodAuthorKind string
+
+// TaskCreateRequestDodBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+type TaskCreateRequestDodBehaviorScope string
+
+// TaskCreateRequestDodJudgment ADR-080 D-TYPES. What SHAPE of claim this criterion is — `boolean`, `quantitative`, or `artifact` — orthogonal to `kind` (the verification MECHANISM). OPTIONAL on this input shape: when omitted, the server infers it from the effective `kind` via `task.InferJudgment` — `check` => `boolean`, `behavior` => `quantitative`, `prose` => `boolean` (the default for the honestly-subjective catch-all). An EXPLICIT `judgment` that mismatches a technical `kind` (e.g. `judgment: artifact` with `kind: check`) is a 400. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+type TaskCreateRequestDodJudgment string
+
+// TaskCreateRequestDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. OPTIONAL on this input shape (ADR-074 D2): when omitted, inferred from the payload — `check` payload => `check`, `behavior` payload => `behavior`, no payload => `prose`. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+type TaskCreateRequestDodKind string
+
+// TaskCreateRequestDodProvenance ADR-080 D-DOD. The authority layer this criterion (typically a DoD item) was derived from. ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored elsewhere. Never required.
+type TaskCreateRequestDodProvenance string
+
+// TaskCreateRequestDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`.
+type TaskCreateRequestDodStatus string
 
 // TaskCreateRequestSurface UI surface ownership (Detail #5). Defaults to `user`. Dedicated-UI features (e.g. heartbeat) set their own surface so the task is hidden from general views.
 type TaskCreateRequestSurface string
@@ -15166,7 +16929,7 @@ type TaskUpdateRequest struct {
 	// CompletedAt When the task completed or failed.
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 
-	// Criteria Replacement acceptance-criteria set (ADR-049 D2/D5/FR-3) — replaces the current `criteria` atomically. Agent tool paths reject an update that reduces the count below 1. Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload.
+	// Criteria Replacement acceptance-criteria set (ADR-049 D2/D5/FR-3) — replaces the current `criteria` atomically. GOAL-FR-021/D-C (2026-09-11, operator-ratified): the mandatory-criteria rule now binds at EDIT too, uniformly with creation — an update that reduces the count below 1 (on either `criteria` or `dod` below) is rejected with a 400, on every surface (the create form, the task detail panel, the calendar slide-over, this REST path, and the `update_task` tool) — no creation-only carve-out and no exemption for a task created before this rule (GOAL-FR-023 exempts an untouched legacy task from running, never from being edited). Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload.
 	Criteria *[]struct {
 		// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
 		Author struct {
@@ -15201,6 +16964,9 @@ type TaskUpdateRequest struct {
 			ExpectedExitCode int `json:"expected_exit_code"`
 		} `json:"check,omitempty"`
 
+		// ClauseCount JUDGE-FR-006b — server-computed on create/update by `pkg/task/criterion.go::normalizeCriteria`; NOT author-supplied (present on this input shape only for field-set equality with `AcceptanceCriterion.yaml` — see this file's own header comment). A `mode:update` that LOWERS a criterion's persisted clause count while a verdict for that criterion id exists is rejected with a stated reason (FR-006b). Consumed exclusively as a grounding-evidence REPORTING signal (D-B) — never a proof gate.
+		ClauseCount *int `json:"clause_count,omitempty"`
+
 		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
 		Id *string `json:"id,omitempty"`
 
@@ -15213,7 +16979,7 @@ type TaskUpdateRequest struct {
 		// Provenance ADR-080 D-DOD. The authority layer this criterion (typically a DoD item) was derived from. ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored elsewhere. Never required.
 		Provenance *TaskUpdateRequestCriteriaProvenance `json:"provenance,omitempty"`
 
-		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`.
 		Status TaskUpdateRequestCriteriaStatus `json:"status"`
 
 		// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
@@ -15222,6 +16988,63 @@ type TaskUpdateRequest struct {
 
 	// Description New free-form description.
 	Description *string `json:"description,omitempty"`
+
+	// Dod GOAL-FR-003/FR-021/FR-048/D-C — replacement Definition-of-Done set, DISTINCT from `criteria`, replacing the current `dod` atomically. NEW field (ADR-086). Same edit-time mandatory-count rule as `criteria` above (>= 1 item, enforced with a 400 on every surface).
+	Dod *[]struct {
+		// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
+		Author struct {
+			// Id Agent ID or username of the author.
+			Id string `json:"id"`
+
+			// Kind Whether this criterion was authored by an agent or a human user.
+			Kind TaskUpdateRequestDodAuthorKind `json:"kind"`
+		} `json:"author"`
+
+		// Behavior Present iff the effective kind is `behavior` (400 if present with another effective kind — no mixed shape). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
+		Behavior *struct {
+			// MaxCount Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
+			MaxCount *int `json:"max_count,omitempty"`
+
+			// MinCount Minimum number of successful calls of `tool` required within `scope`.
+			MinCount *int `json:"min_count,omitempty"`
+
+			// Scope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+			Scope *TaskUpdateRequestDodBehaviorScope `json:"scope,omitempty"`
+
+			// Tool Name of the tool whose successful-call count is checked.
+			Tool string `json:"tool"`
+		} `json:"behavior,omitempty"`
+
+		// Check Present iff the effective kind is `check` (400 if present with another effective kind — no mixed shape). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
+		Check *struct {
+			// Command Shell command run through the assignee's `bash` tool.
+			Command string `json:"command"`
+
+			// ExpectedExitCode Exit code that counts as PASS (`met`) for this check.
+			ExpectedExitCode int `json:"expected_exit_code"`
+		} `json:"check,omitempty"`
+
+		// ClauseCount JUDGE-FR-006b — server-computed on create/update by `pkg/task/criterion.go::normalizeCriteria`; NOT author-supplied (present on this input shape only for field-set equality with `AcceptanceCriterion.yaml` — see this file's own header comment). A `mode:update` that LOWERS a criterion's persisted clause count while a verdict for that criterion id exists is rejected with a stated reason (FR-006b). Consumed exclusively as a grounding-evidence REPORTING signal (D-B) — never a proof gate.
+		ClauseCount *int `json:"clause_count,omitempty"`
+
+		// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
+		Id *string `json:"id,omitempty"`
+
+		// Judgment ADR-080 D-TYPES. What SHAPE of claim this criterion is — `boolean`, `quantitative`, or `artifact` — orthogonal to `kind` (the verification MECHANISM). OPTIONAL on this input shape: when omitted, the server infers it from the effective `kind` via `task.InferJudgment` — `check` => `boolean`, `behavior` => `quantitative`, `prose` => `boolean` (the default for the honestly-subjective catch-all). An EXPLICIT `judgment` that mismatches a technical `kind` (e.g. `judgment: artifact` with `kind: check`) is a 400. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+		Judgment *TaskUpdateRequestDodJudgment `json:"judgment,omitempty"`
+
+		// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. OPTIONAL on this input shape (ADR-074 D2): when omitted, inferred from the payload — `check` payload => `check`, `behavior` payload => `behavior`, no payload => `prose`. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+		Kind *TaskUpdateRequestDodKind `json:"kind,omitempty"`
+
+		// Provenance ADR-080 D-DOD. The authority layer this criterion (typically a DoD item) was derived from. ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored elsewhere. Never required.
+		Provenance *TaskUpdateRequestDodProvenance `json:"provenance,omitempty"`
+
+		// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`.
+		Status TaskUpdateRequestDodStatus `json:"status"`
+
+		// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
+		Text string `json:"text"`
+	} `json:"dod,omitempty"`
 
 	// Due New deadline (RFC 3339 UTC).
 	Due *time.Time `json:"due,omitempty"`
@@ -15317,8 +17140,26 @@ type TaskUpdateRequestCriteriaKind string
 // TaskUpdateRequestCriteriaProvenance ADR-080 D-DOD. The authority layer this criterion (typically a DoD item) was derived from. ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored elsewhere. Never required.
 type TaskUpdateRequestCriteriaProvenance string
 
-// TaskUpdateRequestCriteriaStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+// TaskUpdateRequestCriteriaStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`.
 type TaskUpdateRequestCriteriaStatus string
+
+// TaskUpdateRequestDodAuthorKind Whether this criterion was authored by an agent or a human user.
+type TaskUpdateRequestDodAuthorKind string
+
+// TaskUpdateRequestDodBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+type TaskUpdateRequestDodBehaviorScope string
+
+// TaskUpdateRequestDodJudgment ADR-080 D-TYPES. What SHAPE of claim this criterion is — `boolean`, `quantitative`, or `artifact` — orthogonal to `kind` (the verification MECHANISM). OPTIONAL on this input shape: when omitted, the server infers it from the effective `kind` via `task.InferJudgment` — `check` => `boolean`, `behavior` => `quantitative`, `prose` => `boolean` (the default for the honestly-subjective catch-all). An EXPLICIT `judgment` that mismatches a technical `kind` (e.g. `judgment: artifact` with `kind: check`) is a 400. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+type TaskUpdateRequestDodJudgment string
+
+// TaskUpdateRequestDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. OPTIONAL on this input shape (ADR-074 D2): when omitted, inferred from the payload — `check` payload => `check`, `behavior` payload => `behavior`, no payload => `prose`. (No schema `default:` here on purpose — see the header comment's codegen trap.)
+type TaskUpdateRequestDodKind string
+
+// TaskUpdateRequestDodProvenance ADR-080 D-DOD. The authority layer this criterion (typically a DoD item) was derived from. ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored elsewhere. Never required.
+type TaskUpdateRequestDodProvenance string
+
+// TaskUpdateRequestDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`.
+type TaskUpdateRequestDodStatus string
 
 // TaskUpdateRequestStatus New task status (6-state lifecycle, ADR-051 D5).
 type TaskUpdateRequestStatus string

@@ -26,3 +26,13 @@ properties:
       message); false = all allowed tools sent every message (no loading step).
       Maps to tools.manifest.compressed. Omitted = unchanged (partial update).
     example: true
+  goal_max_rounds:
+    type: integer
+    minimum: 1
+    description: >
+      New value for the SINGLE, GLOBAL goal-adjudication-round ceiling
+      (GOAL-FR-024/FR-045, D-D/D-E) — governs task goals and chat goals
+      identically; there is no per-goal override anywhere (GOAL-FR-046/
+      US-8 retired). Rejected below 1. Omitted = unchanged (partial
+      update).
+    example: 20

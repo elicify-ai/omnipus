@@ -38,6 +38,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/askuser"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
@@ -65,6 +66,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/entity"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/health"
 	"github.com/elicify-ai/omnipus/pkg/heartbeat"
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -5064,34 +5066,36 @@ func setupAndStartServices(
 		planEngine.SetSessionFailedHook(func(sessionID, reason string) {
 			slog.Info("gateway: boot sweep: session.failed", "session_id", sessionID, "reason", reason)
 		})
-		// Wave 2-C2 supplies the real /goal and /loop active-loop counters via
-		// these exact call sites; until then they contribute 0 to the R5
-		// global active-loop cap (documented boot-ordering requirement on
-		// PlanEngine.RegisterActiveCounter's doc comment). Wave 2-C2 (ADR-049
-		// D6/D7, R5): "goal" counts sessions carrying an active
-		// UnifiedMeta.GoalCondition in the shared session store (the only
-		// store /goal can ever write to — it requires a live
-		// TranscriptStore/TranscriptSessionID, which for every webchat/
-		// channel turn resolves to GetSessionStore()'s shared store, see
-		// resolveOrCreateChannelSession / the WS message handler's session
-		// minting); "loop" counts currently-enabled cron jobs owned by the
-		// dedicated LoopScheduler (constructed above, before this block).
+		// These two exact call sites supply the real /goal and /loop
+		// active-loop counters (documented boot-ordering requirement on
+		// PlanEngine.RegisterActiveCounter's doc comment); "loop" counts
+		// currently-enabled cron jobs owned by the dedicated LoopScheduler
+		// (constructed above, before this block).
+		//
+		// "goal" (GOAL-FR-049, R-22, ADR-086, wave E11 — re-homed here from
+		// the retired wave S4, D-F): re-pointed off session.UnifiedMeta's
+		// GoalCondition field (which ADR-086 makes a derived legacy mirror,
+		// not the source of truth) onto pkg/goal's own record store.
+		// goal.Store.ListActiveByOwnerKind is C-25/R-22's shared selector —
+		// the same predicate goalIdleExpirySweep (pkg/agent/goal_loop.go,
+		// wave E8) reads from, so the two never diverge on what "active"
+		// means. Filtered to owner_kind == session (generated.GoalOwnerKind
+		// Session): the definition phase and every terminal state count 0
+		// by construction (ListActive filters on generated.GoalStateActive
+		// alone), and a task-owned goal is excluded by owner_kind so it
+		// never counts against this global active-loop cap (task-owned
+		// goals are exempt from it, R-22, delivering MV-10 for free).
+		// Constructing a fresh goal.Store per call is safe and cheap —
+		// pkg/entity's cross-call locking is process-wide and shared by
+		// every Store[T] instance rooted at the same directory, exactly the
+		// precedent pkg/gateway/rest_tasks.go's goalStoreForTasks documents.
 		planEngine.RegisterActiveCounter("goal", func() (int, error) {
-			store := agentLoop.GetSessionStore()
-			if store == nil {
-				return 0, nil
-			}
-			sessions, listErr := store.ListSessions()
+			goalStore := goal.NewStore(homePath)
+			active, listErr := goalStore.ListActiveByOwnerKind(gen.GoalOwnerKindSession)
 			if listErr != nil {
-				return 0, fmt.Errorf("active-goal counter: list sessions: %w", listErr)
+				return 0, fmt.Errorf("active-goal counter: list active session-owned goals: %w", listErr)
 			}
-			count := 0
-			for _, s := range sessions {
-				if s != nil && s.GoalCondition != "" {
-					count++
-				}
-			}
-			return count, nil
+			return len(active), nil
 		})
 		planEngine.RegisterActiveCounter("loop", func() (int, error) {
 			if runningServices.LoopScheduler == nil {

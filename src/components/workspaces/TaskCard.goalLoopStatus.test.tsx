@@ -14,9 +14,15 @@
  */
 
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { render, screen } from '@testing-library/react'
 import { TaskCard, goalLoopStatusLabel, DEFAULT_TASK_MAX_ATTEMPTS } from './TaskCard'
 import type { Task, Plan } from '@/lib/api'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const PLANNING_GO = join(__dirname, '..', '..', '..', 'pkg', 'config', 'planning.go')
 
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -64,8 +70,23 @@ describe('goalLoopStatusLabel — pure fn', () => {
     expect(goalLoopStatusLabel({ attempt_count: 2, max_attempts: 5 }, false)).toBe('attempt 2/5')
   })
 
-  it('falls back to the default (3) max attempts when max_attempts is absent', () => {
+  it('falls back to the default max attempts when max_attempts is absent', () => {
     expect(goalLoopStatusLabel({ attempt_count: 1, max_attempts: null }, false)).toBe(`attempt 1/${DEFAULT_TASK_MAX_ATTEMPTS}`)
+  })
+
+  // Anti-drift oracle. Every other assertion in this file uses
+  // DEFAULT_TASK_MAX_ATTEMPTS as its own expected value, so all of them pass
+  // at ANY value of the constant — including a stale one. This constant is
+  // the DENOMINATOR whenever `Task.max_attempts` is absent, which is the
+  // normal "inherit the global" case, so when it drifts below the backend's
+  // real ceiling a perfectly healthy task renders as "attempt 7/3" — already
+  // past a limit it has not reached. The only check that can fail on drift
+  // reads the Go constant itself.
+  it('DEFAULT_TASK_MAX_ATTEMPTS equals pkg/config/planning.go\'s DefaultTaskMaxAttempts', () => {
+    const go = readFileSync(PLANNING_GO, 'utf-8')
+    const m = go.match(/DefaultTaskMaxAttempts\s*=\s*(\d+)/)
+    expect(m, 'DefaultTaskMaxAttempts not found in pkg/config/planning.go').not.toBeNull()
+    expect(DEFAULT_TASK_MAX_ATTEMPTS).toBe(Number(m![1]))
   })
 
   it('appends "· paused" when paused is true, without incrementing the attempt', () => {

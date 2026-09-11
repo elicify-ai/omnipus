@@ -8,14 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
-	"sync/atomic"
 )
 
 // fr001RemovedKeysMsg is the exact error message required by.
@@ -67,70 +65,6 @@ func validateRemovedKeys(data []byte) error {
 	}
 
 	return nil
-}
-
-// legacyOrphanGraceKeyWarnLogged makes warnIfLegacyOrphanGraceKeyPresent fire
-// at most once per process (F11) — every config reload (the gateway's
-// config-file-watcher polls, and /reload calls loadConfigInternal again) must
-// not re-log the same one-line notice forever.
-var legacyOrphanGraceKeyWarnLogged atomic.Bool
-
-// resetLegacyOrphanGraceKeyWarnForTest re-arms the once-latch. Tests only.
-func resetLegacyOrphanGraceKeyWarnForTest() {
-	legacyOrphanGraceKeyWarnLogged.Store(false)
-}
-
-// legacyOrphanGraceKeyJSONPath is gateway.orphaned_turn_grace_seconds, the
-// config key ADR-082 D1 deleted along with the whole orphaned-foreground-turn
-// watchdog it configured (see CLAUDE.md's "Retired surfaces" and
-// pkg/config/orphan_grace_key_ignored_test.go, T-14). Go's json.Unmarshal
-// silently drops unknown object keys, so the key itself is already harmless —
-// this is purely an operator-facing "you can delete this line" notice, never
-// a load failure.
-//
-// Built by concatenation rather than as one string literal: this exact
-// snake_case spelling is verified NOT to match scripts/check-no-orphan-turn-
-// watchdog.sh's SYMBOLS regex (that guard's alternative is the mixed-case Go
-// identifier "OrphanedTurnGraceSeconds" with no underscores, and grep -E is
-// case-sensitive — "orphaned_turn_grace_seconds" shares no substring with it;
-// verified with `grep -E 'OrphanedTurnGraceSeconds'` against the lowercase
-// snake_case form, which does not match). The concatenation is belt-and-
-// braces documentation of that fact for the next reader, not a requirement
-// for the guard to pass — a single literal would already be guard-clean.
-var legacyOrphanGraceKeyJSONPath = "orphaned_turn_grace" + "_seconds"
-
-// warnIfLegacyOrphanGraceKeyPresent inspects raw config.json bytes (BEFORE
-// struct unmarshal, same as validateRemovedKeys) for the retired
-// gateway.orphaned_turn_grace_seconds key and logs one boot WARN if present.
-// Unlike validateRemovedKeys, this never returns an error and never blocks
-// load — TestConfig_OrphanGraceKeyIgnored (T-14/S-13) requires that a
-// pre-ADR-082 config.json carrying this key still boots cleanly; the key has
-// no effect and this is purely a "remove it" nudge to the operator.
-func warnIfLegacyOrphanGraceKeyPresent(data []byte) {
-	top := unmarshalMapSilent(data)
-	if top == nil {
-		return
-	}
-	gatewayRaw, ok := top["gateway"]
-	if !ok {
-		return
-	}
-	gateway := unmarshalMapSilent(gatewayRaw)
-	if gateway == nil {
-		return
-	}
-	if _, present := gateway[legacyOrphanGraceKeyJSONPath]; !present {
-		return
-	}
-	if legacyOrphanGraceKeyWarnLogged.Swap(true) {
-		return
-	}
-	// slog, not pkg/logger, deliberately — same rationale as
-	// WarnIfContainerHasNoMemoryLimit in container_detect.go: pkg/logger
-	// writes to zerolog through package globals with no capture seam, so a
-	// warning emitted through it cannot be asserted on in a test. This is a
-	// one-line boot notice a test needs to observe firing exactly once.
-	slog.Warn("gateway." + legacyOrphanGraceKeyJSONPath + " is retired (ADR-082) and ignored — remove it")
 }
 
 // unmarshalMapSilent attempts to unmarshal JSON bytes into a

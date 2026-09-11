@@ -914,7 +914,18 @@ type Patch struct {
 	Due          *string
 	PlanID       *string
 	Tags         *[]string
-	Criteria     *[]AcceptanceCriterion
+	// Criteria replaces Task.Criteria atomically, same as every other Patch
+	// field. ADR-086 D5/GOAL-FR-029/FR-030 names this write path as a
+	// consumer to re-point onto the task's paired goal record (pkg/goal) —
+	// see Task.Criteria's own doc comment (pkg/task/task.go) for why this
+	// field is deliberately KEPT, disk-persisted, in this round rather than
+	// removed. The tool/REST callers that also hold a goal.Store dual-write
+	// the SAME criteria onto the paired goal record in the same request;
+	// this store has no way to do that itself (pkg/goal imports pkg/task,
+	// so this package cannot import pkg/goal back) and is not the place
+	// GOAL-FR-048's separate `dod` list lives at all — there is no
+	// Patch.Dod, because there is no Task.Dod.
+	Criteria *[]AcceptanceCriterion
 	// WriteSet, Stream, and IsJoin are the ADR-053 plan-member fields
 	// (§Contract Surface — "write_sets + rationale on create_plan", US-11
 	// G-16). Meaningful only when the task has a non-empty PlanID; plan-lint

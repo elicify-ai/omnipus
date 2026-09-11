@@ -12,9 +12,11 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -769,7 +771,188 @@ func (te *TaskExecutor) createTaskSessionSync(t *task.Task) (string, error) {
 		logger.WarnCF("task_executor", "Transcript write failed",
 			map[string]any{"task_id": t.ID, "session_id": taskSessionID, "error": appendErr.Error()})
 	}
+	// GOAL-FR-010/FR-012 (E12): bind this task's own goal record (created in
+	// the defining phase at task creation/edit — rest_tasks.go's
+	// syncTaskGoalRecord) into the active phase against the session just
+	// minted. See activateTaskGoal's own doc comment for the full contract.
+	//
+	// silent-SF-9: the error is DELIBERATELY not propagated out of
+	// createTaskSessionSync — GOAL-FR-023 is explicit that a task with no
+	// usable goal still runs — but it is no longer discarded at the point of
+	// failure either: activateTaskGoal has already logged at ERROR and written
+	// the failure into this task's own transcript before returning it.
+	_ = te.activateTaskGoal(t, taskSessionID)
 	return taskSessionID, nil
+}
+
+// activateTaskGoal is GOAL-FR-010/FR-012's task-side activation: transitions
+// the task's own pkg/goal record (created up front in the defining phase at
+// task creation/edit time — pkg/gateway/rest_tasks.go's syncTaskGoalRecord,
+// GOAL-FR-009) into the active phase, bound to the session this dispatch
+// just minted. Called from BOTH createTaskSessionSync (ExecuteTask's own
+// dispatch path) and StartTaskNow's equivalent inline session-creation
+// block — the two places a task session is minted (see createTaskSessionSync's
+// own doc comment for why StartTaskNow does not route through it).
+//
+// A task with no paired goal record (GOAL-FR-023: a task created before
+// D-C's criteria+DoD-mandatory-at-creation rule, or a test fixture that
+// never called syncTaskGoalRecord) is left alone — this is NOT an error.
+// The task still runs; it simply never enters the goal loop, exactly as it
+// did before this wave, and pkg/agent/judge.go's SoftTierCriterion path
+// judges it the same way it always has.
+//
+// R-04 (re-run, GOAL-FR-028): a task-owned goal that already reached a
+// terminal state on a PRIOR run re-enters active via Reactivate rather than
+// minting a second goal record — rest_tasks.go's syncTaskGoalRecord never
+// creates a second record for a task that already has one (GetByOwner finds
+// it and Update()s it in place instead), so this is the ONLY place a
+// re-run's goal state actually flips back to active. An already-active
+// record (double-activation defensiveness — should not happen under the
+// single-dispatch-per-claim invariant ClaimForRun enforces, but a defensive
+// no-op costs nothing) is left untouched.
+//
+// ADR-086 (S6): the session-meta mirror this function used to write after
+// activating the record (GoalID/GoalCondition/GoalCriteriaJSON/
+// GoalRoundsUsed/GoalMaxRounds/GoalLatestReason/GoalStartedAt/
+// GoalLastActivityAt/GoalQuestionRoundsUsed/GoalZeroOutputPushes) is GONE.
+// It existed for exactly one reason — checkGoalLoopAfterTurn (goal_loop.go)
+// and the keeper drivers (goal_triggers.go) read their entry condition off
+// session.UnifiedMeta, so a task-owned goal had to be made to look like a
+// chat-owned one there. Those readers are re-pointed now: they resolve the
+// ACTIVE goal record BOUND to the turn's session (activeGoalForSession,
+// goal_record_wiring.go), which Activate below sets to taskSessionID, so
+// GOAL-FR-013's "one code path" holds without a second copy of the state.
+//
+// The "task_explicit" GoalCriteriaJSON sentinel goes with it, and its
+// purpose survives structurally: the D3 "unregistered goal" nudge ladder
+// now tests the record's own criteria list (len(rec.Criteria) == 0), and a
+// task goal's criteria are fixed on its record at creation (D-C), so the
+// ladder stays unreachable for a task-owned goal (GOAL-FR-020).
+//
+// That unreachability is the NUDGE LADDER's alone, and says nothing about
+// the keeper that hosts it. The quiet-window keeper
+// (goal_triggers.go::goalQuietWindowSettle) selects ACTIVE goal records of
+// BOTH owner kinds (GOAL-FR-015, C-24): once the record below goes active
+// it is swept exactly like a chat goal's, so a task that goes quiet gets
+// the six suppressions (GOAL-FR-016), the bounded continue-push
+// (GOAL-FR-017) and the one-action-per-quiet-spell re-arm (GOAL-FR-018).
+// An earlier revision of this comment asserted the keeper "selects
+// session-owned records only" — it did, and that was the defect
+// GOAL-FR-015 names, not a design. Do not restore that filter.
+//
+// It returns an error (it used to be a void function, silent-SF-9). Neither
+// caller treats that error as fatal — GOAL-FR-023 is explicit that a task
+// with no usable goal record still runs — but the failure is now reported
+// where it happens (ERROR log plus a line in the task's OWN session
+// transcript, reportTaskGoalActivationFailure) rather than swallowed, so a
+// task running with no goal loop is visible instead of merely quiet. A task
+// with no paired record at all is NOT one of those failures and returns nil.
+//
+// Activation also RECORDS THE GOAL'S ROUTING (review finding 10) — the step
+// both chat activation paths take and this one did not, which left every
+// task-owned goal unreachable by the keeper. See the call to
+// recordGoalRouting below for the full failure it closes.
+func (te *TaskExecutor) activateTaskGoal(t *task.Task, taskSessionID string) error {
+	if t == nil || taskSessionID == "" {
+		return fmt.Errorf("task_executor: activate task goal: a task and a session id are both required")
+	}
+	gstore := resolveGoalRecordStore()
+	g, err := gstore.GetByOwner(generated.GoalOwnerKindTask, t.ID)
+	if err != nil {
+		if errors.Is(err, goal.ErrOwnerNotFound) {
+			// GOAL-FR-023: NOT an error — the task runs, it simply never
+			// enters the goal loop. Logged at INFO rather than DEBUG
+			// (silent-SF-9) because under D-C every task created through the
+			// product carries criteria and therefore a paired record, so
+			// reaching this line at all is worth one visible line.
+			logger.InfoCF("task_executor", "goal: task has no paired goal record — running without a goal loop (GOAL-FR-023)",
+				map[string]any{"task_id": t.ID, "session_id": taskSessionID})
+			return nil
+		}
+		return te.reportTaskGoalActivationFailure(t, taskSessionID, "",
+			fmt.Errorf("task_executor: look up goal record for task %q: %w", t.ID, err))
+	}
+
+	now := time.Now().UTC()
+	if _, uerr := gstore.Update(g.GoalID, func(cur *goal.Goal) error {
+		switch {
+		case cur.IsDefining():
+			return cur.Activate(taskSessionID, now)
+		case cur.IsTerminal():
+			return cur.Reactivate(taskSessionID, now)
+		default:
+			// Already active — defensive no-op (should not happen under
+			// ClaimForRun's single-dispatch-per-claim invariant).
+			return nil
+		}
+	}); uerr != nil {
+		return te.reportTaskGoalActivationFailure(t, taskSessionID, g.GoalID,
+			fmt.Errorf("task_executor: activate goal record %q for task %q: %w", g.GoalID, t.ID, uerr))
+	}
+
+	// Review finding 10: record this goal's ROUTING, exactly as the two chat
+	// activation paths do (goal_loop.go's applyGoalCommandPrompt and
+	// activateInstantGoal both call recordGoalRouting immediately after
+	// activating). This call site did not exist, so a task-owned goal carried
+	// no RouteChannel/RouteChatID on its record and no entry in the in-memory
+	// routing map. Now that goalQuietWindowSettle selects task-owned records
+	// (GOAL-FR-015), that omission was load-bearing: dispatchGoalAsyncFollowUp
+	// resolves its destination through routeFor, which found nothing on either
+	// side, so NO keeper push ever reached a quiet task — and the miss took
+	// routeFor's RecordRoutingLost branch, stamping "keeper cannot reach the
+	// goal's channel — routing lost" into LatestReason, where it surfaced to
+	// the user in the goal status frame as if the goal itself were broken.
+	//
+	// The destination is the task's own SourceChannel/SourceChatID with the
+	// same "system"/"task:<id>" fallback wakeOwnerAttemptsExhausted already
+	// uses for a board/REST-created task with no chat origin —
+	// AsyncNotifier.Notify rejects an empty destination outright (FR-N7), so
+	// the fallback is what makes a board-created task reachable at all.
+	//
+	// The session key is empty by design: GOAL-FR-032 deleted the persisted
+	// session-key field and routeFor reads it from nothing (see
+	// recordGoalRouting's own doc comment).
+	if te.agentLoop != nil {
+		channel, chatID := t.SourceChannel, t.SourceChatID
+		if channel == "" || chatID == "" {
+			channel, chatID = "system", "task:"+t.ID
+		}
+		te.agentLoop.recordGoalRouting(taskSessionID, g.GoalID, channel, chatID, "", t.AgentID)
+	}
+
+	logger.InfoCF("task_executor", "goal: task goal record activated for this run",
+		map[string]any{"task_id": t.ID, "goal_id": g.GoalID, "session_id": taskSessionID})
+	return nil
+}
+
+// reportTaskGoalActivationFailure is silent-SF-9's loud surface: it makes a
+// task-side goal-activation failure as VISIBLE as the chat side's already is.
+//
+// The chat path fails in front of the user — createAndActivateSessionGoalRecord
+// returning an error makes applyGoalCommandPrompt reply "Could not start the
+// goal loop (internal error persisting the goal record)" straight into the
+// chat. The task path used to swallow the identical failure in a void function
+// with one WARN line and a bare return, so a task ran to completion with no
+// goal loop, no adjudication and no criteria ever judged, and nothing anywhere
+// the operator would look said so. That asymmetry breaks ADR-086's
+// identical-behaviour promise (GOAL-FR-013) in exactly the direction that
+// hides a defect.
+//
+// It logs at ERROR and writes a system line into the task's OWN session
+// transcript — the task-side equivalent of the chat reply, and the surface an
+// operator reading the run actually sees — then returns err for the caller to
+// propagate or log.
+func (te *TaskExecutor) reportTaskGoalActivationFailure(t *task.Task, taskSessionID, goalID string, err error) error {
+	logger.ErrorCF("task_executor", "goal: task goal activation failed — this task will run with NO goal loop (no adjudication, no criteria judged)",
+		map[string]any{"task_id": t.ID, "goal_id": goalID, "session_id": taskSessionID, "error": err.Error()})
+	if te.agentLoop != nil {
+		if sessStore := te.agentLoop.GetAgentStore(t.AgentID); sessStore != nil {
+			te.agentLoop.writeGoalSystemTranscript(sessStore, taskSessionID, t.AgentID, fmt.Sprintf(
+				"This task's goal could not be activated (%v). The run continues WITHOUT a goal loop: no acceptance criteria will be adjudicated for it.",
+				err))
+		}
+	}
+	return err
 }
 
 // runTask executes the agent prompt and updates the task on completion.
@@ -1140,12 +1323,13 @@ func (te *TaskExecutor) finishTaskRun(
 // adjudicateClaim routes a worker's SUCCESS claim through the evidence-ladder
 // judge (US-5/US-6, judge.go). Empty Criteria falls back to the ADR-049 D5
 // soft tier (SoftTierCriterion: judge against Prompt, else title+description).
-// When the soft tier applies AND the Judge System Agent is not registered at
-// all (never true post-boot in production, since coreagent.SeedConfig always
-// seeds it — only reachable from a raw pkg/agent harness that never ran
-// SeedConfig), the claim is trusted directly rather than paused forever: a
-// missing Judge in that specific combination is a structural/environment
-// gap, not a transient D7 "unavailable" cause.
+//
+// GOAL-FR-022/R-27: this function contains NO path that completes a task on
+// the worker's own claim. Both trust-the-claim branches it once had are gone
+// — the structurally-empty one (no criteria, no soft-tier text) now fails
+// closed through consumeAttemptOrExhaust, and the Judge-unregistered one now
+// returns EC-6's non-terminal "cannot adjudicate" with no attempt consumed.
+// A claim reaches `done` only via a real met verdict.
 func (te *TaskExecutor) adjudicateClaim(
 	ctx context.Context, t *task.Task, taskSessionID, claimSummary string, run *activeRun,
 ) (redispatchTaskID string) {
@@ -1168,20 +1352,51 @@ func (te *TaskExecutor) adjudicateClaim(
 		}
 	}
 
+	// GOAL-FR-022: the trust-the-claim branch that used to sit here — which
+	// completed the task directly whenever BOTH the explicit criteria set
+	// and the soft-tier fallback were empty — is deleted. GOAL-FR-021 now
+	// requires at least one acceptance criterion at task creation AND edit
+	// (D-C), so this state should not arise for a new task; GOAL-FR-023
+	// keeps a pre-FR-021 legacy task running unchanged via the soft-tier
+	// fallback above. The one case this leaves genuinely unhandled — a
+	// legacy task with no criteria AND an empty title/description/prompt,
+	// so SoftTierCriterion also returns nil — has no verifiable claim to
+	// trust either way; NFR-2's fail-closed default applies: it is treated
+	// exactly like the empty-claim-summary branch above rather than handed
+	// a structurally-empty criteria slice to judge.
 	if len(criteria) == 0 {
-		// Structurally empty task (no criteria, no prompt, no title/description
-		// text worth judging) — nothing to judge; trust the claim.
-		te.completeTaskWithResult(t, taskSessionID, task.StatusInProgress, true, claimSummary, run)
-		return ""
+		reason := "task has no acceptance criteria and no soft-tier fallback text " +
+			"(empty title/description/prompt) — nothing to adjudicate (fail-closed, GOAL-FR-022)"
+		logger.WarnCF("task_executor",
+			"adjudicateClaim: structurally empty task (no criteria, no soft tier) — refusing to trust the claim (GOAL-FR-022)",
+			map[string]any{"task_id": t.ID})
+		return te.consumeAttemptOrExhaust(ctx, t, taskSessionID, reason, nil, run)
 	}
 
+	// GOAL-FR-022/FR-023 + R-27: the SECOND trust-the-claim branch used to sit
+	// here — when the soft tier applied AND the Judge System Agent was absent
+	// from the registry, the claim was completed outright. It is deleted. A
+	// completion claim is a REQUEST to be judged, never a completion: an
+	// unreachable Judge is a reason the claim CANNOT be adjudicated, not
+	// evidence that it is true, and an environment gap must never be worth
+	// more to a task than a real verdict.
+	//
+	// The outcome is EC-6's judge-unavailable rule, identical in shape to the
+	// result.Unavailable branch below: non-terminal, NO round and NO attempt
+	// consumed (consumeAttemptOrExhaust is deliberately not called), the task
+	// left in_progress with its run still open, and one operator-visible WARN
+	// naming the real cause. A later retry re-enters runTask, whose openRun is
+	// idempotent on (taskID, occurrenceMs); boot reconciliation
+	// (reconcileStuckTaskRuns) is the accepted backstop if the retry never
+	// comes. Silence is what is prohibited here, not the pause.
 	if usedSoftTier {
 		if _, ok := te.agentLoop.GetRegistry().GetAgent(string(coreagent.IDJudge)); !ok {
 			logger.WarnCF("task_executor",
-				"goal-loop: Judge System Agent not configured; trusting the worker's claim "+
-					"directly for this criteria-less task",
-				map[string]any{"task_id": t.ID})
-			te.completeTaskWithResult(t, taskSessionID, task.StatusInProgress, true, claimSummary, run)
+				"goal-loop: cannot adjudicate — the Judge System Agent is not registered, so this "+
+					"criteria-less task's completion claim cannot be judged; leaving the task in_progress "+
+					"and consuming no attempt (GOAL-FR-022/R-27). Register the Judge agent "+
+					"(coreagent.SeedConfig seeds it) to unblock it.",
+				map[string]any{"task_id": t.ID, "reason": "judge_unregistered"})
 			return ""
 		}
 	}
@@ -1214,6 +1429,16 @@ func (te *TaskExecutor) adjudicateClaim(
 		// second one. If the task is never retried, boot reconciliation
 		// (reconcileStuckTaskRuns) is the accepted backstop (spec §3.5) —
 		// there is no dedicated in-process reaper.
+		//
+		// JUDGE-FR-057a/FR-083: result.Reason already carries the
+		// upstream-computed, machine-readable distinct-reason prefix
+		// (god_mode:/cas_loss:, verifier_capability_gate.go and the
+		// verifier_registry CAS loser — pkg/agent/verifier_adjudication.go,
+		// outside this file's write-set) rather than a bare provider-outage
+		// string, so it is never reported to the operator merged with a
+		// genuine outage. It is carried here onto the log record —
+		// task_executor's own durable, queryable surface for this task —
+		// keyed and structured so the reason is filterable per task.
 		logger.WarnCF("task_executor",
 			"goal-loop: judge cycle abandoned (context canceled during backoff)",
 			map[string]any{"task_id": t.ID, "reason": result.Reason})
@@ -1244,6 +1469,28 @@ func (te *TaskExecutor) adjudicateClaim(
 
 	verdict := result.Verdict
 	te.writeJudgeVerdictTranscript(t, taskSessionID, verdict)
+
+	// GOAL-FR-036/FR-040: project the verdict's per-criterion outcomes onto
+	// t.Criteria's Status field — one of the projection's three write paths
+	// (verdict_projection.go). Runs against t.Criteria (the persisted list),
+	// never the local `criteria` var used to dispatch the judge call, so a
+	// soft-tier adjudication (criteria holds the ephemeral synthesized
+	// fallback, t.Criteria is empty) naturally resolves as the GOAL-FR-031
+	// logged no-op the projection itself already implements — nothing
+	// task-specific is needed here to keep that ephemeral criterion
+	// unpersisted. Runs on BOTH met and unmet outcomes (FR-040 is not
+	// conditioned on the overall verdict), and only writes when the
+	// projection actually changed something (Applied > 0) — a pure no-op
+	// verdict against this task's criteria never touches the store.
+	if projected, pstats := projectVerdictOntoCriteria(t.Criteria, verdict); pstats.Applied > 0 {
+		if _, perr := te.store.Update(t.ID, task.Patch{Criteria: &projected}); perr != nil {
+			logger.WarnCF("task_executor",
+				"adjudicateClaim: could not persist the verdict projection onto task criteria (GOAL-FR-036)",
+				map[string]any{"task_id": t.ID, "error": perr.Error()})
+		} else {
+			t.Criteria = projected
+		}
+	}
 
 	if verdict.Met {
 		te.completeTaskWithResult(t, taskSessionID, task.StatusInProgress, true, claimSummary, run)
@@ -2578,6 +2825,14 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 			logger.WarnCF("task_executor", "StartTaskNow: transcript write failed",
 				map[string]any{"task_id": taskID, "session_id": taskSessionID, "error": err.Error()})
 		}
+		// GOAL-FR-010/FR-012 (E12): see activateTaskGoal's doc comment —
+		// StartTaskNow is the second of the two task-session-creation
+		// chokepoints and must activate the task's goal record exactly like
+		// createTaskSessionSync does. The error is reported by
+		// activateTaskGoal itself (ERROR log + a line in the task's own
+		// transcript) and is not fatal to the run — see the sibling call in
+		// createTaskSessionSync.
+		_ = te.activateTaskGoal(t, taskSessionID)
 	} else {
 		logger.WarnCF("task_executor", "StartTaskNow: no agent store found, task will have no session",
 			map[string]any{"task_id": taskID, "agent_id": t.AgentID})

@@ -316,20 +316,28 @@ func TestSnapshot_AuditEventNameMatchesContractPattern(t *testing.T) {
 	}
 }
 
-// TestSnapshot_IsNotWriteClass (FR-038) is the structural half of the
-// exemption, asserted against the same classification maps the audit
-// biconditional test reads — so the snapshot cannot drift into the gated set
-// without both tests noticing.
+// TestSnapshot_IsNotWriteClass (FR-038, amended by ADR-085 FR-035 into the
+// three-way action/capture/exempt split) is the structural half of the
+// classification, asserted against the same rosters the audit biconditional
+// test reads — so the snapshot cannot drift into the wrong class without
+// both tests noticing. browser_snapshot moved from "read-only/exempt" to
+// CAPTURE under ADR-085: it now DOES call controlledResult (a human's typed
+// credential could otherwise leak through an accessibility-tree read), but
+// still calls neither the write lease nor recordBrowserAction.
 func TestSnapshot_IsNotWriteClass(t *testing.T) {
 	if writeClassBrowserTools["browser_snapshot"] {
-		t.Error("browser_snapshot is classified write-class. It calls neither controlledResult nor " +
-			"the write lease (FR-038): it is read-only and must answer while a human is driving " +
-			"the tab and while another tool holds the lease")
+		t.Error("browser_snapshot is classified action/write-class. It must call controlledResult " +
+			"but neither the write lease nor recordBrowserAction (ADR-085 FR-035 capture-class): " +
+			"it answers 'what is on the page' but never fights another tool for the lease")
 	}
-	if !readOnlyBrowserTools["browser_snapshot"] {
-		t.Error("browser_snapshot is in NEITHER classification set. audit_test.go treats an " +
-			"unclassified tool as a defect precisely so a new tool cannot default silently into " +
-			"the exempt half")
+	if !captureBrowserTools["browser_snapshot"] {
+		t.Error("browser_snapshot must be in captureBrowserTools (ADR-085 FR-035) — it is " +
+			"control-gated (unlike browser_list_tabs/browser_wait/browser_handle_dialog) but never " +
+			"leased or per-call audited")
+	}
+	if exemptBrowserTools["browser_snapshot"] {
+		t.Error("browser_snapshot must NOT be in exemptBrowserTools any more — ADR-085 moved it to " +
+			"capture-class, so it now defers to a held wheel exactly like a screenshot does")
 	}
 	for _, name := range []string{
 		"browser_select_option", "browser_press_key", "browser_hover", "browser_upload_file",

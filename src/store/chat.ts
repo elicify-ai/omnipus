@@ -21,6 +21,7 @@ import type {
   AskUserQuestionCard,
   AskUserAnswerFrame,
   SessionStateFrame,
+  BrowserHandoverNoticeFrame,
 } from '@/lib/api/generated/asyncapi-types'
 import { useJudgeActivityStore } from '@/store/judgeActivity'
 import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/schemas'
@@ -249,6 +250,21 @@ export type ChatMessage = Message & {
    * durability tradeoff this implies).
    */
   goalAckGoalId?: string
+  /**
+   * ADR-085 BROWSER-FR-042/FR-044 (wave B8, `src/store/chat.ts` region 2 of
+   * 2 — C-73). Set ONLY on the synthetic `role: 'system'` marker message
+   * `case 'browser_handover_notice'` inserts via `buildBrowserHandoverInsertion`
+   * — never on an ordinary system banner. Purely a render-time discriminator
+   * (`ChatScreen.tsx`'s `SystemMessage`/`VirtualSystemMessageRow`, mirroring
+   * `goalAckGoalId`'s identical role) so the `data-testid=
+   * "browser-handover-notice"` e2e hook (C-90) lands on exactly this
+   * message and nothing else. Never serialized to the wire. Unlike
+   * `goalAckGoalId` (which stores the goal_id, a value the ack line's own
+   * id is DERIVED from via `goalAckMessageId`), this field stores the SAME
+   * string as `id` — the server-computed `message_id` (BROWSER-FR-044) IS
+   * the de-dup key, there is no separate domain id to carry.
+   */
+  browserHandoverNoticeId?: string
 }
 
 // Client-side truncation sentinel — parallel to server TruncatedResult/ToolResultRef shapes.
@@ -1596,6 +1612,10 @@ const SESSION_SCOPED_FRAME_TYPES = new Set([
   // on card.session_id (required, min(1)); the routing resolver below
   // falls back to it when no top-level session_id exists.
   'ask_user_question',
+  // ADR-085 BROWSER-FR-042/FR-044 (wave B8): BrowserHandoverNoticeFrame
+  // carries a required, min(1) `session_id` (contracts/components/schemas/
+  // BrowserHandoverNoticeFrame.yaml) — session-scoped like goal_status.
+  'browser_handover_notice',
 ])
 
 // F-S3: frame types that can carry a turn-cancellation acknowledgment
@@ -1632,12 +1652,21 @@ const UNKNOWN_FRAME_TOAST_THRESHOLD = 5
 // ── goalPills bound (regression fix, bc66345f follow-up) ──────────────────
 //
 // Authoritative terminal-state set per the wire contract
-// (contracts/components/schemas/GoalStatusFrame.yaml `state` enum, 9
-// values): `done` (success), `failed` (a genuine budget/rounds-exhausted/
-// idle-expired brake), and `cleared` (a deliberate user-initiated stop —
-// added post-ADR-053 so it does NOT collapse into `failed`). All other
+// (contracts/components/schemas/GoalStatusFrame.yaml `state` enum, now 14
+// values after the joint ADR-084/ADR-085/ADR-086 delivery, C-39): `done`
+// (success), `failed` (a genuine budget/rounds-exhausted/idle-expired
+// brake — pre-existing, now narrower now that `expired` has its own
+// value, see below), `cleared` (a deliberate user-initiated stop — added
+// post-ADR-053 so it does NOT collapse into `failed`), and `expired`
+// (ADR-086 GOAL-FR-028: the 7-day idle-expiry sweep, D-A — the fourth
+// distinguishable terminal ending, ADDED by this delivery). All other
 // states (queued/active/waiting_on_user/judge_unavailable/re-planning/
-// judging) are non-terminal: the goal can still receive another frame.
+// judging/judge_refused_god_mode/judge_cas_loss/blocked/claim_overturned)
+// are non-terminal: the goal can still receive another frame. `blocked`
+// and `claim_overturned` deliberately do NOT join this set (plan OQ-17,
+// C-17) even though both "park" the goal — the goal is still live and a
+// returning operator seeing `claim_overturned` hidden by the terminal
+// display timer would defeat JUDGE-FR-102's whole point.
 //
 // Exported (not just module-private) so `GoalPillTray.tsx` can key its own
 // short-lived "keep a terminal pill visible briefly, then stop rendering
@@ -1647,6 +1676,7 @@ export const GOAL_TERMINAL_STATES: ReadonlySet<GoalStatusFrame['state']> = new S
   'done',
   'failed',
   'cleared',
+  'expired',
 ])
 
 /**
@@ -1872,6 +1902,52 @@ function buildGoalAckInsertion(
       })()
     : [...b.messageOrder, ackId]
   return { messagesById, messageOrder }
+}
+
+/**
+ * Builds the {messagesById, messageOrder} patch that inserts the ADR-085
+ * browser-handover waiting notice for `frame` into bucket `b`, or returns
+ * null when a message with this id already exists in the bucket — the
+ * idempotency BROWSER-FR-044 requires. The server derives `message_id`
+ * deterministically from `(session_id, holdStartedAtUnixNano)` — a
+ * wall-clock nanosecond timestamp minted once at the transition INTO a
+ * stood-down state and reused verbatim for every emission within that one
+ * unbroken hold (never a per-process counter, which would collide across a
+ * gateway restart — C-84) — so a duplicate arrival (a WS re-attach
+ * re-delivering the same live frame, or the FR-043a replay of the same
+ * persisted transcript entry landing on top of an already-live line) must
+ * never insert a second line, while a genuinely NEW hold (a fresh
+ * `holdStartedAtUnixNano`) always gets its own.
+ *
+ * Deliberately simpler than `buildGoalAckInsertion` in one respect: this
+ * notice always appends at the current tail rather than being anchored to
+ * an earlier message in the thread — a handover has no "condition" text
+ * (goal's `/goal <condition>` command) to search the history for, and
+ * BROWSER-FR-041/042 only ever describe it as delivered live into the open
+ * thread, never backdated to some earlier point in it. Split out of `case
+ * 'browser_handover_notice'` for the same reason `buildGoalAckInsertion`
+ * is split out of `case 'goal_status'`: the insertion logic gets a single,
+ * independently-reasoned-about home. Per C-73, this function and its call
+ * site are B8's entire region of this file — it reads no goal symbol.
+ */
+function buildBrowserHandoverInsertion(
+  b: SessionChatState,
+  frame: BrowserHandoverNoticeFrame,
+): Pick<SessionChatState, 'messagesById' | 'messageOrder'> | null {
+  if (b.messagesById[frame.message_id]) return null // already shown for this hold — idempotent, never duplicate.
+
+  const noticeMessage: ChatMessage = {
+    id: frame.message_id,
+    role: 'system',
+    status: 'done',
+    content: frame.text,
+    timestamp: new Date().toISOString(),
+    browserHandoverNoticeId: frame.message_id,
+  }
+  return {
+    messagesById: { ...b.messagesById, [frame.message_id]: noticeMessage },
+    messageOrder: [...b.messageOrder, frame.message_id],
+  }
 }
 
 export const useChatStore = create<ChatStore>((set, get) => {
@@ -5883,6 +5959,21 @@ export const useChatStore = create<ChatStore>((set, get) => {
               ...ackInsertion,
             }
           })
+          break
+        }
+
+        case 'browser_handover_notice': {
+          // ADR-085 BROWSER-FR-042 (render half) / FR-044 (SPA idempotency
+          // half), wave B8 (C-73 — this arm and buildBrowserHandoverInsertion
+          // are this file's ENTIRE B8 region; neither reads nor edits any
+          // goal_status symbol). Session-scoped (in SESSION_SCOPED_FRAME_TYPES
+          // above) — targetSid is already resolved/dropped per the routing
+          // rules at the top of handleFrame. See buildBrowserHandoverInsertion's
+          // doc comment for the idempotency/append-at-tail rationale (mirrors
+          // buildGoalAckInsertion's pattern — C-73).
+          if (!targetSid) break
+          const handoverFrame = frame as BrowserHandoverNoticeFrame
+          withBucket(targetSid, (b) => buildBrowserHandoverInsertion(b, handoverFrame) ?? {})
           break
         }
 

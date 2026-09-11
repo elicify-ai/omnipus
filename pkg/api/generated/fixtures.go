@@ -1029,12 +1029,13 @@ func FixtureTask_Populated() Task {
 			Command          string `json:"command"`
 			ExpectedExitCode int    `json:"expected_exit_code"`
 		} `json:"check,omitempty"`
-		Id         *string                 `json:"id,omitempty"`
-		Judgment   TaskCriteriaJudgment    `json:"judgment"`
-		Kind       TaskCriteriaKind        `json:"kind"`
-		Provenance *TaskCriteriaProvenance `json:"provenance,omitempty"`
-		Status     TaskCriteriaStatus      `json:"status"`
-		Text       string                  `json:"text"`
+		ClauseCount *int                    `json:"clause_count,omitempty"`
+		Id          *string                 `json:"id,omitempty"`
+		Judgment    TaskCriteriaJudgment    `json:"judgment"`
+		Kind        TaskCriteriaKind        `json:"kind"`
+		Provenance  *TaskCriteriaProvenance `json:"provenance,omitempty"`
+		Status      TaskCriteriaStatus      `json:"status"`
+		Text        string                  `json:"text"`
 	}{
 		{
 			Kind:     TaskCriteriaKind("check"),
@@ -2190,10 +2191,19 @@ func FixtureJudgeVerdict_Populated() JudgeVerdict {
 		Round:  1,
 		Met:    false,
 		PerCriterion: []struct {
-			CriterionId   string  `json:"criterion_id"`
-			EvidenceQuote *string `json:"evidence_quote,omitempty"`
-			Met           bool    `json:"met"`
-			Reason        string  `json:"reason"`
+			CriterionId string `json:"criterion_id"`
+			Evidence    *[]struct {
+				Part   string  `json:"part"`
+				Quote  string  `json:"quote"`
+				Source *string `json:"source,omitempty"`
+				Target *string `json:"target,omitempty"`
+			} `json:"evidence,omitempty"`
+			EvidenceQuote  *string                                 `json:"evidence_quote,omitempty"`
+			EvidenceSource *JudgeVerdictPerCriterionEvidenceSource `json:"evidence_source,omitempty"`
+			EvidenceTarget *string                                 `json:"evidence_target,omitempty"`
+			Met            bool                                    `json:"met"`
+			Provenance     *JudgeVerdictPerCriterionProvenance     `json:"provenance,omitempty"`
+			Reason         string                                  `json:"reason"`
 		}{
 			{CriterionId: "550e8400-e29b-41d4-a716-446655440010", Met: false, Reason: "3 tests still failing"},
 		},
@@ -2308,12 +2318,13 @@ func FixturePlanListResponse_Populated() PlanListResponse {
 					Command          string `json:"command"`
 					ExpectedExitCode int    `json:"expected_exit_code"`
 				} `json:"check,omitempty"`
-				Id         *string                             `json:"id,omitempty"`
-				Judgment   PlanListResponsePlansDodJudgment    `json:"judgment"`
-				Kind       PlanListResponsePlansDodKind        `json:"kind"`
-				Provenance *PlanListResponsePlansDodProvenance `json:"provenance,omitempty"`
-				Status     PlanListResponsePlansDodStatus      `json:"status"`
-				Text       string                              `json:"text"`
+				ClauseCount *int                                `json:"clause_count,omitempty"`
+				Id          *string                             `json:"id,omitempty"`
+				Judgment    PlanListResponsePlansDodJudgment    `json:"judgment"`
+				Kind        PlanListResponsePlansDodKind        `json:"kind"`
+				Provenance  *PlanListResponsePlansDodProvenance `json:"provenance,omitempty"`
+				Status      PlanListResponsePlansDodStatus      `json:"status"`
+				Text        string                              `json:"text"`
 			} `json:"dod,omitempty"`
 			FailedReason               *PlanListResponsePlansFailedReason `json:"failed_reason,omitempty"`
 			Goal                       *string                            `json:"goal,omitempty"`

@@ -11,7 +11,11 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -1114,5 +1118,168 @@ func TestSetGoal_ResultCarriesGoalIDAndRecord(t *testing.T) {
 	}
 	if len(amended.Criteria) != 2 {
 		t.Fatalf("amended result must carry the amended (2-item) criteria array, got %+v", amended.Criteria)
+	}
+}
+
+// TestSetGoalUpdate_CannotLowerPersistedClauseCountWithVerdictOnRecord is
+// JUDGE-FR-006b's second clause (E-20, DD-3): a mode:update that shortens a
+// criterion's text enough to lower its persisted clause count, while a
+// verdict already exists for that criterion, must be rejected outright —
+// the adjudicator reads only the persisted count, never recomputing it, so
+// a silently-lowered count would let the judged party cut its own evidence
+// bar in response to a failing verdict. See
+// rejectLoweredClauseCountWithVerdict's own doc comment for why matching is
+// positional (index-for-index at equal list length) rather than by text —
+// this tool's schema carries no criterion-id input, and a text-exact match
+// can never find "the same" criterion once its text has changed.
+func TestSetGoalUpdate_CannotLowerPersistedClauseCountWithVerdictOnRecord(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+
+	const sid = "session_clause_guard"
+	const oldCriterionID = "crit-shrink-1"
+
+	// Seed a real, active session-owned goal record — rejectLoweredClauseCountWithVerdict
+	// (via lookupGoalLatestVerdictForClauseCountGuard) reads the LATEST VERDICT
+	// straight off the pkg/goal store, bypassing the narrow GoalRecordAccess
+	// seam (see that function's own doc comment for why).
+	g, gerr := goal.New(generated.GoalOwnerKindSession, sid, generated.ChatCompiled,
+		"do the three things", "", nil,
+		[]task.AcceptanceCriterion{{
+			ID: "dod-floor", Kind: task.KindProse, Judgment: task.JudgmentBoolean,
+			Text: "no secrets leaked", Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: "test"},
+		}},
+		10, time.Now().UTC())
+	if gerr != nil {
+		t.Fatalf("goal.New: %v", gerr)
+	}
+	gstore := goal.NewStore(home)
+	if cerr := gstore.Create(g); cerr != nil {
+		t.Fatalf("Create: %v", cerr)
+	}
+	if _, aerr := gstore.Update(g.GoalID, func(cur *goal.Goal) error {
+		return cur.Activate(sid, time.Now().UTC())
+	}); aerr != nil {
+		t.Fatalf("Activate: %v", aerr)
+	}
+	if _, verr := gstore.Update(g.GoalID, func(cur *goal.Goal) error {
+		cur.LatestVerdict = &task.JudgeVerdict{
+			PerCriterion: []task.CriterionVerdict{{CriterionID: oldCriterionID, Met: false, Reason: "not yet demonstrated"}},
+		}
+		return nil
+	}); verr != nil {
+		t.Fatalf("seed verdict: %v", verr)
+	}
+
+	// The prior record (what GoalRecordAccess.ReadGoalState would have
+	// returned before this update): one criterion, id oldCriterionID,
+	// ClauseCount explicitly 3 (a verdict already rendered against it at
+	// that count — set_goal's own Execute never recomputes an OLD record's
+	// clause count, only a freshly-submitted one).
+	oldCriterionJSON, jerr := json.Marshal(task.AcceptanceCriterion{
+		ID: oldCriterionID, Kind: task.KindProse, Judgment: task.JudgmentBoolean,
+		Text: "first do a; then do b; then do c", ClauseCount: 3,
+		Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: "test"},
+	})
+	if jerr != nil {
+		t.Fatal(jerr)
+	}
+	oldRecordJSON := fmt.Sprintf(
+		`{"intent":"do the three things","prompt":"do the three things","definition":"do the three things","criteria":[%s],"dod":[]}`,
+		oldCriterionJSON)
+
+	access := newFakeGoalRecordAccess()
+	access.goalID[sid] = g.GoalID
+	access.condition[sid] = "do the three things"
+	access.record[sid] = oldRecordJSON
+	tool := newSetGoalTool(access)
+
+	// Re-issue the SAME (single-item) criteria list, shortened to one
+	// clause — no delimiters, so task.NormalizeCriteria computes
+	// ClauseCount=1 for it, lower than the persisted 3.
+	res := tool.Execute(setGoalCtx(sid, "agent-1"), map[string]any{
+		"mode":       "update",
+		"definition": "do the three things",
+		"criteria": []any{
+			map[string]any{"text": "just do a now", "judgment": "boolean"},
+		},
+	})
+	if !res.IsError {
+		t.Fatalf("want a rejection when a mode:update lowers a verdicted criterion's clause count, got success: %+v", res)
+	}
+	if !strings.Contains(res.ForLLM, "clause") {
+		t.Fatalf("error should name the clause-count guard: %q", res.ForLLM)
+	}
+	if access.writes != 0 {
+		t.Fatalf("a rejected update must not write the record, got %d writes", access.writes)
+	}
+}
+
+// TestSetGoalUpdate_ClauseCountLoweredWithoutVerdict_IsAllowed proves the
+// guard is scoped to "a verdict already exists for this criterion" — the
+// SAME shortening submitted against a criterion with NO verdict on record
+// (e.g. the working agent's own very first steering pass, before any
+// adjudication has ever run) must succeed normally. Without this row, a
+// bug that rejected every clause-count reduction unconditionally (not just
+// the verdicted case JUDGE-FR-006b actually names) would pass the row
+// above and go undetected.
+func TestSetGoalUpdate_ClauseCountLoweredWithoutVerdict_IsAllowed(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+
+	const sid = "session_clause_guard_no_verdict"
+	const oldCriterionID = "crit-shrink-2"
+
+	g, gerr := goal.New(generated.GoalOwnerKindSession, sid, generated.ChatCompiled,
+		"do the three things", "", nil,
+		[]task.AcceptanceCriterion{{
+			ID: "dod-floor", Kind: task.KindProse, Judgment: task.JudgmentBoolean,
+			Text: "no secrets leaked", Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: "test"},
+		}},
+		10, time.Now().UTC())
+	if gerr != nil {
+		t.Fatalf("goal.New: %v", gerr)
+	}
+	gstore := goal.NewStore(home)
+	if cerr := gstore.Create(g); cerr != nil {
+		t.Fatalf("Create: %v", cerr)
+	}
+	if _, aerr := gstore.Update(g.GoalID, func(cur *goal.Goal) error {
+		return cur.Activate(sid, time.Now().UTC())
+	}); aerr != nil {
+		t.Fatalf("Activate: %v", aerr)
+	}
+	// Deliberately NO LatestVerdict seeded — the guard must not fire.
+
+	oldCriterionJSON, jerr := json.Marshal(task.AcceptanceCriterion{
+		ID: oldCriterionID, Kind: task.KindProse, Judgment: task.JudgmentBoolean,
+		Text: "first do a; then do b; then do c", ClauseCount: 3,
+		Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: "test"},
+	})
+	if jerr != nil {
+		t.Fatal(jerr)
+	}
+	oldRecordJSON := fmt.Sprintf(
+		`{"intent":"do the three things","prompt":"do the three things","definition":"do the three things","criteria":[%s],"dod":[]}`,
+		oldCriterionJSON)
+
+	access := newFakeGoalRecordAccess()
+	access.goalID[sid] = g.GoalID
+	access.condition[sid] = "do the three things"
+	access.record[sid] = oldRecordJSON
+	tool := newSetGoalTool(access)
+
+	res := tool.Execute(setGoalCtx(sid, "agent-1"), map[string]any{
+		"mode":       "update",
+		"definition": "do the three things",
+		"criteria": []any{
+			map[string]any{"text": "just do a now", "judgment": "boolean"},
+		},
+	})
+	if res.IsError {
+		t.Fatalf("no verdict is on record — the clause-count guard must not fire: %s", res.ForLLM)
+	}
+	if access.writes != 1 {
+		t.Fatalf("want exactly one write, got %d", access.writes)
 	}
 }

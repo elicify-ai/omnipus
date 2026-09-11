@@ -17,7 +17,10 @@ package agent
 
 import (
 	"testing"
+	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
@@ -137,52 +140,45 @@ func TestU26_WriteGoalVerdictTranscript_RealSession_PersistsAndDoesNotCount(t *t
 	}
 }
 
-// TestU26_GoalIdleExpirySweep_ListSessions_IsUnpaginatedZeroArgForm is a
-// W16j documentation-as-test: it pins that goalIdleExpirySweep (this unit's
-// only ListSessions call site alongside goal_triggers.go's
-// goalQuietWindowSettle) still calls the store's zero-arg, unpaginated
-// ListSessions() — the form ADR-057 U6 deliberately left unchanged
-// (unified.go's SessionListPage doc comment: "ListSessions() itself keeps
-// its existing zero-arg, 'return everything' signature so every caller
-// outside this migration's own session-list pipeline ... keeps compiling
-// unchanged"). This sweep must see every goal-bearing session in one pass
-// (it is a periodic full-store scan, not a UI-facing paginated listing), so
-// converting it to ListSessionsPage would be a regression, not an upgrade —
-// this test exists so a future change that swaps in pagination here fails
-// loudly instead of silently under-sweeping.
-func TestU26_GoalIdleExpirySweep_ListSessions_IsUnpaginatedZeroArgForm(t *testing.T) {
+// TestU26_GoalIdleExpirySweep_SelectorIsUnpaginatedFullScan is a W16j
+// documentation-as-test: it pins that goalIdleExpirySweep's SELECTOR is an
+// unpaginated, "return everything" full scan. The sweep is a periodic
+// full-store pass, not a UI-facing paginated listing, so swapping in
+// pagination here would silently under-sweep — a regression, not an upgrade.
+// This test exists so that change fails loudly.
+//
+// ADR-086 re-point (this was
+// TestU26_GoalIdleExpirySweep_ListSessions_IsUnpaginatedZeroArgForm): the
+// selector is no longer session.ListSessions() filtered on the retired
+// GoalCondition meta field. GOAL-FR-028/R-06 moved it to pkg/goal.Store's own
+// ListActive(), so idle expiry covers BOTH owner kinds off the goal record's
+// own LastActivityAt rather than chat sessions only (goal_loop.go's
+// goalIdleExpirySweep). ListSessions() survives inside the sweep purely to
+// resolve a session's ActiveAgentID for the handover note — it selects
+// nothing. The unpaginated-full-scan property is therefore pinned on
+// ListActive(), which is where under-sweeping could now actually happen.
+func TestU26_GoalIdleExpirySweep_SelectorIsUnpaginatedFullScan(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	store := al.GetAgentStore("native-agent")
 	if store == nil {
 		t.Fatal("GetAgentStore(native-agent) returned nil")
 	}
-	// Create more sessions than any plausible single UI page size, all
-	// carrying an active goal, and confirm the idle sweep still considers
-	// every one of them (proving it is not windowed).
+	// Create more goal-bearing sessions than any plausible single UI page
+	// size and confirm the sweep's selector still returns every one of them
+	// in ONE call (proving it is not windowed).
 	const n = 12
 	for i := 0; i < n; i++ {
 		meta, err := store.NewSession(session.SessionTypeChat, "", "native-agent")
 		if err != nil {
 			t.Fatalf("NewSession[%d]: %v", i, err)
 		}
-		goalCond := "condition"
-		if err := store.SetMeta(meta.ID, session.MetaPatch{
-			GoalCondition: &goalCond,
-		}); err != nil {
-			t.Fatalf("SetMeta[%d]: %v", i, err)
-		}
+		armGoalRecord(t, meta.ID, "condition", nil, 0, time.Now())
 	}
-	sessions, err := store.ListSessions()
+	active, err := goal.NewStore(config.OmnipusHomeDir()).ListActive()
 	if err != nil {
-		t.Fatalf("ListSessions: %v", err)
+		t.Fatalf("ListActive: %v", err)
 	}
-	goalBearing := 0
-	for _, s := range sessions {
-		if s.GoalCondition != "" {
-			goalBearing++
-		}
-	}
-	if goalBearing != n {
-		t.Fatalf("ListSessions returned %d goal-bearing sessions, want all %d in one unpaginated call", goalBearing, n)
+	if len(active) != n {
+		t.Fatalf("ListActive returned %d active goal records, want all %d in one unpaginated call", len(active), n)
 	}
 }

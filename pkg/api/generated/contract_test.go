@@ -4624,3 +4624,264 @@ func TestContract_GodModeStatus_MissingRequiredFieldRejected(t *testing.T) {
 	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "GodModeStatus", raw),
 		"GodModeStatus missing required 'persisted' must fail")
 }
+
+// ── ADR-084/085/086 joint delivery — hand-synced contract-copies comparator ──
+//
+// wave T1 (docs/internal/specs/adr-084-086-joint-delivery-plan.md line 371):
+// GOAL-FR-037, GOAL-FR-042, GOAL-MV-7, GOAL-SC-008, JUDGE-FR-073a, JUDGE-FR-075.
+//
+// FR-073a: every hand-synced copy of every shape this joint delivery touches
+// must agree RECURSIVELY over the full sub-schema — not a top-level
+// property-set diff (C21), which would see "evidence: array" agree across
+// all three per-criterion-verdict copies and stop there, leaving the
+// nested evidence[] item shape (including its `source` field) unguarded in
+// exactly the copy openapi-zod-client reads. The copies-table enumeration
+// (judge spec "Every copy of every changed shape, by path (FR-073, C20)")
+// is the authority for which paths are compared below; $ref rows (4, 9 in
+// that table) are excluded on purpose — they inherit by reference and
+// cannot drift independently of their target. Row 12 of that table (the
+// judge degraded-capability agent-card field) is likewise EXCLUDED:
+// JUDGE-FR-077-FR-080 and judge spec §M ("the mixed state") are retired in
+// full by operator decisions D-F/D-H — building or guarding that field
+// would resurrect a retired surface, not protect one.
+//
+// Each comparison below targets an EXPLICIT (schema, path) pair, never a
+// bare field-name match (C-56): this is what stops the comparator from
+// ever cross-comparing AcceptanceCriterion's authority-layer `provenance`
+// enum ({stated, workspace, floor, inferred}) against CriterionVerdict's
+// evidence-source `provenance` enum ({judge_read, deterministic_check,
+// diff, transcript, session_read, none}) merely because both fields
+// happen to be named "provenance" on unrelated schemas.
+
+// yamlNoiseKeys are documentation-only YAML keys that legitimately differ in
+// wording between independently hand-synced copies of the same shape
+// (each copy explains its own sync obligation in its own words) without
+// that being a structural drift the comparator should flag.
+var yamlNoiseKeys = map[string]bool{"description": true, "example": true, "title": true}
+
+// stripYAMLNoise returns a deep copy of v with every yamlNoiseKeys entry
+// removed at every nesting level, so only structural schema content
+// survives for comparison: type, enum, required, additionalProperties,
+// properties, items, and bounds such as minLength/maxItems/minimum.
+func stripYAMLNoise(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, val := range t {
+			if yamlNoiseKeys[k] {
+				continue
+			}
+			out[k] = stripYAMLNoise(val)
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, val := range t {
+			out[i] = stripYAMLNoise(val)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
+// loadYAMLDoc reads and parses a whole YAML file into a generic mapping.
+// Distinct from this file's yamlLoader (which feeds the jsonschema
+// compiler for validation): this one is for direct structural
+// navigation/comparison between two hand-synced copies, not compilation.
+func loadYAMLDoc(t *testing.T, absPath string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(absPath)
+	require.NoError(t, err, "reading %s", absPath)
+	var doc any
+	require.NoError(t, yaml.Unmarshal(data, &doc), "parsing YAML %s", absPath)
+	m, ok := doc.(map[string]any)
+	require.True(t, ok, "%s: top-level YAML document is not a mapping (got %T)", absPath, doc)
+	return m
+}
+
+// yamlPath walks a chain of map keys from node, failing loudly (never
+// silently returning a zero value) when a step is missing or not a
+// mapping — a scoped check that silently matches nothing must be reported
+// as a failure to run, never as a pass (delivery plan §6 rules 13/17).
+func yamlPath(t *testing.T, label string, node any, path ...string) any {
+	t.Helper()
+	cur := node
+	for i, key := range path {
+		m, ok := cur.(map[string]any)
+		require.Truef(t, ok, "%s: expected a mapping at %q, got %T", label, strings.Join(path[:i], "."), cur)
+		next, ok := m[key]
+		require.Truef(t, ok, "%s: key %q not found at %q", label, key, strings.Join(path[:i+1], "."))
+		cur = next
+	}
+	return cur
+}
+
+// componentYAMLPath loads contracts/components/schemas/<name>.yaml fresh
+// (never relying on the schemaSetupOnce-populated package vars, so this
+// helper — and every test using it — is safely runnable in isolation via
+// `-run '^TestName$'`) and optionally navigates into it.
+func componentYAMLPath(t *testing.T, name string, path ...string) any {
+	t.Helper()
+	abs := filepath.Join(contractsDir(), "components", "schemas", name+".yaml")
+	doc := loadYAMLDoc(t, abs)
+	if len(path) == 0 {
+		return doc
+	}
+	return yamlPath(t, name+".yaml", doc, path...)
+}
+
+// asyncapiYAMLPath loads contracts/asyncapi.yaml fresh and navigates into
+// components.schemas.<schemaName>, then further into path.
+func asyncapiYAMLPath(t *testing.T, schemaName string, path ...string) any {
+	t.Helper()
+	abs := filepath.Join(contractsDir(), "asyncapi.yaml")
+	doc := loadYAMLDoc(t, abs)
+	full := append([]string{"components", "schemas", schemaName}, path...)
+	return yamlPath(t, "asyncapi.yaml", doc, full...)
+}
+
+// yamlStringSet converts a parsed YAML sequence of strings into a set, for
+// order-independent comparisons like a `required` list delta.
+func yamlStringSet(t *testing.T, v any) map[string]bool {
+	t.Helper()
+	list, ok := v.([]any)
+	require.True(t, ok, "expected a YAML sequence, got %T", v)
+	out := make(map[string]bool, len(list))
+	for _, item := range list {
+		s, ok := item.(string)
+		require.True(t, ok, "expected a string sequence item, got %T", item)
+		out[s] = true
+	}
+	return out
+}
+
+// TestContractCopies_AllHandSyncedCopiesAgree_Recursive is FR-073a: every
+// hand-synced copy pair from the judge spec's "Every copy of every changed
+// shape" table (FR-073, C20) agrees structurally, recursively over the
+// full sub-schema. Renamed from a prior "AllThreeContractCopiesAgree"
+// precedent that counted one shape of four (C21) — this covers all four
+// shapes the joint delivery touches: the per-criterion verdict shape
+// (rows 1-3), AcceptanceCriterion's full property set including its status
+// enum (rows 5-8), GoalStatusFrame.state's enum (rows 10-11), and (C-85)
+// the new BrowserHandoverNoticeFrame the joint delivery adds.
+//
+// Manual break test: edit any one hand-synced copy's `type`, `enum`, or
+// nested `properties` (e.g. add an enum value to just the asyncapi.yaml
+// inline copy) and re-run — the corresponding subtest must go red. This
+// comparator already caught a live drift in the current tree: asyncapi.yaml's
+// inline JudgeVerdictFrame.per_criterion.items.evidence[].source carries a
+// closed `enum`, while CriterionVerdict.yaml and JudgeVerdictFrame.yaml's own
+// evidence[].source are both deliberately plain `type: string` (each says so
+// in its own description, "not a closed enum ... a codegen constraint").
+// That is exactly the class of drift FR-073a exists to catch — reported here,
+// not silently normalized away, because contracts/** is outside this wave's
+// write-set (F1 owns it).
+//
+// Traces to: docs/internal/specs/judge-active-reviewer-spec.md FR-073,
+// FR-073a (lines ~2100-2135) and the copies table (lines ~1341-1372);
+// docs/internal/specs/adr-084-086-joint-delivery-plan.md C-85 (line 315),
+// wave T1 (line 371).
+func TestContractCopies_AllHandSyncedCopiesAgree_Recursive(t *testing.T) {
+	t.Run("row 1 vs row 2 — CriterionVerdict.yaml vs JudgeVerdictFrame.yaml per_criterion.items", func(t *testing.T) {
+		canonical := stripYAMLNoise(componentYAMLPath(t, "CriterionVerdict"))
+		handSync := stripYAMLNoise(componentYAMLPath(t, "JudgeVerdictFrame", "properties", "per_criterion", "items"))
+		assert.Equal(t, canonical, handSync,
+			"CriterionVerdict.yaml and JudgeVerdictFrame.yaml's per_criterion.items must agree structurally (FR-073a, copies table rows 1-2)")
+	})
+
+	t.Run("row 1 vs row 3 — CriterionVerdict.yaml vs asyncapi.yaml JudgeVerdictFrame per_criterion.items", func(t *testing.T) {
+		canonical := stripYAMLNoise(componentYAMLPath(t, "CriterionVerdict"))
+		inline := stripYAMLNoise(asyncapiYAMLPath(t, "JudgeVerdictFrame", "properties", "per_criterion", "items"))
+		assert.Equal(t, canonical, inline,
+			"CriterionVerdict.yaml and asyncapi.yaml's inline JudgeVerdictFrame per_criterion.items must agree structurally — this is the copy openapi-zod-client reads (FR-073a, copies table rows 1, 3)")
+	})
+
+	t.Run("row 5 vs row 7 — AcceptanceCriterion.yaml vs asyncapi.yaml GoalStatusFrame.criteria[] item", func(t *testing.T) {
+		canonical := stripYAMLNoise(componentYAMLPath(t, "AcceptanceCriterion"))
+		inline := stripYAMLNoise(asyncapiYAMLPath(t, "GoalStatusFrame", "properties", "criteria", "items"))
+		assert.Equal(t, canonical, inline,
+			"AcceptanceCriterion.yaml and asyncapi.yaml's GoalStatusFrame.criteria[] item must agree structurally (FR-073a, copies table rows 5, 7) — missing this drops every goal-status frame at the SPA edge with a green make verify-contracts")
+	})
+
+	t.Run("row 5 vs row 8 — AcceptanceCriterion.yaml vs asyncapi.yaml GoalStatusFrame.dod[] item", func(t *testing.T) {
+		canonical := stripYAMLNoise(componentYAMLPath(t, "AcceptanceCriterion"))
+		inline := stripYAMLNoise(asyncapiYAMLPath(t, "GoalStatusFrame", "properties", "dod", "items"))
+		assert.Equal(t, canonical, inline,
+			"AcceptanceCriterion.yaml and asyncapi.yaml's GoalStatusFrame.dod[] item must agree structurally (FR-073a, copies table rows 5, 8)")
+	})
+
+	t.Run("row 5 vs row 6 — AcceptanceCriterion.yaml vs AcceptanceCriterionInput.yaml, required-delta exactly {kind, judgment}", func(t *testing.T) {
+		canonicalDoc := componentYAMLPath(t, "AcceptanceCriterion")
+		inputDoc := componentYAMLPath(t, "AcceptanceCriterionInput")
+
+		canonicalProps := stripYAMLNoise(yamlPath(t, "AcceptanceCriterion.yaml", canonicalDoc, "properties"))
+		inputProps := stripYAMLNoise(yamlPath(t, "AcceptanceCriterionInput.yaml", inputDoc, "properties"))
+		assert.Equal(t, canonicalProps, inputProps,
+			"AcceptanceCriterion.yaml and AcceptanceCriterionInput.yaml must describe the identical property set/shape — only `required` may legitimately differ between this pair (FR-073a, copies table rows 5-6)")
+
+		canonicalRequired := yamlStringSet(t, yamlPath(t, "AcceptanceCriterion.yaml", canonicalDoc, "required"))
+		inputRequired := yamlStringSet(t, yamlPath(t, "AcceptanceCriterionInput.yaml", inputDoc, "required"))
+		delta := map[string]bool{}
+		for k := range canonicalRequired {
+			if !inputRequired[k] {
+				delta[k] = true
+			}
+		}
+		assert.Equal(t, map[string]bool{"kind": true, "judgment": true}, delta,
+			"AcceptanceCriterionInput.yaml's required set must be exactly AcceptanceCriterion.yaml's minus {kind, judgment} — any other delta is an undocumented drift")
+		for k := range inputRequired {
+			assert.True(t, canonicalRequired[k],
+				"AcceptanceCriterionInput.yaml requires %q, which AcceptanceCriterion.yaml does not — an input-only required field is not a legitimate delta", k)
+		}
+	})
+
+	t.Run("row 10 vs row 11 — GoalStatusFrame.yaml vs asyncapi.yaml GoalStatusFrame, state enum", func(t *testing.T) {
+		canonical := stripYAMLNoise(componentYAMLPath(t, "GoalStatusFrame", "properties", "state"))
+		inline := stripYAMLNoise(asyncapiYAMLPath(t, "GoalStatusFrame", "properties", "state"))
+		assert.Equal(t, canonical, inline,
+			"GoalStatusFrame.yaml and asyncapi.yaml's inline GoalStatusFrame must carry the identical `state` enum (FR-073a, copies table rows 10-11)")
+	})
+
+	t.Run("BrowserHandoverNoticeFrame.yaml vs asyncapi.yaml inline BrowserHandoverNoticeFrame (C-85)", func(t *testing.T) {
+		handSync := stripYAMLNoise(componentYAMLPath(t, "BrowserHandoverNoticeFrame"))
+		canonical := stripYAMLNoise(asyncapiYAMLPath(t, "BrowserHandoverNoticeFrame"))
+		assert.Equal(t, canonical, handSync,
+			"contracts/components/schemas/BrowserHandoverNoticeFrame.yaml and asyncapi.yaml's inline (generating) copy must agree structurally — F1's new comparator row per C-85")
+	})
+}
+
+// TestCriterionStatusEnumInAllFourContractCopies is GOAL-FR-042 / GOAL-MV-7
+// (spec test #42; the goal spec's own file path for this test,
+// src/lib/api/generated/asyncapi-criterion-status.test.ts, cannot exist —
+// generated/ never holds a hand-written test (C-61) — so its TS half lives
+// at src/lib/api/criterionStatusEnum.test.ts and this is its Go half).
+// Independently of the broader structural comparator above, asserts that
+// AcceptanceCriterion.status accepts EXACTLY {pending, met, unmet} — no
+// more, no fewer — in every one of the four contract copies GOAL-FR-042
+// names: the two canonical/derived AcceptanceCriterion(Input).yaml files,
+// and the two hand-synced asyncapi.yaml inline duplicates
+// (GoalStatusFrame.criteria[] and .dod[]).
+//
+// Traces to: docs/internal/specs/goal-entity-spec.md GOAL-FR-042 (line 464),
+// GOAL-MV-7 (line 298); wave T1 (delivery plan line 371).
+func TestCriterionStatusEnumInAllFourContractCopies(t *testing.T) {
+	want := []any{"pending", "met", "unmet"}
+
+	copies := []struct {
+		label string
+		got   any
+	}{
+		{"AcceptanceCriterion.yaml", componentYAMLPath(t, "AcceptanceCriterion", "properties", "status", "enum")},
+		{"AcceptanceCriterionInput.yaml", componentYAMLPath(t, "AcceptanceCriterionInput", "properties", "status", "enum")},
+		{"asyncapi.yaml GoalStatusFrame.criteria[].status", asyncapiYAMLPath(t, "GoalStatusFrame", "properties", "criteria", "items", "properties", "status", "enum")},
+		{"asyncapi.yaml GoalStatusFrame.dod[].status", asyncapiYAMLPath(t, "GoalStatusFrame", "properties", "dod", "items", "properties", "status", "enum")},
+	}
+
+	for _, c := range copies {
+		t.Run(c.label, func(t *testing.T) {
+			assert.Equal(t, want, c.got,
+				"%s: status enum must be exactly [pending, met, unmet] — no fourth value (GOAL-FR-042, GOAL-MV-7)", c.label)
+		})
+	}
+}

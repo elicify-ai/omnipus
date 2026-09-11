@@ -76,14 +76,22 @@ describe('TaskChecklistField', () => {
         { text: 'Step two', status: 'completed' },
       ],
     }))
-    expect(await screen.findByText(/checklist \(1\/2\)/i)).toBeInTheDocument()
+    // GOAL-FR-057 — the section header is relabelled "Todos" (visible text
+    // only; every aria-label on this component keeps saying "checklist").
+    expect(await screen.findByText(/todos \(1\/2\)/i)).toBeInTheDocument()
     expect(screen.getByText('Step one')).toBeInTheDocument()
     expect(screen.getByText('Step two')).toBeInTheDocument()
   })
 
-  it('renders the bare "Checklist" header with no count when there are no items', async () => {
+  it('renders the bare "Todos" header with no count when there are no items', async () => {
     renderField(makeTask({ todos: [] }))
-    expect(await screen.findByText(/^checklist$/i)).toBeInTheDocument()
+    expect(await screen.findByText(/^todos$/i)).toBeInTheDocument()
+  })
+
+  it('GOAL-FR-057: the add-item placeholder reads "Add a todo…" while the aria-label stays "New checklist item"', async () => {
+    renderField(makeTask({ todos: [] }))
+    const input = await screen.findByLabelText(/new checklist item/i)
+    expect(input).toHaveAttribute('placeholder', 'Add a todo…')
   })
 
   it('adding a checklist item calls setTaskTodos with the appended item and clears the input', async () => {
@@ -162,7 +170,7 @@ describe('TaskChecklistField — controlled/buffered mode (create flow)', () => 
       { text: 'Buffered one', status: 'pending' },
       { text: 'Buffered two', status: 'completed' },
     ])
-    expect(await screen.findByText(/checklist \(1\/2\)/i)).toBeInTheDocument()
+    expect(await screen.findByText(/todos \(1\/2\)/i)).toBeInTheDocument()
     expect(screen.getByText('Buffered one')).toBeInTheDocument()
   })
 

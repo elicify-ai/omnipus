@@ -133,6 +133,48 @@ function describeNonActiveState(state: Exclude<GoalPillState, 'active' | 'queued
         text: 'cleared',
         className: 'text-[var(--color-muted)]',
       }
+    case 'judge_refused_god_mode':
+      // JUDGE-FR-057a: distinct, operator-actionable state — god mode is
+      // blocking every adjudication; the operator can fix it by turning
+      // god mode off, unlike judge_unavailable which is a wait-it-out state.
+      return {
+        testId: 'goal-indicator-judge-refused-god-mode',
+        text: 'god mode is blocking judging — see Settings → Security',
+        className: 'text-[color:var(--color-warning)]',
+      }
+    case 'judge_cas_loss':
+      // JUDGE-FR-083: a verifier_registry compare-and-swap loss — another
+      // adjudication for this unit is already in flight (its own verdict
+      // will still arrive). Distinct from judge_unavailable.
+      return {
+        testId: 'goal-indicator-judge-cas-loss',
+        text: 'verifying elsewhere…',
+        className: 'text-[color:var(--color-warning)]',
+      }
+    case 'blocked':
+      // JUDGE-FR-093: the agent called goal_claim with status: blocked —
+      // parked without an adjudication and without consuming a round.
+      return {
+        testId: 'goal-indicator-blocked',
+        text: 'blocked — needs your help to proceed',
+        className: 'text-[color:var(--color-warning)]',
+      }
+    case 'claim_overturned':
+      // JUDGE-FR-102: a background adjudication disagreed with an earlier
+      // claim already shown as answered — "a state, not an alert".
+      return {
+        testId: 'goal-indicator-claim-overturned',
+        text: 'claim overturned by a later verdict',
+        className: 'text-[color:var(--color-error)]',
+      }
+    case 'expired':
+      // ADR-086 GOAL-FR-028: the 7-day idle-expiry sweep ended this goal
+      // with no claim ever made.
+      return {
+        testId: 'goal-indicator-expired',
+        text: 'expired',
+        className: 'text-[color:var(--color-warning)]',
+      }
     default: {
       const exhaustiveCheck: never = state
       throw new Error(`GoalIndicator: unhandled goal pill state ${String(exhaustiveCheck)}`)

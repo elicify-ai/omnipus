@@ -20,7 +20,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { CalendarEventSlideOver } from './CalendarEventSlideOver'
 import { TaskDetailPanel } from '@/components/workspaces/TaskDetailPanel'
@@ -182,6 +182,34 @@ function fillPrompt(text = 'Post the reminder to the team channel.') {
   fireEvent.change(screen.getByLabelText(/instruction/i), { target: { value: text } })
 }
 
+// Acceptance criteria + Definition of Done are required (operator decision
+// D-C: "criteria + definition-of-done are mandatory at CREATION **and**
+// EDIT. Uniform rule. … Affects E5, U4, U5 + calendar slide-over (U5)").
+// Wave U5 put both mandatory editors on this panel, so — exactly like the
+// agent and instruction fields above — a save flow must now fill them before
+// Save will submit. This is a REQUIRED-FIELD precondition of reaching the
+// save, not a relaxation of anything the tests below assert: every
+// trigger/title assertion is unchanged.
+//
+// Both editors are instances of the same AcceptanceCriteriaEditor, so their
+// "Add criterion" buttons are identically labelled; scope the click to the
+// draft panel that owns the text input (same pattern as
+// CreateTaskSlideOver.criteria.test.tsx).
+const CRITERION_INPUT = /what must be true when this is done\?/i
+const DOD_INPUT = /definition of done item/i
+
+function addItem(inputLabel: RegExp, text: string) {
+  const input = screen.getByLabelText(inputLabel)
+  fireEvent.change(input, { target: { value: text } })
+  const draftPanel = input.parentElement as HTMLElement
+  fireEvent.click(within(draftPanel).getByRole('button', { name: /add criterion/i }))
+}
+
+function fillCriteriaAndDod() {
+  addItem(CRITERION_INPUT, 'The standup reminder is posted to the team channel.')
+  addItem(DOD_INPUT, 'No unresolved errors are left behind.')
+}
+
 beforeEach(() => {
   vi.mocked(createTask).mockReset()
   vi.mocked(updateTask).mockReset().mockResolvedValue(makeTask() as never)
@@ -221,6 +249,7 @@ describe('CalendarEventSlideOver — legacy trigger (US-5, D8)', () => {
     await screen.findByTestId('legacy-trigger-note')
     await selectAgent()
     fillPrompt()
+    fillCriteriaAndDod()
 
     // "Daily" is weekday-independent — safe regardless of what real day the
     // suite runs on (the legacy Date & time field defaults to "now", per D8's
@@ -247,6 +276,7 @@ describe('CalendarEventSlideOver — legacy trigger (US-5, D8)', () => {
     await screen.findByTestId('legacy-trigger-note')
     await selectAgent()
     fillPrompt()
+    fillCriteriaAndDod()
 
     // Never touch the Repeat section (stays "Does not repeat") — only edit
     // the title, exactly like the byte-identical RRULE-edit test above.

@@ -54,6 +54,45 @@
 // Cross-unit contract (spec line ~1007): U2's CreateSessionWithID
 // (pkg/session/unified_api.go) depends on lockSession's exact name and
 // signature to implement FR-082's protocol. Do not rename it.
+//
+// ADR-086 cross-package lock order (delivery-plan C-26, wave S2 documents /
+// wave S3 implements the retention pass this governs): the goal store
+// (pkg/goal, S1) introduces a SECOND lock class alongside this package's
+// session shards. The two-package order is fixed and one-directional:
+//
+//	goalLock(goalID) -> sessionLock(sessionID) -> cacheMu
+//
+// i.e. a caller already holding a goal store lock may acquire a session
+// shard via lockSession or cacheMu; the reverse acquisition order (session
+// shard or cacheMu held, then a goal lock taken) is forbidden. This matters
+// specifically for goal retention (GOAL-FR-043): it sweeps goal records
+// "under the same retention rule and schedule as sessions", but this
+// package's own RetentionSweep (retention_sweep.go) holds EVERY session
+// shard for its entire body via lockAllSessionShards, above. Taking a goal
+// store lock inside that body would invert the order above against any
+// other caller that legitimately goes goal-then-session. The goal
+// retention pass is therefore NOT nested inside RetentionSweep's shard
+// hold — it is a SEPARATE pass, run immediately after RetentionSweep
+// returns and outside its shard hold, same schedule and retention-days
+// argument, not the same critical section (see retention_sweep.go and
+// pkg/goal/retention.go, both wave S3). Nothing inside
+// lockAllSessionShards may take a goal lock, in either direction.
+//
+// This same order is documented, independently, alongside pkg/goal's own
+// package doc (wave S1/S3) — both copies must agree; this one is
+// authoritative for this package's own shards and for RetentionSweep's
+// exception to the single-shard rule above.
+//
+// Windows posture (unchanged by this addition, restated here because it
+// governs the goal store the same way it governs this one):
+// fileutil.WithFlock is a documented no-op on Windows
+// (pkg/fileutil/flock_windows.go), so the goal store's cross-process
+// mutual-exclusion guarantee, like this package's own, is POSIX-only — on
+// Windows only the in-process striped mutex protects concurrent writes to
+// either store. go test -race is not a lock-order checker (see the FR-101
+// seam above): an inversion of the order stated here must be prevented by
+// following this documented protocol, not discovered by a race run that
+// does not happen to deadlock.
 package session
 
 import (

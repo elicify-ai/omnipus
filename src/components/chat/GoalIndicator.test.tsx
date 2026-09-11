@@ -162,6 +162,48 @@ describe('GoalIndicator — cleared state', () => {
   })
 })
 
+// Five states added by the joint ADR-084/ADR-085/ADR-086 delivery (C-39).
+describe('GoalIndicator — judge_refused_god_mode state (JUDGE-FR-057a)', () => {
+  it('shows a distinct, operator-actionable line naming god mode as the cause', () => {
+    render(<GoalIndicator goalStatus={makeGoal({ state: 'judge_refused_god_mode' })} />)
+    const line = screen.getByTestId('goal-indicator-judge-refused-god-mode')
+    expect(line).toHaveTextContent('god mode')
+    expect(screen.queryByTestId('goal-indicator-paused')).not.toBeInTheDocument()
+  })
+})
+
+describe('GoalIndicator — judge_cas_loss state (JUDGE-FR-083)', () => {
+  it('shows a distinct line, not the judge_unavailable one', () => {
+    render(<GoalIndicator goalStatus={makeGoal({ state: 'judge_cas_loss' })} />)
+    expect(screen.getByTestId('goal-indicator-judge-cas-loss')).toBeInTheDocument()
+    expect(screen.queryByTestId('goal-indicator-paused')).not.toBeInTheDocument()
+  })
+})
+
+describe('GoalIndicator — blocked state (JUDGE-FR-093)', () => {
+  it('shows a distinct line, not the waiting_on_user one', () => {
+    render(<GoalIndicator goalStatus={makeGoal({ state: 'blocked' })} />)
+    expect(screen.getByTestId('goal-indicator-blocked')).toBeInTheDocument()
+    expect(screen.queryByTestId('goal-indicator-waiting')).not.toBeInTheDocument()
+  })
+})
+
+describe('GoalIndicator — claim_overturned state (JUDGE-FR-102)', () => {
+  it('shows a distinct "claim overturned" line', () => {
+    render(<GoalIndicator goalStatus={makeGoal({ state: 'claim_overturned' })} />)
+    expect(screen.getByTestId('goal-indicator-claim-overturned')).toHaveTextContent('overturned')
+  })
+})
+
+describe('GoalIndicator — expired state (ADR-086 GOAL-FR-028)', () => {
+  it('shows "expired", distinct from failed and cleared', () => {
+    render(<GoalIndicator goalStatus={makeGoal({ state: 'expired' })} />)
+    expect(screen.getByTestId('goal-indicator-expired')).toHaveTextContent('expired')
+    expect(screen.queryByTestId('goal-indicator-failed')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('goal-indicator-cleared')).not.toBeInTheDocument()
+  })
+})
+
 describe('GoalIndicator — no frame', () => {
   it('renders nothing when goalStatus is null and there is no loop either', () => {
     const { container } = render(<GoalIndicator goalStatus={null} />)

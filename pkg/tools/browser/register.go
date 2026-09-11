@@ -156,6 +156,7 @@ func resolveTurnTabSet(
 //   - browser_switch_tab — make a tab active; tools + live view follow it (ADR-041)
 //   - browser_close_tab  — close a tab; never leaves zero tabs (ADR-041)
 //   - browser_open_tab   — open a NEW tab (does not reuse the current one) and optionally navigate it
+//   - browser_handover   — voluntarily hand the browser to the human operator (ADR-085 D7, BROWSER-FR-046)
 //
 // agentHome is the agent's fixed home directory and restrict maps to
 // fspolicy.FSScopeConfined (true) / FSScopeUnrestricted (false) — both are
@@ -239,6 +240,15 @@ func RegisterTools(
 	// — so gating this behind either one is a deadlock, not a safety
 	// property.
 	registry.RegisterReplacing(&HandleDialogTool{res: res})
+	// browser_handover (ADR-085 D7, BROWSER-FR-046): voluntarily hand the
+	// browser to the human operator. Registered unconditionally, like every
+	// other browser tool — its own FR-052 refusal (take-control disabled)
+	// is a runtime check inside HandoverTool.Execute, not a registration
+	// gate, matching browser_evaluate's executeEnabled pattern above: an
+	// operator reading the tool catalog should see the tool exists, and
+	// learn from calling it (not from its absence) that it currently does
+	// nothing.
+	registry.RegisterReplacing(&HandoverTool{res: res})
 	// browser_upload_file is DELIBERATELY NOT REGISTERED HERE (FR-029).
 	//
 	// It is fully implemented (tools_interact.go), fully seeded (allStaticToolNames,

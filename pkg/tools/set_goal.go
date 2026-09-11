@@ -34,6 +34,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -560,6 +562,25 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		normDoD = setGoalFloorDoD()
 	}
 
+	// JUDGE-FR-006b's second clause (E-20, DD-3, C-59/OQ-16 — assigned here
+	// because this is the file where the check belongs, per the joint
+	// delivery plan). F2 built only the compute-and-persist half of
+	// FR-006b (task.NormalizeCriteria recomputing ClauseCount on every
+	// create/update, pkg/task/criterion.go): the REJECTION half — a
+	// mode:update that lowers a criterion's persisted clause count while a
+	// verdict for it already exists — has to live here, because this is
+	// the only call path that can shorten a criterion's text after a
+	// verdict has been rendered against it.
+	if mode == setGoalModeUpdate {
+		existingVerdict := lookupGoalLatestVerdictForClauseCountGuard(goalID)
+		if cErr := rejectLoweredClauseCountWithVerdict(oldRec.Criteria, normCriteria, existingVerdict); cErr != nil {
+			return ErrorResult(fmt.Sprintf("set_goal rejected: %v", cErr))
+		}
+		if cErr := rejectLoweredClauseCountWithVerdict(oldRec.DoD, normDoD, existingVerdict); cErr != nil {
+			return ErrorResult(fmt.Sprintf("set_goal rejected: %v", cErr))
+		}
+	}
+
 	assessment, aErr := parseSetGoalAssessment(args)
 	if aErr != nil && !errors.Is(aErr, errAssessmentNotProvided) {
 		return ErrorResult(fmt.Sprintf("set_goal rejected: %v", aErr))
@@ -741,6 +762,83 @@ func mergeCriterionKindFromOld(newCrit task.AcceptanceCriterion, oldPool []task.
 		break
 	}
 	return newCrit
+}
+
+// lookupGoalLatestVerdictForClauseCountGuard reads goalID's LatestVerdict
+// directly off the pkg/goal record store, bypassing the narrow
+// GoalRecordAccess seam (which only ever speaks ReadGoalState/WriteRecord —
+// see this file's own package doc for why: GoalRecordAccess is deliberately
+// the ONLY surface pkg/tools has onto pkg/agent's goal machinery, to avoid
+// an import cycle, and widening its interface would require touching
+// pkg/agent/goal_record_wiring.go's concrete implementation, a file outside
+// this wave's write-set). pkg/tools/task.go already establishes the
+// precedent of constructing a bare *goal.Store directly for exactly this
+// reason (goalStoreForTasks); this mirrors pkg/agent/goal_record_wiring.go's
+// resolveGoalRecordStore() rooting rule (config.OmnipusHomeDir(), read fresh
+// on every call so tests can override OMNIPUS_HOME mid-process).
+//
+// Returns nil on any lookup failure (no goal id, store error, not found) —
+// a best-effort read for a REJECTION gate whose failure mode should be "the
+// guard does not fire" rather than "an infra hiccup blocks every steering
+// edit"; the guard's own doc comment records this as a deliberate choice,
+// not an oversight.
+func lookupGoalLatestVerdictForClauseCountGuard(goalID string) *task.JudgeVerdict {
+	if strings.TrimSpace(goalID) == "" {
+		return nil
+	}
+	g, err := goal.NewStore(config.OmnipusHomeDir()).Get(goalID)
+	if err != nil {
+		logger.WarnCF("goal", "set_goal: could not read goal record to check FR-006b's clause-count guard; proceeding without it",
+			map[string]any{"goal_id": goalID, "error": err.Error()})
+		return nil
+	}
+	return g.LatestVerdict
+}
+
+// rejectLoweredClauseCountWithVerdict implements JUDGE-FR-006b's second
+// clause (E-20, DD-3): a mode:update that shortens a criterion's TEXT
+// enough to lower its persisted ClauseCount, while a verdict already exists
+// for that criterion, is rejected outright — letting the judged party cut
+// its own evidence bar in response to a failing verdict is indistinguishable
+// from gaming (A-17), and the adjudicator reads only the persisted count,
+// never recomputing it, so a silently-lowered count would stick.
+//
+// Design decision, made explicit here because the plan assigned this file's
+// wave accountability for finding the answer (C-59/OQ-16): every OTHER
+// match in this file (mergeCriterionKindFromOld, diffCriteriaByText) is
+// TEXT-only, because this tool's schema carries no criterion-id input. A
+// text-only match CANNOT detect this case — the whole point is that the
+// text changed, so an exact-text lookup of the "same" criterion always
+// misses. Positional matching is used instead: position i in the new list
+// is treated as a re-issue of position i in the old list, but ONLY when the
+// two lists are the same length — a genuine restructuring (an item added,
+// removed, or reordered) changes the list length in the overwhelmingly
+// common case and is deliberately left alone rather than misread as a
+// clause-count violation; a same-length reorder that happens to coincide
+// with a shortened criterion at the same index is the one gap this leaves,
+// accepted because the alternative (a fuzzy text-similarity match) is a
+// second, harder-to-audit heuristic layered on top of the first.
+func rejectLoweredClauseCountWithVerdict(oldList, newList []task.AcceptanceCriterion, verdict *task.JudgeVerdict) error {
+	if verdict == nil || len(oldList) != len(newList) || len(oldList) == 0 {
+		return nil
+	}
+	verdictByID := make(map[string]bool, len(verdict.PerCriterion))
+	for _, pc := range verdict.PerCriterion {
+		verdictByID[pc.CriterionID] = true
+	}
+	for i := range oldList {
+		if newList[i].ClauseCount >= oldList[i].ClauseCount {
+			continue
+		}
+		if !verdictByID[oldList[i].ID] {
+			continue
+		}
+		return fmt.Errorf(
+			"criterion %q was shortened from %d clause(s) to %d — its persisted clause count cannot be lowered once a verdict is on record for it (JUDGE-FR-006b)",
+			oldList[i].Text, oldList[i].ClauseCount, newList[i].ClauseCount,
+		)
+	}
+	return nil
 }
 
 // parseSetGoalCriteria decodes and shape-checks the `criteria` arg. Judgment

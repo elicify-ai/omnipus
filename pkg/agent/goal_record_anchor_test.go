@@ -166,12 +166,10 @@ func TestGoalMarkerActivation_AnchorsSetGoalCallInTranscript(t *testing.T) {
 	if !matched || handled {
 		t.Fatalf("marker activation: matched=%v handled=%v, want matched=true handled=false", matched, handled)
 	}
-	meta, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if meta.GoalID == "" || meta.GoalCriteriaJSON == "" {
-		t.Fatalf("precondition: activation must mint a goal id and a record; got id=%q record=%q", meta.GoalID, meta.GoalCriteriaJSON)
+	meta := goalRecordForSession(t, sid)
+	if meta.GoalID == "" || goalRecordCompiledJSON(meta) == "" {
+		t.Fatalf("precondition: activation must mint a goal id and a record; got id=%q record=%q",
+			meta.GoalID, goalRecordCompiledJSON(meta))
 	}
 
 	entry := lastAssistantEntry(t, store, sid)
@@ -186,7 +184,7 @@ func TestGoalMarkerActivation_AnchorsSetGoalCallInTranscript(t *testing.T) {
 		t.Fatalf("mode = %q, want register", res.Mode)
 	}
 	if res.GoalID != meta.GoalID {
-		t.Fatalf("result goal_id = %q, want the meta's %q", res.GoalID, meta.GoalID)
+		t.Fatalf("result goal_id = %q, want the goal record's %q", res.GoalID, meta.GoalID)
 	}
 	if res.CriteriaCount == 0 || len(res.Criteria) != res.CriteriaCount {
 		t.Fatalf("criteria: count=%d len=%d — the anchored result must carry the compiled ladder", res.CriteriaCount, len(res.Criteria))
@@ -244,10 +242,7 @@ func TestGoalMarkerRestate_AnchorsSetGoalUpdateCallAtRestatePosition(t *testing.
 		bus.InboundMessage{Content: "/goal [tests pass]", UserInitiated: true}, agentInst, &opts); !matched || handled {
 		t.Fatalf("activation: matched=%v handled=%v", matched, handled)
 	}
-	before, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := goalRecordForSession(t, sid)
 	registerEntry := lastAssistantEntry(t, store, sid)
 
 	collector, cleanup := newEventCollector(t, al)
@@ -265,10 +260,7 @@ func TestGoalMarkerRestate_AnchorsSetGoalUpdateCallAtRestatePosition(t *testing.
 	if !matched || !handled {
 		t.Fatalf("restate: matched=%v handled=%v reply=%q, want matched=true handled=true", matched, handled, reply)
 	}
-	after, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
+	after := goalRecordForSession(t, sid)
 	if after.GoalID != before.GoalID {
 		t.Fatalf("a restate must keep the goal id (FR-001): %q -> %q", before.GoalID, after.GoalID)
 	}
@@ -317,12 +309,11 @@ func TestKeeperFallbackCompile_AnchorsSetGoalCallAndClosesWebBubble(t *testing.T
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
-	al.recordGoalRouting(sid, "webchat", "chat-fallback-anchor", "sk1", agentInst.ID)
+	al.recordGoalRouting(sid, "", "webchat", "chat-fallback-anchor", "sk1", agentInst.ID)
 	setGoalRoundsArmed(t, store, sid, "make the tests pass", 0, time.Now().Add(-1*time.Hour))
-	goalID := "goal-fallback-anchor-1"
-	if err := store.SetMeta(sid, session.MetaPatch{GoalID: &goalID}); err != nil {
-		t.Fatal(err)
-	}
+	// ADR-086: setGoalRoundsArmed's own record already carries a real, minted
+	// goal id — the synthetic `SetMeta(GoalID: …)` stamp this test used to
+	// need is gone with the field.
 	judgeInst.Provider = unmetJudgeProvider("fallback compile reason")
 
 	collector, cleanup := newEventCollector(t, al)
@@ -334,11 +325,8 @@ func TestKeeperFallbackCompile_AnchorsSetGoalCallAndClosesWebBubble(t *testing.T
 	rewindGoalActivity(t, al, store, sid)
 	al.goalQuietWindowSettle(time.Now()) // exhausted — engine fallback compile
 
-	after, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.GoalCriteriaJSON == "" {
+	after := goalRecordForSession(t, sid)
+	if goalRecordCompiledJSON(after) == "" {
 		t.Fatal("setup: the fallback compile must have registered a record")
 	}
 
@@ -347,8 +335,8 @@ func TestKeeperFallbackCompile_AnchorsSetGoalCallAndClosesWebBubble(t *testing.T
 	if res.Mode != tools.SetGoalModeRegister {
 		t.Fatalf("mode = %q, want register", res.Mode)
 	}
-	if res.GoalID != goalID {
-		t.Fatalf("result goal_id = %q, want the meta's %q", res.GoalID, goalID)
+	if res.GoalID != after.GoalID {
+		t.Fatalf("result goal_id = %q, want the goal record's %q", res.GoalID, after.GoalID)
 	}
 	if res.CriteriaCount == 0 {
 		t.Fatal("the anchored result must carry the engine-compiled ladder")
@@ -394,7 +382,7 @@ func TestKeeperFallbackCompile_ChannelOrigin_NoWebNarration(t *testing.T) {
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
-	al.recordGoalRouting(sid, "telegram", "chat-tg-anchor", "sk1", agentInst.ID)
+	al.recordGoalRouting(sid, "", "telegram", "chat-tg-anchor", "sk1", agentInst.ID)
 	setGoalRoundsArmed(t, store, sid, "make the tests pass", 0, time.Now().Add(-1*time.Hour))
 	judgeInst.Provider = unmetJudgeProvider("fallback compile reason")
 
@@ -426,28 +414,66 @@ loop:
 	}
 }
 
-// TestGoalRecordAccess_ReadGoalState_ActiveGoalWithoutID — F8: an active goal
-// whose meta carries no goal id (pre-ADR-053 meta) still reads cleanly
-// (condition and record returned, empty id) — the WARN this case now logs is
-// the observable that explains the SPA's missing live overlay; the read
-// itself must not fail or synthesize an id.
-func TestGoalRecordAccess_ReadGoalState_ActiveGoalWithoutID(t *testing.T) {
+// TestGoalRecordAccess_ReadGoalState_IDAlwaysPresentOrEmptyTriple is the
+// ADR-086 successor to the retired
+// TestGoalRecordAccess_ReadGoalState_ActiveGoalWithoutID (F8).
+//
+// WHAT WAS RETIRED, AND WHY. F8 covered an active goal whose SESSION META
+// carried a condition and a compiled record but NO goal id — the
+// "pre-ADR-053 meta" legacy shape — and asserted ReadGoalState returned that
+// condition/record with an empty id rather than failing or synthesizing one.
+// That state is unrepresentable under ADR-086 and cannot be re-pointed:
+//
+//  1. The goal is its own entity (D1). There is no session-meta goal shape
+//     left for a legacy row to be in — wave S6 deleted the fields.
+//  2. A goal record ALWAYS has an id: Store.Create mints one when the caller
+//     left it empty, Goal.Validate is the only gate before it, and
+//     Goal.Activate refuses a record that is not in the defining phase. An
+//     "active goal with no id" cannot be constructed through any public path
+//     in pkg/goal.
+//  3. Operator decision D-F (no migration, detection or rescue path anywhere
+//     across ADR-084/085/086 — greenfield is assumed) forbids adding a
+//     legacy-shape reader to keep the old scenario alive.
+//
+// The half of F8's contract that SURVIVES is "ReadGoalState must never mint
+// an id, and must not fail". Both halves are asserted below, against the two
+// states that DO exist now: an active goal (real id, real condition/record)
+// and no goal at all (clean empty triple, nil error).
+func TestGoalRecordAccess_ReadGoalState_IDAlwaysPresentOrEmptyTriple(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
-	store, sid := newGoalTestSession(t, al, agentInst.ID)
-	condition := "legacy goal with no id"
-	record := `{"intent":"x","prompt":"x","criteria":[{"id":"c1","kind":"prose","text":"do it","judgment":"boolean"}]}`
-	if err := store.SetMeta(sid, session.MetaPatch{GoalCondition: &condition, GoalCriteriaJSON: &record}); err != nil {
-		t.Fatal(err)
-	}
-	goalID, gotCondition, gotRecord, err := agentLoopGoalRecordAccess{al: al}.ReadGoalState(sid)
+	_, sid := newGoalTestSession(t, al, agentInst.ID)
+	access := agentLoopGoalRecordAccess{al: al}
+
+	// No goal at all: a clean empty triple, never an error.
+	goalID, gotCondition, gotRecord, err := access.ReadGoalState(sid)
 	if err != nil {
-		t.Fatalf("ReadGoalState: %v", err)
+		t.Fatalf("ReadGoalState (no goal): %v", err)
 	}
-	if goalID != "" {
-		t.Fatalf("ReadGoalState must never mint an id; got %q", goalID)
+	if goalID != "" || gotCondition != "" || gotRecord != "" {
+		t.Fatalf("ReadGoalState (no goal) must return the empty triple, got id=%q condition=%q record=%q",
+			goalID, gotCondition, gotRecord)
 	}
-	if gotCondition != condition || gotRecord != record {
-		t.Fatalf("condition/record mismatch: %q / %q", gotCondition, gotRecord)
+
+	// An ACTIVE goal: a real id is always present — the F8 defect (an active
+	// goal the SPA could not key an overlay to) is structurally impossible.
+	condition := "goal with a real record"
+	armGoalRecord(t, sid, condition, recordedGoalCriteria("do it"), 0, time.Now())
+
+	goalID, gotCondition, gotRecord, err = access.ReadGoalState(sid)
+	if err != nil {
+		t.Fatalf("ReadGoalState (active goal): %v", err)
+	}
+	if goalID == "" {
+		t.Fatal("an ACTIVE goal always carries a real id — ReadGoalState returned an empty one")
+	}
+	if gotCondition != condition {
+		t.Fatalf("condition = %q, want %q", gotCondition, condition)
+	}
+	if gotRecord == "" {
+		t.Fatal("a goal with a non-empty criteria ladder must return a non-empty record")
+	}
+	if want := goalRecordForSession(t, sid).GoalID; goalID != want {
+		t.Fatalf("ReadGoalState must return the record's OWN id (never a synthesized one): got %q want %q", goalID, want)
 	}
 }

@@ -760,6 +760,15 @@ func TestJudgeCriteriaInput_Validate(t *testing.T) {
 		{"goal_scope_ok", JudgeCriteriaInput{Scope: task.VerdictScopeGoal, GoalSessionID: "s1"}, true},
 		{"goal_scope_missing_sessionid", JudgeCriteriaInput{Scope: task.VerdictScopeGoal}, false},
 		{"goal_scope_also_carries_planid", JudgeCriteriaInput{Scope: task.VerdictScopeGoal, GoalSessionID: "s1", PlanID: "p1"}, false},
+		// C-08 (ADR-086): GoalID is the new scope-correlating id — valid on
+		// its own, even with no GoalSessionID set.
+		{"goal_scope_via_goalid_only", JudgeCriteriaInput{Scope: task.VerdictScopeGoal, GoalID: "g1"}, true},
+		// C-08's whole point: a running task's own goal legitimately
+		// carries BOTH TaskID and GoalID — the old symmetric "must not
+		// carry TaskID" rule is removed for goal scope only.
+		{"goal_scope_goalid_with_taskid_now_permitted", JudgeCriteriaInput{Scope: task.VerdictScopeGoal, GoalID: "g1", TaskID: "t1"}, true},
+		// PlanID has no such combination in ADR-086 and stays rejected.
+		{"goal_scope_goalid_with_planid_still_rejected", JudgeCriteriaInput{Scope: task.VerdictScopeGoal, GoalID: "g1", PlanID: "p1"}, false},
 		{"unknown_scope", JudgeCriteriaInput{Scope: "bogus", TaskID: "t1"}, false},
 		{"empty_scope", JudgeCriteriaInput{}, false},
 	}

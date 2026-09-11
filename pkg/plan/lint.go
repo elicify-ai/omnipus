@@ -178,6 +178,15 @@ func lintOverlaps(members []task.Task, ancestors map[string]map[string]bool) []L
 // lintJoinlessConvergence implements FR-156/FR-159/G-16 AS-2: a member
 // depending on >=2 mutually-parallel predecessors MUST be an authored join
 // member (IsJoin==true) with >=1 acceptance criterion.
+//
+// ADR-086 D5/GOAL-FR-029/FR-030 names this function as a Task.Criteria
+// consumer to re-point onto the task's paired goal record (pkg/goal). No
+// change was needed here: m.Criteria (task.Task.Criteria) stays a real,
+// disk-persisted, dual-written field this round rather than being removed
+// (see Task.Criteria's own doc comment, pkg/task/task.go, for the two
+// independent reasons — one of them a Go import-cycle impossibility, not a
+// design choice), so this pre-existing plain-field read continues to see
+// the correct, current criteria set with no repointing required.
 func lintJoinlessConvergence(members []task.Task, idx map[string]*task.Task, ancestors map[string]map[string]bool) []LintViolation {
 	var violations []LintViolation
 	for i := range members {

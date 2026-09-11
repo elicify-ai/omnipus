@@ -18,7 +18,16 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	godiff "github.com/go-git/go-git/v5/utils/diff"
 	"github.com/sergi/go-diff/diffmatchpatch"
+
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
+
+// secretWithheldPatch replaces the rendered patch text of a path whose
+// content matched this Repo's secret guard (MIN-5). The CHANGE is still
+// reported — path, kind, and the counters — so the Judge is never told
+// "nothing happened here"; only the bytes are withheld.
+const secretWithheldPatch = "(patch withheld — this path's content matched the sensitive-value scan (MIN-5); " +
+	"the change itself is reported, its content is not)"
 
 // DiffWorkingTree returns the write-set-scoped diff evidence between the
 // commit at fromHash (or an empty tree when fromHash == "", meaning "since
@@ -45,7 +54,39 @@ import (
 // not required here — a diff racing a real commit at worst sees a
 // slightly-stale filesystem snapshot, the same staleness any `git diff`
 // invoked mid-write would show).
+//
+// SECRET DISCIPLINE (MIN-5, review finding 6): this function reads raw
+// working-tree bytes and its output is rendered straight into the Judge's
+// prompt and sent to an external model on every round — a strictly WIDER
+// exposure than Commit's (which only writes to a local repo). It therefore
+// carries the SAME two controls Commit has, and for the same reason:
+//
+//  1. FAIL-CLOSED on an unguarded Repo. A Repo opened with neither
+//     WithSecretScanner nor WithRedactor is refused outright, exactly like
+//     Commit's MAJOR-3/MIN-5 guard. Before this, the judge call site opened
+//     the repo with NO options at all, so an agent that wrote an API key
+//     into work/.env got it excluded from the boundary commit (Commit's
+//     guard) and then classified here as a plain "insert" and rendered into
+//     the prompt verbatim. A caller that legitimately wants a no-op scan
+//     opts in visibly with WithRedactor(identity), as Commit's doc comment
+//     already describes.
+//  2. PER-PATH EXCLUSION of matching content. A path whose committed-side
+//     or working-tree-side content matches the guard keeps its entry in
+//     Files (path, kind, and both counters) but its Patch is replaced with
+//     secretWithheldPatch. The change stays visible to the Judge; the bytes
+//     do not. Withholding the whole FILE instead would tell the Judge
+//     "nothing changed here", which is the fail-open direction.
 func (r *Repo) DiffWorkingTree(fromHash string, writeSet []string) (*DiffEvidence, error) {
+	if r.scanner == nil && r.redact == nil {
+		return nil, fmt.Errorf(
+			"gitevidence: working-tree diff refused: no secret scanner or redactor configured (MIN-5 fail-closed) " +
+				"— pass WithSecretScanner or WithRedactor to Open",
+		)
+	}
+
+	// tainted maps a path to the guard's human-readable, non-secret-leaking
+	// detail label, for every path whose content matched on EITHER side.
+	tainted := make(map[string]string)
 	fromContents := make(map[string]string)
 	displayFrom := fromHash
 	if fromHash == "" {
@@ -68,6 +109,9 @@ func (r *Repo) DiffWorkingTree(fromHash string, writeSet []string) (*DiffEvidenc
 			content, cerr := f.Contents()
 			if cerr != nil {
 				return fmt.Errorf("gitevidence: read committed content of %s: %w", f.Name, cerr)
+			}
+			if hit, detail := r.fileHasSecret(f.Name, []byte(content)); hit {
+				tainted[f.Name] = detail
 			}
 			fromContents[f.Name] = content
 			return nil
@@ -114,6 +158,9 @@ func (r *Repo) DiffWorkingTree(fromHash string, writeSet []string) (*DiffEvidenc
 			}
 			return fmt.Errorf("gitevidence: read working-tree file %s: %w", relSlash, readErr)
 		}
+		if hit, detail := r.fileHasSecret(relSlash, data); hit {
+			tainted[relSlash] = detail
+		}
 		toContents[relSlash] = string(data)
 		return nil
 	})
@@ -151,10 +198,21 @@ func (r *Repo) DiffWorkingTree(fromHash string, writeSet []string) (*DiffEvidenc
 		default:
 			kind = "modify"
 		}
+		// A tainted path is never line-diffed at all — the rendered patch is
+		// exactly where the secret bytes would end up, so it is not produced
+		// in the first place rather than produced and then discarded.
+		patch := secretWithheldPatch
+		if detail, hit := tainted[p]; hit {
+			logger.WarnCF("gitevidence",
+				"withholding working-tree diff patch from evidence: sensitive value detected (MIN-5)",
+				map[string]any{"dir": r.dir, "path": p, "kind": kind, "detail": detail})
+		} else {
+			patch = renderWorkingTreePatch(fromC, toC)
+		}
 		ev.Files = append(ev.Files, FileDiff{
 			Path:  p,
 			Kind:  kind,
-			Patch: renderWorkingTreePatch(fromC, toC),
+			Patch: patch,
 		})
 	}
 	ev.Matched = len(ev.Files)

@@ -20,67 +20,318 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// wireGoalToolsForAgent registers set_goal for one agent, wired over the
-// real session-store-backed GoalRecordAccess plus the diff and feasibility
-// seams (ADR-081 D2). Called from registerSharedTools' per-agent loop
-// (loop.go), the SAME site AskUserQuestion registers from, so it re-runs on
-// every hot reload — safe: every closure below is stateless with respect to
-// cfg, resolving live state (the session store, the calling agent's own
-// tool policy) per call, exactly like AskUserQuestion's own registry
-// closure.
+// wireGoalToolsForAgent registers BOTH goal tools for one agent — set_goal
+// (ADR-081 D2) and goal_claim (ADR-084 revision 9 §O / D12) — each wired
+// over the real session-store-backed GoalRecordAccess; set_goal additionally
+// gets the diff and feasibility seams. Called from registerSharedTools'
+// per-agent loop (loop.go), the SAME site AskUserQuestion registers from, so
+// it re-runs on every hot reload — safe: every closure below is stateless
+// with respect to cfg, resolving live state (the session store, the calling
+// agent's own tool policy) per call, exactly like AskUserQuestion's own
+// registry closure.
+//
+// goal_claim MUST be registered here and nowhere else. It shares set_goal's
+// GoalRecordAccess seam verbatim (goal_claim.go's own doc comment: "reusing
+// set_goal.go's own GoalRecordAccess (its read half) ... so a single
+// implementation wires both tools with no adapter needed") — it reads
+// ReadGoalState only, to answer its FR-090 "does this session have an active
+// goal at all" precondition, and never writes. Without this registration the
+// tool is seeded in every agent's policy map and present in the metadata
+// catalog yet NEVER OFFERED TO A MODEL, which silently disables ADR-084's
+// claim-triggered adjudication entirely (goal_loop.go's claim detection can
+// never fire and the engine falls back to the prose markers D12/D13
+// replaced).
 func wireGoalToolsForAgent(al *AgentLoop, agent *AgentInstance) {
-	setGoalTool := tools.NewSetGoalTool(func() tools.GoalRecordAccess {
+	goalAccess := func() tools.GoalRecordAccess {
 		return agentLoopGoalRecordAccess{al: al}
-	})
+	}
+	setGoalTool := tools.NewSetGoalTool(goalAccess)
 	setGoalTool.SetDiffFn(goalRecordDiffAdapter)
 	setGoalTool.SetFeasibilityFn(al.goalRecordFeasibilityFn)
 	agent.Tools.RegisterReplacing(setGoalTool)
+	agent.Tools.RegisterReplacing(tools.NewGoalClaimTool(goalAccess))
 }
 
-// agentLoopGoalRecordAccess implements tools.GoalRecordAccess over the real
-// session store (ADR-081 D2): ReadGoalState/WriteRecord read and write the
-// SAME session.MetaPatch.GoalCondition/GoalCriteriaJSON fields the
-// compile-time path (goal_compile.go/goal_loop.go) already uses — set_goal
-// is a second WRITER of that field, never a second store (DoD-11: one
-// implementation).
+// agentLoopGoalRecordAccess implements tools.GoalRecordAccess. Its two
+// methods, ReadGoalState and WriteRecord, are this wave's (joint delivery
+// plan wave E4, GOAL-FR-003's "seam" half + FR-005's "consumer half") own
+// re-point of ADR-081 D2's seam onto ADR-086's goal entity store
+// (pkg/goal.Store) — see each method's own doc comment for the shape of
+// the change. The other functions in this file (wireGoalToolsForAgent,
+// afterGoalRecordWrite, anchorGoalRecordInTranscript,
+// goalRecordDiffAdapter, goalRecordFeasibilityFn, EmitGoalStatusRehydrate)
+// have since been re-pointed onto the same store: wave S6 deleted session
+// meta's GoalID/GoalCondition/GoalCriteriaJSON/GoalRoundsUsed/
+// GoalMaxRounds/GoalLatestReason fields outright, so NOTHING in this file
+// reads goal state off session.UnifiedMeta any more — activeGoalForSession
+// (below) is the single entry predicate they all share.
 type agentLoopGoalRecordAccess struct{ al *AgentLoop }
 
-// ReadGoalState implements tools.GoalRecordAccess. GoalID is minted at goal
-// activation (goal_loop.go's newGoalID call), the SAME MetaPatch write that
-// first sets GoalCondition — so whenever GoalCondition is non-empty (the
-// only case set_goal proceeds past the goalless-session refusal), GoalID is
-// already present too; this is a read-only lookup, never a mint (ADR-082
-// D9/FR-016 — set_goal's result surfaces the id, it does not assign one).
+// goalSeamRecord is the JSON wire shape ReadGoalState/WriteRecord exchange
+// with pkg/tools' own unexported setGoalRecord (set_goal.go): the two are
+// independent, field-for-field mirrors of each other by necessity —
+// pkg/tools cannot import pkg/agent (import cycle) and this package cannot
+// reach set_goal.go's unexported type — exactly the same precedent
+// set_goal.go's own doc comment already documents for pkg/agent.
+// CompiledGoal. Under ADR-086 GOAL-FR-003, pkg/goal.Store's own
+// Goal.Criteria/Goal.DoD are ALWAYS real typed lists, never a serialised
+// string — this struct exists ONLY at this seam's own wire boundary
+// (set_goal.go's GoalRecordAccess interface still speaks a JSON string,
+// and that interface is not this wave's to change — pkg/tools/set_goal.go
+// belongs to wave E12), translating to/from the typed record on the way
+// in and out.
+type goalSeamRecord struct {
+	Intent             string                     `json:"intent"`
+	Prompt             string                     `json:"prompt"`
+	Definition         string                     `json:"definition,omitempty"`
+	Criteria           []task.AcceptanceCriterion `json:"criteria"`
+	DoD                []task.AcceptanceCriterion `json:"dod,omitempty"`
+	SupersededCriteria []goalSeamSupersededEntry  `json:"superseded_criteria,omitempty"`
+}
+
+// goalSeamSupersededEntry mirrors goal.SupersededCriteriaEntry's JSON shape
+// (the same three fields) at this seam's wire boundary.
+type goalSeamSupersededEntry struct {
+	Criteria     []task.AcceptanceCriterion `json:"criteria"`
+	DoD          []task.AcceptanceCriterion `json:"dod,omitempty"`
+	SupersededAt time.Time                  `json:"superseded_at"`
+}
+
+// resolveGoalRecordStore constructs a pkg/goal.Store rooted at the current
+// $OMNIPUS_HOME. config.OmnipusHomeDir() is deliberately read fresh on
+// every call (its own doc comment: "Intentionally not memoised so tests
+// can override OMNIPUS_HOME mid-process") and pkg/goal.Store is a thin,
+// cheap wrapper over pkg/entity.Store[Goal] with nothing expensive to
+// cache — the SAME per-call-site construction pattern pkg/agentstore's own
+// callers already use (e.g. pkg/gateway/rest.go's
+// agentstore.New(a.homePath)). AgentLoop has no goal-store field of its
+// own: AgentLoop is declared in pkg/agent/loop.go, a file this wave's
+// write-set (joint delivery plan §3, wave E4) does not include — loop.go
+// belongs to the E2 → B123 → E13 chain.
+func resolveGoalRecordStore() *goal.Store {
+	return goal.NewStore(config.OmnipusHomeDir())
+}
+
+// activeGoalForSession returns the ACTIVE goal record currently BOUND to
+// sessionID — the record whose ActiveSessionID is this session — for EITHER
+// owner kind, or nil when this session carries no active goal.
+//
+// This is the ADR-086 replacement for the retired
+// `meta.GoalCondition != ""` entry predicate that every goal reader in this
+// package used to run against session.UnifiedMeta (deleted by wave S6). It
+// deliberately keys on ActiveSessionID rather than on the owner reference
+// (GetActiveByOwner), because the two are NOT the same lookup for a
+// task-owned goal: a task goal's OwnerID is the TASK's id, while the turns
+// that must reach the keeper/claim machinery run in the session the task run
+// minted (status.go's Activate binds exactly that session into
+// ActiveSessionID). GOAL-FR-013 requires one code path for both owner kinds,
+// so the session-bound lookup is the one that serves both; ReadGoalState's
+// owner-keyed GetActiveByOwner stays as it is — that seam is the `set_goal`
+// tool's, and a task goal's criteria are fixed at creation (D-C), never
+// authored by a task run's own agent.
+//
+// Finding more than one active record bound to one session is an upstream
+// invariant violation (at most one goal may be active per session). It is
+// reported at Warn and the first record in the store's own (created_at, id)
+// order is used, rather than silently returning nil — losing the goal loop
+// entirely would be a worse failure than continuing against the older of two
+// records.
+func activeGoalForSession(sessionID string) *goal.Goal {
+	if sessionID == "" {
+		return nil
+	}
+	active, err := resolveGoalRecordStore().ListActive()
+	if err != nil {
+		logger.WarnCF("agent", "goal: could not list active goal records; treating this session as goal-less",
+			map[string]any{"component": "goal", "session_id": sessionID, "error": err.Error()})
+		return nil
+	}
+	var found *goal.Goal
+	for i := range active {
+		if active[i].ActiveSessionID != sessionID {
+			continue
+		}
+		if found != nil {
+			logger.WarnCF("agent", "goal: more than one ACTIVE goal record is bound to this session — using the first; this is an upstream invariant violation",
+				map[string]any{"component": "goal", "session_id": sessionID, "goal_id": found.GoalID, "other_goal_id": active[i].GoalID})
+			break
+		}
+		g := active[i]
+		found = &g
+	}
+	return found
+}
+
+// bumpGoalRecordActivity moves goalID's own LastActivityAt clock forward —
+// GOAL-FR-004's relocation of the retired session-meta GoalLastActivityAt
+// field onto the goal record, where it drives both the ~60 s quiet-window
+// math and the multi-day idle-expiry brake. Best-effort with a Warn on
+// failure, exactly like the SetMeta writes it replaces: a missed bump only
+// delays idle settlement, it never fails the caller.
+func bumpGoalRecordActivity(goalID string, now time.Time) {
+	if goalID == "" {
+		return
+	}
+	if _, err := resolveGoalRecordStore().Update(goalID, func(cur *goal.Goal) error {
+		cur.LastActivityAt = now
+		return nil
+	}); err != nil {
+		logger.WarnCF("agent", "goal: could not bump the goal record's activity clock",
+			map[string]any{"component": "goal", "goal_id": goalID, "error": err.Error()})
+	}
+}
+
+// compiledGoalFromRecord projects a pkg/goal record onto this package's
+// in-memory CompiledGoal shape, so every reader that used to call
+// loadCompiledGoal(meta.GoalCriteriaJSON) keeps reading the SAME struct it
+// always did — now sourced from the record's typed Criteria/DoD lists
+// (GOAL-FR-003) instead of a serialised session-meta string.
+//
+// It reproduces loadCompiledGoal's own emptiness contract exactly: a record
+// with no criteria yet — ADR-081 D1's legal transient window between instant
+// activation and the working agent's first `set_goal` — returns nil, the
+// same value an empty GoalCriteriaJSON returned, so every caller's existing
+// nil fallback behaves unchanged. pkg/goal.Goal has no separate Intent field
+// (GOAL-FR-002 keeps ONE raw-intent field, Prompt), so Prompt fills both
+// wire positions — the same mapping marshalGoalSeamRecord already makes.
+func compiledGoalFromRecord(g *goal.Goal) *CompiledGoal {
+	if g == nil || len(g.Criteria) == 0 {
+		return nil
+	}
+	return &CompiledGoal{
+		Intent:     g.Prompt,
+		Prompt:     g.Prompt,
+		Definition: g.Definition,
+		Criteria:   g.Criteria,
+		DoD:        g.DoD,
+	}
+}
+
+// goalRecordCompiledJSON renders g in the SAME CompiledGoal JSON encoding
+// the retired GoalCriteriaJSON session-meta field carried, for the two
+// remaining consumers that still speak that encoding at a seam boundary:
+// afterGoalRecordWrite's own recordJSON argument and goalRecordDiffAdapter's
+// "prior record" side. Returns "" for a record with no criteria — matching
+// the empty-string value those consumers already handle.
+func goalRecordCompiledJSON(g *goal.Goal) string {
+	compiled := compiledGoalFromRecord(g)
+	if compiled == nil {
+		return ""
+	}
+	data, err := marshalCompiledGoal(compiled)
+	if err != nil {
+		logger.WarnCF("agent", "goal: could not marshal the goal record as a compiled-goal record",
+			map[string]any{"component": "goal", "goal_id": g.GoalID, "error": err.Error()})
+		return ""
+	}
+	return data
+}
+
+// marshalGoalSeamRecord renders g's typed Criteria/DoD/Definition/
+// SupersededCriteria as this seam's goalSeamRecord JSON shape — the same
+// field names pkg/tools.setGoalRecord uses, so a round-trip through
+// set_goal.go's own json.Unmarshal(&oldRec, ...) carries every field
+// forward unchanged (set_goal.go's own doc comment: "Intent/Prompt are
+// never SET by this tool ... but ARE carried through unchanged").
+// pkg/goal.Goal has no separate Intent/Prompt split the way
+// pkg/agent.CompiledGoal does — Goal.Prompt (GOAL-FR-002's one raw-intent
+// field) fills both wire positions; set_goal.go only ever carries these
+// two fields forward verbatim, never branching on which is which.
+func marshalGoalSeamRecord(g *goal.Goal) (string, error) {
+	rec := goalSeamRecord{
+		Intent:     g.Prompt,
+		Prompt:     g.Prompt,
+		Definition: g.Definition,
+		Criteria:   g.Criteria,
+		DoD:        g.DoD,
+	}
+	for _, s := range g.SupersededCriteria {
+		rec.SupersededCriteria = append(rec.SupersededCriteria, goalSeamSupersededEntry{
+			Criteria: s.Criteria, DoD: s.DoD, SupersededAt: s.SupersededAt,
+		})
+	}
+	data, err := json.Marshal(rec)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// parseGoalSeamRecord parses recordJSON — WriteRecord's own argument,
+// set_goal.go's freshly-marshaled setGoalRecord — into this seam's wire
+// shape. An empty/whitespace-only value is refused: WriteRecord always
+// carries a real record (set_goal.go's Execute always populates
+// definition + criteria before calling access.WriteRecord).
+func parseGoalSeamRecord(recordJSON string) (goalSeamRecord, error) {
+	var rec goalSeamRecord
+	if strings.TrimSpace(recordJSON) == "" {
+		return rec, errors.New("empty record")
+	}
+	if err := json.Unmarshal([]byte(recordJSON), &rec); err != nil {
+		return goalSeamRecord{}, err
+	}
+	return rec, nil
+}
+
+// ReadGoalState implements tools.GoalRecordAccess (ADR-086 GOAL-FR-003 seam
+// re-point, GOAL-FR-005's consumer half). It looks up sessionID's ACTIVE,
+// session-owned pkg/goal.Store record (GOAL-FR-002's owner_kind: session)
+// instead of session meta's retired GoalID/GoalCondition/GoalCriteriaJSON
+// fields — those fields are not deleted until wave S6 and other functions
+// in this same file still read them (see agentLoopGoalRecordAccess's own
+// doc comment), but this method no longer does.
+//
+// goalCondition keeps its EXACT old emptiness-only contract: set_goal.go's
+// GoalRecordAccess doc says "" means no active goal, and its Execute()
+// checks nothing else about the value
+// (strings.TrimSpace(goalCondition) == ""). A pkg/goal.Goal's Prompt is
+// always non-empty once persisted (Goal.Validate requires it), so
+// returning g.Prompt here satisfies that contract exactly while surfacing
+// real text instead of an arbitrary placeholder.
+//
+// recordJSON is "" for the ADR-081 D1 legal-transient window — an active
+// goal with no criteria registered yet (Goal.Validate allows an empty
+// Criteria list; only DoD must be non-empty) — and this seam's own
+// goalSeamRecord JSON encoding of g otherwise.
+//
+// FR-005's consumer half: the parked-question set (PendingAskJSON, session-
+// owned per wave S2) is never read or returned here — it was never part of
+// this seam's contract and it is not part of pkg/goal.Goal either (see
+// goal.go: no PendingAsk field exists on the goal entity).
 func (a agentLoopGoalRecordAccess) ReadGoalState(sessionID string) (goalID, goalCondition, recordJSON string, err error) {
-	store := a.al.ResolveSessionStore(sessionID)
-	if store == nil {
+	if a.al.ResolveSessionStore(sessionID) == nil {
 		return "", "", "", fmt.Errorf("goal record access: session %q is not known to any session store", sessionID)
 	}
-	meta, gerr := store.GetMeta(sessionID)
+	g, gerr := resolveGoalRecordStore().GetActiveByOwner(generated.GoalOwnerKindSession, sessionID)
 	if gerr != nil {
-		return "", "", "", fmt.Errorf("goal record access: reading session meta: %w", gerr)
+		if errors.Is(gerr, goal.ErrOwnerNotFound) {
+			// No active goal record for this session — matches the OLD
+			// "GoalCondition == ''" empty-triple contract exactly.
+			return "", "", "", nil
+		}
+		return "", "", "", fmt.Errorf("goal record access: reading goal record: %w", gerr)
 	}
-	if meta.GoalCondition != "" && meta.GoalID == "" {
-		// ADR-082 D9 review F8: an active goal with no id is a pre-ADR-053
-		// goal meta (activated before goal ids were minted) or a meta
-		// written by a path that skipped newGoalID. set_goal would silently
-		// emit `"goal_id": ""` — the SPA then renders the record card with
-		// no live-progress overlay and nothing in the log explains why.
-		// Surface it loudly here, once per read, instead of letting the
-		// empty id propagate unremarked.
-		logger.WarnCF("goal", "goal record access: active goal has no goal_id — set_goal's result will carry an empty id and the SPA card cannot overlay live progress (pre-ADR-053 goal meta?)",
-			map[string]any{"session_id": sessionID, "goal_condition": meta.GoalCondition})
+	if len(g.Criteria) == 0 {
+		return g.GoalID, g.Prompt, "", nil
 	}
-	return meta.GoalID, meta.GoalCondition, meta.GoalCriteriaJSON, nil
+	rec, merr := marshalGoalSeamRecord(g)
+	if merr != nil {
+		return "", "", "", fmt.Errorf("goal record access: encoding goal record: %w", merr)
+	}
+	return g.GoalID, g.Prompt, rec, nil
 }
 
 // goalRecordAnchor describes one ENGINE-authored goal-record write that must
@@ -97,6 +348,12 @@ func (a agentLoopGoalRecordAccess) ReadGoalState(sessionID string) (goalID, goal
 type goalRecordAnchor struct {
 	store     *session.UnifiedStore
 	sessionID string
+	// goalID is the goal this record belongs to — stamped into the synthetic
+	// set_goal result payload and the log lines. Supplied by the caller
+	// (ADR-086): it used to be read back off session meta's retired GoalID
+	// field inside anchorGoalRecordInTranscript, and every call site already
+	// holds the id it is anchoring for.
+	goalID string
 	// agentID is the agent the record is attributed to (the goal-bearing
 	// agent) — stamped on the transcript entry and the live frames exactly
 	// as a real set_goal call stamps its calling agent.
@@ -154,8 +411,10 @@ func (al *AgentLoop) anchorGoalRecordInTranscript(a goalRecordAnchor) (session.T
 	if a.record == nil {
 		return "", errors.New("goal anchor: nil compiled record")
 	}
-	meta, err := a.store.GetMeta(a.sessionID)
-	if err != nil || meta == nil {
+	// The session must exist for the transcript append below to land; the
+	// goal identity itself now comes from a.goalID (ADR-086), not from this
+	// read.
+	if meta, err := a.store.GetMeta(a.sessionID); err != nil || meta == nil {
 		return "", fmt.Errorf("goal anchor: reading session meta: %w", err)
 	}
 	// A marker-shaped record legitimately carries no restated statement
@@ -181,7 +440,7 @@ func (al *AgentLoop) anchorGoalRecordInTranscript(a goalRecordAnchor) (session.T
 	}
 	resultJSON, merr := json.Marshal(tools.SetGoalResultPayload(tools.SetGoalResultCore{
 		Mode:       a.mode,
-		GoalID:     meta.GoalID,
+		GoalID:     a.goalID,
 		Definition: definition,
 		Criteria:   a.record.Criteria,
 		DoD:        a.record.DoD,
@@ -210,7 +469,7 @@ func (al *AgentLoop) anchorGoalRecordInTranscript(a goalRecordAnchor) (session.T
 	if werr := a.store.AppendTranscriptStrict(a.sessionID, entry); werr != nil {
 		taskGoalTranscriptWriteFailures.Add(1)
 		logger.WarnCF("agent", "goal: could not anchor the record as a set_goal transcript call; the card will not render for this write",
-			map[string]any{"component": "goal", "session_id": a.sessionID, "goal_id": meta.GoalID, "mode": a.mode, "error": werr.Error()})
+			map[string]any{"component": "goal", "session_id": a.sessionID, "goal_id": a.goalID, "mode": a.mode, "error": werr.Error()})
 		return "", fmt.Errorf("goal anchor: transcript write: %w", werr)
 	}
 
@@ -233,7 +492,7 @@ func (al *AgentLoop) anchorGoalRecordInTranscript(a goalRecordAnchor) (session.T
 		AgentID:    a.agentID,
 	})
 	logger.InfoCF("agent", "goal: record anchored as a set_goal transcript call",
-		map[string]any{"component": "goal", "session_id": a.sessionID, "goal_id": meta.GoalID, "mode": a.mode, "tool_call_id": string(callID)})
+		map[string]any{"component": "goal", "session_id": a.sessionID, "goal_id": a.goalID, "mode": a.mode, "tool_call_id": string(callID)})
 	return callID, nil
 }
 
@@ -254,30 +513,86 @@ func setGoalCriteriaArgs(items []task.AcceptanceCriterion, withProvenance bool) 
 	return out
 }
 
-// WriteRecord implements tools.GoalRecordAccess: persists recordJSON as
-// sessionID's compiled goal record, bumps the activity clock, and RESETS
-// the FR-014b zero-output push streak (a fresh registration/update is
-// unambiguous forward progress, so a prior "recordless-idle" streak no
-// longer applies against it) — then triggers the D5 write-side effect
-// (frame emission + channel echo, afterGoalRecordWrite below).
+// WriteRecord implements tools.GoalRecordAccess (ADR-086 GOAL-FR-003 seam
+// re-point). It parses recordJSON — set_goal.go's own freshly-marshaled
+// setGoalRecord — into typed criteria/dod and persists them onto
+// sessionID's ACTIVE pkg/goal.Store record via Store.Update, never as a
+// serialised string (GOAL-FR-003: pkg/goal.Goal.Criteria/DoD are always
+// real typed lists). SetCriteria/SetDoD (pkg/goal/criteria.go) bump the
+// record's own LastActivityAt as a side effect — GOAL-FR-004's relocated
+// idle-expiry clock — and ZeroOutputPushes is explicitly reset to 0 below,
+// replacing the old session.MetaPatch.GoalLastActivityAt/
+// GoalZeroOutputPushes write this method used to make (the FR-014b reset
+// rule: a fresh registration/update is unambiguous forward progress, so a
+// prior "recordless-idle" streak no longer applies against it).
+//
+// This requires an ALREADY-ACTIVE goal record for sessionID.
+// set_goal.go's own Execute() already refuses before ever reaching this
+// call when ReadGoalState reported no active goal (goalCondition == ""),
+// so a missing active record here is a caller-contract violation, not a
+// normal-path branch — it is reported as an error rather than silently
+// creating one. The activation write itself (Store.Create + Goal.Activate)
+// belongs to the engine wave that wires /goal activation into
+// goal_loop.go — outside this wave's write-set (joint delivery plan §3:
+// this file's WriteRecord/ReadGoalState is wave E4; goal_loop.go's
+// activation path is E8/E12, later in the same chain).
+//
+// The D5 write-side effect (frame emission + channel echo,
+// afterGoalRecordWrite below — untouched by this wave, still reading
+// session meta's own Goal* fields until wave S6) still receives the
+// ORIGINAL recordJSON argument unchanged: goalSeamRecord's wire shape is a
+// superset of the fields pkg/agent.CompiledGoal's own json.Unmarshal reads
+// (loadCompiledGoal silently ignores the one field it does not know,
+// superseded_criteria), so afterGoalRecordWrite's own loadCompiledGoal
+// call parses it exactly as it always has. The "prior" side of
+// goalRecordDiffAdapter's diff is this seam's own re-marshaling of the
+// record as it stood immediately BEFORE this write (the OLD behaviour read
+// this from session meta; it now reads it from the store).
 func (a agentLoopGoalRecordAccess) WriteRecord(sessionID, recordJSON string) error {
-	store := a.al.ResolveSessionStore(sessionID)
-	if store == nil {
+	if a.al.ResolveSessionStore(sessionID) == nil {
 		return fmt.Errorf("goal record access: session %q is not known to any session store", sessionID)
 	}
+	rec, perr := parseGoalSeamRecord(recordJSON)
+	if perr != nil {
+		return fmt.Errorf("goal record access: parsing incoming record: %w", perr)
+	}
+
+	store := resolveGoalRecordStore()
+	existing, gerr := store.GetActiveByOwner(generated.GoalOwnerKindSession, sessionID)
+	if gerr != nil {
+		return fmt.Errorf("goal record access: no active goal to write against: %w", gerr)
+	}
 	var priorRecordJSON string
-	if priorMeta, gerr := store.GetMeta(sessionID); gerr == nil && priorMeta != nil {
-		priorRecordJSON = priorMeta.GoalCriteriaJSON
+	if len(existing.Criteria) > 0 {
+		if data, merr := marshalGoalSeamRecord(existing); merr == nil {
+			priorRecordJSON = data
+		}
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	zero := 0
-	if err := store.SetMeta(sessionID, session.MetaPatch{
-		GoalCriteriaJSON:     &recordJSON,
-		GoalLastActivityAt:   &now,
-		GoalZeroOutputPushes: &zero,
-	}); err != nil {
-		return fmt.Errorf("goal record access: writing session meta: %w", err)
+
+	now := time.Now().UTC()
+	if _, uerr := store.Update(existing.GoalID, func(cur *goal.Goal) error {
+		cur.Definition = rec.Definition
+		if err := cur.SetCriteria(rec.Criteria, now); err != nil {
+			return err
+		}
+		if len(rec.DoD) > 0 {
+			if err := cur.SetDoD(rec.DoD, now); err != nil {
+				return err
+			}
+		}
+		superseded := make([]goal.SupersededCriteriaEntry, 0, len(rec.SupersededCriteria))
+		for _, s := range rec.SupersededCriteria {
+			superseded = append(superseded, goal.SupersededCriteriaEntry{
+				Criteria: s.Criteria, DoD: s.DoD, SupersededAt: s.SupersededAt,
+			})
+		}
+		cur.SupersededCriteria = superseded
+		cur.ZeroOutputPushes = 0
+		return nil
+	}); uerr != nil {
+		return fmt.Errorf("goal record access: writing goal record: %w", uerr)
 	}
+
 	a.al.afterGoalRecordWrite(sessionID, recordJSON, goalRecordDiffAdapter(priorRecordJSON, recordJSON))
 	return nil
 }
@@ -346,16 +661,12 @@ func (al *AgentLoop) goalRecordFeasibilityFn(ctx context.Context, criteria []tas
 //     exactly once per write. A web-routed (or not-yet-routed) goal
 //     receives no text echo; the frame is the surface there.
 func (al *AgentLoop) afterGoalRecordWrite(sessionID, recordJSON, diffSummary string) {
-	store := al.ResolveSessionStore(sessionID)
-	if store == nil {
-		logger.WarnCF("agent", "goal: could not re-read session meta after a record write; frame/echo skipped",
+	// ADR-086: the goal's own record, not session meta, is where the frame's
+	// id / condition / round / budget / reason now come from.
+	rec := activeGoalForSession(sessionID)
+	if rec == nil {
+		logger.WarnCF("agent", "goal: could not re-read the goal record after a record write; frame/echo skipped",
 			map[string]any{"component": "goal", "session_id": sessionID})
-		return
-	}
-	meta, err := store.GetMeta(sessionID)
-	if err != nil || meta == nil {
-		logger.WarnCF("agent", "goal: could not re-read session meta after a record write; frame/echo skipped",
-			map[string]any{"component": "goal", "session_id": sessionID, "error": errString(err)})
 		return
 	}
 
@@ -368,8 +679,8 @@ func (al *AgentLoop) afterGoalRecordWrite(sessionID, recordJSON, diffSummary str
 		dod = g.DoD
 	}
 	al.emitGoalStatusFrameWithCriteriaAndDoD(
-		sessionID, meta.GoalID, meta.GoalCondition, meta.GoalRoundsUsed, meta.GoalMaxRounds,
-		meta.GoalLatestReason, goalPillActive, definition, criteria, dod,
+		sessionID, rec.GoalID, rec.Prompt, rec.Round, rec.MaxRounds,
+		rec.LatestReason, goalPillActive, definition, criteria, dod,
 	)
 
 	if route := goalTriggers().routeFor(sessionID); route.channel != "" && route.channel != goalForcingWebChannel {
@@ -393,7 +704,7 @@ func (al *AgentLoop) afterGoalRecordWrite(sessionID, recordJSON, diffSummary str
 	}
 
 	logger.InfoCF("agent", "goal: record write applied",
-		map[string]any{"component": "goal", "session_id": sessionID, "goal_id": meta.GoalID, "diff": diffSummary})
+		map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID, "diff": diffSummary})
 }
 
 // EmitGoalStatusRehydrate re-emits ONE goal_status event for sessionID
@@ -412,7 +723,7 @@ func (al *AgentLoop) afterGoalRecordWrite(sessionID, recordJSON, diffSummary str
 // after replay + hydration complete, so the reattaching connection (already
 // registered for live-event forwarding earlier in that same function) sees
 // exactly the event it would have seen had it never disconnected. Cheap:
-// one GetMeta read, only on attach.
+// one goal-record lookup, only on attach.
 //
 // SPA goal-ack-line fix (2026-09-08, frontend wave GX-C): originally this
 // returned false outright for the D1 legal-transient empty-record window
@@ -424,46 +735,38 @@ func (al *AgentLoop) afterGoalRecordWrite(sessionID, recordJSON, diffSummary str
 // `active` frame is observed for a goal_id) never reconstructed. Emitting
 // the SAME criteria-less frame `activateInstantGoal` (goal_loop.go) emits
 // at the moment of activation — never inventing state, just re-publishing
-// what is already durably persisted in meta.GoalCondition/GoalID — closes
+// what is already durably persisted on the goal record — closes
 // that gap: every reattach while the goal is active, empty record or not,
 // now reproduces exactly the live event stream a connection that never
 // dropped would have seen.
+// ADR-086: "is there an active goal" is now the existence of an ACTIVE
+// pkg/goal record bound to this session (activeGoalForSession), and "has a
+// record been registered yet" is that record's own criteria list being
+// non-empty — the same two questions the retired GoalCondition /
+// GoalCriteriaJSON session-meta fields used to answer. A terminal goal is
+// still excluded for free: Terminate moves the record out of the active
+// state, so activeGoalForSession stops finding it.
 func (al *AgentLoop) EmitGoalStatusRehydrate(sessionID string) bool {
-	store := al.ResolveSessionStore(sessionID)
-	if store == nil {
+	rec := activeGoalForSession(sessionID)
+	if rec == nil {
 		return false
 	}
-	meta, err := store.GetMeta(sessionID)
-	if err != nil || meta == nil {
-		return false
-	}
-	if meta.GoalCondition == "" {
-		// No active goal — a genuinely terminal/cleared goal also reads
-		// GoalCondition == "" (clearGoal empties it), so this excludes
-		// terminal goals for free.
-		return false
-	}
-	if meta.GoalCriteriaJSON == "" {
+	g := compiledGoalFromRecord(rec)
+	if g == nil {
 		// D1 legal-transient empty-record state: activated, but the working
 		// agent has not written a record yet. Re-emit the SAME criteria-less
 		// frame activateInstantGoal itself emits at activation — this is
 		// what lets the SPA's goal-ack line (and the goal-aware thinking
 		// indicator) survive a reload that lands inside this window.
 		al.emitGoalStatusFrame(
-			sessionID, meta.GoalID, meta.GoalCondition, meta.GoalRoundsUsed, meta.GoalMaxRounds,
-			meta.GoalLatestReason, goalPillActive,
+			sessionID, rec.GoalID, rec.Prompt, rec.Round, rec.MaxRounds,
+			rec.LatestReason, goalPillActive,
 		)
 		return true
 	}
-	g := loadCompiledGoal(meta.GoalCriteriaJSON)
-	if g == nil {
-		// Non-empty but unparseable/corrupt/zero-criteria — loadCompiledGoal
-		// already WARN-logged the specifics; nothing safe to re-emit.
-		return false
-	}
 	al.emitGoalStatusFrameWithCriteriaAndDoD(
-		sessionID, meta.GoalID, meta.GoalCondition, meta.GoalRoundsUsed, meta.GoalMaxRounds,
-		meta.GoalLatestReason, goalPillActive, g.Definition, g.Criteria, g.DoD,
+		sessionID, rec.GoalID, rec.Prompt, rec.Round, rec.MaxRounds,
+		rec.LatestReason, goalPillActive, g.Definition, g.Criteria, g.DoD,
 	)
 	return true
 }

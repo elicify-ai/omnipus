@@ -350,8 +350,7 @@ func TestGoalClear_AfterRestate_ClearsEverything(t *testing.T) {
 	// A marker-only restate on the active goal applies immediately (US-5 S19).
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal [tests pass]", UserInitiated: true}, agentInst, &opts)
-	mid, _ := store.GetMeta(sid)
-	if mid.GoalCondition == "" {
+	if goalRecordForSessionOrNil(sid) == nil {
 		t.Fatal("precondition: goal must still be active after restate")
 	}
 
@@ -364,10 +363,13 @@ func TestGoalClear_AfterRestate_ClearsEverything(t *testing.T) {
 	if !strings.Contains(reply, "cleared") {
 		t.Fatalf("/goal clear reply should say cleared, got: %s", reply)
 	}
-	after, _ := store.GetMeta(sid)
-	if after.GoalCondition != "" || after.GoalCriteriaJSON != "" {
-		t.Errorf("after clear, all goal state must be empty: condition=%q criteria=%q",
-			after.GoalCondition, after.GoalCriteriaJSON)
+	// ADR-086 GOAL-FR-027: a clear is a terminal STATUS TRANSITION on a
+	// retained record, so "all goal state must be empty" is now "no goal is
+	// ACTIVE on this session any more" — the record itself survives with its
+	// criteria intact, deliberately.
+	if after := goalRecordForSessionOrNil(sid); after != nil {
+		t.Errorf("after clear, no goal may remain ACTIVE: condition=%q criteria=%q",
+			after.Prompt, goalRecordCompiledJSON(after))
 	}
 }
 

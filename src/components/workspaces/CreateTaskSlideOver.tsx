@@ -29,11 +29,13 @@ import {
   fetchAgents,
   buildTaskAssigneeItems,
   fetchTasks,
+  fetchPlans,
   tasksQueryKeys,
   workspacesQueryKeys,
+  plansQueryKeys,
   isApiError,
 } from '@/lib/api'
-import type { Task, TaskTrigger, TaskCreateRequest, Todo, AcceptanceCriterion } from '@/lib/api'
+import type { Task, TaskCreateRequest, Todo, AcceptanceCriterion } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { useAuthStore } from '@/store/auth'
 import { useWorkspaceTeamIds } from '@/hooks/useWorkspaceTeamIds'
@@ -41,14 +43,8 @@ import { cn } from '@/lib/utils'
 import { PRIORITY_BADGE } from './TaskCard'
 import { TagInput } from './TagInput'
 import { AcceptanceCriteriaEditor } from './AcceptanceCriteriaEditor'
-import {
-  type TriggerKind,
-  buildTrigger,
-  datetimeLocalToMs,
-  datetimeLocalToIso,
-  datetimeLocalToDate,
-  dateToDatetimeLocal,
-} from './taskFormFields'
+import { DefinitionOfDoneEditor } from './DefinitionOfDoneEditor'
+import { datetimeLocalToIso, datetimeLocalToDate, dateToDatetimeLocal } from './taskFormFields'
 
 interface CreateTaskSlideOverProps {
   open: boolean
@@ -66,11 +62,10 @@ interface FormState {
   prompt: string
   priority: number
   agentId: string
-  // Trigger — FR-011/D3: the generic create form offers only manual/once;
-  // recurring triggers (every/recurring) are calendar-only and built
-  // exclusively via the calendar's event slide-over.
-  triggerKind: TriggerKind
-  triggerAt: string // datetime-local value (once)
+  // Plan (GOAL-FR-059) — defaults to the inherited `planId` prop (the
+  // board's active plan filter) but is now an explicit, changeable picker
+  // rather than a silent inherit. '__none__' = no plan.
+  planId: string
   // Dependencies
   blockedBy: string[]
   // Due
@@ -81,6 +76,9 @@ interface FormState {
   tags: string[]
   // Acceptance criteria (ADR-049 — Definition of Done)
   criteria: AcceptanceCriterion[]
+  // Definition of Done (GOAL-FR-003/FR-048) — DISTINCT from `criteria`:
+  // standing quality gates judged on every attempt, never mixed in.
+  dod: AcceptanceCriterion[]
 }
 
 const INITIAL_FORM: FormState = {
@@ -88,13 +86,39 @@ const INITIAL_FORM: FormState = {
   prompt: '',
   priority: 3,
   agentId: '__none__',
-  triggerKind: 'manual',
-  triggerAt: '',
+  planId: '__none__',
   blockedBy: [],
   due: '',
   todos: [],
   tags: [],
   criteria: [],
+  dod: [],
+}
+
+/**
+ * Keep only the `blocked_by` selections that are still legal under `nextPlanId`.
+ *
+ * A `blocked_by` edge has to stay inside one plan's DAG (the plan engine and
+ * the graph both treat a plan as a self-contained DAG), so the dependency
+ * picker only ever lists top-level tasks belonging to the SELECTED plan. When
+ * the plan changes, any previously-selected dependency from the old plan
+ * vanishes from both the picker and the chip row — the operator can no longer
+ * see it or remove it — yet it would still ride along in the POST body and
+ * create a cross-plan edge. Re-validating here is what makes the visible
+ * selection and the submitted selection the same thing again.
+ *
+ * Exported for its own test: this is the whole fix, and asserting it through
+ * the form alone would let a caller that forgets to invoke it still pass.
+ */
+export function reconcileBlockedByForPlan(
+  blockedBy: string[],
+  nextPlanId: string | null,
+  tasks: Pick<Task, 'id' | 'parent_task_id' | 'plan_id'>[],
+): string[] {
+  if (blockedBy.length === 0) return blockedBy
+  return blockedBy.filter((id) =>
+    tasks.some((t) => t.id === id && !t.parent_task_id && (t.plan_id || null) === nextPlanId),
+  )
 }
 
 export function CreateTaskSlideOver({
@@ -110,18 +134,36 @@ export function CreateTaskSlideOver({
 
   const [form, setForm] = useState<FormState>(INITIAL_FORM)
   const [titleError, setTitleError] = useState('')
-  const [triggerError, setTriggerError] = useState('')
+  const [goalError, setGoalError] = useState('')
+  const [criteriaError, setCriteriaError] = useState('')
+  const [dodError, setDodError] = useState('')
   const [newTodo, setNewTodo] = useState('')
 
-  // Sync due pre-fill when the slide-over opens or the caller's prop changes
+  // Sync due date + inherited plan pre-fill when the slide-over opens or the
+  // caller's props change (GOAL-FR-059 — the plan picker defaults to the
+  // board's active plan filter, same lifecycle as the due-date pre-fill).
   useEffect(() => {
     if (open) {
-      setForm((f) => ({
-        ...f,
-        due: initialDue ?? f.due,
-      }))
+      setForm((f) => {
+        const nextPlan = planId ? planId : f.planId
+        const nextDue = initialDue ?? f.due
+        if (nextPlan === f.planId && nextDue === f.due) return f
+        // This effect is the OTHER way the selected plan changes (the board's
+        // active plan filter moving while the slide-over is open), and it
+        // strands a dependency selection exactly the way the picker did. Drop
+        // the selection outright here rather than re-validating: a task
+        // belongs to exactly one plan, so no dependency chosen under the old
+        // plan can be legal under the new one, and the task list this form
+        // would validate against is not a dependency of this effect.
+        return {
+          ...f,
+          due: nextDue,
+          planId: nextPlan,
+          blockedBy: nextPlan === f.planId ? f.blockedBy : [],
+        }
+      })
     }
-  }, [open, initialDue])
+  }, [open, initialDue, planId])
 
   const { data: agents = [] } = useQuery({
     queryKey: ['agents'],
@@ -144,33 +186,46 @@ export function CreateTaskSlideOver({
     enabled: !!workspaceId && open,
   })
 
+  // Plans in this workspace (GOAL-FR-059) — the create form now offers the
+  // same Plan picker the detail panel has, instead of silently inheriting
+  // the board's active plan filter with no way to change or clear it here.
+  const { data: plans = [] } = useQuery({
+    queryKey: plansQueryKeys.list(workspaceId),
+    queryFn: () => fetchPlans(workspaceId),
+    staleTime: 10_000,
+    enabled: !!workspaceId && open,
+  })
+
   // Eligible dependencies are top-level tasks (subtasks nest under parents)
   // that belong to the SAME plan as the task being created — a `blocked_by`
   // edge must stay inside one plan's DAG (cross-plan deps aren't meaningful;
-  // the plan engine + graph treat each plan as a self-contained DAG). `planId`
-  // is the plan this new task will join; `null`/absent = the plan-less "Loose"
-  // group, whose members may still depend on one another.
+  // the plan engine + graph treat each plan as a self-contained DAG).
+  // `form.planId` is the plan this new task will join; '__none__' = the
+  // plan-less "Loose" group, whose members may still depend on one another.
+  const effectivePlanId = form.planId === '__none__' ? null : form.planId
   const depCandidates: Task[] = wsTasks.filter(
-    (t) => !t.parent_task_id && (t.plan_id || null) === (planId || null),
+    (t) => !t.parent_task_id && (t.plan_id || null) === effectivePlanId,
   )
 
   function buildBody(): TaskCreateRequest {
+    // GOAL-FR-060: a normal task has no timer — it starts by a human
+    // pressing Start, an agent starting it, or a plan reaching it. The
+    // create form no longer offers a Trigger control, so the body never
+    // carries one; a task lands here manual by construction, matching the
+    // implicit default the server already applies.
     const body: TaskCreateRequest = {
       title: form.title.trim(),
       action: 'llm',
-      prompt: form.prompt.trim() || undefined,
+      prompt: form.prompt.trim(),
       priority: form.priority,
       workspace_id: workspaceId,
       surface: 'user',
-      plan_id: planId ?? undefined,
+      plan_id: effectivePlanId ?? undefined,
       agent_id: form.agentId === '__none__' ? undefined : form.agentId || undefined,
-    }
-
-    const trigger = currentTrigger()
-    // Omit manual triggers — they are the implicit default; sending {type:'manual',config:{}} is harmless
-    // but keeping the body lean avoids noise. We DO send non-manual triggers.
-    if (trigger && trigger.type !== 'manual') {
-      body.trigger = trigger
+      // GOAL-FR-047: both lists are now mandatory — handleSubmit refuses
+      // submission before this is ever called when either is empty.
+      criteria: form.criteria,
+      dod: form.dod,
     }
 
     if (form.blockedBy.length > 0) {
@@ -191,19 +246,7 @@ export function CreateTaskSlideOver({
       body.tags = form.tags
     }
 
-    if (form.criteria.length > 0) {
-      body.criteria = form.criteria
-    }
-
     return body
-  }
-
-  function currentTrigger(): TaskTrigger | null {
-    if (form.triggerKind === 'once') {
-      const at = datetimeLocalToMs(form.triggerAt)
-      return buildTrigger('once', { at_ms: at ?? undefined })
-    }
-    return buildTrigger('manual', {})
   }
 
   function currentTodos(): Todo[] {
@@ -211,16 +254,6 @@ export function CreateTaskSlideOver({
       .map((t) => t.trim())
       .filter((t) => t.length > 0)
       .map((text) => ({ text, status: 'pending' as const }))
-  }
-
-  /** Client-side validation of the chosen trigger; returns an error string or ''. */
-  function validateTrigger(): string {
-    if (form.triggerKind === 'once') {
-      if (!form.triggerAt) return 'Pick a date and time for the one-time trigger.'
-      const at = datetimeLocalToMs(form.triggerAt)
-      if (at == null) return 'Invalid trigger date/time.'
-    }
-    return ''
   }
 
   // Create only — lands in inbox
@@ -256,18 +289,43 @@ export function CreateTaskSlideOver({
     },
   })
 
+  // GOAL-FR-047/FR-053/FR-056: Title, Goal, at least one acceptance
+  // criterion and at least one definition-of-done item are all mandatory at
+  // creation — checked independently so a refusal says which is missing,
+  // rather than stopping at the first failure.
   function handleSubmit(runNow: boolean) {
+    let blocked = false
+
     if (!form.title.trim()) {
       setTitleError('Title is required')
-      return
+      blocked = true
+    } else {
+      setTitleError('')
     }
-    setTitleError('')
-    const tErr = validateTrigger()
-    if (tErr) {
-      setTriggerError(tErr)
-      return
+
+    if (!form.prompt.trim()) {
+      setGoalError('Goal is required')
+      blocked = true
+    } else {
+      setGoalError('')
     }
-    setTriggerError('')
+
+    if (form.criteria.length === 0) {
+      setCriteriaError('Add at least one acceptance criterion.')
+      blocked = true
+    } else {
+      setCriteriaError('')
+    }
+
+    if (form.dod.length === 0) {
+      setDodError('Add at least one definition-of-done item.')
+      blocked = true
+    } else {
+      setDodError('')
+    }
+
+    if (blocked) return
+
     if (runNow) {
       createAndRunMutation.mutate()
     } else {
@@ -278,7 +336,9 @@ export function CreateTaskSlideOver({
   function resetAndClose() {
     setForm(INITIAL_FORM)
     setTitleError('')
-    setTriggerError('')
+    setGoalError('')
+    setCriteriaError('')
+    setDodError('')
     setNewTodo('')
     onOpenChange(false)
   }
@@ -286,6 +346,27 @@ export function CreateTaskSlideOver({
   function handleOpenChange(next: boolean) {
     if (!next) resetAndClose()
     else onOpenChange(next)
+  }
+
+  // Plan changes must reconcile the dependency selection, not leave it
+  // stranded. `depCandidates` below is filtered to the SELECTED plan (a
+  // `blocked_by` edge has to stay inside one plan's DAG), so a dependency
+  // picked under the previous plan disappears from the picker AND from the
+  // chip row the moment the plan changes — while still riding along in
+  // `form.blockedBy` to the POST body. The operator could neither see it nor
+  // remove it, and the task was created with a cross-plan edge. Re-validate
+  // against the new plan and drop whatever is no longer eligible.
+  function handlePlanChange(next: string) {
+    setForm((s) => {
+      if (s.planId === next) return s
+      if (s.blockedBy.length === 0) return { ...s, planId: next }
+      const nextPlanId = next === '__none__' ? null : next
+      return {
+        ...s,
+        planId: next,
+        blockedBy: reconcileBlockedByForPlan(s.blockedBy, nextPlanId, wsTasks),
+      }
+    })
   }
 
   function toggleDep(id: string) {
@@ -341,20 +422,26 @@ export function CreateTaskSlideOver({
             )}
           </div>
 
-          {/* Prompt */}
+          {/* Goal (GOAL-FR-056 — was "Prompt"; this becomes the goal record
+              once the task starts its own session). Required. */}
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="ct-prompt" className="text-[var(--color-secondary)]">
-              Prompt
+              Goal <span className="text-[var(--color-error)]">*</span>
             </Label>
             <Textarea
               id="ct-prompt"
               value={form.prompt}
-              onChange={(e) => setForm((s) => ({ ...s, prompt: e.target.value }))}
-              placeholder="Describe what the agent should do…"
+              onChange={(e) => { setForm((s) => ({ ...s, prompt: e.target.value })); setGoalError('') }}
+              placeholder="What should this task achieve?"
               rows={4}
               maxLength={10000}
               className="text-xs font-mono resize-none"
+              aria-invalid={!!goalError}
+              aria-describedby={goalError ? 'ct-goal-error' : undefined}
             />
+            {goalError && (
+              <p id="ct-goal-error" className="text-xs text-[var(--color-error)]">{goalError}</p>
+            )}
           </div>
 
           {/* Priority */}
@@ -382,6 +469,24 @@ export function CreateTaskSlideOver({
             </Select>
           </div>
 
+          {/* Plan (GOAL-FR-059) — defaults to the inherited board plan
+              filter, but is now a real, changeable picker instead of a
+              silent inherit-only value. */}
+          <div className="flex flex-col gap-1.5">
+            <Label className="text-[var(--color-secondary)]">Plan</Label>
+            <SmartSelect
+              value={form.planId}
+              onValueChange={handlePlanChange}
+              placeholder="No plan"
+              triggerClassName="h-9 text-sm"
+              ariaLabel="Plan"
+              items={[
+                { value: '__none__', label: 'No plan', className: 'text-xs' },
+                ...plans.map((p) => ({ value: p.id, label: p.title, className: 'text-xs' })),
+              ]}
+            />
+          </div>
+
           {/* Tags (ADR-049 — replaces the milestone selector) */}
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="ct-tags" className="text-[var(--color-secondary)]">
@@ -395,15 +500,40 @@ export function CreateTaskSlideOver({
             />
           </div>
 
-          {/* Acceptance criteria (ADR-049 — Definition of Done, SD-C13) */}
+          {/* Acceptance criteria (ADR-049 — Definition of Done, SD-C13).
+              GOAL-FR-047/FR-053: required — the D5 soft-tier empty hint is
+              retired; a plain instruction replaces it (C-80: the `emptyHint`
+              prop itself survives on AcceptanceCriteriaEditor, only this
+              call site's attribute is removed). */}
           <div className="flex flex-col gap-1.5">
-            <Label className="text-[var(--color-secondary)]">Acceptance criteria</Label>
+            <Label className="text-[var(--color-secondary)]">
+              Acceptance criteria <span className="text-[var(--color-error)]">*</span>
+            </Label>
             <AcceptanceCriteriaEditor
               criteria={form.criteria}
-              onChange={(criteria) => setForm((s) => ({ ...s, criteria }))}
+              onChange={(criteria) => { setForm((s) => ({ ...s, criteria })); setCriteriaError('') }}
               currentAuthor={{ kind: 'user', id: username ?? 'operator' }}
-              emptyHint="No criteria added — this task will be judged against its title and description (D5)."
             />
+            <p className="text-xs text-[var(--color-muted)]">Add at least one.</p>
+            {criteriaError && (
+              <p className="text-xs text-[var(--color-error)]">{criteriaError}</p>
+            )}
+          </div>
+
+          {/* Definition of Done (GOAL-FR-003/FR-048/FR-053) — a second,
+              DISTINCT list of standing quality gates, required at creation
+              same as Acceptance criteria. `DefinitionOfDoneEditor` (U1) is a
+              thin wrapper around `AcceptanceCriteriaEditor` and already
+              supplies its own label, asterisk and standing helper line. */}
+          <div className="flex flex-col gap-1.5">
+            <DefinitionOfDoneEditor
+              dod={form.dod}
+              onChange={(dod) => { setForm((s) => ({ ...s, dod })); setDodError('') }}
+              currentAuthor={{ kind: 'user', id: username ?? 'operator' }}
+            />
+            {dodError && (
+              <p className="text-xs text-[var(--color-error)]">{dodError}</p>
+            )}
           </div>
 
           {/* Agent */}
@@ -450,39 +580,16 @@ export function CreateTaskSlideOver({
             )}
           </div>
 
-          {/* Trigger */}
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ct-trigger" className="text-[var(--color-secondary)]">
-              Trigger
-            </Label>
-            <Select
-              value={form.triggerKind}
-              onValueChange={(v) => { setForm((s) => ({ ...s, triggerKind: v as TriggerKind })); setTriggerError('') }}
-            >
-              <SelectTrigger id="ct-trigger" className="bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="manual" className="text-xs">None (manual)</SelectItem>
-                <SelectItem value="once" className="text-xs">Once (at a time)</SelectItem>
-              </SelectContent>
-            </Select>
-
-            {form.triggerKind === 'once' && (
-              <DateTimePicker
-                aria-label="Trigger date and time"
-                value={datetimeLocalToDate(form.triggerAt)}
-                onChange={(d) => {
-                  setForm((s) => ({ ...s, triggerAt: dateToDatetimeLocal(d) }))
-                  setTriggerError('')
-                }}
-                className="mt-1"
-              />
-            )}
-            {triggerError && (
-              <p className="text-xs text-[var(--color-error)]">{triggerError}</p>
-            )}
-          </div>
+          {/* Trigger — REMOVED (GOAL-FR-060). A normal task has no timer: it
+              starts by a human pressing Start, an agent starting it, or a
+              plan reaching it, none of which is a schedule. Time-based
+              starts are the calendar's own job (its event slide-over keeps
+              the full trigger editor); the board/list already exclude every
+              scheduled task, so a task reaching this form is manual by
+              definition. Scope limit: only the two CONTROLS are removed —
+              the `trigger` model field, wire type, `isScheduledTrigger` /
+              `buildTrigger` helpers and the calendar's own editor all stay
+              (joint delivery plan U4 row). */}
 
           {/* Depends on (blocked_by) */}
           <div className="flex flex-col gap-1.5">
@@ -573,7 +680,7 @@ export function CreateTaskSlideOver({
 
           {/* Todos */}
           <div className="flex flex-col gap-1.5">
-            <Label className="text-[var(--color-secondary)]">Checklist</Label>
+            <Label className="text-[var(--color-secondary)]">Todos</Label>
             <div className="flex items-center gap-2">
               <Input
                 aria-label="New checklist item"
@@ -585,7 +692,7 @@ export function CreateTaskSlideOver({
                     addTodo()
                   }
                 }}
-                placeholder="Add a checklist item…"
+                placeholder="Add a todo…"
                 maxLength={500}
                 className="text-xs flex-1"
               />

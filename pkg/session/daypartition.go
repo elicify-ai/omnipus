@@ -132,50 +132,16 @@ type SessionMeta struct {
 	// every test green (spec note on W2).
 	ParentSessionID string `json:"parent_session_id,omitempty"`
 
-	// Goal loop state (ADR-049 D6/D7, spec Part B US-8, `/goal <condition>`),
-	// following the TaskID precedent above: session-scoped, not a wire type
-	// (the `goal_status` WS frame and `/goal status` reply are the wire/UX
-	// surfaces). GoalCondition == "" means no active goal — replace-on-set
-	// (FR-068) simply overwrites all five fields together.
-	// GoalID is the stable identifier for the CURRENT goal generation
-	// (ADR-053 R§8.11's `goal_id`, UAT S3 fix): minted once when a goal
-	// activates from empty (fresh `/goal <condition>` or a confirmed fresh
-	// pending goal), held constant across every round-advance/pause/judging
-	// frame for that generation (an amendment via `/goal confirm` keeps it —
-	// it is the SAME goal being refined), and cleared together with the rest
-	// of the Goal* fields on `/goal clear`. This is what lets the SPA's
-	// GoalPillTray key one pill per goal generation instead of collapsing
-	// every goal this session ever carried into a single `_default` bucket.
-	// Never regenerated mid-lifecycle — a fabricated per-frame id would be
-	// worse than no id at all.
-	GoalID           string `json:"goal_id,omitempty"`
-	GoalCondition    string `json:"goal_condition,omitempty"`
-	GoalRoundsUsed   int    `json:"goal_rounds_used,omitempty"`
-	GoalMaxRounds    int    `json:"goal_max_rounds,omitempty"`
-	GoalLatestReason string `json:"goal_latest_reason,omitempty"`
-	// GoalStartedAt is an RFC 3339 UTC timestamp, used for `/goal status`'s
-	// elapsed wall-clock (FR-069).
-	GoalStartedAt string `json:"goal_started_at,omitempty"`
-	// GoalLastActivityAt is the FR-064/D7 idle-expiry calendar-brake clock for
-	// `/goal` (review r1, mirrors plan_engine.go's Plan.LastActivityAt
-	// semantics exactly): an RFC 3339 UTC timestamp bumped on genuine goal
-	// activity (goal set, or a judge round that actually ran) but
-	// deliberately NOT on a judge-unavailability pause (R9/m4) — a
-	// permanently-unavailable judge must still end the loop via this
-	// calendar brake, never via a fabricated verdict or a clock that never
-	// expires.
-	GoalLastActivityAt string `json:"goal_last_activity_at,omitempty"`
-	// GoalCriteriaJSON is the ADR-053 Phase-2 compiled criteria ladder
-	// (FR-110/FR-113): the engine-invoked SMART compiler's output — a JSON-encoded
-	// []task.AcceptanceCriterion (the S1 unified goal/criteria record, reusing the
-	// SAME AcceptanceCriterion type tasks/plans use, DoD-11 — never a second
-	// criteria type). Empty when no goal is active OR when a legacy pre-Phase-2
-	// goal carries only GoalCondition (checkGoalLoopAfterTurn falls back to a
-	// single prose criterion from GoalCondition in that case, preserving
-	// back-compat). Cleared together with GoalCondition on /goal clear (FR-114).
-	// Immutable once the user confirms the echo (D9); a re-statement AMENDS by
-	// minting a fresh JSON via a diffed, confirmed amendment (N-6).
-	GoalCriteriaJSON string `json:"goal_criteria,omitempty"`
+	// ADR-086 GOAL-FR-005 (wave S6, "the deletion half"): the goal loop
+	// state that used to live here — GoalID, GoalCondition, GoalRoundsUsed,
+	// GoalMaxRounds, GoalLatestReason, GoalStartedAt, GoalLastActivityAt,
+	// GoalCriteriaJSON, GoalQuestionRoundsUsed, GoalZeroOutputPushes, and
+	// the four GoalRoute* fields — is RETIRED from SessionMeta in full. The
+	// goal is now its own stored entity (pkg/goal.Store, ADR-086); it is no
+	// longer session-scoped state at all. PendingAskJSON, immediately below,
+	// is the one field that historically sat among the Goal* group but was
+	// never goal state — it stays.
+	//
 	// PendingAskJSON is the AskUserQuestion tool's durable pending question
 	// set (askuserquestion-tool-spec.md §0.4, M-R2-1): a JSON-encoded
 	// askuser.PendingSet, written by pkg/askuser's Registry when a question
@@ -185,42 +151,20 @@ type SessionMeta struct {
 	// default-safe timers (US-6 S1). Empty means no set was ever asked on
 	// this session; a terminal-status record (status answered/cancelled)
 	// means "not pending" — the collapsed card record renders from it on
-	// history reload. Persisted in the goal.json field group (session-scoped
-	// pending interaction state that must not bump the session's composed
-	// recency) — untouched by ADR-081 D9, which belongs to the tool, not the
-	// deleted confirm-gate coupling.
+	// history reload. Session-scoped pending interaction state that must not
+	// bump the session's composed recency — untouched by ADR-081 D9, which
+	// belongs to the tool, not the deleted confirm-gate coupling.
+	//
+	// ADR-086 GOAL-FR-005 (wave S2): this field's NAME, JSON tag and
+	// in-memory semantics on SessionMeta/UnifiedMeta/MetaPatch are
+	// UNCHANGED — pkg/askuser and pkg/gateway/replay.go read and write it
+	// exactly as before. Its UnifiedStore ON-DISK location moved in wave S2:
+	// it used to be persisted inside the goal.json field group; it is now
+	// persisted to its own pending_ask.json file (pendingAskTouched /
+	// u5WritePendingAskLocked, unified.go; pending_ask.go) — it is
+	// session-scoped, not goal-scoped, and it did not disappear when wave
+	// S6 deleted goal.json wholesale (the rest of this doc comment block).
 	PendingAskJSON string `json:"pending_ask,omitempty"`
-
-	// GoalQuestionRoundsUsed is ADR-081 FR-010's question-round budget: 1 per
-	// goal GENERATION (per GoalID) — a prose restate keeps the GoalID and
-	// therefore inherits a spent budget (only a fresh activation on a
-	// goalless session mints a new GoalID and resets this to 0). Wired by
-	// wave 2's forced two-door mechanism (D3); this field is added here only
-	// so the greenfield meta round-trips it.
-	GoalQuestionRoundsUsed int `json:"goal_question_rounds_used,omitempty"`
-	// GoalZeroOutputPushes is ADR-081 FR-014b's persisted bounded-push streak:
-	// how many consecutive idle cycles the keeper has pushed a RECORDED goal
-	// with zero adjudicable output, capped at 2 before normal (fail-closed
-	// permitted) adjudication resumes. Persisted (not in-memory) so a
-	// gateway restart between pushes cannot silently re-open the unbounded
-	// loop. Reset to 0 on a triple-false idle or a successful set_goal write
-	// (wave 2 wiring; this field is added here only so the greenfield meta
-	// round-trips it).
-	GoalZeroOutputPushes int `json:"goal_zero_output_pushes,omitempty"`
-	// GoalRouteChannel/GoalRouteChatID/GoalRouteSessionKey/GoalRouteAgentID
-	// are ADR-081 FR-031's persisted goal routing: the chat coordinates
-	// (channel/chat-id/session-key/agent) a later idle-settlement push or a
-	// channel record echo needs to re-inject a turn — today this lives ONLY
-	// in an in-memory map (recordGoalRouting/goal_triggers.go), which a
-	// gateway restart silently empties, disabling BOTH the keeper push and
-	// the channel echo for a long-running channel goal. Persisting it here
-	// lets the reader (goalTriggers().routeFor, wave 2) fall back to the
-	// on-disk value when the in-memory map is empty. All four are omitempty
-	// and unwired by this wave — wave 2 wires the writer/reader.
-	GoalRouteChannel    string `json:"goal_route_channel,omitempty"`
-	GoalRouteChatID     string `json:"goal_route_chat_id,omitempty"`
-	GoalRouteSessionKey string `json:"goal_route_session_key,omitempty"`
-	GoalRouteAgentID    string `json:"goal_route_agent_id,omitempty"`
 
 	// Loop state (ADR-049 D6/D7, spec Part B US-9, `/loop`). LoopMode == ""
 	// means no active loop. LoopMode is "interval" (cron `every` + `continue`)
@@ -431,6 +375,20 @@ type TranscriptEntry struct {
 	//
 	// Backend-only: never serialized onto a wire frame.
 	ParentSpawnCallID string `json:"parent_spawn_call_id,omitempty"`
+
+	// SystemSubtype discriminates an EntryTypeSystem entry by what kind of
+	// system event it records (ADR-085 BROWSER-FR-043a, folded into this
+	// wave per delivery-plan R-23 — a persisted-field dependency of wave
+	// B123, not goal work; declared here so B123 only has to write and read
+	// it, never define it). The single legal value today is
+	// "browser_handover_notice": an operator taking the browser control
+	// wheel from a running agent. Deliberately a dedicated typed field
+	// rather than a prefix match on Content — FR-043a forbids
+	// prefix-matching prose to classify a system entry. The deterministic
+	// notice id for a handover notice rides the existing TranscriptEntry.ID
+	// field, not a new one. Empty (and omitted from JSON) for every
+	// non-system entry and for every system entry that predates this field.
+	SystemSubtype string `json:"system_subtype,omitempty"`
 }
 
 // Attachment represents a file attached to a message.

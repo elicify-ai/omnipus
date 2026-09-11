@@ -121,6 +121,78 @@ func TestPerformancePUT_ZeroResetsToAutoDetectedDefault(t *testing.T) {
 		"after resetting to auto, the effective value must no longer be the previously-explicit 3 (unless auto genuinely also resolves to 3, which is astronomically unlikely on a real test machine)")
 }
 
+// TestPerformancePUT_GoalMaxRounds_BelowOne_Rejected is GOAL-FR-025's
+// "an override below 1 MUST be rejected" requirement, carried over onto the
+// single global field after D-E retired the per-goal override itself: the
+// one goal_max_rounds value both owner kinds resolve through must still
+// reject a sub-1 write outright, at the REST boundary, before it ever
+// reaches config.json.
+func TestPerformancePUT_GoalMaxRounds_BelowOne_Rejected(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/performance",
+		strings.NewReader(`{"goal_max_rounds":0}`))
+	r.Header.Set("Content-Type", "application/json")
+	r = withReAuthAdmin(t, api, r)
+	w := httptest.NewRecorder()
+	api.HandlePerformance(w, r)
+	assert.Equal(t, http.StatusBadRequest, w.Code,
+		"PUT with goal_max_rounds=0 must be 400; body=%s", w.Body.String())
+
+	// A negative value must be rejected the same way, and the config on
+	// disk must be untouched by either rejected attempt (still resolving
+	// the default), proving neither PUT partially wrote before validating.
+	r2 := httptest.NewRequest(http.MethodPut, "/api/v1/performance",
+		strings.NewReader(`{"goal_max_rounds":-3}`))
+	r2.Header.Set("Content-Type", "application/json")
+	r2 = withReAuthAdmin(t, api, r2)
+	w2 := httptest.NewRecorder()
+	api.HandlePerformance(w2, r2)
+	assert.Equal(t, http.StatusBadRequest, w2.Code,
+		"PUT with goal_max_rounds=-3 must be 400; body=%s", w2.Body.String())
+
+	liveCfg := api.agentLoop.GetConfig()
+	assert.Equal(t, 20, liveCfg.Planning.EffectiveGoalMaxRounds(),
+		"a rejected goal_max_rounds write must not partially persist — the default must still resolve")
+}
+
+// TestPerformancePUT_GoalMaxRounds_HighValue_SurvivesEndToEnd is
+// goal_max_rounds's own version of this file's
+// TestPerformancePUT_AboveOldCeiling_SurvivesEndToEnd above: there is no
+// artificial ceiling on the single global goal budget — only the >=1 floor
+// (GOAL-FR-025) — and a large explicit value must survive unclamped through
+// request validation, config persistence, and the resolver, exercised
+// through the real REST handler end to end.
+func TestPerformancePUT_GoalMaxRounds_HighValue_SurvivesEndToEnd(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	const want = 500 // comfortably above the 20 default; no ceiling exists
+
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/performance",
+		strings.NewReader(`{"goal_max_rounds":500}`))
+	r.Header.Set("Content-Type", "application/json")
+	r = withReAuthAdmin(t, api, r)
+	w := httptest.NewRecorder()
+	api.HandlePerformance(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "PUT with goal_max_rounds=500 must succeed; body=%s", w.Body.String())
+
+	var putResp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &putResp))
+	assert.EqualValues(t, want, putResp["goal_max_rounds"],
+		"PUT response must echo the configured value unchanged, not silently clamped")
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/performance", nil)
+	getW := httptest.NewRecorder()
+	api.HandlePerformance(getW, getReq)
+	require.Equal(t, http.StatusOK, getW.Code, "GET must succeed; body=%s", getW.Body.String())
+	var getResp map[string]any
+	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &getResp))
+	assert.EqualValues(t, want, getResp["goal_max_rounds"],
+		"GET after PUT must reflect the persisted, un-clamped value")
+
+	liveCfg := api.agentLoop.GetConfig()
+	assert.Equal(t, want, liveCfg.Planning.EffectiveGoalMaxRounds(),
+		"cfg.Planning.EffectiveGoalMaxRounds() must reflect the un-clamped configured value")
+}
+
 // TestPerformancePUT_Zero_ResponseBodySchemaValid is the MAJOR-3 regression
 // test from the 2026-08-04 code review: a PUT of {"max_parallel_agents":0}
 // (the documented "reset to auto-detect" contract) must return a response

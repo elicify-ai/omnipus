@@ -312,8 +312,40 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	// predecessors) whose IsJoin is false, or true but with zero Criteria.
 	IsJoin bool `json:"is_join,omitempty"`
 	// Criteria are the task's acceptance criteria / Definition of Done
-	// (ADR-049 D2/D5, FR-3). Agent-created tasks require at least one (enforced
-	// at the tool layer); human/UI creation may leave this empty (SD-A7).
+	// (ADR-049 D2/D5, FR-3). Agent-created and REST-created tasks require at
+	// least one (enforced at the tool/gateway layer, GOAL-FR-021/D-C); a
+	// legacy task created before that rule may carry none (GOAL-FR-023).
+	//
+	// ADR-086 D5/GOAL-FR-029: going forward, a task's Definition of Done is
+	// AUTHORED onto its own paired goal record (pkg/goal, keyed by
+	// OwnerKind=task/OwnerID=this task's ID via goal.Store.GetByOwner) — the
+	// goal record is now the intended authoritative store, and the SEPARATE,
+	// new `dod` list (GOAL-FR-048) lives there EXCLUSIVELY; there is no
+	// Task.Dod field. This Criteria field, however, is DELIBERATELY KEPT as
+	// a real, disk-persisted, dual-written field rather than removed
+	// (contrary to FR-029's literal "become a reference" text) — see the
+	// wave E5 report for the two independent, load-bearing reasons:
+	//
+	//  1. pkg/goal imports pkg/task (for this very AcceptanceCriterion type),
+	//     so pkg/task cannot import pkg/goal back — a true in-memory
+	//     "hydrate Criteria from the goal record on every Store.Get/List"
+	//     reference is a Go import-cycle impossibility, not a design choice.
+	//     The reference therefore has to live ABOVE this package, at the
+	//     tool/REST callers that already hold both stores.
+	//  2. Three real consumers still read this field directly as a plain Go
+	//     struct access — pkg/agent/task_executor.go, pkg/agent/plan_engine.go
+	//     (both scheduled for repointing by a LATER wave, E12/E14, not this
+	//     round) and pkg/tools/plan.go's execute_plan handler (asserted
+	//     nowhere in any wave's write-set — an apparent gap in the delivery
+	//     plan). Deleting this field in this round would not compile those
+	//     three files, breaking the tree for every wave running after this
+	//     one — "a wave must leave the tree green" (standing rule 15)
+	//     forbids that outright.
+	//
+	// The tool/REST create and update paths in this wave's write-set write
+	// this field AND the paired goal record's Criteria in the same call
+	// (dual-write) so both stay consistent until a future wave can finish
+	// the removal FR-029 describes.
 	Criteria []AcceptanceCriterion `json:"criteria,omitempty"`
 	// AttemptCount is the current run's attempt index within its goal loop
 	// (ADR-049 D7/R4/C17). Read-only, server-set by the runtime engine — never

@@ -119,6 +119,38 @@ type InboundMessage struct {
 	// agent<->channel plumbing (pkg/bus is not part of the gateway/SPA wire
 	// boundary, Constraint #8) — not a wire type.
 	UserInitiated bool `json:"user_initiated,omitempty"`
+	// OperatorPrompt is a fail-closed origin signal for ADR-085's browser
+	// control handover (BROWSER-FR-029): true ONLY when this message is a
+	// prompt the operator composed on THIS session — the webchat WS
+	// `message` handler (pkg/gateway/websocket.go), the SSE chat POST
+	// (pkg/gateway/sse.go), or a channel adapter's inbound dispatch of a
+	// real platform sender (pkg/channels/base.go::HandleMessage). Every
+	// other producer MUST leave this false; it is NEVER set automatically,
+	// so a producer added later fails closed (does not release the browser
+	// wheel) rather than failing open. In particular:
+	//   - pkg/gateway/ws_ask_user.go::DispatchResume (a question-card
+	//     answer OR cancel) MUST leave this false — a resumed turn is a
+	//     synthesised resumeText injected into an already-parked turn, not
+	//     an operator-composed prompt, and releasing on it would hand the
+	//     browser to the agent mid-drive on the most ordinary click
+	//     available (ADR-085 A13).
+	//   - pkg/agent/async_notifier.go (a background tool/delegate
+	//     completion on the synthetic "system" channel) MUST leave this
+	//     false — a delegate finishing in the background must never hand
+	//     the browser back while the operator is mid-task in it.
+	//   - pkg/agent/loop.go's goal-loop follow-up re-injection MUST leave
+	//     this false, for the same reason.
+	//   - pkg/agent/loop.go::ProcessDirectWithChannel (cron) builds its own
+	//     InboundMessage and never publishes to the bus; it leaves this
+	//     false, so a scheduled run never releases the wheel either.
+	// bus.InboundMessage.UserInitiated (above) MUST NOT be reused for this:
+	// it is false on the SSE path (pkg/gateway/sse.go never sets it) and
+	// true on the question-card resume path — exactly backwards from what
+	// this field needs on both counts.
+	// Like UserInitiated, this is internal agent<->channel plumbing —
+	// pkg/bus is not on the gateway/SPA wire boundary, so Constraint #8
+	// does not apply.
+	OperatorPrompt bool `json:"operator_prompt,omitempty"`
 }
 
 type OutboundMessage struct {

@@ -109,6 +109,15 @@ type turnResult struct {
 	// whether the turn ended via the engine's error/limit fallback without holding
 	// a reference to the turnState.  Populated by runTurn before it returns.
 	turnFailed bool
+	// goalDeferredAdjudication is JUDGE-FR-098's deferred-dispatch payload
+	// (ADR-084 revision 9 D13, wave E13): checkGoalLoopAfterTurn
+	// (goal_loop.go) populates this instead of calling runGoalAdjudication
+	// synchronously when a turn resolves a `met` claim. nil means no
+	// claim-triggered adjudication is pending. runAgentLoop (loop.go)
+	// dispatches it, in a goroutine, strictly AFTER bus.PublishOutbound of
+	// this turn's own finalContent — see goalDeferredAdjudicationWork's own
+	// doc comment (goal_loop.go) for the full contract.
+	goalDeferredAdjudication *goalDeferredAdjudicationWork
 }
 
 type turnState struct {
@@ -438,6 +447,22 @@ type turnState struct {
 	// denied nothing yet, so no counter or quarantine entry ever survives
 	// into a new turn or crosses into another session's turnState.
 	denialLedger turnDenialLedger
+
+	// browserDeferralLedger is ADR-085's per-turn control-gate deferral
+	// state (BROWSER-FR-013/FR-014/FR-017): a plain aggregate count of how
+	// many control-gated browser tool calls this turn has been deferred on
+	// (BROWSER-FR-013), modelled on denialLedger immediately above but
+	// deliberately a SEPARATE counter — the two refusals share this file's
+	// tool-dispatch point and nothing else (see pkg/agent/loop.go's
+	// shared-file-chain doc: E2's cap counts verifier tool-call denials and
+	// refuses at its own ceiling; this counts control-gate deferrals per
+	// turn and refuses at three). Its type and every method that reads/
+	// mutates it are defined in browser_deferral.go. Guarded by mu above,
+	// same discipline as denialLedger. Zero value (used 0) is correct — a
+	// fresh turnState (one per turn) has deferred nothing yet, and a
+	// delegated child turn gets its OWN turnState and therefore its own
+	// independent count (FR-017).
+	browserDeferralLedger turnBrowserDeferralLedger
 
 	// mediaRetryDone is the per-turn guard for the RD2 media-downgrade retry
 	// (ADR-051 §RD2 / FR-007 / FR-008). When true, the loop's classifier-gated

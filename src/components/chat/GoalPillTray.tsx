@@ -45,7 +45,7 @@
 // readers without stealing focus.
 
 import { useEffect, useRef, useState } from 'react'
-import { Target, CaretDown, CaretUp, CheckCircle, XCircle, Spinner, ChatCircleDots, FlagBannerFold, Pencil, MinusCircle } from '@phosphor-icons/react'
+import { Target, CaretDown, CaretUp, CheckCircle, XCircle, Spinner, ChatCircleDots, FlagBannerFold, Pencil, MinusCircle, ShieldWarning, ArrowsCounterClockwise, Prohibit, ArrowUUpLeft, ClockCountdown } from '@phosphor-icons/react'
 import type { GoalStatusFrame, JudgeVerdictFrame } from '@/lib/api/generated/asyncapi-types'
 import { useChatStore, GOAL_TERMINAL_STATES } from '@/store/chat'
 import { useJudgeActivityStore } from '@/store/judgeActivity'
@@ -60,11 +60,23 @@ function truncateCondition(raw: string): string {
   return clusters.slice(0, CONDITION_DISPLAY_CAP).join('') + '…'
 }
 
-// ── Pill-state → render config (exhaustive, 8 values) ─────────────────────────
+// ── Pill-state → render config (exhaustive, 13 values) ────────────────────────
 //
 // Each state maps to a testId, icon, accent class, and human label. The
-// exhaustive switch with a `never` default ensures a future 9th enum value
+// exhaustive switch with a `never` default ensures a future 14th enum value
 // fails typecheck here instead of silently rendering nothing.
+//
+// Five states ADDED by the joint ADR-084/ADR-085/ADR-086 delivery (C-39,
+// plan §3 wave U2): `judge_refused_god_mode` (JUDGE-FR-057a),
+// `judge_cas_loss` (JUDGE-FR-083 — the machine-readable reason string
+// stays `cas_loss`; this file only names the wire enum value
+// `judge_cas_loss`), `blocked` (JUDGE-FR-093), `claim_overturned`
+// (JUDGE-FR-102), `expired` (ADR-086 GOAL-FR-028). Per plan OQ-17,
+// `blocked` and `claim_overturned` are deliberately NOT terminal (see
+// `GOAL_TERMINAL_STATES` in chat.ts) — a pill in either state can still
+// receive another frame, so it must never be hidden by the terminal-pill
+// display timer. `expired` IS terminal (chat.ts's `GOAL_TERMINAL_STATES`
+// gains it, joining done/failed/cleared as the fourth terminal member).
 
 interface PillStateConfig {
   testId: string
@@ -98,6 +110,41 @@ function describePillState(state: Exclude<GoalStatusFrame['state'], 'queued'>): 
       // stop — NOT a failure. Neutral/muted, distinct from both `done`
       // (green success) and `failed` (red error).
       return { testId: 'goal-pill-cleared', label: 'cleared', accentClass: 'text-[var(--color-muted)]', Icon: MinusCircle }
+    case 'judge_refused_god_mode':
+      // JUDGE-FR-057a: distinct, operator-ACTIONABLE state — the operator
+      // cannot fix this by waiting (unlike judge_unavailable), only by
+      // turning god mode off. Warning tone, a shield icon rather than the
+      // flag `judge_unavailable` uses, so the two are never confusable at
+      // a glance.
+      return { testId: 'goal-pill-judge-refused-god-mode', label: 'god mode blocks judging', accentClass: 'text-[color:var(--color-warning)]', Icon: ShieldWarning }
+    case 'judge_cas_loss':
+      // JUDGE-FR-083: a verifier_registry compare-and-swap loss — another
+      // adjudication for this unit is already in flight. A real, brief
+      // concurrency event, distinguishable from judge_unavailable (which
+      // reads as a provider outage the operator cannot fix by waiting);
+      // this one resolves itself. Pulsing, like `judging`, since it is
+      // also ephemeral.
+      return { testId: 'goal-pill-judge-cas-loss', label: 'verifying elsewhere', accentClass: 'text-[color:var(--color-warning)]', Icon: ArrowsCounterClockwise, pulse: true }
+    case 'blocked':
+      // JUDGE-FR-093: the agent called goal_claim with status: blocked —
+      // parked WITHOUT an adjudication and WITHOUT consuming a round.
+      // Distinct from waiting_on_user: "I cannot proceed and it is not a
+      // question you can answer" vs. "I need an answer". NOT terminal
+      // (OQ-17) — see GOAL_TERMINAL_STATES in chat.ts.
+      return { testId: 'goal-pill-blocked', label: 'blocked', accentClass: 'text-[color:var(--color-warning)]', Icon: Prohibit }
+    case 'claim_overturned':
+      // JUDGE-FR-102: a background adjudication disagreed with an earlier
+      // claim the operator already saw answered — "a state, not an
+      // alert" (ADR §8 open item 2). NOT terminal (OQ-17): the goal keeps
+      // iterating and the steer arrives as an ordinary async turn.
+      return { testId: 'goal-pill-claim-overturned', label: 'claim overturned', accentClass: 'text-[color:var(--color-error)]', Icon: ArrowUUpLeft }
+    case 'expired':
+      // ADR-086 GOAL-FR-028: the 7-day idle-expiry sweep (D-A) ended this
+      // goal with no claim ever made. Terminal — the fourth distinguishable
+      // terminal ending alongside done/failed/cleared. Muted-warning tone:
+      // neither a success (green) nor an active failure the operator did
+      // something wrong to cause (red) — the goal was simply abandoned.
+      return { testId: 'goal-pill-expired', label: 'expired', accentClass: 'text-[color:var(--color-warning)]', Icon: ClockCountdown }
     default: {
       const exhaustiveCheck: never = state
       throw new Error(`GoalPillTray: unhandled goal pill state ${String(exhaustiveCheck)}`)

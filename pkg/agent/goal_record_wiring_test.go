@@ -12,27 +12,67 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
+
+// seedActiveGoalRecord creates and activates a pkg/goal.Store record owned
+// by session sid (ADR-086 GOAL-FR-002 owner_kind: session) — this wave's
+// own test scaffolding standing in for the activation wiring
+// (Store.Create + Goal.Activate) that goal_loop.go's /goal command path
+// will perform once wave E8/E12 re-points it (joint delivery plan §5's
+// E4 → E8 chain for this file: this wave owns ONLY WriteRecord/
+// ReadGoalState, not activation). A nil dod defaults to a single
+// floor-provenance item so goal.New's DoD-non-empty invariant (D11, schema
+// minItems: 1) is always satisfied; nil criteria leaves the record in the
+// ADR-081 D1 legal-transient "active, no criteria registered yet" state,
+// mirroring setActiveGoalRecordless's (goal_first_move_test.go, wave E12)
+// old session-meta-only seeding for that same state.
+func seedActiveGoalRecord(t *testing.T, sid, prompt string, criteria, dod []task.AcceptanceCriterion) *goal.Goal {
+	t.Helper()
+	if len(dod) == 0 {
+		dod = []task.AcceptanceCriterion{{
+			Kind: task.KindProse, Judgment: task.JudgmentBoolean, Provenance: task.ProvenanceFloor,
+			Text: "no secrets are leaked", Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: "test-seed"},
+		}}
+	}
+	gstore := goal.NewStore(config.OmnipusHomeDir())
+	g, err := goal.New(generated.GoalOwnerKindSession, sid, generated.ChatCompiled, prompt, "", criteria, dod, 10, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("seedActiveGoalRecord: New: %v", err)
+	}
+	if err := gstore.Create(g); err != nil {
+		t.Fatalf("seedActiveGoalRecord: Create: %v", err)
+	}
+	updated, err := gstore.Update(g.GoalID, func(cur *goal.Goal) error {
+		return cur.Activate(sid, time.Now().UTC())
+	})
+	if err != nil {
+		t.Fatalf("seedActiveGoalRecord: Activate: %v", err)
+	}
+	return updated
+}
 
 // --- GoalRecordAccess (D2) --------------------------------------------------
 
 func TestGoalRecordAccess_ReadWrite(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
-	store, sid := newGoalTestSession(t, al, agentInst.ID)
 
 	access := agentLoopGoalRecordAccess{al: al}
 
 	t.Run("read_no_active_goal", func(t *testing.T) {
+		_, sid := newGoalTestSession(t, al, agentInst.ID)
 		goalID, cond, rec, err := access.ReadGoalState(sid)
 		if err != nil {
 			t.Fatal(err)
@@ -42,24 +82,33 @@ func TestGoalRecordAccess_ReadWrite(t *testing.T) {
 		}
 	})
 
+	// Each subtest below mints its OWN session: a pkg/goal.Store session-owned
+	// goal has no one-active-per-owner uniqueness constraint the way a
+	// task-owned one does (GetActiveByOwner errors loudly on more than one
+	// active match for the same owner — see predicate.go's own doc comment),
+	// so two subtests seeding against the SAME sid would collide.
+
 	t.Run("read_active_goal_empty_record", func(t *testing.T) {
-		setActiveGoalRecordless(t, store, sid, "goal-r1", "build a game")
+		_, sid := newGoalTestSession(t, al, agentInst.ID)
+		seeded := seedActiveGoalRecord(t, sid, "build a game", nil, nil)
 		goalID, cond, rec, err := access.ReadGoalState(sid)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if goalID != "goal-r1" {
-			t.Fatalf("goal id = %q, want the minted id (ADR-082 D9/FR-016)", goalID)
+		if goalID != seeded.GoalID {
+			t.Fatalf("goal id = %q, want the minted id %q (Store.Create mints it, GOAL-FR-002)", goalID, seeded.GoalID)
 		}
 		if cond != "build a game" {
-			t.Fatalf("condition = %q, want the active condition", cond)
+			t.Fatalf("condition = %q, want the active condition (Goal.Prompt)", cond)
 		}
 		if rec != "" {
-			t.Fatalf("record must still read empty (D1's transient state), got %q", rec)
+			t.Fatalf("record must still read empty (D1's transient state — no criteria registered yet), got %q", rec)
 		}
 	})
 
 	t.Run("write_persists_and_readable_back", func(t *testing.T) {
+		_, sid := newGoalTestSession(t, al, agentInst.ID)
+		seedActiveGoalRecord(t, sid, "build a game", nil, nil)
 		recordJSON := `{"intent":"i","prompt":"p","definition":"Build a tetris clone",` +
 			`"criteria":[{"id":"c1","kind":"prose","judgment":"boolean","text":"it renders","author":{"kind":"agent","id":"tester"}}],` +
 			`"dod":[{"id":"d1","kind":"prose","judgment":"boolean","provenance":"floor","text":"no secrets","author":{"kind":"agent","id":"tester"}}]}`
@@ -70,8 +119,22 @@ func TestGoalRecordAccess_ReadWrite(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if rec != recordJSON {
-			t.Fatalf("the record read back must be byte-identical to what was written, got %q", rec)
+		// GOAL-FR-003: the STORE persists typed lists, never a serialised
+		// string — a byte-identical round-trip is no longer the contract
+		// (the store re-marshals from its own typed fields). Assert the
+		// values that matter instead.
+		var got goalSeamRecord
+		if uErr := json.Unmarshal([]byte(rec), &got); uErr != nil {
+			t.Fatalf("ReadGoalState returned an unparseable record: %v (%q)", uErr, rec)
+		}
+		if got.Definition != "Build a tetris clone" {
+			t.Fatalf("definition = %q, want %q", got.Definition, "Build a tetris clone")
+		}
+		if len(got.Criteria) != 1 || got.Criteria[0].Text != "it renders" {
+			t.Fatalf("criteria read back = %+v, want one criterion with text %q", got.Criteria, "it renders")
+		}
+		if len(got.DoD) != 1 || got.DoD[0].Text != "no secrets" {
+			t.Fatalf("dod read back = %+v, want one dod item with text %q", got.DoD, "no secrets")
 		}
 	})
 
@@ -95,21 +158,39 @@ func TestGoalRecordAccess_ReadWrite(t *testing.T) {
 func TestGoalRecordAccess_WriteRecord_SideEffects(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
-	store, sid := newGoalTestSession(t, al, agentInst.ID)
-	setActiveGoalRecordless(t, store, sid, "goal-side-1", "build a game")
+	_, sid := newGoalTestSession(t, al, agentInst.ID)
+	// ADR-086 (wave S6): ONE active record per session, and this is it.
+	// The setActiveGoalRecordless call that used to sit above this line is
+	// gone. It was written when the two halves were independent — it seeded
+	// SESSION META for afterGoalRecordWrite's own read, while
+	// seedActiveGoalRecord seeded the pkg/goal record for WriteRecord. S6
+	// deleted the session-meta half of the goal entirely, so
+	// setActiveGoalRecordless now CREATES AND ACTIVATES A REAL RECORD of its
+	// own — and the pair left this session owning TWO active goals, which
+	// activeGoalForSession reports at Warn and resolves in favour of the
+	// OLDER one (the recordless one), so every assertion below then read a
+	// record WriteRecord had never touched. Same failure and same fix as
+	// goal_terminal_transition_test.go's seedCriteriaOntoActiveGoal.
+	seeded := seedActiveGoalRecord(t, sid, "build a game", nil, nil)
 
-	// Seed a nonzero push streak — WriteRecord must reset it.
-	pushes := 2
-	if err := store.SetMeta(sid, session.MetaPatch{GoalZeroOutputPushes: &pushes}); err != nil {
+	// Seed a nonzero push streak directly on the store record — WriteRecord
+	// must reset it (GOAL-FR-004's relocated FR-014b counter).
+	goalStore := goal.NewStore(config.OmnipusHomeDir())
+	if _, err := goalStore.Update(seeded.GoalID, func(cur *goal.Goal) error {
+		cur.ZeroOutputPushes = 2
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
-	beforeMeta, err := store.GetMeta(sid)
+	before, err := goalStore.Get(seeded.GoalID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if beforeMeta.GoalZeroOutputPushes != 2 {
-		t.Fatalf("seed failed: GoalZeroOutputPushes = %d, want 2", beforeMeta.GoalZeroOutputPushes)
+	if before.ZeroOutputPushes != 2 {
+		t.Fatalf("seed failed: ZeroOutputPushes = %d, want 2", before.ZeroOutputPushes)
 	}
+	beforeActivity := before.LastActivityAt
+	time.Sleep(2 * time.Millisecond) // guarantee a distinguishable LastActivityAt bump below
 
 	collector, cleanup := newEventCollector(t, al)
 	defer cleanup()
@@ -122,15 +203,15 @@ func TestGoalRecordAccess_WriteRecord_SideEffects(t *testing.T) {
 		t.Fatalf("WriteRecord: %v", writeErr)
 	}
 
-	afterMeta, err := store.GetMeta(sid)
+	after, err := goalStore.Get(seeded.GoalID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if afterMeta.GoalZeroOutputPushes != 0 {
-		t.Fatalf("GoalZeroOutputPushes = %d, want reset to 0 on a successful write", afterMeta.GoalZeroOutputPushes)
+	if after.ZeroOutputPushes != 0 {
+		t.Fatalf("ZeroOutputPushes = %d, want reset to 0 on a successful write", after.ZeroOutputPushes)
 	}
-	if afterMeta.GoalLastActivityAt == "" || afterMeta.GoalLastActivityAt == beforeMeta.GoalLastActivityAt {
-		t.Fatal("GoalLastActivityAt must be bumped by a successful write")
+	if !after.LastActivityAt.After(beforeActivity) {
+		t.Fatalf("LastActivityAt must be bumped by a successful write, got before=%v after=%v", beforeActivity, after.LastActivityAt)
 	}
 
 	// Give the async event-bus delivery a moment (SubscribeEvents fans out
@@ -174,9 +255,13 @@ func TestGoalRecordAccess_ChannelEcho(t *testing.T) {
 	t.Run("channel_routed_gets_exactly_one_echo", func(t *testing.T) {
 		al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 		agentInst, _ := al.GetRegistry().GetAgent("native-agent")
-		store, sid := newGoalTestSession(t, al, agentInst.ID)
-		setActiveGoalRecordless(t, store, sid, "goal-echo-1", "build a game")
-		al.recordGoalRouting(sid, "telegram", "chat-99", "sk-1", agentInst.ID)
+		_, sid := newGoalTestSession(t, al, agentInst.ID)
+		// One active record per session (ADR-086) — see
+		// TestGoalRecordAccess_WriteRecord_SideEffects' own note above for why
+		// the setActiveGoalRecordless call that used to pair with this one is
+		// gone.
+		seeded := seedActiveGoalRecord(t, sid, "build a game", nil, nil)
+		al.recordGoalRouting(sid, seeded.GoalID, "telegram", "chat-99", "sk-1", agentInst.ID)
 
 		access := agentLoopGoalRecordAccess{al: al}
 		if err := access.WriteRecord(sid, recordJSON); err != nil {
@@ -204,9 +289,9 @@ func TestGoalRecordAccess_ChannelEcho(t *testing.T) {
 	t.Run("web_routed_gets_no_echo", func(t *testing.T) {
 		al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 		agentInst, _ := al.GetRegistry().GetAgent("native-agent")
-		store, sid := newGoalTestSession(t, al, agentInst.ID)
-		setActiveGoalRecordless(t, store, sid, "goal-echo-2", "build a game")
-		al.recordGoalRouting(sid, "webchat", "c1", "sk-2", agentInst.ID)
+		_, sid := newGoalTestSession(t, al, agentInst.ID)
+		seeded := seedActiveGoalRecord(t, sid, "build a game", nil, nil)
+		al.recordGoalRouting(sid, seeded.GoalID, "webchat", "c1", "sk-2", agentInst.ID)
 
 		access := agentLoopGoalRecordAccess{al: al}
 		if err := access.WriteRecord(sid, recordJSON); err != nil {
@@ -222,8 +307,8 @@ func TestGoalRecordAccess_ChannelEcho(t *testing.T) {
 	t.Run("unrouted_gets_no_echo", func(t *testing.T) {
 		al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 		agentInst, _ := al.GetRegistry().GetAgent("native-agent")
-		store, sid := newGoalTestSession(t, al, agentInst.ID)
-		setActiveGoalRecordless(t, store, sid, "goal-echo-3", "build a game")
+		_, sid := newGoalTestSession(t, al, agentInst.ID)
+		seedActiveGoalRecord(t, sid, "build a game", nil, nil)
 		// No recordGoalRouting call — routeFor returns the zero value.
 
 		access := agentLoopGoalRecordAccess{al: al}
@@ -274,11 +359,7 @@ func TestGoalMarkerActivation_EmitsCriteriaCarryingFrame(t *testing.T) {
 	if !matched || handled {
 		t.Fatalf("marker activation: matched=%v handled=%v, want matched=true handled=false", matched, handled)
 	}
-	meta, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if meta.GoalCriteriaJSON == "" {
+	if goalRecordCompiledJSON(goalRecordForSession(t, sid)) == "" {
 		t.Fatal("precondition: a marker-only activation must compile a non-empty record immediately")
 	}
 
@@ -326,11 +407,7 @@ func TestGoalMarkerActivation_ChannelOrigin_GetsOneFormattedEcho(t *testing.T) {
 	if !matched || handled {
 		t.Fatalf("marker activation: matched=%v handled=%v, want matched=true handled=false", matched, handled)
 	}
-	meta, err := store.GetMeta(sid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if meta.GoalCriteriaJSON == "" {
+	if goalRecordCompiledJSON(goalRecordForSession(t, sid)) == "" {
 		t.Fatal("precondition: a marker-only activation must compile a non-empty record immediately")
 	}
 
@@ -365,11 +442,24 @@ func TestEmitGoalStatusRehydrate_RegisteredGoal_DeliversRecordCarryingFrame(t *t
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
 	setActiveGoalRecordless(t, store, sid, "goal-rehydrate-1", "build a game")
 
-	recordJSON := `{"intent":"i","prompt":"p","definition":"Build a tetris clone",` +
-		`"criteria":[{"id":"c1","kind":"prose","judgment":"boolean","text":"it renders and accepts input","author":{"kind":"agent","id":"tester"}}],` +
-		`"dod":[{"id":"d1","kind":"prose","judgment":"boolean","provenance":"floor","text":"no secrets","author":{"kind":"agent","id":"tester"}}]}`
-	if err := store.SetMeta(sid, session.MetaPatch{GoalCriteriaJSON: &recordJSON}); err != nil {
-		t.Fatal(err)
+	// ADR-086: the registered record is the goal's OWN typed Criteria/DoD
+	// (GOAL-FR-003), not the retired GoalCriteriaJSON session-meta string.
+	if _, uerr := goal.NewStore(config.OmnipusHomeDir()).Update("goal-rehydrate-1", func(cur *goal.Goal) error {
+		cur.Definition = "Build a tetris clone"
+		if serr := cur.SetCriteria([]task.AcceptanceCriterion{{
+			ID: "c1", Kind: task.KindProse, Judgment: task.JudgmentBoolean,
+			Text:   "it renders and accepts input",
+			Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: "tester"},
+		}}, time.Now().UTC()); serr != nil {
+			return serr
+		}
+		return cur.SetDoD([]task.AcceptanceCriterion{{
+			ID: "d1", Kind: task.KindProse, Judgment: task.JudgmentBoolean,
+			Provenance: task.ProvenanceFloor, Text: "no secrets",
+			Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: "tester"},
+		}}, time.Now().UTC())
+	}); uerr != nil {
+		t.Fatal(uerr)
 	}
 
 	// Simulate the SPA reload: a fresh WS connection attaches (represented
@@ -706,8 +796,11 @@ func TestWireGoalToolsForAgent_RegistersRealSeams(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	allowGoalToolsPolicy(agentInst)
-	store, sid := newGoalTestSession(t, al, agentInst.ID)
-	setActiveGoalRecordless(t, store, sid, "goal-wire-1", "build a game")
+	_, sid := newGoalTestSession(t, al, agentInst.ID)
+	// One active record per session (ADR-086) — see
+	// TestGoalRecordAccess_WriteRecord_SideEffects' own note for the full
+	// reason the paired setActiveGoalRecordless call is gone.
+	seeded := seedActiveGoalRecord(t, sid, "build a game", nil, nil)
 
 	tl, ok := agentInst.Tools.Get(tools.SetGoalToolName)
 	if !ok {
@@ -718,16 +811,27 @@ func TestWireGoalToolsForAgent_RegistersRealSeams(t *testing.T) {
 	res := tl.Execute(ctx, map[string]any{
 		"definition": "Build a tetris clone",
 		"criteria":   []any{map[string]any{"text": "it renders", "judgment": "boolean"}},
+		// An EXPLICIT dod, deliberately: set_goal.go's own floor-DoD
+		// fallback (setGoalFloorDoD, used whenever dod is omitted) mints
+		// items carrying the exact "goal-dod-floor-" id prefix
+		// pkg/goal.IsReservedCriterionID refuses to persist on ANY goal
+		// record (GOAL-FR-007) — a real cross-wave collision this seam
+		// re-point surfaces (see this wave's report), not something this
+		// test is exercising. Supplying our own dod here sidesteps it so
+		// this test proves what it says it proves: the seam is really
+		// wired, not the floor-DoD/reserved-id interaction.
+		"dod": []any{map[string]any{"text": "no unrelated secrets are exposed", "judgment": "boolean", "provenance": "stated"}},
 	})
 	if res.IsError {
 		t.Fatalf("set_goal execution failed — the access seam is not really wired: %s", res.ForLLM)
 	}
 
-	meta, err := store.GetMeta(sid)
+	goalStore := goal.NewStore(config.OmnipusHomeDir())
+	updated, err := goalStore.Get(seeded.GoalID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.GoalCriteriaJSON == "" {
-		t.Fatal("the write must have landed on the real session store — the metadata-only catalog instance would have refused with a nil-store error")
+	if len(updated.Criteria) == 0 {
+		t.Fatal("the write must have landed on the real pkg/goal.Store record — the metadata-only catalog instance would have refused with a nil-store error")
 	}
 }

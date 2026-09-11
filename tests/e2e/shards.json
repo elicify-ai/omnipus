@@ -125,6 +125,7 @@
       "port": 6065,
       "solo": true,
       "specs": [
+        "tests/e2e/browser-control-handover.spec.ts",
         "tests/e2e/browser-live-video.spec.ts",
         "tests/e2e/idle-no-reconnect.spec.ts",
         "tests/e2e/multi-turn-render.spec.ts",

@@ -91,6 +91,79 @@ properties:
             absent on fail-closed and pre-D7 verdicts. Keep in sync with
             CriterionVerdict.yaml and the inline asyncapi.yaml copy.
           example: "--- PASS: TestPlanStore_CreatePersists (0.02s)"
+        evidence_source:
+          type: string
+          enum:
+            - diff
+            - transcript
+            - machine_check
+            - file_read
+            - session_read
+          description: >
+            JUDGE-FR-065/FR-066. OPTIONAL REPORTING field only (D-B) — never
+            a proof gate. Keep in sync with CriterionVerdict.yaml (copies
+            table row 2) and the inline asyncapi.yaml copy (row 3).
+          example: "file_read"
+        evidence_target:
+          type: string
+          description: >
+            JUDGE-FR-065. OPTIONAL REPORTING field only (D-B). Keep in sync
+            with CriterionVerdict.yaml and the inline asyncapi.yaml copy.
+          example: "neon-2048/index.html"
+        provenance:
+          type: string
+          enum:
+            - judge_read
+            - deterministic_check
+            - diff
+            - transcript
+            - session_read
+            - none
+          description: >
+            JUDGE-FR-065. OPTIONAL REPORTING field only (D-B) — never
+            conditions the Judge's authority to rule `met`. Keep in sync
+            with CriterionVerdict.yaml and the inline asyncapi.yaml copy.
+          example: "judge_read"
+        evidence:
+          type: array
+          maxItems: 50
+          description: >
+            JUDGE-FR-006 — one entry per clause, each `{part, source,
+            target, quote}`. NEW, OPTIONAL, sibling field alongside
+            `evidence_quote` (C2 — `evidence_quote` unchanged); the engine
+            populates `evidence_quote` from `evidence[0].quote` when
+            present. REPORTING obligation only (D-B) — never turns a `met`
+            into an `unmet`. Keep in sync with CriterionVerdict.yaml
+            (copies table row 2) and the inline asyncapi.yaml copy (row 3,
+            the copy `openapi-zod-client` reads).
+          items:
+            type: object
+            required:
+              - part
+              - quote
+            additionalProperties: false
+            properties:
+              part:
+                type: string
+                maxLength: 1000
+                description: The clause text this entry answers.
+                example: "the button links to https://example.com/pricing"
+              source:
+                type: string
+                description: >
+                  Plain string (not a closed enum) — see
+                  CriterionVerdict.yaml's matching field for why.
+                example: "file_read"
+              target:
+                type: string
+                example: "neon-2048/index.html"
+              quote:
+                type: string
+                maxLength: 500
+                description: >
+                  UNTRUSTED CONTENT — same framing obligation as
+                  `evidence_quote`. MAY be empty (reported gap, D-B).
+                example: "<a href=\"https://example.com/pricing\">Pricing</a>"
     description: Per-criterion outcomes making up the overall verdict.
   model:
     type: string

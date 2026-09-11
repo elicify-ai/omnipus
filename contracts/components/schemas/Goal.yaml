@@ -1,26 +1,39 @@
 type: object
 title: Goal
 description: >
-  The unified goal / criteria record (ADR-053 §Contract Surface, S1 — "one
-  criteria model, two authors"). A chat `/goal`, a standalone Task's
-  criteria, and a Plan's DoD are all judged against the SAME
-  `AcceptanceCriterion` model (REUSED, never duplicated — a second goal
-  store is a DoD-11 blocking finding). Authored two ways: `chat_compiled`
-  (agent-compiled from user intent via the SMART goal compiler, US-3) or
-  `task_explicit`/`plan_dod` (explicit at task/plan creation).
+  The unified goal / criteria record (ADR-086 D1 — a goal is its own stored
+  entity, addressed by its own id, and is NOT represented as fields on a
+  session or a task; ADR-053 §Contract Surface, S1 — "one criteria model,
+  two authors"). A chat `/goal` and a standalone Task's criteria are judged
+  against the SAME `AcceptanceCriterion` model (REUSED, never duplicated —
+  a second goal store is a DoD-11 blocking finding). Authored two ways:
+  `chat_compiled` (agent-compiled from user intent via the SMART goal
+  compiler, US-3) or `task_explicit` (explicit at task creation). TYPE-ONLY
+  on the wire (D-E, 2026-09-11, OQ-2 ANSWERED): registered in
+  `components.schemas` and referenced by NO path — there is no
+  `GET`/`PATCH /api/v1/goals/{id}` and no `GoalUpdateRequest.yaml`, in this
+  delivery or as a follow-up. The SPA reaches goal state through
+  `GoalStatusFrame` (WS) and through the task shapes' `dod`/`criteria`.
+  RESHAPED from the pre-existing four-field stub (`binding_kind
+  [session|task|plan]`/`binding_id`/`attempts_max`/`judge_rounds_max`/
+  `state [active|done|failed|cleared]`) by this delivery — see the joint
+  ADR-084/ADR-085/ADR-086 delivery plan's C-05, R-14, R-31, OQ-1.
 required:
   - goal_id
-  - binding_kind
-  - binding_id
+  - owner_kind
+  - owner_id
   - source
   - prompt
   - criteria
   - dod
-  - attempts_max
-  - judge_rounds_max
+  - max_rounds
   - round
+  - attempts_used
   - state
   - created_at
+  - last_activity_at
+  - zero_output_pushes
+  - question_rounds_used
 additionalProperties: false
 properties:
   goal_id:
@@ -28,23 +41,33 @@ properties:
     minLength: 1
     description: Unique goal identifier.
     example: "goal_01J3ZQK8N2H8VXNRP5T7C9M4WU"
-  binding_kind:
+  owner_kind:
     type: string
     enum:
       - session
       - task
-      - plan
     description: >
-      SHAPE DECISION (flagged for review): the spec describes `binding`
-      as `oneOf session_id | task_id | plan_id`. A bare `oneOf` of
-      untagged strings has no discriminator, so it is split into this
-      enum tag plus `binding_id` below — mirrors the same pattern used
-      for `SessionLifecycleRecord.owner_scope_kind`/`owner_scope_id`.
+      GOAL-FR-002 — a goal MUST reference exactly one owner, as an owner
+      kind plus an owner id; owner kind MUST be part of the persisted
+      record, not inferred. RENAMED from the pre-existing `binding_kind`
+      (R-14: a rename, not a widening) and NARROWED from three values to
+      two (R-31): `plan` is dropped. A Plan's own DoD is judged with NO
+      goal record involved at all — criterion statuses are projected
+      directly onto the plan member's own DoD list, using the same
+      explicit, logged no-op discipline already required for the ephemeral
+      soft-tier criterion (goal spec FR-040). `Goal.OwnerID` is unique per
+      owner for the `task` kind — one goal per task for the task's whole
+      life; a terminal task-owned goal re-enters `active` on task re-run
+      rather than a new goal being minted (R-04, see `state` and
+      `terminal_history` below). A `session`-owned goal has no such
+      re-entry edge — a terminal chat goal stays terminal.
     example: "session"
-  binding_id:
+  owner_id:
     type: string
     minLength: 1
-    description: The session/task/plan id this goal is bound to, per `binding_kind`.
+    description: >
+      The session/task id this goal is bound to, per `owner_kind`. RENAMED
+      from the pre-existing `binding_id` (R-14).
     example: "550e8400-e29b-41d4-a716-446655440000"
   source:
     type: string
@@ -52,7 +75,11 @@ properties:
       - chat_compiled
       - task_explicit
       - plan_dod
-    description: How this goal's criteria were authored.
+    description: >
+      How this goal's criteria were authored. `plan_dod` is retained on
+      the wire for forward-compatibility even though no `owner_kind: plan`
+      goal record exists any more (see `owner_kind` above) — a Plan's DoD
+      never reaches this enum today.
     example: "chat_compiled"
   prompt:
     type: string
@@ -65,8 +92,8 @@ properties:
     maxLength: 4000
     description: >
       The compiled SMART restatement of `prompt` (US-3 echo-confirm) —
-      distinct from the raw prompt. Absent for `task_explicit`/`plan_dod`
-      sources, which have no separate compile step.
+      distinct from the raw prompt. Absent for `task_explicit` sources,
+      which have no separate compile step.
     example: "All pkg/plan tests pass and golangci-lint reports zero issues."
   criteria:
     type: array
@@ -93,49 +120,288 @@ properties:
       built-in floor DoD at load time (before this schema validates), so
       a legacy goal always satisfies `minItems: 1` too. The Judge
       evaluates `criteria` UNION `dod` together.
-  attempts_max:
+  max_rounds:
     type: integer
     minimum: 1
     description: >
-      Attempt ceiling before the goal loop wakes the owner (3 native / 6
-      default per session_messaging config, restart-gated).
-    example: 3
-  judge_rounds_max:
-    type: integer
-    minimum: 1
-    description: >
-      Adjudication-round ceiling (R§8.9 — one round = one adjudication,
-      claim-triggered or idle-settled).
+      GOAL-FR-024/MV-1, D-D/D-E (2026-09-11, operator-ratified) — the
+      SINGLE budget ceiling for this goal's adjudication rounds, collapsed
+      from the pre-existing separate `attempts_max`/`judge_rounds_max`
+      pair (R14/C-05). Defaults to 20 (no schema `default:` here — this
+      field is `required`, and combining `default:` with `required`
+      makes openapi-zod-client emit an optional `.default()` input type
+      that conflicts with the plain required TS type; see
+      AcceptanceCriterionInput.yaml's header comment for the sibling
+      codegen trap on an OPTIONAL field). There is NO per-goal override
+      anywhere on the wire (D-E retires GOAL-FR-046/US-8 in full): this
+      value is always the ONE global "goal tries" setting under Settings →
+      Performance (`PerformanceSettings.yaml`'s `goal_max_rounds`),
+      governing a task-owned and a session-owned goal IDENTICALLY — there
+      is no writable per-goal budget field on this schema, `Task.yaml`,
+      `TaskUpdateRequest.yaml` or anywhere else. The distinct `attempts`
+      counter (task retry attempts, separate from adjudication rounds) is
+      NOT modelled here — it stays on the task/session's own attempt
+      machinery; the `2 × effective budget` hard ceiling there is an
+      independent divergence brake, not a second goal budget (R-03).
     example: 20
   round:
     type: integer
     minimum: 0
     readOnly: true
     description: >
-      Adjudications consumed so far (R§8.9). The stored integer is
-      preserved unchanged across the upgrade from the legacy "one turn +
-      judge" round definition — only the increment site moved.
+      Adjudications consumed so far (R§8.9 — one round = one adjudication,
+      claim-triggered or idle-settled). The stored integer is preserved
+      unchanged across the upgrade from the legacy "one turn + judge"
+      round definition — only the increment site moved. Reset to 0 when a
+      terminal task-owned goal re-enters `active` on task re-run (R-04).
+    example: 0
+  attempts_used:
+    type: integer
+    minimum: 0
+    readOnly: true
+    description: >
+      GOAL-FR-006 — attempts consumed so far against this goal's owner's
+      attempt ceiling (a distinct counter from `round` — `TestAttemptsVsRounds_DistinctBrakes`
+      asserts the two counters are distinct, not that their numbers
+      differ, R-03). Reset to 0 when a terminal task-owned goal re-enters
+      `active` on task re-run (R-04).
     example: 0
   state:
     type: string
     enum:
+      - defining
       - active
-      - done
-      - failed
+      - met
+      - exhausted
+      - expired
       - cleared
     description: >
-      SHAPE DECISION (flagged for review): the spec lists a bare `state`
-      field with no enumerated values. This 4-value set is the persisted
-      GOAL record's OWN lifecycle (active while iterating; done on a met
-      verdict; failed on rounds/attempts/budget exhaustion; cleared via
-      `/goal clear`) — deliberately narrower than and distinct from the
-      8-state pill-display enum (`GoalStatusFrame.state`, R§8.10), which
-      derives its richer display states from this state PLUS the
-      session's own lifecycle PLUS ephemeral engine-phase signals. Do not
-      conflate the two.
+      GOAL-FR-006/FR-027/FR-028, R-14 (a RENAME of the pre-existing
+      4-value set, not a widening: `done` → `met`, `failed` → `exhausted`,
+      plus two new values). `defining` — the goal exists, is readable and
+      editable, and MUST NOT run (ADR-086 D2/D3, GOAL-FR-009): a task holds
+      its goal in this phase from task creation until the task starts.
+      `active` — activated and iterating (GOAL-FR-010: activation binds
+      the goal to exactly one session and starts the loop). `met` —
+      terminal, a verdict satisfied every criterion. `exhausted` —
+      terminal, the round/attempt/budget ceiling was reached with no `met`
+      verdict. `expired` — terminal, the 7-day idle-expiry sweep ended a
+      goal that never claimed (D-A) — EC-10: a goal record whose active
+      session was swept by retention is also terminal-expired at the next
+      sweep rather than left pointing at a missing session. `cleared` —
+      terminal, a deliberate user-initiated `/goal clear` (not a failure,
+      mirrors `GoalStatusFrame.state`'s existing `cleared`/`failed`
+      split). Ending a goal is a STATUS TRANSITION on a retained record,
+      never field-zeroing erasure (GOAL-FR-027/FR-028): the record
+      survives every terminal transition with its criteria, their final
+      statuses, the verdict, the reason and any handover intact. This
+      4-value set is deliberately narrower than and distinct from the
+      richer `GoalStatusFrame.state` display enum (R§8.10), which derives
+      additional ephemeral engine-phase and lifecycle-overlay states from
+      this state PLUS the owning session's own lifecycle. Do not conflate
+      the two. A `task`-owned goal's ONLY re-entry edge is
+      terminal → `active` on task re-run (R-04); a `session`-owned goal
+      has no such edge and stays terminal once ended.
     example: "active"
   created_at:
     type: string
     format: date-time
     description: RFC3339 timestamp this goal was set/created.
     example: "2026-07-22T10:00:00Z"
+  started_at:
+    type: string
+    format: date-time
+    description: >
+      GOAL-FR-006 — RFC3339 timestamp this goal was last ACTIVATED
+      (GOAL-FR-010). Absent while `state == defining`. Reset to a fresh
+      timestamp on a task-owned goal's terminal → active re-entry (R-04).
+    example: "2026-07-22T10:05:00Z"
+  last_activity_at:
+    type: string
+    format: date-time
+    description: >
+      GOAL-FR-006 — RFC3339 timestamp of the most recent activity on this
+      goal (a claim, an adjudication, a criteria update). Drives the
+      7-day idle-expiry sweep (D-A) for BOTH owner kinds identically, and
+      is the clock the goal's own retention (A-8: "the goal's own
+      `last_activity_at` against the session retention window") measures
+      against for a task-owned goal, which has no session lifecycle of its
+      own to borrow a clock from. Initialised to `created_at`.
+    example: "2026-07-22T10:05:00Z"
+  active_session_id:
+    type: string
+    minLength: 1
+    description: >
+      GOAL-FR-006 — the id of the session this goal is currently active
+      in, once `state != defining`. Absent while `state == defining`.
+      Cleared (never re-pointed) once the goal reaches a terminal state —
+      the terminal record still names the session that carried it via the
+      LAST value this field held before the transition, per the
+      `terminal_history`/replay-anchored transcript, not via a live
+      pointer that could dangle (EC-10).
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  latest_reason:
+    type: string
+    description: >
+      GOAL-FR-006 — most recent judge reason fed forward as steering
+      (evaluator-optimizer pattern), mirroring `GoalStatusFrame.latest_reason`.
+      Empty/absent before the first round completes.
+    example: "3 tests still failing in pkg/plan"
+  terminal_reason:
+    type: string
+    description: >
+      GOAL-FR-028 — the reason this goal reached its current terminal
+      `state`, distinct from `latest_reason` (which tracks the latest
+      ROUND's judge reason, not why the goal itself ended): e.g. "idle
+      expiry after 7 days of inactivity with no claim", "round budget
+      (20) exhausted", "cleared by operator". Absent while the goal is not
+      terminal. Exactly one terminal frame is emitted per ending
+      (GOAL-FR-028) and this field is set in the same transition.
+    example: "round budget (20) exhausted with no met verdict"
+  latest_claim:
+    type: object
+    description: >
+      GOAL-FR-006 — a snapshot of the most recent `goal_claim` tool call
+      against this goal (JUDGE §D12's reliable claim channel). Absent
+      until the first claim. Does not itself carry a verdict — see
+      `latest_verdict` below, set only once the claim's adjudication
+      completes.
+    required:
+      - status
+      - claimed_at
+    additionalProperties: false
+    properties:
+      status:
+        type: string
+        enum:
+          - met
+          - blocked
+          - waiting_on_user
+        description: >
+          JUDGE machine-verifiable constraint — `goal_claim.status` enum
+          is exactly these three values.
+        example: "met"
+      evidence:
+        type: string
+        maxLength: 4000
+        description: >
+          The claim's own evidence text. Required and non-empty
+          (whitespace-trimmed) at the call when `status == met`
+          (JUDGE machine-verifiable constraint); ignored otherwise. This
+          is a snapshot of what was submitted, not a grounding excerpt —
+          distinct from `CriterionVerdict.evidence`.
+        example: "All 47 tests in pkg/plan pass; golangci-lint reports 0 issues."
+      claimed_at:
+        type: string
+        format: date-time
+        example: "2026-07-22T10:07:00Z"
+  latest_verdict:
+    $ref: './JudgeVerdict.yaml'
+    description: >
+      GOAL-FR-006 — the most recent Judge adjudication of this goal.
+      Absent before the first completed adjudication.
+  superseded_criteria:
+    type: array
+    description: >
+      GOAL-FR-006 — the superseded-criteria history: prior `criteria`/`dod`
+      sets this goal carried before a `set_goal(mode: update)` steering
+      revision replaced them (ADR-081). Empty/absent for a goal never
+      revised. Distinct from `terminal_history` below, which records prior
+      COMPLETED RUNS of a re-run task-owned goal, not prior criteria
+      revisions of the current run.
+    items:
+      type: object
+      required:
+        - superseded_at
+        - criteria
+        - dod
+      additionalProperties: false
+      properties:
+        superseded_at:
+          type: string
+          format: date-time
+        criteria:
+          type: array
+          items:
+            $ref: './AcceptanceCriterion.yaml'
+        dod:
+          type: array
+          items:
+            $ref: './AcceptanceCriterion.yaml'
+  terminal_history:
+    type: array
+    description: >
+      R-04 (goal spec A-2/EC-1) — for a `task`-owned goal that is reused
+      across a re-run after its prior run ended (the SAME goal, its
+      `attempts_used`/`round` reset to 0, per `owner_kind`'s description):
+      the prior run's terminal outcome is APPENDED here rather than
+      overwritten, so a task's full adjudication history survives every
+      re-run. A `session`-owned goal never re-enters `active` from
+      terminal, so this array stays empty for it. Ordered oldest-first.
+    items:
+      type: object
+      required:
+        - state
+        - ended_at
+      additionalProperties: false
+      properties:
+        state:
+          type: string
+          enum:
+            - met
+            - exhausted
+            - expired
+            - cleared
+          description: The terminal state this prior run ended in.
+        terminal_reason:
+          type: string
+        verdict:
+          $ref: './JudgeVerdict.yaml'
+        ended_at:
+          type: string
+          format: date-time
+        attempts_used:
+          type: integer
+          minimum: 0
+          description: Attempts consumed in that prior run.
+        round:
+          type: integer
+          minimum: 0
+          description: Rounds consumed in that prior run.
+  zero_output_pushes:
+    type: integer
+    minimum: 0
+    description: >
+      GOAL-FR-004 — the keeper's own durable recordless-nudge /
+      zero-output-push streak counter (today the session-level
+      `goal_zero_output_pushes`, bound `goalZeroOutputPushMax = 2`),
+      relocated onto the goal record so it applies identically to a
+      task-owned and a session-owned goal (GOAL-FR-015/FR-017).
+    example: 0
+  question_rounds_used:
+    type: integer
+    minimum: 0
+    description: >
+      GOAL-FR-004 — the keeper's own durable clarification-question door
+      counter (today the session-level `goal_question_rounds_used`),
+      relocated onto the goal record so it applies identically to both
+      owner kinds (GOAL-FR-015/FR-020).
+    example: 0
+  route_channel:
+    type: string
+    description: >
+      GOAL-FR-034 — the channel a keeper follow-up for this goal is
+      delivered through (e.g. "telegram", "discord"), surviving from the
+      pre-existing session-level `goal_route_channel`. `dispatchGoalAsyncFollowUp`
+      aborts without either `route_channel` or `route_chat_id`. Absent for
+      a goal whose owner has never needed an async follow-up (e.g. webchat
+      delivery, which stays session-addressed per ADR-082 and does not use
+      this field, GOAL-FR-035).
+    example: "telegram"
+  route_chat_id:
+    type: string
+    description: >
+      GOAL-FR-034 — the chat/peer id within `route_channel` a keeper
+      follow-up for this goal is delivered to, surviving from the
+      pre-existing session-level `goal_route_chat_id`.
+    example: "123456789"

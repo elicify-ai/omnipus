@@ -8,13 +8,25 @@
 // gateway.orphaned_turn_grace_seconds config key are deleted in full
 // (greenfield, ADR-082 §5) — not disabled, not defaulted to 0, REMOVED:
 // GatewayConfig.OrphanedTurnGraceSeconds no longer exists as a Go field at
-// all. This is the regression test the deletion inventory calls for: an
-// operator's pre-existing config.json that still carries the retired key
-// (an upgrade from a pre-ADR-082 install) must still boot cleanly — Go's
+// all. This is the regression test the deletion inventory calls for: a
+// config.json that still carries the retired key must load cleanly — Go's
 // standard json.Unmarshal silently ignores unknown object keys, so the
-// retired key becomes ordinary dead JSON with zero effect, rather than a
-// load failure — and the field itself must be gone from the struct so no
-// future code can accidentally resurrect a live consumer of it.
+// retired key is ordinary dead JSON with zero effect, rather than a load
+// failure — and the field itself must be gone from the struct so no future
+// code can accidentally resurrect a live consumer of it.
+//
+// The key is IGNORED IN SILENCE. The former one-time boot WARN
+// ("…is retired (ADR-082) and ignored — remove it") and the
+// warnIfLegacyOrphanGraceKeyPresent / legacyOrphanGraceKeyWarnLogged /
+// legacyOrphanGraceKeyJSONPath machinery behind it are deleted, together
+// with the test that asserted the warning fired exactly once
+// (TestConfig_OrphanGraceKeyLogsRetiredWarningOnce). That notice existed only
+// to help an install upgraded from a pre-ADR-082 config.json; operator
+// decision D-F retires every upgrade/migration/detection path across the
+// codebase, and the notice was the last piece of deprecation machinery in
+// pkg/config — SC-009 (scripts/check-greenfield-providers.sh) flags exactly
+// that class. Do not reintroduce a warning here: the assertion below now
+// pins the silence.
 package config
 
 import (
@@ -24,72 +36,6 @@ import (
 	"strings"
 	"testing"
 )
-
-// TestConfig_OrphanGraceKeyLogsRetiredWarningOnce is F11: an operator's
-// pre-ADR-082 config.json carrying gateway.orphaned_turn_grace_seconds must
-// still load cleanly (TestConfig_OrphanGraceKeyIgnored, above) AND get a
-// one-time boot WARN telling them the key does nothing and can be removed —
-// silently ignoring it forever leaves an operator maintaining a line that
-// has no effect with no way to discover that short of reading source.
-func TestConfig_OrphanGraceKeyLogsRetiredWarningOnce(t *testing.T) {
-	resetLegacyOrphanGraceKeyWarnForTest()
-	t.Cleanup(resetLegacyOrphanGraceKeyWarnForTest)
-
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.json")
-	raw := `{
-		"version": 1,
-		"agents": {"defaults": {"workspace": "./workspace"}},
-		"gateway": {
-			"port": 5000,
-			"orphaned_turn_grace_seconds": 20
-		}
-	}`
-	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
-		t.Fatalf("WriteFile() error: %v", err)
-	}
-
-	logs := captureWarnings(t)
-
-	if _, err := LoadConfig(configPath); err != nil {
-		t.Fatalf("LoadConfig() must still succeed with the retired key present: %v", err)
-	}
-	// A second load (mirrors the gateway's config-file-watcher re-reading
-	// config.json, and a manual /reload) must NOT log the notice again — the
-	// condition is static content of one file, so a repeated line is noise.
-	if _, err := LoadConfig(configPath); err != nil {
-		t.Fatalf("second LoadConfig() error: %v", err)
-	}
-
-	out := logs.String()
-	const wantSubstr = "orphaned_turn_grace_seconds is retired (ADR-082) and ignored"
-	got := strings.Count(out, wantSubstr)
-	if got != 1 {
-		t.Fatalf("2 loads of a config.json carrying the retired key produced %d matching warning(s), want exactly 1.\nCaptured log:\n%s", got, out)
-	}
-	if !strings.Contains(out, "gateway.orphaned_turn_grace_seconds") {
-		t.Errorf("the warning does not name the full dotted key (gateway.orphaned_turn_grace_seconds) — without it an operator has to go find which section it complains about.\nCaptured log:\n%s", out)
-	}
-
-	// A config.json WITHOUT the retired key must stay silent.
-	resetLegacyOrphanGraceKeyWarnForTest()
-	logs2 := captureWarnings(t)
-	cleanPath := filepath.Join(dir, "config-clean.json")
-	cleanRaw := `{
-		"version": 1,
-		"agents": {"defaults": {"workspace": "./workspace"}},
-		"gateway": {"port": 5000}
-	}`
-	if err := os.WriteFile(cleanPath, []byte(cleanRaw), 0o600); err != nil {
-		t.Fatalf("WriteFile() error: %v", err)
-	}
-	if _, err := LoadConfig(cleanPath); err != nil {
-		t.Fatalf("LoadConfig() error on clean config: %v", err)
-	}
-	if strings.Contains(logs2.String(), wantSubstr) {
-		t.Errorf("a config.json with no retired key logged the retired-key warning anyway.\nCaptured log:\n%s", logs2.String())
-	}
-}
 
 // TestConfig_OrphanGraceKeyIgnored is T-14 (S-13): "Given a config.json
 // carrying gateway.orphaned_turn_grace_seconds, When the gateway loads,
@@ -119,11 +65,12 @@ func TestConfig_OrphanGraceKeyIgnored(t *testing.T) {
 		t.Fatalf("WriteFile() error: %v", err)
 	}
 
+	logs := captureWarnings(t)
+
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
 		t.Fatalf("LoadConfig() must succeed against a config.json carrying the retired "+
-			"gateway.orphaned_turn_grace_seconds key (an upgrade from a pre-ADR-082 install "+
-			"must still boot) — got error: %v", err)
+			"gateway.orphaned_turn_grace_seconds key — got error: %v", err)
 	}
 	if cfg == nil {
 		t.Fatal("LoadConfig() returned a nil *Config with no error")
@@ -134,6 +81,17 @@ func TestConfig_OrphanGraceKeyIgnored(t *testing.T) {
 	if cfg.Gateway.Port != 5000 {
 		t.Errorf("cfg.Gateway.Port = %d, want 5000 — the gateway section around the retired "+
 			"key must still parse correctly", cfg.Gateway.Port)
+	}
+
+	// IGNORED IN SILENCE: no deprecation notice of any kind may mention the
+	// retired key. The one-time WARN that used to fire here is deleted with
+	// its machinery (D-F: no upgrade path, therefore no upgrade nudge); a
+	// re-added warning would reintroduce the deprecation shim SC-009 forbids
+	// in pkg/config.
+	if out := logs.String(); strings.Contains(out, "orphaned_turn_grace_seconds") {
+		t.Errorf("loading a config.json that carries the retired key logged a notice naming it; "+
+			"the key must be ignored in silence (the deprecation warning and its machinery are "+
+			"deleted — see this file's header).\nCaptured log:\n%s", out)
 	}
 
 	// Structural assertion: GatewayConfig must carry NO field for the

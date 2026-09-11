@@ -115,7 +115,7 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 	// Composition order is FIXED (spec §14.2 rule 1): ownership resolves the
 	// scope, controlledResult decides whether a human outranks this call, and
 	// only then is the write lease taken on the resolved (key, owner) pair.
-	if result := controlledResult(mgr, key, owner, t.Name()); result != nil {
+	if result := controlledResult(ctx, mgr, key, owner, t.Name(), &t.browserAudit); result != nil {
 		return result
 	}
 	deferred, release := leaseWrite(ctx, mgr, key, owner, tools.ToolAgentID(ctx), t.Name())
@@ -307,7 +307,7 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 	// Composition order is FIXED (spec §14.2 rule 1): ownership resolves the
 	// scope, controlledResult decides whether a human outranks this call, and
 	// only then is the write lease taken on the resolved (key, owner) pair.
-	if result := controlledResult(mgr, key, owner, t.Name()); result != nil {
+	if result := controlledResult(ctx, mgr, key, owner, t.Name(), &t.browserAudit); result != nil {
 		return result
 	}
 	deferred, release := leaseWrite(ctx, mgr, key, owner, tools.ToolAgentID(ctx), t.Name())
@@ -585,7 +585,7 @@ func (t *TypeTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	// Composition order is FIXED (spec §14.2 rule 1): ownership resolves the
 	// scope, controlledResult decides whether a human outranks this call, and
 	// only then is the write lease taken on the resolved (key, owner) pair.
-	if result := controlledResult(mgr, key, owner, t.Name()); result != nil {
+	if result := controlledResult(ctx, mgr, key, owner, t.Name(), &t.browserAudit); result != nil {
 		return result
 	}
 	deferred, release := leaseWrite(ctx, mgr, key, owner, tools.ToolAgentID(ctx), t.Name())
@@ -696,7 +696,7 @@ func (t *ScreenshotTool) Name() string                 { return "browser_screens
 func (t *ScreenshotTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *ScreenshotTool) Category() tools.ToolCategory { return tools.CategoryBrowser }
 func (t *ScreenshotTool) Description() string {
-	return "Capture a screenshot of the CURRENT page as a JPEG image, and report its current URL and title. Use this to see what page is open — including a page the user navigated to themselves via the live browser panel (the tab is shared). Do not guess the URL from the visual content; read it from this tool's output. Captures the ENTIRE scrollable page (full page height), not just the visible viewport. The JPEG is also written to a file in your current working directory in addition to being returned inline."
+	return "Capture a screenshot of the CURRENT page as a JPEG image, and report its current URL and title. Use this to see what page is open — including a page the user navigated to themselves via the live browser panel (the tab is shared). Do not guess the URL from the visual content; read it from this tool's output. Captures the ENTIRE scrollable page (full page height), not just the visible viewport. The JPEG is also written to a file in your current working directory in addition to being returned inline." + deferredIsNotAnError
 }
 
 func (t *ScreenshotTool) Parameters() map[string]any {
@@ -707,9 +707,16 @@ func (t *ScreenshotTool) Parameters() map[string]any {
 }
 
 func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
-	mgr, sid, failure := resolveTurnTabSet(ctx, t.res, &t.browserAudit, t.Name())
+	mgr, key, _, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
+	}
+	// ADR-085 D5/FR-033/FR-039: the capture gate MUST run BEFORE any of this
+	// tool's three sinks (the JPEG write, the MediaStore entry, the
+	// [file:...] tag) — never after. A deferred screenshot produces none of
+	// them.
+	if result := controlledResult(ctx, mgr, key, owner, t.Name(), &t.browserAudit); result != nil {
+		return result
 	}
 	// FR-051: this call is now IN FLIGHT against the workspace's browser, and
 	// stays so until Execute returns. The pool reads this before evicting or
@@ -844,7 +851,7 @@ func (t *GetTextTool) Description() string {
 		"visible label directly (case-insensitive substring match); when both are given, text is matched " +
 		"only among elements inside selector. Provide selector OR text (or both). To read the entire " +
 		"page's text, use a selector like \"body\" or \"html\". " + roleNameLocatorHelp +
-		"Output is capped at 64,000 characters (truncated with a marker beyond that)."
+		"Output is capped at 64,000 characters (truncated with a marker beyond that)." + deferredIsNotAnError
 }
 
 func (t *GetTextTool) Parameters() map[string]any {
@@ -872,9 +879,14 @@ func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.T
 		return tools.ErrorResult("browser_get_text: 'selector' parameter is required")
 	}
 
-	mgr, sid, failure := resolveTurnTabSet(ctx, t.res, &t.browserAudit, t.Name())
+	mgr, key, _, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
 		return failure
+	}
+	// ADR-085 D5/FR-033: gate before reading anything off a page a human may
+	// be actively driving.
+	if result := controlledResult(ctx, mgr, key, owner, t.Name(), &t.browserAudit); result != nil {
+		return result
 	}
 	// FR-051: this call is now IN FLIGHT against the workspace's browser, and
 	// stays so until Execute returns. The pool reads this before evicting or
@@ -1169,7 +1181,7 @@ func (t *EvaluateTool) Execute(ctx context.Context, args map[string]any) *tools.
 	// Composition order is FIXED (spec §14.2 rule 1): ownership resolves the
 	// scope, controlledResult decides whether a human outranks this call, and
 	// only then is the write lease taken on the resolved (key, owner) pair.
-	if result := controlledResult(mgr, key, owner, t.Name()); result != nil {
+	if result := controlledResult(ctx, mgr, key, owner, t.Name(), &t.browserAudit); result != nil {
 		return result
 	}
 	deferred, release := leaseWrite(ctx, mgr, key, owner, tools.ToolAgentID(ctx), t.Name())
@@ -1240,57 +1252,181 @@ func classifyEvalResult(raw []byte) *tools.ToolResult {
 	return jsonResult(map[string]any{"result": v})
 }
 
-// controlledResult implements ADR-038 D6's cooperative turn-coordination: when
-// a human viewer currently holds interactive control of the browser's live
-// view (see pkg/tools/browser/live.go), the agent's own interactive tools
-// (navigate/click/type/evaluate — the ones that would "fight for the cursor")
-// defer instead of executing, returning a non-error, visible ToolResult so
-// the LLM can see why nothing happened and tell the user to wait. Read-only
-// tools (browser_screenshot, browser_get_text, browser_wait) are NOT gated —
-// they don't inject input, so they can't conflict with a human driving the
-// same page.
+// controlledResult implements ADR-038 D6's cooperative turn-coordination,
+// extended by ADR-085 (BROWSER-FR-010 through FR-024, FR-033, FR-061): when a
+// human viewer currently holds interactive control of the browser's live
+// view, or the tab set is otherwise stood down (an agent handover, or a
+// stand-down latch left by a release that was not a fresh prompt — see
+// pkg/tools/browser/live.go's LiveView.isStoodDownLocked), the agent's
+// control-gated tools — every action verb (navigate/click/type/evaluate/…)
+// AND, since ADR-085 D5, the three capture verbs (screenshot/get_text/
+// snapshot) — defer instead of executing, returning a non-error, visible
+// ToolResult so the LLM can see why nothing happened and tell the user to
+// wait. `browser_wait`, `browser_list_tabs` and `browser_handle_dialog` stay
+// permanently exempt (FR-034) and never call this function at all.
 //
-// Returns nil (no deferral) when the session is uncontrolled or has no live
-// view at all — the overwhelmingly common case, so this stays a cheap map
-// lookup on the hot path.
+// Returns nil (no deferral) when neither of the two FR-020 checks below
+// finds a stood-down tab set — the overwhelmingly common case, so this stays
+// a cheap pair of map lookups on the hot path.
 //
-// LIMITATION (documented per ADR-038 D6): this is cooperative, not
-// preemptive. A tool call already in flight when a human takes control
-// finishes normally — there is no mid-tool preemption in v1.
+// FR-020's TWO-KEY coverage. A held wheel defers every call that resolves to
+// the CONTROLLED tab set (the obvious case) AND every call reachable from the
+// SAME ROOT CHAT the operator's panel is attached to, even when that call's
+// own resolved tab set is a delegated child's own (FR-023) — closing the gap
+// where a delegated agent, whose transcript session differs from its
+// parent's, could keep driving while the operator holds the parent's wheel.
+// The root-chat id comes from the tool-context key FR-021 threads through
+// (tools.ToolRootChatSessionID), never through ManagerResolver. A turn with
+// no root chat id (cron, heartbeat, a non-chat task) FAILS OPEN on this
+// second check — it is skipped entirely, not treated as "no root chat, so
+// nothing is controlled" would already say (FR-020's own documented
+// intentional gap; a non-chat turn cannot be blocked by a chat it has no
+// relationship to).
 //
-// The deferral is a NON-ERROR result (IsError stays false — the
-// deferral is not a tool failure, it's cooperative turn-coordination), but it
-// must be structurally distinguishable from a normal success payload rather
-// than prose-only. Every one of these seven callers (navigate/click/type/
-// evaluate/switch_tab/close_tab/open_tab) previously returned this as a bare
-// sentence with no signal beyond text a model might not parse — a
-// success-shaped no-op. The body is now JSON: {"deferred": true, "reason":
-// "..."}, so a caller can check for the "deferred" key the same way it would
-// check any other tool's result shape.
-func controlledResult(mgr *BrowserManager, key BrowsingKey, owner TabOwner, toolName string) *tools.ToolResult {
-	// FR-002c. This asked the live registry about a hardcoded shared session id
-	// until ADR-075 D1
-	// re-keyed the live-view registry. Left on the constant it would match
-	// nothing and return false FOREVER — an intact, populated human-control
-	// lock that is never consulted, with no error, no log line and every lease
-	// test still green. It MUST ask about the (BrowsingKey, TabOwner) pair the
-	// call has already resolved, which is the same string the live panel takes
-	// control of (BrowserManager.OperatorSessionID for the operator's own tabs).
-	if !mgr.Live().IsControlled(sessionKey(key, owner)) {
+// LIMITATION (documented per ADR-038 D6, unchanged by ADR-085): this is
+// cooperative, not preemptive. A tool call already in flight when a human
+// takes control finishes normally — there is no mid-tool preemption in v1
+// (BROWSER-FR-003).
+//
+// The deferral is a NON-ERROR result (IsError stays false — the deferral is
+// not a tool failure, it's cooperative turn-coordination), carried on TWO
+// channels for two different readers: the model-facing JSON body in ForLLM
+// ({"deferred": true, "gate": "browser_control", "reason": "..."},
+// BROWSER-FR-012) and the structural tools.ToolResult.Deferred field
+// (BROWSER-FR-012a), which the turn engine's per-turn ledger
+// (pkg/agent/browser_deferral.go, BROWSER-FR-013) reads with a nil check and
+// never by parsing ForLLM's prose.
+func controlledResult(
+	ctx context.Context, mgr *BrowserManager, key BrowsingKey, owner TabOwner, toolName string, aud *browserAudit,
+) *tools.ToolResult {
+	// D-G (operator decision, 2026-09-11): while the wheel is held, an agent
+	// with other browser work to do OPENS A NEW TAB rather than waiting.
+	// browser_open_tab is therefore the one escape hatch out of this gate —
+	// see controlGateEscapeHatchTools for the whole rationale, including what
+	// the escape hatch does and does not buy while the lock stays per-tab-set.
+	if controlGateEscapeHatchTools[toolName] {
 		return nil
 	}
+	resolvedKey := sessionKey(key, owner)
+	triggerKey := resolvedKey
+	stood := mgr.Live().IsStoodDown(resolvedKey)
+	rootChatID := tools.ToolRootChatSessionID(ctx)
+	if !stood && rootChatID != "" {
+		// FR-020's second check, scoped: PanelTabSetID composes with THIS
+		// manager's own BrowsingKey, so the two checks are always on the
+		// same browser and differ only in TabOwner (see this function's doc
+		// comment).
+		panelKey := mgr.PanelTabSetID(rootChatID)
+		if panelKey != resolvedKey && mgr.Live().IsStoodDown(panelKey) {
+			stood = true
+			triggerKey = panelKey
+		}
+	}
+	if !stood {
+		return nil
+	}
+
 	reason := "a human is currently controlling this browser via the live view — " +
-		"wait for them to release control before driving the browser further"
+		"do not retry any browser action until control returns; the operator resumes " +
+		"the agent's driving by sending a new message"
 	body, err := json.Marshal(map[string]any{
 		"deferred": true,
+		"gate":     "browser_control",
 		"reason":   reason,
 	})
 	if err != nil {
 		// Should be unreachable for a static map of strings/bools, but never
 		// silently drop the deferral signal if it somehow happens.
-		body = []byte(fmt.Sprintf(`{"deferred":true,"reason":%q}`, reason))
+		body = []byte(fmt.Sprintf(`{"deferred":true,"gate":"browser_control","reason":%q}`, reason))
 	}
-	return tools.NewToolResult(fmt.Sprintf("%s: %s", toolName, string(body)))
+	result := tools.NewToolResult(fmt.Sprintf("%s: %s", toolName, string(body)))
+	result.Deferred = &tools.ToolDeferral{Gate: "browser_control", Reason: reason}
+
+	if aud != nil {
+		aud.recordControlDeferral(ctx, mgr, key, rootChatID, mgr.Live().StoodDownHolder(triggerKey), toolName)
+	}
+	return result
+}
+
+// controlGateEscapeHatchTools is D-G's carve-out: tool names that STILL call
+// controlledResult (so the §14-rule-3 biconditional between the gated set and
+// the write-class/audited set is untouched, and control_gate_membership_test.go
+// keeps its oracle) but which the gate lets through unconditionally.
+//
+// WHY IT IS EXPRESSED HERE AND NOT BY DELETING THE CALL SITE. Three separate
+// surfaces already tell the model, in prose, that a new tab is the way to keep
+// working while the operator holds the wheel: browser_handover's tool
+// description, its success message and its FR-052 refusal message (see
+// tools_handover.go's D-G paragraph). Until this carve-out existed,
+// browser_open_tab went through this gate like every other write verb and
+// returned a DEFERRAL instead of a tab — the instruction the agent was given
+// three times could not be followed. Keeping the call site and exempting by
+// name puts the exemption in ONE readable place with its reason attached,
+// rather than as the absence of a line in tabs.go that a future reader would
+// have to notice was missing.
+//
+// WHAT THIS DOES AND DOES NOT BUY — read before extending it. D-G's own
+// premise is that "the stand-down is therefore per-tab, not per-browser-
+// session", and required the implementing wave to verify that and report if it
+// is false. IT IS FALSE TODAY. The control lock and the FR-026a stand-down
+// latch live on a LiveView, and a LiveView is keyed by sessionKey(BrowsingKey,
+// TabOwner) — one per TAB SET, covering every tab in it (live.go's
+// LiveViewRegistry doc comment; key.go's sessionKey). So:
+//   - the agent CAN now obtain a new tab while the wheel is held, which is
+//     what this carve-out delivers and what the three prompts promise;
+//   - every subsequent action/capture verb on that new tab still resolves to
+//     the SAME stood-down tab set and still defers, because the gate's first
+//     check is on the tab set, not on the tab;
+//   - and BrowserManager.OpenTab makes the new tab ACTIVE, so on a tab set the
+//     operator is actually driving, the tab under them changes.
+//
+// Making the escape hatch complete requires moving the lock to per-tab
+// granularity, which every action tool's "act on the active tab" resolution
+// also depends on — an architectural change, not a gate edit. Do not paper
+// over it by widening this map.
+var controlGateEscapeHatchTools = map[string]bool{
+	"browser_open_tab": true,
+}
+
+// ControlGatedToolNames returns every registered browser tool's name that
+// this package's control gate covers — the ACTION ∪ CAPTURE union
+// (BROWSER-FR-016a, FR-035) — derived from the SAME three rosters
+// pkg/tools/browser/audit.go declares, never from a fourth hand-written
+// list. pkg/agent/browser_deferral.go consumes this once, at construction,
+// to build the short-circuit set FR-016 needs: after BROWSER-FR-014's N=3
+// per-turn deferral bound is reached, every LATER control-gated call in the
+// same turn must be refused by the ENGINE, before dispatch, without ever
+// reaching this package again — and the engine can only decide that from the
+// tool name alone, since short-circuiting here means this gate never runs.
+//
+// Returns the METADATA-scoped roster (BrowserBuiltinMetadata — 17 tools,
+// 14 of them gated), not the registry-scoped one (16 tools, 13 gated): a
+// name in it that the registry never actually registers (browser_upload_file
+// held-but-unregistered) is harmless — the engine short-circuits on a name
+// the model can never call — while a REGISTERED gated name missing from it
+// is the drift control_gate_membership_test.go exists to catch.
+//
+// D-G: a name in controlGateEscapeHatchTools is EXCLUDED. The engine's FR-016
+// short-circuit refuses a name in this set before dispatch once the per-turn
+// deferral bound is reached — which would slam the escape hatch shut from the
+// other side, on exactly the turn the agent most needs it (three deferrals is
+// what a held wheel produces). The gate and the engine must agree about which
+// names can defer, and neither can now defer browser_open_tab.
+func ControlGatedToolNames() []string {
+	names := make([]string, 0, len(writeClassBrowserTools)+len(captureBrowserTools))
+	for name := range writeClassBrowserTools {
+		if controlGateEscapeHatchTools[name] {
+			continue
+		}
+		names = append(names, name)
+	}
+	for name := range captureBrowserTools {
+		if controlGateEscapeHatchTools[name] {
+			continue
+		}
+		names = append(names, name)
+	}
+	return names
 }
 
 // jsonResult marshals v to JSON and returns a SilentResult.

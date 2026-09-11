@@ -17,7 +17,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Cpu, Info, Warning } from '@phosphor-icons/react'
+import { Cpu, Info, Warning, Target } from '@phosphor-icons/react'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -85,6 +85,23 @@ const INVALID_MAX_PARALLEL_MESSAGE =
 // not "what can this machine run". See max_parallel_agents_configured.
 const PHYSICAL_THREAD_CEILING = 2000
 
+// DEFAULT_GOAL_MAX_ROUNDS mirrors PerformanceSettings.yaml's documented
+// default (20). goal_max_rounds is documented as "always present" on the
+// wire, but this fallback exists for the same forward-compatibility reason
+// max_parallel_agents_configured is tested with `!== false` above: an older
+// backend that omits the field must not render a blank/undefined control.
+const DEFAULT_GOAL_MAX_ROUNDS = 20
+
+// Validation message for the single global goal-round budget
+// (GOAL-FR-024/FR-045, D-D/D-E). Mirrors the backend contract
+// (PerformanceSettingsUpdate.yaml): minimum 1, no ceiling other than the
+// independent hard-divergence brake enforced server-side. There is NO
+// per-goal override anywhere (GOAL-FR-046/US-8 retired) — this is the one
+// and only budget control in the product, governing task goals and chat
+// goals identically.
+const INVALID_GOAL_MAX_ROUNDS_MESSAGE =
+  'Goal round budget must be a whole number of at least 1.'
+
 export function PerformanceSection(): React.ReactElement {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
@@ -95,14 +112,52 @@ export function PerformanceSection(): React.ReactElement {
   // dirty tracks whether the user has changed any field since the last save.
   const [dirty, setDirty] = useState(false)
 
+  // goalMaxRoundsInput mirrors the single global goal-tries setting
+  // (GOAL-FR-024/FR-045, D-D/D-E) — the ONE budget control in the product,
+  // governing task goals and chat goals identically. It is an independent
+  // field from max_parallel_agents/tools_on_demand above: a different card,
+  // saved via its own partial PUT body ({ goal_max_rounds }) so editing one
+  // control never touches the other two. goalDirty is its own dirty flag for
+  // the same reason.
+  const [goalMaxRoundsInput, setGoalMaxRoundsInput] = useState<string>('')
+  const [goalDirty, setGoalDirty] = useState(false)
+
   // The change waiting on a re-auth consent token, and whether the dialog is
   // open. PUT /api/v1/performance is re-auth gated (Spec-6 FR-12.2 / Spec-3
   // FR-6.6); the token is replayed via updatePerformanceSettings's header arg.
-  const [pending, setPending] = useState<PerformanceSettingsUpdate | null>(null)
+  // Shared across all three controls on this screen — only one save can be
+  // in flight (and one dialog open) at a time.
+  //
+  // Review finding 15 (silent data loss): this is ONE slot but there are TWO
+  // independent 600 ms debounces feeding it (max-parallel/tools-on-demand and
+  // the goal round budget). Overwriting it dropped the earlier control's edit
+  // *silently* — the PUT carried only the later body, `onSuccess` cleared BOTH
+  // dirty flags, the sync effects then snapped the discarded field back to the
+  // server value, and the indicator said "saved". A pending write must
+  // therefore ACCUMULATE (`enqueuePending`), never replace: the wire type is a
+  // genuine partial update ("Omitted = unchanged"), so a merged body saves
+  // both intents in one round trip. The slot is a ref, not state: nothing
+  // renders from it, and the debounce timers and mutation callbacks that read
+  // it all run outside the render they were created in, where a state
+  // snapshot would be stale.
+  const pendingRef = useRef<PerformanceSettingsUpdate | null>(null)
   const [reauthOpen, setReauthOpen] = useState(false)
 
-  // Debounce timer for autosave.
+  // Single writer for the pending slot.
+  const setPendingPatch = useCallback((next: PerformanceSettingsUpdate | null) => {
+    pendingRef.current = next
+  }, [])
+
+  // Merge a control's body into whatever is already queued instead of
+  // replacing it (see the slot's comment above).
+  const enqueuePending = useCallback((patch: PerformanceSettingsUpdate) => {
+    const prev = pendingRef.current
+    setPendingPatch(prev ? { ...prev, ...patch } : patch)
+  }, [setPendingPatch])
+
+  // Debounce timers for autosave — one per independently-saved control.
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const goalDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ['performance-settings'],
@@ -129,20 +184,46 @@ export function PerformanceSection(): React.ReactElement {
     }
   }, [data, dirty])
 
+  // Sync the goal-round-budget input with the fetched value on first load —
+  // a separate effect from the one above because it tracks its own dirty
+  // flag (goalDirty), independent from max_parallel_agents/tools_on_demand.
+  useEffect(() => {
+    if (data && !goalDirty) {
+      setGoalMaxRoundsInput(String(data.goal_max_rounds ?? DEFAULT_GOAL_MAX_ROUNDS))
+    }
+  }, [data, goalDirty])
+
   const mutation = useMutation({
     mutationFn: ({ body, token }: { body: PerformanceSettingsUpdate; token: string }) =>
       updatePerformanceSettings(body, token),
-    onSuccess: () => {
+    onSuccess: (_result, variables) => {
       setSaveStatus('saved')
-      setDirty(false)
-      setPending(null)
+      // Clear a dirty flag ONLY for a control this PUT actually carried, and
+      // only while the user has not re-edited that control since the body was
+      // handed to the mutation. Clearing a dirty flag re-arms the sync effect
+      // above, which overwrites the input with the server's value — doing that
+      // for a field the PUT never sent is precisely the silent revert finding
+      // 15 describes.
+      const saved = variables.body
+      const queued = pendingRef.current
+      const parallelSaved = 'max_parallel_agents' in saved || 'tools_on_demand' in saved
+      const parallelRequeued =
+        queued !== null && ('max_parallel_agents' in queued || 'tools_on_demand' in queued)
+      if (parallelSaved && !parallelRequeued) setDirty(false)
+      if ('goal_max_rounds' in saved && !(queued !== null && 'goal_max_rounds' in queued)) {
+        setGoalDirty(false)
+      }
+      // The slot was emptied when the body was handed over (onReAuthConfirmed),
+      // so anything sitting in it now is a NEWER edit — leave it queued.
       void queryClient.invalidateQueries({ queryKey: ['performance-settings'] })
       // Reset to 'idle' after showing 'saved' briefly.
       setTimeout(() => setSaveStatus('idle'), 2000)
     },
     onError: (err) => {
       setSaveStatus('error')
-      setPending(null)
+      // Deliberately does NOT clear the slot or the dirty flags: the slot was
+      // already emptied at hand-over, the inputs still hold the unsaved edit,
+      // and the sr-only "Save changes" escape hatch stays available to retry.
       const msg = getErrorMessage(err, 'Failed to save performance settings.')
       addToast({ variant: 'error', message: msg })
     },
@@ -164,6 +245,22 @@ export function PerformanceSection(): React.ReactElement {
     return { max_parallel_agents: parsed, tools_on_demand: onDemand }
   }, [])
 
+  // buildGoalBody constructs the partial-update payload for the single
+  // global goal-round budget alone (GOAL-FR-024/FR-045, D-D/D-E). Unlike
+  // buildBody above, this sends ONLY goal_max_rounds — PerformanceSettingsUpdate
+  // is a genuine partial update ("Omitted = unchanged") and this control has
+  // no relationship to max_parallel_agents/tools_on_demand, so there is no
+  // "revert on save" risk in sending it alone. Minimum is 1, no 0-sentinel
+  // (unlike max_parallel_agents, there is no "clear to automatic" meaning
+  // here — the backend always resolves a value, default 20).
+  const buildGoalBody = useCallback((rawInput: string): PerformanceSettingsUpdate | null => {
+    const raw = rawInput.trim()
+    if (raw === '') return null
+    const parsed = parseInt(raw, 10)
+    if (isNaN(parsed) || parsed < 1) return null
+    return { goal_max_rounds: parsed }
+  }, [])
+
   // triggerSave validates the current input and opens the ReAuthDialog.
   // The actual PUT fires from onReAuthConfirmed once the consent token is minted.
   const triggerSave = useCallback(() => {
@@ -172,9 +269,21 @@ export function PerformanceSection(): React.ReactElement {
       addToast({ variant: 'error', message: INVALID_MAX_PARALLEL_MESSAGE })
       return
     }
-    setPending(body)
+    enqueuePending(body)
     setReauthOpen(true)
-  }, [inputValue, toolsOnDemand, buildBody, addToast])
+  }, [inputValue, toolsOnDemand, buildBody, addToast, enqueuePending])
+
+  // triggerGoalSave mirrors triggerSave for the independent goal-round-budget
+  // control — the keyboard-accessible escape hatch for its own sr-only button.
+  const triggerGoalSave = useCallback(() => {
+    const body = buildGoalBody(goalMaxRoundsInput)
+    if (!body) {
+      addToast({ variant: 'error', message: INVALID_GOAL_MAX_ROUNDS_MESSAGE })
+      return
+    }
+    enqueuePending(body)
+    setReauthOpen(true)
+  }, [goalMaxRoundsInput, buildGoalBody, addToast, enqueuePending])
 
   // Autosave: debounce on input change then open the reauth dialog.
   function handleInputChange(value: string) {
@@ -186,7 +295,7 @@ export function PerformanceSection(): React.ReactElement {
       const body = buildBody(value, toolsOnDemand)
       if (body) {
         setSaveStatus('saving')
-        setPending(body)
+        enqueuePending(body)
         setReauthOpen(true)
       } else {
         // max_parallel_agents settled out of range — this path never goes
@@ -195,6 +304,27 @@ export function PerformanceSection(): React.ReactElement {
         // Mirror the same guidance triggerSave and the toggle path show.
         setSaveStatus('idle')
         addToast({ variant: 'error', message: INVALID_MAX_PARALLEL_MESSAGE })
+      }
+    }, AUTOSAVE_DEBOUNCE_MS)
+  }
+
+  // Autosave for the independent goal-round-budget control: debounce, then
+  // save ONLY { goal_max_rounds } — see buildGoalBody's comment for why this
+  // never touches the other two fields' saved state.
+  function handleGoalInputChange(value: string) {
+    setGoalMaxRoundsInput(value)
+    setGoalDirty(true)
+    setSaveStatus('idle')
+    if (goalDebounceRef.current) clearTimeout(goalDebounceRef.current)
+    goalDebounceRef.current = setTimeout(() => {
+      const body = buildGoalBody(value)
+      if (body) {
+        setSaveStatus('saving')
+        enqueuePending(body)
+        setReauthOpen(true)
+      } else {
+        setSaveStatus('idle')
+        addToast({ variant: 'error', message: INVALID_GOAL_MAX_ROUNDS_MESSAGE })
       }
     }, AUTOSAVE_DEBOUNCE_MS)
   }
@@ -209,7 +339,7 @@ export function PerformanceSection(): React.ReactElement {
     const body = buildBody(inputValue, checked)
     if (body) {
       setSaveStatus('saving')
-      setPending(body)
+      enqueuePending(body)
       setReauthOpen(true)
     } else {
       // max_parallel_agents is out of range — the toggle can't proceed until
@@ -226,13 +356,19 @@ export function PerformanceSection(): React.ReactElement {
   useEffect(() => {
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
+      if (goalDebounceRef.current) clearTimeout(goalDebounceRef.current)
     }
   }, [])
 
   function onReAuthConfirmed(token: string) {
-    if (!pending) return
+    const body = pendingRef.current
+    if (!body) return
+    // Empty the slot as the body is handed over, so an edit made while this
+    // PUT is in flight accumulates on its own and is not cleared by this
+    // PUT's onSuccess.
+    setPendingPatch(null)
     setSaveStatus('saving')
-    mutation.mutate({ body: pending, token })
+    mutation.mutate({ body, token })
   }
 
   if (isLoading) return <Skeleton />
@@ -430,12 +566,51 @@ export function PerformanceSection(): React.ReactElement {
         </p>
       </div>
 
+      {/* Goal completion budget card (GOAL-FR-024/FR-045, D-D/D-E) — the ONE
+          global goal-tries setting in the product. There is no per-goal
+          override anywhere: not on the task detail panel, not in chat, not
+          on the wire, not in the store. This single control governs task
+          goals and chat goals identically. */}
+      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <Target size={16} className="text-[var(--color-secondary)]" />
+          <h3 className="text-sm font-semibold text-[var(--color-secondary)]">Goal completion budget</h3>
+        </div>
+
+        <p className="text-xs text-[var(--color-muted)] leading-relaxed">
+          The maximum number of adjudication rounds a goal may run before it is judged
+          unmet for insufficient progress. This is the only budget control in the
+          product — it applies to every goal, task and chat alike, identically. There is
+          no per-goal override.
+        </p>
+
+        <div className="flex items-center gap-3">
+          <label className="text-xs font-medium text-[var(--color-secondary)] w-44 shrink-0">
+            Goal round budget
+          </label>
+          <Input
+            type="number"
+            min={1}
+            value={goalMaxRoundsInput}
+            onChange={(e) => handleGoalInputChange(e.target.value)}
+            className="w-24 h-7 text-sm"
+            aria-label="Goal round budget"
+            data-testid="performance-goal-max-rounds-input"
+          />
+        </div>
+
+        <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">
+          Governs task goals and chat goals identically — every goal in the product uses
+          this one setting. Changes apply after re-authentication.
+        </p>
+      </div>
+
       <ReAuthDialog
         open={reauthOpen}
         onOpenChange={(o) => {
           setReauthOpen(o)
           if (!o) {
-            setPending(null)
+            setPendingPatch(null)
             if (saveStatus === 'saving') setSaveStatus('idle')
             // Cancelling re-auth means the pending change (toggle or typed
             // value) was never persisted. Clear dirty so the sync effect
@@ -444,6 +619,7 @@ export function PerformanceSection(): React.ReactElement {
             // unsaved edit indefinitely, until the user happened to change
             // it again.
             setDirty(false)
+            setGoalDirty(false)
           }
         }}
         title="Confirm to change performance settings"
@@ -457,6 +633,16 @@ export function PerformanceSection(): React.ReactElement {
           type="button"
           data-testid="performance-save-btn"
           onClick={triggerSave}
+          className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:p-2 focus:bg-[var(--color-surface-1)] focus:rounded text-xs text-[var(--color-secondary)]"
+        >
+          Save changes
+        </button>
+      )}
+      {goalDirty && !reauthOpen && (
+        <button tabIndex={0}
+          type="button"
+          data-testid="performance-goal-save-btn"
+          onClick={triggerGoalSave}
           className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:p-2 focus:bg-[var(--color-surface-1)] focus:rounded text-xs text-[var(--color-secondary)]"
         >
           Save changes

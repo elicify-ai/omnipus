@@ -260,3 +260,93 @@ func TestReadFile_DocumentSymlinkEscape_NowExtractsOpenly(t *testing.T) {
 		t.Fatalf("expected the real out-of-workspace document content, got:\n%s", res.ForLLM)
 	}
 }
+
+// TestReadFile_DocumentSymlinkEscape_ClosedWhenReadConfined — ADR-084
+// JUDGE-FR-060a.
+//
+// This is the inversion of the test directly above, on the identical
+// fixture, and the pair is the whole point: the escape stays open for an
+// ordinary agent (ADR-063 FR-2.2, unchanged) and closes for a read-confined
+// System Agent turn. Running both postures through one fixture is what makes
+// the assertion mean "confinement decided this" rather than "something in
+// the fixture happened to fail".
+//
+// Why a symlink specifically deserves its own test rather than being assumed
+// to fall out of JUDGE-FR-060: the agent whose work is under review CONTROLS
+// the workspace the Judge is about to read, and can plant the link between
+// writing the artifact and the adjudication opening it. If confinement were
+// measured on the path as spelled rather than on its realpath, a file inside
+// the work dir named `notes.docx` could point anywhere on the host and the
+// Judge would read it while believing it stayed inside the workspace. The
+// production code closes this because realAbs is fully symlink-resolved
+// before containment is tested — this test is what keeps that true.
+//
+// The document-extraction path is used (rather than a plain text read)
+// because extraction re-reads through the SAME resolved handle, so a
+// confinement regression that leaked only through the extraction branch
+// would be invisible to a plain read_file test.
+func TestReadFile_DocumentSymlinkEscape_ClosedWhenReadConfined(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", root)
+
+	ws := filepath.Join(root, "workspace")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// A real document living OUTSIDE the workspace.
+	secret := filepath.Join(root, "secret.docx")
+	if err := os.WriteFile(secret, makeDocxBytes(t, "TOP SECRET"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(ws, "leak.docx")
+	if err := os.Symlink(secret, link); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	// A document that really does live inside the workspace, so the confined
+	// posture can be shown to confine rather than merely to fail.
+	inside := filepath.Join(ws, "own.docx")
+	if err := os.WriteFile(inside, makeDocxBytes(t, "OWN WORK"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewReadFileTool(ws, true, MaxReadFileSize)
+
+	t.Run("confined turn is refused the symlink escape", func(t *testing.T) {
+		ctx := WithReadConfined(context.Background(), true)
+		res := tool.Execute(ctx, map[string]any{"path": link})
+
+		if !res.IsError {
+			t.Fatalf("JUDGE-FR-060a: the symlink escape was extracted for a read-confined turn:\n%s", res.ForLLM)
+		}
+		if strings.Contains(res.ForLLM, "TOP SECRET") {
+			t.Fatalf("the out-of-workspace document's content leaked into the refusal:\n%s", res.ForLLM)
+		}
+	})
+
+	t.Run("confined turn still reads its own workspace document", func(t *testing.T) {
+		ctx := WithReadConfined(context.Background(), true)
+		res := tool.Execute(ctx, map[string]any{"path": inside})
+
+		if res.IsError {
+			t.Fatalf("a confined turn must still read inside its own work dir, got:\n%s", res.ForLLM)
+		}
+		if !strings.Contains(res.ForLLM, "OWN WORK") {
+			t.Fatalf("expected the in-workspace document's content, got:\n%s", res.ForLLM)
+		}
+	})
+
+	t.Run("unconfined turn on the same fixture still extracts openly", func(t *testing.T) {
+		// The FR's "what does NOT change" clause, asserted on the exact
+		// fixture the confined case refused.
+		res := tool.Execute(context.Background(), map[string]any{"path": link})
+
+		if res.IsError {
+			t.Fatalf("ADR-063 FR-2.2: an unconfined turn must still extract through the escape, got:\n%s", res.ForLLM)
+		}
+		if !strings.Contains(res.ForLLM, "TOP SECRET") {
+			t.Fatalf("expected the real out-of-workspace document content, got:\n%s", res.ForLLM)
+		}
+	})
+}

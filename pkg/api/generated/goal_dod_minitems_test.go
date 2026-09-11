@@ -35,17 +35,20 @@ const validGoalDoDItemJSON = `{"kind":"prose","judgment":"boolean","text":"no se
 func goalFixtureJSON(dodArrayLiteral string) []byte {
 	return []byte(`{
 		"goal_id": "goal_01J3ZQK8N2H8VXNRP5T7C9M4WU",
-		"binding_kind": "session",
-		"binding_id": "550e8400-e29b-41d4-a716-446655440000",
+		"owner_kind": "session",
+		"owner_id": "550e8400-e29b-41d4-a716-446655440000",
 		"source": "chat_compiled",
 		"prompt": "make the tests pass",
 		"criteria": [],
 		"dod": ` + dodArrayLiteral + `,
-		"attempts_max": 3,
-		"judge_rounds_max": 20,
+		"max_rounds": 20,
 		"round": 0,
+		"attempts_used": 0,
 		"state": "active",
-		"created_at": "2026-07-22T10:00:00Z"
+		"created_at": "2026-07-22T10:00:00Z",
+		"last_activity_at": "2026-07-22T10:00:00Z",
+		"zero_output_pushes": 0,
+		"question_rounds_used": 0
 	}`)
 }
 
@@ -72,16 +75,19 @@ func TestContract_Goal_NonEmptyDoDAccepted(t *testing.T) {
 func TestContract_Goal_MissingDoDKeyRejected(t *testing.T) {
 	raw := []byte(`{
 		"goal_id": "goal_01J3ZQK8N2H8VXNRP5T7C9M4WU",
-		"binding_kind": "session",
-		"binding_id": "550e8400-e29b-41d4-a716-446655440000",
+		"owner_kind": "session",
+		"owner_id": "550e8400-e29b-41d4-a716-446655440000",
 		"source": "chat_compiled",
 		"prompt": "make the tests pass",
 		"criteria": [],
-		"attempts_max": 3,
-		"judge_rounds_max": 20,
+		"max_rounds": 20,
 		"round": 0,
+		"attempts_used": 0,
 		"state": "active",
-		"created_at": "2026-07-22T10:00:00Z"
+		"created_at": "2026-07-22T10:00:00Z",
+		"last_activity_at": "2026-07-22T10:00:00Z",
+		"zero_output_pushes": 0,
+		"question_rounds_used": 0
 	}`)
 	err := validateAgainstComponentSchemaRawJSON(t, "Goal", raw)
 	assert.Error(t, err, "Goal.dod is a required top-level field — omitting it entirely must be rejected")

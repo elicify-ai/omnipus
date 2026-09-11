@@ -322,19 +322,28 @@ func TestHandleTaskPatch_InProgress_WithKnownAgent(t *testing.T) {
 
 	// Teardown race guard: StartTaskNow launched a background goroutine that
 	// writes session + task files into the test's TempDir. Register a cleanup
-	// (LIFO → runs before al.Close and before TempDir removal) that polls until
-	// the task reaches a terminal state, guaranteeing all goroutine writes are
-	// complete before the temp directory is removed.
+	// (LIFO → runs before al.Close and before TempDir removal) that waits for
+	// every in-flight dispatch goroutine to finish, guaranteeing all of their
+	// writes have landed before the temp directory is removed.
 	//
-	// The mock LLM returns immediately so the goroutine finishes in well under
-	// a second on any machine; the 10 s bound is a generous safety margin.
-	taskID := tsk.Id
+	// This USED to poll until the task reached done/failed. ADR-084 retired
+	// that premise: adjudication is now triggered by the agent CLAIMING
+	// completion, and this test's mock LLM returns an empty response with no
+	// TASK_STATUS signal — i.e. it never claims. An unclaimed task is
+	// deliberately NOT terminal; the goal loop keeps it alive and the 7-day
+	// idle-expiry sweep is its only terminator (D-A). The old poll therefore
+	// waited 10 s for a state that correctly never arrives and then failed the
+	// test, on a guard that asserts nothing about this endpoint's contract.
+	//
+	// TaskExecutor.Drain is what the guard actually wanted all along: it
+	// closes dispatch intake and blocks on the executor's own WaitGroup, so it
+	// is deterministic rather than a poll, and it observes goroutine
+	// COMPLETION directly rather than inferring it from a task status. Nothing
+	// asserted about the PATCH itself changed — the 200 and the in_progress
+	// status above are untouched.
 	t.Cleanup(func() {
-		require.Eventually(t, func() bool {
-			s := getTaskStatus(t, api, taskID)
-			return s == gen.TaskStatusDone || s == gen.TaskStatusFailed
-		}, 10*time.Second, 20*time.Millisecond,
-			"task goroutine must reach a terminal state before test teardown")
+		require.NotNil(t, api.taskExecutor, "aligned-store harness must wire a task executor")
+		api.taskExecutor.Drain(10 * time.Second)
 	})
 }
 

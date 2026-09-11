@@ -80,13 +80,20 @@ func TestExecuteTask_NativeDispatch_RootsAtTaskWorkspaceID_WhenAgentBelongsToMul
 				MaxToolIterations:   10,
 				RestrictToWorkspace: true,
 			},
-			List: []config.AgentConfig{{ID: "main"}},
+			// GOAL-FR-022/R-27: this task carries no explicit criteria, so its
+			// success marker is adjudicated on the soft tier — which now
+			// REQUIRES a registered Judge to resolve at all. See
+			// judgeAgentConfigForTaskTests (task_completion_contract_test.go).
+			// A System Agent is never a chat target, so this entry cannot
+			// displace "main" as GetDefaultAgent's answer below.
+			List: []config.AgentConfig{{ID: "main"}, judgeAgentConfigForTaskTests(t)},
 		},
 	}
 
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	defer al.Close()
+	bindMetSoftTierJudge(t, al)
 	defaultAgent := al.registry.GetDefaultAgent()
 	require.NotNil(t, defaultAgent, "expected default agent")
 	// No-default-policy model (CLAUDE.md hard constraint 6): write_file needs

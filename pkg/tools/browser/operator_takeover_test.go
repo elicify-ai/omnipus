@@ -261,7 +261,7 @@ func TestOperatorTakeover_DefersWhileAHumanDrivesTheOperatorsTab(t *testing.T) {
 	// operator's tab, and their control check has to follow it there. If it
 	// keeps asking about the chat's own set, an agent that has taken over
 	// drives straight through a human holding the wheel.
-	m.Live().ReleaseControl(operatorSet, "human-viewer")
+	m.Live().ReleaseStoodDown(operatorSet) // ADR-085 FR-026a: a bare ReleaseControl would leave the stand-down latch set
 	idxForTakeover := operatorTabIndexFromListing(t, m, 0)
 	takeover := switchTab.Execute(
 		tools.WithAgentID(context.Background(), "jim"),
@@ -270,17 +270,43 @@ func TestOperatorTakeover_DefersWhileAHumanDrivesTheOperatorsTab(t *testing.T) {
 	require.False(t, takeover.IsError, "%s", takeover.ForLLM)
 	require.True(t, m.Live().TakeControl(operatorSet, "human-viewer"))
 
+	// browser_snapshot stands in for what browser_open_tab used to assert here:
+	// an index-free tool, one that acts on "wherever the browser already is".
+	// After a take-over that is the OPERATOR's tab, and its control check has
+	// to follow it there. If it keeps asking about the chat's own set, an agent
+	// that has taken over reads straight past a human holding the wheel.
+	snapshot := &SnapshotTool{res: res}
+	snapResult := snapshot.Execute(tools.WithAgentID(context.Background(), "jim"), map[string]any{})
+	require.NotNil(t, snapResult)
+	assert.Contains(t, snapResult.ForLLM, humanControlDeferralMarker,
+		"an index-free tool must defer too once this chat is driving the operator's tabs")
+	require.NotNil(t, snapResult.Deferred,
+		"and it must carry the STRUCTURAL deferral the turn engine's ledger reads, not only the prose")
+
+	// browser_open_tab is the ONE exception, by operator decision D-G
+	// (2026-09-11): while the wheel is held the agent opens a new tab rather
+	// than waiting, so this call must SUCCEED where every sibling defers.
+	//
+	// HAZARD, recorded deliberately rather than asserted away: the control
+	// lock is per TAB SET, not per tab (see controlGateEscapeHatchTools'
+	// doc comment), and OpenTab activates what it opens — so this is the agent
+	// changing the active tab of a set a human is driving. That is the cost of
+	// honouring D-G against a per-tab-set lock, and it is why the tab count
+	// below goes UP rather than staying put.
 	openTab := &OpenTabTool{res: res}
 	openResult := openTab.Execute(tools.WithAgentID(context.Background(), "jim"), map[string]any{})
 	require.NotNil(t, openResult)
-	assert.Contains(t, openResult.ForLLM, humanControlDeferralMarker,
-		"an index-free tool must defer too once this chat is driving the operator's tabs")
+	assert.NotContains(t, openResult.ForLLM, humanControlDeferralMarker,
+		"D-G: browser_open_tab is the escape hatch and must not defer while the wheel is held")
+	assert.False(t, openResult.IsError, "%s", openResult.ForLLM)
 	_, opTabsAfter, _, err := m.ListTabsState(operatorSet)
 	require.NoError(t, err)
-	assert.Len(t, opTabsAfter, 3, "the deferred call must not have opened anything")
+	assert.Len(t, opTabsAfter, 4,
+		"D-G: the escape hatch must really have produced a tab — a non-deferral that opened nothing "+
+			"would leave the agent exactly as stuck, with no error saying so")
 
 	// Once the human lets go, the take-over proceeds.
-	m.Live().ReleaseControl(operatorSet, "human-viewer")
+	m.Live().ReleaseStoodDown(operatorSet) // ADR-085 FR-026a: a genuine release, not a bare lock release
 	idx = operatorTabIndexFromListing(t, m, 0)
 	after := switchTab.Execute(
 		tools.WithAgentID(context.Background(), "jim"),
