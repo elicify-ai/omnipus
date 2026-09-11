@@ -40,6 +40,34 @@ func loadConfig(data []byte) (*Config, error) {
 		return nil, err
 	}
 
+	// Record whether cfg.Sandbox.AuditLog holds the seeded default (true —
+	// see the field's doc comment on sandbox.go) or a value the operator
+	// actually WROTE. The resolved value alone cannot answer this: a plain
+	// bool cannot distinguish "absent" from "explicitly true", and the two
+	// must be told apart because they earn different failure behaviour when
+	// the audit logger cannot be built (pkg/agent/loop.go's audit-construction
+	// block: abort boot for someone who asked, degrade loudly for a default).
+	//
+	// A pointer probe over the same bytes is the mechanism already used for
+	// `version` in loadConfigInternal, for the same reason. It cannot fail
+	// where the full unmarshal succeeded — `sandbox` has already decoded as an
+	// object and `audit_log` as a bool — so a probe error here would mean the
+	// two decoders disagree about the same bytes, which is a real fault and is
+	// returned rather than defaulted away.
+	//
+	// Assigned unconditionally, in both directions: DefaultConfig() seeds this
+	// true, so a config.json that DOES carry the key must clear it back to
+	// false rather than inherit the seed.
+	var auditProbe struct {
+		Sandbox struct {
+			AuditLog *bool `json:"audit_log"`
+		} `json:"sandbox"`
+	}
+	if err := json.Unmarshal(compatData, &auditProbe); err != nil {
+		return nil, fmt.Errorf("failed to resolve sandbox.audit_log provenance: %w", err)
+	}
+	cfg.Sandbox.AuditLogFromDefault = auditProbe.Sandbox.AuditLog == nil
+
 	// FR-004 / FR-027: detect unknown top-level fields, log them at debug level,
 	// and store them for round-trip preservation on SaveConfig.
 	//
