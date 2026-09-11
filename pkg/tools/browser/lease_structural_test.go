@@ -96,6 +96,17 @@ func TestLease_ExactlyOneAcquireSymbol(t *testing.T) {
 			_, firstIsFunc := kinds[0].(*ast.FuncType)
 			secondIdent, secondIsIdent := kinds[1].(*ast.Ident)
 			if firstIsFunc && secondIsIdent && secondIdent.Name == "bool" {
+				// This exact method registers concurrent startup waiters. Its
+				// returned closure removes one waiter; it grants no exclusive
+				// browser-write lease. All other acquisition-shaped symbols,
+				// including new functions in this file, remain guarded.
+				if e.Name() == "startup_cohort.go" && fn.Name.Name == "join" && fn.Recv != nil && len(fn.Recv.List) == 1 {
+					if ptr, pointer := fn.Recv.List[0].Type.(*ast.StarExpr); pointer {
+						if receiver, named := ptr.X.(*ast.Ident); named && receiver.Name == "startupCohort" {
+							return true
+						}
+					}
+				}
 				found = append(found, e.Name()+": "+fn.Name.Name)
 			}
 			return true

@@ -104,25 +104,46 @@ type BrowserAttachFrame struct {
 
 // BrowserCaptureAnswerFrame — Server (gateway) → client (capture extension). Pion SDP answer to a browser_capture_offer, completing the ingest leg's non-trickle offer/answer exchange. Once applied, the encoder page's tabCapture MediaStream (video, plus audio when the tab produces sound) flows into the gateway's shared TrackLocalStaticRTP tracks for relay to viewers. See ADR-047 D1/D2.
 type BrowserCaptureAnswerFrame struct {
+	// Immutable accepted capture generation from the corresponding offer.
+	CaptureGeneration *int `json:"capture_generation,omitempty"`
+	// Encoder negotiation attempt identity on this ingest connection. The answer echoes this value; stale answers must never configure a newer peer even when the capture generation and target are unchanged.
+	OfferId *int `json:"offer_id,omitempty"`
 	// Complete SDP answer (application/sdp body) from the gateway's Pion ingest PeerConnection, ICE-gathering-complete (non-trickle).
-	Sdp  string `json:"sdp"`
-	Type string `json:"type"`
+	Sdp string `json:"sdp"`
+	// Verified CDP page target from the corresponding offer.
+	TargetId *string `json:"target_id,omitempty"`
+	Type     string  `json:"type"`
 }
 
 // BrowserCaptureControlFrame — Bidirectional control frame on the /api/v1/browser/capture-ingest channel. Server (gateway) → client (extension) for `recapture` (the agent's active tab changed — chrome.tabs.query({active:true}) must be re-bound; triggered by the same live.go onTabsChanged/rebindWatch tab-follow logic that also drives the live-view session/control-lock bookkeeping, ADR-047 D2) and `shutdown` (the capture session is ending — last viewer detached past the grace period, or the gateway is stopping the stream); client (extension) → server (gateway) for `ping`, the encoder page's periodic health beacon / reconnect-watchdog signal. `reason` is an optional human-readable note (e.g. why shutdown was requested).
 type BrowserCaptureControlFrame struct {
 	Action string `json:"action"`
+	// Server-issued target and CSS geometry generation, scoped to the capture session. Input names the generation actually displayed; stale generations must be rejected. Viewer answers bind the negotiated stream to this value.
+	CaptureGeneration *int `json:"capture_generation,omitempty"`
+	// Fresh capture-stage observations on ping; absent for older encoders. Silence alone is not a failure.
+	CaptureHealth *struct {
+		EncodedFrames     *int     `json:"encoded_frames,omitempty"`
+		Generation        int      `json:"generation"`
+		PacketsSent       *int     `json:"packets_sent,omitempty"`
+		PeerState         string   `json:"peer_state"`
+		SampleTimestampMs *float64 `json:"sample_timestamp_ms,omitempty"`
+		SourceFrames      *int     `json:"source_frames,omitempty"`
+		TrackMuted        bool     `json:"track_muted"`
+		TrackState        string   `json:"track_state"`
+	} `json:"capture_health,omitempty"`
 	// recapture only, server → extension: the deviceScaleFactor the captured tab renders at (driven by the controlling viewer's window.devicePixelRatio via the viewport frame). The encoder multiplies its tabCapture width/height constraints by this so captured frames carry PHYSICAL pixels, not CSS pixels. Absent or 1 = CSS resolution. Without it a Retina (dpr=2) viewer gets a 1x capture stretched over 2x display pixels — uniformly blurry video (live report, macOS 2026-08-12). The tabs.get convergence check stays in CSS px; only the media constraints scale.
 	CaptureScale *float64 `json:"capture_scale,omitempty"`
 	// recapture only: expected CSS viewport height. See expected_width.
 	ExpectedHeight *int `json:"expected_height,omitempty"`
-	// recapture only, server → extension: the CDP-verified CSS viewport width the tab was just resized to. chrome.tabs.get lags the OS window reflow, so a recapture racing a resize can pin the stream to a stale size — the encoder polls tabs.get until it converges on this, falling back to it on timeout.
+	// recapture only, server → extension: the measured CSS viewport width for this exact target and capture generation. The encoder uses this verified geometry directly; it does not poll chrome.tabs.get, whose dimensions can lag a resize. The server keeps capture pending until the target's actual viewport has been measured.
 	ExpectedWidth *int `json:"expected_width,omitempty"`
 	// set_bitrate only, server -> extension: the video sender's maximum bitrate in bits per second, derived from the VIEWER leg's own RTCP receiver reports (ADR-062 Finding 2).
 	MaxBitrate *int `json:"max_bitrate,omitempty"`
 	// Optional human-readable context for the action (e.g. shutdown cause).
 	Reason *string `json:"reason,omitempty"`
-	Type   string  `json:"type"`
+	// CDP page target identity for this capture generation. The encoder must verify its selected Chrome tab maps to this identity before offering.
+	TargetId *string `json:"target_id,omitempty"`
+	Type     string  `json:"type"`
 }
 
 // BrowserCaptureHelloFrame — Client (capture extension) → server (gateway). First frame on the loopback-only /api/v1/browser/capture-ingest WebSocket, analogous to AuthFrame on the public channels. `token` is the per-stream capability token the gateway minted for this capture session and injected into the extension's encoder page out-of-band via CDP Page.addScriptToEvaluateOnNewDocument — never a URL query param, never recoverable from the CDP transport. Loopback is NOT a trust boundary (a co-tenant process could reach it), so this token is mandatory; the gateway audits any hello with a missing/invalid/expired token as a rejected ingest-auth attempt and closes the connection. See ADR-047 D6.
@@ -136,9 +157,15 @@ type BrowserCaptureHelloFrame struct {
 
 // BrowserCaptureOfferFrame — Client (capture extension) → server (gateway). SDP offer from the encoder page's self-consuming tabCapture PeerConnection (ADR-047 D2), sent after a successful browser_capture_hello. Non-trickle: the encoder page gathers all ICE candidates before sending, so `sdp` is the complete offer. The gateway's Pion relay answers with browser_capture_answer and publishes the resulting media/audio tracks to every attached viewer PC. See ADR-047 D1/D2/D6.
 type BrowserCaptureOfferFrame struct {
+	// Server-issued target and CSS geometry generation, scoped to the capture session. Input names the generation actually displayed; stale generations must be rejected. Viewer answers bind the negotiated stream to this value.
+	CaptureGeneration *int `json:"capture_generation,omitempty"`
+	// Encoder negotiation attempt identity on this ingest connection. The answer echoes this value; stale answers must never configure a newer peer even when the capture generation and target are unchanged.
+	OfferId *int `json:"offer_id,omitempty"`
 	// Complete SDP offer (application/sdp body) from the encoder page's ingest PeerConnection, ICE-gathering-complete (non-trickle).
-	Sdp  string `json:"sdp"`
-	Type string `json:"type"`
+	Sdp string `json:"sdp"`
+	// CDP page target identity for this capture generation. The encoder must verify its selected Chrome tab maps to this identity before offering.
+	TargetId *string `json:"target_id,omitempty"`
+	Type     string  `json:"type"`
 }
 
 // BrowserControlFrame — Client → server. Take or release interactive control of the live browser. While a viewer holds control, the agent's own browser tools defer (cooperative turn-coordination, ADR-038 D6).
@@ -156,8 +183,12 @@ type BrowserDetachFrame struct {
 // BrowserInputFrame — Client → server. A viewer input event to inject into the live browser via CDP Input.dispatch*. Only honoured while the viewer holds control (browser_control action=take). Coordinates are device (CSS) pixels of the WebRTC video frame, UNLESS capture_width/capture_height are present — then x/y are in that capture-frame pixel space and the server rescales them into the tab's real CSS viewport before dispatch (root cause 2026-07-31, fault 3).
 type BrowserInputFrame struct {
 	Button *string `json:"button,omitempty"`
+	// Server-issued target and CSS geometry generation, scoped to the capture session. Input names the generation actually displayed; stale generations must be rejected. Viewer answers bind the negotiated stream to this value.
+	CaptureGeneration *int `json:"capture_generation,omitempty"`
 	// Intrinsic pixel height of the capture frame the client mapped x/y into. See capture_width.
 	CaptureHeight *float64 `json:"capture_height,omitempty"`
+	// Non-secret opaque capture-session identity. Generation claims are valid only within this capture; replacement invalidates all previous claims.
+	CaptureId *string `json:"capture_id,omitempty"`
 	// Intrinsic pixel width of the capture frame the client mapped x/y into (the <video>'s videoWidth in WebRTC mode). With capture_height, the server rescales x/y into the tab's actual CSS viewport before CDP dispatch. Absent (older client) means x/y are already CSS pixels.
 	CaptureWidth *float64 `json:"capture_width,omitempty"`
 	Code         *string  `json:"code,omitempty"`
@@ -183,9 +214,11 @@ type BrowserStatusFrame struct {
 	ControlledByOther *bool   `json:"controlled_by_other,omitempty"`
 	Controller        *string `json:"controller,omitempty"`
 	Message           *string `json:"message,omitempty"`
-	SessionId         *string `json:"session_id,omitempty"`
-	State             string  `json:"state"`
-	Type              string  `json:"type"`
+	// True only with state=error for a failed input or tab command. Show the operation error without changing attachment, control ownership, capture health or displayed-frame authorization. It does not assert browser death and must not be combined with control_only. Absent/false retains ordinary lifecycle status semantics.
+	OperationOnly *bool   `json:"operation_only,omitempty"`
+	SessionId     *string `json:"session_id,omitempty"`
+	State         string  `json:"state"`
+	Type          string  `json:"type"`
 }
 
 // BrowserTabActionFrame — Client → server. A tab-management action on a live-browser session: switch the active tab, close a tab, or open a new (blank) tab. Honoured the same way as browser_input/browser_control — switch/close target the active browsing context's tab set. index is required for switch/close, ignored for open. See ADR-041.
@@ -216,15 +249,27 @@ type BrowserTabsFrame struct {
 type BrowserVideoHealthFrame struct {
 	// Which automatic recapture attempt this is, 1-based. 0 when the state is not part of an attempt sequence (recovered).
 	Attempt *int `json:"attempt,omitempty"`
+	// Server-issued target and CSS geometry generation, scoped to the capture session. Input names the generation actually displayed; stale generations must be rejected. Viewer answers bind the negotiated stream to this value.
+	CaptureGeneration *int `json:"capture_generation,omitempty"`
+	// Non-secret opaque capture-session identity. Generation claims are valid only within this capture; replacement invalidates all previous claims.
+	CaptureId *string `json:"capture_id,omitempty"`
+	// Confirmed source CSS viewport height for capture_generation.
+	CssHeight *int `json:"css_height,omitempty"`
+	// Confirmed source CSS viewport width for capture_generation. Together with css_height and decoded video dimensions, identifies padding inside the encoded frame; pointer coordinates must exclude that padding.
+	CssWidth *int `json:"css_width,omitempty"`
 	// Optional free-text cause for the operator to read and act on, carried on `lost` and `unrecoverable`. Server-side the text is whitespace-collapsed, credential-redacted and length-bounded before it is sent, exactly as browser_webrtc_state.reason_detail is; URLs, CDP target ids, ports and timeouts are deliberately KEPT, because they are what makes the sentence actionable. Absent when the state alone fully explains the situation.
 	Detail *string `json:"detail,omitempty"`
 	// The attempt budget the gateway will spend before declaring the feed unrecoverable. Present so the panel can say "2 of 3" rather than implying an unbounded retry.
 	MaxAttempts *int `json:"max_attempts,omitempty"`
+	// Forwarded video boundary for capture_generation. Zero is valid. Viewers must observe presentation of this or a later frame from the matching stream before enabling input. Serial comparison uses 32-bit wrap rules; attach requires a current boundary to avoid half-range ambiguity.
+	RtpTimestamp *int `json:"rtp_timestamp,omitempty"`
 	// Echoes the chat session_id this viewer attached with, for client-side correlation only.
 	SessionId *string `json:"session_id,omitempty"`
 	// lost = the capture's ingest connection died and automatic recovery is starting; the panel has no video right now. recovering = an automatic recapture has just been issued (see `attempt`). recovered = video is flowing again; any error the panel was showing for this cause should be cleared. unrecoverable = the bounded recovery budget is spent and nothing further will be retried automatically — a terminal, named failure the operator must see.
 	State string `json:"state"`
-	Type  string `json:"type"`
+	// CDP page target identity for this capture generation. The encoder must verify its selected Chrome tab maps to this identity before offering.
+	TargetId *string `json:"target_id,omitempty"`
+	Type     string  `json:"type"`
 }
 
 // BrowserViewportFrame — Client → server. Reports the live-browser panel's current render box so the gateway can size the captured tab to match it. The captured tab was pinned to a hardcoded 1280x720 while the docked panel is an arbitrary resizable shape, so object-fit:contain could only ever fill one dimension and letterboxed the rest (operator UAT 2026-07-31). device_scale_factor addresses the same report's second half, blur: the managed headless Chrome renders at DPR 1, so a capture displayed larger than its CSS size upscales. Sent on attach and debounced on resize; the server applies the metrics then triggers browser_capture_control{action: recapture} so the encoder rebuilds its stream at the new geometry (capture constraints are pinned per stream).
@@ -242,6 +287,12 @@ type BrowserViewportFrame struct {
 
 // BrowserWebRTCAnswerFrame — Server → client. Pion SDP answer to a browser_webrtc_offer, sent once the gateway's relay has created the viewer PeerConnection and gathered its own ICE candidates (non-trickle — the answer is complete, no separate candidate frames follow). See ADR-047 D1/D4.
 type BrowserWebRTCAnswerFrame struct {
+	// Server-issued target and CSS geometry generation, scoped to the capture session. Input names the generation actually displayed; stale generations must be rejected. Viewer answers bind the negotiated stream to this value.
+	CaptureGeneration *int `json:"capture_generation,omitempty"`
+	// Non-secret opaque capture-session identity. Generation claims are valid only within this capture; replacement invalidates all previous claims.
+	CaptureId *string `json:"capture_id,omitempty"`
+	// Viewer negotiation attempt identity, unique on this WebSocket connection. The server echoes the offer value in its answer. A client must reject an answer for another attempt even when the capture generation is unchanged.
+	OfferId *int `json:"offer_id,omitempty"`
 	// Complete SDP answer (application/sdp body) from the gateway's Pion viewer PeerConnection, ICE-gathering-complete (non-trickle).
 	Sdp string `json:"sdp"`
 	// Echoes the session_id from the triggering browser_webrtc_offer, for client-side correlation only.
@@ -253,6 +304,12 @@ type BrowserWebRTCAnswerFrame struct {
 type BrowserWebRTCOfferFrame struct {
 	// The agent this panel is open on. It names WHO is asking and must be a member of the workspace session_id resolves to; it does not by itself select a capture session, because the capture belongs to the workspace's browser and every agent on that team shares it.
 	AgentId string `json:"agent_id"`
+	// Server-issued target and CSS geometry generation, scoped to the capture session. Input names the generation actually displayed; stale generations must be rejected. Viewer answers bind the negotiated stream to this value.
+	CaptureGeneration *int `json:"capture_generation,omitempty"`
+	// Non-secret opaque capture-session identity. Generation claims are valid only within this capture; replacement invalidates all previous claims.
+	CaptureId *string `json:"capture_id,omitempty"`
+	// Viewer negotiation attempt identity, unique on this WebSocket connection. The server echoes the offer value in its answer. A client must reject an answer for another attempt even when the capture generation is unchanged.
+	OfferId *int `json:"offer_id,omitempty"`
 	// Complete SDP offer (application/sdp body), gathered with ICE candidates already resolved (non-trickle, ADR-047 D4).
 	Sdp string `json:"sdp"`
 	// The client's chat session id. Exactly as in BrowserAttachFrame, it RESOLVES the browsing context under ADR-075 FR-017 — the gateway reads this session's own workspace_id server-side and targets that workspace's browser and its single capture session. It is still echoed back on browser_webrtc_answer / browser_webrtc_state so the client can match them to this offer. A session that names no workspace degrades to the agent's own unambiguous membership, and to FR-033's refusal when the agent is on more than one workspace. agent_id is no longer the binding key.

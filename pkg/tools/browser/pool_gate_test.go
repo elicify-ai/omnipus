@@ -73,6 +73,11 @@ func TestPool_PressureGateAtTheBoundary(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newPoolFixture(t)
+			// This is a memory-admission boundary test, not an OS process-speed
+			// test. Keep the fake binary's known version in the existing cache so
+			// the 300ms caller budget measures the gate and fake launcher only.
+			chromeMajorCache.Store(f.pool.cfg.ExecPath, "152")
+			t.Cleanup(func() { chromeMajorCache.Delete(f.pool.cfg.ExecPath) })
 			*f.available = tc.available
 
 			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)

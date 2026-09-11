@@ -179,7 +179,7 @@ func TestViewportBasis_TabBacksTheCache_KeepsMappingAndRequestsRecapture(t *test
 	mgr := &BrowserManager{started: true}
 	cs, err := NewCaptureSessionWithDeps(mgr, "agent-basis", relay, fakeEncoderStarter(new(int32), nil), nil)
 	require.NoError(t, err)
-	mgr.capture = cs
+	mgr.captures = map[string]*CaptureSession{"s1": cs}
 
 	var probes int
 	lv := &LiveView{
@@ -261,14 +261,14 @@ func TestViewportBasis_TabBacksTheCapture_RefreshesTheStaleCache(t *testing.T) {
 func TestOnTabsChanged_ReAppliesTheViewportToTheNewlyActiveTab(t *testing.T) {
 	tabOld, cancelOld := context.WithCancel(context.Background())
 	t.Cleanup(cancelOld)
-	tabNew, cancelNew := context.WithCancel(context.Background())
+	tabNew, cancelNew := context.WithCancel(context.WithValue(context.Background(), viewportTargetTestKey{}, "new"))
 	t.Cleanup(cancelNew)
 
 	mgr := &BrowserManager{
 		started: true,
 		sessions: map[string]*sessionEntry{
 			"s1": {
-				tabs:      []*tabEntry{{ctx: tabNew, cancel: cancelNew}},
+				tabs:      []*tabEntry{{ctx: tabNew, cancel: cancelNew, targetID: "reapply-new"}},
 				activeIdx: 0,
 			},
 		},
@@ -276,7 +276,7 @@ func TestOnTabsChanged_ReAppliesTheViewportToTheNewlyActiveTab(t *testing.T) {
 	relay := &fakeRelay{}
 	cs, err := NewCaptureSessionWithDeps(mgr, "agent-reapply", relay, fakeEncoderStarter(new(int32), nil), nil)
 	require.NoError(t, err)
-	mgr.capture = cs
+	mgr.captures = map[string]*CaptureSession{"s1": cs}
 
 	type applied struct {
 		bounds []windowBoundsAction
@@ -303,6 +303,8 @@ func TestOnTabsChanged_ReAppliesTheViewportToTheNewlyActiveTab(t *testing.T) {
 		case windowBoundsAction:
 			got.bounds = append(got.bounds, a)
 			got.ctxs = append(got.ctxs, ctx)
+		case viewportFrameGeometryAction:
+			*a.width, *a.height, *a.scale = 633, 686, 2
 		case layoutMetricsAction:
 			*a.w, *a.h = 633, 686
 			select {
@@ -335,7 +337,7 @@ func TestOnTabsChanged_ReAppliesTheViewportToTheNewlyActiveTab(t *testing.T) {
 	require.Equal(t, 686, got.bounds[0].height)
 	require.Positive(t, got.scales,
 		"the sharpness override is per tab, so it must be re-applied too or the new tab renders at 1x")
-	require.Same(t, tabNew, got.ctxs[0],
+	require.Equal(t, "new", got.ctxs[0].Value(viewportTargetTestKey{}),
 		"the resize must target the tab the user switched TO, not the one they left")
 }
 

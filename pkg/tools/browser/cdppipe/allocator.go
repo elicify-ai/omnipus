@@ -85,6 +85,13 @@ func NewPipeAllocator(
 	execPath string,
 	opts PipeOptions,
 ) (context.Context, context.CancelFunc, error) {
+	return newPipeAllocator(parent, parent, execPath, opts)
+}
+
+func newPipeAllocator(parent, startup context.Context, execPath string, opts PipeOptions) (context.Context, context.CancelFunc, error) {
+	if err := startup.Err(); err != nil {
+		return nil, nil, err
+	}
 	if opts.ExecPath != "" {
 		execPath = opts.ExecPath
 	}
@@ -100,16 +107,31 @@ func NewPipeAllocator(
 
 	// The chromedp context the pipe *Browser will be bound onto. parent must not
 	// already be a chromedp context (the managed-Chrome launcher passes context.Background()).
-	ctx, baseCancel := chromedp.NewContext(parent)
+	lifetime, lifetimeCancel := context.WithCancelCause(parent)
+	// The startup request may cancel a partially launched child, but must not
+	// own an accepted browser's lifetime. Remove this link before publishing it.
+	stopStartup := context.AfterFunc(startup, func() { lifetimeCancel(context.Cause(startup)) })
+	defer stopStartup()
+	cancellationErr := func() error {
+		if err := startup.Err(); err != nil {
+			return err
+		}
+		return parent.Err()
+	}
+	ctx, baseCancel := chromedp.NewContext(lifetime)
 
-	l := &launch{opts: opts, execPath: execPath}
+	l := &launch{opts: opts, execPath: execPath, onExit: lifetimeCancel}
 	if err := l.start(ctx); err != nil {
+		if canceled := cancellationErr(); canceled != nil {
+			err = canceled
+		}
 		baseCancel()
+		lifetimeCancel(context.Canceled)
 		l.teardown()
 		return nil, nil, err
 	}
 
-	browserOpts := []chromedp.BrowserOption{}
+	browserOpts := []chromedp.BrowserOption{chromedp.WithDialTimeout(dialTimeout)}
 	if opts.Logf != nil {
 		browserOpts = append(browserOpts, chromedp.WithBrowserLogf(opts.Logf))
 	}
@@ -124,9 +146,11 @@ func NewPipeAllocator(
 	// client conn, and the bridge completes the websocket handshake over it.
 	b, err := chromedp.NewBrowser(ctx, l.wsURL, browserOpts...)
 	if err != nil {
+		err = l.startupError("connect browser over pipe", err, cancellationErr())
 		baseCancel()
+		lifetimeCancel(context.Canceled)
 		l.teardown()
-		return nil, nil, fmt.Errorf("cdppipe: connect browser over pipe: %w", err)
+		return nil, nil, err
 	}
 
 	// Bind the Browser onto the chromedp context via the exported field, so
@@ -140,15 +164,29 @@ func NewPipeAllocator(
 	_, err = target.GetTargets().Do(cdp.WithExecutor(probeCtx, b))
 	probeCancel()
 	if err != nil {
+		err = l.startupError("CDP liveness probe failed over pipe", err, cancellationErr())
 		baseCancel()
+		lifetimeCancel(context.Canceled)
 		l.teardown()
-		return nil, nil, fmt.Errorf("cdppipe: CDP liveness probe failed over pipe: %w", err)
+		return nil, nil, err
+	}
+
+	if !stopStartup() || cancellationErr() != nil {
+		err := cancellationErr()
+		if err == nil {
+			err = context.Canceled
+		}
+		baseCancel()
+		lifetimeCancel(context.Canceled)
+		l.teardown()
+		return nil, nil, err
 	}
 
 	var cancelOnce sync.Once
 	cancel := func() {
 		cancelOnce.Do(func() {
 			baseCancel()
+			lifetimeCancel(context.Canceled)
 			l.teardown()
 		})
 	}
@@ -161,6 +199,7 @@ func NewPipeAllocator(
 		case <-b.LostConnection:
 			cancel()
 		case <-ctx.Done():
+			cancel()
 		}
 	}()
 
@@ -172,8 +211,12 @@ type launch struct {
 	opts     PipeOptions
 	execPath string
 
-	cmd *exec.Cmd
-	pc  *PipeConn // parent-side NUL-framed pipe to Chrome (fd 3 out / fd 4 in)
+	cmd      *exec.Cmd
+	waitDone chan struct{} // closed by the sole process waiter
+	waitErr  error         // read only after waitDone closes
+	onExit   context.CancelCauseFunc
+	stderr   diagnosticTail
+	pc       *PipeConn // parent-side NUL-framed pipe to Chrome (fd 3 out / fd 4 in)
 
 	serverConn net.Conn // bridge side of the in-memory ws link
 	clientConn net.Conn // chromedp side of the in-memory ws link (registered)
@@ -226,9 +269,9 @@ func (l *launch) start(ctx context.Context) error {
 	if l.opts.ModifyCmd != nil {
 		l.opts.ModifyCmd(cmd)
 	}
-	if l.opts.Errf != nil {
-		cmd.Stderr = &lineWriter{fn: l.opts.Errf, prefix: "cdppipe: chrome: "}
-	}
+	cmd.Stderr = &lineWriter{fn: l.opts.Errf, prefix: "cdppipe: chrome: ", tail: &l.stderr}
+	// A descendant inheriting stderr must not prevent reaping after Chrome exits.
+	cmd.WaitDelay = time.Second
 	cmd.ExtraFiles = []*os.File{browserInR, browserOutW} // → child fd 3, fd 4
 
 	if err := cmd.Start(); err != nil {
@@ -242,6 +285,17 @@ func (l *launch) start(ctx context.Context) error {
 		return fmt.Errorf("cdppipe: start chrome: %w", err)
 	}
 	l.cmd = cmd
+	l.waitDone = make(chan struct{})
+	go func() {
+		l.waitErr = cmd.Wait()
+		if l.waitErr != nil && ctx.Err() == nil {
+			l.errf("Chrome process exited unexpectedly: %v", l.waitErr)
+		}
+		close(l.waitDone)
+		if l.onExit != nil {
+			l.onExit(l.exitError())
+		}
+	}()
 	// The child now owns its ends; the parent must not keep them open or it will
 	// never observe the child's EOF.
 	browserInR.Close()
@@ -368,17 +422,12 @@ func (l *launch) teardown() {
 			l.clientConn.Close()
 		}
 
-		if l.cmd != nil && l.cmd.Process != nil {
-			waited := make(chan struct{})
-			go func() {
-				_ = l.cmd.Wait()
-				close(waited)
-			}()
+		if l.waitDone != nil {
 			select {
-			case <-waited:
+			case <-l.waitDone:
 			case <-time.After(5 * time.Second):
 				_ = l.cmd.Process.Kill()
-				<-waited
+				<-l.waitDone
 			}
 		}
 
@@ -413,12 +462,77 @@ func hasFlag(args []string, name string) bool {
 type lineWriter struct {
 	fn     func(string, ...any)
 	prefix string
+	tail   *diagnosticTail
 }
 
 func (w *lineWriter) Write(p []byte) (int, error) {
+	if w.tail != nil {
+		w.tail.append(p)
+	}
 	line := strings.TrimRight(string(p), "\r\n")
-	if line != "" {
+	if line != "" && w.fn != nil {
 		w.fn("%s%s", w.prefix, line)
 	}
 	return len(p), nil
+}
+
+// exitError is called only after the process waiter has published its result.
+func (l *launch) exitError() error {
+	if l.waitErr != nil {
+		return fmt.Errorf("cdppipe: Chrome process exited: %w", l.waitErr)
+	}
+	return errors.New("cdppipe: Chrome process exited (exit status 0)")
+}
+
+func (l *launch) startupError(stage string, err, parentErr error) error {
+	if parentErr != nil {
+		return fmt.Errorf("cdppipe: %s: %w", stage, parentErr)
+	}
+	select {
+	case <-l.waitDone:
+		err = fmt.Errorf("chrome exited before readiness: %w", l.exitError())
+	default:
+	}
+	if hint := l.stderr.hint(); hint != "" {
+		return fmt.Errorf("cdppipe: %s: %w (%s)", stage, err, hint)
+	}
+	return fmt.Errorf("cdppipe: %s: %w", stage, err)
+}
+
+// Keep diagnostics bounded in memory. Only fixed classifications enter returned
+// errors: Chrome stderr can include profile paths, URLs, or other private data.
+const maxStartupDiagnosticBytes = 4096
+
+type diagnosticTail struct {
+	mu   sync.Mutex
+	data []byte
+}
+
+func (d *diagnosticTail) append(p []byte) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(p) >= maxStartupDiagnosticBytes {
+		d.data = append(d.data[:0], p[len(p)-maxStartupDiagnosticBytes:]...)
+		return
+	}
+	excess := len(d.data) + len(p) - maxStartupDiagnosticBytes
+	if excess > 0 {
+		d.data = append(d.data[:0], d.data[excess:]...)
+	}
+	d.data = append(d.data, p...)
+}
+func (d *diagnosticTail) hint() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	text := string(d.data)
+	switch {
+	case strings.Contains(text, "ProcessSingleton"), strings.Contains(text, "profile appears to be in use"):
+		return "Chrome could not acquire its profile; another browser may be using it"
+	case strings.Contains(text, "MachPortRendezvousServer"), strings.Contains(text, "No rendezvous client"):
+		return "a Chrome helper could not contact its parent process; inspect browser startup logs"
+	case len(d.data) > 0:
+		return "Chrome emitted startup diagnostics; inspect browser logs"
+	default:
+		return ""
+	}
 }

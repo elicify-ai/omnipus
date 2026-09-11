@@ -3,14 +3,15 @@
 // This page is opened directly by the gateway (via CDP,
 // chrome-extension://<pinned-id>/encoder.html) once the extension has been
 // loaded into a managed, headless Chrome instance. It self-consumes
-// chrome.tabCapture on the ACTIVE tab (no separate consumer tab — the
-// spike-proven simplest pattern, see docs/internal/design/wv1-spike-results.md
-// Q2/Q3), negotiates a non-trickle WebRTC offer/answer with the gateway's
+// chrome.tabCapture on the exact server-assigned CDP page target, resolved
+// read-only through chrome.debugger.getTargets (never by focus or URL). It
+// negotiates a non-trickle WebRTC offer/answer with the gateway's
 // loopback capture-ingest WS endpoint, and streams both audio+video tracks.
 //
 // Config is injected by the gateway BEFORE this script runs, via
 // Page.addScriptToEvaluateOnNewDocument setting
-// `window.__omnipusCapture = {token, ingestUrl}`. This is intentionally
+// `window.__omnipusCapture = {token, ingestUrl, capture_generation, target_id,
+// expected_width, expected_height, capture_scale}`. This is intentionally
 // NEVER read from URL params or any other lower-trust channel — the
 // loopback WS is not a trust boundary by itself, so the token is the only
 // thing that authorizes this page to mint a capture session server-side.
@@ -19,10 +20,10 @@
 // (contracts/components/schemas/BrowserCapture{Hello,Offer,Answer,Control}Frame.yaml,
 // ADR-047 D1/D2/D6):
 //   -> {type: 'browser_capture_hello',   token, ext_version}
-//   -> {type: 'browser_capture_offer',   sdp}
-//   <- {type: 'browser_capture_answer',  sdp}
-//   <-  {type: 'browser_capture_control', action: recapture|shutdown|adapt_reset|set_bitrate, reason?, expected_width?, expected_height?}  (server -> client)
-//   ->  {type: 'browser_capture_control', action: ping}                        (client -> server)
+//   -> {type: 'browser_capture_offer',   sdp, capture_generation, target_id, offer_id}
+//   <- {type: 'browser_capture_answer',  sdp, capture_generation, target_id, offer_id}
+//   <-  {type: 'browser_capture_control', action: recapture|shutdown|adapt_reset|set_bitrate, reason?, capture_generation?, target_id?, expected_width?, expected_height?, capture_scale?, max_bitrate?}  (server -> client)
+//   ->  {type: 'browser_capture_control', action: ping, capture_generation?, target_id?, capture_health?}                        (client -> server)
 //
 // expected_width/expected_height (2026-07-31 follow-up,
 // docs/internal/browser-viewport-input-rootcause-2026-07-31.md): on a
@@ -32,7 +33,8 @@
 // it through here so captureActiveTabStream can converge on a KNOWN target
 // instead of merely polling chrome.tabs.get until two reads agree with each
 // other (which two STALE reads can also satisfy). Absent on a recapture with
-// no such measurement to offer (e.g. an active-tab switch).
+// no such measurement to offer. Capture generation and exact target identity
+// remain mandatory on every initial capture and recapture command.
 //
 // browser_capture_hello is CLIENT -> SERVER ONLY — the gateway never sends
 // one back. Per the schema doc: "the gateway audits any hello with a
@@ -46,7 +48,8 @@
 //
 // browser_capture_control's `ping` is likewise CLIENT -> SERVER ONLY (this
 // page's own periodic health/reconnect-watchdog beacon); the server-issued
-// control actions are exactly `recapture` and `shutdown` — there is no
+// control actions are `recapture`, `shutdown`, `adapt_reset`, and
+// `set_bitrate` — there is no
 // `pong` action in the schema's enum.
 'use strict';
 
@@ -80,12 +83,6 @@ window.__omnipusState = {
   // constraints genuinely stuck on a settled sender, not just that this file
   // attempted to set them. Stays null until the first such success.
   senderConstraints: null,
-  // lastRecaptureSkipAt is stamped whenever a server-initiated recapture was
-  // answered by KEEPING the running stream instead of rebuilding it (see
-  // recaptureGeometryChangeReason). A live check that the panel-open path has
-  // stopped renegotiating a healthy connection reads this back over CDP; the
-  // reason for every rebuild that DID happen is in history.
-  lastRecaptureSkipAt: null,
   history: [],
 };
 
@@ -125,28 +122,60 @@ function isExtensionUrl(url) {
   return typeof url === 'string' && url.startsWith('chrome-extension://');
 }
 
-// findActiveTargetTab implements the targeting rule from the task spec:
-// the ACTIVE tab in the last-focused window, falling back to the first
-// non-extension tab if there is no such active tab (e.g. the extension's
-// own page happens to be focused).
-async function findActiveTargetTab() {
-  const active = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  const activeCandidate = active.find((t) => !isExtensionUrl(t.url));
-  if (activeCandidate) return activeCandidate.id;
-
-  record('findActiveTargetTab: no non-extension active tab, falling back to first non-extension tab');
-  const all = await chrome.tabs.query({});
-  const fallback = all.find((t) => !isExtensionUrl(t.url));
-  if (!fallback) {
-    throw new Error('no capturable tab found (only extension pages are open)');
+// Resolve the backend's CDP page identity directly. Managed Chrome already
+// belongs to the backend; debugger permission is used only for this read-only
+// identity list, never to attach another debugger or guess from focus/URL.
+async function findActiveTargetTab(targetID) {
+  if (typeof targetID !== 'string' || targetID.length === 0 || targetID.length > 128) {
+    throw new TypeError('capture target_id must be a nonempty string of at most 128 characters');
   }
-  return fallback.id;
+  let timer;
+  try {
+    const targets = await Promise.race([
+      chrome.debugger.getTargets(),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('capture target lookup timed out')), 1500); }),
+    ]);
+    const matches = targets.filter((target) => target.id === targetID && target.type === 'page' &&
+      Number.isSafeInteger(target.tabId) && target.tabId >= 0);
+    if (matches.length !== 1) throw new Error('requested capture target is unavailable');
+    return matches[0].tabId;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ---- capture ----------------------------------------------------------------
 
 let currentStream = null;
 let currentPC = null;
+let captureGeneration = 0;
+// Server display lineage and local async cancellation are different identities.
+let desiredCaptureCommand = null;
+let currentCaptureCommand = null;
+let nextOfferID = 0;
+let currentOfferID = 0;
+
+function captureCommandFrom(frame) {
+  if (!Number.isSafeInteger(frame.capture_generation) || frame.capture_generation < 1) {
+    throw new RangeError('capture_generation must be a positive safe integer');
+  }
+  if (typeof frame.target_id !== 'string' || frame.target_id.length === 0 || frame.target_id.length > 128) {
+    throw new TypeError('capture target_id must be a nonempty string of at most 128 characters');
+  }
+  const command = { capture_generation: frame.capture_generation, target_id: frame.target_id,
+    capture_scale: typeof frame.capture_scale === 'number' && Number.isFinite(frame.capture_scale)
+      ? Math.min(4, Math.max(1, frame.capture_scale)) : 1 };
+  if (frame.expected_width !== undefined || frame.expected_height !== undefined) {
+    if (!Number.isFinite(frame.expected_width) || frame.expected_width <= 0 ||
+        !Number.isFinite(frame.expected_height) || frame.expected_height <= 0) {
+      throw new RangeError('capture geometry must contain two finite positive dimensions');
+    }
+    command.expected_width = frame.expected_width;
+    command.expected_height = frame.expected_height;
+  }
+  return Object.freeze(command);
+}
+
 let ws = null;
 let shuttingDown = false;
 let lastGoodIceTime = Date.now();
@@ -158,16 +187,6 @@ const RECONNECT_MAX_DELAY_MS = 30000;
 const ICE_BAD_GRACE_MS = 10000;
 const PING_BEACON_INTERVAL_MS = 15000;
 
-// expectedCaptureDims (2026-07-31 follow-up,
-// docs/internal/browser-viewport-input-rootcause-2026-07-31.md) carries the
-// CDP-verified {w, h} a viewport-resize-triggered recapture wants
-// captureActiveTabStream to converge on, or null when the incoming recapture
-// carried no such hint (e.g. an active-tab switch — see
-// handleControlFrame). Set just before runCaptureAndOffer is kicked off for
-// a recapture and consumed (then cleared) by captureActiveTabStream's own
-// polling logic below, so it is never stale across a LATER recapture that
-// omits the fields.
-let expectedCaptureDims = null;
 // deviceScaleFactor of the captured tab — see the recapture control handler. 1 = CSS.
 let captureScale = 1;
 // CAPTURE_PIXEL_BUDGET caps the PHYSICAL pixels tabCapture is asked to
@@ -196,17 +215,25 @@ const CAPTURE_PIXEL_BUDGET = 1280 * 720;
 // budgetedCaptureDims returns the physical capture size to request, clamped
 // to CAPTURE_PIXEL_BUDGET. Scaling is uniform (sqrt of the overshoot) so the
 // aspect ratio is preserved and the server-side coordinate rescale stays
-// proportional. Dimensions are rounded to even numbers because H.264 chroma
-// subsampling requires it. Pure function -- unit-tested without a browser.
+// proportional. Dimensions use a twelve-pixel grid so H.264 chroma
+// subsampling stays valid at all application adaptation levels. Pure function -- unit-tested without a browser.
 function budgetedCaptureDims(cssW, cssH, scale) {
-  const w0 = Math.max(2, Math.round(cssW * scale));
-  const h0 = Math.max(2, Math.round(cssH * scale));
-  const px = w0 * h0;
-  if (!(px > CAPTURE_PIXEL_BUDGET)) return { w: w0, h: h0, clamped: false };
-  const k = Math.sqrt(CAPTURE_PIXEL_BUDGET / px);
-  const w = Math.max(2, Math.round((w0 * k) / 2) * 2);
-  const h = Math.max(2, Math.round((h0 * k) / 2) * 2);
-  return { w: w, h: h, clamped: true };
+  if (![cssW, cssH, scale, cssW * scale, cssH * scale].every((n) => typeof n === 'number' && Number.isFinite(n) && n > 0)) {
+    throw new RangeError('capture dimensions and scale must be finite and positive');
+  }
+  // Twelve is the smallest grid that yields even dimensions at every
+  // supported scale (1, 1.5, 2). Tiny viewports use one grid cell.
+  const w0 = Math.max(12, cssW * scale);
+  const h0 = Math.max(12, cssH * scale);
+  const k = Math.min(1, Math.sqrt(CAPTURE_PIXEL_BUDGET / w0 / h0));
+  let w = Math.max(12, Math.floor(w0 * k / 12) * 12);
+  let h = Math.max(12, Math.floor(h0 * k / 12) * 12);
+  // One extremely thin dimension can hit the minimum after the uniform
+  // scale; re-bound the other dimension so the budget remains absolute.
+  h = Math.min(h, CAPTURE_PIXEL_BUDGET / 12);
+  w = Math.min(w, Math.floor(CAPTURE_PIXEL_BUDGET / h / 12) * 12);
+  h = Math.min(h, Math.floor(CAPTURE_PIXEL_BUDGET / w / 12) * 12);
+  return { w, h, clamped: k < 1 };
 }
 
 // Tab id of the CURRENTLY captured tab — recorded at capture time so the
@@ -237,142 +264,6 @@ let lastPinnedCapDims = null;
 // (and the initial capture) grants 3 post-connect checks; self-heal
 // recaptures spend from the same budget — bounded convergence, no churn.
 let selfHealBudget = 3;
-
-// ---- "only rebuild if the size really changed" --------------------------------
-//
-// Every panel open used to destroy a working stream. The gateway answers a
-// viewer's offer and then, unconditionally, issues a corrective recapture
-// carrying the panel's CDP-verified viewport (browser_webrtc.go's
-// applyColdStartRecapture) — because on a cold start the capture really can
-// be running at launch geometry and nothing else will ever correct it. But
-// the SAME frame arrives on the ordinary warm case, where the capture is
-// already exactly right, and handleControlFrame's answer to it was to tear
-// the PeerConnection down and renegotiate from scratch at the precise moment
-// somebody started watching. Every rebuild is a fresh chance for the
-// connection to fail, and the comment above this one concedes that several
-// of them overlap during a panel spin-up.
-//
-// So: compare first, and rebuild only when the capture geometry genuinely
-// differs from what is already running.
-//
-// RECAPTURE_SAME_SIZE_TOLERANCE_CSS_PX is deliberately the SAME 8 CSS px this
-// file already uses in its two other "is this the same size?" judgements —
-// captureActiveTabStream's convergence poll (TOLERANCE_PX) and the
-// post-connect self-heal's drift check. Reusing it means the encoder holds
-// exactly one definition of "really changed": a difference the self-heal
-// would call drift is a difference a recapture rebuilds for, and a
-// difference it tolerates is one a recapture keeps. 8 px is far below any
-// resize a person can produce by dragging a panel edge, and comfortably
-// above the sub-pixel/scrollbar rounding that makes a re-reported viewport
-// jitter by a pixel without anything having moved.
-const RECAPTURE_SAME_SIZE_TOLERANCE_CSS_PX = 8;
-// Device scale is a float carried over JSON, so it needs an epsilon rather
-// than ===. 0.01 is two orders of magnitude below the smallest real step a
-// viewer can produce (Chrome's zoom ladder and every DPR a display reports
-// move in quarters at finest), so it separates "the same monitor" from "a
-// different one" without ever mistaking float noise for a change.
-const RECAPTURE_SAME_SCALE_EPSILON = 0.01;
-
-// appliedCaptureGeometry reports what the RUNNING capture actually is, or
-// null when there is nothing running to compare against (a genuinely cold
-// start, a torn-down or failed capture, a rebuild already in flight).
-//
-// The distinction that matters here: physW/physH come from the live
-// MediaStreamTrack's own getSettings(), i.e. what Chrome REPORTS IT
-// PRODUCED, not what we asked it for. cssW/cssH/scale are the pin
-// captureActiveTabStream converged on for that same capture. Returning both
-// lets the decision below refuse to skip on the strength of a value that was
-// merely requested: if the pin and the track disagree, the pin is not
-// trustworthy evidence about the picture on screen and we rebuild.
-function appliedCaptureGeometry() {
-  if (captureInFlight || !currentPC || !currentStream || !lastPinnedCapDims) return null;
-  // A PC that is not connected is not a stream worth protecting — rebuilding
-  // is the recovery path, and the recapture frame may well BE the recovery.
-  if (currentPC.connectionState !== 'connected') return null;
-  let track = null;
-  let settings = null;
-  try {
-    track = currentStream.getVideoTracks()[0] || null;
-    if (!track || track.readyState !== 'live') return null;
-    settings = typeof track.getSettings === 'function' ? track.getSettings() : null;
-  } catch (e) {
-    warn('appliedCaptureGeometry: could not read the running track, treating the capture as unknown', e);
-    return null;
-  }
-  if (!settings || !(settings.width > 0) || !(settings.height > 0)) return null;
-  return {
-    tabId: capturedTabId,
-    cssW: lastPinnedCapDims.w,
-    cssH: lastPinnedCapDims.h,
-    scale: lastPinnedCapDims.scale > 0 ? lastPinnedCapDims.scale : 1,
-    physW: settings.width,
-    physH: settings.height,
-  };
-}
-
-// recaptureGeometryChangeReason answers "would this recapture actually change
-// the picture?" — returning '' when it would not (so the running stream can
-// be kept) and a human-readable reason when it would.
-//
-// want is {cssW, cssH, scale} from the incoming control frame, or null when
-// the frame carried no CDP-verified hint. applied is appliedCaptureGeometry().
-// Every unknown is a rebuild: correctness (a right-sized picture) always wins
-// over stability (an undisturbed connection), so this only ever skips on
-// positive, applied evidence that the two agree. Pure — no globals, no
-// clock, no browser — so it is unit-testable off-browser.
-function recaptureGeometryChangeReason(want, applied) {
-  if (!applied) return 'no healthy capture is running';
-  if (!want || !(want.cssW > 0) || !(want.cssH > 0)) {
-    // A recapture with no geometry hint (an active-tab switch, live.go's
-    // plain Recapture()) carries nothing to compare against, so there is no
-    // evidence on which to keep the stream. Rebuild, exactly as before.
-    return 'the recapture carried no verified target geometry';
-  }
-  const wantScale = want.scale > 0 ? want.scale : 1;
-  if (Math.abs(wantScale - applied.scale) >= RECAPTURE_SAME_SCALE_EPSILON) {
-    return 'device scale ' + applied.scale + ' -> ' + wantScale;
-  }
-  if (
-    Math.abs(want.cssW - applied.cssW) > RECAPTURE_SAME_SIZE_TOLERANCE_CSS_PX ||
-    Math.abs(want.cssH - applied.cssH) > RECAPTURE_SAME_SIZE_TOLERANCE_CSS_PX
-  ) {
-    return (
-      'capture size ' + applied.cssW + 'x' + applied.cssH + ' -> ' + want.cssW + 'x' + want.cssH + ' css'
-    );
-  }
-  // The applied-vs-requested guard. Everything above compared the incoming
-  // request against the size we PINNED; this checks that the running track is
-  // in fact at that size. If Chrome delivered something else — a constraint
-  // it could not honour, a tab that resized under a stale pin — the pin is
-  // not evidence and the stream is not the one the viewer asked for.
-  // Expressed in physical pixels because that is the space getSettings()
-  // speaks, using the same 8 CSS px threshold scaled into it, so there is
-  // still only one tolerance in this file.
-  const implied = budgetedCaptureDims(applied.cssW, applied.cssH, applied.scale);
-  const physTolerance = RECAPTURE_SAME_SIZE_TOLERANCE_CSS_PX * Math.max(1, applied.scale);
-  if (
-    Math.abs(applied.physW - implied.w) > physTolerance ||
-    Math.abs(applied.physH - implied.h) > physTolerance
-  ) {
-    return (
-      'the running track is ' + applied.physW + 'x' + applied.physH +
-      ' physical, not the ' + implied.w + 'x' + implied.h + ' its pinned size implies'
-    );
-  }
-  return '';
-}
-
-// Debug/verification surface only -- never part of the wire protocol, same
-// contract as window.__omnipusState and window.__omnipusQualityAdapt. The
-// off-browser harness drives the rebuild decision through this.
-window.__omnipusRecapture = {
-  changeReason: recaptureGeometryChangeReason,
-  appliedGeometry: appliedCaptureGeometry,
-  constants: {
-    sizeToleranceCssPx: RECAPTURE_SAME_SIZE_TOLERANCE_CSS_PX,
-    scaleEpsilon: RECAPTURE_SAME_SCALE_EPSILON,
-  },
-};
 
 // DEFAULT_MAX_VIDEO_BITRATE_BPS (fix-wave finding 4, "overdrive"; revised
 // per docs/internal/browser-viewport-input-rootcause-2026-07-31.md fault 2):
@@ -798,6 +689,8 @@ function adaptInitialState() {
 // experiencing. adaptCarryOverIndex is the rule; see its doc comment.
 let adaptState = adaptInitialState();
 let adaptTimer = null;
+let adaptEpoch = 0;
+let adaptTickInFlight = false;
 
 // adaptCycleCount counts CAPTURES THAT ACTUALLY RAN -- incremented where the
 // adaptation loop starts (the PeerConnection's first 'connected' transition),
@@ -862,16 +755,22 @@ function qualityAdaptDecide(sample, prev, now) {
     return { state: st, action: 'hold', note: 'no framesPerSecond in sender stats' };
   }
 
-  // Any cpu-limited sample -- at whatever frame rate -- is fresh evidence
+  const sourceFps = typeof sample.sourceFramesPerSecond === 'number' && isFinite(sample.sourceFramesPerSecond)
+    ? sample.sourceFramesPerSecond : null;
+  // A CPU label can survive after the source goes idle. Only fresh source
+  // demand can justify retaining or increasing a resolution reduction.
+  const activeDemand = sourceFps !== null && sourceFps >= ADAPT_TARGET_FPS;
+
+  // Any cpu-limited sample with active source demand is fresh evidence
   // that the encoder is the bottleneck, and is what keeps an existing step
   // down justified (ADAPT_EVIDENCE_TTL_MS). Recorded before the thresholds
   // below so a machine that is cpu-limited but still delivering (say 15 fps
   // at scale 1.5, i.e. the step WORKED) does not read as stale evidence.
-  if (reason === 'cpu') {
+  if (reason === 'cpu' && activeDemand) {
     st.lastPressureAt = now;
   }
 
-  if (reason === 'cpu' && fps < ADAPT_TARGET_FPS) {
+  if (reason === 'cpu' && fps < ADAPT_TARGET_FPS && activeDemand) {
     st.goodStreak = 0;
     st.badStreak += 1;
     if (st.badStreak >= ADAPT_DOWN_SAMPLES && st.index < ADAPT_MAX_STEP_INDEX) {
@@ -979,35 +878,60 @@ function adaptCarryOverIndex(prev, cycleCount, now) {
   return index;
 }
 
-// readVideoSenderSample pulls the two fields the loop needs off the SENDER's
-// own stats -- qualityLimitationReason is the encoder telling us, in its own
-// words, that CPU is what is holding quality back; framesPerSecond is what
-// the viewer actually gets. No gateway round-trip is involved.
-async function readVideoSenderSample(pc) {
+// Sender output rate is not viewer delivery rate. Match the outbound report
+// to its source so a naturally idle capture is not mistaken for slow encoding.
+const previousSenderSamples = new WeakMap();
+
+async function readVideoSenderSample(pc, current = () => true) {
   const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
   if (!sender || typeof sender.getStats !== 'function') return null;
   const report = await sender.getStats();
+  if (!current()) return null;
   if (!report || typeof report.forEach !== 'function') return null;
   let out = null;
+  const sources = new Map();
   report.forEach((s) => {
+    if (s && s.type === 'media-source' && s.kind === 'video') sources.set(s.id, s);
     if (s && s.type === 'outbound-rtp' && (s.kind === 'video' || s.mediaType === 'video')) out = s;
   });
   if (!out) return null;
+  const source = sources.get(out.mediaSourceId);
+  const prior = previousSenderSamples.get(sender);
+  const timestamp = out.timestamp;
+  const fresh = Number.isFinite(timestamp) && (!prior || timestamp > prior.timestamp);
+  let sourceRate;
+  if (fresh && source && Number.isFinite(source.timestamp) && Math.abs(source.timestamp - timestamp) <= 1000) {
+    if (prior && prior.sourceId === source.id && Number.isFinite(prior.frames) && Number.isFinite(source.frames) &&
+        source.frames >= prior.frames && timestamp - prior.timestamp <= 10000) {
+      sourceRate = (source.frames - prior.frames) * 1000 / (timestamp - prior.timestamp);
+    } else if (!prior && Number.isFinite(source.framesPerSecond)) {
+      sourceRate = source.framesPerSecond;
+    }
+  }
+  if (fresh) previousSenderSamples.set(sender, { timestamp, sourceId: source && source.id, frames: source && source.frames });
   return {
-    framesPerSecond: out.framesPerSecond,
+    sourceFramesPerSecond: sourceRate,
+    sourceFrames: source && source.frames,
+    encodedFrames: out.framesEncoded,
+    packetsSent: out.packetsSent,
+    sampleTimestampMs: out.timestamp,
+    totalEncodeTime: out.totalEncodeTime,
+    encoderImplementation: out.encoderImplementation,
+    framesPerSecond: fresh ? out.framesPerSecond : undefined,
     qualityLimitationReason: out.qualityLimitationReason,
     frameWidth: out.frameWidth,
     frameHeight: out.frameHeight,
   };
 }
 
-async function applyAdaptScale(pc, scale) {
+async function applyAdaptScale(pc, scale, current = () => true) {
   const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
   if (!sender) throw new Error('no video sender');
   // Queued for the same reason as applyVideoSenderConstraints: this loop runs
   // every 2s and would otherwise interleave with the post-answer /
   // post-connected applies and invalidate their transaction (or theirs, ours).
   return queueSenderParams(async function () {
+    if (!current()) return;
     const params = sender.getParameters();
     if (!encodingsNegotiated(params)) {
       throw new Error('encodings not negotiated');
@@ -1057,61 +981,79 @@ function reportAdaptFailure(msg) {
 // off-browser harness can drive a fake PeerConnection through the REAL wiring
 // (stats -> decision -> setParameters), not just the pure policy above.
 async function adaptTick(pcOverride, nowOverride) {
-  if (shuttingDown) return null;
+  if (shuttingDown || adaptTickInFlight) return null;
   const pc = pcOverride || currentPC;
   if (!pc) return null;
   if (!pcOverride && pc.connectionState !== 'connected') return null;
 
-  const sample = await readVideoSenderSample(pc);
-  if (!sample) return null;
-
-  const before = adaptState.index;
-  const decision = qualityAdaptDecide(sample, adaptState, nowOverride);
-  adaptState = decision.state;
-
-  if (decision.action === 'down' || decision.action === 'up') {
-    const scale = ADAPT_SCALE_STEPS[adaptState.index];
-    record('qualityAdapt: step ' + decision.action + ' -> scaleResolutionDownBy ' + scale + ' (' + decision.note + ')');
+  const ownerPC = currentPC;
+  const generation = captureGeneration;
+  const epoch = adaptEpoch;
+  const current = () => !shuttingDown && currentPC === ownerPC &&
+    captureGeneration === generation && adaptEpoch === epoch;
+  adaptTickInFlight = true;
+  try {
+    let sample;
     try {
-      await applyAdaptScale(pc, scale);
-      record('qualityAdapt: scaleResolutionDownBy ' + scale + ' applied');
+      sample = await readVideoSenderSample(pc, current);
     } catch (e) {
-      // Keep the recorded index honest: if setParameters did not take, the
-      // stream is still at the OLD scale and the loop must not believe
-      // otherwise (or it would never retry, and would later "restore" to a
-      // scale that was never applied).
-      adaptState.index = before;
-      const msg = 'qualityAdapt: setParameters failed, staying at scale ' + ADAPT_SCALE_STEPS[before] + ': ' + String(e);
-      warn(msg, e);
-      window.__omnipusState.lastError = msg;
-      // Round-2 finding F7: an adaptation that does not APPLY is the one
-      // failure of this loop nobody outside this page could ever learn
-      // about. record()/warn() reach console.log, and nothing forwards the
-      // extension page's console anywhere -- so on a hosted box the picture
-      // would stay collapsed at 1 fps while every layer reported success,
-      // the exact "green but broken" shape this whole file's other fixes
-      // exist to close. Push it to the gateway over the ingest socket.
-      reportAdaptFailure(msg);
+      if (!current()) return null;
+      throw e;
     }
-  }
+    if (!current() || !sample) return null;
 
-  window.__omnipusState.qualityAdapt = {
-    scale: ADAPT_SCALE_STEPS[clampAdaptIndex(adaptState.index)],
-    index: adaptState.index,
-    action: decision.action,
-    note: decision.note,
-    // How long ago the encoder last reported CPU as the limiting factor, and
-    // how many capture rebuilds this page has been through -- the two inputs
-    // to "is the current scale still justified" (adaptCarryOverIndex).
-    pressureAgeMs: adaptState.lastPressureAt ? Date.now() - adaptState.lastPressureAt : null,
-    cycle: adaptCycleCount,
-    fps: sample.framesPerSecond,
-    qualityLimitationReason: sample.qualityLimitationReason,
-    frameWidth: sample.frameWidth,
-    frameHeight: sample.frameHeight,
-    at: Date.now(),
-  };
-  return decision.action;
+    const before = adaptState.index;
+    const decision = qualityAdaptDecide(sample, adaptState, nowOverride);
+    adaptState = decision.state;
+
+    if (decision.action === 'down' || decision.action === 'up') {
+      const scale = ADAPT_SCALE_STEPS[adaptState.index];
+      record('qualityAdapt: step ' + decision.action + ' -> scaleResolutionDownBy ' + scale + ' (' + decision.note + ')');
+      try {
+        await applyAdaptScale(pc, scale, current);
+        if (!current()) return null;
+        record('qualityAdapt: scaleResolutionDownBy ' + scale + ' applied');
+      } catch (e) {
+        if (!current()) return null;
+        // Keep the recorded index honest: if setParameters did not take, the
+        // stream is still at the OLD scale and the loop must not believe
+        // otherwise (or it would never retry, and would later "restore" to a
+        // scale that was never applied).
+        adaptState.index = before;
+        const msg = 'qualityAdapt: setParameters failed, staying at scale ' + ADAPT_SCALE_STEPS[before] + ': ' + String(e);
+        warn(msg, e);
+        window.__omnipusState.lastError = msg;
+        // Round-2 finding F7: an adaptation that does not APPLY is the one
+        // failure of this loop nobody outside this page could ever learn
+        // about. record()/warn() reach console.log, and nothing forwards the
+        // extension page's console anywhere -- so on a hosted box the picture
+        // would stay collapsed at 1 fps while every layer reported success,
+        // the exact "green but broken" shape this whole file's other fixes
+        // exist to close. Push it to the gateway over the ingest socket.
+        reportAdaptFailure(msg);
+      }
+    }
+
+    window.__omnipusState.qualityAdapt = {
+      scale: ADAPT_SCALE_STEPS[clampAdaptIndex(adaptState.index)],
+      index: adaptState.index,
+      action: decision.action,
+      note: decision.note,
+      // How long ago the encoder last reported CPU as the limiting factor, and
+      // how many capture rebuilds this page has been through -- the two inputs
+      // to "is the current scale still justified" (adaptCarryOverIndex).
+      pressureAgeMs: adaptState.lastPressureAt ? Date.now() - adaptState.lastPressureAt : null,
+      cycle: adaptCycleCount,
+      fps: sample.framesPerSecond,
+      qualityLimitationReason: sample.qualityLimitationReason,
+      frameWidth: sample.frameWidth,
+      frameHeight: sample.frameHeight,
+      at: Date.now(),
+    };
+    return decision.action;
+  } finally {
+    adaptTickInFlight = false;
+  }
 }
 
 function startQualityAdaptLoop() {
@@ -1124,6 +1066,7 @@ function startQualityAdaptLoop() {
 }
 
 function stopQualityAdaptLoop() {
+  adaptEpoch += 1;
   if (adaptTimer) {
     clearInterval(adaptTimer);
     adaptTimer = null;
@@ -1187,6 +1130,7 @@ window.__omnipusQualityAdapt = {
     return adaptState;
   },
   reset: function () {
+    adaptEpoch += 1;
     adaptState = adaptInitialState();
     adaptCycleCount = 0;
     lastAdaptReportAt = 0;
@@ -1340,6 +1284,7 @@ function mungeVideoStartBitrate(sdp) {
 }
 
 function teardownCapture() {
+  captureGeneration += 1;
   clearOfferAnswerTimeout();
   // Stop sampling BEFORE the PC goes away, so a tick in flight cannot call
   // getStats()/setParameters() on a closing sender. Whether the learned scale
@@ -1386,11 +1331,17 @@ function waitIceGatheringComplete(pc) {
   });
 }
 
-async function captureActiveTabStream() {
-  const tabId = await findActiveTargetTab();
+async function captureActiveTabStream(command) {
+  const generation = captureGeneration;
+  const current = () => !shuttingDown && captureGeneration === generation;
+  if (!current()) return null;
+  const tabId = await findActiveTargetTab(command.target_id);
+  if (!current()) return null;
+  const commandScale = command.capture_scale;
   record('captureActiveTabStream: targetTabId=' + tabId);
 
   const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+  if (!current()) return null;
   record('captureActiveTabStream: got streamId');
 
   // W3 e2e finding: WITHOUT explicit size constraints, tabCapture delivers
@@ -1407,80 +1358,14 @@ async function captureActiveTabStream() {
   let capW = 1280;
   let capH = 720;
 
-  // expectedCaptureDims (2026-07-31 follow-up,
-  // docs/internal/browser-viewport-input-rootcause-2026-07-31.md): consumed
-  // and cleared here, exactly once per capture cycle. A viewport-resize
-  // recapture carries the gateway's own CDP-verified Page.getLayoutMetrics
-  // read-back through CaptureSession.RecaptureAt -> browser_capture_control
-  // {expected_width, expected_height} -- the ONLY truth that actually proves
-  // what the tab's CSS viewport is at this instant (see live.go's
-  // SetViewport doc comment). Two independent failure modes measured live on
-  // 2026-07-31 motivate polling against this KNOWN target instead of the
-  // plain "two consecutive reads agree with EACH OTHER" strategy the `else`
-  // branch below still uses when no such hint is available:
-  //   (1) mid-reflow race: a single chrome.tabs.get read during the
-  //       window-bounds reflow can catch a transitional size (measured:
-  //       stream stuck at 615x766 while the settled, CDP-verified viewport
-  //       was already 615x744).
-  //   (2) two-agreeing-STALE-reads: the "poll until two consecutive reads
-  //       agree" strategy is fooled when chrome.tabs.get simply LAGS the
-  //       real window resize entirely -- two stale reads agree with each
-  //       other just as readily as two settled ones, so that poll exits
-  //       "successfully" pinned to the OLD geometry (measured: capture stuck
-  //       at the 1278x632 launch size while the tab was CDP-verified at
-  //       615x744 in the SAME second).
-  // Converging chrome.tabs.get onto the expected value closes both; if it
-  // never gets there within the poll budget, the CDP-verified expected
-  // value is trusted directly rather than whatever (possibly still-stale)
-  // size chrome.tabs.get last reported.
-  const expected = expectedCaptureDims;
-  expectedCaptureDims = null;
-
+  // These dimensions were read back by CDP for this exact generation.
+  // Trust that committed snapshot directly; polling the lagging tabs API
+  // adds up to 2.4 seconds without increasing confidence in the source.
+  const expected = command.expected_width && command.expected_height
+    ? { w: command.expected_width, h: command.expected_height } : null;
   if (expected) {
-    const TOLERANCE_PX = 8;
-    const MAX_TRIES = 16;
-    const POLL_INTERVAL_MS = 150;
-    let converged = false;
-    try {
-      for (let attempt = 0; attempt < MAX_TRIES; attempt++) {
-        const tab = await chrome.tabs.get(tabId);
-        if (
-          tab &&
-          tab.width &&
-          tab.height &&
-          Math.abs(tab.width - expected.w) <= TOLERANCE_PX &&
-          Math.abs(tab.height - expected.h) <= TOLERANCE_PX
-        ) {
-          capW = tab.width;
-          capH = tab.height;
-          converged = true;
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-      }
-    } catch (e) {
-      warn(
-        'captureActiveTabStream: chrome.tabs.get failed while converging on expected dims, using expected values directly',
-        e
-      );
-    }
-    if (!converged) {
-      // Timeout (or a thrown chrome.tabs.get): the CDP-verified expected
-      // values are still the best truth available -- use them directly
-      // rather than whatever stale/transitional size chrome.tabs.get last
-      // reported.
-      warn(
-        'captureActiveTabStream: chrome.tabs.get did not converge on expected ' +
-          expected.w +
-          'x' +
-          expected.h +
-          ' within ' +
-          MAX_TRIES +
-          ' tries, using the expected (CDP-verified) values directly'
-      );
-      capW = expected.w;
-      capH = expected.h;
-    }
+    capW = expected.w;
+    capH = expected.h;
   } else {
     try {
       // Poll until two consecutive reads agree (bounded) — the fallback
@@ -1514,14 +1399,14 @@ async function captureActiveTabStream() {
       warn('captureActiveTabStream: chrome.tabs.get failed, using default capture size', e);
     }
   }
-  // scale rides along with the pin: recaptureGeometryChangeReason needs the
-  // deviceScaleFactor THIS capture was actually built at, and the module-level
-  // captureScale is a live value the next control frame overwrites.
-  lastPinnedCapDims = { w: capW, h: capH, scale: captureScale };
-  const capDims = budgetedCaptureDims(capW, capH, captureScale);
+  // Keep the scale from this immutable command with its captured geometry;
+  // later control frames cannot change what this capture was built at.
+  if (!current()) return null;
+  lastPinnedCapDims = { w: capW, h: capH, scale: commandScale };
+  const capDims = budgetedCaptureDims(capW, capH, commandScale);
   record(
     'captureActiveTabStream: capture size ' +
-      capW + 'x' + capH + ' css x' + captureScale +
+      capW + 'x' + capH + ' css x' + commandScale +
       ' -> requesting ' + capDims.w + 'x' + capDims.h + ' physical' +
       (capDims.clamped ? ' (CLAMPED to the ' + CAPTURE_PIXEL_BUDGET + 'px budget)' : '')
   );
@@ -1549,6 +1434,18 @@ async function captureActiveTabStream() {
   } catch (e) {
     warn('captureActiveTabStream: tab unmute failed (tab may already be closed)', e);
   }
+  if (!current()) {
+    // Shutdown may have muted before Chrome finished the pending unmute.
+    // Restore local silence after that operation, on the same exact tab.
+    if (shuttingDown) {
+      try {
+        await chrome.tabs.update(tabId, { muted: true });
+      } catch (e) {
+        warn('captureActiveTabStream: shutdown mute compensation failed', e);
+      }
+    }
+    return null;
+  }
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: streamId } },
     video: {
@@ -1556,7 +1453,7 @@ async function captureActiveTabStream() {
         chromeMediaSource: 'tab',
         chromeMediaSourceId: streamId,
         // capW/capH are CSS px (chrome.tabs.get and the CDP-verified hint
-        // both speak CSS); the tab's compositor surface is CSS x captureScale
+        // both speak CSS); the tab's compositor surface is CSS x commandScale
         // physical px. Constrain to the physical size so tabCapture does not
         // throw away the Retina pixels — see the capture_scale handler.
         minWidth: capDims.w,
@@ -1578,6 +1475,10 @@ async function captureActiveTabStream() {
     },
   });
 
+  if (!current()) {
+    stream.getTracks().forEach((track) => track.stop());
+    return null;
+  }
   window.__omnipusState.videoTracks = stream.getVideoTracks().map((t) => ({ label: t.label, settings: t.getSettings() }));
   window.__omnipusState.audioTracks = stream.getAudioTracks().map((t) => ({ label: t.label, settings: t.getSettings() }));
   record(
@@ -1645,39 +1546,41 @@ function newPeerConnection() {
   return pc;
 }
 
-// runCaptureAndOffer performs (or re-performs, for recapture) the full
-// capture -> offer flow: acquire the active tab's MediaStream, build a
-// fresh non-trickle offer, and send it as a browser_capture_offer frame.
-// Tears down any previous PC/stream first, so it is safe to call both for
-// the initial connect and for a recapture control message — matching
-// wv1-spike-results.md Q3's proven "new PC with fresh SSRCs replaces the
-// old one" recovery pattern rather than incremental same-PC renegotiation.
-// captureInFlight serialises runCaptureAndOffer (2026-07-31, found by review
-// of the adaptive-viewport feature). This function has two awaits before it
-// assigns currentPC/currentStream, and it had NO in-flight guard. That was
-// practically unreachable while the only trigger was an active-tab switch (a
-// rare, effectively serialized event) — but the viewport feature added a
-// second, client-driven, HIGH-FREQUENCY trigger: every panel resize sends
-// browser_viewport, and the gateway answers with a recapture. A CaptureSession
-// is shared per AGENT, so two viewers of the same tab each push their own
-// geometry with no cross-viewer coordination.
+// Capture the exact server-assigned target. Same-generation recovery replaces
+// tracks on the connected peer; a target or geometry generation change creates
+// a fresh peer and offer. Each immutable command keeps its own geometry.
 //
-// Two overlapping calls race the same chrome.tabCapture pipeline for one tab.
-// Chrome allows only one active tabCapture stream per tab, so the loser's
-// getUserMedia throws — and handleControlFrame's catch closes the WHOLE ingest
-// WebSocket, tearing down a session that was otherwise fine. Even without a
-// throw, the loser's PeerConnection and MediaStreamTrack are orphaned, because
-// teardownCapture only ever closes whatever the globals currently point at.
-//
-// Coalesce rather than queue: if a recapture arrives while one is running, set
-// a rerun flag and let the in-flight call loop once more when it finishes. The
-// geometry we want is always the LATEST one, so collapsing N pending
-// recaptures into one extra pass is both correct and cheaper.
+// Chrome permits only one tabCapture per tab. Coalesce overlapping requests
+// into the latest pending command rather than starting competing captures.
+// A retired attempt's completion or rejection must leave that command queued;
+// shutdown retires both the active attempt and any pending pass.
 let captureInFlight = false;
 let captureRerunRequested = false;
 
-async function runCaptureAndOffer() {
+function validatedCaptureCommand(command) {
+  let next = captureCommandFrom(command || desiredCaptureCommand || readConfig());
+  if (desiredCaptureCommand && next.capture_generation < desiredCaptureCommand.capture_generation) {
+    throw new Error('stale capture generation');
+  }
+  if (desiredCaptureCommand && next.capture_generation === desiredCaptureCommand.capture_generation) {
+    const previous = desiredCaptureCommand;
+    if (next.target_id !== previous.target_id || next.capture_scale !== previous.capture_scale ||
+        (next.expected_width && previous.expected_width &&
+         (next.expected_width !== previous.expected_width || next.expected_height !== previous.expected_height))) {
+      throw new Error('capture generation reused for a different source or geometry');
+    }
+    if (!next.expected_width && previous.expected_width) {
+      next = Object.freeze({ ...next, expected_width: previous.expected_width, expected_height: previous.expected_height });
+    }
+  }
+  return next;
+}
+
+async function runCaptureAndOffer(command) {
+  const next = validatedCaptureCommand(command);
+  desiredCaptureCommand = next;
   if (captureInFlight) {
+    captureGeneration += 1;
     captureRerunRequested = true;
     record('runCaptureAndOffer: already in flight, coalescing into a rerun');
     return;
@@ -1686,70 +1589,131 @@ async function runCaptureAndOffer() {
   try {
     do {
       captureRerunRequested = false;
-      await runCaptureAndOfferOnce();
-    } while (captureRerunRequested);
+      await runCaptureAndOfferOnce(desiredCaptureCommand);
+    } while (captureRerunRequested && !shuttingDown);
   } finally {
     captureInFlight = false;
+    captureRerunRequested = false;
   }
 }
 
-async function runCaptureAndOfferOnce() {
-  teardownCapture();
-  setStatus('capturing');
-
-  const stream = await captureActiveTabStream();
-  currentStream = stream;
-
-  setStatus('offering');
-  const pc = newPeerConnection();
-  currentPC = pc;
-  stream.getTracks().forEach((t) => pc.addTrack(t, stream));
-  // Prefer H.264 over VP8 (measured 2026-08-13): software VP8 at the 2x
-  // capture size (1122x1416) tops out at 4-12fps on a 4-core mobile Intel -
-  // the encoder, not bitrate or transport, is the ceiling (proven by
-  // testufo.com runs: 'balanced' degradation removed the 3s stalls but avg
-  // fps stayed ~7). H.264 engages VideoToolbox HARDWARE encode on macOS,
-  // taking the encode off the CPU entirely. Best-effort: if H.264 is absent
-  // from capabilities (or setCodecPreferences unsupported) the negotiation
-  // falls back to the previous VP8 path untouched. The Pion relay registers
-  // default codecs incl. H264, and it forwards RTP without transcoding, so
-  // the preference must be expressed HERE, on the sending leg.
+async function runCaptureAndOfferOnce(command) {
+  command = captureCommandFrom(command || desiredCaptureCommand || readConfig());
+  let generation = captureGeneration;
   try {
-    const caps = RTCRtpSender.getCapabilities && RTCRtpSender.getCapabilities('video');
-    if (caps && caps.codecs && caps.codecs.length) {
-      const h264 = caps.codecs.filter((c) => /h264/i.test(c.mimeType));
-      if (h264.length) {
-        const rest = caps.codecs.filter((c) => !/h264/i.test(c.mimeType));
-        const tr = pc.getTransceivers().find((x) => x.sender && x.sender.track && x.sender.track.kind === 'video');
-        if (tr && tr.setCodecPreferences) {
-          tr.setCodecPreferences(h264.concat(rest));
-          record('codec preference: H264 first (' + h264.length + ' profiles)');
+    captureScale = command.capture_scale;
+    const existing = currentPC;
+    const sameGeneration = currentCaptureCommand &&
+      currentCaptureCommand.capture_generation === command.capture_generation &&
+      currentCaptureCommand.target_id === command.target_id;
+    if (sameGeneration && existing && existing.connectionState === 'connected' && currentStream) {
+      generation = ++captureGeneration;
+      setStatus('capturing');
+      // Chrome forbids a second active capture of the same tab. Stop the
+      // source, retaining its sender and negotiated connection (verified with
+      // Chrome 151, H.264 VideoToolbox and Opus).
+      currentStream.getTracks().forEach((track) => track.stop());
+      currentStream = null;
+      try {
+        const replacement = await captureActiveTabStream(command);
+        if (!replacement) return;
+        if (shuttingDown || currentPC !== existing || captureGeneration !== generation) {
+          replacement.getTracks().forEach((track) => track.stop());
+          return;
         }
+        currentStream = replacement;
+        const senders = existing.getSenders();
+        for (const track of replacement.getTracks()) {
+          const sender = senders.find((candidate) => candidate.track && candidate.track.kind === track.kind);
+          if (!sender) throw new Error('recapture has no negotiated ' + track.kind + ' sender');
+          await queueSenderParams(() => sender.replaceTrack(track));
+        }
+        if (shuttingDown || currentPC !== existing || captureGeneration !== generation) return;
+        applyVideoSenderConstraints(existing, { context: 'track-replacement', recordSuccess: true });
+        currentCaptureCommand = command;
+        setStatus('connected');
+        record('recapture: replaced tracks, retained ingest connection');
+        return;
+      } catch (e) {
+        if (shuttingDown || currentPC !== existing || captureGeneration !== generation) return;
+        warn('recapture track replacement failed; renegotiating ingest', e);
+        record('recapture: replacement failed, renegotiating: ' + String(e));
       }
     }
-  } catch (e) {
-    warn('setCodecPreferences failed; keeping default codec order', e);
+    teardownCapture();
+    generation = ++captureGeneration;
+    setStatus('capturing');
+
+    const stream = await captureActiveTabStream(command);
+    if (!stream) return;
+    if (shuttingDown || captureGeneration !== generation) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    currentStream = stream;
+
+    setStatus('offering');
+    const pc = newPeerConnection();
+    currentPC = pc;
+    currentCaptureCommand = command;
+    const offerID = ++nextOfferID;
+    if (!Number.isSafeInteger(offerID)) throw new RangeError('capture offer_id exhausted');
+    currentOfferID = offerID;
+    stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+    // Prefer H.264 over VP8 (measured 2026-08-13): software VP8 at the 2x
+    // capture size (1122x1416) tops out at 4-12fps on a 4-core mobile Intel -
+    // the encoder, not bitrate or transport, is the ceiling (proven by
+    // testufo.com runs: 'balanced' degradation removed the 3s stalls but avg
+    // fps stayed ~7). H.264 engages VideoToolbox HARDWARE encode on macOS,
+    // taking the encode off the CPU entirely. Best-effort: if H.264 is absent
+    // from capabilities (or setCodecPreferences unsupported) the negotiation
+    // falls back to the previous VP8 path untouched. The Pion relay registers
+    // default codecs incl. H264, and it forwards RTP without transcoding, so
+    // the preference must be expressed HERE, on the sending leg.
+    try {
+      const caps = RTCRtpSender.getCapabilities && RTCRtpSender.getCapabilities('video');
+      if (caps && caps.codecs && caps.codecs.length) {
+        const h264 = caps.codecs.filter((c) => /h264/i.test(c.mimeType));
+        if (h264.length) {
+          const rest = caps.codecs.filter((c) => !/h264/i.test(c.mimeType));
+          const tr = pc.getTransceivers().find((x) => x.sender && x.sender.track && x.sender.track.kind === 'video');
+          if (tr && tr.setCodecPreferences) {
+            tr.setCodecPreferences(h264.concat(rest));
+            record('codec preference: H264 first (' + h264.length + ' profiles)');
+          }
+        }
+      }
+    } catch (e) {
+      warn('setCodecPreferences failed; keeping default codec order', e);
+    }
+
+    // Fix-wave finding 4: cap bitrate + set encoding hints on the video
+    // sender now that addTrack has created it. Video-only (audio/Opus has no
+    // equivalent overdrive risk here). This pre-negotiation call is
+    // best-effort -- see applyVideoSenderConstraints's doc comment for why
+    // the post-answer/post-connected re-applies below are the ones that
+    // actually matter.
+    const videoTrack = stream.getVideoTracks()[0];
+    if (videoTrack) {
+      applyVideoSenderConstraints(pc, { context: 'pre-negotiation' });
+    }
+
+    const offer = await pc.createOffer();
+    offer.sdp = mungeVideoStartBitrate(offer.sdp);
+    await pc.setLocalDescription(offer);
+    await waitIceGatheringComplete(pc);
+
+    if (shuttingDown || currentPC !== pc || captureGeneration !== generation) return;
+    record('runCaptureAndOffer: sending browser_capture_offer');
+    sendFrame({ type: 'browser_capture_offer', sdp: pc.localDescription.sdp,
+      capture_generation: command.capture_generation, target_id: command.target_id, offer_id: offerID });
+    armOfferAnswerTimeout();
+  } catch (error) {
+    // Chrome can reject an old lookup/media/negotiation promise after a new
+    // command or shutdown retired it. Only a current attempt owns failure.
+    if (shuttingDown || captureGeneration !== generation) return;
+    throw error;
   }
-
-  // Fix-wave finding 4: cap bitrate + set encoding hints on the video
-  // sender now that addTrack has created it. Video-only (audio/Opus has no
-  // equivalent overdrive risk here). This pre-negotiation call is
-  // best-effort -- see applyVideoSenderConstraints's doc comment for why
-  // the post-answer/post-connected re-applies below are the ones that
-  // actually matter.
-  const videoTrack = stream.getVideoTracks()[0];
-  if (videoTrack) {
-    applyVideoSenderConstraints(pc, { context: 'pre-negotiation' });
-  }
-
-  const offer = await pc.createOffer();
-  offer.sdp = mungeVideoStartBitrate(offer.sdp);
-  await pc.setLocalDescription(offer);
-  await waitIceGatheringComplete(pc);
-
-  record('runCaptureAndOffer: sending browser_capture_offer');
-  sendFrame({ type: 'browser_capture_offer', sdp: pc.localDescription.sdp });
-  armOfferAnswerTimeout();
 }
 
 // ---- signaling ----------------------------------------------------------------
@@ -1784,6 +1748,7 @@ async function handleControlFrame(msg) {
   }
 
   if (action === 'adapt_reset') {
+    adaptEpoch += 1;
     // A boot-warmed capture is being handed to its FIRST real viewer. The
     // resolution the adaptation loop settled on while nobody was watching is
     // not evidence about this viewer, so start them at full quality.
@@ -1804,99 +1769,16 @@ async function handleControlFrame(msg) {
   }
 
   if (action === 'recapture') {
-    // Read expected_width/expected_height off the frame BEFORE kicking off
-    // runCaptureAndOffer -- captureActiveTabStream (called from inside that
-    // chain) is what actually consumes and clears expectedCaptureDims. Both
-    // fields must be present and numeric; anything else (either omitted, or
-    // an older/malformed server) means "no CDP-verified hint" and this
-    // recapture falls back to the historical two-agreeing-reads poll.
-    //
-    // Held in a local until the rebuild decision below is taken, THEN
-    // published to expectedCaptureDims: a hint stored for a recapture that
-    // turns out to be redundant would sit unconsumed and be picked up by
-    // whatever recapture came next.
-    const hintedDims =
-      typeof msg.expected_width === 'number' && typeof msg.expected_height === 'number'
-        ? { w: msg.expected_width, h: msg.expected_height }
-        : null;
-    // Physical-pixel capture (blur fix, macOS 2026-08-12): the tab renders at
-    // this deviceScaleFactor (Emulation override, driven by the controlling
-    // viewer's devicePixelRatio), so the media constraints multiply by it —
-    // otherwise tabCapture downscales the 2x compositor surface to CSS pixels
-    // and every Retina viewer gets a 1x frame stretched over 2x display
-    // pixels. Clamped to [1,4] mirroring the contract.
-    //
-    // ABSENT MEANS 1, NOT "unchanged" (fix-wave F3, external review
-    // 2026-08-13 -- reverses this field's prior "sticky across recaptures"
-    // contract). A CaptureSession is shared per AGENT, so a viewer dragging
-    // the panel from a Retina (DPR 2) monitor to a non-Retina one -- or a
-    // SECOND viewer on the same session at DPR 1 -- triggers a recapture
-    // whose capture_scale field the server sends only when scale > 1.
-    // Treating "field absent" as "leave captureScale wherever it last was"
-    // pinned the encoder at 2x forever in that case: 4x the pixels against
-    // applyVideoSenderConstraints' scale^2 bitrate ceiling, on a tab now
-    // rendering at 1x -- exactly the CPU-encode load this file's other
-    // fixes exist to reduce. The server is being made to send this field
-    // unconditionally too, but this side must be correct on its own
-    // regardless of what the server does.
-    captureScale =
-      typeof msg.capture_scale === 'number' && isFinite(msg.capture_scale) ? Math.min(4, Math.max(1, msg.capture_scale)) : 1;
-    record('control frame: capture_scale=' + captureScale);
-
-    // Compare before acting (see recaptureGeometryChangeReason). The gateway
-    // sends this frame on EVERY panel open, not only when something changed,
-    // so answering it with an unconditional teardown is what turned "open the
-    // panel" into "destroy the working stream and renegotiate while the user
-    // watches". Keep the stream when nothing needs changing.
-    //
-    // captureScale is assigned ABOVE this, unconditionally, and deliberately
-    // so: the F3 contract ("absent means 1, never sticky") is about what the
-    // NEXT capture is built at, and the comparison below only ever skips when
-    // the value just assigned already matches the scale the running capture
-    // was built at (lastPinnedCapDims.scale), so a skip cannot leave the two
-    // disagreeing. expectedCaptureDims, by contrast, must NOT be set until we
-    // know we are rebuilding — an unconsumed hint would be handed to a later,
-    // unrelated recapture.
-    const applied = appliedCaptureGeometry();
-    const changeReason = recaptureGeometryChangeReason(
-      hintedDims ? { cssW: hintedDims.w, cssH: hintedDims.h, scale: captureScale } : null,
-      applied
-    );
-    if (changeReason === '') {
-      // Geometry agrees. The last thing to rule out is a recapture that is
-      // really about the SOURCE, not the size: an active-tab switch can land
-      // on a tab of identical dimensions, and keeping the stream there would
-      // leave the viewer watching the wrong page. Only paid for once every
-      // other check has already passed, so the rebuild path costs nothing.
-      let activeTabId = null;
-      let resolved = false;
-      try {
-        activeTabId = await findActiveTargetTab();
-        resolved = true;
-      } catch (e) {
-        warn('recapture: could not resolve the active tab, rebuilding rather than assuming', e);
-      }
-      if (resolved && activeTabId != null && activeTabId === applied.tabId) {
-        window.__omnipusState.lastRecaptureSkipAt = Date.now();
-        record(
-          'recapture: SKIPPED — the running capture is already tab ' + applied.tabId + ' at ' +
-            applied.cssW + 'x' + applied.cssH + ' css x' + applied.scale +
-            ' (' + applied.physW + 'x' + applied.physH + ' physical); keeping the connected stream'
-        );
-        return;
-      }
-      record('recapture: rebuilding — the active tab is no longer the captured one');
-    } else {
-      record('recapture: rebuilding — ' + changeReason);
-    }
-
-    expectedCaptureDims = hintedDims;
+    const command = validatedCaptureCommand(msg);
+    // The backend deduplicates no-op viewport updates. An explicit recapture
+    // is also the recovery command for a live-looking but stalled track, so
+    // matching dimensions are never grounds to discard it here.
     // Each SERVER-initiated recapture gets one post-connect self-heal check;
     // a self-heal's own recapture deliberately does not re-arm this (no loop).
     selfHealBudget = 3;
     const forWs = ws;
     try {
-      await runCaptureAndOffer();
+      await runCaptureAndOffer(command);
     } catch (e) {
       window.__omnipusState.lastError = String(e);
       record('recapture FAILED: ' + e);
@@ -1971,6 +1853,12 @@ async function handleWsMessage(raw) {
 
   switch (msg.type) {
     case 'browser_capture_answer':
+      if (!currentCaptureCommand || msg.offer_id !== currentOfferID ||
+          msg.capture_generation !== currentCaptureCommand.capture_generation ||
+          msg.target_id !== currentCaptureCommand.target_id) {
+        record('ignored stale browser_capture_answer identity');
+        return;
+      }
       // Clear the offer-answer timeout as soon as a response arrives at
       // all -- even if setRemoteDescription below then fails, that's a
       // different (already-logged) failure class, not the "silently
@@ -1994,24 +1882,25 @@ async function handleWsMessage(raw) {
         return;
       }
       try {
-        await currentPC.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
+        const answerPC = currentPC;
+        await answerPC.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
+        if (currentPC !== answerPC || currentOfferID !== msg.offer_id) return;
         setStatus('connected');
         lastGoodIceTime = Date.now();
         record('applied browser_capture_answer, PC connecting');
-        if (selfHealBudget > 0) {
+        if (selfHealBudget > 0 && !currentCaptureCommand.expected_width) {
           selfHealBudget--;
           const healPC = currentPC;
           setTimeout(async () => {
             if (currentPC !== healPC || shuttingDown || !lastPinnedCapDims) return;
             try {
-              const tabId = await findActiveTargetTab();
+              const tabId = await findActiveTargetTab(currentCaptureCommand ? currentCaptureCommand.target_id : readConfig().target_id);
               const tab = await chrome.tabs.get(tabId);
               if (
                 tab && tab.width && tab.height &&
                 (Math.abs(tab.width - lastPinnedCapDims.w) > 8 || Math.abs(tab.height - lastPinnedCapDims.h) > 8)
               ) {
                 record('self-heal: pinned ' + lastPinnedCapDims.w + 'x' + lastPinnedCapDims.h + ' drifted from tab ' + tab.width + 'x' + tab.height + ' — recapturing once');
-                expectedCaptureDims = { w: tab.width, h: tab.height };
                 await runCaptureAndOffer();
               }
             } catch (e) {
@@ -2163,11 +2052,64 @@ function stopWatchdog() {
 // schema describes. Distinct from the ICE-state watchdog above: this beacon
 // exists so the gateway can detect a hung-but-still-WS-open encoder even
 // when no ICE state change would otherwise reveal it.
+// Reports capture stages separately. A timed-out stats read still sends track
+// and peer state, without relabelling an old counter sample as fresh.
+async function sendCaptureHealth() {
+  const pc = currentPC;
+  const stream = currentStream;
+  const command = currentCaptureCommand;
+  const socket = ws;
+  const generation = captureGeneration;
+  const track = stream && stream.getVideoTracks()[0];
+  const health = {
+    generation,
+    track_state: track ? track.readyState : 'absent',
+    track_muted: !!(track && track.muted),
+    peer_state: pc ? pc.connectionState : 'absent',
+  };
+  if (pc && pc.connectionState === 'connected') {
+    let timer;
+    try {
+      const sample = await Promise.race([
+        readVideoSenderSample(pc),
+        new Promise((resolve) => { timer = setTimeout(() => resolve(null), 1500); }),
+      ]);
+      if (sample) {
+        const fields = { source_frames: sample.sourceFrames, encoded_frames: sample.encodedFrames, packets_sent: sample.packetsSent };
+        for (const [key, value] of Object.entries(fields)) {
+          if (Number.isSafeInteger(value) && value >= 0) health[key] = value;
+        }
+        if (Number.isFinite(sample.sampleTimestampMs) && sample.sampleTimestampMs >= 0) {
+          health.sample_timestamp_ms = sample.sampleTimestampMs;
+        }
+      }
+    } catch (e) {
+      warn('capture health: stats unavailable', e);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  if (shuttingDown || ws !== socket) return;
+  const frame = { type: 'browser_capture_control', action: 'ping' };
+  if (currentPC !== pc || currentStream !== stream || currentCaptureCommand !== command || captureGeneration !== generation) {
+    // A changed sample cannot describe the new peer, but the original socket
+    // can still prove it is alive while capture transitions are pending.
+    sendFrame(frame);
+    return;
+  }
+  frame.capture_health = health;
+  if (pc && command) {
+    frame.capture_generation = command.capture_generation;
+    frame.target_id = command.target_id;
+  }
+  sendFrame(frame);
+}
+
 function startPingBeacon() {
   if (pingBeaconTimer) return;
   pingBeaconTimer = setInterval(() => {
     if (shuttingDown) return;
-    sendFrame({ type: 'browser_capture_control', action: 'ping' });
+    sendCaptureHealth().catch((e) => warn('capture health: beacon failed', e));
   }, PING_BEACON_INTERVAL_MS);
 }
 

@@ -668,7 +668,7 @@ func newControlTestFixtures(t *testing.T) (*browserWSConn, *browserConnState) {
 	require.NoError(t, err)
 	mgr, err := browser.NewBrowserManager(browserCfg, security.NewSSRFChecker(nil))
 	require.NoError(t, err)
-	wc := &browserWSConn{sendCh: make(chan []byte, 8), doneCh: make(chan struct{})}
+	wc := &browserWSConn{sendCh: make(chan browserOutboundFrame, 8), doneCh: make(chan struct{})}
 	state := &browserConnState{
 		mgr:            mgr,
 		sessionID:      "control-test-session",
@@ -683,7 +683,8 @@ func newControlTestFixtures(t *testing.T) (*browserWSConn, *browserConnState) {
 func readWCFrame(t *testing.T, wc *browserWSConn, timeout time.Duration) browserFrameDecoder {
 	t.Helper()
 	select {
-	case data := <-wc.sendCh:
+	case queued := <-wc.sendCh:
+		data := queued.data
 		var f browserFrameDecoder
 		require.NoError(t, json.Unmarshal(data, &f))
 		return f
@@ -713,7 +714,7 @@ func newTabActionTestFixtures(t *testing.T) (*browserWSConn, *browserConnState) 
 	browserCfg.ExecPath = filepath.Join(tmpDir, "no-such-chromium-binary")
 	mgr, err := browser.NewBrowserManager(browserCfg, security.NewSSRFChecker(nil))
 	require.NoError(t, err)
-	wc := &browserWSConn{sendCh: make(chan []byte, 8), doneCh: make(chan struct{})}
+	wc := &browserWSConn{sendCh: make(chan browserOutboundFrame, 8), doneCh: make(chan struct{})}
 	state := &browserConnState{
 		mgr:            mgr,
 		sessionID:      "tab-action-test-session",
@@ -743,7 +744,7 @@ func marshalTabActionFrame(t *testing.T, action string, index *int) []byte {
 // managing tabs" gate must fire before any manager state is consulted.
 func TestBrowserWS_HandleTabAction_NotAttached_Rejected(t *testing.T) {
 	handler, _ := newBrowserWSTestHandler(t, nil)
-	wc := &browserWSConn{sendCh: make(chan []byte, 8), doneCh: make(chan struct{})}
+	wc := &browserWSConn{sendCh: make(chan browserOutboundFrame, 8), doneCh: make(chan struct{})}
 	state := &browserConnState{} // zero value: mgr==nil, sessionID=="" — never attached
 
 	handler.handleTabAction(wc, state, "viewer1", marshalTabActionFrame(t, "switch", intPtr(0)))
@@ -821,11 +822,10 @@ func TestBrowserWS_HandleTabAction_Close_DispatchesToManager_NoSessionErrors(t *
 		"the error must be CloseTab's own — proof the handler actually called into the manager")
 }
 
-// TestBrowserWS_HandleTabAction_Open_DispatchesToManager_ExecPathError
-// proves "open" reaches the REAL BrowserManager.OpenTab: against a manager
-// whose ExecPath deliberately points at a nonexistent binary (no Chromium
-// dependency, fails fast via os.Stat inside resolveExecPath), OpenTab's own
-// "cannot locate chromium" error comes back as browser_status(error).
+// TestBrowserWS_HandleTabAction_Open_DispatchesToManager_ExecPathError uses a
+// deliberately missing executable. Interactive open now requires an existing
+// attachment, so it must report that missing session before attempting launch.
+// Legacy tool-driven OpenTab still owns cold-start behavior.
 func TestBrowserWS_HandleTabAction_Open_DispatchesToManager_ExecPathError(t *testing.T) {
 	handler, _ := newBrowserWSTestHandler(t, nil)
 	wc, state := newTabActionTestFixtures(t)
@@ -835,9 +835,9 @@ func TestBrowserWS_HandleTabAction_Open_DispatchesToManager_ExecPathError(t *tes
 	resp := readWCFrame(t, wc, 5*time.Second)
 	assert.Equal(t, "browser_status", resp.Type)
 	assert.Equal(t, "error", resp.State)
-	assert.Contains(t, resp.Message, "cannot locate chromium",
-		"the error must be OpenTab's own (via ensureStarted/resolveExecPath) — proof the handler "+
-			"actually called into the manager, not a stub")
+	assert.Contains(t, resp.Message, "no active session for attached tab set",
+		"an attached UI command must not attempt a cold browser launch")
+	assert.NotContains(t, resp.Message, "cannot locate chromium")
 }
 
 // TestBrowserWS_HandleTabAction_UnknownAction_Rejected verifies an
@@ -987,7 +987,7 @@ func lastBrowserAuditRecord(t *testing.T, auditDir, event string) audit.Record {
 // consulted.
 func TestBrowserWS_HandleControl_NotAttached_Rejected(t *testing.T) {
 	handler, al, _ := newBrowserWSHandlerWithAudit(t)
-	wc := &browserWSConn{sendCh: make(chan []byte, 8), doneCh: make(chan struct{})}
+	wc := &browserWSConn{sendCh: make(chan browserOutboundFrame, 8), doneCh: make(chan struct{})}
 	state := &browserConnState{} // zero value: mgr==nil, sessionID=="" — never attached
 
 	handler.handleControl(wc, state, "viewer1", "user1", marshalControlFrame(t, "take"), al.GetConfig())
@@ -1133,8 +1133,7 @@ func TestBrowserWS_HandleControl_UnknownAction_Rejected(t *testing.T) {
 // isolating the throttle's own content-comparison logic (handleInput's
 // throttled-frame.Kind/message/interval condition) from dispatchInput's
 // specific failure text.
-// BDD: Given a real dispatch failure (control taken but never attached, so
-// dispatchInput fails closed at "session is not attached" every time),
+// BDD: Given a real dispatch failure (no active live view exists),
 // When the SAME failure repeats immediately (within minInputErrorInterval),
 // Then only the first browser_status(error) frame is sent.
 // And when the connection's last-recorded message differs from the new
@@ -1143,9 +1142,8 @@ func TestBrowserWS_HandleControl_UnknownAction_Rejected(t *testing.T) {
 func TestBrowserWS_HandleInput_ThrottleIsContentAware(t *testing.T) {
 	handler, _ := newBrowserWSTestHandler(t, nil)
 	wc, state := newControlTestFixtures(t)
-	require.True(t, state.mgr.Live().TakeControl(state.mgr.OperatorSessionID(), "viewer1"),
-		"test setup: take control WITHOUT a real attach, so dispatchInput fails deterministically "+
-			"and identically every call ('session is not attached', tabCtx nil) — no CDP/browser needed")
+	// Keep the registry empty: missing live view is a real dispatch error.
+	// A control-only view would instead reject this unattached viewer benignly.
 
 	mmX, mmY := 10.0, 20.0
 	moveFrame, err := json.Marshal(generated.BrowserInputFrame{
@@ -1164,7 +1162,8 @@ func TestBrowserWS_HandleInput_ThrottleIsContentAware(t *testing.T) {
 	// with the IDENTICAL underlying failure — must be throttled (no frame).
 	handler.handleInput(wc, state, "viewer1", moveFrame)
 	select {
-	case f := <-wc.sendCh:
+	case queued := <-wc.sendCh:
+		f := queued.data
 		t.Fatalf("an identical repeated error must still be throttled inside minInputErrorInterval, got: %s", f)
 	case <-time.After(300 * time.Millisecond):
 		// expected: nothing sent
@@ -1194,8 +1193,8 @@ func TestBrowserWS_HandleInput_ThrottleIsContentAware(t *testing.T) {
 // SPA (which clears its error banner optimistically on every navigate
 // submit) would leave the user looking at no error at all after resubmitting
 // the exact same bad URL within minInputErrorInterval.
-// BDD: Given a real dispatch failure on a "navigate" input (control taken
-// but never attached, so dispatchInput fails closed identically every call),
+// BDD: Given a real dispatch failure on a "navigate" input (no active live
+// view exists, so input fails identically every call),
 // When the SAME navigate is resubmitted immediately (well inside
 // minInputErrorInterval), Then BOTH calls produce a browser_status(error)
 // frame — the cooldown that suppresses a repeated mouse_move failure must
@@ -1203,9 +1202,8 @@ func TestBrowserWS_HandleInput_ThrottleIsContentAware(t *testing.T) {
 func TestBrowserWS_HandleInput_Navigate_AlwaysBypassesThrottle(t *testing.T) {
 	handler, _ := newBrowserWSTestHandler(t, nil)
 	wc, state := newControlTestFixtures(t)
-	require.True(t, state.mgr.Live().TakeControl(state.mgr.OperatorSessionID(), "viewer1"),
-		"test setup: take control WITHOUT a real attach, so dispatchInput fails deterministically "+
-			"and identically every call ('session is not attached', tabCtx nil) — no CDP/browser needed")
+	// Keep the registry empty: missing live view is a real dispatch error.
+	// A control-only view would instead reject this unattached viewer benignly.
 
 	navURL := "http://8.8.8.8/"
 	navigateFrame, err := json.Marshal(generated.BrowserInputFrame{

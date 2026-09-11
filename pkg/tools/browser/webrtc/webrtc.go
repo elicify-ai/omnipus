@@ -28,7 +28,8 @@ package webrtc
 
 import (
 	"errors"
-	"net"
+
+	"github.com/pion/ice/v4"
 )
 
 // ErrUnavailable is returned by every Session method on a lite build (-tags
@@ -69,35 +70,14 @@ type Config struct {
 	// wave-plan decision 7 (Tools.Browser.WebRTCStunServer, "" = host-only).
 	StunServer string
 
-	// MediaConn is a SHARED, already-bound UDP socket that every viewer leg
-	// multiplexes over (ADR-069 tier 1). nil keeps the pre-ADR-069
-	// behaviour: an ephemeral port per session, which only ever works when
-	// the viewer can reach the gateway directly (same host, or an open LAN).
-	//
-	// SHARED, and owned by the caller, deliberately. A Session exists PER
-	// AGENT (capture_session.go), so a per-Session bind of the same fixed
-	// port means the FIRST agent wins and every later agent silently falls
-	// back to an ephemeral port -- i.e. multi-agent hosted installs would
-	// have video for one agent and an unexplained failure for the rest.
-	// Pion's UDP mux demultiplexes many ICE agents on one socket by ufrag,
-	// so one gateway-owned socket serves them all. The caller closes it.
-	//
-	// WHY a fixed port is the whole ballgame for a hosted install (measured
-	// 2026-08-15, Fly UAT): NO hosted provider delivers inbound UDP to an
-	// UNDECLARED ephemeral port. Providers route what you declare. An
-	// ephemeral port can never be declared, so ICE could never complete on a
-	// hosted deployment however healthy the network was -- and Fly's network
-	// was measured healthy (raw datagrams and STUN-formatted replies both
-	// traversed, sizes to 1200B). Omnipus is client-to-SERVER, not
-	// peer-to-peer: the gateway always has a fixed public address, so it
-	// should LISTEN somewhere reachable and SAY WHERE, never hole-punch.
-	MediaConn net.PacketConn
-
-	// MediaTCP is a SHARED, already-bound TCP listener for ICE-TCP
-	// (ADR-069 tier 2). nil keeps UDP-only. Same sharing rule as MediaConn:
-	// one gateway-owned listener, muxed by ufrag, because a Session is per-agent.
-	// Used when the viewer's network drops raw UDP (VPN system extensions).
-	MediaTCP net.Listener
+	// MediaUDPMux and MediaTCPMux are borrowed gateway-owned demultiplexers.
+	// Every capture on a fixed media port must share the SAME mux: separate
+	// muxes over one socket/listener compete for packets and drop other
+	// captures' ICE handshakes. The gateway closes them after its sessions.
+	// nil retains ephemeral UDP / no passive TCP respectively. These settings
+	// apply only to the viewer leg; loopback ingest has independent sockets.
+	MediaUDPMux ice.UDPMux
+	MediaTCPMux ice.TCPMux
 
 	// PublicIPs are addresses advertised to VIEWERS as media candidates
 	// (ADR-069 tier 1). Applied to the viewer leg ONLY -- see
@@ -122,25 +102,52 @@ type Config struct {
 // panicking.
 type InputSink func(viewerID string, raw []byte)
 
+// VideoReceipt identifies the source of the latest accepted video RTP packet.
+// Serial advances across feed replacement; zero means no packet was accepted.
+type VideoReceipt struct {
+	BindingToken uint64
+	Generation   uint64
+	TargetID     string
+	Serial       uint64
+}
+
 // Stats is a point-in-time snapshot of a Session's relay state, as returned
 // by Session.Stats() / stubbed by the lite build.
 type Stats struct {
 	// Viewers is the number of currently attached viewer PeerConnections.
 	Viewers int
-	// HasVideo/HasAudio report whether an ingest track of that kind has ever
-	// been attached (i.e. the shared local track exists, independent of
-	// whether the CURRENT ingest connection is still alive -- a track
-	// survives ingest replacement, see HandleIngestOffer).
+	// HasVideo/HasAudio report a currently live ingest feed of that kind.
+	// Shared local tracks survive replacement, but an unfed track is not live.
 	HasVideo bool
 	HasAudio bool
+	// VideoGeneration/VideoTargetID describe only the current live video feed.
+	// They are zero/empty while an installed peer has no video track yet.
+	VideoGeneration uint64
+	VideoTargetID   string
+	// VideoReceipt retains the latest actual packet's identity across feed
+	// changes until a new packet is accepted, independently of viewer writes.
+	VideoReceipt VideoReceipt
 	// VideoCodec/AudioCodec are the negotiated codec MIME types (e.g.
 	// "video/VP8", "audio/opus") of the most recent ingest track of that
 	// kind, empty if none has arrived yet.
 	VideoCodec string
 	AudioCodec string
-	// VideoPackets/AudioPackets are cumulative RTP packets forwarded from
-	// ingest to the shared local track since the Session was created (counts
-	// survive ingest replacement; they do not reset).
+	// VideoPackets/AudioPackets count successful shared-track WriteRTP calls
+	// since Session creation. An aggregate failure may follow successful
+	// delivery to some viewers; zero bound viewers can also return success.
+	// These cumulative counters are not proof of receiver presentation.
 	VideoPackets int64
 	AudioPackets int64
+	// Received counters count parsed packets accepted from the current ingest
+	// owner before writing to viewers; failures count aggregate writer errors.
+	VideoReceivedPackets int64
+	AudioReceivedPackets int64
+	VideoForwardFailures int64
+	AudioForwardFailures int64
+	// IngestBindingToken belongs to the installed peer, not a pending offer.
+	IngestBindingToken uint64
+	// Input overflow counters exclude lossless dequeue-time coalescing.
+	InputShedPositional    int64
+	InputDroppedPositional int64
+	InputDroppedDiscrete   int64
 }

@@ -198,8 +198,8 @@ func TestPool_PerKeyLockAndMarker(t *testing.T) {
 		key := browserTestKey(ws)
 		dir, err := f.pool.ProfileDirFor(key)
 		require.NoError(t, err)
-		_, statErr := os.Stat(filepath.Join(dir, launchLockFileName))
-		assert.NoError(t, statErr, "workspace %q must hold its OWN launch lock inside its own profile dir", ws)
+		_, statErr := os.Stat(profileLaunchLockPath(dir))
+		assert.NoError(t, statErr, "workspace %q must hold its OWN launch lock beside its profile dir", ws)
 	}
 	assert.NotEqual(t,
 		f.pool.markerPathFor(browserTestKey("alpha")),
@@ -293,7 +293,12 @@ func TestPool_DeleteProfileOnWorkspaceDeletionOnly(t *testing.T) {
 	})
 
 	t.Run("refuses while the browser is still live", func(t *testing.T) {
-		seed()
+		// A deleted workspace cannot be reopened. This is an independent live
+		// workspace, not another operation on the preceding deleted fixture.
+		f := newPoolFixture(t)
+		inst := f.mustAcquire(t, "live-delete-refusal")
+		key, dir := inst.key, inst.profileDir
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "Cookies"), []byte("session=abc"), 0o600))
 		err := f.pool.DeleteProfile(key)
 		require.Error(t, err,
 			"deleting a profile out from under a running Chrome races the browser's own "+
@@ -459,7 +464,7 @@ func TestPool_ReconcileRefusesWhenLockHeld(t *testing.T) {
 	// Our own pid stands in for "another live gateway's Chrome".
 	writeTestMarker(t, f.pool.markerPathFor(key), os.Getpid())
 
-	held, acquired, lockErr := acquireLaunchLock(filepath.Join(dir, launchLockFileName))
+	held, acquired, lockErr := acquireLaunchLock(profileLaunchLockPath(dir))
 	require.NoError(t, lockErr)
 	require.True(t, acquired)
 	t.Cleanup(func() { releaseLaunchLock(held) })

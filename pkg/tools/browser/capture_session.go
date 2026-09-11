@@ -1,10 +1,10 @@
 package browser
 
-// capture_session.go implements the ADR-047 / wave-plan W2-A per-agent WebRTC
+// capture_session.go implements the ADR-047 / wave-plan W2-A WebRTC
 // capture session: it owns the gateway-owned encoder page's lifecycle (the
 // capture extension's chrome-extension://<id>/encoder.html target), plus the
-// Pion SFU relay Session that backs it. One CaptureSession exists per agent
-// (BrowserManager.capture), created lazily on the first WebRTC-capable viewer
+// Pion SFU relay Session that backs it. BrowserManager indexes captures by
+// resolved panel tab set, created lazily on the first WebRTC-capable viewer
 // offer and torn down on last-viewer-detach (after a grace period) or on
 // browser death (live.go's watchForUnexpectedDeath) or manager Shutdown.
 //
@@ -46,6 +46,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -63,7 +65,7 @@ const captureTokenBytes = 32
 
 // captureStartTimeout bounds the encoder-page inject+navigate CDP round trip
 // — NOT Start() itself (Start contains no chromedp.Run call of its own), but
-// the EncoderStarter it invokes: defaultEncoderStarter derives its own
+// the EncoderStarter it invokes: startEncoderWithFrame derives its own
 // runCtx from this constant around its chromedp.Run(injectScript, Navigate)
 // call, below. Generous for a cold managed-Chrome extension load, but
 // bounded so a wedged CDP transport can't hang a viewer's offer forever.
@@ -133,8 +135,8 @@ var captureGracePeriod = 60 * time.Second
 // other packages — chiefly pkg/gateway's WebRTC signaling handler tests —
 // can supply a fake relay without depending on real Pion/ICE machinery, per
 // wave-plan W2-A's "fake webrtc.Session behind a narrow interface you define
-// at the consumption point." Both webrtc.Session build variants (the real
-// Pion-backed session.go and the lite stub.go) satisfy this structurally.
+// at the consumption point." The Pion-backed webrtc.Session satisfies this
+// interface structurally.
 type RelaySession interface {
 	HandleIngestOffer(sdpOffer string) (answer string, err error)
 	HandleViewerOffer(viewerID string, sdpOffer string) (answer string, err error)
@@ -157,8 +159,8 @@ type RelaySession interface {
 //
 // GAP 2 fix-wave finding: the callback additionally receives the relay's own
 // identity handle for the evicted registration (dynamically a
-// *webrtc.ViewerHandle -- opaque `any` for the same build-tag-neutral reason
-// viewerOfferHandler's handle parameters are, below), NOT just the bare
+// *webrtc.ViewerHandle, an opaque identity token as documented below on
+// viewerOfferHandler), NOT just the bare
 // viewerID the original version of this interface passed. Without it,
 // CaptureSession had no way to tell a legitimate eviction of an OLD,
 // already-superseded relay registration (e.g. an ICE failure on a
@@ -171,13 +173,8 @@ type RelaySession interface {
 // recordViewerRelayHandle/removeViewerByRelayHandle for how the handle is
 // used to close that second, independent gap.
 //
-// Detected via a type assertion in newCaptureSessionWithDeps rather than
-// added to RelaySession itself, so:
-//   - the lite build's stub Session (never evicts a viewer on its own --
-//     HandleViewerOffer always errors there) needs no matching method and
-//     keeps compiling unchanged.
-//   - test fakes (fakeRelay, capture_session_test.go) that don't exercise
-//     this path don't need to implement it either.
+// Detected via a type assertion so test fakes that do not exercise relay-side
+// eviction need not implement this capability.
 type viewerRemover interface {
 	SetOnViewerRemoved(fn func(viewerID string, handle any))
 }
@@ -192,8 +189,7 @@ type viewerRemover interface {
 // last received — the operator watched the start page persist while the tab
 // title and URL bar advanced through several real sites.
 //
-// Detected via type assertion, same discipline (and same lite-stub/test-fake
-// reasons) as viewerRemover above.
+// Detected via type assertion, like viewerRemover, to support narrower test fakes.
 type ingestLossNotifier interface {
 	SetOnIngestLost(fn func())
 }
@@ -217,7 +213,7 @@ type ingestLiveNotifier interface {
 // bitrateTargetNotifier is the optional RelaySession capability that reports a
 // congestion target derived from the VIEWER leg's RTCP receiver reports
 // (ADR-069 Finding 2). Detected by type assertion for the same reason as the
-// interfaces above: the lite stub and the test fakes do not implement it.
+// interfaces above: narrower test fakes need not implement it.
 type bitrateTargetNotifier interface {
 	SetOnBitrateTarget(fn func(bps int))
 }
@@ -227,28 +223,25 @@ type bitrateTargetNotifier interface {
 // HandleViewerOfferHandle and CloseViewerIfCurrent's doc comments for the
 // race this closes (a superseded/failed offer's cleanup tearing down a
 // NEWER, already-committed offer's live connection for the same viewerID).
-// Same detection discipline as viewerRemover above (a type assertion, not a
-// RelaySession method) for the same lite-stub/test-fake reasons -- only the
-// real Pion-backed *webrtc.Session implements it.
-//
-// The handle parameters are declared `any`, NOT the concrete
-// *webrtc.ViewerHandle, deliberately: this file has no build tag (it
-// compiles into the lite build too), while *webrtc.ViewerHandle is defined
-// only in webrtc/viewer.go (//go:build !lite) -- naming it here would break
-// -tags lite with an "undefined: webrtc.ViewerHandle" compile error. `any`
-// lets this interface (and ViewerAttachHandle.relay below) exist in both
-// builds; treat the value as opaque and pass it straight to
-// CloseViewerIfCurrent, exactly as webrtc.Session's own doc comments direct.
+// Detected by type assertion so narrower test fakes remain usable. Handles
+// are opaque identity tokens; consumers pass them back to CloseViewerIfCurrent.
 type viewerOfferHandler interface {
 	HandleViewerOfferHandle(viewerID, sdpOffer string) (answer string, handle any, err error)
 	CloseViewerIfCurrent(handle any)
+}
+
+// contextViewerOfferHandler retains the original attachment lifetime in a
+// relay that also supports the existing exact-handle cleanup contract.
+type contextViewerOfferHandler interface {
+	viewerOfferHandler
+	HandleViewerOfferHandleContext(ctx context.Context, viewerID, sdp string) (string, any, error)
 }
 
 // viewerRegistration is the value CaptureSession.viewers stores per attached
 // viewerID (see that field's doc comment): the generation token AddViewer
 // minted for the current attach attempt, and — once known — the relay's own
 // identity handle for that same attempt's registration (dynamically a
-// *webrtc.ViewerHandle, opaque `any` for the same build-tag-neutral reason
+// *webrtc.ViewerHandle, opaque `any` for the same identity-token contract
 // documented on viewerOfferHandler above). relayHandle is nil until
 // recordViewerRelayHandle sets it (there is a real window, inside
 // HandleViewerOffer, between minting gen via AddViewer and the relay actually
@@ -272,7 +265,7 @@ type viewerRegistration struct {
 // LOW finding: this was previously never passed to the encoder page at all).
 // Exported purely as a test-injection seam (mirrors this package's existing
 // createTabFn/pipeLauncher/listTargets testability pattern) — production code
-// always uses defaultEncoderStarter.
+// always uses startEncoderWithFrame.
 //
 // panelSessionID (issue #671) is the manager-level tab set the LIVE PANEL
 // resolved for this capture — the encoder page must be raised alongside
@@ -282,7 +275,7 @@ type viewerRegistration struct {
 // every fake starter in the tests passes.
 type EncoderStarter func(ctx context.Context, mgr *BrowserManager, panelSessionID, tokenHex, ingestURL, stunServer string) (tabCtx context.Context, tabCancel context.CancelFunc, err error)
 
-// CaptureSession owns one agent's WebRTC capture stream end to end: the
+// CaptureSession owns one resolved panel tab set's WebRTC stream end to end: the
 // encoder-page CDP target, the minted ingest capability token, the Pion SFU
 // relay Session, and the loopback capture-ingest connection's send/close
 // callbacks (bound once browser_capture_hello authenticates — see
@@ -296,8 +289,7 @@ type CaptureSession struct {
 	startEncoder EncoderStarter
 	token        []byte // captureTokenBytes random bytes, minted once in NewCaptureSession*
 	// offerHandler is relay's viewerOfferHandler capability, if it has one
-	// (the real Pion-backed *webrtc.Session; never the lite build's stub, and
-	// not every test fake) -- set once at construction (see
+	// (the Pion-backed *webrtc.Session and capable test fakes) -- set once at construction (see
 	// newCaptureSessionWithDeps), nil-safe everywhere it's read (see
 	// HandleViewerOffer/CleanupViewerOffer).
 	offerHandler viewerOfferHandler
@@ -320,20 +312,21 @@ type CaptureSession struct {
 	panelSessionID string
 
 	mu sync.Mutex
-	// startOnce/startErr collapse concurrent Start() callers into exactly one
-	// startEncoder invocation — see Start's doc comment.
-	startOnce sync.Once
-	startErr  error
-	// captureScale is the controlling viewer's devicePixelRatio (see
-	// SetCaptureScale). Guarded by mu. Zero means "never set" -> treated as 1.
-	captureScale float64
-	extVersion   string
-	lastPingAt   time.Time
-	tabCtx       context.Context
-	tabCancel    context.CancelFunc
-	started      bool
+	// startDone publishes the sole startup attempt; each waiter retains its own cancellation.
+	startDone          chan struct{}
+	startCancel        context.CancelFunc
+	startErr           error
+	extVersion         string
+	lastPingAt         time.Time
+	captureHealth      CaptureHealthObservation
+	frames             captureFrameTracker
+	documentTransition *captureDocumentTransition
+	onFrameState       func(CaptureFrameState)
+	tabCtx             context.Context
+	tabCancel          context.CancelFunc
+	started            bool
 	// starting is true only for the narrow window between Start() entering
-	// its one-time startOnce.Do body and cs.startEncoder returning (success
+	// its sole startup attempt and cs.startEncoder returning (success
 	// or failure) — see IsStarting's doc comment for why the gateway's
 	// ADR-048 condition-2 fence needs to distinguish this from both "never
 	// started" and "fully started."
@@ -347,8 +340,9 @@ type CaptureSession struct {
 	// follow-up, measured 2026-07-31 — stream stuck at 1278x632 launch
 	// geometry while the tab was CDP-verified at 615x744 in the same
 	// second).
-	ingestSend  func(action string, reason *string, expectedW, expectedH, maxBitrate int) error
-	ingestClose func()
+	ingestSend      func(action string, reason *string, expectedW, expectedH, maxBitrate int) error
+	ingestClose     func()
+	ingestRecapture CaptureRecaptureSender
 	// ingestEpoch increments on every BindIngest call — UnbindIngest only
 	// clears ingestSend/ingestClose if the epoch it was handed still matches
 	// the current one, guarding against a stale (superseded/reconnected)
@@ -356,6 +350,16 @@ type CaptureSession struct {
 	// callbacks. A counter rather than comparing the callback funcs
 	// themselves (func values are not comparable in Go beyond nil-checks).
 	ingestEpoch uint64
+	// Authenticated socket, pending offer, and frame lifetimes are independent
+	// of the media token installed in the relay. Guarded by mu.
+	ingestContextBound  bool // Retained after Unbind; production must never regain legacy proof semantics.
+	ingestBindingToken  uint64
+	ingestBindingCtx    context.Context
+	ingestBindingCancel context.CancelFunc
+	ingestOfferID       uint64
+	ingestOfferCancel   context.CancelFunc
+	frameCtx            context.Context
+	frameCancel         context.CancelFunc
 	// viewers maps an attached viewerID to its MOST RECENT registration
 	// attempt's viewerRegistration (generation token + relay identity
 	// handle) -- see AddViewer, RemoveViewerIfCurrent, recordViewerRelayHandle
@@ -367,14 +371,19 @@ type CaptureSession struct {
 	// (guarded by relayHandle, via removeViewerByRelayHandle) -- only the
 	// CURRENT registration's own cleanup/eviction may remove the entry.
 	viewers map[string]viewerRegistration
+	// viewerRequests holds only the latest ordered attempt for each original attachment.
+	// Pending attempts are separate from active viewer registrations. Guarded by mu.
+	viewerRequests map[string]*captureViewerRequest
 	// viewerGenSeq is the monotonic counter AddViewer draws each new
 	// generation token from. Guarded by mu, same as viewers itself.
 	viewerGenSeq uint64
 	stopTimer    *time.Timer
-	onStopped    func() // invoked exactly once when Stop() completes (gateway hook for registry cleanup)
-	// done is closed exactly once, when Stop() completes — see Done()'s doc
-	// comment. Lets a caller (the gateway's encoder-liveness watchdog)
-	// select on session lifetime without a redundant onStopped wiring.
+	// graceAfterFunc substitutes only the clock boundary in lifecycle tests.
+	// Nil uses time.AfterFunc; callbacks must run asynchronously after return.
+	graceAfterFunc func(time.Duration, func()) *time.Timer
+	onStopped      func() // invoked exactly once when Stop() completes (gateway hook for registry cleanup)
+	// done closes when Stop claims the session, before shutdown transport I/O.
+	// Callers can cancel pending work without waiting for socket cleanup.
 	done chan struct{}
 
 	// tabChangeRecaptureRunning/Pending coalesce concurrent
@@ -383,15 +392,8 @@ type CaptureSession struct {
 	tabChangeRecaptureRunning bool
 	tabChangeRecapturePending bool
 
-	// tabChangeRecaptureW/H carry the CDP-verified CSS viewport the NEXT
-	// worker pass should hand the encoder (0,0 = "no measurement to offer",
-	// same convention as RecaptureAt). Written by every
-	// RecaptureForTabChangeAt call — including one that only coalesces into a
-	// running worker — and read fresh at the top of each pass, so a burst of
-	// tab changes converges on the LAST caller's geometry rather than
-	// replaying the first one's. Guarded by mu.
-	tabChangeRecaptureW int
-	tabChangeRecaptureH int
+	// The pending pass owns its measured frame and original binding lifetime.
+	tabChangeRecaptureRequest captureTabRecaptureRequest
 
 	// ── Bounded automatic video recovery (#674) ─────────────────────────────
 	// All guarded by mu. See capture_video_health.go for the state machine
@@ -403,6 +405,15 @@ type CaptureSession struct {
 	// ingestRecoveryAttempts counts automatic recaptures issued since video
 	// was last confirmed live. Reset to 0 by onIngestVideoLive.
 	ingestRecoveryAttempts int
+	videoHealthVersion     uint64
+	videoHealthExhausted   bool
+	videoHealthLatest      VideoHealthEvent
+	ingestRecoveryEpoch    uint64
+	ingestRecoveryCtx      context.Context
+	ingestRecoveryCancel   context.CancelFunc
+	// Progress at the latest loss; only later packets may complete recovery.
+	ingestRecoveryProgressBaseline uint64
+	ingestConsumedReceiptSerial    uint64
 	// ingestRecoveryTimer is the single armed evaluation of the recovery state
 	// machine; nil when none is pending. Exactly one may exist at a time —
 	// that is what stops a burst of loss notifications becoming a burst of
@@ -437,12 +448,12 @@ type CaptureSession struct {
 // agent's BrowserManager — NOT because the encoder page is created in a
 // context of its own (it is not; there is one default context per browser
 // since FR-031), but because mgr is how this reaches the workspace's
-// coordinator, whose BrowserConfig.ExtensionDir defaultEncoderStarter loads
+// coordinator, whose BrowserConfig.ExtensionDir startEncoderWithFrame loads
 // the capture extension from, set once at gateway boot. cfg is the Pion
 // relay's ICE config (wave-plan item 7:
 // Tools.Browser.WebRTCStunServer), sink receives every "input" data-channel
 // message from every viewer (the gateway builds this — see
-// browser_webrtc.go's webrtcInputSink — so this package never needs
+// browser_webrtc.go's input routing — so this package never needs
 // pkg/api/generated), and logf is a structured log sink (nil-safe).
 func NewCaptureSession(
 	mgr *BrowserManager,
@@ -452,12 +463,22 @@ func NewCaptureSession(
 	sink webrtc.InputSink,
 	logf func(string, ...any),
 ) (*CaptureSession, error) {
+	var contextSink webrtc.ContextInputSink
+	if sink != nil {
+		contextSink = func(_ context.Context, viewerID string, raw []byte) { sink(viewerID, raw) }
+	}
+	return NewCaptureSessionWithContextInput(mgr, agentID, panelSessionID, cfg, contextSink, logf)
+}
+
+// NewCaptureSessionWithContextInput retains the originating input-source
+// lifetime while preserving the same confirmed-frame startup and relay callbacks.
+func NewCaptureSessionWithContextInput(mgr *BrowserManager, agentID, panelSessionID string, cfg webrtc.Config, sink webrtc.ContextInputSink, logf func(string, ...any)) (*CaptureSession, error) {
 	token := make([]byte, captureTokenBytes)
 	if _, err := rand.Read(token); err != nil {
 		return nil, fmt.Errorf("capture session: mint token: %w", err)
 	}
-	relay := webrtc.NewSession(cfg, sink, logf)
-	cs := newCaptureSessionWithDeps(mgr, agentID, relay, defaultEncoderStarter, token, logf)
+	relay := webrtc.NewSessionWithContextInput(cfg, sink, logf)
+	cs := newCaptureSessionWithDeps(mgr, agentID, relay, nil, token, logf)
 	// The encoder page gets NO STUN server, whatever the operator configured.
 	// tools.browser.webrtc_stun_server governs the VIEWER leg, which is the
 	// only leg with a real network between its peers; the encoder page is this
@@ -471,13 +492,23 @@ func NewCaptureSession(
 	// (resolveIceServers's tri-state), which is exactly what this leg wants.
 	cs.stunServer = ""
 	cs.panelSessionID = panelSessionID
+	cs.startEncoder = func(ctx context.Context, mgr *BrowserManager, panelID, token, ingestURL, stun string) (context.Context, context.CancelFunc, error) {
+		frame, err := cs.prepareEncoderFrame(ctx, measureCaptureGeometry)
+		if err != nil {
+			return nil, nil, err
+		}
+		return startEncoderWithFrame(ctx, mgr, panelID, token, ingestURL, stun, frame)
+	}
+	relay.SetOnVideoBoundary(func(generation uint64, targetID string, timestamp uint32) {
+		cs.CommitFrameBoundary(generation, targetID, timestamp)
+	})
 	return cs, nil
 }
 
 // NewCaptureSessionWithDeps is the fully-injectable constructor: relay
 // satisfies RelaySession (a fake in tests, *webrtc.Session in production —
 // see NewCaptureSession) and startEncoder satisfies EncoderStarter (a fake
-// in tests that never touches real chromedp, defaultEncoderStarter in
+// in tests that never touches real chromedp, startEncoderWithFrame in
 // production). Exported for other packages' tests (pkg/gateway's WebRTC
 // signaling handler tests construct a real *CaptureSession with these two
 // seams faked, exercising the actual CaptureSession lifecycle logic against
@@ -520,8 +551,7 @@ func newCaptureSessionWithDeps(
 	// Wire the two optional RelaySession capabilities (viewerRemover,
 	// viewerOfferHandler) if the concrete relay supports them -- see their
 	// doc comments. Detected via a type assertion rather than widening
-	// RelaySession itself, so the lite build's stub Session and narrower
-	// test fakes need no matching methods.
+	// RelaySession itself, so narrower test fakes need no matching methods.
 	if vr, ok := relay.(viewerRemover); ok {
 		// removeViewerByRelayHandle (NOT the plain, unconditional
 		// RemoveViewer this replaces as the wiring target) -- GAP 2 fix-wave
@@ -534,7 +564,9 @@ func newCaptureSessionWithDeps(
 	if oh, ok := relay.(viewerOfferHandler); ok {
 		cs.offerHandler = oh
 	}
-	if il, ok := relay.(ingestLossNotifier); ok {
+	if il, ok := relay.(captureOfferLossNotifier); ok {
+		il.SetOnIngestLostForOffer(cs.onIngestLostForOffer)
+	} else if il, ok := relay.(ingestLossNotifier); ok {
 		// A dead ingest means the encoder is gone; ask it to re-capture so the
 		// stream recovers on its own. Without this the session sits with no
 		// ingest at all and nothing ever asks for a new one, which is
@@ -558,35 +590,19 @@ func newCaptureSessionWithDeps(
 	return cs
 }
 
-// captureInjectPayload is the exact shape encoder.js's readConfig() expects
-// at window.__omnipusCapture — {token, ingestUrl, stunServer} (see
-// pkg/tools/browser/captureext/embedded/encoder.js's readConfig doc
-// comment). Not a cross-gateway-boundary wire type in the Constraint #8
-// sense (it never round-trips through pkg/gateway's REST/WS surface — it is
-// injected directly into a CDP-driven page via
-// Page.addScriptToEvaluateOnNewDocument), so a package-local struct here is
-// correct, not a lint violation.
-//
-// StunServer carries the STUN policy for the encoder's own browser-side
-// RTCPeerConnection. It MUST NOT be `omitempty`, and that is not a style
-// preference — encoder.js's resolveIceServers reads this field as a
-// TRI-state:
-//
-//	"stun:…" present -> use that server
-//	""      present  -> host candidates only, no STUN at all
-//	key ABSENT       -> back-compat fallback to Google's public STUN server
-//
-// `omitempty` erases the difference between the middle case and the last
-// one, so an explicit "no STUN" was silently delivered to the page as "use
-// stun.l.google.com". Measured 2026-09-05 with the repro harness: with
-// omitempty in place, an encoder configured for host-only ICE still offered
-// server-reflexive candidates from a public STUN server it had been told not
-// to use. Emitting the empty string is what makes the middle case reachable
-// at all.
-type captureInjectPayload struct {
-	Token      string `json:"token"`
-	IngestURL  string `json:"ingestUrl"`
-	StunServer string `json:"stunServer"`
+// captureInjectPayload is injected before the encoder document executes. Its
+// target, generation and geometry describe one immutable prepared frame.
+// StunServer must stay present even when empty: empty disables STUN, whereas
+// an absent property selects the encoder's legacy default.
+type captureInjectPayload struct { // not-wire-format: CDP-injected page configuration.
+	Token             string  `json:"token"`
+	IngestURL         string  `json:"ingestUrl"`
+	StunServer        string  `json:"stunServer"`
+	CaptureGeneration uint64  `json:"capture_generation"`
+	TargetID          string  `json:"target_id"`
+	ExpectedWidth     int     `json:"expected_width"`
+	ExpectedHeight    int     `json:"expected_height"`
+	CaptureScale      float64 `json:"capture_scale"`
 }
 
 // panelTabSet reports the manager-level tab set this capture is bound to
@@ -607,127 +623,110 @@ func (cs *CaptureSession) panelTabSet() string {
 	return cs.mgr.OperatorSessionID()
 }
 
-// defaultEncoderStarter is the production EncoderStarter: it ensures the
-// tab set the live panel resolved exists (so there is a tab to capture),
-// ensures the capture extension is loaded into this workspace's Chrome,
-// creates an UNTRACKED CDP target — deliberately NOT via mgr.OpenTab, which
-// would register it in the visible tab strip; the encoder page is a
-// gateway-internal target the agent and the user never see — injects
-// window.__omnipusCapture BEFORE
-// navigating (Page.addScriptToEvaluateOnNewDocument runs before any of the
-// target document's own scripts, per its CDP doc comment), then navigates to
-// chrome-extension://<captureext.ExtensionID>/encoder.html. stunServer (may
-// be empty) is forwarded into the injected captureInjectPayload verbatim.
-func defaultEncoderStarter(
-	ctx context.Context,
-	mgr *BrowserManager,
-	panelSessionID, tokenHex, ingestURL, stunServer string,
-) (context.Context, context.CancelFunc, error) {
+// captureInjectionScript serializes one startup configuration snapshot.
+func captureInjectionScript(token, ingestURL, stun string, frame CaptureFrameState) (string, error) {
+	if frame.Generation == 0 || frame.Generation > 9007199254740991 ||
+		strings.TrimSpace(frame.TargetID) == "" || len(frame.TargetID) > 128 ||
+		frame.Width < 1 || frame.Width > 16384 || frame.Height < 1 || frame.Height > 16384 ||
+		math.IsNaN(frame.Scale) || frame.Scale < 1 || frame.Scale > 4 {
+		return "", fmt.Errorf("capture session: invalid confirmed frame")
+	}
+	payload, err := json.Marshal(captureInjectPayload{Token: token, IngestURL: ingestURL, StunServer: stun,
+		CaptureGeneration: frame.Generation, TargetID: frame.TargetID, ExpectedWidth: frame.Width, ExpectedHeight: frame.Height, CaptureScale: frame.Scale})
+	if err != nil {
+		return "", fmt.Errorf("capture session: marshal inject payload: %w", err)
+	}
+	return "window.__omnipusCapture = " + string(payload) + ";", nil
+}
+
+// runEncoderStartup links cancellation only while creating and navigating the
+// target. The successful target keeps a persistent coordinator-root lifetime.
+// The supplied functions are the CDP I/O boundary, not lifecycle substitutes.
+func runEncoderStartup(caller, root context.Context, create func(context.Context) (*tabEntry, error), navigate func(context.Context) error) (context.Context, context.CancelFunc, error) {
+	startup, cancelStartup := context.WithTimeout(caller, captureStartTimeout)
+	defer cancelStartup()
+	if err := startup.Err(); err != nil {
+		return nil, nil, err
+	}
+	lifetime, closeLifetime := context.WithCancel(root)
+	stopLink := context.AfterFunc(startup, closeLifetime)
+	defer stopLink()
+	tab, err := create(lifetime)
+	if err != nil {
+		closeLifetime()
+		return nil, nil, err
+	}
+	closeTarget := func() { closeLifetime(); tab.cancel() }
+	if startupErr := startup.Err(); startupErr != nil {
+		closeTarget()
+		return nil, nil, startupErr
+	}
+	deadline, _ := startup.Deadline()
+	runCtx, cancelRun := context.WithDeadline(tab.ctx, deadline)
+	err = navigate(runCtx)
+	cancelRun()
+	if err != nil {
+		closeTarget()
+		return nil, nil, err
+	}
+	// Detach before cancelStartup runs; otherwise success would close the tab.
+	if !stopLink() || startup.Err() != nil {
+		closeTarget()
+		return nil, nil, startup.Err()
+	}
+	return tab.ctx, closeTarget, nil
+}
+
+// startEncoderWithFrame creates an untracked encoder target in the workspace's
+// shared Chrome. The caller has already prepared the captured target under the
+// live-input gate; this function performs no focus-based target selection.
+func startEncoderWithFrame(ctx context.Context, mgr *BrowserManager, panelSessionID, tokenHex, ingestURL, stunServer string, frame CaptureFrameState) (context.Context, context.CancelFunc, error) {
+	injectScript, err := captureInjectionScript(tokenHex, ingestURL, stunServer, frame)
+	if err != nil {
+		return nil, nil, err
+	}
 	if mgr == nil {
 		return nil, nil, fmt.Errorf("capture session: no browser manager")
 	}
-
-	// 1. Ensure the tab set being watched exists — the encoder page must share
-	// ITS window (see this file's top-of-file doc comment for why).
-	//
-	// panelSessionID is what the live panel resolved for this viewer (issue
-	// #671): the watched chat's own tab set, or the operator's workspace-owned
-	// one. Passing the operator's unconditionally is the bug — with an empty
-	// operator set THIS call was what lazily created the blank /browser-start
-	// tab the video then showed, while the agent browsed in the chat's set.
-	// Empty falls back to the operator's set, the behaviour every caller
-	// without panel context had before.
-	//
-	// Either way it is a real (key, owner) tab set, never a hardcoded default
-	// session: that identity was deleted by FR-002b, and
-	// TestNoResidualDefaultSessionID exists to keep it deleted.
-	if panelSessionID == "" {
-		panelSessionID = mgr.OperatorSessionID()
-	}
-	if _, err := mgr.Session(panelSessionID); err != nil {
-		return nil, nil, fmt.Errorf("capture session: ensure agent browsing context: %w", err)
-	}
-
-	// 2. Ensure the capture extension is loaded into THIS WORKSPACE'S Chrome.
-	// There is one per workspace now (FR-037), not one shared by the gateway,
-	// so the extension is loaded per browser and not once per process.
 	coord := mgr.Coordinator()
 	if coord == nil {
-		return nil, nil, fmt.Errorf(
-			"capture session: no shared-Chrome coordinator attached (WebRTC capture requires the shared-Chrome coordinator)",
-		)
+		return nil, nil, fmt.Errorf("capture session: no shared-Chrome coordinator attached (WebRTC capture requires the shared-Chrome coordinator)")
 	}
-	if coord.LoadedExtensionID() != captureext.ExtensionID {
-		if _, err := coord.LoadExtension(ctx); err != nil {
-			return nil, nil, fmt.Errorf("capture session: load capture extension: %w", err)
-		}
-	}
-
-	// 3. Create the encoder target as a child of the coordinator's pipe
-	// rootCtx — i.e. in this workspace's browser, alongside every tab that
-	// browser holds. There is exactly one browser context here (FR-031), so
-	// "which context" is no longer a decision this code makes; encoder.js's
-	// tab-selection query and chrome.tabCapture both see the workspace's own
-	// tabs because there is nowhere else for them to be.
-	//
-	// The target is still created WITHOUT mgr.OpenTab, and that part is a
-	// live decision rather than history: OpenTab would register the encoder
-	// page in the visible tab strip, and it is a gateway-internal page the
-	// agent and the user must never see or be able to drive.
-	//
-	// Why the encoder page is not simply put wherever is convenient — the
-	// constraint that shaped this, kept because it is the reason the code
-	// looks like this and not because it still binds: against the retired
-	// per-agent CDP-created contexts, Chrome refused to load
-	// chrome-extension:// pages at all (net::ERR_BLOCKED_BY_CLIENT, even with
-	// enableInIncognito:true), and chrome.tabCapture answered "Invalid tab
-	// specified." for any tab inside one (ADR-048, real Chrome 150). Both
-	// findings are what make a per-workspace Chrome PROCESS the right
-	// isolation boundary and a CDP context the wrong one. Do not reintroduce
-	// a CDP context to "isolate" anything here: it would break capture and
-	// nothing else, which is a failure that shows up only on a machine with a
-	// real browser.
 	rootCtx := coord.rootContext()
 	if rootCtx == nil {
 		return nil, nil, fmt.Errorf("capture session: shared Chrome is not live (no root context for the encoder page)")
 	}
-
-	tab, err := mgr.createTab(rootCtx, "")
-	if err != nil {
-		return nil, nil, fmt.Errorf("capture session: create encoder target: %w", err)
-	}
-
-	payload, err := json.Marshal(captureInjectPayload{Token: tokenHex, IngestURL: ingestURL, StunServer: stunServer})
-	if err != nil {
-		tab.cancel()
-		return nil, nil, fmt.Errorf("capture session: marshal inject payload: %w", err)
-	}
-	injectScript := "window.__omnipusCapture = " + string(payload) + ";"
-	encoderURL := "chrome-extension://" + captureext.ExtensionID + "/encoder.html"
-
-	runCtx, cancel := context.WithTimeout(tab.ctx, captureStartTimeout)
-	runErr := chromedp.Run(
-		runCtx,
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			_, err := page.AddScriptToEvaluateOnNewDocument(injectScript).Do(ctx)
-			return err
-		}),
-		chromedp.Navigate(encoderURL),
-	)
-	cancel()
-	if runErr != nil {
-		tab.cancel()
-		return nil, nil, fmt.Errorf("capture session: inject config + navigate encoder page: %w", runErr)
-	}
-
-	return tab.ctx, tab.cancel, nil
+	return runEncoderStartup(ctx, rootCtx, func(lifetime context.Context) (*tabEntry, error) {
+		if coord.LoadedExtensionID() != captureext.ExtensionID {
+			if _, err := coord.LoadExtension(lifetime); err != nil {
+				return nil, fmt.Errorf("capture session: load capture extension: %w", err)
+			}
+		}
+		tab, err := mgr.createTab(lifetime, "")
+		if err != nil {
+			return nil, fmt.Errorf("capture session: create encoder target: %w", err)
+		}
+		return tab, nil
+	}, func(runCtx context.Context) error {
+		err := chromedp.Run(runCtx,
+			chromedp.ActionFunc(func(ctx context.Context) error {
+				_, err := page.AddScriptToEvaluateOnNewDocument(injectScript).Do(ctx)
+				return err
+			}),
+			chromedp.Navigate("chrome-extension://"+captureext.ExtensionID+"/encoder.html"),
+		)
+		if err != nil {
+			return fmt.Errorf("capture session: inject config + navigate encoder page: %w", err)
+		}
+		return nil
+	})
 }
 
 // Start idempotently begins this capture session's encoder-page lifecycle.
 // Concurrent Start calls (two viewer offers racing to be "first" — a real
-// possibility, since HandleWebRTCOffer runs per-connection) are collapsed by
-// startOnce into exactly one startEncoder invocation; every caller observes
-// the SAME outcome. Returns justStarted=true only to the ONE caller whose
+// possibility, since HandleWebRTCOffer runs per-connection) share one
+// startEncoder invocation. Each caller can stop waiting independently; the
+// first caller owns the startup attempt. Returns justStarted=true only to the caller whose
 // call actually ran the startup (so the gateway can audit "stream started"
 // exactly once), and an error if construction failed OR the session was
 // already stopped (a stopped session must not be reused — callers create a
@@ -736,272 +735,130 @@ func defaultEncoderStarter(
 // (ws://127.0.0.1:<gateway port>/api/v1/browser/capture-ingest) the encoder
 // page will connect to.
 func (cs *CaptureSession) Start(ctx context.Context, ingestURL string) (justStarted bool, err error) {
+	if ctx == nil {
+		return false, fmt.Errorf("capture session: nil startup context")
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	cs.mu.Lock()
 	if cs.stopped {
 		cs.mu.Unlock()
 		return false, fmt.Errorf("capture session: already stopped")
 	}
-	cs.mu.Unlock()
-
-	ranNow := false
-	cs.startOnce.Do(func() {
-		ranNow = true
-		cs.mu.Lock()
-		cs.starting = true
+	if done := cs.startDone; done != nil {
 		cs.mu.Unlock()
-		defer func() {
-			cs.mu.Lock()
-			cs.starting = false
-			cs.mu.Unlock()
-		}()
-
-		tabCtx, tabCancel, startErr := cs.startEncoder(
-			ctx,
-			cs.mgr,
-			cs.panelTabSet(),
-			hex.EncodeToString(cs.token),
-			ingestURL,
-			cs.stunServer,
-		)
-		if startErr != nil {
-			cs.mu.Lock()
-			cs.startErr = startErr
-			cs.mu.Unlock()
-			return
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-cs.done:
+			return false, fmt.Errorf("capture session: already stopped")
+		case <-done:
 		}
 		cs.mu.Lock()
+		defer cs.mu.Unlock()
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
 		if cs.stopped {
-			// A Stop() (e.g. browser death detected concurrently) raced this
-			// Start() and won — tear down what we just built rather than
-			// leaving an orphaned encoder target nobody will ever close.
-			cs.startErr = fmt.Errorf("capture session: stopped while starting")
-			cs.mu.Unlock()
-			tabCancel()
-			return
+			return false, fmt.Errorf("capture session: already stopped")
 		}
-		cs.tabCtx = tabCtx
-		cs.tabCancel = tabCancel
-		cs.started = true
-		cs.mu.Unlock()
-		// Deterministic capture-target binding (UAT 2026-07-18 "video black
-		// when the agent drives" root cause): encoder.js resolves its capture
-		// target as "the ACTIVE tab in the LAST-FOCUSED window"
-		// (findActiveTargetTab). The encoder target startEncoder just created
-		// lives in its own freshly-created window, which is the last-focused
-		// window at resolution time — the active-tab query then finds only
-		// the (filtered-out) extension page and falls back to "first
-		// non-extension tab", i.e. the OLDEST tab in THIS WORKSPACE'S Chrome.
-		// With one agent that is coincidentally correct; and since FR-037 put
-		// every agent on a workspace into that one browser, a second agent on
-		// the same workspace is the ordinary case, not the exotic one — the
-		// fallback then binds the WRONG agent's tab. Bringing
-		// the REQUESTING agent's active tab to front here — after the
-		// encoder-target creation (the last window-focus-stealing step) and
-		// strictly before the encoder resolves its target (which happens only
-		// after its page loads AND the ingest-WS hello/config round-trip
-		// completes) — makes the last-focused window deterministically this
-		// agent's, so the active-tab query resolves it directly, no fallback.
-		// This is what lets handleWebRTCOffer's ADR-048 condition-2 fence be
-		// scoped to ACTIVELY-VIEWED conflicting captures instead of denying
-		// on any other live agent session. (Same BringToFront-before-capture
-		// precedent as live.go's StartScreencast/rebindScreencast.)
-		if !cs.bringAgentTabToFront(ctx) {
-			cs.reassertForegroundAsync()
-		}
-		cs.logf("capture[%s]: started (encoder page navigating)", cs.agentID)
-	})
-
-	cs.mu.Lock()
-	startErr := cs.startErr
+		return false, cs.startErr
+	}
+	attempt, cancel := context.WithCancel(ctx)
+	cs.startDone = make(chan struct{})
+	cs.startCancel = cancel
+	cs.starting = true
 	cs.mu.Unlock()
-	return ranNow, startErr
+	tabCtx, tabCancel, startErr := cs.startEncoder(attempt, cs.mgr, cs.panelTabSet(), hex.EncodeToString(cs.token), ingestURL, cs.stunServer)
+	cancel()
+	cs.mu.Lock()
+	cs.starting = false
+	cs.startCancel = nil
+	if startErr == nil && cs.stopped {
+		startErr = fmt.Errorf("capture session: stopped while starting")
+	}
+	if startErr == nil {
+		cs.tabCtx, cs.tabCancel, cs.started = tabCtx, tabCancel, true
+	}
+	cs.startErr = startErr
+	cs.mu.Unlock()
+	if startErr != nil && tabCancel != nil {
+		tabCancel()
+	}
+	cs.mu.Lock()
+	close(cs.startDone)
+	cs.mu.Unlock()
+	if startErr == nil {
+		cs.logf("capture[%s]: started (encoder page navigating)", cs.agentID)
+	}
+	return true, startErr
 }
 
-// bringToFrontTimeout bounds the ENTIRE bringAgentTabToFront effort —
-// session resolution AND the tab-focus action together, not just the
-// chromedp.Run half. cs.mgr.Session() takes no context parameter, so the
-// first call for an agent whose WORKSPACE'S Chrome has never launched yet
-// blocks
-// for as long as that launch takes: up to cdppipe's CDP-liveness-probe dial
-// timeout (~20s, cdppipe.defaultDialTimeout) if the resolved Chromium binary
-// is slow, broken, or unreachable. An earlier version of this function only
-// timed the chromedp.Run half, leaving Session()'s own resolution unbounded
-// on the capture-start critical path — directly contradicting this
-// function's "best-effort, a transient CDP hiccup must not cost the viewer
-// their stream" design intent (regression: TestWebRTCEndToEndInProcess
-// flaked on CI-worker CPU contention, spending most of the viewer's own
-// answer-read deadline blocked here against a deliberately-broken decoy
-// exec_path before this fix).
+// bringToFrontTimeout bounds admission and focus of an existing target together.
+// Caller cancellation and capture Stop can end the operation sooner.
 const bringToFrontTimeout = 5 * time.Second
 
-// foregroundReassertDelay is how long reassertForegroundAsync waits before its
-// single retry. Long enough that a cold shared-Chrome launch (the usual reason
-// the first attempt loses its budget) has finished, short enough that a viewer
-// is not left watching a ~0.5fps stream while it waits.
-const foregroundReassertDelay = 6 * time.Second
-
-// bringAgentTabToFront focuses the active tab of the tab set this capture is
-// bound to (Page.bringToFront on panelTabSet()'s active-tab context) so
-// encoder.js's active-in-last-focused-window tab resolution binds THIS
-// agent's tab — see the call site in Start for the full rationale.
-// Best-effort by design: on any failure OR timeout the capture proceeds with
-// the historical fallback resolution (first non-extension tab) rather than
-// failing the whole start — a transient CDP hiccup must not cost the viewer
-// their stream. A no-op when cs.mgr is nil (test-construction pattern).
+// bringAgentTabToFront best-effort focuses this capture's existing active target.
+// It never creates a session, and cancellation ends the browser command before
+// returning without taking ownership of the persistent tab's lifetime.
 func (cs *CaptureSession) bringAgentTabToFront(ctx context.Context) bool {
 	if cs.mgr == nil {
 		return false
 	}
-	landed := make(chan struct{}, 1)
-	// Session resolution AND chromedp.Run both happen inside this one
-	// goroutine, raced against bringToFrontTimeout as a single bound — see
-	// that const's doc comment for why Session() itself must be included,
-	// not just the chromedp.Run call.
-	done := make(chan struct{})
+	opCtx, cancelOperation := context.WithTimeout(ctx, bringToFrontTimeout)
+	watcherDone := make(chan struct{})
 	go func() {
-		defer close(done)
-		sid := cs.panelTabSet()
-		// Focus the tab that EXISTS; never manufacture one as a side effect of
-		// focusing. By the time this runs on the real path the encoder starter
-		// has already ensured the workspace-owned browsing context (step 1 of
-		// defaultEncoderStarter), so a missing context here means the capture is
-		// running against a manager that has none — and lazily creating one
-		// would open a tab nobody asked for, on a code path whose whole
-		// contract is best-effort.
-		if !cs.mgr.sessionExists(sid) {
-			cs.logf("capture[%s]: bring agent tab to front: no browsing context to focus", cs.agentID)
-			return
+		defer close(watcherDone)
+		select {
+		case <-cs.Done():
+			cancelOperation()
+		case <-opCtx.Done():
 		}
-		tabCtx, err := cs.mgr.Session(sid)
-		if err != nil {
-			cs.logf("capture[%s]: bring agent tab to front: resolve session: %v", cs.agentID, err)
-			return
-		}
-		// Fix-wave MED (reviewer 6): cs.mgr.Session() above can block for a
-		// while on a cold shared-Chrome launch — long enough for THIS
-		// capture session to have been superseded/Stop()'d by a newer one in
-		// the meantime (e.g. another agent's offer won the ADR-048
-		// condition-2 fence). Re-check before stealing window focus: a late-firing
-		// BringToFront from an already-stopped session would steal focus
-		// from whichever agent's tab is now legitimately active, for a
-		// capture that is dead either way.
+	}()
+	defer func() {
+		cancelOperation()
+		<-watcherDone
+	}()
+	current := func() bool {
 		cs.mu.Lock()
 		stopped := cs.stopped
 		cs.mu.Unlock()
-		if stopped {
-			cs.logf(
-				"capture[%s]: bring agent tab to front: session already stopped, skipping (would have stolen window focus for nothing)",
-				cs.agentID,
-			)
-			return
+		if stopped || ctx.Err() != nil || opCtx.Err() != nil {
+			return false
 		}
-		// runCtx is deliberately derived from tabCtx alone, NOT from ctx —
-		// tabCtx must stay the chromedp parent so the run actually targets
-		// the agent's tab. The caller's ctx (Start's ctx) is honored a
-		// different way: the outer select below races this goroutine's own
-		// "done" signal against ctx.Done() directly, rather than by
-		// threading ctx into runCtx here.
-		runCtx, cancel := context.WithTimeout(tabCtx, bringToFrontTimeout)
-		defer cancel()
-		// foregroundTabActions (manager.go), NOT a local bringToFront+focus
-		// pair: this used to be the ONLY place focus emulation was applied,
-		// so the tab-switch path gave a captured tab a DIFFERENT treatment
-		// and one browser_switch_tab undid half of what capture start did
-		// (review finding F9, 2026-08-13). One definition, every path.
-		if runErr := chromedp.Run(runCtx, foregroundTabActions()...); runErr != nil {
-			cs.logf(
-				"capture[%s]: bring agent tab to front failed (capture may fall back to first-tab resolution): %v",
-				cs.agentID,
-				runErr,
-			)
-			return
+		select {
+		case <-cs.Done():
+			return false
+		default:
+			return true
 		}
-		landed <- struct{}{}
-	}()
-	// This select is what actually honors ctx's cancellation (Start's ctx)
-	// and bringToFrontTimeout — both race directly against the goroutine
-	// above completing, independent of whatever context that goroutine's own
-	// runCtx was derived from.
-	select {
-	case <-done:
-	case <-time.After(bringToFrontTimeout):
-		cs.logf(
-			"capture[%s]: bring agent tab to front: timed out after %s waiting for session resolution (capture proceeds; may fall back to first-tab resolution)",
-			cs.agentID,
-			bringToFrontTimeout,
-		)
-	case <-ctx.Done():
 	}
-
-	select {
-	case <-landed:
-		return true
-	default:
+	if !current() {
 		return false
 	}
-}
-
-// reassertForegroundAsync re-runs the foreground assert ONCE, shortly after a
-// first attempt failed to land.
-//
-// CORRECTION (2026-08-06): the measurement this rationale was originally
-// written from was UNSOUND, and the retry below did NOT fix the
-// browser-live-video e2e failure it was written for — that test still fails
-// identically with this in place. The probe compared Page.startScreencast frame
-// counts without ever sending Page.screencastFrameAck; Chrome throttles
-// delivery to a trickle when frames go unacked (production acks every frame,
-// see live.go's runAckWorker), so the foreground-vs-background difference it
-// showed was noise on an already-stalled stream, not evidence of compositing
-// throttling. Do not cite those numbers.
-//
-// What justifies keeping this anyway is narrower and independently true: the
-// first attempt shares ONE 5s budget with cs.mgr.Session(), which on a cold
-// shared-Chrome launch can alone take ~20s (see bringToFrontTimeout's own doc),
-// so under load the focus action can never run at all and nothing notices. A
-// single warm retry closes that gap cheaply. It is a robustness fix, NOT a fix
-// for the frozen-video test, whose root cause remains open.
-//
-// Original (unsupported) rationale follows, kept only so the next reader can
-// see what was disproved: a tab that is not foregrounded
-// composites at roughly ONE frame every two seconds; foregrounded it produces
-// several times that (probed directly against this project's own Chrome build
-// via Page.startScreencast frame counts). Chrome's anti-backgrounding flags do
-// NOT change it: --disable-renderer-backgrounding,
-// --disable-background-timer-throttling and
-// --disable-backgrounding-occluded-windows are all already set (chromedp's
-// defaults carry them too) and a background tab still composites at ~0.5fps.
-// Animation TIMELINES keep advancing at full rate, which is what makes this so
-// easy to misdiagnose: the page is genuinely animating, it just is not being
-// painted for the capture.
-//
-// So a first attempt that times out is not cosmetic — it is the difference
-// between a live stream and one that looks frozen. The first attempt shares a
-// single 5s budget with cs.mgr.Session(), which on a cold shared-Chrome launch
-// can alone take ~20s (see bringToFrontTimeout), so under load the focus action
-// frequently never runs at all. By the time we retry, that session is resolved
-// and warm, so the retry costs a single CDP round trip.
-//
-// Deliberately ONE retry, and it re-checks stopped first: window focus is a
-// shared, global resource in the shared-Chrome model, and repeatedly stealing
-// it would fight other agents' captures for it — the exact hazard the original
-// call site's comment warns about.
-func (cs *CaptureSession) reassertForegroundAsync() {
-	go func() {
-		select {
-		case <-time.After(foregroundReassertDelay):
-		case <-cs.done:
-			return
-		}
-		cs.mu.Lock()
-		stopped := cs.stopped
-		cs.mu.Unlock()
-		if stopped {
-			return
-		}
-		if cs.bringAgentTabToFront(context.Background()) {
-			cs.logf("capture[%s]: foreground re-assert landed on retry", cs.agentID)
-		}
-	}()
+	panelID := cs.panelTabSet()
+	release, err := cs.mgr.acquireLiveTabCommand(opCtx, panelID)
+	if err != nil {
+		return false
+	}
+	defer release()
+	tabCtx, _, err := cs.mgr.activeTargetSnapshot(panelID)
+	if err != nil || !current() {
+		return false
+	}
+	deadline, _ := opCtx.Deadline()
+	runCtx, cancelRun := context.WithDeadline(tabCtx, deadline)
+	stopLink := context.AfterFunc(opCtx, cancelRun)
+	defer func() { stopLink(); cancelRun() }()
+	if !current() || runCtx.Err() != nil {
+		return false
+	}
+	if err := cs.mgr.runTabFocusCDP(runCtx, foregroundTabActions()...); err != nil {
+		cs.logf("capture[%s]: bring agent tab to front failed: %v", cs.agentID, err)
+		return false
+	}
+	return current() && runCtx.Err() == nil
 }
 
 // Relay returns this session's RelaySession (the Pion-backed webrtc.Session
@@ -1084,10 +941,13 @@ func (cs *CaptureSession) BindIngest(
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	previousClose = cs.ingestClose
+	cs.ingestContextBound = false
+	cs.cancelIngestBindingLocked()
 	cs.ingestEpoch++
 	cs.ingestSend = send
 	cs.ingestClose = closeConn
 	cs.lastPingAt = time.Now()
+	cs.captureHealth = CaptureHealthObservation{}
 	return previousClose, cs.ingestEpoch
 }
 
@@ -1101,6 +961,7 @@ func (cs *CaptureSession) UnbindIngest(epoch uint64) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	if cs.ingestEpoch == epoch {
+		cs.cancelIngestBindingLocked()
 		cs.ingestSend = nil
 		cs.ingestClose = nil
 	}
@@ -1136,7 +997,8 @@ func (cs *CaptureSession) LastPingAt() time.Time {
 	return cs.lastPingAt
 }
 
-// Done returns a channel that is closed exactly once, when Stop() completes
+// Done returns a channel closed exactly once when Stop claims shutdown,
+// before potentially blocking transport and target cleanup.
 // — callers (the gateway's encoder-liveness watchdog) select on this to
 // exit their own per-session goroutine as soon as the session stops, for
 // ANY reason (grace timer, browser death, ensure/start failure, or explicit
@@ -1181,13 +1043,13 @@ type ViewerAttachHandle struct {
 	viewerID string
 	gen      uint64
 	// relay is nil (a true nil `any`) unless the underlying RelaySession
-	// implements viewerOfferHandler (the real Pion-backed Session; never the
-	// lite build's stub, and not every test fake) AND this specific attempt
+	// implements viewerOfferHandler (the Pion-backed Session and capable test
+	// fakes) AND this specific attempt
 	// reached the point HandleViewerOfferHandle registers it (see that
 	// method's doc comment) -- CleanupViewerOffer falls back to the
 	// historical viewerID-only relay close when nil. Declared `any` (holding
 	// a *webrtc.ViewerHandle dynamically in production) rather than the
-	// concrete type for the same build-tag-neutral reason viewerOfferHandler
+	// concrete type to preserve the opaque identity contract viewerOfferHandler
 	// above documents.
 	relay any
 }
@@ -1203,25 +1065,37 @@ func (cs *CaptureSession) HandleViewerOffer(
 	viewerID, sdp string,
 	gen uint64,
 ) (answer string, handle *ViewerAttachHandle, err error) {
+	return cs.HandleViewerOfferContext(context.Background(), viewerID, sdp, gen)
+}
+
+// HandleViewerOfferContext passes the persistent attachment lifetime through
+// the relay. Legacy injected relays remain synchronous; cancellation is checked
+// again after their call returns, rather than claiming their IO is interruptible.
+// Rejection before delegation removes only this capture registration and returns
+// no relay cleanup handle. After an attempt, its exact handle is always retained.
+func (cs *CaptureSession) HandleViewerOfferContext(parent context.Context, viewerID, sdp string, gen uint64) (answer string, handle *ViewerAttachHandle, err error) {
+	if parent == nil {
+		cs.RemoveViewerIfCurrent(viewerID, gen)
+		return "", nil, fmt.Errorf("capture session: viewer offer: nil attachment context")
+	}
+	if contextErr := parent.Err(); contextErr != nil {
+		cs.RemoveViewerIfCurrent(viewerID, gen)
+		return "", nil, contextErr
+	}
 	var relayHandle any
-	if cs.offerHandler != nil {
+	if handler, ok := cs.relay.(contextViewerOfferHandler); ok {
+		answer, relayHandle, err = handler.HandleViewerOfferHandleContext(parent, viewerID, sdp)
+	} else if cs.offerHandler != nil {
 		answer, relayHandle, err = cs.offerHandler.HandleViewerOfferHandle(viewerID, sdp)
 	} else {
 		answer, err = cs.relay.HandleViewerOffer(viewerID, sdp)
 	}
-	// GAP 2 fix-wave finding: record the relay's own identity handle for
-	// THIS registration (if any -- see viewerRegistration's doc comment for
-	// when it's nil) alongside gen, so a later relay-confirmed eviction
-	// notification (removeViewerByRelayHandle) can tell whether it describes
-	// the registration currently on file for viewerID before removing
-	// anything. Recorded regardless of err: even a call that later fails
-	// further down (SetRemoteDescription/CreateAnswer/SetLocalDescription)
-	// may already have registered a live PeerConnection at the relay (see
-	// HandleViewerOfferHandle's own doc comment on the registration point) —
-	// that registration is exactly what CleanupViewerOffer's
-	// CloseViewerIfCurrent branch will need to find in order to close it.
-	cs.recordViewerRelayHandle(viewerID, gen, relayHandle)
 	handle = &ViewerAttachHandle{viewerID: viewerID, gen: gen, relay: relayHandle}
+	// A failed negotiation may still own a registered relay peer. Retain the
+	// exact cleanup handle even when cancellation prevents recording it.
+	if contextErr := cs.recordViewerRelayHandle(parent, viewerID, gen, relayHandle); contextErr != nil {
+		return "", handle, contextErr
+	}
 	return answer, handle, err
 }
 
@@ -1236,18 +1110,24 @@ func (cs *CaptureSession) HandleViewerOffer(
 // this specific attempt never reached registration — see CleanupViewerOffer's
 // CRITICAL fix-wave finding for that second case) — nothing meaningful to
 // record either way.
-func (cs *CaptureSession) recordViewerRelayHandle(viewerID string, gen uint64, relayHandle any) {
-	if relayHandle == nil {
-		return
-	}
+// The cancellation check and registration share the relay-removal callback lock,
+// preventing a canceled completion from recording after its cleanup notification.
+func (cs *CaptureSession) recordViewerRelayHandle(parent context.Context, viewerID string, gen uint64, relayHandle any) error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
+	if err := parent.Err(); err != nil {
+		return err
+	}
+	if relayHandle == nil {
+		return nil
+	}
 	reg, exists := cs.viewers[viewerID]
 	if !exists || reg.gen != gen {
-		return
+		return nil
 	}
 	reg.relayHandle = relayHandle
 	cs.viewers[viewerID] = reg
+	return nil
 }
 
 // removeViewerByRelayHandle is wired as the relay's SetOnViewerRemoved
@@ -1305,8 +1185,7 @@ func (cs *CaptureSession) removeViewerByRelayHandle(viewerID string, relayHandle
 // handle (from THIS call's own HandleViewerOffer) makes both halves of the
 // cleanup identity-safe, independently:
 //   - relay-side: if the underlying relay supports it (viewerOfferHandler,
-//     the real Pion-backed Session — never the lite stub, which has no live
-//     viewer connection to protect), CloseViewerIfCurrent is a no-op once
+//     the Pion-backed Session), CloseViewerIfCurrent is a no-op once
 //     handle's connection has already been superseded/removed, and otherwise
 //     closes+evicts it via the SAME identity-checked path
 //     (webrtc.Session.removeViewer) a relay-side ICE eviction uses — which
@@ -1319,8 +1198,7 @@ func (cs *CaptureSession) removeViewerByRelayHandle(viewerID string, relayHandle
 //
 // Falls back to the historical viewerID-only relay close ONLY when the
 // underlying relay has NO supersede-safe capability whatsoever
-// (cs.offerHandler == nil — a lite-build stub, or a RelaySession test fake
-// that doesn't implement viewerOfferHandler) — no worse than before this fix
+// (cs.offerHandler == nil, as with a narrower RelaySession test fake) — no worse than before this fix
 // in that case, since no identity information was ever available to make it
 // safer.
 //
@@ -1378,72 +1256,10 @@ func (cs *CaptureSession) CleanupViewerOffer(handle *ViewerAttachHandle) {
 	cs.RemoveViewerIfCurrent(handle.viewerID, handle.gen)
 }
 
-// Recapture signals both halves of the recapture path (wave-plan W2-A item
-// 5) with no expected-geometry hint. Delegates to RecaptureAt(0, 0) (0,0 =
-// absent, mirroring ingestSend's convention) — kept as its own method
-// because most callers (e.g. live.go's onTabsChanged, on an active-tab
-// switch) have no CDP-verified viewport measurement to offer, so the
-// encoder falls back to its own chrome.tabs.get-based stability poll. See
-// RecaptureAt's doc comment for the dimension-carrying variant a caller
-// should prefer whenever one IS available (a viewport resize).
+// Recapture requests the current measured frame on an authenticated binding.
+// Explicit legacy bindings retain the absent-dimensions adapter.
 func (cs *CaptureSession) Recapture() {
 	cs.RecaptureAt(0, 0)
-}
-
-// RecaptureAt signals both halves of the recapture path (wave-plan W2-A item
-// 5): a browser_capture_control{recapture} frame is pushed to the encoder
-// over the ingest WS (if currently bound) so it re-binds chrome.tabCapture
-// to the newly-active tab, AND the relay's SignalRecapture() primes attached
-// viewers for the resulting brief gap with an immediate + bursted PLI so
-// playback recovers as fast as possible. expectedW/expectedH (0,0 = absent)
-// additionally carry the CDP-verified CSS viewport the encoder should
-// converge on.
-//
-// Why this exists (follow-up to
-// docs/internal/browser-viewport-input-rootcause-2026-07-31.md, measured
-// 2026-07-31): a viewport resize (pkg/gateway/browser_ws.go's
-// handleViewport) calls LiveViewRegistry.SetViewport, which reads back the
-// tab's ACTUAL CSS viewport via Page.getLayoutMetrics immediately after
-// applying it — the one piece of CDP-VERIFIED truth that exists at that
-// moment — then triggers a recapture so the WebRTC stream follows the new
-// size. Without threading that measurement through, the encoder's own
-// chrome.tabs.get-based resolution (encoder.js's captureActiveTabStream)
-// races the OS window reflow: chrome.tabs.get lags behind the CDP-verified
-// layout, so a recapture landing mid-reflow pins the stream to a STALE tab
-// size. Live evidence: the stream stuck at the 1278x632 launch geometry
-// while the SAME tab was already CDP-verified at 615x744 in the same
-// second — encoder.js's old "two agreeing chrome.tabs.get reads" stability
-// poll is fooled by this, because two STALE reads can agree with each other
-// just as readily as two settled ones. Passing the verified dimensions lets
-// the encoder poll chrome.tabs.get against a KNOWN target and fall back to
-// that known-good value on a poll timeout, instead of trusting mere
-// agreement between reads — see encoder.js's captureActiveTabStream for the
-// convergence logic this drives.
-//
-// Safe to call with no ingest connection bound (a no-op send) or no relay
-// tracks yet (SignalRecapture is itself a no-op then, per its doc comment).
-// SetCaptureScale records the deviceScaleFactor the captured tab renders at
-// (the controlling viewer's window.devicePixelRatio, threaded through the
-// viewport frame — the same source SetViewport's Emulation override uses).
-// The gateway's ingest send closure reads it back via CaptureScale when
-// building a recapture control frame, so the encoder can size its tabCapture
-// constraints in PHYSICAL pixels. Values below 1 (including the zero value)
-// are treated as 1 by CaptureScale — capture-at-CSS-resolution, the pre-fix
-// behavior — so an SPA that never sends a scale changes nothing.
-func (cs *CaptureSession) SetCaptureScale(scale float64) {
-	cs.mu.Lock()
-	cs.captureScale = scale
-	cs.mu.Unlock()
-}
-
-// CaptureScale returns the last SetCaptureScale value, clamped to >= 1.
-func (cs *CaptureSession) CaptureScale() float64 {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-	if cs.captureScale < 1 {
-		return 1
-	}
-	return cs.captureScale
 }
 
 // ResetAdaptation asks the encoder to restore full quality WITHOUT rebuilding
@@ -1475,147 +1291,75 @@ func (cs *CaptureSession) ResetAdaptation(reason string) {
 }
 
 func (cs *CaptureSession) RecaptureAt(expectedW, expectedH int) {
-	// Open the in-flight window BEFORE the control frame goes out (#674): the
-	// encoder tears its PeerConnection down as the first step of a recapture,
-	// so the resulting ingest loss can arrive before this function returns. A
-	// window opened afterwards would already have missed it, and the bounded
-	// recovery would spend an attempt on a recapture that was working.
-	cs.noteRecaptureIssued()
-	cs.requestControl("recapture", nil, expectedW, expectedH)
+	cs.mu.Lock()
+	if cs.stopped || cs.documentPendingLocked() {
+		cs.mu.Unlock()
+		return
+	}
+	frame, qualified, send, binding := cs.frameStateLocked(), cs.ingestContextBound, cs.ingestSend, cs.ingestBindingCtx
+	if qualified && (frame.Width <= 0 || frame.Height <= 0 || cs.ingestRecapture == nil || binding == nil || binding.Err() != nil) {
+		cs.mu.Unlock()
+		return
+	}
+	cs.noteExplicitRecaptureIssuedLocked(ingestRecoverySettle)
+	cs.mu.Unlock()
+	if qualified {
+		cs.RecaptureFrameContext(binding, frame)
+		return
+	}
+	// Retain the explicit legacy callback rather than looking up a newer
+	// authenticated binding after admission.
+	if send != nil {
+		if err := send("recapture", nil, expectedW, expectedH, 0); err != nil {
+			cs.logf("capture[%s]: legacy recapture failed: %v", cs.agentID, err)
+		}
+	}
 	cs.relay.SignalRecapture()
 }
 
-// RecaptureForTabChange is the recapture entry point for "the active tab
-// moved", as opposed to "the viewport was resized" (RecaptureAt). It does
-// everything Recapture() does AND first re-asserts this agent's CURRENT
-// model-active tab as Chrome's foreground tab, so the encoder's own
-// chrome.tabs.query({active: true, lastFocusedWindow: true}) resolution
-// (captureext/embedded/encoder.js findActiveTargetTab) cannot answer with a
-// tab this manager no longer considers active.
-//
-// Why a SEPARATE entry point rather than putting the re-assert in
-// RecaptureAt (measured trade-off, 2026-08-15): RecaptureAt is also the
-// viewport-resize path, which the SPA drives at drag frequency
-// (pkg/gateway/browser_ws.go's handleViewport, and its Recapture() fallback
-// branches when the CDP resize handle fails). Adding a CDP round trip to
-// EVERY recapture would put a Page.bringToFront on that high-frequency path
-// — on a 2-CPU hosted box, CDP starvation is already what produced the
-// measured "auto-attach: failed to adopt new tab target ... timed out after
-// 20s". A tab change is a human clicking a tab strip: low frequency, one
-// extra round trip, paid only where it buys something. So the resize path
-// stays exactly as cheap as it was, and only this path pays.
-//
-// Why the re-assert is not redundant with the caller's own
-// activateTabInChrome (manager.go): that call is best-effort and its failure
-// is a WARN log, nothing more — the exact silence this whole defect class
-// lives in. This re-assert is an independent second attempt that resolves
-// the tab through mgr.Session (which recreates a dead tab context) rather
-// than through a context captured earlier, and it completes BEFORE the
-// control frame is pushed, so the encoder never re-queries Chrome ahead of
-// it.
-//
-// Runs on its own goroutine so a slow or wedged CDP round trip cannot add
-// latency to the caller's tab switch, and coalesces: a second call while a
-// worker is in flight sets a pending flag instead of spawning a second
-// goroutine, and the worker loops once more. Coalescing is SAFE rather than
-// lossy because the worker resolves the then-current model-active tab from
-// scratch on each pass — two rapid switches converge on the last one, which
-// is the correct answer anyway. A no-op once Stop() has run.
-//
-// Carries no expected geometry — see RecaptureForTabChangeAt for the variant
-// a caller that HAS a CDP-verified measurement (live.go's post-viewport-
-// re-apply tab-change path) must prefer.
+// RecaptureForTabChange coalesces foreground preparation and recapture.
 func (cs *CaptureSession) RecaptureForTabChange() {
 	cs.RecaptureForTabChangeAt(0, 0)
 }
 
-// RecaptureForTabChangeAt is RecaptureForTabChange carrying the CDP-verified
-// CSS viewport the encoder should converge on (0,0 = absent — see
-// RecaptureAt's doc comment for why a verified measurement beats the
-// encoder's own chrome.tabs.get stability poll, which two equally-stale reads
-// can satisfy).
-//
-// Why this exists (round-2 finding F3, 2026-08-16): the foreground re-assert
-// was reachable ONLY from BrowserManager.SwitchTab's "the model did not move"
-// branch — the rare recovery path — while the ORDINARY tab switch went
-// LiveView.onTabsChanged -> plain Recapture(), with no re-assert at all. That
-// is backwards: the re-assert exists precisely because
-// BrowserManager.activateTabInChrome is best-effort and its failure is a WARN
-// log and nothing more, so the path a user takes on every single tab click is
-// the one that most needs a second, independent attempt. live.go's tab-change
-// path now comes through here — and it has a verified viewport to offer by
-// then (it re-applies the panel's viewport to the new target first, because
-// Chrome's deviceScaleFactor override is per TARGET), which is why the
-// geometry-carrying variant is the one it needs.
-//
-// The dimensions are stored rather than captured by the worker goroutine, so
-// a call that merely coalesces into a running worker still gets ITS geometry
-// used on the next pass.
+// RecaptureForTabChangeAt retains the measured frame at request admission.
+// A newer request replaces only the pending pass; a running old pass cannot
+// acquire the replacement frame or binding after foreground preparation.
+// Dimensions remain hints only for the explicit legacy BindIngest adapter.
 func (cs *CaptureSession) RecaptureForTabChangeAt(expectedW, expectedH int) {
 	cs.mu.Lock()
-	if cs.stopped {
+	if cs.stopped || cs.documentPendingLocked() {
 		cs.mu.Unlock()
 		return
 	}
-	cs.tabChangeRecaptureW, cs.tabChangeRecaptureH = expectedW, expectedH
+	request := captureTabRecaptureRequest{
+		width: expectedW, height: expectedH, send: cs.ingestSend,
+		qualified: cs.ingestContextBound, frame: cs.frameStateLocked(),
+		binding: cs.ingestBindingCtx, frameCtx: cs.frameCtx,
+	}
+	if request.qualified && (request.binding == nil || request.binding.Err() != nil || request.frameCtx == nil || request.frameCtx.Err() != nil || request.frame.Width <= 0 || request.frame.Height <= 0 || cs.ingestRecapture == nil) {
+		cs.mu.Unlock()
+		return
+	}
+	cs.tabChangeRecaptureRequest = request
 	if cs.tabChangeRecaptureRunning {
 		cs.tabChangeRecapturePending = true
 		cs.mu.Unlock()
 		return
 	}
 	cs.tabChangeRecaptureRunning = true
-	// Same reason as RecaptureAt: a tab-change recapture is a real teardown,
-	// and the loss it produces must not be read as a death (#674).
-	cs.recapturePendingUntil = time.Now().Add(ingestRecoverySettle)
+	if !request.qualified {
+		cs.noteExplicitRecaptureIssuedLocked(ingestRecoverySettle)
+	}
 	cs.mu.Unlock()
-
-	// Prime attached viewers for the coming gap NOW, on the caller's own
-	// goroutine, rather than behind the foreground re-assert. SignalRecapture
-	// is pure relay-side signalling (an immediate + bursted PLI) with no CDP
-	// in it, and there is no reason to make a viewer wait for a browser round
-	// trip before it starts recovering. The ENCODER's half — the control frame
-	// that makes it re-bind chrome.tabCapture — is the half that genuinely
-	// must come after the re-assert, and that is the half the worker still
-	// owns. Exactly one signal per pass either way; only the first one moved
-	// earlier.
-	cs.relay.SignalRecapture()
-
-	go func() {
-		firstPass := true
-		for {
-			cs.mu.Lock()
-			w, h := cs.tabChangeRecaptureW, cs.tabChangeRecaptureH
-			cs.mu.Unlock()
-
-			if !firstPass {
-				cs.relay.SignalRecapture()
-			}
-			firstPass = false
-
-			cs.assertForeground(context.Background())
-			cs.noteRecaptureIssued()
-			cs.requestControl("recapture", nil, w, h)
-
-			cs.mu.Lock()
-			if !cs.tabChangeRecapturePending || cs.stopped {
-				cs.tabChangeRecaptureRunning = false
-				cs.tabChangeRecapturePending = false
-				cs.mu.Unlock()
-				return
-			}
-			cs.tabChangeRecapturePending = false
-			cs.mu.Unlock()
-		}
-	}()
+	if !request.qualified {
+		cs.relay.SignalRecapture()
+	}
+	go cs.runTabRecaptures(request)
 }
 
-// assertForeground routes the foreground re-assert through the
-// foregroundAssertFn test seam when one is installed, and to the real
-// bringAgentTabToFront otherwise. Best-effort in both cases: the boolean is
-// informational (bringAgentTabToFront logs its own failures), and a false
-// result never blocks the recapture — a recapture that binds the wrong tab
-// is still strictly better than no recapture at all, which is the state that
-// left the picture frozen on the old tab indefinitely.
+// assertForeground performs best-effort focus before recapture. Exact target
+// identity comes from the retained frame, independently of focus success.
 func (cs *CaptureSession) assertForeground(ctx context.Context) bool {
 	cs.mu.Lock()
 	fn := cs.foregroundAssertFn
@@ -1626,20 +1370,8 @@ func (cs *CaptureSession) assertForeground(ctx context.Context) bool {
 	return cs.bringAgentTabToFront(ctx)
 }
 
-// requestControl pushes a browser_capture_control{action, reason,
-// expected_width?, expected_height?} frame to the bound ingest connection,
-// if any. expectedW/expectedH carry the CDP-verified CSS viewport a
-// recapture should converge on (0,0 = absent — see RecaptureAt's doc
-// comment); Stop's shutdown call always passes 0,0, since there is no
-// geometry to convey on teardown. Errors are logged, not returned — every
-// call site (RecaptureAt, Stop) is best-effort: the encoder's own reconnect
-// watchdog (encoder.js) and this session's own Stop() teardown are what
-// actually guarantee termination, not a successfully-delivered control
-// frame.
-// requestControlBitrate pushes browser_capture_control{set_bitrate}. Separate
-// from requestControl because it is the only action that carries max_bitrate,
-// and threading a bitrate through every recapture/shutdown call site would
-// make the common path lie about what it sends.
+// requestControlBitrate sends the viewer-derived bitrate ceiling to the
+// currently bound encoder. The original transport closure owns final admission.
 func (cs *CaptureSession) requestControlBitrate(bps int) {
 	cs.mu.Lock()
 	send := cs.ingestSend
@@ -1652,6 +1384,8 @@ func (cs *CaptureSession) requestControlBitrate(bps int) {
 	}
 }
 
+// requestControl sends adaptation reset or shutdown through the retained
+// transport closure. Errors remain visible in capture diagnostics.
 func (cs *CaptureSession) requestControl(action string, reason *string, expectedW, expectedH int) {
 	cs.mu.Lock()
 	send := cs.ingestSend
@@ -1704,8 +1438,18 @@ func (cs *CaptureSession) AddViewer(viewerID string) uint64 {
 // remain and one isn't already armed or the session already stopped — shared
 // by RemoveViewer and RemoveViewerIfCurrent. Caller must hold cs.mu.
 func (cs *CaptureSession) armGraceStopLocked() {
-	if len(cs.viewers) == 0 && cs.stopTimer == nil && !cs.stopped {
-		cs.stopTimer = time.AfterFunc(captureGracePeriod, cs.Stop)
+	if len(cs.viewers) == 0 && !cs.hasPendingViewerRequestsLocked() && cs.stopTimer == nil && !cs.stopped {
+		after := time.AfterFunc
+		if cs.graceAfterFunc != nil {
+			after = cs.graceAfterFunc
+		}
+		var timer *time.Timer
+		timer = after(captureGracePeriod, func() {
+			cs.stopWhen(func() bool {
+				return cs.stopTimer == timer && len(cs.viewers) == 0 && !cs.hasPendingViewerRequestsLocked()
+			})
+		})
+		cs.stopTimer = timer
 	}
 }
 
@@ -1787,12 +1531,28 @@ func (cs *CaptureSession) SetOnStopped(fn func()) {
 // explicit Stop from browser-death detection) and safe to use directly as a
 // time.AfterFunc callback (see RemoveViewer).
 func (cs *CaptureSession) Stop() {
+	cs.stopWhen(nil)
+}
+
+// stopWhen evaluates an optional ownership predicate and claims stopped under
+// the same lock. The predicate must not perform I/O or re-enter CaptureSession.
+func (cs *CaptureSession) stopWhen(allowed func() bool) bool {
 	cs.mu.Lock()
-	if cs.stopped {
+	if cs.stopped || (allowed != nil && !allowed()) {
 		cs.mu.Unlock()
-		return
+		return false
 	}
 	cs.stopped = true
+	cs.retireDocumentTransitionLocked()
+	if cs.startCancel != nil {
+		cs.startCancel()
+	}
+	cs.stopViewerRequestsLocked()
+	cs.retireIngestRecoveryEpisodeLocked()
+	cs.cancelIngestBindingLocked()
+	if cs.frameCancel != nil {
+		cs.frameCancel()
+	}
 	close(cs.done)
 	if cs.stopTimer != nil {
 		cs.stopTimer.Stop()
@@ -1829,6 +1589,7 @@ func (cs *CaptureSession) Stop() {
 	if onStopped != nil {
 		onStopped()
 	}
+	return true
 }
 
 // Stats returns the relay's current point-in-time stats (viewer count,

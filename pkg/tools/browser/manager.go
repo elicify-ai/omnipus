@@ -415,6 +415,10 @@ type BrowserManager struct {
 	cfg  BrowserConfig
 	ssrf *security.SSRFChecker // never nil — enforced by NewBrowserManager
 	mu   sync.Mutex
+	// tabCommands serializes target operations and their observers; guarded by mu.
+	tabCommands map[string]*liveTabCommandGate
+	// At most one metadata publication waits for each exact session entry.
+	pendingTabNotifications map[string]*sessionEntry
 	// allocCtx is the chromedp context ensureStarted's tab-creating callers
 	// (bootstrapBrowserCtx etc.) build off. In coordinator (shared-Chrome)
 	// mode this is the coordinator's rootCtx itself (CRIT-001: chromedp CHILD
@@ -499,8 +503,13 @@ type BrowserManager struct {
 	// of also calling chromedp.NewContext/Run for that ID (which would
 	// create and leak a second tab, and corrupt the tab count). Lazily
 	// initialized; nil is a valid empty state.
-	pending map[string]chan struct{}
-	started bool
+	pending      map[string]chan struct{}
+	started      bool
+	localStartup *startupCohort
+
+	// Pool retirement advances this under m.mu. A registration that releases
+	// m.mu must still match before publishing its returned connection.
+	poolRegistrationGeneration uint64
 
 	// execPath holds the Chromium-binary resolution caches (success + negative),
 	// refactored into a reusable struct shared with the BrowserCoordinator
@@ -538,12 +547,12 @@ type BrowserManager struct {
 	// agentID identifies this per-agent manager to the coordinator (Register/
 	// Release/RemoveAgent are keyed by it). Set via AttachSharedChrome.
 	agentID string
-	// capture/captureMu (ADR-047, wave-plan W2-A) hold this manager's single
-	// active WebRTC CaptureSession, guarded by their own mutex — see
-	// CaptureSession()/EnsureCaptureSession()'s doc comments for why this is
-	// deliberately NOT m.mu.
-	capture   *CaptureSession
+	// captures is keyed by resolved panel tab-set ID. Capture lifecycle code
+	// calls back into the manager, so its mutex is separate from m.mu.
+	captures  map[string]*CaptureSession
 	captureMu sync.Mutex
+	// Guard capture admission until every concurrent connection teardown ends.
+	captureTeardowns int
 	// videoHealthObs is the gateway's live-video health observer (issue
 	// #674), registered once per manager by the browser WS handler and
 	// installed on every CaptureSession this manager creates. Guarded by
@@ -1080,10 +1089,9 @@ func (m *BrowserManager) Viewers() int {
 // write one. A screenshot that returns "connection lost" mid-turn is not less
 // confusing for having been read-only.
 //
-// It is an int64 read under m.mu rather than an atomic, so that the pool's
-// eviction selection and a call's own increment serialise: see
-// BrowserPool.evictableLocked for why a call starting DURING selection must
-// be either seen or landed on a relaunched instance, never lost between them.
+// The read and EnterCall's increment use m.mu. The pool holds that same mutex
+// through the final retirement claim, so a new call is either counted before
+// removal or observes a manager marked unstarted and waits for cleanup.
 func (m *BrowserManager) InFlight() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1121,57 +1129,22 @@ func (m *BrowserManager) TotalOpenTabs() int {
 	return m.totalTabCountLocked()
 }
 
-// CaptureSession returns this manager's active WebRTC CaptureSession, or nil
-// if none has been created yet (ADR-047 D2, wave-plan W2-A). Guarded by its
-// own mutex (m.captureMu), deliberately separate from m.mu, because
-// CaptureSession's own lifecycle methods call back into m.Session()/
-// m.createTab() etc., which take m.mu themselves — holding m.mu across that
-// would deadlock.
+// CaptureSession returns the workspace operator tab set's capture. Callers with
+// a resolved panel identity must use CaptureSessionForPanel.
 func (m *BrowserManager) CaptureSession() *CaptureSession {
-	m.captureMu.Lock()
-	defer m.captureMu.Unlock()
-	return m.capture
+	return m.CaptureSessionForPanel(m.OperatorSessionID())
 }
 
-// EnsureCaptureSession returns this manager's existing CaptureSession, or
-// lazily constructs one via newFn if none exists yet. newFn is called at
-// most once per manager (subsequent viewers reuse the same session, "one
-// active stream per agent" — wave-plan W2-A item 4); it receives no
-// arguments because every dependency a production CaptureSession needs
-// (this manager, its agent id, WebRTC config, the input sink) is already
-// known to the caller's closure. newFn's error (NewCaptureSession's own
-// crypto/rand.Read failure — effectively never happens, but MUST NOT be
-// silently swallowed) is propagated to the caller rather than caching a nil
-// session, so a transient failure doesn't wedge this manager into always
-// returning nil for the rest of the process's life.
+// EnsureCaptureSession reuses or creates the workspace operator's capture.
+// Panel-aware callers use EnsureCaptureSessionForPanel with their resolved ID.
 func (m *BrowserManager) EnsureCaptureSession(newFn func() (*CaptureSession, error)) (*CaptureSession, error) {
-	m.captureMu.Lock()
-	defer m.captureMu.Unlock()
-	if m.capture != nil {
-		return m.capture, nil
-	}
-	cs, err := newFn()
-	if err != nil {
-		return nil, err
-	}
-	// Install the gateway's video-health observer on the session BEFORE it is
-	// published (issue #674). newFn is the gateway's own constructor closure,
-	// but it lives in a file this wiring must not touch, so the observer is
-	// registered on the MANAGER (SetVideoHealthObserver, from browser_attach)
-	// and attached here — the one place that sees every CaptureSession this
-	// manager will ever own, exactly once each.
-	if m.videoHealthObs != nil {
-		cs.SetOnVideoHealth(m.videoHealthObs)
-	}
-	m.capture = cs
-	return cs, nil
+	return m.EnsureCaptureSessionForPanel(m.OperatorSessionID(), newFn)
 }
 
 // SetVideoHealthObserver registers fn as the observer notified whenever the
-// live-browser video path for this manager's capture changes state — lost,
+// live-browser video path for this manager's captures changes state — lost,
 // recovering, recovered, or unrecoverable (issue #674). It is installed on the
-// CURRENT CaptureSession if one already exists, and on every session created
-// afterwards.
+// current captures and on every session created afterwards.
 //
 // Registered on the manager rather than passed to NewCaptureSession because
 // the gateway learns which manager it is dealing with at browser_attach time,
@@ -1184,11 +1157,12 @@ func (m *BrowserManager) EnsureCaptureSession(newFn func() (*CaptureSession, err
 // CaptureSession lock held. Pass nil to unregister.
 func (m *BrowserManager) SetVideoHealthObserver(fn func(VideoHealthEvent)) {
 	m.captureMu.Lock()
+	defer m.captureMu.Unlock()
 	m.videoHealthObs = fn
-	cur := m.capture
-	m.captureMu.Unlock()
-	if cur != nil {
-		cur.SetOnVideoHealth(fn)
+	for _, cs := range m.captures {
+		if cs != nil {
+			cs.SetOnVideoHealth(fn)
+		}
 	}
 }
 
@@ -1203,8 +1177,10 @@ func (m *BrowserManager) SetVideoHealthObserver(fn func(VideoHealthEvent)) {
 func (m *BrowserManager) ClearCaptureSession(cur *CaptureSession) {
 	m.captureMu.Lock()
 	defer m.captureMu.Unlock()
-	if m.capture == cur {
-		m.capture = nil
+	for panel, cs := range m.captures {
+		if cs == cur {
+			delete(m.captures, panel)
+		}
 	}
 }
 
@@ -1264,32 +1240,18 @@ func (m *BrowserManager) ValidateURL(ctx context.Context, rawURL string) error {
 	return nil
 }
 
-// ensureStarted lazily initializes the browser. Must be called under m.mu.
-//
-// ADR-038 discipline extended to exec-path resolution: resolveExecPath
-// (below) can now shell out to probe PATH candidates (`--version`, up to
-// chromiumProbeTimeout each) or even trigger a managed chrome-for-testing
-// download on first use. Neither may run with m.mu held — a slow/broken
-// probe or an in-flight 100+MB download would otherwise freeze every OTHER
-// browser tool call (any session, any tab) for its entire duration,
-// recreating the exact "single global mutex held across a blocking external
-// call" shape Session()'s doc comment describes as the ADR-038 postmortem
-// bug, just with exec(1) standing in for CDP. So: m.mu is released for the
-// resolveExecPath call only, then re-acquired before continuing. A
-// concurrent caller that raced in during that window (another
-// Session()/createFirstTab()/OpenTab() call, still seeing m.started ==
-// false) and ALSO ran ensureStarted's managed-mode setup to completion is
-// detected by re-checking m.started immediately after re-acquiring the
-// lock — this goroutine's own (fully valid, just redundant) exec-path
-// resolution is then discarded in favor of whichever goroutine's
-// chromedp.NewExecAllocator call and m.allocCtx/m.started assignment
-// happened to win, mirroring the discard-the-loser pattern
-// createFirstTab/OpenTab already use for a redundant tab. This never
-// double-launches a subprocess: chromedp.NewExecAllocator only builds an
-// allocator config, it does not spawn Chromium — that happens later and
-// lazily, in bootstrapBrowserCtx's chromedp.Run, which only ever reads the
-// WINNING m.allocCtx field, never a discarded local variable.
+// ensureStarted retains the legacy background caller policy. It must be called
+// with m.mu held and returns with it held. Resolution, downloads, process launch,
+// and waits all release that mutex. SessionContext supplies a caller and gate
+// lifetime through ensureStartedContext instead.
 func (m *BrowserManager) ensureStarted() error {
+	return m.ensureStartedContext(context.Background())
+}
+
+func (m *BrowserManager) ensureStartedContext(ctx context.Context) error {
+	if err := sessionStartupError(ctx); err != nil {
+		return err
+	}
 	if m.started {
 		return nil
 	}
@@ -1316,27 +1278,37 @@ func (m *BrowserManager) ensureStarted() error {
 	// coordinator.go's Register doc comment).
 	//
 	// Register blocks on the (possibly cold) Chrome launch, so m.mu is released
-	// around it — same ADR-038 no-lock-across-blocking-call discipline as the
-	// resolveExecPath unlock/relock below. A concurrent ensureStarted that won
+	// around it — the same no-lock-across-blocking-call discipline as the
+	// local startup cohort. A concurrent ensureStarted that won
 	// while m.mu was released is handled by the post-relock m.started check.
 	if m.pool != nil || m.coordinator != nil {
 		agentID := m.agentID
 		pool := m.pool
 		coord := m.coordinator
 		key := m.key
+		registrationGeneration := m.poolRegistrationGeneration
 		m.mu.Unlock()
 		var (
 			rootCtx context.Context
 			regErr  error
 		)
 		if pool != nil {
-			coord, rootCtx, regErr = pool.Register(context.Background(), key, m)
+			coord, rootCtx, regErr = pool.Register(ctx, key, m)
+			if regErr == nil && pool.afterRegisterHook != nil {
+				pool.afterRegisterHook()
+			}
 		} else {
-			rootCtx, regErr = coord.Register(context.Background(), agentID, m)
+			rootCtx, regErr = coord.Register(ctx, agentID, m)
 		}
 		m.mu.Lock()
+		if err := sessionStartupError(ctx); err != nil {
+			return err
+		}
 		if regErr != nil {
 			return fmt.Errorf("browser: shared Chrome unavailable: %w", regErr)
+		}
+		if pool != nil && m.poolRegistrationGeneration != registrationGeneration {
+			return ErrBrowserRestarting
 		}
 		if m.started {
 			// A concurrent ensureStarted won while m.mu was released. Discard
@@ -1361,84 +1333,9 @@ func (m *BrowserManager) ensureStarted() error {
 		return nil
 	}
 
-	// US-4: Managed mode — launch local Chromium (no coordinator: tests +
-	// the legacy one-manager-one-Chrome path).
-	if err := os.MkdirAll(m.cfg.ProfileDir, 0o700); err != nil {
-		return fmt.Errorf("browser: cannot create profile directory %s: %w", m.cfg.ProfileDir, err)
-	}
-
-	// Clean up stale SingletonLock files. When Chromium exits ungracefully
-	// (kill -9, crash, or the gateway's chromedp allocator canceling mid-
-	// startup), `SingletonLock` / `SingletonCookie` / `SingletonSocket`
-	// stay behind in the profile dir. The next launch refuses to start with:
-	//   "Failed to create .../SingletonLock: File exists (17)
-	//    Failed to create a ProcessSingleton for your profile directory."
-	// and every subsequent browser_navigate fails. We always own this
-	// profile directory exclusively (single chromedp allocator per gateway
-	// process; tabs share the same Chromium instance), so it is safe to
-	// remove these on each lazy-init. Symlinks (which is what Chrome uses
-	// for SingletonLock — a symlink whose target encodes pid + hostname)
-	// must be removed with os.Remove; os.RemoveAll would fail to follow
-	// them in some edge cases.
-	for _, name := range []string{"SingletonLock", "SingletonCookie", "SingletonSocket"} {
-		path := filepath.Join(m.cfg.ProfileDir, name)
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			logger.WarnCF("browser", "Failed to remove stale Chromium singleton file", map[string]any{
-				"path":  path,
-				"error": err.Error(),
-			})
-		}
-	}
-
-	// Release m.mu across exec-path resolution — see this function's doc
-	// comment above for why (the probe/download it can trigger must never
-	// run with m.mu held).
-	m.mu.Unlock()
-	execPath, err := m.resolveExecPath(context.Background())
-	m.mu.Lock()
-	if err != nil {
-		return fmt.Errorf("browser: cannot locate chromium: %w", err)
-	}
-	if m.started {
-		// A concurrent ensureStarted() call raced in and already finished
-		// setting up the allocator while m.mu was released above — discard
-		// our own now-redundant resolution instead of launching a second
-		// allocator. See this function's doc comment.
-		return nil
-	}
-
-	// Render the Chrome command line via the shared helper (managedExecAllocatorOpts,
-	// exec_resolver.go) — identical to the coordinator's launch path, so the two
-	// never diverge (MAJ-001). See that helper for the per-flag rationale
-	// (hardening set, sandbox disable, stealth flags, XDG/HOME jail, etc.).
-	//
-	// CRIT-001: launch over the CDP pipe (cdppipe — no TCP debug port; see
-	// coordinator.go's file doc). The launcher is a seam (m.pipeLauncherFn)
-	// so tests never spawn real Chrome — mirrors the coordinator's
-	// pipeLauncher field exactly.
-	cmdline := managedExecAllocatorOpts(m.cfg, chromeMajorVersion(context.Background(), execPath))
-	launch := m.pipeLauncherFn
-	if launch == nil {
-		launch = launchManagedPipe
-	}
-	res, err := launch(context.Background(), execPath, pipeLaunchConfig{
-		args:        cmdline.Args,
-		env:         cmdline.Env,
-		userDataDir: m.cfg.ProfileDir,
-	})
-	if err != nil {
-		return fmt.Errorf("browser: failed to launch managed Chrome over the CDP pipe: %w", err)
-	}
-	m.allocCtx = res.rootCtx
-	m.allocCancel = res.cancel
-	m.started = true
-
-	logger.InfoCF("browser", "Browser allocator ready (managed mode)", map[string]any{
-		"headless":    m.cfg.Headless,
-		"profile_dir": m.cfg.ProfileDir,
-		"exec_path":   execPath,
-	})
-	return nil
+	// The legacy local browser uses the same waiter lifetime as shared startup;
+	// never hold manager.mu while a process is being launched.
+	return m.ensureLocalStartedLocked(ctx)
 }
 
 // resolveExecPath returns the path to the Chromium binary chromedp should
@@ -1450,8 +1347,8 @@ func (m *BrowserManager) ensureStarted() error {
 //
 // Safe to call without m.mu held, and safe to call WHILE some other goroutine
 // holds m.mu: the only state resolve touches is execPathCaches.mu, never m.mu.
-// ensureStarted relies on this — it releases m.mu before calling here so a slow
-// first-time probe/download never blocks concurrent tab/session bookkeeping.
+// Startup workers resolve with m.mu released, so a slow first-time probe or
+// download never blocks concurrent tab/session bookkeeping.
 func (m *BrowserManager) resolveExecPath(ctx context.Context) (string, error) {
 	return m.execPath.resolve(ctx, m.cfg)
 }
@@ -1588,13 +1485,22 @@ func probeChromiumBinaryWithTimeout(
 // concurrent caller waits and then observes the now-populated
 // m.sessions[sessionID] instead of creating a second one.
 func (m *BrowserManager) Session(sessionID string) (context.Context, error) {
+	release, err := m.acquireLegacyTabCommand(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return m.sessionUnderGate(context.Background(), sessionID)
+}
+
+func (m *BrowserManager) sessionWithContext(ctx context.Context, sessionID string) (context.Context, error) {
 	// Cancels collected under m.mu and run after it is dropped (see the
 	// crash-recovery branch below). Declared out here so the retry loop reuses
 	// one slice rather than allocating per iteration.
 	var pendingCancels []func()
 	for {
 		m.mu.Lock()
-		if err := m.ensureStarted(); err != nil {
+		if err := m.ensureStartedContext(ctx); err != nil {
 			m.mu.Unlock()
 			return nil, err
 		}
@@ -1644,7 +1550,7 @@ func (m *BrowserManager) Session(sessionID string) (context.Context, error) {
 		}
 		pendingCancels = nil
 
-		if err := m.createFirstTab(sessionID); err != nil {
+		if err := m.createFirstTabContext(ctx, sessionID); err != nil {
 			return nil, err
 		}
 		// Loop back to the top to read the freshly-created (or, if we lost
@@ -1683,11 +1589,25 @@ func (m *BrowserManager) Session(sessionID string) (context.Context, error) {
 //
 // Must be called with NO BrowserManager lock held.
 func (m *BrowserManager) createFirstTab(sessionID string) error {
+	return m.createFirstTabContext(context.Background(), sessionID)
+}
+
+func (m *BrowserManager) createFirstTabContext(ctx context.Context, sessionID string) error {
 	for {
 		m.mu.Lock()
-		if err := m.ensureStarted(); err != nil {
+		if gate := m.tabCommands[sessionID]; gate != nil && gate.retired {
+			m.mu.Unlock()
+			return errBrowserSessionChanged
+		}
+		if err := m.ensureStartedContext(ctx); err != nil {
 			m.mu.Unlock()
 			return err
+		}
+		// Startup may release m.mu while establishing Chrome. Lifecycle removal
+		// can retire this command during that work, before a token exists.
+		if gate := m.tabCommands[sessionID]; gate != nil && gate.retired {
+			m.mu.Unlock()
+			return errBrowserSessionChanged
 		}
 		if se, ok := m.sessions[sessionID]; ok && len(se.tabs) > 0 {
 			m.mu.Unlock()
@@ -1700,7 +1620,11 @@ func (m *BrowserManager) createFirstTab(sessionID string) error {
 			// re-check m.sessions, rather than racing to create a second
 			// tab for the same ID.
 			m.mu.Unlock()
-			<-wait
+			select {
+			case <-wait:
+			case <-ctx.Done():
+				return sessionStartupError(ctx)
+			}
 			continue
 		}
 
@@ -1730,11 +1654,11 @@ func (m *BrowserManager) createFirstTab(sessionID string) error {
 		)
 		if existing != nil {
 			browserCtx = existing.browserCtx
-			tab, err = m.createTab(browserCtx, "")
+			tab, err = m.createLiveTab(ctx, browserCtx)
 		} else {
-			browserCtx, browserCancel, err = m.bootstrapBrowserCtx(allocCtx)
+			browserCtx, browserCancel, err = m.bootstrapBrowserCtxContext(ctx, allocCtx)
 			if err == nil {
-				tab, err = m.createTab(browserCtx, "")
+				tab, err = m.createLiveTab(ctx, browserCtx)
 				if err != nil {
 					browserCancel()
 				}
@@ -1742,6 +1666,21 @@ func (m *BrowserManager) createFirstTab(sessionID string) error {
 		}
 
 		m.mu.Lock()
+		if sessionStartupError(ctx) != nil || m.pending[sessionID] != done || m.sessions[sessionID] != existing {
+			if m.pending[sessionID] == done {
+				delete(m.pending, sessionID)
+			}
+			m.mu.Unlock()
+			m.discardLifecycleTarget(sessionID, tab)
+			if existing == nil && browserCancel != nil {
+				cancelBounded(browserCancel, map[string]any{"session_id": sessionID, "origin": "retired_first_creation"})
+			}
+			close(done)
+			if callerErr := sessionStartupError(ctx); callerErr != nil {
+				return callerErr
+			}
+			return errBrowserSessionChanged
+		}
 		delete(m.pending, sessionID)
 		if err != nil {
 			m.mu.Unlock()
@@ -1802,7 +1741,7 @@ func (m *BrowserManager) createFirstTab(sessionID string) error {
 			// and the encoder would bind to that instead of the replacement
 			// this call just created. Best-effort and no lock held, like every
 			// other call site.
-			m.activateTabInChrome(newActiveCtx, sessionID, 0)
+			_ = m.liveTabFocus(ctx, sessionID, newActiveCtx, nil)
 			m.notifyTabsChanged(sessionID, tabs, 0)
 		}
 		return nil
@@ -1877,17 +1816,7 @@ var firstAttachTimeout = 20 * time.Second
 // createTab/bootstrapBrowserCtx already had — only the wait itself is now
 // bounded.
 func runFirstAttach(fn func() error, timeout time.Duration) error {
-	done := make(chan error, 1)
-	go func() { done <- fn() }()
-	select {
-	case err := <-done:
-		return err
-	case <-time.After(timeout):
-		return fmt.Errorf(
-			"browser: timed out after %s waiting for the browser to attach the tab (target may be unresponsive)",
-			timeout,
-		)
-	}
+	return runFirstAttachContext(context.Background(), fn, timeout)
 }
 
 // bootstrapBrowserCtx creates the ONE-TIME browser-owning chromedp context
@@ -1932,7 +1861,7 @@ func (m *BrowserManager) bootstrapBrowserCtx(allocCtx context.Context) (context.
 	// the workspace's own Chrome process and profile directory (FR-037), not
 	// a context id.
 	ctx, cancel := chromedp.NewContext(allocCtx)
-	if err := runFirstAttach(func() error { return chromedp.Run(ctx) }, firstAttachTimeout); err != nil {
+	if err := runFirstAttachContext(allocCtx, func() error { return chromedp.Run(ctx) }, firstAttachTimeout); err != nil {
 		cancel()
 		return nil, nil, fmt.Errorf("browser: failed to launch browser: %w", err)
 	}
@@ -2038,7 +1967,7 @@ func (m *BrowserManager) createTab(parentCtx context.Context, targetID target.ID
 	}
 	ctx, cancel := chromedp.NewContext(parentCtx, opts...)
 
-	if err := runFirstAttach(func() error { return chromedp.Run(ctx) }, firstAttachTimeout); err != nil {
+	if err := runFirstAttachContext(parentCtx, func() error { return chromedp.Run(ctx) }, firstAttachTimeout); err != nil {
 		cancel()
 		return nil, err
 	}
@@ -2166,17 +2095,11 @@ func snapshotTabsLocked(se *sessionEntry) []Tab {
 	return out
 }
 
-// notifyTabsChanged invokes the registered ADR-041 D4 tabs-changed callback
-// (if any) with tabs/activeIdx already computed by the caller. Only
-// m.tabsChanged itself is read under lock; the callback is always invoked
-// with NO BrowserManager lock held (ADR-038 rule) — every mutating tab-set
-// method in this file (Session/createFirstTab, OpenTab, CloseTab, SwitchTab,
-// adoptTarget, handleTargetEvent) calls this only after releasing m.mu. One
-// call site (handleTargetEvent's already-tracked/title-changed branch, ADR-
-// 041 fix F5) additionally wraps the call itself in `go` — see its doc
-// comment — since it runs on the CDP event-dispatch goroutine, where even a
-// lock-free call into notifyTabsChanged must not run synchronously if the
-// registered callback might call back into Session() and block on CDP.
+// notifyTabsChanged invokes the registered observer with a complete snapshot.
+// m.mu is released before invocation, while the caller retains target-command
+// admission through publication. Observers may read manager state but must not
+// start or mutate targets. Chrome metadata events use a coalesced worker so the
+// event-dispatch goroutine never waits for admission or observer work.
 func (m *BrowserManager) notifyTabsChanged(sessionID string, tabs []Tab, activeIdx int) {
 	m.mu.Lock()
 	cb := m.tabsChanged
@@ -2190,8 +2113,8 @@ func (m *BrowserManager) notifyTabsChanged(sessionID string, tabs []Tab, activeI
 // browsing context's tab set changes shape or its active tab moves —
 // open/close/switch/adopt, and best-effort title/url updates. Overwrites any
 // previously-registered callback; pass nil to unregister. Safe to call at
-// any time. The callback itself is always invoked with NO BrowserManager
-// lock held — see notifyTabsChanged.
+// any time. m.mu is never held during the callback, but target admission is:
+// use read-only lookups, not Session or tab mutations — see notifyTabsChanged.
 func (m *BrowserManager) SetTabsChangedFunc(cb func(sessionID string, tabs []Tab, activeIdx int)) {
 	m.mu.Lock()
 	m.tabsChanged = cb
@@ -2276,6 +2199,12 @@ func (m *BrowserManager) ListTabs(sessionID string) (tabs []Tab, activeIdx int, 
 // (live-measured 2026-08-03; the three-way desync where the tab strip said one
 // tab, the URL bar said another, and the pixels showed a third).
 func (m *BrowserManager) SwitchTab(sessionID string, index int) (Tab, error) {
+	release, admissionErr := m.acquireLegacyTabCommand(sessionID)
+	if admissionErr != nil {
+		return Tab{}, admissionErr
+	}
+	defer release()
+
 	m.mu.Lock()
 	se, err := m.lookupTabLocked(sessionID, index)
 	if err != nil {
@@ -2343,16 +2272,8 @@ func (m *BrowserManager) SwitchTab(sessionID string, index int) (Tab, error) {
 	// branch has already issued exactly one recapture from the
 	// notifyTabsChanged call immediately above.
 	//
-	// Round-2 finding F3: that branch now goes through the SAME entry point
-	// this one does (CaptureSession.RecaptureForTabChangeAt, via
-	// LiveView.signalRecaptureForTabChange), so the independent foreground
-	// re-assert — the second attempt that exists because activateTabInChrome
-	// above is best-effort and its failure is a WARN log and nothing more —
-	// is on the path every ordinary tab click takes, not only on this rare
-	// recovery one. It used to be reachable ONLY from here, which had the
-	// hardening exactly backwards.
 	if !modelMoved {
-		m.recaptureForTabChange()
+		m.recaptureForTabChange(sessionID)
 	}
 	return tabs[index], nil
 }
@@ -2362,11 +2283,10 @@ func (m *BrowserManager) SwitchTab(sessionID string, index int) (Tab, error) {
 // capture session exists (WebRTC never used, or the panel is closed), which
 // is why every call site can invoke it unconditionally.
 //
-// Must be called with NO BrowserManager lock held: CaptureSession() takes
-// m.captureMu, and the work RecaptureForTabChange schedules calls back into
-// m.Session(), which takes m.mu.
-func (m *BrowserManager) recaptureForTabChange() {
-	if cs := m.CaptureSession(); cs != nil {
+// Called after releasing the manager state lock. The capture lookup uses
+// captureMu; foreground recapture work acquires tab admission asynchronously.
+func (m *BrowserManager) recaptureForTabChange(sessionID string) {
+	if cs := m.CaptureSessionForPanel(sessionID); cs != nil {
 		cs.RecaptureForTabChange()
 	}
 }
@@ -2520,6 +2440,12 @@ func (m *BrowserManager) runTabFocusCDP(tabCtx context.Context, actions ...chrom
 // doc comment), which DOES talk to CDP and therefore runs with no
 // BrowserManager lock held, mirroring Session()'s discipline.
 func (m *BrowserManager) CloseTab(sessionID string, index int) (tabs []Tab, activeIdx int, err error) {
+	release, admissionErr := m.acquireLegacyTabCommand(sessionID)
+	if admissionErr != nil {
+		return nil, 0, admissionErr
+	}
+	defer release()
+
 	m.mu.Lock()
 	se, lerr := m.lookupTabLocked(sessionID, index)
 	if lerr != nil {
@@ -2612,12 +2538,24 @@ func (m *BrowserManager) CloseTab(sessionID string, index int) (tabs []Tab, acti
 // it active, subject to the FR-060 memory gate (ADR-041 D3). Creates the browsing context
 // if it doesn't exist yet, mirroring Session()'s lazy-creation semantics.
 func (m *BrowserManager) OpenTab(sessionID string) (Tab, error) {
+	release, admissionErr := m.acquireLegacyTabCommand(sessionID)
+	if admissionErr != nil {
+		return Tab{}, admissionErr
+	}
+	defer release()
+	startupCtx, stopStartup, startupErr := m.startupContextUnderGate(context.Background(), sessionID)
+	if startupErr != nil {
+		return Tab{}, startupErr
+	}
+	defer stopStartup()
+
 	m.mu.Lock()
-	if err := m.ensureStarted(); err != nil {
+	if err := m.ensureStartedContext(startupCtx); err != nil {
 		m.mu.Unlock()
 		return Tab{}, err
 	}
 	se, exists := m.sessions[sessionID]
+	expected := se
 	hasTabs := exists && len(se.tabs) > 0
 	m.mu.Unlock()
 
@@ -2651,6 +2589,10 @@ func (m *BrowserManager) OpenTab(sessionID string) (Tab, error) {
 		return Tab{}, errMemoryPressureTabOpen
 	}
 	se, exists = m.sessions[sessionID]
+	if se != expected {
+		m.mu.Unlock()
+		return Tab{}, errBrowserSessionChanged
+	}
 	if !exists || len(se.tabs) == 0 {
 		// The browsing context vanished, or was raced down to zero tabs (e.g.
 		// a concurrent CloseTab last-tab-replacement), between the hasTabs
@@ -2668,26 +2610,18 @@ func (m *BrowserManager) OpenTab(sessionID string) (Tab, error) {
 	m.mu.Unlock()
 
 	newTab, err := m.createTab(browserCtx, "")
+	m.mu.Lock()
+	se = m.sessions[sessionID]
+	if se != expected {
+		m.mu.Unlock()
+		m.discardLifecycleTarget(sessionID, newTab)
+		return Tab{}, errBrowserSessionChanged
+	}
 	if err != nil {
+		m.mu.Unlock()
 		return Tab{}, fmt.Errorf("browser: failed to open new tab: %w", err)
 	}
 
-	m.mu.Lock()
-	se, ok := m.sessions[sessionID]
-	if !ok {
-		// The browsing context vanished entirely while createTab ran
-		// unlocked (e.g. raced with CloseSession, or CloseTab's last-tab
-		// replacement tore it down). Don't resurrect it by blindly
-		// installing a bare sessionEntry (ADR-041 fix F1) — release this
-		// tab and go through the shared first-tab path instead, which
-		// itself dedups against any concurrent recreation.
-		m.mu.Unlock()
-		newTab.cancel()
-		if err := m.createFirstTab(sessionID); err != nil {
-			return Tab{}, err
-		}
-		return m.activeTabSnapshot(sessionID)
-	}
 	if m.memoryRefusesTabOpenLocked() {
 		m.mu.Unlock()
 		newTab.cancel()
@@ -2826,11 +2760,21 @@ type pendingAdoptEntry struct {
 // a racing caller's in-flight attempt, both run with NO BrowserManager lock
 // held.
 func (m *BrowserManager) adoptTarget(sessionID string, targetID target.ID) (tabAdoptResult, error) {
+	return m.adoptTargetForSession(sessionID, targetID, nil)
+}
+
+// Passive events retain the original session across dispatch and retries. A nil
+// owner preserves direct adoption without an externally retained snapshot.
+func (m *BrowserManager) adoptTargetForSession(sessionID string, targetID target.ID, owner *sessionEntry) (tabAdoptResult, error) {
 	if targetID == "" {
 		return tabAdoptResult{}, nil
 	}
 
 	m.mu.Lock()
+	if !m.adoptionSessionCurrentLocked(sessionID, owner) {
+		m.mu.Unlock()
+		return tabAdoptResult{}, errBrowserSessionChanged
+	}
 	se, ok := m.sessions[sessionID]
 	if !ok {
 		m.mu.Unlock()
@@ -2853,6 +2797,12 @@ func (m *BrowserManager) adoptTarget(sessionID string, targetID target.ID) (tabA
 		defer timer.Stop()
 		select {
 		case <-entry.done:
+			m.mu.Lock()
+			current := m.adoptionSessionCurrentLocked(sessionID, owner)
+			m.mu.Unlock()
+			if !current {
+				return tabAdoptResult{}, errBrowserSessionChanged
+			}
 			return entry.result, entry.err
 		case <-timer.C:
 			return tabAdoptResult{Unadopted: true, Reason: tabAdoptReasonAttachFailed},
@@ -2881,9 +2831,42 @@ func (m *BrowserManager) adoptTarget(sessionID string, targetID target.ID) (tabA
 	browserCtx := se.browserCtx
 	m.mu.Unlock()
 
+	// Register the shared adoption outcome before waiting for target admission,
+	// so concurrent callers still observe this attempt's result.
+	release, admissionErr := m.acquireLegacyTabCommand(sessionID)
+	if admissionErr != nil {
+		m.mu.Lock()
+		delete(m.pendingAdopt, targetID)
+		entry.result = tabAdoptResult{Unadopted: true, Reason: tabAdoptReasonAttachFailed}
+		entry.err = admissionErr
+		close(entry.done)
+		m.mu.Unlock()
+		return entry.result, admissionErr
+	}
+	defer release()
+	m.mu.Lock()
+	if m.sessions[sessionID] != se || !m.adoptionSessionCurrentLocked(sessionID, owner) {
+		delete(m.pendingAdopt, targetID)
+		entry.result = tabAdoptResult{Unadopted: true, Reason: tabAdoptReasonAttachFailed}
+		entry.err = errBrowserSessionChanged
+		close(entry.done)
+		m.mu.Unlock()
+		return entry.result, entry.err
+	}
+	m.mu.Unlock()
+
 	newTab, err := m.createTab(browserCtx, targetID)
 
 	m.mu.Lock()
+	if m.sessions[sessionID] != se || !m.adoptionSessionCurrentLocked(sessionID, owner) {
+		delete(m.pendingAdopt, targetID)
+		entry.result = tabAdoptResult{Unadopted: true, Reason: tabAdoptReasonAttachFailed}
+		entry.err = errBrowserSessionChanged
+		close(entry.done)
+		m.mu.Unlock()
+		m.discardLifecycleTarget(sessionID, newTab)
+		return entry.result, entry.err
+	}
 	delete(m.pendingAdopt, targetID)
 	// Finalize the entry (result/err + close(entry.done)) BEFORE unlocking in
 	// EVERY branch below — this closes a TOCTOU gap that could let a
@@ -3022,10 +3005,8 @@ func (m *BrowserManager) adoptRetrySchedule() []time.Duration {
 	return sched
 }
 
-// sessionExists reports whether sessionID still has a browsing context. Used
-// by adoptTargetWithRetry to abandon a pending retry promptly when the
-// context is torn down (Shutdown/CloseSession) rather than sleeping out the
-// rest of its schedule against a session that no longer exists.
+// sessionExists reports whether sessionID currently has a browsing context.
+// Presence alone must not authorize retained asynchronous work.
 func (m *BrowserManager) sessionExists(sessionID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -3048,8 +3029,20 @@ func (m *BrowserManager) sessionExists(sessionID string) bool {
 // (handleTargetEvent must never block the CDP event-dispatch goroutine —
 // see its doc comment).
 func (m *BrowserManager) adoptTargetWithRetry(sessionID string, targetID target.ID) {
-	_, err := m.adoptTarget(sessionID, targetID)
-	if err == nil {
+	m.mu.Lock()
+	owner := m.sessions[sessionID]
+	m.mu.Unlock()
+	m.adoptTargetWithRetryForSession(sessionID, targetID, owner)
+}
+
+// Opener membership is historical provenance, checked at event admission. The
+// popup may survive its opener, but it cannot migrate to a replacement session.
+func (m *BrowserManager) adoptTargetWithRetryForSession(sessionID string, targetID target.ID, owner *sessionEntry) {
+	if owner == nil {
+		return
+	}
+	_, err := m.adoptTargetForSession(sessionID, targetID, owner)
+	if err == nil || errors.Is(err, errBrowserSessionChanged) {
 		return
 	}
 
@@ -3064,16 +3057,15 @@ func (m *BrowserManager) adoptTargetWithRetry(sessionID string, targetID target.
 			"retry_in_ms":  delay.Milliseconds(),
 			"consequences": "tab stays stranded (not in the tab strip, and Chrome may show it) until a retry succeeds",
 		})
-		if !m.sessionExists(sessionID) {
-			return // browsing context torn down under us — nothing left to adopt into
-		}
 		timer := time.NewTimer(delay)
-		<-timer.C
-		timer.Stop()
-		if !m.sessionExists(sessionID) {
+		select {
+		case <-owner.browserCtx.Done():
+			timer.Stop()
 			return
+		case <-timer.C:
 		}
-		if _, err = m.adoptTarget(sessionID, targetID); err == nil {
+		timer.Stop()
+		if _, err = m.adoptTargetForSession(sessionID, targetID, owner); err == nil || errors.Is(err, errBrowserSessionChanged) {
 			return
 		}
 	}
@@ -3084,6 +3076,11 @@ func (m *BrowserManager) adoptTargetWithRetry(sessionID string, targetID target.
 		"error":      err.Error(),
 		"attempts":   len(sched) + 1,
 	})
+}
+
+// Caller holds m.mu. A nil owner denotes direct adoption without a snapshot.
+func (m *BrowserManager) adoptionSessionCurrentLocked(sessionID string, owner *sessionEntry) bool {
+	return owner == nil || m.sessions[sessionID] == owner && owner.browserCtx != nil && owner.browserCtx.Err() == nil
 }
 
 // reconcileTargetListTimeout bounds the chromedp.Targets CDP round trip
@@ -3142,29 +3139,20 @@ type ReconcileOutcome struct {
 // (see ReconcileOutcome's doc comment) — a click that spawns two new targets
 // where one adopts and the other is stranded reports BOTH.
 func (m *BrowserManager) ReconcileTabs(sessionID string) (ReconcileOutcome, error) {
-	m.mu.Lock()
-	se, ok := m.sessions[sessionID]
-	if !ok || len(se.tabs) == 0 {
-		m.mu.Unlock()
-		return ReconcileOutcome{}, nil
-	}
-	execCtx := se.active().ctx
-	tracked := make(map[target.ID]struct{}, len(se.tabs))
-	for _, t := range se.tabs {
-		tracked[t.targetID] = struct{}{}
-	}
-	listTargets := m.listTargets
-	m.mu.Unlock()
+	return m.reconcileTabs(sessionID, nil)
+}
 
-	if listTargets == nil {
-		listTargets = chromedp.Targets
+func (m *BrowserManager) reconcileTabs(sessionID string, before *clickTabSnapshot) (ReconcileOutcome, error) {
+	infos, tracked, owner, err := m.reconcileTargetSnapshot(sessionID)
+	if err != nil {
+		return ReconcileOutcome{}, err
 	}
+	return m.reconcileListedTabs(sessionID, infos, tracked, owner, before)
+}
 
-	timeoutCtx, cancel := context.WithTimeout(execCtx, reconcileTargetListTimeout)
-	infos, lerr := listTargets(timeoutCtx)
-	cancel()
-	if lerr != nil {
-		return ReconcileOutcome{}, fmt.Errorf("browser: failed to list targets for reconcile: %w", lerr)
+func (m *BrowserManager) reconcileListedTabs(sessionID string, infos []*target.Info, tracked map[target.ID]struct{}, owner *sessionEntry, before *clickTabSnapshot) (ReconcileOutcome, error) {
+	if before != nil && owner != before.owner {
+		return ReconcileOutcome{}, errBrowserSessionChanged
 	}
 
 	var out ReconcileOutcome
@@ -3172,22 +3160,38 @@ func (m *BrowserManager) ReconcileTabs(sessionID string) (ReconcileOutcome, erro
 		if info == nil || info.Type != "page" {
 			continue
 		}
-		if _, already := tracked[info.TargetID]; already {
+		report := before == nil || before.reports(info)
+		if _, already := tracked[info.TargetID]; already && (before == nil || !report) {
 			continue
 		}
 		if info.OpenerID == "" {
 			continue // not opened by a page — a top-level target, not ours to adopt
 		}
-		if _, openerIsOurs := tracked[info.OpenerID]; !openerIsOurs {
+		if _, openerIsOurs := tracked[info.OpenerID]; !openerIsOurs && (before == nil || info.OpenerID != before.opener) {
 			continue // opened by a target outside this browsing context
 		}
-		result, aerr := m.adoptTarget(sessionID, info.TargetID)
+		result, aerr := m.adoptTargetForSession(sessionID, info.TargetID, owner)
+		if before != nil && report && aerr == nil && result.Adopted == nil && !result.Unadopted {
+			result, aerr = m.completedClickAdoption(sessionID, before, info.TargetID)
+		}
+		if errors.Is(aerr, errBrowserSessionChanged) {
+			// Earlier results no longer describe the current tab set.
+			return ReconcileOutcome{}, aerr
+		}
 		if aerr != nil {
 			logger.WarnCF("browser", "reconcile: failed to adopt detected tab", map[string]any{
 				"session_id": sessionID,
 				"target_id":  string(info.TargetID),
 				"error":      aerr.Error(),
 			})
+		}
+		if result.Adopted != nil || result.Unadopted {
+			tracked[info.TargetID] = struct{}{}
+		}
+		// Reconciliation still adopts other owned popups normally; only the
+		// click's report is restricted to its original opener and time window.
+		if !report {
+			continue
 		}
 		// Adopted and Unadopted are set on DISJOINT fields of out — deliberately
 		// NOT an if/else — so a click that opens two new targets where one
@@ -3197,14 +3201,20 @@ func (m *BrowserManager) ReconcileTabs(sessionID string) (ReconcileOutcome, erro
 		case result.Adopted != nil:
 			out.Adopted = true
 			out.NewActive = result.Adopted
-			tracked[info.TargetID] = struct{}{} // avoid reprocessing within this pass
 		case result.Unadopted:
 			out.Unadopted = true
 			if out.Reason == "" {
 				out.Reason = result.Reason // first reason wins — stable across the pass
 			}
 			out.UnadoptedCount++
-			tracked[info.TargetID] = struct{}{} // avoid reprocessing within this pass
+		}
+	}
+	if owner != nil {
+		m.mu.Lock()
+		current := m.adoptionSessionCurrentLocked(sessionID, owner)
+		m.mu.Unlock()
+		if !current {
+			return ReconcileOutcome{}, errBrowserSessionChanged
 		}
 	}
 	return out, nil
@@ -3275,23 +3285,23 @@ func (m *BrowserManager) handleTargetEvent(sessionID string, ev any) {
 				m.mu.Unlock()
 				return
 			}
-			tabs := snapshotTabsLocked(se)
-			activeIdx := se.activeIdx
+			m.queueTabNotificationLocked(sessionID, se)
 			m.mu.Unlock()
-			go m.notifyTabsChanged(sessionID, tabs, activeIdx) // ADR-041 fix F5 — see doc comment above
 			return
 		}
 	}
+	// Discovery is browser-global; another tab set's popup is not ours.
+	ownedOpener := exists && info.OpenerID != "" && se.indexOfTarget(info.OpenerID) >= 0
 	m.mu.Unlock()
 
-	if info.OpenerID == "" {
-		return // not opened by a page — a top-level/browser-initiated target, not ours
+	if !ownedOpener {
+		return
 	}
 	// adoptTargetWithRetry, not a bare adoptTarget: Target.targetCreated
 	// fires exactly once per target, so a single transient failure here used
 	// to strand the tab permanently — see defaultAdoptRetryBackoff's doc
 	// comment for the measurement.
-	go m.adoptTargetWithRetry(sessionID, info.TargetID)
+	go m.adoptTargetWithRetryForSession(sessionID, info.TargetID, se)
 }
 
 // targetInfoFromEvent extracts *target.Info from the two CDP event types
@@ -3382,6 +3392,7 @@ func (m *BrowserManager) CloseSession(sessionID string) {
 	// while holding the lock, drop it, then run them bounded.
 	var pending []func()
 	m.mu.Lock()
+	m.retireTabCommandsLocked(sessionID)
 	if se, ok := m.sessions[sessionID]; ok {
 		for _, t := range se.tabs {
 			pending = append(pending, t.cancel)
@@ -3662,6 +3673,7 @@ func (m *BrowserManager) ReapIdleSessions() []string {
 	var reapedSessions []string
 	var reapedTabs []reapedTabInfo
 	var reapedBrowsers []reapedSessionInfo
+	var notifications []reapedTabNotification
 	for sessionID, se := range m.sessions {
 		// The live panel's tab strip shows every tab in this context — a
 		// viewer watching it protects ALL of them, in full, regardless of
@@ -3699,12 +3711,18 @@ func (m *BrowserManager) ReapIdleSessions() []string {
 			if now.Sub(se.emptySince) < ttl {
 				continue
 			}
+			release := m.tryAcquireTabCommandLocked(sessionID)
+			if release == nil {
+				continue
+			}
+			notifications = append(notifications, reapedTabNotification{sessionID: sessionID, session: se, release: release})
 			if se.browserCancel != nil {
 				reapedBrowsers = append(
 					reapedBrowsers,
 					reapedSessionInfo{sessionID: sessionID, cancel: se.browserCancel},
 				)
 			}
+			delete(m.pending, sessionID)
 			delete(m.sessions, sessionID)
 			reapedSessions = append(reapedSessions, sessionID)
 			continue
@@ -3730,6 +3748,11 @@ func (m *BrowserManager) ReapIdleSessions() []string {
 		if len(closing) == 0 {
 			continue
 		}
+		release := m.tryAcquireTabCommandLocked(sessionID)
+		if release == nil {
+			continue
+		}
+		notifications = append(notifications, reapedTabNotification{sessionID: sessionID, session: se, release: release})
 
 		// Defer the actual t.cancel() calls until AFTER m.mu is released
 		// below (ADR-038 discipline) — cancel() is not guaranteed to return
@@ -3751,6 +3774,7 @@ func (m *BrowserManager) ReapIdleSessions() []string {
 					reapedSessionInfo{sessionID: sessionID, cancel: se.browserCancel},
 				)
 			}
+			delete(m.pending, sessionID)
 			delete(m.sessions, sessionID)
 			reapedSessions = append(reapedSessions, sessionID)
 			continue
@@ -3779,6 +3803,11 @@ func (m *BrowserManager) ReapIdleSessions() []string {
 	}
 	m.mu.Unlock()
 
+	for _, notification := range notifications {
+		m.publishReapedTabSnapshot(notification)
+	}
+	// Removed contexts are cleaned up after publication, outside both manager
+	// mutex and target admission. They can no longer become active again.
 	for _, rt := range reapedTabs {
 		cancelBounded(rt.tab.cancel, map[string]any{"session_id": rt.sessionID, "target_id": string(rt.tab.targetID)})
 		logger.InfoCF("browser", "reaped idle browser tab (no viewer and no agent activity within idle_ttl)",
@@ -3927,25 +3956,12 @@ func (m *BrowserManager) InvalidateExecPathCache() {
 // Chrome. Either way the bookkeeping (sessions, started, allocCancel) is
 // reset cleanly and idempotently.
 func (m *BrowserManager) Shutdown() {
-	// Fix-wave CRIT (reviewer 1, conf 88): stop this manager's WebRTC
-	// CaptureSession, if any, BEFORE the connection/session teardown below.
-	// Without this, a live capturing session was orphaned by Shutdown — its
-	// encoder tab lives in the shared-Chrome coordinator's own root context
-	// (capture_session.go's defaultEncoderStarter), not any of the sessions
-	// torn down here, so it survives; its ping beacon keeps the encoder-
-	// liveness watchdog happy; and the registry entry it still occupies
-	// (BrowserManager.capture) is never cleared, making it unstoppable once
-	// this manager itself is gone (e.g. hot-reload via pkg/agent/loop.go's
-	// registerSharedTools, which calls Shutdown on the OLD manager while a
-	// NEW one takes over — the orphaned session's own token still resolves
-	// in the gateway's captureRegistry, but nothing ever calls Stop() on it
-	// again). cs.Stop() is idempotent and safe to call even if the manager
-	// never actually started a capture session (CaptureSession() returns nil
-	// then). Deliberately taken via m.CaptureSession() BEFORE m.mu.Lock()
-	// below: cs.Stop() can block for a few seconds (its own best-effort
-	// ingest control-frame write, now bounded by fix 5's write deadline) and
-	// must never hold m.mu — a separate mutex (m.captureMu) — while doing so.
-	if cs := m.CaptureSession(); cs != nil {
+	// Encoder targets outlive the tab contexts below. Stop every panel capture
+	// first, outside manager locks: Stop can perform I/O and its callback removes
+	// the exact capture from this manager.
+	captures := m.beginCaptureTeardown()
+	defer m.endCaptureTeardown()
+	for _, cs := range captures {
 		cs.Stop()
 	}
 
@@ -3954,6 +3970,11 @@ func (m *BrowserManager) Shutdown() {
 	// cancelBounded and ReapIdleSessions for the same discipline.
 	var pending []func()
 	m.mu.Lock()
+	for id := range m.tabCommands {
+		m.retireTabCommandsLocked(id)
+	}
+	m.pending = nil
+	m.pendingTabNotifications = nil
 	for id, se := range m.sessions {
 		for _, t := range se.tabs {
 			pending = append(pending, t.cancel)
@@ -4021,7 +4042,9 @@ func (m *BrowserManager) invalidateConnection() {
 	// NOT route through Shutdown, so it needs its own identical guard. Taken
 	// before m.mu.Lock() for the same reason: cs.Stop() must never block
 	// while holding m.mu.
-	if cs := m.CaptureSession(); cs != nil {
+	captures := m.beginCaptureTeardown()
+	defer m.endCaptureTeardown()
+	for _, cs := range captures {
 		cs.Stop()
 	}
 

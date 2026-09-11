@@ -125,7 +125,7 @@ func TestCaptureRegistry_OnePerBrowsingKey(t *testing.T) {
 	others := handler.captures.otherSessions(keyOther)
 	require.Len(t, others, 1,
 		"carol's workspace must still see the shared workspace's capture as a foreign one")
-	assert.Contains(t, others, keyShared)
+	assert.Equal(t, keyShared, others[csA])
 
 	// --- Teardown deregisters by key, not by agent ------------------------
 	handler.captures.removeIfCurrent(agentA, csA)

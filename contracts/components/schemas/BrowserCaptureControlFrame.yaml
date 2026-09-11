@@ -2,10 +2,8 @@ title: BrowserCaptureControlFrame
 description: >
   Bidirectional control frame on the /api/v1/browser/capture-ingest
   channel. Server (gateway) → client (extension) for `recapture` (the
-  agent's active tab changed — chrome.tabs.query({active:true}) must be
-  re-bound; triggered by the same live.go onTabsChanged/rebindWatch
-  tab-follow logic that also drives the live-view session/control-lock
-  bookkeeping, ADR-047 D2) and `shutdown` (the capture session is ending — last viewer
+  verified target or CSS geometry changed, or the current capture needs
+  recovery) and `shutdown` (the capture session is ending — last viewer
   detached past the grace period, or the gateway is stopping the stream);
   Server → client also for `adapt_reset`: a boot-warmed capture is being
   handed to its first real viewer, and whatever resolution the encoder's
@@ -55,14 +53,11 @@ properties:
     minimum: 1
     maximum: 16384
     description: >-
-      recapture only, server → extension: the CDP-verified CSS viewport width
-      the tab was just resized to (SetViewport's getLayoutMetrics read-back).
-      chrome.tabs.get lags the OS window reflow, so a recapture racing a
-      resize can pin the whole stream to a stale size (measured live
-      2026-07-31: capture stuck at launch geometry while the tab was already
-      verified at 615x744). With this present the encoder polls tabs.get
-      until it converges on the expected size, falling back to the expected
-      value itself on timeout — it is the CDP-verified truth.
+      recapture only, server → extension: the measured CSS viewport width
+      for this exact target and capture generation. The encoder uses this
+      verified geometry directly; it does not poll chrome.tabs.get, whose
+      dimensions can lag a resize. The server keeps capture pending until
+      the target's actual viewport has been measured.
   expected_height:
     type: integer
     minimum: 1
@@ -82,3 +77,55 @@ properties:
       stretched over 2x display pixels — uniformly blurry video, reported
       from live use on macOS 2026-08-12. The tabs.get convergence check
       stays in CSS pixels; only the media constraints scale.
+
+  capture_health:
+    type: object
+    description: >-
+      Capture-stage observations on ping, qualified by the outer capture_generation
+      and target_id of the sampled peer. Missing or stale frame identity may
+      refresh socket liveness but cannot refresh recovery evidence. Silence alone
+      is not a failure.
+    additionalProperties: false
+    required: [generation, track_state, track_muted, peer_state]
+    properties:
+      generation:
+        type: integer
+        minimum: 0
+        description: Encoder-local capture attempt counter, distinct from the outer server-issued capture_generation.
+      track_state:
+        type: string
+        enum: [live, ended, absent]
+      track_muted:
+        type: boolean
+      peer_state:
+        type: string
+        enum: [new, connecting, connected, disconnected, failed, closed, absent]
+      source_frames:
+        type: integer
+        minimum: 0
+      encoded_frames:
+        type: integer
+        minimum: 0
+      packets_sent:
+        type: integer
+        minimum: 0
+      sample_timestamp_ms:
+        type: number
+        minimum: 0
+  capture_generation:
+    type: integer
+    minimum: 1
+    maximum: 9007199254740991
+    description: >-
+      Server-issued target and CSS geometry generation, scoped to the capture
+      session. Recapture commands assign this value. Ping evidence names the
+      immutable command of the peer actually sampled, never a newer requested
+      capture. A ping with stale or missing identity proves only socket liveness.
+  target_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: >-
+      CDP page target identity for this capture generation. The encoder must
+      verify its selected Chrome tab maps to this identity before offering.
+      Ping evidence repeats the sampled peer command target, not a pending target.

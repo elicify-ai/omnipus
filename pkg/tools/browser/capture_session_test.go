@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/security"
-	"github.com/elicify-ai/omnipus/pkg/tools/browser/captureext"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser/webrtc"
 )
 
@@ -305,60 +304,21 @@ func TestCaptureSession_StartPropagatesEncoderError(t *testing.T) {
 	}
 }
 
-// TestDefaultEncoderStarter_NoRootContext_ReturnsSharedChromeNotLiveError
-// calls the REAL production defaultEncoderStarter (never a fake) — every
-// other Start()/EncoderStarter test in this file substitutes
-// fakeEncoderStarter, so defaultEncoderStarter itself had zero direct unit
-// coverage. Reaches its step-3 gate (capture_session.go: "rootCtx :=
-// coord.rootContext(); if rootCtx == nil { return ... "shared Chrome is not
-// live" }") by constructing a coordinator that is deliberately never
-// launched (rootCtx stays nil by construction — NewBrowserCoordinator never
-// touches it), while making steps 1-2 succeed WITHOUT a real Chrome:
-//   - step 1 (mgr.Session(testSessionID)): a hand-planted sessionEntry
-//     with a live (never-canceled) tab context, mirroring sessionEntry's own
-//     doc comment ("nil only for hand-built sessionEntry literals in tests
-//     that bypass Session()/createFirstTab entirely... every nil-checked at
-//     its two call sites") and live_deadlock_test.go's identical technique —
-//     plus mgr.started=true so ensureStarted() never attempts a real
-//     coordinator.Register() launch.
-//   - step 2 (coord.LoadedExtensionID() != captureext.ExtensionID): the
-//     coordinator's loadedExtensionID is set directly to captureext.ExtensionID
-//     so LoadExtension (which itself needs a live rootCtx) is never called —
-//     calling it here would fail for a DIFFERENT reason and mask the one
-//     this test targets.
+// The enriched production starter must reject a coordinator without a live
+// root even when its injected frame identity is independently valid.
 func TestDefaultEncoderStarter_NoRootContext_ReturnsSharedChromeNotLiveError(t *testing.T) {
 	coord := NewBrowserCoordinator(t.TempDir(), BrowserConfig{})
-	// Never Register()'d/launched — coord.rootCtx stays nil, which is exactly
-	// the precondition defaultEncoderStarter's step 3 gate checks for.
-
-	fakeCtx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	mgr := &BrowserManager{
-		cfg:      BrowserConfig{ProfileDir: t.TempDir() + "/profiles/default"},
-		started:  true,
-		sessions: map[string]*sessionEntry{},
-	}
+	mgr := &BrowserManager{}
 	mgr.AttachSharedChrome(coord, browserTestKey("agent-no-root-ctx"))
-	// The capture path resolves the WORKSPACE-OWNED tab set (the live panel is
-	// the operator, ADR-075 §0.2a), so the hand-planted entry must be keyed the
-	// way production will look it up — AttachSharedChrome above is what gives
-	// the manager the browsing key that key is built from.
-	mgr.sessions[mgr.OperatorSessionID()] = &sessionEntry{
-		tabs:      []*tabEntry{{ctx: fakeCtx, cancel: cancel}},
-		activeIdx: 0,
-	}
 
-	coord.mu.Lock()
-	coord.loadedExtensionID = captureext.ExtensionID
-	coord.mu.Unlock()
-
-	_, _, err := defaultEncoderStarter(
+	_, _, err := startEncoderWithFrame(
 		context.Background(),
 		mgr,
-		"", // no panel context: falls back to the operator's set, as before (#671)
+		"", // Frame target identity is already prepared.
 		"deadbeef",
 		"ws://127.0.0.1:1/api/v1/browser/capture-ingest",
 		"",
+		CaptureFrameState{Generation: 1, TargetID: "page-a", Width: 800, Height: 600, Scale: 1},
 	)
 	if err == nil {
 		t.Fatal("expected an error when the coordinator has no live root context")
@@ -370,7 +330,7 @@ func TestDefaultEncoderStarter_NoRootContext_ReturnsSharedChromeNotLiveError(t *
 
 // TestCaptureSession_StopWhileStarting_NoOrphanedEncoderTarget is the
 // regression guard for the Start()/Stop() race capture_session.go's Start()
-// explicitly handles (the "cs.stopped" branch inside startOnce.Do, comment:
+// explicitly handles (the "cs.stopped" branch after startup, comment:
 // "A Stop() (e.g. browser death detected concurrently) raced this Start()
 // and won — tear down what we just built rather than leaving an orphaned
 // encoder target nobody will ever close"). Blocks a fake EncoderStarter

@@ -43,7 +43,7 @@ func TestSession_ViewerAnswerAdvertisesTCPCandidate(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ln.Close() })
 
-	s := newIngestedSession(t, webrtc.Config{MediaTCP: ln, PublicIPs: []string{"203.0.113.8"}})
+	s := newIngestedSession(t, webrtc.Config{MediaTCPMux: newTestTCPMux(t, ln), PublicIPs: []string{"203.0.113.8"}})
 	viewer := newFakeViewer(t, false)
 	answer, err := s.HandleViewerOffer("v-tcp", nonTrickleOffer(t, viewer.pc))
 	require.NoError(t, err)
@@ -72,8 +72,8 @@ func TestSession_TCPOnlyWithStun_StillNegotiates(t *testing.T) {
 	t.Cleanup(func() { _ = ln.Close() })
 
 	s := newIngestedSession(t, webrtc.Config{
-		MediaTCP:   ln,
-		StunServer: "stun:stun.l.google.com:19302",
+		MediaTCPMux: newTestTCPMux(t, ln),
+		StunServer:  "stun:stun.l.google.com:19302",
 	})
 	viewer := newFakeViewer(t, false)
 	answer, err := s.HandleViewerOffer("v-tcp-stun", nonTrickleOffer(t, viewer.pc))
@@ -90,9 +90,9 @@ func TestSession_HostedViewerIsLiteAndStunFree(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 
 	s := newIngestedSession(t, webrtc.Config{
-		MediaConn:  conn,
-		PublicIPs:  []string{"203.0.113.9"},
-		StunServer: "stun:stun.l.google.com:19302",
+		MediaUDPMux: newTestUDPMux(t, conn),
+		PublicIPs:   []string{"203.0.113.9"},
+		StunServer:  "stun:stun.l.google.com:19302",
 	})
 	viewer := newFakeViewer(t, false)
 	answer, err := s.HandleViewerOffer("v-hosted", nonTrickleOffer(t, viewer.pc))
@@ -114,8 +114,8 @@ func TestSession_SelfHostedNoPublicIP_KeepsSrflx(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 
 	s := newIngestedSession(t, webrtc.Config{
-		MediaConn:  conn,
-		StunServer: "stun:stun.l.google.com:19302",
+		MediaUDPMux: newTestUDPMux(t, conn),
+		StunServer:  "stun:stun.l.google.com:19302",
 	})
 	viewer := newFakeViewer(t, false)
 	answer, err := s.HandleViewerOffer("v-selfhost", nonTrickleOffer(t, viewer.pc))

@@ -23,6 +23,7 @@
 //      false in-content coordinate the way the pre-fix, uncorrected
 //      `rect` math would.
 
+import { installBrowserFrameCallbacks, confirmBrowserFrame } from './browserFrameTestUtils'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
@@ -63,6 +64,7 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
 })
 
 import { BrowserLiveView } from './BrowserLiveView'
+installBrowserFrameCallbacks()
 
 /** Stand-in MediaStream — jsdom has no real WebRTC/MediaStream. Passed via
  * the `mediaStream` test/override seam (see BrowserLiveView.webrtcSink.test.tsx)
@@ -82,6 +84,7 @@ function decodeFirstFrame() {
   Object.defineProperty(video, 'videoWidth', { value: 1280, configurable: true })
   Object.defineProperty(video, 'videoHeight', { value: 720, configurable: true })
   fireEvent.loadedMetadata(video)
+    confirmBrowserFrame(callbacksRef.current, video)
 }
 
 function connectFrameAndDrive() {
@@ -203,36 +206,17 @@ describe('BrowserLiveView — fillContainer sizing (BUG 1)', () => {
 })
 
 describe('BrowserLiveView — letterbox-corrected coordinate mapping (BUG 1 revert-proof)', () => {
-  // THE key regression test: before the fix, `mapPointerToDeviceCoords` fed
-  // `mapClientToDevice` the RAW container rect unconditionally. For a
-  // container whose aspect ratio doesn't match the content (exactly what
-  // `fillContainer` introduces), that mis-reports where the content edge
-  // actually is — a click in what's actually dead pillarbox space would be
-  // reported as landing 25.6px into the live page instead of clamping to the
-  // content's left edge (x: 0). Run this test against the pre-fix
-  // `mapPointerToDeviceCoords` (rect passed straight through, no
-  // `computeObjectContainRect` correction) and it fails with `x: 25.6`
-  // instead of `x: 0` — restoring that behavior locally and re-running
-  // confirms the regression.
-  it('clamps a click inside the pillarboxed dead-zone to the content edge, not a false in-content coordinate', () => {
+  // Padding is outside the page; it cannot authorize a remote click.
+  it('ignores a click inside the pillarboxed dead zone', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} fillContainer />)
     connectFrameAndDrive()
     const container = stubMismatchedContainerRect()
-
-    // Content (1280x720, aspect 1.7778) pillarboxed inside the 1000x500
-    // (aspect 2.0) box: visible width = 500 * 1.7778 = 888.89, so visible
-    // content starts at x = (1000 - 888.89) / 2 = 55.56. A click at
-    // clientX=20 is well inside the dead zone to its left.
+    // A 1280×720 page contained in a 1000×500 box starts at x=55.56.
+    // A click at x=20 is padding and must never become a page-edge click.
     mockSendInput.mockClear()
     fireEvent.pointerDown(container, { clientX: 20, clientY: 250 })
-
-    expect(mockSendInput).toHaveBeenCalledTimes(1)
-    const sent = mockSendInput.mock.calls[0][0] as { kind: string; x: number; y: number }
-    expect(sent.kind).toBe('mouse_down')
-    // Uncorrected (pre-fix) math would report x ≈ 25.6 (20 * 1280/1000) — a
-    // coordinate inside the live page, when the click never actually
-    // reached visible content at all.
-    expect(sent.x).toBe(0)
+    fireEvent.pointerUp(container, { clientX: 20, clientY: 250 })
+    expect(mockSendInput.mock.calls).toEqual([])
   })
 
   it('maps a click at the exact box center to the exact content center (sanity check both pre- and post-fix agree here)', () => {
@@ -336,6 +320,7 @@ describe('BrowserLiveView — transient-resize guard and input pacing', () => {
   it('does not push a viewport while focus sits in a panel input', async () => {
     vi.useFakeTimers()
     try {
+      vi.stubGlobal('visualViewport', { scale: 1, height: window.innerHeight - 250, offsetTop: 0, addEventListener: vi.fn(), removeEventListener: vi.fn() })
       render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} fillContainer canAnnotate />)
       act(() => {
         callbacksRef.current?.onConnected?.()
@@ -366,6 +351,7 @@ describe('BrowserLiveView — transient-resize guard and input pacing', () => {
 
       expect(mockSendViewport).not.toHaveBeenCalled()
     } finally {
+      vi.unstubAllGlobals()
       vi.useRealTimers()
     }
   })
@@ -479,6 +465,7 @@ describe('BrowserLiveView — focus guard covers the settle window', () => {
   it('does not commit a size measured after focus entered a text field', async () => {
     vi.useFakeTimers()
     try {
+      vi.stubGlobal('visualViewport', { scale: 1, height: window.innerHeight - 250, offsetTop: 0, addEventListener: vi.fn(), removeEventListener: vi.fn() })
       render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} fillContainer canAnnotate />)
       act(() => {
         callbacksRef.current?.onConnected?.()
@@ -509,6 +496,7 @@ describe('BrowserLiveView — focus guard covers the settle window', () => {
 
       expect(mockSendViewport).not.toHaveBeenCalled()
     } finally {
+      vi.unstubAllGlobals()
       vi.useRealTimers()
     }
   })
@@ -537,7 +525,7 @@ describe('BrowserLiveView — viewport settle: recovery paths', () => {
   // blur produces no resize either — without an explicit blur catch-up the
   // resize is suppressed once and never retried. Resize the window while typing
   // a URL and the panel stayed pinned to the old geometry indefinitely.
-  it('commits a real resize that happened while a text field had focus, once focus leaves', async () => {
+  it('commits desktop resizing before blur and deduplicates the later blur', async () => {
     vi.useFakeTimers()
     try {
       const el = mountSettled()
@@ -554,7 +542,7 @@ describe('BrowserLiveView — viewport settle: recovery paths', () => {
         window.dispatchEvent(new Event('resize'))
       })
       await vi.advanceTimersByTimeAsync(2000)
-      expect(mockSendViewport).not.toHaveBeenCalled()
+      expect(mockSendViewport).toHaveBeenCalledExactlyOnceWith(890, 1300, window.devicePixelRatio || 1)
 
       // Blur with NO further resize event. The focusout catch-up is the only
       // thing that can rescue the 1300 height now.
@@ -563,7 +551,7 @@ describe('BrowserLiveView — viewport settle: recovery paths', () => {
       })
       await vi.advanceTimersByTimeAsync(2000)
 
-      expect(mockSendViewport).toHaveBeenCalledWith(890, 1300, expect.any(Number))
+      expect(mockSendViewport).toHaveBeenCalledExactlyOnceWith(890, 1300, window.devicePixelRatio || 1)
     } finally {
       vi.useRealTimers()
     }
@@ -627,4 +615,22 @@ describe('BrowserLiveView — viewport settle: recovery paths', () => {
       vi.useRealTimers()
     }
   })
+})
+
+// Real layout resizing must proceed on desktop even while the user types.
+it('applies a desktop resize while the address bar remains focused', async () => {
+  vi.useFakeTimers()
+  try {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} fillContainer />)
+    act(() => { callbacksRef.current?.onConnected?.(); emitFirstFrame() })
+    const frame = screen.getByTestId('browser-live-frame')
+    vi.spyOn(frame, 'getBoundingClientRect').mockReturnValue({ width: 800, height: 600 } as DOMRect)
+    act(() => screen.getByLabelText('Address bar').focus())
+    act(() => window.dispatchEvent(new Event('resize')))
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(mockSendViewport).toHaveBeenLastCalledWith(800, 600, window.devicePixelRatio || 1)
+    expect(document.activeElement).toBe(screen.getByLabelText('Address bar'))
+  } finally {
+    vi.useRealTimers()
+  }
 })

@@ -1,7 +1,9 @@
 package webrtc
 
 import (
+	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/rtcp"
@@ -76,6 +78,22 @@ func (s *Session) HandleViewerOffer(viewerID string, sdpOffer string) (answer st
 // closed session, PC/track-add failures) -- nothing exists yet for a caller
 // to protect.
 func (s *Session) HandleViewerOfferHandle(viewerID string, sdpOffer string) (answer string, handle any, err error) {
+	return s.HandleViewerOfferHandleContext(context.Background(), viewerID, sdpOffer)
+}
+
+// HandleViewerOfferHandleContext retains the original attachment lifetime for
+// this peer. Returning an answer does not end that lifetime.
+func (s *Session) HandleViewerOfferHandleContext(parent context.Context, viewerID string, sdpOffer string) (answer string, handle any, err error) {
+	return s.handleViewerOfferHandle(parent, parent, nil, viewerID, sdpOffer)
+}
+
+func (s *Session) handleViewerOfferHandle(ctx, parent context.Context, request *viewerRequestAdmission, viewerID, sdpOffer string) (answer string, handle any, err error) {
+	if parent == nil {
+		return "", nil, fmt.Errorf("webrtc: viewer offer: nil attachment context")
+	}
+	if parentErr := parent.Err(); parentErr != nil {
+		return "", nil, fmt.Errorf("webrtc: viewer offer: %w", parentErr)
+	}
 	if viewerID == "" {
 		return "", nil, fmt.Errorf("webrtc: viewer offer: empty viewerID")
 	}
@@ -87,7 +105,10 @@ func (s *Session) HandleViewerOfferHandle(viewerID string, sdpOffer string) (ans
 	prefix := fmt.Sprintf("[viewer-%d/%s]", id, viewerID)
 	s.logf("%s offer received (%d bytes SDP)", prefix, len(sdpOffer))
 
-	videoTrack, audioTrack, ok := s.waitForTracks(waitForTracksTimeout)
+	videoTrack, audioTrack, ok := s.waitForTracksContext(ctx, waitForTracksTimeout)
+	if requestErr := context.Cause(ctx); requestErr != nil {
+		return "", nil, fmt.Errorf("webrtc: viewer offer: %w", requestErr)
+	}
 	if !ok {
 		// %w wraps ErrNoIngestVideoTrack (ingest.go) so the gateway
 		// (browser_webrtc.go) can classify this SPECIFIC failure mode via
@@ -108,153 +129,45 @@ func (s *Session) HandleViewerOfferHandle(viewerID string, sdpOffer string) (ans
 		return "", nil, fmt.Errorf("webrtc: session closed")
 	}
 
-	pc, err := s.buildPeerConnection(s.apiViewer, true) // internet-facing leg: fixed socket + public candidates
-	if err != nil {
-		return "", nil, fmt.Errorf("webrtc: viewer %s: %w", prefix, err)
-	}
-
-	var senders []*webrtc.RTPSender
-	if sender, addErr := pc.AddTrack(videoTrack); addErr != nil {
-		_ = pc.Close()
-		return "", nil, fmt.Errorf("webrtc: viewer %s: add video track: %w", prefix, addErr)
-	} else {
-		senders = append(senders, sender)
-		go s.drainViewerRTCP(prefix, sender)
-	}
-	if audioTrack != nil {
-		if sender, addErr := pc.AddTrack(audioTrack); addErr != nil {
-			_ = pc.Close()
-			return "", nil, fmt.Errorf("webrtc: viewer %s: add audio track: %w", prefix, addErr)
-		} else {
-			senders = append(senders, sender)
-			go s.drainViewerRTCP(prefix, sender)
+	var published atomic.Pointer[ViewerHandle]
+	var prepared *viewerPreparedCandidate
+	err = s.viewerPreparations.run(ctx, func() error {
+		var prepareErr error
+		prepared, prepareErr = s.prepareViewerCandidate(ctx, parent, request, prefix, viewerID, sdpOffer, videoTrack, audioTrack, &published)
+		return prepareErr
+	}, func() {
+		if prepared != nil {
+			s.retireViewerCandidate(prepared.vc)
 		}
-	} else {
-		s.logf("%s no audio track yet, answering video-only", prefix)
-	}
-
-	// pcHandle is minted HERE, before vc is ever published into s.viewers,
-	// and stored on vc itself (viewerConn.handle) as well as returned below
-	// as this call's `handle` -- the SAME pointer instance serves both
-	// purposes so removeViewer's eventual onViewerRemoved notification (GAP 2
-	// fix-wave finding) can hand a caller back the EXACT identity it was
-	// given at registration time, letting it recognize its own registration
-	// with a plain equality check rather than needing a second identity
-	// scheme.
-	pcHandle := &ViewerHandle{viewerID: viewerID, pc: pc}
-	vc := &viewerConn{pc: pc, senders: senders, handle: pcHandle}
+	})
+	// A canceled caller synchronizes with the short publication lock: either
+	// no attempt was installed, or its exact cleanup handle is already visible.
 	s.viewersMu.Lock()
-	if old, exists := s.viewers[viewerID]; exists {
-		s.logf("%s replacing existing viewer connection for id %q", prefix, viewerID)
-		// Explicit, synchronous termination (stopViewerConn) of old's own
-		// RTPSenders/input-queue -- see viewerConn's doc comment (session.go)
-		// for why this package does not rely solely on the async pc.Close()
-		// below to unblock old's drainViewerRTCP/runInputQueue goroutines.
-		// Safe under s.viewersMu: old's only other writer (the OnDataChannel
-		// handler below) is gated by this same lock.
-		s.stopViewerConn(old)
-		go func() {
-			if cerr := old.pc.Close(); cerr != nil {
-				s.logf("%s closing previous viewer connection: %v", prefix, cerr)
-			}
-		}()
+	if h := published.Load(); h != nil {
+		handle = h
 	}
-	s.viewers[viewerID] = vc
-	viewerCount := len(s.viewers)
 	s.viewersMu.Unlock()
-	s.logf("%s viewer count now %d", prefix, viewerCount)
-
-	// This attempt is now registered -- from here on, a handle exists for a
-	// caller to protect via CloseViewerIfCurrent, even if a later step below
-	// fails (SetRemoteDescription/CreateAnswer/SetLocalDescription), because
-	// a concurrent newer offer for the SAME viewerID could already have
-	// replaced this registration before this call returns. Reuses pcHandle
-	// (minted above, already stored on vc) rather than constructing a second,
-	// distinct *ViewerHandle for the same registration -- see pcHandle's doc
-	// comment for why the two must be the identical pointer.
-	handle = pcHandle
-
-	// Same candidate/timing/selected-pair instrumentation the ingest leg
-	// carries (icediag.go). The viewer leg is where a hosted install's ICE
-	// actually has work to do -- srflx, TURN, ICE-Lite, a real network
-	// between the peers -- so "-> failed" with no candidate record is, if
-	// anything, LESS diagnosable here than on the loopback leg.
-	diag := newICEDiag(prefix, "viewer", s.logf)
-	pc.OnICECandidate(diag.noteLocalCandidate)
-	pc.OnICEGatheringStateChange(diag.noteGatheringState)
-
-	pc.OnICEConnectionStateChange(func(st webrtc.ICEConnectionState) {
-		s.logf("%s ICE connection state -> %s", prefix, st.String())
-		diag.noteICEState(st, pc)
-	})
-	pc.OnConnectionStateChange(func(st webrtc.PeerConnectionState) {
-		s.logf("%s peer connection state -> %s", prefix, st.String())
-		switch st {
-		case webrtc.PeerConnectionStateClosed, webrtc.PeerConnectionStateFailed:
-			// Terminal, unrecoverable states: evict immediately.
-			s.removeViewer(viewerID, pc)
-		case webrtc.PeerConnectionStateDisconnected:
-			// Disconnected is often transient (a brief Wi-Fi blip Pion's own
-			// ICE agent recovers from without ever reaching Failed) -- evict
-			// only if it hasn't recovered within disconnectGracePeriod. See
-			// scheduleDisconnectEviction's doc comment for the full fix-wave
-			// CRIT rationale (removeViewer previously never closed the PC at
-			// all on ANY of these three states, leaking it).
-			s.scheduleDisconnectEviction(viewerID, pc)
-		}
-	})
-
-	// Q4 pattern: the viewer creates a data channel labeled "input" on this
-	// SAME PeerConnection alongside the recvonly media transceivers, so
-	// input can never contend with media on a separate queue. Since the
-	// viewer is the offering side, the channel arrives here via
-	// OnDataChannel.
-	pc.OnDataChannel(func(dc *webrtc.DataChannel) {
-		if dc.Label() != "input" {
-			s.logf("%s unexpected data channel label %q, ignoring", prefix, dc.Label())
-			return
-		}
-		s.viewersMu.Lock()
-		if cur, exists := s.viewers[viewerID]; exists && cur.pc == pc {
-			cur.dc = dc
-		}
-		s.viewersMu.Unlock()
-		s.wireInputDataChannel(prefix, viewerID, dc)
-	})
-
-	offer := webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: sdpOffer}
-	diag.noteRemoteOffer(offer.SDP)
-	if err = pc.SetRemoteDescription(offer); err != nil {
-		return "", handle, fmt.Errorf("webrtc: viewer %s: set remote description: %w", prefix, err)
-	}
-
-	gatherComplete := webrtc.GatheringCompletePromise(pc)
-
-	var ans webrtc.SessionDescription
-	ans, err = pc.CreateAnswer(nil)
 	if err != nil {
-		return "", handle, fmt.Errorf("webrtc: viewer %s: create answer: %w", prefix, err)
+		return "", handle, err
 	}
-	if err = pc.SetLocalDescription(ans); err != nil {
-		return "", handle, fmt.Errorf("webrtc: viewer %s: set local description: %w", prefix, err)
+	if request != nil {
+		if err = s.installViewerCandidate(ctx, request, prefix, prepared.vc, nil); err != nil {
+			s.retireViewerCandidate(prepared.vc)
+			return "", nil, err
+		}
+		handle = prepared.vc.handle
 	}
-
-	select {
-	case <-gatherComplete:
-		s.logf("%s server gathering complete, sending answer", prefix)
-	case <-time.After(gatherTimeout):
-		s.logf("%s WARNING: server gathering did not complete within %s, sending partial answer", prefix, gatherTimeout)
+	if err := context.Cause(ctx); err != nil {
+		s.retireViewerCandidate(prepared.vc)
+		return "", handle, err
 	}
-
-	local := pc.LocalDescription()
-	if local == nil {
-		return "", handle, fmt.Errorf("webrtc: viewer %s: no local description after SetLocalDescription", prefix)
+	if request != nil && !s.IsViewerCurrent(handle) {
+		s.retireViewerCandidate(prepared.vc)
+		return "", handle, errStaleViewerRequest
 	}
-
 	s.logf("%s answer sent to viewer", prefix)
 	s.pliBurstForNewViewer(prefix)
-
-	return local.SDP, handle, nil
+	return prepared.answer, handle, nil
 }
 
 // disconnectGracePeriod bounds how long a viewer PeerConnection may sit in
@@ -296,44 +209,13 @@ func (s *Session) scheduleDisconnectEviction(viewerID string, pc *webrtc.PeerCon
 	})
 }
 
-// stopViewerConn explicitly and synchronously terminates the two things
-// vc's per-connection goroutines (drainViewerRTCP x{1,2}, runInputQueue x1)
-// depend on to unblock: each RTPSender's Stop() (unblocking drainViewerRTCP's
-// blocking sender.Read() -- RTPSender.Stop, if the sender has ever sent,
-// closes its srtpStream directly, which is what the blocked Read() call is
-// ultimately reading from) and vc.dc's own Close() (unblocking
-// runInputQueue indirectly: dc.Close() tears down JUST this one data
-// channel's underlying SCTP stream, which is what fires the dc.OnClose
-// handler already wired in inputdc.go's wireInputDataChannel, which is what
-// closes the input queue runInputQueue ranges over) -- see viewerConn's doc
-// comment (session.go) for the CI-confirmed incident this closes: this
-// package must not rely SOLELY on pc.Close()'s own close cascade (correct on
-// a clean/fast transport, but several hops deep through Pion/its SCTP
-// dependency -- PeerConnection.Close -> SCTPTransport.Stop ->
-// sctpAssociation.Abort -> EVERY stream's read erroring -- and dependent on
-// that abort signaling actually reaching this side over the wire) to reap
-// these goroutines. Under real network conditions (packet loss, a degraded
-// transport) that whole-association cascade was observed to leave both
-// goroutines blocked well past a 60s bound; calling Stop()/dc.Close()
-// directly here does not depend on the SCTP association at all.
-//
-// pc.Close() itself is still called by every caller of this method
-// (removeViewer, CloseViewer, Close, and the same-viewerID replace branch
-// above) -- this only covers the two things that must not wait on it. Safe
-// to call on a nil vc (no-op), one whose senders are still unset (Stop() on
-// a nil slice is simply zero iterations), or one whose dc is still nil (the
-// viewer's "input" data channel hasn't opened yet -- an ordinary, momentary
-// window; nothing to close since wireInputDataChannel/runInputQueue haven't
-// started).
-//
-// A method on *Session (not a free function) so it can log via s.logf --
-// fix-wave finding: every OTHER teardown call in this package
-// (pc.Close() at each of stopViewerConn's own call sites, plus Close's
-// ingest.Close()) logs its error; snd.Stop()/vc.dc.Close() silently
-// discarding theirs via a bare `_ =` was the one inconsistency, meaning a
-// systemic SRTP/DTLS teardown failure here would have been invisible even
-// though every other failure in the same teardown path is surfaced.
+// stopViewerConn cancels input and stops each sender/data channel directly.
+// Queue cancellation does not depend on Pion delivering an OnClose event;
+// explicit sender stops unblock RTCP reads even on a degraded transport.
+// Callers also close the whole peer. A nil connection or absent channel is
+// safe, and transport shutdown errors remain visible through the session log.
 func (s *Session) stopViewerConn(vc *viewerConn) {
+	vc.cancelInput()
 	if vc == nil {
 		return
 	}
@@ -386,6 +268,7 @@ func (s *Session) removeViewer(viewerID string, pc *webrtc.PeerConnection) {
 	stillCurrent := exists && cur.pc == pc
 	var handle *ViewerHandle
 	if stillCurrent {
+		cur.cancelInput()
 		handle = cur.handle
 		delete(s.viewers, viewerID)
 	}
@@ -456,6 +339,7 @@ func (s *Session) CloseViewer(viewerID string) {
 	s.viewersMu.Lock()
 	vc, exists := s.viewers[viewerID]
 	if exists {
+		vc.cancelInput()
 		delete(s.viewers, viewerID)
 	}
 	s.viewersMu.Unlock()

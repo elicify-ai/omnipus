@@ -29,7 +29,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser/webrtc"
 )
@@ -107,7 +106,7 @@ func TestHandleWebRTCOffer_StartFailure_ClearsStickySessionAndAuditsDistinctEven
 	}
 	tmpDir := t.TempDir()
 	bogusExec := filepath.Join(tmpDir, "no-such-chrome-binary")
-	handler, al, auditDir := newFixWaveHandlerWithAudit(t, func(cfg *config.Config) {
+	handler, al, auditDir := newMeasuredFixWaveHandlerWithAudit(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
 		cfg.Tools.Browser.ExecPath = bogusExec
@@ -132,7 +131,9 @@ func TestHandleWebRTCOffer_StartFailure_ClearsStickySessionAndAuditsDistinctEven
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-start-fail", "user-1", data, al.GetConfig(), 0)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
+
+	handler.handleWebRTCOffer(wc, &state, "viewer-start-fail", "user-1", data, al.GetConfig(), offerEpoch)
 
 	got := decodeWebRTCState(t, drainOneFrame(t, wc))
 	require.False(t, got.Available)
@@ -157,10 +158,10 @@ func TestHandleWebRTCOffer_StartFailure_ClearsStickySessionAndAuditsDistinctEven
 
 	// (c) the sticky-session bug itself: mgr.CaptureSession() must be nil,
 	// not pointing at the permanently-broken session.
-	require.Nil(t, mgr.CaptureSession(),
+	require.Nil(t, mgr.CaptureSessionForPanel("handler-fixture:sess-start-fail"),
 		"a failed Start() must not leave a stale CaptureSession registered on the manager")
 
-	cs2, err := handler.ensureCaptureSession(mgr, defaultAgent.ID, "", al.GetConfig())
+	cs2, err := handler.ensureCaptureSession(mgr, defaultAgent.ID, "handler-fixture:sess-start-fail", al.GetConfig())
 	require.NoError(t, err)
 	t.Cleanup(cs2.Stop)
 	require.NotNil(t, cs2, "ensureCaptureSession after the cleared failure must construct a genuinely fresh session")
@@ -251,21 +252,23 @@ func TestWebrtcUnavailableReason_PoolAttachedManagerPassesTheGate(t *testing.T) 
 // handleWebRTCOffer's own ensureCaptureSession call finds it already
 // populated and never constructs a REAL browser.NewCaptureSession) and then
 // drives handleWebRTCOffer's full path — Start() (fake, instant) ->
-// AddViewer -> HandleViewerOffer (fake, returns viewerOfferErr) — without
-// ever touching real chromedp/Pion. Returns the decoded wire state frame.
+// AddViewer -> HandleViewerOffer (fake, returns viewerOfferErr). The measured
+// variant keeps chromedp admission and refresh real against a protocol fixture;
+// media negotiation remains fake. Returns the decoded wire state frame.
 func newHandleWebRTCOfferWithFakeCapture(
 	t *testing.T,
 	handler *BrowserWSHandler,
 	al *agent.AgentLoop,
 	agentID string,
 	relay *fakeRelay,
+	discovery ...<-chan struct{},
 ) webrtcStateFrameDecoder {
 	t.Helper()
 	mgr, outcome := al.BrowserManagerForAgent(context.Background(), agentID, "")
 	require.Equal(t, agent.BrowserResolveOK, outcome)
 
 	var calls int32
-	cs, err := browser.NewCaptureSessionWithDeps(nil, agentID, relay, fakeEncoderStarter(&calls, nil), nil)
+	cs, err := browser.NewCaptureSessionWithDeps(nil, agentID, newRequestFixtureRelay(relay), fakeEncoderStarter(&calls, nil), nil)
 	require.NoError(t, err)
 	_, err = mgr.EnsureCaptureSession(func() (*browser.CaptureSession, error) { return cs, nil })
 	require.NoError(t, err)
@@ -282,7 +285,9 @@ func newHandleWebRTCOfferWithFakeCapture(
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-offer-fail", "user-1", data, al.GetConfig(), 0)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data, discovery...)
+
+	handler.handleWebRTCOffer(wc, &state, "viewer-offer-fail", "user-1", data, al.GetConfig(), offerEpoch)
 	return decodeWebRTCState(t, drainOneFrame(t, wc))
 }
 
@@ -308,10 +313,10 @@ func newHandleWebRTCOfferWithFakeCapture(
 // requires a NON-ingest failure to report "error" on the wire, so a
 // regression that made every failure report ingest_timeout would fail there.
 func TestHandleWebRTCOffer_IngestTimeout_ClassifiedDistinctlyInAuditAndLogs(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("ClassifyVideoCapabilityWithExec only ever reports Capable=true on linux")
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("video capability is supported on Linux and macOS")
 	}
-	handler, al, auditDir := newFixWaveHandlerWithAudit(t, webrtcCapableGateMutate(t))
+	handler, al, auditDir, discovered := newMeasuredFixWaveHandlerWithDiscovery(t, webrtcCapableGateMutate(t))
 	t.Cleanup(handler.Wait)
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
@@ -319,7 +324,7 @@ func TestHandleWebRTCOffer_IngestTimeout_ClassifiedDistinctlyInAuditAndLogs(t *t
 	relay := &fakeRelay{viewerOfferErr: fmt.Errorf(
 		"webrtc: viewer [viewer-1/x]: %w after waiting 15s", webrtc.ErrNoIngestVideoTrack,
 	)}
-	got := newHandleWebRTCOfferWithFakeCapture(t, handler, al, defaultAgent.ID, relay)
+	got := newHandleWebRTCOfferWithFakeCapture(t, handler, al, defaultAgent.ID, relay, discovered)
 
 	require.True(t, got.Available, "an ingest-timeout must still allow a future offer (available stays true)")
 	require.Equal(t, "ingest_timeout", got.Reason,
@@ -342,16 +347,16 @@ func TestHandleWebRTCOffer_IngestTimeout_ClassifiedDistinctlyInAuditAndLogs(t *t
 // DISTINGUISHES rather than always reporting "ingest_timeout" for any
 // HandleViewerOffer failure.
 func TestHandleWebRTCOffer_GenericViewerOfferFailure_StillClassifiedAsError(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("ClassifyVideoCapabilityWithExec only ever reports Capable=true on linux")
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("video capability is supported on Linux and macOS")
 	}
-	handler, al, auditDir := newFixWaveHandlerWithAudit(t, webrtcCapableGateMutate(t))
+	handler, al, auditDir, discovered := newMeasuredFixWaveHandlerWithDiscovery(t, webrtcCapableGateMutate(t))
 	t.Cleanup(handler.Wait)
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
 
 	relay := &fakeRelay{viewerOfferErr: errors.New("webrtc: viewer offer: set remote description failed")}
-	got := newHandleWebRTCOfferWithFakeCapture(t, handler, al, defaultAgent.ID, relay)
+	got := newHandleWebRTCOfferWithFakeCapture(t, handler, al, defaultAgent.ID, relay, discovered)
 
 	require.True(t, got.Available)
 	require.Equal(t, "error", got.Reason)
@@ -394,11 +399,10 @@ func TestWatchEncoderLiveness_StopsStaleSessionAndNotifiesAttachedViewer(t *test
 	var onStoppedCalls int32
 	cs.SetOnStopped(func() {
 		atomic.AddInt32(&onStoppedCalls, 1)
-		handler.notifyViewersStreamStopped(cs.ViewerIDs())
+		handler.notifyViewersStreamStopped(cs, cs.ViewerIDs())
 	})
 
-	wc := newTestBrowserWSConn()
-	handler.registerWebRTCViewerConn("viewer-watchdog", wc, "sess-watchdog")
+	wc, _, _ := registerPublicationViewer(t, handler, cs, "viewer-watchdog")
 	cs.AddViewer("viewer-watchdog")
 
 	// Establish a baseline ping, then go silent — LastPingAt stays fixed
@@ -475,47 +479,27 @@ func TestWatchEncoderLiveness_ExitsOnDoneWithoutStopping(t *testing.T) {
 // kind (navigate) is NEVER throttled — exactly handleInput's own discipline
 // (browser_ws.go), reused here rather than reinvented.
 func TestSurfaceWebRTCInputError_SendsAndThrottles(t *testing.T) {
-	handler, _ := newBrowserWSTestHandler(t, nil)
-	t.Cleanup(handler.Wait)
-
-	wc := newTestBrowserWSConn()
-	handler.registerWebRTCViewerConn("viewer-dc-err", wc, "sess-dc-err")
-	t.Cleanup(func() { handler.unregisterWebRTCViewerConn("viewer-dc-err") })
-
-	dispatchErr := errors.New("browser live: no active live view for session \"default\"")
-
-	handler.surfaceWebRTCInputError("viewer-dc-err", "mouse_move", dispatchErr)
-	frame1 := drainOneFrame(t, wc)
-	var f1 struct {
-		Type    string `json:"type"`
-		State   string `json:"state"`
-		Message string `json:"message"`
-	}
-	require.NoError(t, json.Unmarshal(frame1, &f1))
-	require.Equal(t, "browser_status", f1.Type)
-	require.Equal(t, "error", f1.State)
-	require.Contains(t, f1.Message, dispatchErr.Error())
-
-	// An IDENTICAL repeat within the throttle window, for a non-discrete
-	// kind, must be suppressed.
-	handler.surfaceWebRTCInputError("viewer-dc-err", "mouse_move", dispatchErr)
+	f := newHandlerContextFixture(t, false)
+	source, route := admittedInputRoute(t, f, "viewer-dc-err")
+	failure := errors.New("browser live: no active live view")
+	route.report(source, "mouse_move", failure)
+	var first generated.BrowserStatusFrame
+	require.NoError(t, json.Unmarshal(drainOneFrame(t, f.conn), &first))
+	require.Equal(t, "error", first.State)
+	require.NotNil(t, first.Message)
+	require.Contains(t, *first.Message, failure.Error())
+	require.NotNil(t, first.OperationOnly)
+	require.True(t, *first.OperationOnly)
+	route.report(source, "mouse_move", failure)
 	select {
-	case <-wc.sendCh:
-		t.Fatal("an identical repeat within minInputErrorInterval must be throttled for a non-discrete kind")
+	case <-f.conn.sendCh:
+		t.Fatal("identical continuous error escaped throttle")
 	case <-time.After(100 * time.Millisecond):
 	}
-
-	// A "navigate" kind (discrete) with the SAME message must NEVER be
-	// throttled, even inside the cooldown window.
-	handler.surfaceWebRTCInputError("viewer-dc-err", "navigate", dispatchErr)
-	frame2 := drainOneFrame(t, wc)
-	var f2 struct {
-		Type  string `json:"type"`
-		State string `json:"state"`
-	}
-	require.NoError(t, json.Unmarshal(frame2, &f2))
-	require.Equal(t, "browser_status", f2.Type)
-	require.Equal(t, "error", f2.State)
+	route.report(source, "navigate", failure)
+	var discrete generated.BrowserStatusFrame
+	require.NoError(t, json.Unmarshal(drainOneFrame(t, f.conn), &discrete))
+	require.Equal(t, "error", discrete.State)
 }
 
 // TestSurfaceWebRTCInputError_NoRegisteredViewer_IsNoop proves a detached/
@@ -523,152 +507,58 @@ func TestSurfaceWebRTCInputError_SendsAndThrottles(t *testing.T) {
 // races against detach in production (a message may arrive just as the
 // viewer disconnects).
 func TestSurfaceWebRTCInputError_NoRegisteredViewer_IsNoop(t *testing.T) {
-	handler, _ := newBrowserWSTestHandler(t, nil)
-	t.Cleanup(handler.Wait)
-
-	// Must not panic; must return promptly (no registered conn to send to).
-	handler.surfaceWebRTCInputError("never-registered-viewer", "mouse_move", errors.New("boom"))
+	f := newHandlerContextFixture(t, false)
+	source, route := admittedInputRoute(t, f, "viewer-dc-err")
+	f.state.clearAttachment()
+	route.report(source, "mouse_move", errors.New("late input failure"))
+	select {
+	case frame := <-f.conn.sendCh:
+		t.Fatalf("retired viewer received late error: %s", frame.data)
+	default:
+	}
 }
 
-// TestWebrtcInputSink_NonBenignError_SurfacedToViewer exercises fix 7's full
-// production wiring end to end (not just surfaceWebRTCInputError in
-// isolation, which TestSurfaceWebRTCInputError_SendsAndThrottles already
-// covers directly): a real, non-benign LiveView dispatch failure — "no
-// active live view for session" (session never attached at all) is
-// explicitly a REAL/surfaced failure per handleInput's own doc comment
-// (browser_ws.go), NOT one of IsBenignLiveInputError's three benign kinds
-// (not-controller, rate-limited, and the third — see live.go) — must reach
-// the registered viewer's WS connection as a browser_status(error) frame
-// when dispatched through the ACTUAL production sink
-// (handler.webrtcInputSink(mgr)), parsing a real DC message exactly as a
-// browser's data channel would send it.
+// A current, attached media viewer receives a real navigation refusal through the production contextual input sink.
 func TestWebrtcInputSink_NonBenignError_SurfacedToViewer(t *testing.T) {
-	browserCfg, err := browser.DefaultConfig()
+	f := newHandlerContextFixture(t, false)
+	source, _ := admittedInputRoute(t, f, "viewer-nonbenign")
+	raw, err := json.Marshal(generated.BrowserInputFrame{Type: "browser_input", Kind: "navigate", Url: strPtr("javascript:alert(1)")})
 	require.NoError(t, err)
-	browserCfg.ProfileDir = t.TempDir()
-	mgr, err := browser.NewBrowserManager(browserCfg, security.NewSSRFChecker(nil))
-	require.NoError(t, err)
-	// mgr.Live() with NO attach() ever called -> Input() returns "no active
-	// live view for session ..." — a genuine, non-benign dispatch failure
-	// (never a real Chrome launch attempt: LiveViewRegistry.Input's very
-	// first step is a pure in-memory session lookup that fails before any
-	// CDP call).
-
-	handler, al := newBrowserWSTestHandler(t, nil)
-	t.Cleanup(handler.Wait)
-
-	wc := newTestBrowserWSConn()
-	handler.registerWebRTCViewerConn("viewer-nonbenign", wc, "sess-nonbenign")
-	t.Cleanup(func() { handler.unregisterWebRTCViewerConn("viewer-nonbenign") })
-
-	sink := handler.webrtcInputSink(mgr, mgr.OperatorSessionID(), al.GetConfig())
-	x, y := 1.0, 2.0
-	inputFrame := generated.BrowserInputFrame{Type: "browser_input", Kind: "mouse_move", X: &x, Y: &y}
-	raw, err := json.Marshal(inputFrame)
-	require.NoError(t, err)
-
-	sink("viewer-nonbenign", raw)
-
-	frame := drainOneFrame(t, wc)
-	var f struct {
-		Type    string `json:"type"`
-		State   string `json:"state"`
-		Message string `json:"message"`
-	}
-	require.NoError(t, json.Unmarshal(frame, &f))
-	require.Equal(t, "browser_status", f.Type)
-	require.Equal(t, "error", f.State)
-	require.Contains(t, f.Message, "browser input failed")
+	newWebRTCContextInputSink(false)(source, "viewer-nonbenign", raw)
+	var status generated.BrowserStatusFrame
+	require.NoError(t, json.Unmarshal(drainOneFrame(t, f.conn), &status))
+	require.Equal(t, "error", status.State)
+	require.NotNil(t, status.Message)
+	require.Contains(t, *status.Message, "browser input failed")
 }
 
-// TestWebrtcInputSink_ViewerIdentityArbitration_ControllerVsNonController is
-// the QA regression-wave item 7 guard: proves the WS-granted controller ID
-// (LiveViewRegistry.TakeControl — the SAME call browser_ws.go's handleControl
-// makes for a real browser_control{action:"take"} frame) equals the DC
-// sink's viewer ID end to end, through the ACTUAL production
-// handler.webrtcInputSink(mgr), not a re-implementation of its logic.
-//
-// viewerA is granted control; viewerB never is. Both dispatch the identical
-// input kind through the sink. Neither reaches a real CDP call in this test
-// (no Attach() ever ran, so lv.tabCtx stays nil) — but that is exactly what
-// makes the two outcomes cleanly distinguishable: LiveView.dispatchInput
-// checks controller identity BEFORE ever consulting tabCtx (live.go), so
-//   - viewerA (the controller) clears the identity gate and proceeds to the
-//     tabCtx==nil check, which returns a REAL (non-benign) "session is not
-//     attached" error -- itself proof of having passed the identity gate.
-//   - viewerB (never granted control) is rejected AT the identity gate with
-//     a BENIGN "does not hold control" error, which webrtcInputSink
-//     deliberately never surfaces as a status frame (see its doc comment) --
-//     proving viewerB never got anywhere near the tabCtx check viewerA
-//     reached.
-//
-// A hardcoded/no-op identity check would either surface a status frame for
-// BOTH viewers or NEITHER; this test fails under both of those mutations.
-// TestWebrtcInputSink_NonControllerViewerIsNotRejected — regression coverage
-// for the operator-reported dead-input failure (2026-08-03, `0803 (1).mov`).
-//
-// This test previously asserted the OPPOSITE: that a viewer who never took
-// control was "rejected BENIGNLY at the identity gate". That exclusive-control
-// model is gone. The live panel is a real browser the human uses normally,
-// and the agent can steer it too — concurrently. A viewer that does not hold
-// lv.controller is most often the actual human, and silently discarding its
-// input is exactly what left the operator with a dead mouse and keyboard while
-// the panel read "Someone else is driving".
-//
-// Both viewers must now clear identity and reach the same downstream check.
+// Both attached viewers reach the same real navigation refusal, even when only one holds the presentation control indicator.
 func TestWebrtcInputSink_NonControllerViewerIsNotRejected(t *testing.T) {
-	browserCfg, err := browser.DefaultConfig()
+	f := newHandlerContextFixture(t, false)
+	sourceA, _ := admittedInputRoute(t, f, "viewerA")
+	other := f
+	other.state = &browserConnState{}
+	other.conn = newTestBrowserWSConn()
+	epoch := other.state.beginAttach()
+	require.True(t, other.state.bindAttachment(epoch, f.manager, "chat", "panel"))
+	t.Cleanup(func() { other.state.clearAttachment() })
+	sourceB, _ := admittedInputRoute(t, other, "viewerB")
+	require.True(t, f.manager.Live().TakeControl("panel", "viewerA"))
+	raw, err := json.Marshal(generated.BrowserInputFrame{Type: "browser_input", Kind: "navigate", Url: strPtr("javascript:alert(1)")})
 	require.NoError(t, err)
-	browserCfg.ProfileDir = t.TempDir()
-	mgr, err := browser.NewBrowserManager(browserCfg, security.NewSSRFChecker(nil))
-	require.NoError(t, err)
-
-	// viewerA holds control — standing in for a second panel, a pop-out, or an
-	// automation session that never detached.
-	require.True(t, mgr.Live().TakeControl(mgr.OperatorSessionID(), "viewerA"),
-		"TakeControl for the first-ever controller of a session must succeed")
-
-	handler, al := newBrowserWSTestHandler(t, nil)
-	t.Cleanup(handler.Wait)
-
-	wcA := newTestBrowserWSConn()
-	handler.registerWebRTCViewerConn("viewerA", wcA, "sess-arb")
-	t.Cleanup(func() { handler.unregisterWebRTCViewerConn("viewerA") })
-
-	wcB := newTestBrowserWSConn()
-	handler.registerWebRTCViewerConn("viewerB", wcB, "sess-arb")
-	t.Cleanup(func() { handler.unregisterWebRTCViewerConn("viewerB") })
-
-	sink := handler.webrtcInputSink(mgr, mgr.OperatorSessionID(), al.GetConfig())
-	inputFrame := generated.BrowserInputFrame{Type: "browser_input", Kind: "mouse_move"}
-	raw, err := json.Marshal(inputFrame)
-	require.NoError(t, err)
-
-	readStatus := func(t *testing.T, wc *browserWSConn) string {
-		t.Helper()
-		frame := drainOneFrame(t, wc)
-		var f struct {
-			Type    string `json:"type"`
-			State   string `json:"state"`
-			Message string `json:"message"`
-		}
-		require.NoError(t, json.Unmarshal(frame, &f))
-		require.Equal(t, "browser_status", f.Type)
-		require.Equal(t, "error", f.State)
-		return f.Message
+	sink := newWebRTCContextInputSink(false)
+	for _, tc := range []struct {
+		source context.Context
+		viewer string
+		conn   *browserWSConn
+	}{{sourceA, "viewerA", f.conn}, {sourceB, "viewerB", other.conn}} {
+		sink(tc.source, tc.viewer, raw)
+		var status generated.BrowserStatusFrame
+		require.NoError(t, json.Unmarshal(drainOneFrame(t, tc.conn), &status))
+		require.Equal(t, "error", status.State)
+		require.NotNil(t, status.Message)
+		require.Contains(t, *status.Message, "browser input failed", "both viewers must reach the same downstream failure")
 	}
-
-	// viewerA (holds control) reaches the tabCtx check.
-	sink("viewerA", raw)
-	require.Contains(t, readStatus(t, wcA), "session is not attached")
-
-	// viewerB (holds NO control) must reach the SAME check — not be discarded.
-	// Identical downstream failure is the proof that no identity gate stopped
-	// it on the way.
-	sink("viewerB", raw)
-	require.Contains(t, readStatus(t, wcB), "session is not attached",
-		"a viewer without the control lock must still reach dispatch — its input is a human's "+
-			"and must never be silently dropped (2026-08-03 dead-input regression)")
 }
 
 // ---------------------------------------------------------------------------
@@ -747,7 +637,7 @@ func TestWebrtcUnavailableReason_AgreesAcrossBothCallers(t *testing.T) {
 	directReason := webrtcUnavailableReason(cfg, mgr)
 
 	wc := newTestBrowserWSConn()
-	handler.announceWebRTCAvailability(wc, mgr, "sess-agree", "viewer-agree", cfg)
+	handler.announceWebRTCAvailabilityContext(context.Background(), wc, mgr, "sess-agree", "viewer-agree", cfg)
 	announced := decodeWebRTCState(t, drainOneFrame(t, wc))
 
 	require.Equal(t, directReason, announced.Reason,

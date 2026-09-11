@@ -1,8 +1,10 @@
 package webrtc
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sync"
 
 	"github.com/pion/webrtc/v4"
@@ -237,19 +239,18 @@ func (q *inputQueue) Len() int {
 	return len(q.items)
 }
 
-func (s *Session) wireInputDataChannel(prefix, viewerID string, dc *webrtc.DataChannel) {
+func (s *Session) wireInputDataChannel(parent context.Context, endSource context.CancelFunc, prefix, viewerID string, dc *webrtc.DataChannel) {
+	ctx, cancel := context.WithCancel(parent)
 	queue := newInputQueue()
-	var closeQueueOnce sync.Once
-	closeQueue := func() { closeQueueOnce.Do(queue.close) }
-
-	go s.runInputQueue(viewerID, queue)
+	go func() { defer cancel(); s.runInputQueueContext(ctx, viewerID, queue) }()
 
 	dc.OnOpen(func() {
 		s.logf("%s input data channel OPEN (label=%s)", prefix, dc.Label())
 	})
 	dc.OnClose(func() {
 		s.logf("%s input data channel closed", prefix)
-		closeQueue()
+		cancel()
+		endSource()
 	})
 	dc.OnError(func(err error) {
 		s.logf("%s input data channel error: %v", prefix, err)
@@ -259,7 +260,7 @@ func (s *Session) wireInputDataChannel(prefix, viewerID string, dc *webrtc.DataC
 			s.logf("%s WARNING: binary input frame received (want text), ignoring %d bytes", prefix, len(msg.Data))
 			return
 		}
-		if s.sink == nil {
+		if ctx.Err() != nil || (s.sink == nil && s.contextSink == nil) {
 			return
 		}
 		// Copy before handing off: Pion may reuse/release the underlying
@@ -267,74 +268,48 @@ func (s *Session) wireInputDataChannel(prefix, viewerID string, dc *webrtc.DataC
 		// asynchronously.
 		raw := make([]byte, len(msg.Data))
 		copy(raw, msg.Data)
-		s.enqueueInput(prefix, viewerID, queue, raw)
+		if s.enqueueInput(prefix, viewerID, queue, raw) == pushDroppedIncomingDiscrete {
+			// A lost release can leave held input behind. End this exact
+			// source before the peer's removal callback requests cleanup.
+			cancel()
+			endSource()
+		}
 	})
 }
 
-// enqueueInput pushes raw onto queue without ever blocking the caller (Pion's
-// own OnMessage callback -- see wireInputDataChannel's doc comment): if the
-// queue is full, the OLDEST queued item is dropped to make room, not the new
-// one, mirroring live.go's queueAck coalescing discipline. Logged at
-// Session's normal logf (the gateway's webrtcRelayLogf classifies a line
-// with neither "failed" nor "warning" in it to Debug, matching the fix's
-// "log drops at Debug" requirement).
-// Revised 2026-07-30 (UAT): the shed decision is now TYPE-AWARE — see
-// isCoalescableInputKind for the failure that forced this. A full queue no
-// longer blindly evicts whatever is at the head:
-//
-//   - An incoming COALESCABLE event (mouse_move/wheel) is dropped outright.
-//     It must never evict a queued click or keystroke; the next move is
-//     along in ~10ms and supersedes it anyway.
-//   - An incoming DISCRETE event (mouse_down/up, key_down/up) always gets
-//     in, evicting the head to make room. Under the flood that causes
-//     congestion the head is overwhelmingly a move, so in practice this
-//     sheds a move to admit a click — exactly the intended trade.
-//
-// Order is still preserved (the queue is only ever appended to at the tail
-// and consumed from the head), and the function is still non-blocking, so
-// Pion's OnMessage callback is never stalled.
-func (s *Session) enqueueInput(prefix, viewerID string, queue *inputQueue, raw []byte) {
-	switch queue.push(raw, inputQueueCapacity) {
+// enqueueInput preserves queued discrete events under congestion, shedding
+// positional events first. If an all-discrete backlog forces a discrete drop,
+// the caller must cancel the originating source and request its cleanup.
+// Counters distinguish overflow loss from lossless dequeue-time coalescing.
+func (s *Session) enqueueInput(prefix, viewerID string, queue *inputQueue, raw []byte) pushOutcome {
+	outcome := queue.push(raw, inputQueueCapacity)
+	switch outcome {
 	case pushAccepted, pushClosed:
-		return
+		return outcome
 	case pushShedOldestPositional:
+		s.inputShedPositional.Add(1)
 		// Normal, expected backpressure under a sustained cursor stream.
 		s.logf("%s input queue full for viewer %s, shed oldest positional event to admit a newer one", prefix, viewerID)
 	case pushDroppedIncomingPositional:
+		s.inputDroppedPositional.Add(1)
 		s.logf(
 			"%s input queue full for viewer %s, dropped incoming positional event (backlog is all discrete)",
 			prefix,
 			viewerID,
 		)
 	case pushDroppedIncomingDiscrete:
+		s.inputDroppedDiscrete.Add(1)
 		// Real input loss, not routine backpressure — WARNING so
 		// webrtcRelayLogf escalates it above debug.
 		s.logf("%s WARNING: input queue full for viewer %s, dropped a discrete input event", prefix, viewerID)
 	}
+	return outcome
 }
 
-// runInputQueue is the SINGLE goroutine that drains one viewer's input queue
-// and invokes the Session's InputSink for each message IN ORDER, until the
-// queue is closed (dc.OnClose) — draining whatever remains queued first so a
-// viewer's last few events before disconnect are not discarded.
-//
-// It is the ONLY dequeuer. That is the whole point of the inputQueue type
-// (see its doc comment): the previous implementation used a Go channel that
-// this worker AND the producer's eviction path both received from, which
-// could reorder events.
+// runInputQueue preserves the legacy queue-drain contract for callers that
+// have no source context. Production data channels use runInputQueueContext.
 func (s *Session) runInputQueue(viewerID string, queue *inputQueue) {
-	for {
-		batch, ok := queue.popBatch()
-		if !ok {
-			return
-		}
-		if s.sink == nil {
-			continue
-		}
-		for _, raw := range coalesceInputBatch(batch) {
-			s.sink(viewerID, raw)
-		}
-	}
+	s.runInputQueueContext(context.Background(), viewerID, queue)
 }
 
 // coalesceInputBatch compacts one drained backlog before dispatch. Only
@@ -345,7 +320,8 @@ func (s *Session) runInputQueue(viewerID string, queue *inputQueue) {
 //
 //   - a run of mouse_move frames collapses to its NEWEST frame (a cursor
 //     stream is sampled state; the freshest sample supersedes the rest);
-//   - a run of wheel frames collapses to its newest frame carrying the SUM
+//   - a run of wheel frames with identical non-delta fields collapses to
+//     its newest frame carrying the SUM
 //     of the run's delta_x/delta_y (wheel is a stream of increments; the
 //     merged frame preserves total scroll distance while costing one
 //     dispatch instead of dozens);
@@ -353,8 +329,8 @@ func (s *Session) runInputQueue(viewerID string, queue *inputQueue) {
 //     unchanged in place.
 //
 // The wheel merge round-trips the newest frame through map[string]any so
-// every other field (coordinates, modifiers, capture_width/height, ...)
-// rides along untouched — this package still never mirrors the
+// every other field (coordinates, modifiers, capture identity and geometry)
+// remains unchanged; changes to these fields split the run. This package never mirrors the
 // BrowserInputFrame wire struct (see wireInputDataChannel's doc comment);
 // like isCoalescableInputKind's `kind` probe it touches named fields only.
 // If any frame in a wheel run fails to parse, that run is passed through
@@ -373,6 +349,9 @@ func coalesceInputBatch(batch [][]byte) [][]byte {
 		}
 		j := i + 1
 		for j < len(batch) && inputKindOf(batch[j]) == kind {
+			if kind == "wheel" && !sameWheelBasis(batch[i], batch[j]) {
+				break
+			}
 			j++
 		}
 		run := batch[i:j]
@@ -384,6 +363,20 @@ func coalesceInputBatch(batch [][]byte) [][]byte {
 		i = j
 	}
 	return out
+}
+
+// Preserve every non-delta field, including future protocol additions. A
+// scroll increment cannot be reassigned to another picture or gesture.
+func sameWheelBasis(first, next []byte) bool {
+	var a, b map[string]json.RawMessage
+	if json.Unmarshal(first, &a) != nil || json.Unmarshal(next, &b) != nil {
+		return false
+	}
+	delete(a, "delta_x")
+	delete(a, "delta_y")
+	delete(b, "delta_x")
+	delete(b, "delta_y")
+	return reflect.DeepEqual(a, b)
 }
 
 // inputKindOf peeks the frame's `kind` (empty string on parse failure, which

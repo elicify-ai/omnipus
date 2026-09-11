@@ -377,18 +377,30 @@ describe('BrowserLiveWsConnection — outbound sends', () => {
     openSocket()
     lastWsInstance.send.mockClear()
 
-    conn.sendWebRTCOffer('v=0...')
+    conn.sendWebRTCOffer({ sdp: 'v=0...', offer_id: 1 })
 
     expect(sentFrames()).toEqual([
-      { type: 'browser_webrtc_offer', session_id: 'sess-1', agent_id: 'agent-1', sdp: 'v=0...' },
+      { type: 'browser_webrtc_offer', session_id: 'sess-1', agent_id: 'agent-1', sdp: 'v=0...', offer_id: 1 },
     ])
+  })
+
+  it('sends exact capture and offer identities for a fresh viewer', () => {
+    const conn = new BrowserLiveWsConnection('s1', 'a1', makeCallbacks())
+    conn.connect()
+    openSocket()
+    conn.sendWebRTCOffer({ sdp: 'offer', offer_id: 2, capture_id: 'capture-a', capture_generation: 3 })
+    expect(JSON.parse(lastWsInstance!.send.mock.calls.at(-1)![0])).toEqual({
+      type: 'browser_webrtc_offer', session_id: 's1', agent_id: 'a1', sdp: 'offer',
+      offer_id: 2, capture_id: 'capture-a', capture_generation: 3,
+    })
+    conn.close()
   })
 
   it('sendWebRTCOffer is a no-op (returns false) when the socket is not open', () => {
     const conn = new BrowserLiveWsConnection('sess-1', 'agent-1', makeCallbacks())
     conn.connect()
     lastWsInstance.readyState = 3 // CLOSED
-    expect(conn.sendWebRTCOffer('v=0...')).toBe(false)
+    expect(conn.sendWebRTCOffer({ sdp: 'v=0...', offer_id: 1 })).toBe(false)
   })
 
   it('detach() sends a browser_detach frame carrying the session id', () => {
@@ -671,5 +683,22 @@ describe('translateBrowserErrorMessage — D5 protocol-internal closed set', () 
 
   it('passes an unrecognized raw string through unchanged', () => {
     expect(translateBrowserErrorMessage('completely unrelated message')).toBe('completely unrelated message')
+  })
+})
+
+// Input must stay bounded locally. No replay is safe for non-idempotent clicks
+// or text after a congested connection has accepted earlier events.
+describe('browser input backpressure', () => {
+  it.each([65535, 65536, 65537])('bounds queued input at 64 KiB (buffer=%i)', (bufferedAmount) => {
+    const conn = new BrowserLiveWsConnection('s1', 'a1', makeCallbacks())
+    conn.connect()
+    openSocket()
+    Object.defineProperty(lastWsInstance, 'bufferedAmount', { value: bufferedAmount })
+    lastWsInstance.send.mockClear()
+    const sent = conn.sendInput({ kind: 'text', text: 'x' })
+    expect(sent).toBe(bufferedAmount < 65536)
+    expect(sentFrames()).toEqual(bufferedAmount < 65536 ? [{ type: 'browser_input', kind: 'text', text: 'x' }] : [])
+    expect(lastWsInstance.close.mock.calls).toEqual(bufferedAmount < 65536 ? [] : [[4008, 'input_backpressure']])
+    conn.close()
   })
 })

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -73,10 +74,12 @@ func TestResolvePanelTabSet_PrefersTheIdPinnedAtAttach(t *testing.T) {
 	mgr := newPanelTestManager(t)
 	state := &browserConnState{}
 	epoch := state.beginAttach()
+	request := state.attachmentRequest()
 	require.True(t, state.bindAttachment(epoch, mgr, "chat-1", "pinned/tab-set"))
-
-	require.Equal(t, "pinned/tab-set", resolvePanelTabSet(state, mgr, "chat-1"),
-		"the offer must reuse what the attach resolved, not resolve again")
+	attached, err := state.awaitAttachment(context.Background(), request)
+	require.NoError(t, err)
+	require.Same(t, mgr, attached.mgr)
+	require.Equal(t, "pinned/tab-set", attached.panelSessionID)
 }
 
 // TestResolvePanelTabSet_FallsBackWhenNothingIsPinned covers the real timing
@@ -85,19 +88,16 @@ func TestResolvePanelTabSet_PrefersTheIdPinnedAtAttach(t *testing.T) {
 // a session key minted for another browser names a tab set this browser does
 // not have.
 func TestResolvePanelTabSet_FallsBackWhenNothingIsPinned(t *testing.T) {
-	mgr := newPanelTestManager(t)
-	other := newPanelTestManager(t)
-
-	require.Equal(t, mgr.PanelTabSetID("chat-1"), resolvePanelTabSet(&browserConnState{}, mgr, "chat-1"),
-		"an offer that beat its attach must resolve the same way the attach will")
-	require.Equal(t, mgr.PanelTabSetID("chat-1"), resolvePanelTabSet(nil, mgr, "chat-1"),
-		"no connection state at all must still resolve, never return empty")
-
+	// The former fallback is retired: an offer must retain its original attach.
+	mgr, other := newPanelTestManager(t), newPanelTestManager(t)
 	state := &browserConnState{}
-	epoch := state.beginAttach()
-	require.True(t, state.bindAttachment(epoch, other, "chat-1", "other-browser/tab-set"))
-	require.Equal(t, mgr.PanelTabSetID("chat-1"), resolvePanelTabSet(state, mgr, "chat-1"),
-		"a pin from another manager must be ignored, not borrowed across browsers")
+	first := state.beginAttach()
+	original := state.attachmentRequest()
+	require.True(t, state.bindAttachment(first, mgr, "chat-1", "first-panel"))
+	replacement := state.beginAttach()
+	require.True(t, state.bindAttachment(replacement, other, "chat-1", "other-panel"))
+	_, err := state.awaitAttachment(context.Background(), original)
+	require.ErrorIs(t, err, context.Canceled, "a retired offer must never borrow a replacement manager or panel")
 }
 
 // TestBrowserConnState_ClearAttachmentClearsTheResolvedTabSet: the pinned tab

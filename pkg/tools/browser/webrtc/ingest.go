@@ -1,6 +1,7 @@
 package webrtc
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -75,20 +76,45 @@ var audioGraceTimeout = 2 * time.Second
 // OnTrack fires. This is the one deliberate deviation from the spike's
 // relay.go, which allocated a fresh local track on every attach and would
 // have orphaned existing viewers on reconnect.
-func (s *Session) HandleIngestOffer(sdpOffer string) (answer string, err error) {
+func (s *Session) HandleIngestOffer(sdpOffer string) (string, error) {
+	return s.handleIngestOffer(sdpOffer, 0, "", nil)
+}
+
+func (s *Session) handleIngestOffer(sdpOffer string, generation uint64, targetID string, admission *ingestAdmission) (string, error) {
+	if admission == nil {
+		answer, cleanup, err := s.handleIngestOfferOnce(sdpOffer, generation, targetID, nil)
+		if cleanup != nil {
+			go cleanup()
+		}
+		return answer, err
+	}
+	return s.ingestPreparations.runWithCleanup(admission.ctx, func() (string, func(), error) {
+		return s.handleIngestOfferOnce(sdpOffer, generation, targetID, admission)
+	})
+}
+
+func (s *Session) handleIngestOfferOnce(sdpOffer string, generation uint64, targetID string, admission *ingestAdmission) (answer string, cleanup func(), err error) {
 	if sdpOffer == "" {
-		return "", fmt.Errorf("webrtc: ingest offer: empty SDP")
+		return "", nil, fmt.Errorf("webrtc: ingest offer: empty SDP")
 	}
 
 	id := s.nextConnID()
 	prefix := fmt.Sprintf("[ingest-%d]", id)
 	s.logf("%s offer received (%d bytes SDP)", prefix, len(sdpOffer))
 
+	ctx := context.Background()
+	if admission != nil {
+		ctx = admission.ctx
+	}
 	s.mu.Lock()
 	closed := s.closed
+	admissionErr := s.ingestAdmissionErrorLocked(admission)
 	s.mu.Unlock()
 	if closed {
-		return "", fmt.Errorf("webrtc: session closed")
+		return "", nil, fmt.Errorf("webrtc: session closed")
+	}
+	if admissionErr != nil {
+		return "", nil, admissionErr
 	}
 
 	// ice-diag: full candidate/timing/selected-pair instrumentation, on the
@@ -131,12 +157,12 @@ func (s *Session) HandleIngestOffer(sdpOffer string) (answer string, err error) 
 	// recovery path -- so a genuinely unconfigurable environment retries with
 	// backoff and a NAMED reason instead of silently burning 30s per attempt.
 	if usableRemoteCandidateCount(sdpOffer) == 0 {
-		return "", fmt.Errorf("webrtc: ingest %s: %w", prefix, ErrOfferHasNoUsableCandidates)
+		return "", nil, fmt.Errorf("webrtc: ingest %s: %w", prefix, ErrOfferHasNoUsableCandidates)
 	}
 
 	pc, err := s.buildPeerConnection(s.api, false) // loopback encoder leg: no public rewrite, no shared mux
 	if err != nil {
-		return "", fmt.Errorf("webrtc: ingest %s: %w", prefix, err)
+		return "", nil, fmt.Errorf("webrtc: ingest %s: %w", prefix, err)
 	}
 	// Fix-wave finding 2b: this new pc is NOT installed as s.ingestPC (and
 	// the OLD ingest connection is NOT closed) until negotiation below has
@@ -184,24 +210,21 @@ func (s *Session) HandleIngestOffer(sdpOffer string) (answer string, err error) 
 		s.logf("%s peer connection state -> %s", prefix, st.String())
 		s.handleIngestStateChange(prefix, pc, st)
 	})
+	installedDone := make(chan struct{})
+	defer close(installedDone)
 	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		go s.attachIngestTrack(prefix, track, receiver)
+		go func() {
+			<-installedDone
+			s.attachIngestTrack(prefix, pc, track, receiver, generation, targetID)
+		}()
 	})
 
-	offer := webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: sdpOffer}
-	if err = pc.SetRemoteDescription(offer); err != nil {
-		return "", fmt.Errorf("webrtc: ingest %s: set remote description: %w", prefix, err)
-	}
-
 	gatherComplete := webrtc.GatheringCompletePromise(pc)
-
-	var ans webrtc.SessionDescription
-	ans, err = pc.CreateAnswer(nil)
+	// The preparation worker retains its slot through native SDP work and
+	// synchronous cleanup, even after the authenticated caller has canceled.
+	err = prepareIngestAnswer(pc, sdpOffer, prefix)
 	if err != nil {
-		return "", fmt.Errorf("webrtc: ingest %s: create answer: %w", prefix, err)
-	}
-	if err = pc.SetLocalDescription(ans); err != nil {
-		return "", fmt.Errorf("webrtc: ingest %s: set local description: %w", prefix, err)
+		return "", nil, err
 	}
 
 	// gatherStart is deliberately taken AFTER SetLocalDescription (which is
@@ -213,6 +236,8 @@ func (s *Session) HandleIngestOffer(sdpOffer string) (answer string, err error) 
 	// separate, because it reported only which of the two branches was taken.
 	gatherStart := time.Now()
 	select {
+	case <-ctx.Done():
+		return "", nil, fmt.Errorf("webrtc: ingest %s: %w", prefix, context.Cause(ctx))
 	case <-gatherComplete:
 		s.logf("%s server gathering complete in %dms, sending answer", prefix, time.Since(gatherStart).Milliseconds())
 	case <-time.After(gatherTimeout):
@@ -222,34 +247,38 @@ func (s *Session) HandleIngestOffer(sdpOffer string) (answer string, err error) 
 
 	local := pc.LocalDescription()
 	if local == nil {
-		return "", fmt.Errorf("webrtc: ingest %s: no local description after SetLocalDescription", prefix)
+		return "", nil, fmt.Errorf("webrtc: ingest %s: no local description after SetLocalDescription", prefix)
 	}
 
 	// Negotiation fully succeeded -- NOW swap the new connection in and
 	// close whatever ingest connection preceded it (if any). Only this late
 	// swap, not the earlier build/negotiate steps, ever tears down a
 	// previously-healthy ingest connection.
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return "", fmt.Errorf("webrtc: session closed")
+	old, err := s.installIngestCandidate(ctx, pc, admission, generation, targetID)
+	if err != nil {
+		return "", nil, err
 	}
-	old := s.ingestPC
-	s.ingestPC = pc
-	s.mu.Unlock()
 	installed = true
 
 	if old != nil {
 		s.logf("%s replacing previous ingest connection", prefix)
-		go func() {
+		cleanup = func() {
 			if cerr := old.Close(); cerr != nil {
 				s.logf("%s closing previous ingest connection: %v", prefix, cerr)
 			}
-		}()
+		}
 	}
 
 	s.logf("%s answer sent to encoder", prefix)
-	return local.SDP, nil
+	return local.SDP, cleanup, nil
+}
+
+// HandleIngestOfferForGeneration binds an ingest to the server's display lineage.
+func (s *Session) HandleIngestOfferForGeneration(sdp string, generation uint64, targetID string) (string, error) {
+	if err := validateCaptureIdentity(generation, targetID); err != nil {
+		return "", err
+	}
+	return s.handleIngestOffer(sdp, generation, targetID, nil)
 }
 
 // ingestDisconnectGracePeriod bounds how long the INSTALLED ingest connection
@@ -340,6 +369,8 @@ func (s *Session) scheduleIngestDisconnectEviction(prefix string, pc *webrtc.Pee
 func (s *Session) clearIngestIfCurrent(prefix string, pc *webrtc.PeerConnection, reason string) bool {
 	s.mu.Lock()
 	cleared := s.ingestPC == pc
+	var videoFeed, audioFeed int64
+	var mediaCancel context.CancelFunc
 	if cleared {
 		s.ingestPC = nil
 		// Issue #674: retire the feed tokens too. The shared local tracks
@@ -356,21 +387,33 @@ func (s *Session) clearIngestIfCurrent(prefix string, pc *webrtc.PeerConnection,
 		// blocking Read finally unblocks, which on a degraded transport can
 		// lag the connection's death by a long way; the connection's own
 		// terminal state is available immediately and is just as conclusive.
-		s.videoFeedID = 0
-		s.audioFeedID = 0
+		videoFeed, audioFeed = s.videoFeedID, s.audioFeedID
+		s.videoFeedID, s.audioFeedID = 0, 0
+		mediaCancel = s.ingestMediaCancel
+		s.ingestMediaCtx, s.ingestMediaCancel = nil, nil
 	}
 	notify := s.onIngestLost
+	notifyForOffer := s.onIngestLostForOffer
+	bindingToken, offerID := s.ingestInstalledBindingToken, s.ingestInstalledOfferID
+	generation, targetID := s.ingestInstalledGeneration, s.ingestInstalledTargetID
 	s.mu.Unlock()
 	if !cleared {
 		return false
+	}
+	if mediaCancel != nil {
+		mediaCancel()
 	}
 	s.logf("%s ingest connection %s — cleared; a fresh capture is required", prefix, reason)
 	// Ask the owner (CaptureSession) to re-establish capture. Without this the
 	// session sits with no ingest at all and nothing ever asks the encoder to
 	// reconnect, which is indistinguishable to the user from a hung browser.
-	if notify != nil {
+	if notifyForOffer != nil {
+		go notifyForOffer(bindingToken, offerID, generation, targetID)
+	} else if notify != nil {
 		go notify()
 	}
+	s.videoForward.retireIfFeed(videoFeed)
+	s.audioForward.retireIfFeed(audioFeed)
 	return true
 }
 
@@ -440,53 +483,14 @@ func describeSDPCandidates(sdp string) string {
 	return strings.Join(parts, " ")
 }
 
-// attachIngestTrack is invoked (in its own goroutine, from HandleIngestOffer's
-// OnTrack callback) once per remote track the ingest PeerConnection receives.
-// It reuses the existing shared local track for this kind if one already
-// exists (ingest reconnect case) or creates it on first arrival, then pumps
-// RTP packets from the remote track to the local one (raw copy, no
-// transcode -- payload bytes are untouched) until the remote track ends.
-//
-// Why reusing the local track across reconnects is safe:
-//
-//  1. Pion's TrackLocalStaticRTP.WriteRTP rewrites the packet's SSRC and
-//     PayloadType to each bound viewer-sender's own negotiated values on
-//     every write (see pion/webrtc's track_local_static.go:writeRTP) -- the
-//     local track object is decoupled from whichever upstream connection is
-//     currently producing bytes for it as far as SSRC/PayloadType go.
-//  2. That alone is NOT sufficient: each ingest connection's
-//     TrackLocalStaticSample/packetizer on the ENCODER side picks its own
-//     independent, randomized starting sequence number (rtp.NewRandomSequencer).
-//     Forwarding that number as-is means a fresh ingest connection produces a
-//     sequence-number discontinuity relative to whatever an already-attached
-//     viewer's SRTP receive window has already advanced past -- SRTP's
-//     mandatory anti-replay window (RFC 3711) then silently drops the
-//     "out of window" packets on the VIEWER side, with no error visible
-//     anywhere on this side (TrackLocalStaticRTP.Write still returns nil).
-//     This package therefore rewrites SequenceNumber by a constant
-//     per-connection OFFSET (chosen at each connection's first packet to
-//     continue past Session.videoLastOutSeq/audioLastOutSeq, the shared
-//     outgoing high-water marks), so the local track's OUTGOING sequence
-//     stream stays within one continuous serial-number progression across
-//     source switches while intra-connection gaps and ordering pass through
-//     intact for the viewer's loss recovery (see the offset-rewrite comment
-//     in the forward loop below). Timestamp is passed through
-//     unmodified -- a timestamp discontinuity on source switch is normal,
-//     expected WebRTC behavior (decoders resync on the next keyframe, which
-//     pliBurstForNewViewer already requests) and, unlike sequence number, is
-//     not subject to any crypto-layer replay check.
-//
-// Two overlapping writers (the outgoing old connection finishing its last
-// few packets, and the new one starting) can safely write concurrently: the
-// sequence counter is an atomic, and the old one simply stops once its
-// remote.Read returns an error after the old PeerConnection closes.
-// seqReconnectGap is the deliberate forward jump opened in the outgoing RTP
-// sequence numbering when a new ingest connection takes over the shared
-// local track (see the offset-rewrite comment in attachIngestTrack's forward
-// loop). Big enough that reordering straggler packets from the outgoing old
-// connection can never overlap the new connection's range, small enough that
-// the viewer's brief NACK burst for the phantom gap is negligible.
-const seqReconnectGap = 64
+// Shared local tracks keep viewer bindings alive across source replacement.
+// Pion translates SSRC and payload type for each viewer; mediaForwarder
+// translates sequence numbers and timestamps while excluding old writers.
+// RTP payload bytes are untouched. Sender reports use the identical clock
+// offset, preserving the source's audio/video synchronization mapping.
+// seqReconnectGap advances to the next sequence number without inventing
+// packet loss. mediaForwarder excludes the retired source at the write boundary.
+const seqReconnectGap = 1
 
 // seq16Ahead reports whether a is strictly ahead of b in RFC 1982 16-bit
 // serial-number space (the RTP sequence-number ordering).
@@ -504,20 +508,9 @@ type seqRewriter struct {
 	offset     uint16
 }
 
-// rewrite maps one inbound sequence number to the outgoing stream. The
-// offset is fixed at the connection's FIRST packet: lastOut + seqReconnectGap
-// deliberately opens a forward gap at every source switch (forward jumps are
-// legal loss as far as the viewer is concerned -- it NACKs briefly and
-// resyncs on the keyframe that pliBurstForNewViewer/recapture already
-// requests), whereas overlapping the previous connection's numbering risks
-// the SRTP anti-replay drop described on attachIngestTrack. Every later
-// packet shifts by that same constant, preserving intra-connection gaps and
-// ordering exactly.
-//
-// The high-water mark advances only forward in RFC 1982 space: late
-// (reordered/retransmitted) packets must not drag it backwards, and at
-// reconnect the outgoing old writer's stragglers must not fight the new
-// writer's fresh range.
+// rewrite maps a feed by a fixed offset, preserving real gaps and ordering.
+// Its caller must exclude retired writers before invoking it. The high-water
+// mark advances only forward in 16-bit serial-number space.
 func (r *seqRewriter) rewrite(in uint16) uint16 {
 	if !r.haveOffset {
 		r.offset = uint16(r.lastOut.Load()) + seqReconnectGap - in
@@ -544,34 +537,37 @@ func (r *seqRewriter) rewrite(in uint16) uint16 {
 func (s *Session) endFeed(prefix string, kind webrtc.RTPCodecType, feedID int64) {
 	s.mu.Lock()
 	var cleared bool
+	var forward *mediaForwarder
 	switch kind {
 	case webrtc.RTPCodecTypeVideo:
 		if s.videoFeedID == feedID {
 			s.videoFeedID = 0
+			forward = &s.videoForward
 			cleared = true
 		}
 	case webrtc.RTPCodecTypeAudio:
 		if s.audioFeedID == feedID {
 			s.audioFeedID = 0
+			forward = &s.audioForward
 			cleared = true
 		}
 	}
 	s.mu.Unlock()
 	if cleared {
+		forward.retireIfFeed(feedID)
 		s.logf("%s ingest %s feed ended — nothing is writing to the shared local track now", prefix, kind)
 	}
 }
 
-func (s *Session) attachIngestTrack(prefix string, remote *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+func (s *Session) attachIngestTrack(prefix string, pc *webrtc.PeerConnection, remote *webrtc.TrackRemote, receiver *webrtc.RTPReceiver, generation uint64, targetID string) {
 	codec := remote.Codec()
 	kind := remote.Kind()
 	// Minted before any lock is taken so the token is unique even if two
 	// OnTrack callbacks for the same kind race (ingest replacement).
 	feedID := s.feedSeq.Add(1)
 
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
+	forward, release, err := s.acquireIngestTrackInstallation(pc, kind)
+	if err != nil {
 		return
 	}
 	var local *webrtc.TrackLocalStaticRTP
@@ -585,7 +581,7 @@ func (s *Session) attachIngestTrack(prefix string, remote *webrtc.TrackRemote, r
 		var err error
 		local, err = webrtc.NewTrackLocalStaticRTP(codec.RTPCodecCapability, kind.String(), "omnipus-browser")
 		if err != nil {
-			s.mu.Unlock()
+			release()
 			s.logf("%s attachIngestTrack: NewTrackLocalStaticRTP(%s) failed: %v", prefix, kind, err)
 			return
 		}
@@ -596,18 +592,29 @@ func (s *Session) attachIngestTrack(prefix string, remote *webrtc.TrackRemote, r
 			s.audioTrack = local
 		}
 	}
+	if kind == webrtc.RTPCodecTypeVideo {
+		forward.beginWithReceiptLocked(feedID, codec.ClockRate, VideoReceipt{
+			BindingToken: s.ingestInstalledBindingToken, Generation: generation, TargetID: targetID,
+		})
+	} else {
+		forward.beginWithReceiptLocked(feedID, codec.ClockRate, VideoReceipt{})
+	}
 	var live func()
+	var boundary func(uint64, string, uint32)
 	switch kind {
 	case webrtc.RTPCodecTypeVideo:
 		s.videoSSRC = remote.SSRC()
 		s.videoCodec = codec.MimeType
 		s.videoFeedID = feedID
+		s.videoGeneration = generation
+		s.videoTargetID = targetID
 		live = s.onIngestLive
+		boundary = s.onVideoBoundary
 	case webrtc.RTPCodecTypeAudio:
 		s.audioCodec = codec.MimeType
 		s.audioFeedID = feedID
 	}
-	s.mu.Unlock()
+	release()
 	// From here on this goroutine OWNS the feed token, so every exit path must
 	// retire it — including the RTCP-drain/forward loop's `return`s below.
 	defer s.endFeed(prefix, kind, feedID)
@@ -652,24 +659,26 @@ func (s *Session) attachIngestTrack(prefix string, remote *webrtc.TrackRemote, r
 			}
 			for _, pkt := range pkts {
 				sr, ok := pkt.(*rtcp.SenderReport)
-				if !ok {
+				// A compound RTCP datagram can carry reports for both media
+				// kinds. Only this receiver's source clock belongs to its feed.
+				if !ok || sr.SSRC != uint32(remote.SSRC()) {
 					continue
 				}
-				s.forwardSenderReport(prefix, kind, sr)
+				forward.senderReport(feedID, sr, func(report *rtcp.SenderReport) {
+					s.forwardSenderReport(prefix, kind, report)
+				})
 			}
 		}
 	}()
 
-	lastOutSeq := &s.videoLastOutSeq
 	pktCounter := &s.videoPktCount
 	if kind == webrtc.RTPCodecTypeAudio {
-		lastOutSeq = &s.audioLastOutSeq
 		pktCounter = &s.audioPktCount
 	}
 
 	buf := make([]byte, 1500)
 	var lastLog time.Time
-	rewriter := seqRewriter{lastOut: lastOutSeq}
+	boundarySent := false
 	for {
 		n, _, err := remote.Read(buf)
 		if err != nil {
@@ -682,44 +691,30 @@ func (s *Session) attachIngestTrack(prefix string, remote *webrtc.TrackRemote, r
 		}
 
 		var pkt rtp.Packet
-		if err := pkt.Unmarshal(buf[:n]); err != nil {
-			s.logf("%s dropping unparseable RTP packet: kind=%s err=%v", prefix, kind, err)
+		if parseErr := pkt.Unmarshal(buf[:n]); parseErr != nil {
+			s.logf("%s dropping unparseable RTP packet: kind=%s err=%v", prefix, kind, parseErr)
 			continue
 		}
-		// See the long comment on attachIngestTrack above: the sequence
-		// number is rewritten by a CONSTANT PER-CONNECTION OFFSET, chosen at
-		// this connection's first packet so its outgoing stream continues
-		// ahead of wherever the previous ingest connection left off --
-		// without that continuity, an already-attached viewer's SRTP
-		// anti-replay window silently discards every packet from a freshly
-		// reconnected ingest source.
-		//
-		// A constant offset -- NOT a per-packet monotonic counter, which is
-		// what shipped first (renumbering packets in READ order). Read-order
-		// renumbering destroyed the two loss-recovery signals the viewer leg
-		// depends on (operator-visible as persistent cyan macroblock
-		// smearing during scroll, 2026-08-13): (a) an ingest-leg packet loss
-		// left NO GAP in the outgoing numbering, so the viewer's decoder
-		// could not detect the loss -- no NACK, no prompt PLI, just a broken
-		// bitstream decoded as garbage until some unrelated keyframe; and
-		// (b) a packet recovered late by ingest-leg retransmission was
-		// renumbered into its READ position, splicing it into the wrong
-		// bitstream position with perfectly sequential numbering, actively
-		// corrupting the decode. Offset rewriting preserves intra-connection
-		// gaps and relative order, so the viewer's jitter buffer reorders
-		// correctly, its NACK generator sees real gaps (answered by the
-		// default-interceptor NACK responder from the local track's send
-		// cache), and unrecoverable loss escalates to the PLI path
-		// (forwardPLIThrottled) for a proper keyframe resync.
-		pkt.SequenceNumber = rewriter.rewrite(pkt.SequenceNumber)
-
-		if err := local.WriteRTP(&pkt); err != nil {
+		accepted, err := forward.write(feedID, &pkt, time.Now(), local.WriteRTP)
+		if !accepted {
+			return
+		}
+		if err != nil {
 			// ErrClosedPipe just means no viewer is bound to this local
 			// track yet -- not worth logging per-packet.
 			if !errors.Is(err, io.ErrClosedPipe) {
 				s.logf("%s forward write failed: kind=%s err=%v", prefix, kind, err)
 			}
 			continue
+		}
+		if !boundarySent && boundary != nil && generation > 0 {
+			if timestamp, _, current := forward.boundary(feedID); current {
+				boundarySent = true
+				// Consumers recheck immutable identity when this queued
+				// callback arrives. The first mapped timestamp is the floor
+				// even if an earlier write partially failed for a viewer.
+				go boundary(generation, targetID, timestamp)
+			}
 		}
 		count := pktCounter.Add(1)
 		if time.Since(lastLog) > 5*time.Second {
@@ -742,9 +737,18 @@ func (s *Session) attachIngestTrack(prefix string, remote *webrtc.TrackRemote, r
 // BOTH tracks -- relaxing it to video-only-immediately is what introduced
 // the first-viewer no-audio race (UAT 2026-07-18).
 func (s *Session) waitForTracks(timeout time.Duration) (video, audio *webrtc.TrackLocalStaticRTP, ok bool) {
+	return s.waitForTracksContext(context.Background(), timeout)
+}
+
+func (s *Session) waitForTracksContext(ctx context.Context, timeout time.Duration) (video, audio *webrtc.TrackLocalStaticRTP, ok bool) {
 	deadline := time.Now().Add(timeout)
 	var audioDeadline time.Time // armed once video is first observed
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
 	for {
+		if ctx.Err() != nil {
+			return nil, nil, false
+		}
 		s.mu.Lock()
 		v, a := s.videoTrack, s.audioTrack
 		// Issue #674: a track with no live feed is treated exactly as an
@@ -774,7 +778,11 @@ func (s *Session) waitForTracks(timeout time.Duration) (video, audio *webrtc.Tra
 		} else if now.After(deadline) {
 			return v, a, false
 		}
-		time.Sleep(50 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return nil, nil, false
+		case <-tick.C:
+		}
 	}
 }
 
@@ -871,16 +879,13 @@ func (s *Session) forwardPLIThrottled(prefix string) {
 // finding 2, UAT symptom "audio slightly delayed vs video"): Chrome's own
 // WebRTC stack uses a stream's Sender Reports (NTP wall-clock time paired
 // with that stream's RTP timestamp) to align independently-clocked audio
-// and video tracks into one presentation timeline. Without ANY Sender
-// Report ever reaching the viewer -- true before this fix, since the
-// ingest-side RTCP drain simply discarded everything -- the browser falls
-// back to jitter-buffer-only heuristics that can drift out of sync under
-// load.
+// and video tracks into one presentation timeline. These encoder-origin
+// reports retain their shared source clock; independently generated relay
+// reports instead anchor each kind to its packet-arrival time. The viewer
+// interceptor registry therefore disables local sender-report generation.
 //
-// The RTP TIMESTAMP domain forwarded here is unmodified -- this package
-// only ever rewrites RTP sequence numbers (see attachIngestTrack's long
-// comment), never timestamps -- so an SR's RTPTime field stays meaningful
-// as-is. What MUST be rewritten, once per viewer, is the packet's own SSRC
+// mediaForwarder has already applied the same timestamp translation to
+// this report as to its feed's RTP packets. What MUST be rewritten, once per viewer, is the packet's own SSRC
 // field: a browser only accepts (or correctly correlates) an SR whose SSRC
 // matches the SSRC of the RTP stream it is actually receiving, and Pion
 // rewrites every forwarded RTP packet's SSRC to each viewer-binding's own

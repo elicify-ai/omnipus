@@ -68,7 +68,7 @@ func TestSharedMediaConn_TakenPort_RecordsOperatorVisibleDegradation(t *testing.
 	t.Cleanup(func() { _ = conn.Close() })
 	bound := mediaConnPort(t, conn)
 
-	notice := h.mediaPortFallbackNotice()
+	notice := h.mediaTransportNotice()
 	require.NotEmpty(t, notice,
 		"a fallback off the operator's declared port MUST produce a user-visible notice — a log line alone "+
 			"is invisible to the person who has to free the port or fix the config")
@@ -96,7 +96,7 @@ func TestSharedMediaConn_ConfiguredPortFree_NoDegradationNotice(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 	require.Equal(t, free, mediaConnPort(t, conn))
 
-	assert.Empty(t, h.mediaPortFallbackNotice(),
+	assert.Empty(t, h.mediaTransportNotice(),
 		"nothing degraded, so nothing may be reported — a warning on a healthy install trains operators to "+
 			"ignore the one that matters")
 }
@@ -107,7 +107,7 @@ func TestSharedMediaConn_ConfiguredPortFree_NoDegradationNotice(t *testing.T) {
 func TestSharedMediaConn_Unconfigured_NoDegradationNotice(t *testing.T) {
 	h := &BrowserWSHandler{}
 	require.Nil(t, h.sharedMediaConn(&config.Config{}))
-	assert.Empty(t, h.mediaPortFallbackNotice(),
+	assert.Empty(t, h.mediaTransportNotice(),
 		"fixed-port media is opt-in; the untouched default must not raise an operator alarm")
 }
 
@@ -124,57 +124,53 @@ func TestSharedMediaConn_Unconfigured_NoDegradationNotice(t *testing.T) {
 // the SPA renders as a persistent strip under the (locally working) video,
 // rather than a dead panel with no explanation.
 func TestNotifyMediaPortDegraded_PushesStatusErrorToThePanel(t *testing.T) {
-	h := &BrowserWSHandler{mediaPortFallback: &mediaPortFallbackState{
-		configured: 50000,
-		bound:      50001,
-		lastProbed: 50001,
-	}}
-	wc := &browserWSConn{sendCh: make(chan []byte, 4), doneCh: make(chan struct{})}
-
-	h.notifyMediaPortDegraded(wc, "sess-1", "viewer-1")
-
-	var raw []byte
-	select {
-	case raw = <-wc.sendCh:
-	default:
-		t.Fatal("no frame was sent — the viewer would sit in front of a panel that can never show video " +
-			"remotely, with nothing on screen saying why (the exact ADR-061 failure this fixes)")
+	f := newHandlerContextFixture(t, false)
+	f.handler.mediaPortFallback = &mediaPortFallbackState{configured: 50000, bound: 50001, lastProbed: 50001}
+	epoch := f.state.beginWebRTCOffer()
+	f.handler.handleWebRTCOffer(f.conn, f.state, "viewer", "user", f.offer(t, nil), f.cfg, epoch)
+	var status *generated.BrowserStatusFrame
+	for len(f.conn.sendCh) > 0 {
+		queued := <-f.conn.sendCh
+		var frame generated.BrowserStatusFrame
+		require.NoError(t, json.Unmarshal(queued.data, &frame))
+		if frame.Type == "browser_status" {
+			status = &frame
+		}
 	}
-
-	var frame generated.BrowserStatusFrame
-	require.NoError(t, json.Unmarshal(raw, &frame))
-	assert.Equal(t, string(generated.WsFrameTypeBrowserStatus), frame.Type)
-	assert.Equal(t, "error", frame.State,
-		"it must arrive on the surface the SPA already renders as a visible error, not an informational state "+
-			"it drops on the floor")
-	require.NotNil(t, frame.SessionId)
-	assert.Equal(t, "sess-1", *frame.SessionId)
-	require.NotNil(t, frame.Message)
-	assert.Contains(t, *frame.Message, "50000", "the panel copy must name the configured port")
-	assert.Contains(t, *frame.Message, "50001", "the panel copy must name the port actually bound")
+	require.NotNil(t, status)
+	require.Equal(t, "error", status.State)
+	require.NotNil(t, status.SessionId)
+	require.Equal(t, "chat", *status.SessionId)
+	require.NotNil(t, status.Message)
+	require.Contains(t, *status.Message, "50000")
+	require.Contains(t, *status.Message, "50001")
 }
 
 // TestNotifyMediaPortDegraded_SilentWhenHealthy — the ordinary install must
 // see no frame at all, so this can never become a banner people learn to
 // dismiss.
 func TestNotifyMediaPortDegraded_SilentWhenHealthy(t *testing.T) {
-	h := &BrowserWSHandler{}
-	wc := &browserWSConn{sendCh: make(chan []byte, 4), doneCh: make(chan struct{})}
-
-	h.notifyMediaPortDegraded(wc, "sess-1", "viewer-1")
-
-	select {
-	case raw := <-wc.sendCh:
-		t.Fatalf("a healthy install must send nothing, got %s", raw)
-	default:
+	f := newHandlerContextFixture(t, false)
+	epoch := f.state.beginWebRTCOffer()
+	f.handler.handleWebRTCOffer(f.conn, f.state, "viewer", "user", f.offer(t, nil), f.cfg, epoch)
+	answered := false
+	for len(f.conn.sendCh) > 0 {
+		queued := <-f.conn.sendCh
+		var header struct {
+			Type string `json:"type"`
+		}
+		require.NoError(t, json.Unmarshal(queued.data, &header))
+		require.NotEqual(t, "browser_status", header.Type, "healthy offer must not show degradation")
+		answered = answered || header.Type == "browser_webrtc_answer"
 	}
+	require.True(t, answered)
 }
 
 // TestMediaPortFallbackNotice_TotalFailureNamesEphemeralConsequence covers the
 // worse branch: not even the probe range could be bound, so every Session is
 // on an ephemeral port and a hosted install has no chance whatsoever.
 func TestMediaPortFallbackNotice_TotalFailureNamesEphemeralConsequence(t *testing.T) {
-	notice := mediaPortFallbackState{configured: 50000, bound: 0, lastProbed: 50016}.notice()
+	notice := (&BrowserWSHandler{mediaPortFallback: &mediaPortFallbackState{configured: 50000, bound: 0, lastProbed: 50016}}).mediaTransportNotice()
 
 	require.NotEmpty(t, notice, "the total-failure branch is the WORST case and must not be the silent one")
 	assert.Contains(t, notice, "50000")
@@ -202,7 +198,7 @@ func TestMediaPortFallbackNotice_FitsContractMaxLength(t *testing.T) {
 	}
 	for name, state := range cases {
 		t.Run(name, func(t *testing.T) {
-			notice := state.notice()
+			notice := (&BrowserWSHandler{mediaPortFallback: &state}).mediaTransportNotice()
 			assert.LessOrEqual(t, len(notice), limit,
 				"an over-length message is dropped by the SPA's zod edge validation, which would make this "+
 					"degradation invisible again — the whole point of the fix")
@@ -246,8 +242,8 @@ func TestMediaPortFallbackNotice_StaysOutOfTheSPATranslator(t *testing.T) {
 		"unknown frame type", "invalid frame: not json",
 	}
 	notices := []string{
-		mediaPortFallbackState{configured: 50000, bound: 50001, lastProbed: 50001}.notice(),
-		mediaPortFallbackState{configured: 50000, bound: 0, lastProbed: 50016}.notice(),
+		(&BrowserWSHandler{mediaPortFallback: &mediaPortFallbackState{configured: 50000, bound: 50001, lastProbed: 50001}}).mediaTransportNotice(),
+		(&BrowserWSHandler{mediaPortFallback: &mediaPortFallbackState{configured: 50000, bound: 0, lastProbed: 50016}}).mediaTransportNotice(),
 	}
 	for _, notice := range notices {
 		lower := strings.ToLower(notice)
@@ -285,7 +281,7 @@ func TestHandleWebRTCOffer_MediaPortFallback_TellsTheViewerInThePanel(t *testing
 	if runtime.GOOS != "linux" {
 		t.Skip("ClassifyVideoCapabilityWithExec only ever reports Capable=true on linux")
 	}
-	handler, al := newBrowserWSTestHandler(t, webrtcCapableGateMutate(t))
+	handler, al := newMeasuredBrowserWSTestHandler(t, webrtcCapableGateMutate(t))
 	t.Cleanup(handler.Wait)
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
@@ -300,7 +296,7 @@ func TestHandleWebRTCOffer_MediaPortFallback_TellsTheViewerInThePanel(t *testing
 	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
 	require.Equal(t, agent.BrowserResolveOK, outcome)
 	var encoderCalls int32
-	cs, err := browser.NewCaptureSessionWithDeps(nil, defaultAgent.ID, &fakeRelay{},
+	cs, err := browser.NewCaptureSessionWithDeps(nil, defaultAgent.ID, newRequestFixtureRelay(&fakeRelay{}),
 		fakeEncoderStarter(&encoderCalls, nil), nil)
 	require.NoError(t, err)
 	_, err = mgr.EnsureCaptureSession(func() (*browser.CaptureSession, error) { return cs, nil })
@@ -317,13 +313,16 @@ func TestHandleWebRTCOffer_MediaPortFallback_TellsTheViewerInThePanel(t *testing
 	})
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-media-port", "user-1", data, al.GetConfig(), 0)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
+
+	handler.handleWebRTCOffer(wc, &state, "viewer-media-port", "user-1", data, al.GetConfig(), offerEpoch)
 	t.Cleanup(func() { handler.detachWebRTCViewer(&state, "viewer-media-port") })
 
 	var status *generated.BrowserStatusFrame
 	for range 4 {
 		select {
-		case raw := <-wc.sendCh:
+		case queued := <-wc.sendCh:
+			raw := queued.data
 			var probe struct {
 				Type string `json:"type"`
 			}
@@ -404,9 +403,9 @@ func TestSharedMediaTCP_BindFailure_IsUserVisible(t *testing.T) {
 		_ = ln.Close()
 		t.Skip("port could not be made unavailable on this machine; nothing to assert")
 	}
-	notice := h.iceTCPUnavailableNotice()
+	notice := h.mediaTransportNotice()
 	require.NotEmpty(t, notice, "a failed ICE-TCP bind must produce an operator-facing notice")
-	require.Contains(t, notice, "webrtc_media_tcp_port")
+	require.Contains(t, notice, "TCP media port")
 	require.LessOrEqual(t, len(notice), 512, "BrowserStatusFrame.message is capped at 512")
 }
 
@@ -415,7 +414,7 @@ func TestSharedMediaTCP_BindFailure_IsUserVisible(t *testing.T) {
 func TestSharedMediaTCP_Unconfigured_SaysNothing(t *testing.T) {
 	h := &BrowserWSHandler{}
 	require.Nil(t, h.sharedMediaTCP(&config.Config{}))
-	require.Empty(t, h.iceTCPUnavailableNotice())
+	require.Empty(t, h.mediaTransportNotice())
 }
 
 // TestTURNUnavailableNotice_SilentWhenOff keeps the tier-3 notice from
@@ -423,7 +422,7 @@ func TestSharedMediaTCP_Unconfigured_SaysNothing(t *testing.T) {
 func TestTURNUnavailableNotice_SilentWhenOff(t *testing.T) {
 	h := &BrowserWSHandler{}
 	require.Nil(t, h.sharedTURN(&config.Config{}))
-	require.Empty(t, h.turnUnavailableNotice())
+	require.Empty(t, h.mediaTransportNotice())
 }
 
 // TestTURNUnavailableNotice_ReportsAConfiguredButFailedRelay is the ADR-061
@@ -436,8 +435,8 @@ func TestTURNUnavailableNotice_ReportsAConfiguredButFailedRelay(t *testing.T) {
 	// advertises a private address is useless to every remote viewer.
 	h := &BrowserWSHandler{}
 	require.Nil(t, h.sharedTURN(cfg))
-	notice := h.turnUnavailableNotice()
+	notice := h.mediaTransportNotice()
 	require.NotEmpty(t, notice)
-	require.Contains(t, notice, "webrtc_turn_udp_port")
+	require.Contains(t, notice, "TURN relay")
 	require.LessOrEqual(t, len(notice), 512)
 }

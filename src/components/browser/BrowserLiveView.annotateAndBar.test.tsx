@@ -13,6 +13,7 @@
 // gracefully surfaces a "could not capture" toast when canvas is
 // unavailable, without crashing or leaving the UI in a stuck state.
 
+import { installBrowserFrameCallbacks, confirmBrowserFrame } from './browserFrameTestUtils'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
@@ -20,11 +21,8 @@ import type { BrowserLiveWsCallbacks } from '@/lib/browserLiveWs'
 import { useUiStore } from '@/store/ui'
 
 const { mockSendControl, mockSendInput, mockConnect, mockDetach, mockClose, callbacksRef } = vi.hoisted(() => ({
-  // Returns `true` by default (mirrors a successful send on an OPEN socket) —
-  // see BrowserLiveView.takeTheWheel.test.tsx's identical hoisted mock for
-  // why this matters (the auto-release effect now reacts to a falsy return).
   mockSendControl: vi.fn(() => true),
-  mockSendInput: vi.fn(),
+  mockSendInput: vi.fn<(input: unknown) => boolean>(() => true),
   mockConnect: vi.fn(),
   mockDetach: vi.fn(),
   mockClose: vi.fn(),
@@ -56,6 +54,7 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
 })
 
 import { BrowserLiveView } from './BrowserLiveView'
+installBrowserFrameCallbacks()
 
 /** Stand-in MediaStream — jsdom has no real WebRTC/MediaStream. Every render
  * call in this file supplies it via the `mediaStream` test/override seam
@@ -78,6 +77,7 @@ function connectAndFrame() {
     Object.defineProperty(video, 'videoWidth', { value: 1280, configurable: true })
     Object.defineProperty(video, 'videoHeight', { value: 720, configurable: true })
     fireEvent.loadedMetadata(video)
+    confirmBrowserFrame(callbacksRef.current, video)
   })
 }
 
@@ -214,13 +214,7 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
     expect(mockSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com' })
   })
 
-  // CRITICAL reviewer finding: the omnibox is now gated through the SAME
-  // driveMode as the pointer/keyboard handlers, not a hand-rolled duplicate
-  // guard — this proves controlled_by_other blocks the submit even when
-  // dispatched directly (bypassing the Go button's OWN `disabled` attribute,
-  // which already covers the click path — this is defense-in-depth for the
-  // handler itself, exercised via a direct form submit).
-  it('does not take the wheel nor navigate when controlled_by_other is true (direct submit, bypassing the disabled Go button)', () => {
+  it('allows navigation while another viewer is marked as controlling', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
@@ -233,8 +227,8 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
     expect(form).not.toBeNull()
     fireEvent.submit(form!)
 
-    expect(mockSendControl).not.toHaveBeenCalled()
-    expect(mockSendInput).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'navigate' }))
+    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com' })
   })
 
   // Reviewer finding: the previous hand-rolled omnibox guard never accounted

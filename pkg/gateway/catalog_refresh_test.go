@@ -113,6 +113,26 @@ func testDocument(t *testing.T, version string) []byte {
 	return data
 }
 
+// startCatalogRefreshLoopForTest joins the refresh worker before TempDir cleanup.
+// Cancellation alone does not wait for a filesystem write already in progress.
+func startCatalogRefreshLoopForTest(t *testing.T, cat *catalog.Catalog, store persistedCatalogAger, interval, refreshTimeout, skipWindow time.Duration) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runCatalogRefreshLoop(ctx, cat, store, interval, refreshTimeout, skipWindow)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("catalog refresh worker did not stop before fixture cleanup")
+		}
+	})
+}
+
 // TestGatewayBoot_OfflineSnapshot_Then_StartupPull (T42, US-3.AC1/AC2,
 // FR-008/FR-010) drives the exact composition setupAndStartServices performs:
 // catalog.Boot with no network, then — only once a listener is accepting —
@@ -159,7 +179,7 @@ func TestGatewayBoot_OfflineSnapshot_Then_StartupPull(t *testing.T) {
 		nil,
 	)
 
-	go runCatalogRefreshLoop(context.Background(), pulled, catalog.NewFileStore(home), time.Hour, 5*time.Second, time.Hour)
+	startCatalogRefreshLoopForTest(t, pulled, catalog.NewFileStore(home), time.Hour, 5*time.Second, time.Hour)
 
 	select {
 	case <-puller.ready:
@@ -199,7 +219,7 @@ func TestGatewayBoot_OfflineSnapshot_Then_StartupPull(t *testing.T) {
 		catalog.NewFileStore(home),
 		nil,
 	)
-	go runCatalogRefreshLoop(context.Background(), skipCat, catalog.NewFileStore(home), time.Hour, 5*time.Second, time.Hour)
+	startCatalogRefreshLoopForTest(t, skipCat, catalog.NewFileStore(home), time.Hour, 5*time.Second, time.Hour)
 	time.Sleep(200 * time.Millisecond)
 	assert.Zero(t, skipPuller.hitCount(),
 		"startup pull must be skipped while the persisted document is younger than the skip window")
@@ -245,7 +265,7 @@ func TestRefreshLoop_24h_NoRequestPathPulls(t *testing.T) {
 		nil,
 	)
 
-	go runCatalogRefreshLoop(context.Background(), cat, catalog.NewFileStore(home), time.Hour, 5*time.Second, 0)
+	startCatalogRefreshLoopForTest(t, cat, catalog.NewFileStore(home), time.Hour, 5*time.Second, 0)
 
 	select {
 	case <-puller.ready:
@@ -287,7 +307,7 @@ func TestRefreshLoop_TickerFires(t *testing.T) {
 	cat := catalog.Boot(context.Background(), catalog.EmbeddedSnapshot, puller,
 		catalog.NewFileStore(home), nil)
 
-	go runCatalogRefreshLoop(context.Background(), cat, catalog.NewFileStore(home), 20*time.Millisecond, time.Second, 0)
+	startCatalogRefreshLoopForTest(t, cat, catalog.NewFileStore(home), 20*time.Millisecond, time.Second, 0)
 
 	require.Eventually(t, func() bool { return puller.hitCount() >= 3 },
 		5*time.Second, 10*time.Millisecond,

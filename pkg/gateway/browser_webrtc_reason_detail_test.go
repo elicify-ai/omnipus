@@ -99,7 +99,9 @@ func newHandleWebRTCOfferWithFailingStart(
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-start-detail", "user-1", data, al.GetConfig(), 0)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
+
+	handler.handleWebRTCOffer(wc, &state, "viewer-start-detail", "user-1", data, al.GetConfig(), offerEpoch)
 	require.Equal(t, int32(1), atomic.LoadInt32(&calls), "the encoder starter must actually have been invoked")
 	return decodeWebRTCState(t, drainOneFrame(t, wc))
 }
@@ -109,7 +111,7 @@ func newHandleWebRTCOfferWithFailingStart(
 // carried reason="error" and nothing else, so the panel's only possible copy
 // was the generic sentence.
 func TestHandleWebRTCOffer_StartFailure_CarriesRealCauseToTheOperator(t *testing.T) {
-	handler, al, _ := newFixWaveHandlerWithAudit(t, webrtcCapableGateMutate(t))
+	handler, al, _ := newMeasuredFixWaveHandlerWithAudit(t, webrtcCapableGateMutate(t))
 	t.Cleanup(handler.Wait)
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)
@@ -129,7 +131,7 @@ func TestHandleWebRTCOffer_StartFailure_CarriesRealCauseToTheOperator(t *testing
 // the same requirement one branch over: HandleViewerOffer failures were
 // equally mute on the wire.
 func TestHandleWebRTCOffer_ViewerOfferFailure_CarriesRealCauseToTheOperator(t *testing.T) {
-	handler, al, _ := newFixWaveHandlerWithAudit(t, webrtcCapableGateMutate(t))
+	handler, al, _ := newMeasuredFixWaveHandlerWithAudit(t, webrtcCapableGateMutate(t))
 	t.Cleanup(handler.Wait)
 	defaultAgent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, defaultAgent)

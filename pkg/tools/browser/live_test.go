@@ -960,15 +960,8 @@ func TestControlledResult(t *testing.T) {
 // call them at the right moment.
 // ---------------------------------------------------------------------------
 
-// TestLiveView_WatchForUnexpectedDeath_GenuineBrowserDeath_StopsCaptureSession
-// proves the watchForUnexpectedDeath -> cs.Stop() wire (live.go, wave-plan
-// W2-A item 5: "also on browser_status-relevant lifecycle: browser death ->
-// stop session"). mgr.browserAlive("s1") is made to report false (genuinely
-// dead) simply by never populating mgr.sessions at all — browserAlive's own
-// implementation treats "no sessionEntry for this id" as not-alive, which is
-// exactly the "whole browsing context is gone" case this trigger targets
-// (as opposed to a mere tab close/switch, which watchForUnexpectedDeath
-// deliberately leaves alone — see its doc comment).
+// A missing panel browsing context ends its capture. This watcher is local to
+// the panel; manager Shutdown/invalidateConnection owns whole-browser cleanup.
 func TestLiveView_WatchForUnexpectedDeath_GenuineBrowserDeath_StopsCaptureSession(t *testing.T) {
 	// NewBrowserManager (not a bare &BrowserManager{} literal) so mgr.sessions
 	// starts as an empty map, which is exactly what this test wants:
@@ -980,7 +973,9 @@ func TestLiveView_WatchForUnexpectedDeath_GenuineBrowserDeath_StopsCaptureSessio
 	var calls int32
 	cs, err := NewCaptureSessionWithDeps(mgr, "agent-death", relay, fakeEncoderStarter(&calls, nil), nil)
 	require.NoError(t, err)
-	mgr.capture = cs
+	mgr.captures = map[string]*CaptureSession{"s1": cs}
+	_, err = cs.BeginFrameTransition("dead-target", 800, 600, 1)
+	require.NoError(t, err)
 
 	lv := &LiveView{
 		mgr:          mgr,
@@ -1000,9 +995,7 @@ func TestLiveView_WatchForUnexpectedDeath_GenuineBrowserDeath_StopsCaptureSessio
 		close(done)
 	}()
 
-	// Simulate the whole browsing context dying (BrowserManager.Shutdown or a
-	// genuine crash) — the tab's own context (and everything derived from
-	// it, including this epoch's listenCtx) dies WITHOUT a clean detach().
+	// Simulate the watched browsing context ending without a clean detach.
 	cancel()
 
 	select {
@@ -1014,54 +1007,24 @@ func TestLiveView_WatchForUnexpectedDeath_GenuineBrowserDeath_StopsCaptureSessio
 	require.Equal(t, 1, relay.closeCount(), "a genuine browser death must call cs.Stop(), which closes the relay")
 }
 
-// TestLiveView_OnTabsChanged_ActiveTabSwitch_TriggersCaptureSessionRecapture
-// proves the onTabsChanged -> cs.Recapture() wire (live.go, wave-plan W2-A
-// item 5: "recapture on active-tab switch"). lastKnownActiveCtx is
-// pre-seeded to a DIFFERENT context than the manager's actual active tab, so
-// this single onTabsChanged call observes activeTabChanged=true on its very
-// first real comparison (mirroring a genuine second call after an initial
-// baseline one). Deliberately leaves lv.listenCtx unset (hasEpochLocked()
-// stays false) so onTabsChanged's separate needsRebind/rebindWatch branch is
-// never reached; this test is scoped to the Recapture trigger alone.
+// An actual manager switch must publish the measured frame through the live
+// registry callback, with the same target selected by the manager.
 func TestLiveView_OnTabsChanged_ActiveTabSwitch_TriggersCaptureSessionRecapture(t *testing.T) {
-	tabOld, cancelOld := context.WithCancel(context.Background())
-	t.Cleanup(cancelOld)
-	tabNew, cancelNew := context.WithCancel(context.Background())
-	t.Cleanup(cancelNew)
-
-	mgr := &BrowserManager{
-		started: true,
-		sessions: map[string]*sessionEntry{
-			"s1": {
-				tabs:      []*tabEntry{{ctx: tabNew, cancel: cancelNew}},
-				activeIdx: 0,
-			},
-		},
-	}
-	relay := &fakeRelay{}
-	var calls int32
-	cs, err := NewCaptureSessionWithDeps(mgr, "agent-recapture", relay, fakeEncoderStarter(&calls, nil), nil)
+	m, lv, cs, ledger, _ := newAttachedLiveManager(t)
+	old := lv.tabCtx
+	_, err := m.SwitchTab(testSessionID, 0)
 	require.NoError(t, err)
-	mgr.capture = cs
-
-	lv := &LiveView{
-		mgr:                mgr,
-		sessionID:          "s1",
-		viewers:            make(map[string]struct{}),
-		statusSinks:        make(map[string]StatusSink),
-		controlSinks:       make(map[string]ControlSink),
-		tabsSinks:          make(map[string]TabsSink),
-		lastKnownActiveCtx: tabOld,
-	}
-
-	lv.onTabsChanged(nil, 0)
-
-	require.Equal(
-		t,
-		1,
-		relay.recaptureCount(),
-		"an active-tab switch must call cs.Recapture(), which signals the relay",
-	)
+	require.Eventually(t, func() bool { return ledger.recaptures() == 1 }, time.Second, 5*time.Millisecond)
+	frame := cs.FrameState()
+	_, targetID, err := m.activeTargetSnapshot(testSessionID)
+	require.NoError(t, err)
+	require.Equal(t, string(targetID), frame.TargetID)
+	require.Equal(t, 800, frame.Width)
+	require.Equal(t, 600, frame.Height)
+	lv.mu.Lock()
+	current := lv.lastKnownActiveCtx
+	lv.mu.Unlock()
+	require.True(t, old != current, "the active target must change")
 }
 
 // ---------------------------------------------------------------------------
@@ -1221,9 +1184,22 @@ func TestLiveView_DispatchInput_RescaleGate(t *testing.T) {
 				mu.Unlock()
 				return nil
 			})
+			picture := installInputTestPicture(t, lv)
+			tc.in = inputWithTestPicture(picture, tc.in)
 			lv.cssViewportW = int(cssW)
 			lv.cssViewportH = int(cssH)
 			require.True(t, lv.takeControl("viewerA"))
+
+			if tc.in.Kind == "mouse_up" {
+				// Releases now require this viewer's accepted press. Keep the
+				// coordinate assertions focused on the release under test.
+				down := tc.in
+				down.Kind = "mouse_down"
+				require.NoError(t, lv.dispatchInput("viewerA", down))
+				mu.Lock()
+				actions = nil
+				mu.Unlock()
+			}
 
 			err := lv.dispatchInput("viewerA", tc.in)
 			require.NoError(t, err)

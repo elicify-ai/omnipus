@@ -43,6 +43,7 @@ properties:
   state:
     type: string
     enum:
+      - transitioning
       - lost
       - recovering
       - recovered
@@ -81,3 +82,47 @@ properties:
       target ids, ports and timeouts are deliberately KEPT, because they are
       what makes the sentence actionable. Absent when the state alone fully
       explains the situation.
+  capture_generation:
+    type: integer
+    minimum: 1
+    maximum: 9007199254740991
+    description: >-
+      Server-issued target and CSS geometry generation, scoped to the capture
+      session. Input names the generation actually displayed; stale generations
+      must be rejected. Viewer answers bind the negotiated stream to this value.
+  target_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: >-
+      CDP page target identity for this capture generation. The encoder must
+      verify its selected Chrome tab maps to this identity before offering.
+  rtp_timestamp:
+    type: integer
+    minimum: 0
+    maximum: 4294967295
+    description: >-
+      Forwarded video boundary for capture_generation. Zero is valid. Viewers
+      must observe presentation of this or a later frame from the matching
+      stream before enabling input. Serial comparison uses 32-bit wrap rules;
+      attach requires a current boundary to avoid half-range ambiguity.
+  capture_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: >-
+      Non-secret opaque capture-session identity. Generation claims are valid
+      only within this capture; replacement invalidates all previous claims.
+  css_width:
+    type: integer
+    minimum: 1
+    maximum: 16384
+    description: >-
+      Confirmed source CSS viewport width for capture_generation. Together
+      with css_height and decoded video dimensions, identifies padding inside
+      the encoded frame; pointer coordinates must exclude that padding.
+  css_height:
+    type: integer
+    minimum: 1
+    maximum: 16384
+    description: Confirmed source CSS viewport height for capture_generation.

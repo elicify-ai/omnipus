@@ -144,10 +144,11 @@ func TestDispatchInput_TransientViewportMiss_StaysBenign(t *testing.T) {
 			return errors.New("simulated one-off CDP hiccup")
 		},
 	}
+	picture := installInputTestPicture(t, lv)
 
-	err := lv.dispatchInput("v1", LiveInput{
+	err := lv.dispatchInput("v1", inputWithTestPicture(picture, LiveInput{
 		Kind: "mouse_down", HasXY: true, X: 10, Y: 10, CaptureWidth: 562, CaptureHeight: 562,
-	})
+	}))
 	require.Error(t, err)
 	require.True(t, IsBenignLiveInputError(err),
 		"a FIRST viewport-read miss is routinely transient (a cache invalidated by a legitimate "+
@@ -163,10 +164,11 @@ func TestDispatchInput_SustainedViewportFailure_EscalatesToRealError(t *testing.
 			return errors.New("simulated wedged CDP transport")
 		},
 	}
+	picture := installInputTestPicture(t, lv)
 	in := LiveInput{Kind: "mouse_down", HasXY: true, X: 10, Y: 10, CaptureWidth: 562, CaptureHeight: 562}
 
 	// First failure: benign, and it arms the backoff.
-	require.True(t, IsBenignLiveInputError(lv.dispatchInput("v1", in)))
+	require.True(t, IsBenignLiveInputError(lv.dispatchInput("v1", inputWithTestPicture(picture, in))))
 
 	// Clear the backoff so the next event actually retries the fetch, the way
 	// a real client's event would once viewportInputFetchBackoff has elapsed.
@@ -174,7 +176,7 @@ func TestDispatchInput_SustainedViewportFailure_EscalatesToRealError(t *testing.
 	lv.nextFetchAfter = time.Time{}
 	lv.mu.Unlock()
 
-	err := lv.dispatchInput("v1", in)
+	err := lv.dispatchInput("v1", inputWithTestPicture(picture, in))
 	require.Error(t, err)
 	require.False(t, IsBenignLiveInputError(err),
 		"a SECOND consecutive failure is no longer plausibly transient — it must reach the user, "+

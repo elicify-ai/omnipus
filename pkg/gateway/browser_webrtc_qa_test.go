@@ -71,7 +71,7 @@ type qaInputHarness struct {
 // newQAInputHarness stands up the SAME real-signaling / real-relay /
 // fake-CDP-launch-only topology TestWebRTCEndToEndInProcess uses, wires
 // dcRecorder ALONGSIDE (never instead of) the REAL production
-// handler.webrtcInputSink(mgr, cfg) — exactly as TestWebRTCEndToEndInProcess
+// newWebRTCContextInputSink — exactly as TestWebRTCEndToEndInProcess
 // wraps it for its own dcFramesObserved counter — and returns only once the
 // viewer's "input" data channel has opened. dcRecorder may be nil.
 func newQAInputHarness(t *testing.T, dcRecorder func(viewerID string, raw []byte)) *qaInputHarness {
@@ -97,7 +97,7 @@ func newQAInputHarness(t *testing.T, dcRecorder func(viewerID string, raw []byte
 	port := addr.Port
 
 	tmpDir := t.TempDir()
-	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
+	handler, al := newMeasuredBrowserWSTestHandler(t, func(cfg *config.Config) {
 		cfg.Gateway.Port = port
 		cfg.Tools.Browser.WebRTCEnabled = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
@@ -150,39 +150,43 @@ func newQAInputHarness(t *testing.T, dcRecorder func(viewerID string, raw []byte
 		},
 	)
 
-	// dcRecorder observes every frame ALONGSIDE the real production sink —
-	// it never replaces it, so this test proves the frame genuinely
-	// traveled through webrtcInputSink -> browserInputFrameToLiveInput ->
-	// mgr.Live().Input, exactly like TestWebRTCEndToEndInProcess's
-	// dcFramesObserved counter, just with the raw bytes retained.
-	realSink := handler.webrtcInputSink(mgr, mgr.OperatorSessionID(), al.GetConfig())
-	sink := webrtc.InputSink(func(viewerID string, raw []byte) {
-		realSink(viewerID, raw)
+	// Retain payloads alongside the real contextual sink. This measures
+	// transport delivery, not page dispatch success or decoded media.
+	realSink := newWebRTCContextInputSink(al.GetConfig().Gateway.ValidateInbound)
+	sink := webrtc.ContextInputSink(func(source context.Context, viewerID string, raw []byte) {
+		realSink(source, viewerID, raw)
 		if dcRecorder != nil {
 			dcRecorder(viewerID, raw)
 		}
 	})
 
-	relay := webrtc.NewSession(webrtc.Config{StunServer: ""}, sink, e2eSafeLogf(t.Name()))
+	relay := webrtc.NewSessionWithContextInput(webrtc.Config{StunServer: ""}, sink, e2eSafeLogf(t.Name()))
 
-	cs, err := browser.NewCaptureSessionWithDeps(mgr, defaultAgent.ID, relay, fakeStarter, e2eSafeLogf(t.Name()))
+	cs, err := browser.NewCaptureSessionWithDeps(nil, defaultAgent.ID, relay, fakeStarter, e2eSafeLogf(t.Name()))
+	require.NoError(t, err)
+	_, err = cs.BeginFrameTransition("verified-target", 800, 600, 1)
 	require.NoError(t, err)
 	t.Cleanup(cs.Stop)
-	cs.SetOnStopped(func() { handler.captures.removeIfCurrent(defaultAgent.ID, cs) })
+	cs.SetOnStopped(func() { handler.captures.removeIfCurrent(mgr.BrowsingKey().String(), cs) })
 
-	_, err = mgr.EnsureCaptureSession(func() (*browser.CaptureSession, error) { return cs, nil })
+	_, err = mgr.EnsureCaptureSessionForPanel(mgr.PanelTabSetID("qa-input-session"), func() (*browser.CaptureSession, error) { return cs, nil })
 	require.NoError(t, err)
-	handler.captures.set(defaultAgent.ID, cs)
+	handler.captures.set(mgr.BrowsingKey().String(), cs)
 
 	viewerConn := dialBrowserTestWS(t, srv)
 	t.Cleanup(func() { _ = viewerConn.Close() })
 	writeBrowserAuthFrame(t, viewerConn, "dev-token")
+	require.NoError(t, viewerConn.WriteJSON(generated.BrowserAttachFrame{Type: "browser_attach", AgentId: defaultAgent.ID, SessionId: "qa-input-session"}))
+	require.Equal(t, "attached", readBrowserStatusFrame(t, viewerConn, e2eWait).State)
+	require.NoError(t, mgr.Live().RefreshCaptureFrameContext(context.Background(), mgr.PanelTabSetID("qa-input-session"), cs))
 
 	viewer := newE2EFakeViewer(t)
 	t.Cleanup(func() { _ = viewer.pc.Close() })
 
 	offerV := e2eNonTrickleOffer(t, viewer.pc)
+	offerID := 7
 	offerFrame := generated.BrowserWebRTCOfferFrame{
+		OfferId:   &offerID,
 		Type:      string(generated.WsFrameTypeBrowserWebrtcOffer),
 		AgentId:   defaultAgent.ID,
 		Sdp:       offerV,
@@ -192,28 +196,12 @@ func newQAInputHarness(t *testing.T, dcRecorder func(viewerID string, raw []byte
 	require.NoError(t, err)
 	require.NoError(t, viewerConn.WriteMessage(websocket.TextMessage, offerData))
 
-	viewerConn.SetReadDeadline(time.Now().Add(e2eWait))
-	_, firstData, err := viewerConn.ReadMessage()
-	require.NoError(t, err, "viewer: read first response frame")
-	var firstType wsTypeOnly
-	require.NoError(t, json.Unmarshal(firstData, &firstType))
-	if firstType.Type == string(generated.WsFrameTypeBrowserWebrtcState) {
-		var early webrtcStateFrameDecoder
-		require.NoError(t, json.Unmarshal(firstData, &early))
-		t.Fatalf(
-			"handleWebRTCOffer failed before answering (available=%v reason=%q) — fake encoder start error, see logs",
-			early.Available,
-			early.Reason,
-		)
-	}
-	require.Equal(t, string(generated.WsFrameTypeBrowserWebrtcAnswer), firstType.Type)
+	firstData := readE2EOfferResponse(t, viewerConn, string(generated.WsFrameTypeBrowserWebrtcAnswer))
 	var answerFrame generated.BrowserWebRTCAnswerFrame
 	require.NoError(t, json.Unmarshal(firstData, &answerFrame))
 	require.NotEmpty(t, answerFrame.Sdp)
 
-	viewerConn.SetReadDeadline(time.Now().Add(e2eWait))
-	_, stateData, err := viewerConn.ReadMessage()
-	require.NoError(t, err, "viewer: read browser_webrtc_state")
+	stateData := readE2EOfferResponse(t, viewerConn, string(generated.WsFrameTypeBrowserWebrtcState))
 	var stateFrame webrtcStateFrameDecoder
 	require.NoError(t, json.Unmarshal(stateData, &stateFrame))
 	require.Equal(t, string(generated.WsFrameTypeBrowserWebrtcState), stateFrame.Type)
@@ -235,9 +223,9 @@ func newQAInputHarness(t *testing.T, dcRecorder func(viewerID string, raw []byte
 
 // testInputDispatchBudget bounds the elapsed time between a viewer sending a
 // browser_input frame on the "input" data channel and that EXACT frame
-// reaching the production webrtcInputSink (real DC transport ->
+// reaching the production contextual input sink (real DC transport ->
 // inputQueueCapacity queue -> single worker -> JSON parse ->
-// browserInputFrameToLiveInput -> mgr.Live().Input dispatch).
+// browserInputFrameToLiveInput -> mgr.Live().InputContext dispatch).
 //
 // Evidence for the value: ADR-047's Q4 spike measured REAL CDP round trips
 // (browser -> gateway -> real Chrome DevTools Protocol -> back) under a 30s /
@@ -245,7 +233,7 @@ func newQAInputHarness(t *testing.T, dcRecorder func(viewerID string, raw []byte
 // (docs/internal/architecture/ADR-047-live-browser-webrtc.md line 54). This
 // test's path does NOT include a real CDP call at all — there is no
 // attached live view / no real Chrome tab in this harness, so
-// mgr.Live().Input returns a benign "not attached" error almost immediately
+// mgr.Live().InputContext returns a benign "not attached" error almost immediately
 // (see browser.IsBenignLiveInputError) — meaning this test measures a
 // STRICT SUBSET of the real production path (DC transport + queue/worker
 // handoff + JSON decode + conversion, minus the CDP call itself), which
@@ -267,7 +255,7 @@ const testInputDispatchBudget = 300 * time.Millisecond
 // it only asserts dcFramesObserved > 0 (SOME frame arrived), never that the
 // frame RECEIVED is the frame SENT, and never measures how long the round
 // trip took. This test asserts both, over the SAME real
-// DC -> queue -> worker -> webrtcInputSink production path, and sends a
+// DC -> queue -> worker -> contextual input sink production path, and sends a
 // SECOND, differently-valued frame to prove the sink is not echoing a
 // hardcoded/constant payload (a differentiation check — two different
 // inputs must produce two differently-shaped observations).
@@ -288,7 +276,7 @@ func TestWebRTCInputRoundTrip_LatencyAndPayloadIntegrity(t *testing.T) {
 		case f := <-recvCh:
 			return f
 		case <-time.After(timeout):
-			t.Fatal("input frame never reached webrtcInputSink")
+			t.Fatal("input frame never reached contextual input sink")
 			return observedFrame{}
 		}
 	}

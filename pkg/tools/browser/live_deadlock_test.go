@@ -87,7 +87,7 @@ func TestLiveView_RebindWatch_NoFalseDeathBroadcast(t *testing.T) {
 	newTabCtx, newCancel := chromedp.NewContext(context.Background())
 	defer newCancel()
 
-	lv.rebindWatch(newTabCtx)
+	lv.rebindWatch(newTabCtx, true)
 
 	// Give the REAL background watcher goroutine (started by attach() for
 	// the old epoch) every opportunity to misfire before asserting it
@@ -142,6 +142,8 @@ func TestLiveView_RebindWatch_NoFalseDeathBroadcast(t *testing.T) {
 // manager.go), which is the load-bearing trigger for this bug.
 func TestLiveView_CloseActiveTab_NoFalseDeathAndRebindsToSurvivor(t *testing.T) {
 	m := newTestManagerWithFakeTabs(t)
+	// This fixture opens fake tabs; host memory is outside its routing contract.
+	m.memoryPressureFn = func(int) (bool, bool) { return false, true }
 	reg := newLiveViewRegistry(m)
 
 	_, err := m.Session(testSessionID) // tab 0

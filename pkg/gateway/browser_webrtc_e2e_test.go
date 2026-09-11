@@ -179,7 +179,7 @@ type e2eFakeEncoder struct {
 }
 
 // startE2EFakeEncoder dials ingestWSURL, performs
-// hello → offer → answer exactly as encoder.js does, and returns a ready
+// hello → confirmed capture command → qualified offer → answer, and returns a ready
 // e2eFakeEncoder with its PeerConnection's remote description already set.
 // Call ONLY from a non-test goroutine (see file doc comment) — every failure
 // is a returned error, never a t.Fatal/require call.
@@ -217,6 +217,22 @@ func startE2EFakeEncoder(ingestWSURL, tokenHex string) (enc *e2eFakeEncoder, err
 		return nil, fmt.Errorf("write hello: %w", writeErr)
 	}
 
+	conn.SetReadDeadline(time.Now().Add(e2eWait))
+	_, commandData, readErr := conn.ReadMessage()
+	if readErr != nil {
+		return nil, fmt.Errorf("read initial capture command: %w", readErr)
+	}
+	var command generated.BrowserCaptureControlFrame
+	if err := json.Unmarshal(commandData, &command); err != nil {
+		return nil, fmt.Errorf("unmarshal initial capture command: %w", err)
+	}
+	if command.Type != string(generated.WsFrameTypeBrowserCaptureControl) || command.Action != "recapture" ||
+		command.CaptureGeneration == nil || *command.CaptureGeneration <= 0 || *command.CaptureGeneration > 9007199254740991 ||
+		command.TargetId == nil || *command.TargetId == "" || command.ExpectedWidth == nil || *command.ExpectedWidth <= 0 ||
+		command.ExpectedHeight == nil || *command.ExpectedHeight <= 0 || command.CaptureScale == nil || *command.CaptureScale <= 0 {
+		return nil, fmt.Errorf("initial capture command lacks confirmed identity or geometry: %+v", command)
+	}
+
 	pc, pcErr := pion.NewPeerConnection(pion.Configuration{})
 	if pcErr != nil {
 		return nil, fmt.Errorf("new peer connection: %w", pcErr)
@@ -252,9 +268,13 @@ func startE2EFakeEncoder(ingestWSURL, tokenHex string) (enc *e2eFakeEncoder, err
 		return nil, fmt.Errorf("encoder-side offer: %w", offerErr)
 	}
 
+	offerID := 1
 	offerFrame := generated.BrowserCaptureOfferFrame{
-		Type: string(generated.WsFrameTypeBrowserCaptureOffer),
-		Sdp:  offerSDP,
+		Type:              string(generated.WsFrameTypeBrowserCaptureOffer),
+		Sdp:               offerSDP,
+		CaptureGeneration: command.CaptureGeneration,
+		TargetId:          command.TargetId,
+		OfferId:           &offerID,
 	}
 	offerData, jsonErr := json.Marshal(offerFrame)
 	if jsonErr != nil {
@@ -275,6 +295,12 @@ func startE2EFakeEncoder(ingestWSURL, tokenHex string) (enc *e2eFakeEncoder, err
 	}
 	if answerFrame.Type != string(generated.WsFrameTypeBrowserCaptureAnswer) || answerFrame.Sdp == "" {
 		return nil, fmt.Errorf("unexpected capture-ingest reply: %+v", answerFrame)
+	}
+
+	if answerFrame.CaptureGeneration == nil || *answerFrame.CaptureGeneration != *command.CaptureGeneration ||
+		answerFrame.TargetId == nil || *answerFrame.TargetId != *command.TargetId ||
+		answerFrame.OfferId == nil || *answerFrame.OfferId != offerID {
+		return nil, fmt.Errorf("capture answer does not match the offered identity: %+v", answerFrame)
 	}
 
 	if setErr := pc.SetRemoteDescription(
@@ -422,7 +448,7 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	port := tcpAddr.Port
 
 	tmpDir := t.TempDir()
-	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
+	handler, al := newMeasuredBrowserWSTestHandler(t, func(cfg *config.Config) {
 		cfg.Gateway.Port = port
 		cfg.Tools.Browser.WebRTCEnabled = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
@@ -502,52 +528,49 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 		},
 	)
 
-	// dcFramesObserved counts InputSink invocations that made it all the way
-	// through the REAL production webrtcInputSink(mgr) — i.e. proves
-	// assertion (c): the DC message was unmarshaled as a BrowserInputFrame,
-	// converted via browserInputFrameToLiveInput, and dispatched into
-	// mgr.Live().Input(). This wraps (never replaces) the exact function
-	// ensureCaptureSession wires up in production — no production code was
-	// changed to make this observable.
+	// This counter proves DC transport reaches the real contextual sink.
+	// It does not establish successful page input or decoded video/audio.
 	var dcFramesObserved atomic.Int32
-	realSink := handler.webrtcInputSink(mgr, mgr.OperatorSessionID(), al.GetConfig())
-	sink := webrtc.InputSink(func(viewerID string, raw []byte) {
-		realSink(viewerID, raw)
+	realSink := newWebRTCContextInputSink(al.GetConfig().Gateway.ValidateInbound)
+	sink := webrtc.ContextInputSink(func(source context.Context, viewerID string, raw []byte) {
+		realSink(source, viewerID, raw)
 		dcFramesObserved.Add(1)
 	})
 
-	relay := webrtc.NewSession(webrtc.Config{StunServer: ""}, sink, e2eSafeLogf(t.Name()))
+	relay := webrtc.NewSessionWithContextInput(webrtc.Config{StunServer: ""}, sink, e2eSafeLogf(t.Name()))
 
-	cs, err := browser.NewCaptureSessionWithDeps(mgr, defaultAgent.ID, relay, fakeStarter, e2eSafeLogf(t.Name()))
+	cs, err := browser.NewCaptureSessionWithDeps(nil, defaultAgent.ID, relay, fakeStarter, e2eSafeLogf(t.Name()))
+	require.NoError(t, err)
+	_, err = cs.BeginFrameTransition("verified-target", 800, 600, 1)
 	require.NoError(t, err)
 	t.Cleanup(cs.Stop) // idempotent safety net; the test also calls Stop explicitly below
 
 	var onStoppedCalls atomic.Int32
 	cs.SetOnStopped(func() {
-		handler.captures.removeIfCurrent(defaultAgent.ID, cs)
+		handler.captures.removeIfCurrent(mgr.BrowsingKey().String(), cs)
 		onStoppedCalls.Add(1)
 	})
 
-	// Register cs exactly where ensureCaptureSession (browser_webrtc.go)
-	// would: mgr.capture (so handleWebRTCOffer's own EnsureCaptureSession
-	// call — unmodified production code — reuses THIS session instead of
-	// constructing a production one with defaultEncoderStarter) and the
-	// handler's token->session registry (so the capture-ingest handler's
-	// hello can resolve this session by token, exactly as in production).
-	_, err = mgr.EnsureCaptureSession(func() (*browser.CaptureSession, error) { return cs, nil })
+	// Seed the exact panel capture and workspace registry used by the real offer and ingest routes.
+	_, err = mgr.EnsureCaptureSessionForPanel(mgr.PanelTabSetID("e2e-session"), func() (*browser.CaptureSession, error) { return cs, nil })
 	require.NoError(t, err)
-	handler.captures.set(defaultAgent.ID, cs)
+	handler.captures.set(mgr.BrowsingKey().String(), cs)
 
 	// --- FAKE VIEWER: real WS connection + real recvonly Pion PC + "input" DC ---
 	viewerConn := dialBrowserTestWS(t, srv)
 	t.Cleanup(func() { _ = viewerConn.Close() })
 	writeBrowserAuthFrame(t, viewerConn, "dev-token")
+	require.NoError(t, viewerConn.WriteJSON(generated.BrowserAttachFrame{Type: "browser_attach", AgentId: defaultAgent.ID, SessionId: "e2e-session"}))
+	require.Equal(t, "attached", readBrowserStatusFrame(t, viewerConn, e2eWait).State)
+	require.NoError(t, mgr.Live().RefreshCaptureFrameContext(context.Background(), mgr.PanelTabSetID("e2e-session"), cs))
 
 	viewer := newE2EFakeViewer(t)
 	t.Cleanup(func() { _ = viewer.pc.Close() })
 
 	offerV := e2eNonTrickleOffer(t, viewer.pc)
+	offerID := 7
 	offerFrame := generated.BrowserWebRTCOfferFrame{
+		OfferId:   &offerID,
 		Type:      string(generated.WsFrameTypeBrowserWebrtcOffer),
 		AgentId:   defaultAgent.ID,
 		Sdp:       offerV,
@@ -557,36 +580,14 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, viewerConn.WriteMessage(websocket.TextMessage, offerData))
 
-	// First frame back MUST be browser_webrtc_answer (handleWebRTCOffer sends
-	// the answer, then the state frame, over the same per-connection sendCh
-	// — FIFO, single writer goroutine). If the fake encoder failed to start,
-	// handleWebRTCOffer instead sends ONLY a browser_webrtc_state{available:
-	// false, reason:"error"} — detect and fail loudly with that reason
-	// rather than a confusing unmarshal error.
-	viewerConn.SetReadDeadline(time.Now().Add(e2eWait))
-	_, firstData, err := viewerConn.ReadMessage()
-	require.NoError(t, err, "viewer: read first response frame")
-
-	var firstType wsTypeOnly
-	require.NoError(t, json.Unmarshal(firstData, &firstType))
-	if firstType.Type == string(generated.WsFrameTypeBrowserWebrtcState) {
-		var early webrtcStateFrameDecoder
-		require.NoError(t, json.Unmarshal(firstData, &early))
-		t.Fatalf(
-			"handleWebRTCOffer failed before answering (available=%v reason=%q) — fake encoder start error, see logs",
-			early.Available,
-			early.Reason,
-		)
-	}
-	require.Equal(t, string(generated.WsFrameTypeBrowserWebrtcAnswer), firstType.Type)
+	// Read this offer's qualified answer; attachment availability may interleave.
+	firstData := readE2EOfferResponse(t, viewerConn, string(generated.WsFrameTypeBrowserWebrtcAnswer))
 	var answerFrame generated.BrowserWebRTCAnswerFrame
 	require.NoError(t, json.Unmarshal(firstData, &answerFrame))
 	require.NotEmpty(t, answerFrame.Sdp)
 
 	// (b) browser_webrtc_state{available:true, active:true} follows.
-	viewerConn.SetReadDeadline(time.Now().Add(e2eWait))
-	_, stateData, err := viewerConn.ReadMessage()
-	require.NoError(t, err, "viewer: read browser_webrtc_state")
+	stateData := readE2EOfferResponse(t, viewerConn, string(generated.WsFrameTypeBrowserWebrtcState))
 	var stateFrame webrtcStateFrameDecoder
 	require.NoError(t, json.Unmarshal(stateData, &stateFrame))
 	require.Equal(t, string(generated.WsFrameTypeBrowserWebrtcState), stateFrame.Type)
@@ -672,11 +673,11 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, viewer.inputDC.SendText(string(inputData)))
 
-	e2eWaitCond(t, e2eWait, "DC input frame to reach the production InputSink (webrtcInputSink)", func() bool {
+	e2eWaitCond(t, e2eWait, "DC input frame to reach the production InputSink (contextual input sink)", func() bool {
 		return dcFramesObserved.Load() > 0
 	})
 	t.Logf(
-		"OBSERVED %d data-channel input frame(s) reach webrtcInputSink -> browserInputFrameToLiveInput -> mgr.Live().Input",
+		"OBSERVED %d data-channel input frame(s) reach contextual input sink -> browserInputFrameToLiveInput -> mgr.Live().InputContext",
 		dcFramesObserved.Load(),
 	)
 
@@ -706,5 +707,38 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	encMu.Unlock()
 	if enc != nil {
 		enc.close()
+	}
+}
+
+// readE2EOfferResponse permits attachment health and availability to interleave,
+// while preserving explicit failure detection and the request's positive ID.
+func readE2EOfferResponse(t *testing.T, conn *websocket.Conn, want string) []byte {
+	t.Helper()
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(e2eWait)))
+	for {
+		_, data, err := conn.ReadMessage()
+		require.NoError(t, err)
+		var frame struct {
+			Type      string `json:"type"`
+			OfferID   int    `json:"offer_id"`
+			Available bool   `json:"available"`
+			Active    bool   `json:"active"`
+			Reason    string `json:"reason"`
+		}
+		require.NoError(t, json.Unmarshal(data, &frame))
+		switch frame.Type {
+		case "browser_webrtc_answer":
+			if frame.Type == want && frame.OfferID == 7 {
+				return data
+			}
+		case "browser_webrtc_state":
+			if frame.Reason != "" {
+				t.Fatalf("offer failed: %s", frame.Reason)
+			}
+			// State frames carry no offer ID. Initial attach availability is inactive.
+			if frame.Type == want && frame.Available && frame.Active {
+				return data
+			}
+		}
 	}
 }

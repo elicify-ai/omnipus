@@ -170,17 +170,17 @@ func TestTrim_SkipsLiveProfile(t *testing.T) {
 
 		// Exactly the state Acquire installs before it calls p.launch: the
 		// single-flight entry, and nothing else. No instance, no lock.
-		done := make(chan struct{})
+		flight := newStartupCohort()
 		f.pool.mu.Lock()
-		f.pool.launching[key.String()] = done
+		f.pool.launching[key.String()] = flight
 		f.pool.mu.Unlock()
-		t.Cleanup(func() { f.pool.finishLaunch(key.String(), done) })
+		t.Cleanup(func() { f.pool.finishLaunch(key.String(), flight, nil) })
 
 		f.pool.mu.Lock()
 		_, live := f.pool.instances[key.String()]
 		f.pool.mu.Unlock()
 		require.False(t, live, "the fixture must reproduce the real window: launching, but not yet live")
-		probe, acquired, lockErr := acquireLaunchLock(filepath.Join(dir, launchLockFileName))
+		probe, acquired, lockErr := acquireLaunchLock(profileLaunchLockPath(dir))
 		require.NoError(t, lockErr)
 		require.True(t, acquired, "the fixture must reproduce the real window: the launch lock is not held yet")
 		releaseLaunchLock(probe)
@@ -205,7 +205,7 @@ func TestTrim_SkipsLiveProfile(t *testing.T) {
 		// lock — the second-gateway case, which is exactly where a separate
 		// "is it running?" check would have disagreed with the lock and
 		// trimmed a live profile.
-		held, acquired, lockErr := acquireLaunchLock(filepath.Join(dir, launchLockFileName))
+		held, acquired, lockErr := acquireLaunchLock(profileLaunchLockPath(dir))
 		require.NoError(t, lockErr)
 		require.True(t, acquired)
 		t.Cleanup(func() { releaseLaunchLock(held) })

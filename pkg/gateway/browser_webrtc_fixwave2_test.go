@@ -36,7 +36,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser/webrtc"
 )
@@ -73,7 +72,7 @@ func TestHandleWebRTCOffer_CaptureFenceMu_SerializesFenceCheckAndEnsure(t *testi
 	// exec_resolver.go's execPathCaches.resolve doc comment.
 	t.Setenv("OMNIPUS_BROWSER_FORCE_MANAGED", "1")
 	tmpDir := t.TempDir()
-	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
+	handler, al := newMeasuredBrowserWSTestHandler(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
 	})
@@ -108,8 +107,9 @@ func TestHandleWebRTCOffer_CaptureFenceMu_SerializesFenceCheckAndEnsure(t *testi
 	require.NoError(t, err)
 
 	done := make(chan struct{})
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
 	go func() {
-		handler.handleWebRTCOffer(wc, &state, "viewer-fence-mutex", "user-1", data, al.GetConfig(), 0)
+		handler.handleWebRTCOffer(wc, &state, "viewer-fence-mutex", "user-1", data, al.GetConfig(), offerEpoch)
 		close(done)
 	}()
 
@@ -162,7 +162,7 @@ func TestHandleWebRTCOffer_OtherAgentStartingCapture_SkippedNotSuperseded(t *tes
 	// identical Setenv for why.
 	t.Setenv("OMNIPUS_BROWSER_FORCE_MANAGED", "1")
 	tmpDir := t.TempDir()
-	handler, al, auditDir := newFixWaveHandlerWithAudit(t, func(cfg *config.Config) {
+	handler, al, auditDir := newMeasuredFixWaveHandlerWithAudit(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCEnabled = true
 		cfg.Tools.Browser.ProfileDir = filepath.Join(tmpDir, "browser-profile")
 	})
@@ -223,7 +223,9 @@ func TestHandleWebRTCOffer_OtherAgentStartingCapture_SkippedNotSuperseded(t *tes
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-skip-starting", "user-1", data, al.GetConfig(), 0)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
+
+	handler.handleWebRTCOffer(wc, &state, "viewer-skip-starting", "user-1", data, al.GetConfig(), offerEpoch)
 
 	// otherCS must NOT have been superseded/stopped.
 	select {
@@ -264,71 +266,8 @@ func TestHandleWebRTCOffer_OtherAgentStartingCapture_SkippedNotSuperseded(t *tes
 // with a live ping beacon).
 // ---------------------------------------------------------------------------
 
-// TestWatchEncoderLiveness_StopsSession_WhenVideoPacketsFrozenDespiteFreshPings
-// proves fix 4: the watchdog now also stops a session whose Stats().
-// VideoPackets never advances across consecutive ticks while a viewer is
-// attached — even when the ping beacon stays perfectly fresh throughout
-// (encoderLivenessStaleAfter is set to 24h so THAT signal alone could never
-// fire in this test window), reproducing the "dead-capture encoder with a
-// live ping beacon defeats the old watchdog" finding.
-func TestWatchEncoderLiveness_StopsSession_WhenVideoPacketsFrozenDespiteFreshPings(t *testing.T) {
-	origInterval, origStale := encoderLivenessCheckInterval, encoderLivenessStaleAfter
-	encoderLivenessCheckInterval = 5 * time.Millisecond
-	encoderLivenessStaleAfter = 24 * time.Hour // isolates the RTP-progress signal
-	t.Cleanup(func() {
-		encoderLivenessCheckInterval = origInterval
-		encoderLivenessStaleAfter = origStale
-	})
-
-	handler, _ := newBrowserWSTestHandler(t, nil)
-	t.Cleanup(handler.Wait)
-
-	relay := &fakeRelay{}
-	relay.setStats(webrtc.Stats{HasVideo: true, VideoPackets: 100}) // frozen for the whole test
-
-	var calls int32
-	cs, err := browser.NewCaptureSessionWithDeps(
-		nil,
-		"watchdog-stall-agent",
-		relay,
-		fakeEncoderStarter(&calls, nil),
-		nil,
-	)
-	require.NoError(t, err)
-	_, err = cs.Start(context.Background(), "ws://127.0.0.1:1/api/v1/browser/capture-ingest")
-	require.NoError(t, err)
-	cs.AddViewer("viewer-stall") // ViewerCount() > 0 is required to engage the stall check
-
-	var onStoppedCalls int32
-	cs.SetOnStopped(func() { atomic.AddInt32(&onStoppedCalls, 1) })
-
-	// Keep the ping beacon alive throughout, faster than the check interval
-	// — proves the stop is driven by the RTP-stall signal, not staleAfter.
-	pingStop := make(chan struct{})
-	t.Cleanup(func() { close(pingStop) })
-	go func() {
-		ticker := time.NewTicker(2 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-pingStop:
-				return
-			case <-ticker.C:
-				cs.RecordPing()
-			}
-		}
-	}()
-
-	go handler.watchEncoderLiveness(cs, "watchdog-stall-agent", encoderLivenessCheckInterval, encoderLivenessStaleAfter)
-
-	require.Eventually(
-		t,
-		func() bool { return atomic.LoadInt32(&onStoppedCalls) == 1 },
-		2*time.Second,
-		5*time.Millisecond,
-		"watchdog must stop a session whose VideoPackets never advances across consecutive ticks with an attached viewer, despite a fresh ping beacon",
-	)
-}
+// Silence-only failure detection is superseded by the FR-012 healthy-idle
+// and FR-013 failed-stage recovery tests in browser_capture_health_test.go.
 
 // TestWatchEncoderLiveness_DoesNotStop_WhenVideoPacketsAdvancing is the
 // negative control for fix 4: a relay whose VideoPackets keeps climbing must
@@ -508,66 +447,25 @@ func TestCaptureIngestConn_SendJSON_WriteDeadlineBoundsWedgedWrite(t *testing.T)
 // Fix 7: DC input schema-validation parity with the WS input path.
 // ---------------------------------------------------------------------------
 
-// TestWebrtcInputSink_ValidateInbound_RejectsOversizedTextField proves fix 7:
-// with cfg.Gateway.ValidateInbound enabled, webrtcInputSink now
-// schema-validates every inbound data-channel frame BEFORE dispatch — an
-// oversized "text" field (contracts/components/schemas/BrowserInputFrame.yaml
-// caps it at 8192) is dropped silently (no browser_status frame at all,
-// proven by the absence of ANY frame on the viewer's connection), never
-// reaching mgr.Live().Input(). The control case (a valid-size frame through
-// the SAME sink) DOES reach dispatch — proven by the "no active live view"
-// non-benign error surfacing as a browser_status frame, exactly like
-// TestWebrtcInputSink_NonBenignError_SurfacedToViewer — showing validation
-// isn't just blackholing everything.
+// An oversized text field is rejected before dispatch. The same navigation with a valid text length reaches the real URL refusal and publishes its error.
 func TestWebrtcInputSink_ValidateInbound_RejectsOversizedTextField(t *testing.T) {
-	browserCfg, err := browser.DefaultConfig()
+	f := newHandlerContextFixture(t, false)
+	source, _ := admittedInputRoute(t, f, "viewer-oversized-text")
+	sink := newWebRTCContextInputSink(true)
+	oversized, err := json.Marshal(generated.BrowserInputFrame{Type: "browser_input", Kind: "navigate", Url: strPtr("javascript:alert(1)"), Text: strPtr(strings.Repeat("a", 8193))})
 	require.NoError(t, err)
-	browserCfg.ProfileDir = t.TempDir()
-	mgr, err := browser.NewBrowserManager(browserCfg, security.NewSSRFChecker(nil))
-	require.NoError(t, err)
-
-	handler, al := newBrowserWSTestHandler(t, func(cfg *config.Config) {
-		cfg.Gateway.ValidateInbound = true
-	})
-	t.Cleanup(handler.Wait)
-
-	wc := newTestBrowserWSConn()
-	handler.registerWebRTCViewerConn("viewer-oversized-text", wc, "sess-oversized-text")
-	t.Cleanup(func() { handler.unregisterWebRTCViewerConn("viewer-oversized-text") })
-
-	sink := handler.webrtcInputSink(mgr, mgr.OperatorSessionID(), al.GetConfig())
-
-	oversized := generated.BrowserInputFrame{
-		Type: "browser_input",
-		Kind: "text",
-		Text: strPtr(strings.Repeat("a", 8193)), // schema maxLength is 8192
-	}
-	rawOversized, err := json.Marshal(oversized)
-	require.NoError(t, err)
-
-	sink("viewer-oversized-text", rawOversized)
-
+	sink(source, "viewer-oversized-text", oversized)
 	select {
-	case frame := <-wc.sendCh:
-		t.Fatalf("an oversized text field must be dropped at schema validation, not dispatched (got frame: %s)", frame)
+	case queued := <-f.conn.sendCh:
+		t.Fatalf("oversized text reached dispatch: %s", queued.data)
 	case <-time.After(200 * time.Millisecond):
 	}
-
-	// Control: a valid-size frame through the SAME sink must still reach
-	// dispatch.
-	valid := generated.BrowserInputFrame{Type: "browser_input", Kind: "text", Text: strPtr("ok")}
-	rawValid, err := json.Marshal(valid)
+	valid, err := json.Marshal(generated.BrowserInputFrame{Type: "browser_input", Kind: "navigate", Url: strPtr("javascript:alert(1)"), Text: strPtr("ok")})
 	require.NoError(t, err)
-	sink("viewer-oversized-text", rawValid)
-
-	frame := drainOneFrame(t, wc)
-	var f struct {
-		Type    string `json:"type"`
-		State   string `json:"state"`
-		Message string `json:"message"`
-	}
-	require.NoError(t, json.Unmarshal(frame, &f))
-	require.Equal(t, "browser_status", f.Type)
-	require.Equal(t, "error", f.State)
-	require.Contains(t, f.Message, "browser input failed")
+	sink(source, "viewer-oversized-text", valid)
+	var status generated.BrowserStatusFrame
+	require.NoError(t, json.Unmarshal(drainOneFrame(t, f.conn), &status))
+	require.Equal(t, "error", status.State)
+	require.NotNil(t, status.Message)
+	require.Contains(t, *status.Message, "browser input failed")
 }

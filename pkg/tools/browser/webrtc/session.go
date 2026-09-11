@@ -1,6 +1,7 @@
 package webrtc
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -42,7 +43,7 @@ var Available = true
 // from whichever upstream ingest connection is currently feeding it, and (2)
 // this package additionally rewrites each packet's SEQUENCE NUMBER by a
 // constant per-connection offset anchored on a session-lifetime high-water
-// mark per kind (videoLastOutSeq/audioLastOutSeq below) --
+// mark per kind (mediaForwarder below) --
 // without that second rewrite, a fresh ingest connection's independently-
 // randomized packetizer sequence numbers cause every already-attached
 // viewer's SRTP receive window to silently discard the "replayed"/
@@ -65,17 +66,35 @@ type Session struct {
 	// apiViewer builds the VIEWER leg only; s.api builds the loopback ingest
 	// leg. See NewSession for why they must not share a SettingEngine.
 	// Never nil after NewSession (it aliases s.api in the degraded paths).
-	apiViewer *webrtc.API
-	sink      InputSink
-	logfn     func(string, ...any)
+	apiViewer   *webrtc.API
+	contextSink ContextInputSink
+	sink        InputSink
+	logfn       func(string, ...any)
 
 	mu     sync.Mutex
 	closed bool
+	// Binding admission and peer installation share mu. A binding token is
+	// independent of the server display generation and socket epoch.
+	ingestBindingToken          uint64
+	ingestBindingCtx            context.Context
+	ingestBindingCancel         context.CancelFunc
+	ingestOfferID               uint64
+	ingestOfferCancel           context.CancelFunc
+	ingestInstalledBindingToken uint64
+	ingestInstalledOfferID      uint64
+	ingestInstalledGeneration   uint64
+	ingestInstalledTargetID     string
+	// Installed media outlives successful offer negotiation. Its cancellation
+	// ends obsolete OnTrack admission waits without waiting for writer IO.
+	ingestMediaCtx    context.Context
+	ingestMediaCancel context.CancelFunc
 	// onIngestLost is invoked (in its own goroutine, no lock held) when the
 	// installed ingest connection dies — see the OnConnectionStateChange
 	// handler in ingest.go. The owner uses it to ask the encoder for a fresh
 	// capture; nil is a valid no-op.
-	onIngestLost func()
+	onIngestLostForOffer func(uint64, uint64, uint64, string)
+	onIngestLost         func()
+	onVideoBoundary      func(uint64, string, uint32)
 
 	// onBitrateTarget is invoked (no lock held) when the viewer leg's own RTCP
 	// receiver reports move the congestion target. ADR-069 Finding 2: without
@@ -143,28 +162,29 @@ type Session struct {
 
 	viewersMu sync.Mutex
 	viewers   map[string]*viewerConn
+	// Latest request per original viewer attachment; guarded by viewersMu.
+	viewerRequests map[string]*viewerRequestAdmission
+	// Native preparation owns its own admission mutex.
+	viewerPreparations viewerPreparationPool
+	ingestPreparations ingestPreparationPool
 
-	videoPktCount atomic.Int64
-	audioPktCount atomic.Int64
-	pliBursting   atomic.Bool
+	videoPktCount          atomic.Int64
+	audioPktCount          atomic.Int64
+	inputShedPositional    atomic.Int64
+	inputDroppedPositional atomic.Int64
+	inputDroppedDiscrete   atomic.Int64
+	pliBursting            atomic.Bool
 	// pliDeferred records that a keyframe request was asked for while the
 	// ingest connection was not yet able to carry one (see sendPLI's
 	// not-connected branch). attachIngestTrack redeems it via flushDeferredPLI
 	// the moment a video track arrives on a live connection.
 	pliDeferred atomic.Bool
 
-	// videoLastOutSeq/audioLastOutSeq are the session-lifetime OUTGOING
-	// sequence-number high-water marks (RFC 1982 16-bit serial space, stored
-	// widened) for the two shared local tracks. attachIngestTrack anchors
-	// each new ingest connection's constant rewrite offset on them, and
-	// advances them only forward as packets are forwarded. See the long
-	// comment on attachIngestTrack in ingest.go for why a rewrite -- not
-	// just the SSRC/PayloadType rewriting Pion already does per viewer
-	// binding -- is required for ingest replacement to work at all, and the
-	// forward-loop comment there for why it must be a constant offset, never
-	// read-order renumbering (2026-08-13 corruption incident).
-	videoLastOutSeq atomic.Uint32
-	audioLastOutSeq atomic.Uint32
+	// Each media kind has one generation-aware RTP/RTCP write owner.
+	videoGeneration uint64
+	videoTargetID   string
+	videoForward    mediaForwarder
+	audioForward    mediaForwarder
 
 	connSeq atomic.Int64
 
@@ -188,26 +208,16 @@ type Session struct {
 // data channel (nil until the viewer opens it, which happens asynchronously
 // after the answer is sent -- SendToViewer must tolerate that window).
 //
-// senders backs an explicit, code-owned termination path for this viewer's
-// per-connection goroutines -- see removeViewer's doc comment (viewer.go)
-// for the CI incident this closes: this package must not rely SOLELY on
-// Pion's own close cascade (PeerConnection.Close -> RTPTransceiver.Stop ->
-// RTPSender.Stop for drainViewerRTCP; separately PeerConnection.Close ->
-// SCTPTransport.Stop -> sctpAssociation.Abort -> per-stream read error ->
-// DataChannel.OnClose for runInputQueue) to unblock those goroutines'
-// blocking reads promptly -- that cascade is correct on a clean/fast
-// transport but is several hops deep through a third-party library and,
-// under real network conditions (packet loss, a degraded transport), was
-// observed to leave both goroutines blocked well past a 60s bound.
-// removeViewer/CloseViewer (via stopViewerConn) now call Stop() on senders
-// AND dc.Close() directly and synchronously, in addition to (not instead
-// of) the existing pc.Close() teardown -- dc.Close() (unlike relying on the
-// whole SCTP association's abort) tears down JUST this one data channel's
-// underlying stream directly, which is what runInputQueue's dc.OnClose
-// handler (inputdc.go, unchanged) is already waiting on to fire.
+// The persistent input context derives from the original attachment and is
+// canceled before this peer leaves the registry. Its queue wakes directly
+// on cancellation, without waiting for Pion's asynchronous close cascade.
+// Senders and the data channel also close explicitly to unblock transport
+// readers promptly; the caller still closes the whole PeerConnection.
 type viewerConn struct {
-	pc *webrtc.PeerConnection
-	dc *webrtc.DataChannel
+	inputCtx    context.Context
+	inputCancel context.CancelFunc
+	pc          *webrtc.PeerConnection
+	dc          *webrtc.DataChannel
 	// senders holds every RTPSender this viewer's PeerConnection negotiated
 	// (video, and audio if present) -- removeViewer/CloseViewer call
 	// Stop() on each directly so drainViewerRTCP's blocking sender.Read()
@@ -239,8 +249,9 @@ func hostedViewerLeg(cfg Config) bool {
 // NewSession builds a Session backed by a fresh Pion API: an explicit
 // MediaEngine with the default codec set (VP8/H264 + Opus, among others) so
 // Chrome's tabCapture-derived offer negotiates cleanly, and the default
-// Interceptor registry (NACK/RTCP reports -- what makes getStats() on the
-// browser side report framesDecoded/audioLevel etc). sink receives every
+// ingest interceptor registry. The viewer registry retains the other default
+// stages but forwards encoder clocks instead of generating sender reports.
+// sink receives every
 // "input" data-channel message from every viewer; logf receives structured
 // log lines (may be nil, in which case logging is a no-op).
 func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session {
@@ -265,6 +276,14 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 	ir := &interceptor.Registry{}
 	if err := webrtc.RegisterDefaultInterceptors(m, ir); err != nil {
 		s.logf("webrtc: register default interceptors failed: %v (session will reject all offers)", err)
+		s.api = webrtc.NewAPI()
+		s.apiViewer = s.api
+		return s
+	}
+
+	viewerInterceptors := &interceptor.Registry{}
+	if err := registerViewerInterceptors(m, viewerInterceptors); err != nil {
+		s.logf("webrtc: register viewer interceptors failed: %v (session will reject all offers)", err)
 		s.api = webrtc.NewAPI()
 		s.apiViewer = s.api
 		return s
@@ -299,14 +318,12 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 	// adversarial review of ADR-069 before it shipped; both legs run through
 	// buildPeerConnection, which made the blast radius easy to miss.)
 	viewerSE := se
-	if cfg.MediaConn != nil {
-		// One gateway-owned socket, shared by every agent's Session: Pion's
-		// UDP mux demultiplexes concurrent ICE agents on it by ufrag. See
-		// Config.MediaConn for why a per-Session bind would break the
-		// second agent.
-		viewerSE.SetICEUDPMux(webrtc.NewICEUDPMux(nil, cfg.MediaConn))
+	if cfg.MediaUDPMux != nil {
+		// Borrow the gateway's single reader and ufrag routing table. A new
+		// mux here would compete with every live and retired capture reader.
+		viewerSE.SetICEUDPMux(cfg.MediaUDPMux)
 	}
-	if cfg.MediaTCP != nil {
+	if cfg.MediaTCPMux != nil {
 		// ADR-069 tier 2. Default Pion network types omit TCP entirely, so the
 		// mux would be installed and never advertised. Widen to include TCP;
 		// deliberately KEEP both UDP families -- an earlier revision narrowed
@@ -316,7 +333,7 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 		// fly-global-services bind and by ICE-Lite dropping srflx, not by the
 		// network-type list (with a UDP mux, pion's gatherCandidatesLocalUDPMux
 		// ignores networkTypes and just enumerates the mux's addresses).
-		viewerSE.SetICETCPMux(webrtc.NewICETCPMux(nil, cfg.MediaTCP, 8))
+		viewerSE.SetICETCPMux(cfg.MediaTCPMux)
 		viewerSE.SetNetworkTypes([]webrtc.NetworkType{
 			webrtc.NetworkTypeUDP4, webrtc.NetworkTypeUDP6, webrtc.NetworkTypeTCP4,
 		})
@@ -369,11 +386,11 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 	s.api = webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithInterceptorRegistry(ir), webrtc.WithSettingEngine(se))
 	s.apiViewer = webrtc.NewAPI(
 		webrtc.WithMediaEngine(m),
-		webrtc.WithInterceptorRegistry(ir),
+		webrtc.WithInterceptorRegistry(viewerInterceptors),
 		webrtc.WithSettingEngine(viewerSE),
 	)
-	if cfg.MediaConn != nil || cfg.MediaTCP != nil || len(cfg.PublicIPs) > 0 {
-		s.logf("webrtc: viewer leg using fixed media udp=%v tcp=%v public=%v", cfg.MediaConn != nil, cfg.MediaTCP != nil, cfg.PublicIPs)
+	if cfg.MediaUDPMux != nil || cfg.MediaTCPMux != nil || len(cfg.PublicIPs) > 0 {
+		s.logf("webrtc: viewer leg using fixed media udp=%v tcp=%v public=%v", cfg.MediaUDPMux != nil, cfg.MediaTCPMux != nil, cfg.PublicIPs)
 	}
 	return s
 }
@@ -528,20 +545,36 @@ func (s *Session) Stats() Stats {
 	viewers := len(s.viewers)
 	s.viewersMu.Unlock()
 
+	var videoGeneration uint64
+	var videoTargetID string
+	if s.videoTrack != nil && s.videoFeedID != 0 {
+		videoGeneration, videoTargetID = s.videoGeneration, s.videoTargetID
+	}
 	return Stats{
-		Viewers: viewers,
+		VideoGeneration: videoGeneration,
+		VideoTargetID:   videoTargetID,
+		VideoReceipt:    s.videoForward.latestReceipt(),
+		Viewers:         viewers,
 		// Issue #674: liveness, not mere existence. The shared local tracks
 		// are never torn down (see videoFeedID's doc comment), so
 		// `videoTrack != nil` stays true forever after the first ingest — and
 		// this is what the gateway turns into the panel's has_audio and what
 		// an operator reads in a stats dump. Reporting a track that nothing
 		// feeds as present is the same lie waitForTracks used to tell.
-		HasVideo:     s.videoTrack != nil && s.videoFeedID != 0,
-		HasAudio:     s.audioTrack != nil && s.audioFeedID != 0,
-		VideoCodec:   s.videoCodec,
-		AudioCodec:   s.audioCodec,
-		VideoPackets: s.videoPktCount.Load(),
-		AudioPackets: s.audioPktCount.Load(),
+		HasVideo:               s.videoTrack != nil && s.videoFeedID != 0,
+		HasAudio:               s.audioTrack != nil && s.audioFeedID != 0,
+		VideoCodec:             s.videoCodec,
+		AudioCodec:             s.audioCodec,
+		VideoPackets:           s.videoPktCount.Load(),
+		AudioPackets:           s.audioPktCount.Load(),
+		VideoReceivedPackets:   s.videoForward.receivedPackets.Load(),
+		AudioReceivedPackets:   s.audioForward.receivedPackets.Load(),
+		VideoForwardFailures:   s.videoForward.forwardFailures.Load(),
+		AudioForwardFailures:   s.audioForward.forwardFailures.Load(),
+		IngestBindingToken:     s.ingestInstalledBindingToken,
+		InputShedPositional:    s.inputShedPositional.Load(),
+		InputDroppedPositional: s.inputDroppedPositional.Load(),
+		InputDroppedDiscrete:   s.inputDroppedDiscrete.Load(),
 	}
 }
 
@@ -622,9 +655,37 @@ func (s *Session) Close() error {
 	// video feed: waitForTracks is reachable from a viewer offer that raced
 	// this Close, and answering it from a track nothing writes to is the exact
 	// dead-panel failure the feed tokens exist to prevent.
-	s.videoFeedID = 0
-	s.audioFeedID = 0
+	videoFeed, audioFeed := s.videoFeedID, s.audioFeedID
+	s.videoFeedID, s.audioFeedID = 0, 0
+	mediaCancel := s.ingestMediaCancel
+	s.ingestMediaCtx, s.ingestMediaCancel = nil, nil
+	bindingCancel, offerCancel := s.ingestBindingCancel, s.ingestOfferCancel
+	s.ingestBindingCancel, s.ingestOfferCancel = nil, nil
 	s.mu.Unlock()
+	if mediaCancel != nil {
+		mediaCancel()
+	}
+	if offerCancel != nil {
+		offerCancel()
+	}
+	if bindingCancel != nil {
+		bindingCancel()
+	}
+
+	s.viewersMu.Lock()
+	for _, request := range s.viewerRequests {
+		request.cancel(fmt.Errorf("webrtc: session closed"))
+		if request.stopParent != nil {
+			request.stopParent()
+		}
+	}
+	clear(s.viewerRequests)
+	viewers := s.viewers
+	for _, vc := range viewers {
+		vc.cancelInput()
+	}
+	s.viewers = make(map[string]*viewerConn)
+	s.viewersMu.Unlock()
 
 	var errs []error
 	if ingest != nil {
@@ -632,11 +693,6 @@ func (s *Session) Close() error {
 			errs = append(errs, fmt.Errorf("close ingest: %w", err))
 		}
 	}
-
-	s.viewersMu.Lock()
-	viewers := s.viewers
-	s.viewers = make(map[string]*viewerConn)
-	s.viewersMu.Unlock()
 
 	// Fix-wave finding: this is the FOURTH viewer-teardown site in this
 	// package (removeViewer, CloseViewer, and HandleViewerOfferHandle's
@@ -656,6 +712,11 @@ func (s *Session) Close() error {
 		}
 	}
 
+	// Cancel signaling and close transports before joining the writer boundary;
+	// a stalled outgoing write must not prevent the actions that unblock it.
+	s.videoForward.retireIfFeed(videoFeed)
+	s.audioForward.retireIfFeed(audioFeed)
+
 	if len(errs) == 0 {
 		return nil
 	}
@@ -664,4 +725,36 @@ func (s *Session) Close() error {
 		msg += " " + e.Error() + ";"
 	}
 	return fmt.Errorf("%s", msg)
+}
+
+// SetOnVideoBoundary registers the first forwarded video timestamp of each
+// ingest connection. Callbacks run without Session locks held.
+func (s *Session) SetOnVideoBoundary(cb func(uint64, string, uint32)) {
+	s.mu.Lock()
+	s.onVideoBoundary = cb
+	s.mu.Unlock()
+}
+
+// CurrentVideoBoundary returns the current feed's latest display boundary.
+func (s *Session) CurrentVideoBoundary() (uint64, string, uint32, bool) {
+	s.mu.Lock()
+	if s.closed || s.videoGeneration == 0 || s.videoFeedID == 0 {
+		s.mu.Unlock()
+		return 0, "", 0, false
+	}
+	feed, generation, target := s.videoFeedID, s.videoGeneration, s.videoTargetID
+	s.mu.Unlock()
+	// Successful-forward evidence may wait for a writer, but never while
+	// holding the session's control lock. Ingress receipts are not a substitute.
+	_, timestamp, ok := s.videoForward.boundary(feed)
+	if !ok {
+		return 0, "", 0, false
+	}
+	s.mu.Lock()
+	current := !s.closed && s.videoFeedID == feed && s.videoGeneration == generation && s.videoTargetID == target
+	s.mu.Unlock()
+	if !current {
+		return 0, "", 0, false
+	}
+	return generation, target, timestamp, true
 }

@@ -140,7 +140,7 @@ func TestSeed_ContentIntegrity(t *testing.T) {
 	if manifest.Key == "" {
 		t.Error("manifest key is empty")
 	}
-	wantPerms := map[string]bool{"tabCapture": false, "tabs": false}
+	wantPerms := map[string]bool{"tabCapture": false, "tabs": false, "debugger": false}
 	for _, p := range manifest.Permissions {
 		if _, ok := wantPerms[p]; ok {
 			wantPerms[p] = true
@@ -224,9 +224,9 @@ func TestSeed_EncoderJS_ContentGuards(t *testing.T) {
 	// (a2) …and capDims must still be derived from the captured tab's own
 	// viewport. Without this, (a) alone would pass if capDims were pinned to
 	// some constant, which is the same letterbox bug in a new shape.
-	if !strings.Contains(content, "const capDims = budgetedCaptureDims(capW, capH, captureScale);") {
+	if !strings.Contains(content, "const capDims = budgetedCaptureDims(capW, capH, commandScale);") {
 		t.Error(
-			"encoder.js: capDims must be computed as budgetedCaptureDims(capW, capH, captureScale) — the capture " +
+			"encoder.js: capDims must be computed as budgetedCaptureDims(capW, capH, commandScale) — the capture " +
 				"request has to track the tab's real viewport, clamped only by the pixel budget",
 		)
 	}
@@ -270,26 +270,9 @@ func TestSeed_EncoderJS_ContentGuards(t *testing.T) {
 		)
 	}
 
-	// (d) F3 (external review, 2026-08-13): capture_scale must define an
-	// ABSENT field as 1, not leave captureScale sticky at whatever it was
-	// last set to. A shared per-agent CaptureSession can serve a viewer that
-	// drops from DPR 2 to DPR 1 (monitor change, or a second viewer joining
-	// at 1x); the server sends capture_scale only when scale > 1, so
-	// "absent means unchanged" pinned the encoder at 2x forever — 4x the
-	// pixels against a tab now rendering at 1x. Pinned as an exact string:
-	// the assignment must be unconditional (a ternary with an explicit `: 1`
-	// fallback), not an `if (...) { captureScale = ... }` with no else,
-	// which is exactly the sticky shape this guards against reintroducing.
-	if !strings.Contains(
-		content,
-		"captureScale =\n      typeof msg.capture_scale === 'number' && isFinite(msg.capture_scale) ? Math.min(4, Math.max(1, msg.capture_scale)) : 1;",
-	) {
-		t.Error(
-			"encoder.js: capture_scale handling must unconditionally assign captureScale with an explicit `: 1` " +
-				"fallback for an absent/invalid field (F3) — a bare `if (...) { captureScale = ... }` with no else " +
-				"reintroduces the sticky-across-recaptures bug",
-		)
-	}
+	// (d) F3's scale-default guarantee is exercised by the actual module in
+	// TestEncoderCaptureScaleDefaultsPerCommand. Its old exact-string guard
+	// could not verify immutable command snapshots or absent-field behavior.
 
 	// (e) and (f): extract mungeVideoStartBitrate's function body in
 	// isolation (bounded by the next top-level function declaration) so the
@@ -418,14 +401,24 @@ func TestSeed_AtomicNoPartialLeftovers(t *testing.T) {
 // embedded/manifest.json's "version" together, then ADD a new entry here —
 // never edit an existing entry, the history is the point.
 var versionContentHashes = map[string]string{
-	"1.0.1": "5649686afe5871b13e5a31b0275d7aabe98143172f043e93d79c861947f99b38",
-	"1.0.2": "366cea35b3775142c81c0a5d922b1a30db750731d4d277876303075a0b4b2d28",
-	"1.0.3": "58cc11f1bbeac2bfdcf98917fd163aef577873b349630d880560ff46a2f1a0b5",
-	"1.0.4": "b4452db3f20ccb56f733ea645f0d56f8142b6707fa5182df0298bc9f0b144575",
-	"1.0.5": "ee383d255869ec8765da37e1dc2f7ca1971679d03d4868a0f72be578e7f60334",
-	"1.0.6": "27002761ba1ae644d9c86ffa85d7dfed0bb09a33a879a0dfd531ee8d644a31f0",
-	"1.0.7": "3d3421dcd59363f8ce3c0fe6c6463082c16125577fbeed01b5ed499accfd4b56",
-	"1.0.8": "95d494bd8751af4a33a801a85503dff81100e68720d4ac09ec8b68b1148dd3cb",
+	// 1.0.21: retired capture rejections preserve queued replacement commands.
+	"1.0.21": "6ad2a4d331957c962be3689b405dd7f4784d777674b2d4e65b22e0d289a1769b",
+	// 1.0.20: shutdown and adaptation asynchronous lifetime fences.
+	"1.0.20": "13ff401406de60a155f0df70655a3b8344ba7c23e02b41cc8877f596962b869f",
+	// Historical entry moved from the removed, disconnected skip-policy harness.
+	"1.0.17": "a38a7f7ee336657fb970d0f1d5a853c78a9818354e7ff60b76ae755979e84491",
+	// 1.0.19: exact source identity, capture generations and correlated offers.
+	"1.0.19": "debaf0fdad82a09ae5fa8b6d0153d22ca9209be1a837331cf6099524086dacb0",
+	// 1.0.18: hardware-aligned capture, demand-aware adaptation, health, and track replacement.
+	"1.0.18": "d0618b373f7086c7eebbb4a35691b6c03e87bf441ff4c80acbd1db5e775a9337",
+	"1.0.1":  "5649686afe5871b13e5a31b0275d7aabe98143172f043e93d79c861947f99b38",
+	"1.0.2":  "366cea35b3775142c81c0a5d922b1a30db750731d4d277876303075a0b4b2d28",
+	"1.0.3":  "58cc11f1bbeac2bfdcf98917fd163aef577873b349630d880560ff46a2f1a0b5",
+	"1.0.4":  "b4452db3f20ccb56f733ea645f0d56f8142b6707fa5182df0298bc9f0b144575",
+	"1.0.5":  "ee383d255869ec8765da37e1dc2f7ca1971679d03d4868a0f72be578e7f60334",
+	"1.0.6":  "27002761ba1ae644d9c86ffa85d7dfed0bb09a33a879a0dfd531ee8d644a31f0",
+	"1.0.7":  "3d3421dcd59363f8ce3c0fe6c6463082c16125577fbeed01b5ed499accfd4b56",
+	"1.0.8":  "95d494bd8751af4a33a801a85503dff81100e68720d4ac09ec8b68b1148dd3cb",
 	// 1.0.9 — round-2 F2/F7: the quality-adaptation loop no longer outlives
 	// the evidence behind it (ADAPT_EVIDENCE_TTL_MS + adaptCarryOverIndex, so
 	// a viewer never inherits a resolution a viewerless boot warm-up settled
