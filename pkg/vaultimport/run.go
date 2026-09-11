@@ -241,6 +241,36 @@ func sortedInferredKeys(m map[string][]InferredProperty) []string {
 // the files this run produced rather than against whatever the vault already
 // held.
 func Run(vaultRoot string, write bool) (*Report, error) {
+	return RunWithOptions(vaultRoot, Options{Write: write})
+}
+
+// Options configures one import run.
+//
+// It was introduced alongside identifier stamping rather than a third
+// positional bool: `Run(vault, true, lockDir)` reads as nothing at the call
+// site, and the next option after it would read as less. Run is kept as the
+// two-argument form because it is what every existing caller and test uses
+// and its meaning has not changed.
+type Options struct {
+	// Write is false for --dry-run: nothing is written to the vault, and the
+	// report says what a real run would have done.
+	Write bool
+
+	// LockDir is the note-lock directory under $OMNIPUS_HOME, from
+	// knowledge.LockDirFor. It is what gives the identifier allocator and the
+	// note writes CROSS-PROCESS mutual exclusion against a running gateway
+	// editing the same vault.
+	//
+	// Empty is legal and degrades to in-process locking only — correct for a
+	// unit test, and the reason the CLI resolves a real one: the repair
+	// command is pointed at a vault an operator may well have open in a
+	// running Omnipus.
+	LockDir string
+}
+
+// RunWithOptions is Run with every knob exposed.
+func RunWithOptions(vaultRoot string, opts Options) (*Report, error) {
+	write := opts.Write
 	inv, err := ScanVault(vaultRoot)
 	if err != nil {
 		return nil, err
@@ -427,6 +457,17 @@ func Run(vaultRoot string, write bool) (*Report, error) {
 		return nil, fmt.Errorf("vaultimport: reloading schemas: %w", err)
 	}
 
+	// IDENTIFIER STAMPING, HERE AND NOT EARLIER OR LATER.
+	//
+	// After the schema set exists, because an identifier's prefix comes from
+	// its type's `identity:` block and a note is only stamped when its `type:`
+	// resolves to a schema this vault declares. After FR-104b's
+	// InferTypesForUntypedNotes, so a note that just had its `type:` written
+	// is stamped in the same run rather than needing a second one. Before
+	// records.Validate below, so validation sees the `id:` the run just wrote
+	// and the report cannot contradict the files on disk.
+	identityStamps := StampIdentities(inv.Root, notes, schemaSet, opts.LockDir, write)
+
 	schemaIdx := NewSchemaIndex(inferred)
 	slugs := NewSlugRegistry()
 
@@ -525,6 +566,7 @@ func Run(vaultRoot string, write bool) (*Report, error) {
 		AritySplits:      aritySplits,
 		Bases:            baseOutcomes,
 		TypeInference:    typeInference,
+		IdentityStamps:   identityStamps,
 		SchemaReload:     schemaReload,
 		ViewReload:       viewReload,
 		Validation:       vs,

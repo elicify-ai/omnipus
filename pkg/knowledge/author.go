@@ -393,6 +393,11 @@ type CreateNoteResult struct {
 	Version string
 	// Template is the template used, empty when none.
 	Template string
+	// RecordID is the ADR-068 D7 identifier minted for this note, empty when
+	// none was — the note is not a record, or it already carried one. It is
+	// reported rather than left implicit so a caller can show the operator
+	// the identifier their new record was given without re-reading the file.
+	RecordID string
 }
 
 // CreateNote writes a new note into the collection, refusing anything that
@@ -449,6 +454,18 @@ func CreateNote(fsys LinkFS, c *Collection, req CreateNoteRequest) (CreateNoteRe
 		content = ExpandTemplate(raw, TemplateVars{Title: title, Now: req.Now})
 	}
 
+	// A record note acquires its D7 identifier here, without the caller
+	// asking — this is the choke point all three in-process creation doors
+	// (knowledge_edit's create op, knowledge_create_note, and the REST record
+	// create) already funnel through, so no door can add a record with no
+	// `id:`. Inert for an ordinary note; see stampNewRecordIdentity for the
+	// full list of cases it declines, and for why it runs BEFORE the note's
+	// own write lock rather than inside it.
+	content, mintedID, mintErr := stampNewRecordIdentity(req.Lock, c.Root(), content)
+	if mintErr != nil {
+		return CreateNoteResult{}, audit.refuse([]string{rel}, mintErr)
+	}
+
 	// Everything that touches disk runs inside the note's tier-1 lock, for
 	// the same reason an edit does: two creates of one path racing is exactly
 	// the case where O_EXCL alone tells the loser "already exists" while a
@@ -496,6 +513,7 @@ func CreateNote(fsys LinkFS, c *Collection, req CreateNoteRequest) (CreateNoteRe
 		Bytes:    len(content),
 		Version:  NoteContentVersion(content),
 		Template: strings.TrimSpace(req.Template),
+		RecordID: mintedID,
 	}, nil
 }
 

@@ -386,6 +386,20 @@ func TestImporter_UntypedNotes_ExitProof(t *testing.T) {
 	}
 
 	// ---- the write actually happened, in the file, minimally ---------
+	//
+	// A note this run TYPED has, by that act, become a record of a declared
+	// type — so the identifier pass (ADR-068 D7) then writes its `id:` in the
+	// same run. That is the intended behaviour, not an extra edit to tolerate:
+	// a note typed by the importer and left with no identifier is exactly the
+	// state that made inline editing invisible on the founder's vault.
+	//
+	// The minimal-edit promise therefore covers BOTH lines and stays an exact
+	// equality. The identifier is read from the run's own report rather than
+	// assumed, so a stamp the report does not claim still fails the count.
+	stampedByPath := map[string]string{}
+	for _, st := range rep.IdentityStamps.Stamped {
+		stampedByPath[st.RelPath] = st.ID
+	}
 	for _, n := range notes {
 		if n.want != wantWritten {
 			continue
@@ -399,11 +413,33 @@ func TestImporter_UntypedNotes_ExitProof(t *testing.T) {
 		if !bytes.HasPrefix(raw, []byte(want)) {
 			t.Errorf("%s: expected the file to open with %q, got %q", n.rel, want, first120(raw))
 		}
-		// The minimal-edit promise: the file is its original bytes plus one
-		// line, nothing else moved.
-		if got, wantLen := len(raw), len(n.body)+len("type: "+o.Inferred+"\n"); got != wantLen {
-			t.Errorf("%s: file is %d bytes, expected %d (original %d + one `type:` line) — the edit was not minimal",
-				n.rel, got, wantLen, len(n.body))
+		// The minimal-edit promise, stated as BYTE IDENTITY rather than as a
+		// length: strip the one `id:` line the D7 pass added, and what remains
+		// must be exactly the original file with the one `type:` line inserted
+		// after its opening fence. Comparing bytes is stricter than comparing
+		// lengths — it also proves nothing else moved, reordered or requoted.
+		//
+		// The `id:` line's own bytes are deliberately NOT predicted here. The
+		// writer quotes a value YAML would otherwise re-read as something else
+		// (`0001` would come back as the integer 1), and a test that hardcoded
+		// the quoting would be reading its oracle off the implementation. What
+		// is asserted instead is the thing that actually matters: the note
+		// parses back with exactly the identifier the report claims.
+		body := raw
+		if id, stamped := stampedByPath[n.rel]; stamped {
+			if got := records.ParseRecord(n.rel, raw).ID(); got != id {
+				t.Errorf("%s: the report claims identifier %q but the file reads back %q", n.rel, id, got)
+			}
+			removed, rest := stripLinesWithKey(string(raw), records.RecordIDKey)
+			if removed != 1 {
+				t.Errorf("%s: expected exactly one `%s:` line, found %d", n.rel, records.RecordIDKey, removed)
+			}
+			body = []byte(rest)
+		}
+		wantBody := "---\ntype: " + o.Inferred + "\n" + n.body[len("---\n"):]
+		if string(body) != wantBody {
+			t.Errorf("%s: the edit was not minimal.\n--- want ---\n%q\n--- got (id line stripped) ---\n%q",
+				n.rel, wantBody, string(body))
 		}
 	}
 
