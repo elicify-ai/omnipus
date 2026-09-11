@@ -13,19 +13,17 @@
 // for a wikilink embed whose target classifies as the `video` KIND — a file
 // this workspace's own Library serves.
 //
-// Not wired into any note's markdown pipeline yet — that dispatch lives in
-// knowledgeMarkdown.tsx, owned by a concurrent change. This is the component
-// that dispatch is expected to mount, and its call is exactly:
-//
-//   <KbVideoEmbedMount workspaceId={resolution.workspaceId} workspacePath={resolution.workspacePath} />
-//
-// once `classifyEmbedKind`'s `'video'` case is added to
-// `KINDS_WITH_INLINE_RENDERER` there.
+// Wired into the note markdown pipeline by `bfbb05948`:
+// `knowledgeMarkdown.tsx`'s `KnowledgeMarkdownLink` dispatches a STANDALONE,
+// RESOLVED embed of kind `video` straight here. The promotion gate is
+// `isPromotableBlockEmbedNode` recognising `data-kb-embed-kind` — there is
+// no second per-kind set to keep in sync with it (an earlier draft of this
+// header predicted one, and adding `video` to it was a provable no-op).
 
 import { LazyEmbedMount } from './LazyEmbedMount'
 import { LibraryVideoPreview } from './LibraryVideoPreview'
 import { useResolvedEmbedEntry } from './useResolvedEmbedEntry'
-import { EmbedMountPlaceholder, EmbedMountError } from './embedMountStates'
+import { EmbedMountPlaceholder, EmbedMountError, EmbedMountMissing } from './embedMountStates'
 
 /** A 16:9-shaped reserved height, distinct from the audio bar and the base/
  *  image/transclusion reservations already in knowledgeMarkdown.tsx
@@ -50,8 +48,14 @@ function KbVideoEmbedContent({ workspaceId, workspacePath }: KbVideoEmbedMountPr
   const resolved = useResolvedEmbedEntry(workspaceId, workspacePath)
 
   if (resolved.status === 'loading') return <EmbedMountPlaceholder />
-  if (resolved.status === 'error' || !resolved.entry) {
+  if (resolved.status === 'error') {
     return <EmbedMountError message="Could not read this file's details." onRetry={resolved.refetch} />
+  }
+  // A listing that SUCCEEDED without this path is a renamed/deleted file,
+  // not a failed request — stated in its own words, with no Retry that
+  // cannot work (see `useResolvedEmbedEntry`'s four-state doc).
+  if (resolved.status === 'missing') {
+    return <EmbedMountMissing workspacePath={workspacePath} parentDir={resolved.parentDir} />
   }
 
   return <LibraryVideoPreview workspaceId={workspaceId} entry={resolved.entry} variant="inline" />

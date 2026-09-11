@@ -26,19 +26,14 @@
 // should not fire for a fence that is not near the viewport any more than a
 // picture or a dashboard view does.
 //
-// Not wired into any note's markdown pipeline yet — that dispatch lives in
-// kbMarkdownBase.tsx's / knowledgeMarkdown.tsx's `code` component override
-// (see `classifyFence` in `@/components/chat/markdown-shared`, already used
-// there for `language === 'mermaid'`), owned by a concurrent change. This is
-// the component that dispatch is expected to mount for `language === 'query'`,
-// and its call is exactly:
-//
-//   <KbQueryFenceEmbed workspaceId={workspaceId} collectionId={collectionId} query={text} />
-//
-// `collectionId` is the note's own `KnowledgeBaseInfo.collection_id` —
-// `KnowledgeNoteView.tsx` already resolves this today (it is not a new
-// dependency this component introduces); it simply is not threaded down
-// into knowledgeMarkdown.tsx's markdown composition yet.
+// Wired into the note markdown pipeline by `bfbb05948`:
+// `knowledgeMarkdown.tsx`'s `KnowledgeMarkdownCode` (the `code` slot, using
+// `classifyFence` from `@/components/chat/markdown-shared`) dispatches a
+// block fence with `language === 'query'` here, passing the open note's own
+// `workspaceId` and `KnowledgeBaseInfo.collection_id` off
+// `KnowledgeLinkContext`. A `query` fence WITHOUT those two ids does not
+// silently become an ordinary code block — see `KnowledgeMarkdownCode`'s own
+// doc for the two reasons it distinguishes there.
 
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
@@ -46,6 +41,7 @@ import { MagnifyingGlass, Warning } from '@phosphor-icons/react'
 import { searchVault } from '@/lib/api'
 import type { components } from '@/lib/api/generated/openapi-types'
 import { LazyEmbedMount } from './LazyEmbedMount'
+import { stripWikilinkNotation } from './wikilinkNotation'
 
 type VaultSearchResponse = components['schemas']['VaultSearchResponse']
 
@@ -138,62 +134,113 @@ function KbQueryFenceEmbedContent({ workspaceId, collectionId, query }: KbQueryF
   }
 
   const data = searchQuery.data
-  if (!data) return null
-
-  // Honest, not silent: an index still catching up says so instead of
-  // reading as "nothing matches" (the same distinction searchVault's own
-  // doc comment names — "still indexing" vs "no results").
-  if (!data.complete) {
+  if (!data) {
+    // NOT `return null`. With `networkMode: 'online'` (the default), a query
+    // that is pending but PAUSED — the browser is offline — has
+    // `isLoading === false`, `isError === false` and `data === undefined`,
+    // so this branch is genuinely reachable. Returning nothing rendered the
+    // fence as a hole in the note: no box, no border, no text, nothing to
+    // tell the reader something was meant to be there at all.
     return (
       <div
-        data-testid="kb-query-fence-incomplete"
-        className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-xs text-[var(--color-muted)]"
+        data-testid="kb-query-fence-waiting"
+        className="flex items-center gap-2 rounded-md border border-[var(--color-border)] px-3 py-4 text-xs text-[var(--color-muted)]"
       >
-        This knowledge base is still indexing — results may be incomplete.
-        {data.complete_reason ? ` (${data.complete_reason})` : ''}
+        <MagnifyingGlass size={14} />
+        {searchQuery.fetchStatus === 'paused'
+          ? 'This query is waiting for a connection.'
+          : 'This query has not run yet.'}
       </div>
     )
   }
 
+  // Honest, not silent: an index still catching up says so instead of
+  // reading as "nothing matches" (the same distinction searchVault's own
+  // doc comment names — "still indexing" vs "no results"). The notice is
+  // rendered ALONGSIDE whatever hits the answer already carries, never
+  // instead of them: an incomplete answer returning two real matches used to
+  // discard both, which is strictly less honest than "here is what we have
+  // so far, and it may be incomplete".
+  const incompleteNotice = data.complete ? null : (
+    <div
+      data-testid="kb-query-fence-incomplete"
+      className="mb-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-xs text-[var(--color-muted)]"
+    >
+      This knowledge base is still indexing — results may be incomplete.
+      {data.complete_reason ? ` (${data.complete_reason})` : ''}
+    </div>
+  )
+
   if (totalHits === 0) {
     return (
-      <div
-        data-testid="kb-query-fence-no-results"
-        className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-xs text-[var(--color-muted)]"
-      >
-        No results for “{trimmed}”.
-      </div>
+      <>
+        {incompleteNotice}
+        {/* A complete answer with no hits is a real "nothing matches"; an
+            INCOMPLETE one is not, so it never claims to be — the notice
+            above is the whole statement in that case. */}
+        {data.complete ? (
+          <div
+            data-testid="kb-query-fence-no-results"
+            className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-xs text-[var(--color-muted)]"
+          >
+            No results for “{trimmed}”.
+          </div>
+        ) : null}
+      </>
     )
   }
 
   return (
-    <div
-      data-testid="kb-query-fence-results"
-      className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-xs text-[var(--color-secondary)]"
-    >
-      <p className="mb-1.5 text-[var(--color-muted)]">
-        Results for “{trimmed}” ({totalHits})
-      </p>
-      <ul className="space-y-1">
-        {data.notes.map((hit) => (
-          <li key={`note-${hit.path}`} data-testid="kb-query-fence-note-hit">
-            <span className="font-medium">{hit.title}</span>
-            {hit.snippet ? <span className="text-[var(--color-muted)]"> — {hit.snippet}</span> : null}
-          </li>
-        ))}
-        {data.records.map((hit) => (
-          <li key={`record-${hit.path}`} data-testid="kb-query-fence-record-hit">
-            <span className="font-medium">{hit.title}</span>
-            <span className="text-[var(--color-muted)]"> (record)</span>
-          </li>
-        ))}
-        {data.views.map((hit) => (
-          <li key={`view-${hit.view}`} data-testid="kb-query-fence-view-hit">
-            <span className="font-medium">{hit.label}</span>
-            <span className="text-[var(--color-muted)]"> (view)</span>
-          </li>
-        ))}
-      </ul>
-    </div>
+    <>
+      {incompleteNotice}
+      <div
+        data-testid="kb-query-fence-results"
+        className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-xs text-[var(--color-secondary)]"
+      >
+        <p className="mb-1.5 text-[var(--color-muted)]">
+          Results for “{trimmed}” ({totalHits})
+        </p>
+        <ul className="space-y-1">
+          {data.notes.map((hit) => (
+            <li key={`note-${hit.path}`} data-testid="kb-query-fence-note-hit">
+              <span className="font-medium">{hit.title}</span>
+              {/* A snippet is a RAW BYTE EXCERPT of the note's own text, so a
+                  frontmatter value like `owner: "[[Daniel Piatkowski]]"`
+                  arrives with its brackets — the same WL-2 defect the Library
+                  search bar fixed, on the same field from the same engine.
+                  Stripped to display text, never rendered as a link: an
+                  excerpt cannot claim a resolved/unresolved verdict. */}
+              {hit.snippet ? (
+                <span className="text-[var(--color-muted)]"> — {stripWikilinkNotation(hit.snippet)}</span>
+              ) : null}
+            </li>
+          ))}
+          {data.records.map((hit) => (
+            <li key={`record-${hit.path}`} data-testid="kb-query-fence-record-hit">
+              <span className="font-medium">{hit.title}</span>
+              <span className="text-[var(--color-muted)]"> (record)</span>
+            </li>
+          ))}
+          {data.views.map((hit) => (
+            <li key={`view-${hit.view}`} data-testid="kb-query-fence-view-hit">
+              <span className="font-medium">{hit.label}</span>
+              <span className="text-[var(--color-muted)]"> (view)</span>
+            </li>
+          ))}
+          {/* Attachments were COUNTED in `totalHits` and had no branch here,
+              so a fence whose only matches were attachments rendered
+              "Results (2)" above an empty list — and, because the count was
+              non-zero, skipped the honest "No results" state entirely.
+              Counting what you do not render is the defect; rendering them
+              is the fix that keeps the two real matches nameable. */}
+          {(data.attachments ?? []).map((hit) => (
+            <li key={`attachment-${hit.path}`} data-testid="kb-query-fence-attachment-hit">
+              <span className="font-medium">{hit.name}</span>
+              <span className="text-[var(--color-muted)]"> (attachment)</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </>
   )
 }

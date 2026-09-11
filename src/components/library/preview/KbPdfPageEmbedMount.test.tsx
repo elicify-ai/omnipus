@@ -148,12 +148,23 @@ describe('KbPdfPageEmbedMount', () => {
     expect(screen.queryByTestId('library-pdf-preview')).not.toBeInTheDocument()
   })
 
-  it('shows a visible, named error when the entry cannot be found', async () => {
-    vi.mocked(fetchLibraryEntries).mockResolvedValue([])
+  it('shows a visible, named error when the listing request FAILS', async () => {
+    vi.mocked(fetchLibraryEntries).mockRejectedValue(new Error('listing failed'))
     renderMount(3)
 
     const error = await screen.findByTestId('kb-embed-mount-error')
     expect(error).toHaveTextContent(/could not read this file/i)
+    expect(screen.queryByTestId('library-pdf-preview')).not.toBeInTheDocument()
+  })
+
+  // Silent-failure audit M1, same distinction as the audio/video mounts.
+  it('shows the distinct "missing" state, with no Retry, when the listing succeeded without the file', async () => {
+    vi.mocked(fetchLibraryEntries).mockResolvedValue([])
+    renderMount(3)
+
+    const missing = await screen.findByTestId('kb-embed-mount-missing')
+    expect(missing.querySelector('button')).toBeNull()
+    expect(screen.queryByTestId('kb-embed-mount-error')).not.toBeInTheDocument()
     expect(screen.queryByTestId('library-pdf-preview')).not.toBeInTheDocument()
   })
 })

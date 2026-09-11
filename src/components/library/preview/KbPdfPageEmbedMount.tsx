@@ -18,17 +18,18 @@
 // takes the page number as a plain prop and makes no assumption about the
 // fragment's original text.
 //
-// Not wired into any note's markdown pipeline yet. This is the component
-// that dispatch is expected to mount, and its call is exactly:
-//
-//   <KbPdfPageEmbedMount workspaceId={resolution.workspaceId} workspacePath={resolution.workspacePath} page={pageNumber} />
-//
-// once a `#page=N` fragment is recognised for a `pdf`-kind embed there.
+// Wired into the note markdown pipeline by `bfbb05948`:
+// `knowledgeMarkdown.tsx`'s `KnowledgeMarkdownLink` dispatches a STANDALONE,
+// RESOLVED `pdf`-kind embed here when, and only when, it carries a
+// `data-kb-embed-page` attribute. `remarkKbWikilinks` writes that attribute
+// from the parsed `#page=N` fragment, and `isPromotableBlockEmbedNode`
+// promotes a pdf embed ONLY when it is present — which is what keeps a
+// whole-document pdf embed on the link-fallback path (EMB-025).
 
 import { LazyEmbedMount } from './LazyEmbedMount'
 import { LibraryPdfPreview } from './LibraryPdfPreview'
 import { useResolvedEmbedEntry } from './useResolvedEmbedEntry'
-import { EmbedMountPlaceholder, EmbedMountError } from './embedMountStates'
+import { EmbedMountPlaceholder, EmbedMountError, EmbedMountMissing } from './embedMountStates'
 
 /** A single-page-shaped reserved height — smaller than a whole multi-page
  *  PDF embed would reserve, since exactly one page is ever drawn here
@@ -54,8 +55,14 @@ function KbPdfPageEmbedContent({ workspaceId, workspacePath, page }: KbPdfPageEm
   const resolved = useResolvedEmbedEntry(workspaceId, workspacePath)
 
   if (resolved.status === 'loading') return <EmbedMountPlaceholder />
-  if (resolved.status === 'error' || !resolved.entry) {
+  if (resolved.status === 'error') {
     return <EmbedMountError message="Could not read this file's details." onRetry={resolved.refetch} />
+  }
+  // A listing that SUCCEEDED without this path is a renamed/deleted file,
+  // not a failed request — stated in its own words, with no Retry that
+  // cannot work (see `useResolvedEmbedEntry`'s four-state doc).
+  if (resolved.status === 'missing') {
+    return <EmbedMountMissing workspacePath={workspacePath} parentDir={resolved.parentDir} />
   }
 
   return (

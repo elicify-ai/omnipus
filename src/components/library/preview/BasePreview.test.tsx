@@ -498,6 +498,59 @@ describe('BasePreview — tabs over the views the server says this base owns', (
           expect(link).not.toHaveAttribute('data-kb-state', 'resolved')
           expect(link).toHaveAttribute('data-kb-state', 'unknown')
         })
+
+        // Silent-failure audit M4. Every one of these graph queries is
+        // `retry: false`, and a failed one contributes no edges. Without a
+        // statement, the whole collection-wide resolver silently reverts to
+        // the pre-WL-1 row-title-match tier — relation cells rendering white
+        // again, which is EXACTLY the symptom WL-1 was written to fix, with
+        // nothing on screen to show the fix had stopped working.
+        it('states, once at page level, that link checking is incomplete when a row\'s graph query FAILS', async () => {
+          const loadGraph: KnowledgeGraphLoader = vi.fn(async () => {
+            throw new Error('graph endpoint 500')
+          })
+          renderBase({
+            loadGraph,
+            loadViewResult: vi.fn().mockResolvedValue(
+              result({
+                parts: [{ part: 'table', source: { part: 'table' }, columns: ['file.name', 'client'] }],
+                rows: [
+                  { path: 'a.md', title: 'INV-A', cells: [{ property: 'client', value: '[[Korn Ferry]]' }], joins: [] },
+                ],
+              }),
+            ),
+          })
+          await screen.findByTestId('viewpart-table')
+
+          const banner = await screen.findByTestId('base-preview-link-graph-degraded')
+          expect(banner).toHaveTextContent(/link checking is incomplete/i)
+          // ONE statement, never one marker per cell — the same treatment
+          // `graph_unavailable` gets in the note reader.
+          expect(screen.getAllByTestId('base-preview-link-graph-degraded')).toHaveLength(1)
+          // And a real Retry, not a dead control.
+          expect(screen.getByTestId('base-preview-link-graph-retry')).toBeInTheDocument()
+
+          // The table still renders — this degrades honestly, it does not
+          // replace the content with an error.
+          expect(screen.getByTestId('viewpart-cell-link')).toBeInTheDocument()
+        })
+
+        it('control: when every row\'s graph query SUCCEEDS, no such statement is shown', async () => {
+          renderBase({
+            loadGraph: vi.fn().mockResolvedValue(graph()),
+            loadViewResult: vi.fn().mockResolvedValue(
+              result({
+                parts: [{ part: 'table', source: { part: 'table' }, columns: ['file.name', 'client'] }],
+                rows: [
+                  { path: 'a.md', title: 'INV-A', cells: [{ property: 'client', value: '[[Korn Ferry]]' }], joins: [] },
+                ],
+              }),
+            ),
+          })
+          await screen.findByTestId('viewpart-table')
+          await waitFor(() => expect(screen.getByTestId('viewpart-cell-link')).toBeInTheDocument())
+          expect(screen.queryByTestId('base-preview-link-graph-degraded')).not.toBeInTheDocument()
+        })
       })
     })
 

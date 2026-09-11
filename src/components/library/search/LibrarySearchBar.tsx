@@ -71,11 +71,15 @@ import { cn } from '@/lib/utils'
 import { fetchKnowledgeViewResult } from '@/lib/api'
 import type { ViewResult } from '@/lib/api/generated/openapi-types'
 import { ViewPartsRenderer } from '../preview/viewparts/ViewPartsRenderer'
-// WL-2: the SAME wikilink parser the note reader uses (`knowledgeMarkdown.tsx`'s
-// remark plugin is built on these two exports) — reused here, never
-// reimplemented. See `stripWikilinkNotation` below for why a search hit needs
-// it at all.
-import { WIKILINK_RE, parseWikilink } from '../preview/knowledgeMarkdown'
+// WL-2: the note reader's own wikilink stripper, imported rather than
+// reimplemented. A search hit's snippet and a record's cell value are RAW
+// byte excerpts of file content — frontmatter included — so a match falling
+// inside `owner: "[[Daniel Piatkowski]]"` arrives here with the brackets
+// still on it. `stripWikilinkNotation`'s own doc carries the full rationale,
+// including why this renders plain text and never a link. It lives in
+// wikilinkNotation.ts because the `query` fence inside a note shows excerpts
+// from the same engine's same field and needs the identical fix.
+import { stripWikilinkNotation } from '../preview/wikilinkNotation'
 import { collectionPathToWorkspacePath } from '../knowledge/KnowledgeBacklinks'
 import { LibraryErrorBanner } from '../LibraryErrorBanner'
 import {
@@ -423,40 +427,6 @@ function ViewRow({ hit, onOpen }: { hit: VaultSearchViewHit; onOpen: () => void 
  *  defect writeup as reversible. */
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-/** WL-2: a search hit's snippet or a record's cell value is a RAW excerpt of
- *  file content — frontmatter included, since the search engine never renders
- *  markdown, it just returns bytes around the matched term. A note whose
- *  match happens to fall inside a `[[wikilink]]` (very common: `owner:
- *  "[[Daniel Piatkowski]]"` is ordinary frontmatter) therefore reached this
- *  string with the brackets still on it — the exact defect the founder
- *  reported, on the one surface (search results) that never runs a note
- *  through KnowledgeReader/`knowledgeMarkdown.tsx` at all.
- *
- *  Fixed the same way the sibling defect was: reuse the note reader's own
- *  parser instead of writing a second one. `parseWikilink`/`WIKILINK_RE` are
- *  the exact pieces `knowledgeMarkdown.tsx`'s `remarkKbWikilinks` plugin is
- *  built on — this strips the notation down to the SAME display text that
- *  plugin would produce (the alias when one was given, else the raw target),
- *  so `owner: "[[Daniel Piatkowski]]"` reads as `owner: "Daniel Piatkowski"`.
- *
- *  Deliberately renders PLAIN TEXT, not a link: a search excerpt is not the
- *  document, so it cannot honestly claim a resolved/unresolved verdict the
- *  way a real note render can (WL-1's own resolver-scope discussion covers
- *  exactly this "don't claim more than you know" line) — clicking the row
- *  already opens the real note, where the same target renders as a real,
- *  resolved link. */
-function stripWikilinkNotation(text: string): string {
-  // A fresh RegExp, not the shared `WIKILINK_RE` instance: that module-scope
-  // object is also driven by `knowledgeMarkdown.tsx`'s own remark plugin, and
-  // a `g`-flag regex carries mutable `lastIndex` state — reusing the same
-  // instance here would race it.
-  const re = new RegExp(WIKILINK_RE.source, WIKILINK_RE.flags)
-  return text.replace(re, (whole: string, bang: string, inner: string) => {
-    const parsed = parseWikilink(inner, bang === '!')
-    return parsed ? parsed.text : whole
-  })
 }
 
 function highlightQuery(text: string, query: string): ReactNode {

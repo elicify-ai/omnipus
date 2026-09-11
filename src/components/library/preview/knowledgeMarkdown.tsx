@@ -68,15 +68,21 @@ import { createContext, useContext, useMemo } from 'react'
 import type { ComponentProps, ComponentPropsWithoutRef, ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { useQuery } from '@tanstack/react-query'
-import { SpinnerGap, Warning } from '@phosphor-icons/react'
 // From kbMarkdownBase, NOT from LibraryMarkdownPreview: that file now mounts
 // the stage-2 reading view this module is part of, so importing it here would
 // be a cycle — and `kbMarkdownComponents` is read at module scope below, which
 // is where a cycle crashes instead of merely warning.
 import { kbMarkdownComponents, KB_REHYPE_PLUGINS, KB_REMARK_PLUGINS } from './kbMarkdownBase'
-import { libraryEntryExt, type LibraryPreviewKind } from './libraryPreviewKind'
+import { libraryEntryExt, LIBRARY_PREVIEW_KINDS, type LibraryPreviewKind } from './libraryPreviewKind'
 import { fetchKnowledgeBaseViews, fetchLibraryContent, fetchLibraryEntries, libraryQueryKeys } from '@/lib/api'
 import { LazyEmbedMount } from './LazyEmbedMount'
+// The ONE definition of the shared loading/error chrome every inline embed
+// mount shows (this file's `base`/`markdown`/`image` mounts and the Step 6
+// `KbAudio`/`KbVideo`/`KbPdfPage` mounts alike). This file used to carry a
+// byte-identical private copy — same test ids, same classes, same Retry
+// button — which is two places for one visual contract to drift, with
+// nothing but a human diffing both files to catch it.
+import { EmbedMountPlaceholder, EmbedMountError } from './embedMountStates'
 import { matchBaseView } from './baseViewMatch'
 import { sliceTranscludedContent } from './noteTransclusion'
 import { BasePreview, type BasePreviewEmbedOptions } from './BasePreview'
@@ -340,105 +346,20 @@ export function remarkKbHighlights() {
 // Divergence 2d — wikilinks and embeds (FR-060, US-7 AS-1, AS-2)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const WIKILINK_RE = /(!?)\[\[([^[\]\n]+)\]\]/g
+// The wikilink NOTATION parser lives in its own module so the inline embed
+// mounts this file dispatches to can use it without importing this file back
+// (see wikilinkNotation.ts's header). Re-exported here because every existing
+// importer — the outline and backlink rails, the Library search bar, this
+// module's own remark plugin — has always found these names at this address.
+export {
+  WIKILINK_RE,
+  parseWikilink,
+  stripWikilinkNotation,
+  type ParsedWikilink,
+} from './wikilinkNotation'
+import { WIKILINK_RE, parseWikilink } from './wikilinkNotation'
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif', 'ico'])
-
-export interface ParsedWikilink {
-  /** Path or basename before `#` and `|`. Empty for a same-note heading link. */
-  target: string
-  /** Heading after `#`, if any. Mutually exclusive with `block` — a block
-   *  reference never populates this (ADR-083 EMB-036). */
-  heading?: string
-  /** Block anchor with the leading `^` removed, for a `[[Note#^abc123]]` block
-   *  reference — a distinct addressing form from a heading, kept separate so a
-   *  block id is never matched against heading text (ADR-083 EMB-011, EMB-036,
-   *  mirroring `pkg/knowledge/links.go`'s `Link.BlockID`/`Link.Heading` split). */
-  block?: string
-  /** 1-based page number from a `[[doc.pdf#page=3]]` fragment (ADR-083 Step 6,
-   *  EMB-105, US-12 AS-4) — a THIRD fragment form alongside heading and block,
-   *  mutually exclusive with both. Whether that page actually exists in the
-   *  document is a render-time question `LibraryPdfPreview` already answers;
-   *  parsing only recognises the notation. */
-  page?: number
-  /** Display text: the alias when one was given, else the raw inner text.
-   *  Never the raw digits of a `width` (below) — a bar segment is read as
-   *  EITHER a size OR a caption, never both, and never the wrong one. */
-  text: string
-  /** True for the `![[…]]` embed form. */
-  embed: boolean
-  /** Pixel width from `![[target|400]]` / `![[target|400x300]]` (a height, if
-   *  given, is read and discarded — see `EMBED_WIDTH_PATTERN`'s own doc).
-   *  Only ever populated for the EMBED form (ADR-083 EMB-030: "a size given
-   *  after a bar applies to pictures only", and only an embed can be a
-   *  picture) — a plain `[[target|400]]` reference link's bar segment is
-   *  always a caption, even when it happens to look like digits. Whether the
-   *  TARGET actually turns out to be a picture is decided later, from its
-   *  resolved kind — this field only reports what the notation itself said. */
-  width?: number
-}
-
-/** `pkg/knowledge/knowledge_edit.go`'s own `embedWidthPattern` — EMB-030's
- *  exact data constraint ("A size given after `|` in an embed MUST match
- *  `^\d+(x\d+)?$` to be read as a size; anything else is display text."),
- *  mirrored here so read and write agree on what counts as a size rather
- *  than each having its own idea. Capture group 1 is the WIDTH only; an
- *  optional `x<height>` suffix is recognised (so it is never mistaken for
- *  caption text) but discarded — `LibraryImagePreview`'s existing `width`
- *  prop is the one sizing path this reads into, and it takes pixels wide,
- *  not a separate height. */
-const EMBED_WIDTH_PATTERN = /^(\d+)(?:x\d+)?$/
-
-/** A `page=N` fragment (ADR-083 Step 6, EMB-105) — the third form a `#`
- *  fragment can take, alongside a heading and a `^`-prefixed block anchor.
- *  Recognised on any target's fragment, not just a `.pdf` one: whether the
- *  target is actually a PDF is `classifyEmbedKind`'s job, downstream of
- *  parsing, not this pattern's. */
-const PAGE_FRAGMENT_PATTERN = /^page=(\d+)$/
-
-/** Parses the inside of a `[[…]]`, in Obsidian's order: alias last, heading
- *  before it. Exported because the outline/backlink rails parse the same forms.
- *  Returns null for an empty or whitespace-only body. */
-export function parseWikilink(inner: string, embed = false): ParsedWikilink | null {
-  const bar = inner.indexOf('|')
-  const head = (bar === -1 ? inner : inner.slice(0, bar)).trim()
-  const barContent = bar === -1 ? undefined : inner.slice(bar + 1).trim()
-  if (head === '' && !barContent) return null
-
-  const hash = head.indexOf('#')
-  const target = (hash === -1 ? head : head.slice(0, hash)).trim()
-  const fragment = hash === -1 ? undefined : head.slice(hash + 1).trim() || undefined
-  if (target === '' && !fragment) return null
-
-  // `^` prefixes a block anchor, not a heading (Obsidian's own distinction —
-  // see the `block` field's doc comment above). `page=N` is the third,
-  // mutually exclusive form (see PAGE_FRAGMENT_PATTERN's own doc).
-  const isBlock = fragment !== undefined && fragment.startsWith('^')
-  const pageMatch = !isBlock && fragment !== undefined ? PAGE_FRAGMENT_PATTERN.exec(fragment) : null
-  const heading = isBlock || pageMatch ? undefined : fragment
-  const block = isBlock ? fragment.slice(1) || undefined : undefined
-  const page = pageMatch ? Number.parseInt(pageMatch[1] as string, 10) : undefined
-
-  // EMB-030: on an EMBED, a bar segment shaped like a size is read as one —
-  // never as the caption a size was never meant to be, even when the target
-  // turns out not to be a picture (there it is simply inert, per EMB-030's
-  // own "applies only to pictures" rule) rather than silently eating the
-  // display text. A plain (non-embed) wikilink never has a size to give, so
-  // its bar segment is always an alias, digits or not.
-  const widthMatch = embed && barContent !== undefined ? EMBED_WIDTH_PATTERN.exec(barContent) : null
-  const width = widthMatch ? Number.parseInt(widthMatch[1] as string, 10) : undefined
-  const alias = widthMatch ? undefined : barContent
-
-  return {
-    target,
-    heading,
-    block,
-    text: alias && alias !== '' ? alias : head,
-    embed,
-    ...(width !== undefined ? { width } : {}),
-    ...(page !== undefined ? { page } : {}),
-  }
-}
 
 // ── Inline kind classification (ADR-083 EMB-034) ─────────────────────────────
 //
@@ -476,24 +397,6 @@ export function classifyEmbedKind(target: string): LibraryPreviewKind {
   return 'other'
 }
 
-/** The kinds this file mounts a media-shaped inline renderer for — `image`
- *  (Step 1) plus `audio`/`video` (Step 6, ADR-083 EMB-105). Membership here
- *  governs only the IMAGE branch just below: a picture is the one kind that
- *  maps onto a literal `image` mdast node, so its eligibility is checked and
- *  built right here. Audio and video have no such node to become — a media
- *  player is a `<div>`-rooted mount, not an inline HTML element — so for
- *  them this check is a no-op that falls through to the SAME "reported,
- *  never faked" embed-link section every other kind already goes through;
- *  what actually promotes an audio/video embed to its real mount is
- *  `isPromotableBlockEmbedNode` recognising `data-kb-embed-kind` below, the
- *  same mechanism `base`/`markdown` use WITHOUT ever being in this set.
- *  `pdf` is likewise never added here — only a `#page=N` fragment on a pdf
- *  target is promotable (`KbPdfPageEmbedMount`); a whole-document pdf embed
- *  has no renderer yet and stays link-only (EMB-025). `html`, `other` and
- *  `text` never gain one at all — that part of EMB-025 is permanent, not a
- *  "not yet". */
-const KINDS_WITH_INLINE_RENDERER: ReadonlySet<LibraryPreviewKind> = new Set(['image', 'audio', 'video'])
-
 /** What the reader knows about an embed's target — the resolver's answer.
  *
  *  Five states, none collapsible into another (ADR-083 EMB-012):
@@ -512,36 +415,87 @@ const KINDS_WITH_INLINE_RENDERER: ReadonlySet<LibraryPreviewKind> = new Set(['im
  *                    skipped target, a truncated answer, or the edge and node
  *                    lists disagreeing with each other. MUST NOT be rendered
  *                    as "nothing in this knowledge base is named X". */
-export type EmbedResolutionState = 'resolved' | 'unresolved' | 'loading' | 'graph_unavailable' | 'indeterminate'
+export const EMBED_RESOLUTION_STATES = [
+  'resolved',
+  'unresolved',
+  'loading',
+  'graph_unavailable',
+  'indeterminate',
+] as const
 
-export interface EmbedResolution {
-  state: EmbedResolutionState
-  /** Workspace-relative URL the browser can load. Present only when resolved. */
-  url?: string
-  /** Collection-relative path of the resolved target. Present only when resolved. */
-  path?: string
-  /** True when the unresolved target lay outside the collection root rather
-   *  than simply not matching anything (ADR-083 EMB-017, EMB-023). The
-   *  reason text for this case MUST NOT contain the escaping path. */
-  outsideRoot?: boolean
-  /** Human-readable explanation. Always set for `indeterminate` and
-   *  `unresolved` — "no reason available" when nothing more specific is
-   *  known, per EMB-013, rather than the field being omitted. */
-  reason?: string
+/** Derived from the runtime array, the same way `LibraryPreviewKind` is, so
+ *  a new state cannot be added to the type without also appearing in a list
+ *  `asEmbedResolutionState` below can actually check against. */
+export type EmbedResolutionState = (typeof EMBED_RESOLUTION_STATES)[number]
+
+/** A `data-kb-embed-state` attribute back as a real state, or `undefined`
+ *  for a string that is not one. The one place this union re-enters the
+ *  typed world after the remark pipeline flattens it into a DOM attribute —
+ *  an unrecognised value is reported as unrecognised here rather than
+ *  carried onward as an unchecked `string` for a downstream `if`-chain to
+ *  quietly fail to match. */
+function asEmbedResolutionState(raw: string | undefined): EmbedResolutionState | undefined {
+  return EMBED_RESOLUTION_STATES.find((s) => s === raw)
+}
+
+/** The `resolved` arm — and the reason this whole type is a DISCRIMINATED
+ *  UNION rather than one interface with eight optionals.
+ *
+ *  `url`/`path`/`workspaceId`/`workspacePath` are REQUIRED here, not
+ *  documented-as-present. As a bag of optionals, `{ state: 'resolved' }`
+ *  with no URL type-checked, every consumer re-derived the invariant by
+ *  hand (`embedState === 'resolved' && embedWorkspaceId && embedWorkspacePath`),
+ *  and the one case a reader must never see — a confident verdict with no
+ *  evidence behind it — was the one the compiler permitted. EMB-012/EMB-013
+ *  exist to make "I have no verdict" impossible to render as "confirmed";
+ *  the type has to carry that, not the prose. */
+export interface EmbedResolutionResolved {
+  state: 'resolved'
+  /** Workspace-relative URL the browser can load. */
+  url: string
+  /** Collection-relative path of the resolved target. */
+  path: string
+  /** The workspace the resolved target lives in. A `.base`/markdown inline
+   *  renderer needs this to query the Library and knowledge endpoints
+   *  itself; it is not derivable from `url`, which is already an absolute
+   *  download link, not a query key. */
+  workspaceId: string
+  /** WORKSPACE-relative path of the resolved target (ADR-083 dashboards/
+   *  transclusion note: a graph edge's own `path` is COLLECTION-relative —
+   *  see KnowledgeNoteView's `toWorkspacePath`). */
+  workspacePath: string
   /** True when more than one graph edge matched this embed's key (EMB-018). */
   ambiguous?: boolean
   /** The alternative targets not chosen. Present only when ambiguous. */
   candidates?: string[]
-  /** The workspace the resolved target lives in — present only when
-   *  resolved. A `.base`/markdown inline renderer needs this to query the
-   *  Library and knowledge endpoints itself; it is not derivable from `url`,
-   *  which is already an absolute download link, not a query key. */
-  workspaceId?: string
-  /** WORKSPACE-relative path of the resolved target (ADR-083 dashboards/
-   *  transclusion note: a graph edge's own `path` is COLLECTION-relative —
-   *  see KnowledgeNoteView's `toWorkspacePath`). Present only when resolved. */
-  workspacePath?: string
 }
+
+export interface EmbedResolutionUnresolved {
+  state: 'unresolved'
+  /** Human-readable explanation — ALWAYS set (EMB-013): "no reason
+   *  available" when nothing more specific is known, never omitted. */
+  reason: string
+  /** True when the unresolved target lay outside the collection root rather
+   *  than simply not matching anything (ADR-083 EMB-017, EMB-023). The
+   *  reason text for this case MUST NOT contain the escaping path. */
+  outsideRoot?: boolean
+}
+
+export interface EmbedResolutionIndeterminate {
+  state: 'indeterminate'
+  /** Always set, same EMB-013 rule as `unresolved` above. */
+  reason: string
+}
+
+export type EmbedResolution =
+  | EmbedResolutionResolved
+  | EmbedResolutionUnresolved
+  | EmbedResolutionIndeterminate
+  /** In flight. No evidence either way, and nothing to explain yet. */
+  | { state: 'loading' }
+  /** The request itself failed. Rendered as ONE page-level statement, never
+   *  per embed — the reason is what that statement says. */
+  | { state: 'graph_unavailable'; reason: string }
 
 export interface KbWikilinkOptions {
   /**
@@ -609,56 +563,64 @@ export function remarkKbWikilinks(options: KbWikilinkOptions = {}) {
           options.resolveEmbedUrl?.(parsed.target, parsed.heading, parsed.block) ??
           NO_RESOLVER_EMBED_RESOLUTION
 
-        if (KINDS_WITH_INLINE_RENDERER.has(kind) && resolution.state === 'resolved' && resolution.url) {
-          if (kind === 'image') {
-            // Still a plain `image` node in every case (EMB-030 does not
-            // change WHERE this renders, only whether a width reaches it) —
-            // an unsized picture is byte-for-byte what this returned before.
-            // A SIZED one additionally carries the width and workspace
-            // coordinates as `data.hProperties`: inert here (this composition
-            // never touches the `img` slot — FR-013d — so `MarkdownImage`
-            // reads only `src`/`alt` and drops the rest), but read back by
-            // `promoteStandaloneEmbeds` below, which is the ONLY place that
-            // knows whether this embed stood alone in its own paragraph —
-            // `LibraryImagePreview`'s width prop needs that block-safe
-            // placement (its own root is a `<div>`), the same reason a `.base`
-            // or markdown embed needs it. An embed mixed inline with other
-            // words is not decidable yet at this point in the pipeline, so it
-            // is deferred, not guessed.
-            const sizable = parsed.width !== undefined && resolution.workspaceId && resolution.workspacePath
-            return {
-              type: 'image',
-              url: resolution.url,
-              alt: parsed.text,
-              children: [],
-              ...(sizable
-                ? {
-                    data: {
-                      hProperties: {
-                        'data-kb-embed-width': String(parsed.width),
-                        'data-kb-embed-workspace-id': resolution.workspaceId,
-                        'data-kb-embed-workspace-path': resolution.workspacePath,
-                      },
+        // `image` is the ONE kind decided right here, because it is the one
+        // kind that maps onto a literal `image` mdast node. Every other kind
+        // with an inline renderer — `base`, `markdown`, `audio`, `video`,
+        // and a `#page=N` pdf — is a `<div>`-rooted mount with no mdast node
+        // to become, so it falls through to the "reported, never faked"
+        // embed-link section below and is promoted later by
+        // `isPromotableBlockEmbedNode`, which is the SINGLE gate for all of
+        // them. There is deliberately no second per-kind set to keep in sync
+        // with that one: a set naming `audio`/`video` here was provably
+        // inert (nothing inside this branch ever treated them differently
+        // from not matching at all) and is exactly the "two gates" hazard
+        // the promotion gate exists to avoid.
+        if (kind === 'image' && resolution.state === 'resolved') {
+          // Still a plain `image` node in every case (EMB-030 does not
+          // change WHERE this renders, only whether a width reaches it) —
+          // an unsized picture is byte-for-byte what this returned before.
+          // A SIZED one additionally carries the width and workspace
+          // coordinates as `data.hProperties`: inert here (this composition
+          // never touches the `img` slot — FR-013d — so `MarkdownImage`
+          // reads only `src`/`alt` and drops the rest), but read back by
+          // `promoteStandaloneEmbeds` below, which is the ONLY place that
+          // knows whether this embed stood alone in its own paragraph —
+          // `LibraryImagePreview`'s width prop needs that block-safe
+          // placement (its own root is a `<div>`), the same reason a `.base`
+          // or markdown embed needs it. An embed mixed inline with other
+          // words is not decidable yet at this point in the pipeline, so it
+          // is deferred, not guessed.
+          return {
+            type: 'image',
+            url: resolution.url,
+            alt: parsed.text,
+            children: [],
+            ...(parsed.width !== undefined
+              ? {
+                  data: {
+                    hProperties: {
+                      'data-kb-embed-width': String(parsed.width),
+                      'data-kb-embed-workspace-id': resolution.workspaceId,
+                      'data-kb-embed-workspace-path': resolution.workspacePath,
                     },
-                  }
-                : {}),
-            }
+                  },
+                }
+              : {}),
           }
-          // audio / video (ADR-083 Step 6, EMB-105): no mdast node maps to a
-          // media player, so this falls through, unreturned, to the SAME
-          // "reported, never faked" embed-link section below that `base` and
-          // `markdown` already reach without ever being in
-          // KINDS_WITH_INLINE_RENDERER — that section already carries the
-          // kind, state and workspace coordinates KbAudioEmbedMount/
-          // KbVideoEmbedMount need, via isPromotableBlockEmbedNode below.
         }
         // Every other combination is reported, never faked: a resolved
-        // embed of a kind with no inline renderer AT THIS POINT (base,
-        // markdown, audio, video, a whole-document pdf, or an image whose
-        // resolver returned no URL despite `resolved` state), or an
+        // embed of a kind whose renderer is a block mount reached through
+        // `isPromotableBlockEmbedNode` (base, markdown, audio, video, a
+        // `#page=N` pdf), a resolved embed of a kind with no renderer at all
+        // (a whole-document pdf, html, other), or an
         // unresolved/indeterminate/loading/graph_unavailable target.
-
-        const candidates = resolution.candidates ?? []
+        //
+        // Each `data-kb-embed-*` attribute is emitted from the ARM that owns
+        // it, so the serialisation cannot claim a field the state does not
+        // have (a `path`/workspace id on a `loading` embed, say) — that is
+        // the same guarantee EmbedResolution's union shape gives upstream,
+        // carried across the one place it has to become flat strings.
+        const candidates = resolution.state === 'resolved' ? (resolution.candidates ?? []) : []
         return {
           type: 'link',
           url: '',
@@ -676,17 +638,31 @@ export function remarkKbWikilinks(options: KbWikilinkOptions = {}) {
               'data-kb-embed': '',
               'data-kb-embed-kind': kind,
               'data-kb-embed-state': resolution.state,
-              ...(resolution.path ? { 'data-kb-embed-path': resolution.path } : {}),
-              ...(resolution.reason ? { 'data-kb-embed-reason': resolution.reason } : {}),
-              ...(resolution.outsideRoot ? { 'data-kb-embed-outside-root': '' } : {}),
-              ...(resolution.ambiguous ? { 'data-kb-embed-ambiguous': '' } : {}),
-              ...(candidates.length > 0 ? { 'data-kb-embed-candidates': candidates.join(', ') } : {}),
-              // ADR-083 Step 2/3 — a `.base` (dashboard) or markdown
-              // (transclusion) embed needs its own workspace query key to
-              // mount a real renderer; see EmbedResolution's own doc.
-              ...(resolution.workspaceId ? { 'data-kb-embed-workspace-id': resolution.workspaceId } : {}),
-              ...(resolution.workspacePath
-                ? { 'data-kb-embed-workspace-path': resolution.workspacePath }
+              ...(resolution.state === 'resolved'
+                ? {
+                    'data-kb-embed-path': resolution.path,
+                    ...(resolution.ambiguous ? { 'data-kb-embed-ambiguous': '' } : {}),
+                    ...(candidates.length > 0
+                      ? { 'data-kb-embed-candidates': candidates.join(', ') }
+                      : {}),
+                    // ADR-083 Step 2/3 — a `.base` (dashboard) or markdown
+                    // (transclusion) embed needs its own workspace query key
+                    // to mount a real renderer; see EmbedResolution's own doc.
+                    'data-kb-embed-workspace-id': resolution.workspaceId,
+                    'data-kb-embed-workspace-path': resolution.workspacePath,
+                  }
+                : {}),
+              // `loading` and `resolved` are the two arms that carry no
+              // reason — naming them explicitly is what makes the union do
+              // the work: adding a sixth state without a reason field fails
+              // to compile here rather than emitting `undefined`.
+              ...(resolution.state === 'unresolved' ||
+              resolution.state === 'indeterminate' ||
+              resolution.state === 'graph_unavailable'
+                ? { 'data-kb-embed-reason': resolution.reason }
+                : {}),
+              ...(resolution.state === 'unresolved' && resolution.outsideRoot
+                ? { 'data-kb-embed-outside-root': '' }
                 : {}),
             },
           },
@@ -715,15 +691,75 @@ export function remarkKbWikilinks(options: KbWikilinkOptions = {}) {
  *  (EMB-025). Everything else (an unresolved/indeterminate/loading state, a
  *  resolved embed of a kind with genuinely no inline renderer) is
  *  unaffected and keeps rendering wherever `remarkKbWikilinks` put it. */
+/** How an embed of each kind is rendered inline. Written as an EXHAUSTIVE
+ *  switch over `LibraryPreviewKind` — which is itself derived from the
+ *  runtime `LIBRARY_PREVIEW_KINDS` array — so adding an eleventh kind fails
+ *  `npm run typecheck` here rather than silently degrading every embed of
+ *  that kind to the link fallback with nothing to notice.
+ *
+ *   - `image-node`          — the one kind that maps onto a literal `image`
+ *                             mdast node, built in `remarkKbWikilinks`.
+ *   - `block-mount`         — a `<div>`-rooted renderer, promoted by
+ *                             `isPromotableBlockEmbedNode` below and
+ *                             dispatched in `KnowledgeMarkdownLink`.
+ *   - `block-mount-if-page` — pdf only: a `#page=N` fragment mounts one page
+ *                             (`KbPdfPageEmbedMount`); a whole-document pdf
+ *                             embed has no renderer and stays link-only
+ *                             (EMB-025).
+ *   - `link-only`           — no inline renderer, and for `html`/`text`/
+ *                             `other` that part of EMB-025 is permanent,
+ *                             not a "not yet". */
+type InlineEmbedTreatment = 'image-node' | 'block-mount' | 'block-mount-if-page' | 'link-only'
+
+function inlineEmbedTreatment(kind: LibraryPreviewKind): InlineEmbedTreatment {
+  switch (kind) {
+    case 'image':
+      return 'image-node'
+    case 'base':
+    case 'markdown':
+    case 'audio':
+    case 'video':
+      return 'block-mount'
+    case 'pdf':
+      return 'block-mount-if-page'
+    // `mermaid` is a DEFERRAL, not an oversight, and is called out here so
+    // the next reader sees a decision. ADR-083 §5 routes a `![[chart.mmd]]`
+    // embed to the mermaid renderer "in step 6"; step 6 shipped audio,
+    // video, pdf pages and query fences and did not state that the fifth was
+    // dropped. It is not implemented, there are zero measured uses of a
+    // `.mmd` embed, and a `.mmd` file already renders through the ordinary
+    // ```mermaid fence inside a note — so a link-only embed is a real,
+    // working reference rather than a missing feature the reader cannot
+    // route around. Whoever picks it up adds `'block-mount'` here and a
+    // dispatch branch in `KnowledgeMarkdownLink`.
+    case 'mermaid':
+    case 'html':
+    case 'text':
+    case 'other':
+      return 'link-only'
+    default: {
+      const unhandled: never = kind
+      return unhandled
+    }
+  }
+}
+
+/** The `data-kb-embed-kind` attribute back as a real `LibraryPreviewKind`,
+ *  or undefined for anything that is not one — the one place a flat mdast/DOM
+ *  attribute re-enters the typed world. */
+function asPreviewKind(raw: string | string[] | undefined): LibraryPreviewKind | undefined {
+  return LIBRARY_PREVIEW_KINDS.find((k) => k === raw)
+}
+
 function isPromotableBlockEmbedNode(node: MdNode): boolean {
   const props = node.data?.hProperties
   if (!props || props['data-kb-embed'] === undefined) return false
-  const kind = props['data-kb-embed-kind']
+  const kind = asPreviewKind(props['data-kb-embed-kind'])
   const state = props['data-kb-embed-state']
-  if (state !== 'resolved') return false
-  if (kind === 'base' || kind === 'markdown' || kind === 'audio' || kind === 'video') return true
-  if (kind === 'pdf' && props['data-kb-embed-page'] !== undefined) return true
-  return false
+  if (state !== 'resolved' || kind === undefined) return false
+  const treatment = inlineEmbedTreatment(kind)
+  if (treatment === 'block-mount') return true
+  return treatment === 'block-mount-if-page' && props['data-kb-embed-page'] !== undefined
 }
 
 /** True for a resolved, WIDTH-bearing image embed (EMB-030) —
@@ -868,10 +904,23 @@ export interface KnowledgeLinkContextValue {
    * carries. Absent outside a knowledge base, or inside a transcluded note's
    * nested pass (`KbTransclusionContent` deliberately does not forward
    * these) — nesting a live query is OUT (EMB-060/N1), so a query fence
-   * there falls back to the inherited, non-searching code renderer.
+   * there falls back to the inherited, non-searching code renderer WITH a
+   * stated reason (see `nestedTransclusion` below and
+   * `KnowledgeMarkdownCode`).
    */
   workspaceId?: string
   collectionId?: string
+  /**
+   * True only inside a transcluded note's nested markdown pass. It exists to
+   * keep two very different causes of "this query fence did not run" apart on
+   * screen: a DELIBERATE exclusion (EMB-060/N1 — nesting a live query is out
+   * of scope) and a CONTEXT-PLUMBING FAULT (a host that forgot to pass
+   * `workspaceId`/`collectionId`). Without it both render identically, and a
+   * regression that silently turns every query fence in every note back into
+   * a static code block is indistinguishable from an author who wrote a code
+   * block on purpose — invisible for as long as nobody happens to look.
+   */
+  nestedTransclusion?: boolean
 }
 
 const KnowledgeLinkContext = createContext<KnowledgeLinkContextValue>({})
@@ -1249,7 +1298,14 @@ function EmbedFallback({
   children,
 }: {
   target: string
-  state: string
+  /** The resolver's own five-state verdict, NOT a bare `string`. This type
+   *  is the whole point of the `switch` below: the confident render — a link
+   *  badged `verified` — must be reachable ONLY from a state that was proved
+   *  `resolved`. When this parameter was `string`, adding a sixth state
+   *  matched none of the branches, fell through to the confident tail, and
+   *  badged an unconfirmed target "verified" with `npm run typecheck` silent
+   *  throughout — the exact inversion EMB-012/EMB-013 exist to prevent. */
+  state: EmbedResolutionState
   path?: string
   reason?: string
   outsideRoot: boolean
@@ -1257,39 +1313,57 @@ function EmbedFallback({
   candidates?: string
   children?: ReactNode
 }) {
-  if (state === 'loading') return <LoadingEmbedPlaceholder />
-  if (state === 'graph_unavailable') return <GraphUnavailableEmbed>{children}</GraphUnavailableEmbed>
-  if (state === 'indeterminate') {
-    return <IndeterminateEmbedLink reason={reason ?? 'no reason available'}>{children}</IndeterminateEmbedLink>
+  switch (state) {
+    case 'loading':
+      return <LoadingEmbedPlaceholder />
+    case 'graph_unavailable':
+      return <GraphUnavailableEmbed>{children}</GraphUnavailableEmbed>
+    case 'indeterminate':
+      return (
+        <IndeterminateEmbedLink reason={reason ?? 'no reason available'}>{children}</IndeterminateEmbedLink>
+      )
+    case 'unresolved':
+      if (outsideRoot) return <ContainmentRefusedEmbed>{children}</ContainmentRefusedEmbed>
+      return (
+        <UnresolvedLink detail={reason ?? `no file in this collection matches "${target}"`}>
+          {children}
+        </UnresolvedLink>
+      )
+    case 'resolved':
+      // The target exists, but this embed's kind has no inline renderer (a
+      // whole-document pdf, html, other) or its block mount was not reached
+      // because the embed did not stand alone in its paragraph: a real,
+      // working link to the file, styled and badged exactly like any other
+      // confirmed embed shown as a link.
+      return (
+        <CollectionLink
+          path={path ?? target}
+          kind="wikilink"
+          target={target}
+          verified
+          isEmbed
+          ambiguousDetail={
+            ambiguous
+              ? `more than one file matched this embed's target; showing the first — also matches: ${candidates ?? 'no other candidates were reported'}`
+              : undefined
+          }
+        >
+          {children}
+        </CollectionLink>
+      )
+    default: {
+      // Unreachable today, and it must STAY unreachable by compiler proof,
+      // not by review: a new `EmbedResolutionState` fails to compile here.
+      // If one ever does slip through at runtime (a hand-written DOM
+      // attribute, say), it renders as the honest "no verdict" treatment —
+      // never the `verified` badge above.
+      const unhandled: never = state
+      void unhandled
+      return (
+        <IndeterminateEmbedLink reason={reason ?? 'no reason available'}>{children}</IndeterminateEmbedLink>
+      )
+    }
   }
-  if (state === 'unresolved') {
-    if (outsideRoot) return <ContainmentRefusedEmbed>{children}</ContainmentRefusedEmbed>
-    return (
-      <UnresolvedLink detail={reason ?? `no file in this collection matches "${target}"`}>
-        {children}
-      </UnresolvedLink>
-    )
-  }
-  // 'resolved' — the target exists, but this embed's kind has no inline
-  // renderer yet (or the image branch's own URL check failed despite a
-  // resolved edge): a real, working link to the file, styled and badged
-  // exactly like any other confirmed embed shown as a link.
-  return (
-    <CollectionLink
-      path={path ?? target}
-      kind="wikilink"
-      target={target}
-      verified
-      isEmbed
-      ambiguousDetail={
-        ambiguous
-          ? `more than one file matched this embed's target; showing the first — also matches: ${candidates ?? 'no other candidates were reported'}`
-          : undefined
-      }
-    >
-      {children}
-    </CollectionLink>
-  )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1329,40 +1403,6 @@ function nestedTranscludedEmbedResolver(): EmbedResolution {
     state: 'unresolved',
     reason: 'embeds inside a transcluded note are shown as links — open the note itself to see them',
   }
-}
-
-function EmbedMountPlaceholder() {
-  return (
-    <div
-      data-testid="kb-embed-mount-loading"
-      aria-hidden="true"
-      className="flex items-center justify-center gap-2 rounded-md border border-[var(--color-border)] px-3 py-6 text-xs text-[var(--color-muted)]"
-    >
-      <SpinnerGap size={14} className="animate-spin" /> Loading…
-    </div>
-  )
-}
-
-function EmbedMountError({ message, onRetry }: { message: string; onRetry?: () => void }) {
-  return (
-    <div
-      data-testid="kb-embed-mount-error"
-      className="flex flex-col items-center gap-2 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 px-3 py-6 text-center text-xs text-[var(--color-warning)]"
-    >
-      <Warning size={16} />
-      <span>{message}</span>
-      {onRetry && (
-        <button
-          type="button"
-          tabIndex={0}
-          onClick={onRetry}
-          className="text-[11px] underline underline-offset-2"
-        >
-          Retry
-        </button>
-      )}
-    </div>
-  )
 }
 
 function dirnameOf(path: string): string {
@@ -1691,6 +1731,11 @@ function KbTransclusionContent({
         {...(ctx.onNavigate ? { onNavigate: ctx.onNavigate } : {})}
         {...(ctx.onHeadingLink ? { onHeadingLink: ctx.onHeadingLink } : {})}
         {...(ctx.linkHref ? { linkHref: ctx.linkHref } : {})}
+        // Deliberately NOT forwarding workspaceId/collectionId — a live query
+        // inside a transcluded note is out of scope (EMB-060/N1). This flag
+        // is what lets `KnowledgeMarkdownCode` say so in those words rather
+        // than rendering the same thing a missing-context bug would.
+        nestedTransclusion
         resolveEmbedUrl={nestedTranscludedEmbedResolver}
       />
     </div>
@@ -1836,7 +1881,11 @@ function KnowledgeMarkdownLink(
       return (
         <EmbedFallback
           target={target}
-          state={props['data-kb-embed-state'] ?? 'indeterminate'}
+          // An absent OR unrecognised attribute becomes `indeterminate` —
+          // "no verdict", the only honest reading of a state this build does
+          // not know about. It is never allowed to reach the `resolved`
+          // branch's `verified` badge by default.
+          state={asEmbedResolutionState(props['data-kb-embed-state']) ?? 'indeterminate'}
           {...(props['data-kb-embed-path'] !== undefined ? { path: props['data-kb-embed-path'] } : {})}
           {...(props['data-kb-embed-reason'] !== undefined ? { reason: props['data-kb-embed-reason'] } : {})}
           outsideRoot={props['data-kb-embed-outside-root'] !== undefined}
@@ -1943,17 +1992,30 @@ function KnowledgeMarkdownLink(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Divergence 3 — the `code` slot, ADR-083 Step 6 (US-12, EMB-105)
+// Divergence 2 — the `code` slot, ADR-083 Step 6 (US-12, EMB-105)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * The KB `code` slot: a fenced ```query block runs a real search
  * (`KbQueryFenceEmbed`) when the open note carries a workspace and
- * collection id in context; everything else — inline code, mermaid, any
- * other language, and a `query` fence with no such context (a nested
- * transclusion pass, or this composition used outside a knowledge base) —
- * is handed to the INHERITED `code` renderer unchanged, so mermaid routing
- * and Shiki highlighting cannot drift from stage 1.
+ * collection id in context. Inline code, mermaid and every other language go
+ * to the INHERITED `code` renderer unchanged, so mermaid routing and Shiki
+ * highlighting cannot drift from stage 1.
+ *
+ * A `query` fence that CANNOT run still renders its own text through that
+ * inherited renderer — but never silently. It carries a one-line statement
+ * naming which of the two reasons applies:
+ *
+ *   - inside a transcluded note (`nestedTransclusion`), nesting a live query
+ *     is a deliberate scope exclusion (EMB-060/N1); and
+ *   - anywhere else, the host did not supply `workspaceId`/`collectionId`,
+ *     which outside a knowledge base is expected and inside one is a bug.
+ *
+ * Rendering both as a plain code block — which is what this did — makes a
+ * context-plumbing regression indistinguishable from an author's deliberate
+ * code block: `KnowledgeNoteView` is the only host that supplies those two
+ * ids, so a refactor that dropped them would quietly turn every query fence
+ * in every note back into static text with nothing on screen to notice.
  *
  * This is divergence (2) of the file header's three — unlike the `a` slot's
  * wikilink/embed vocabulary, this one recognises nothing about NOTATION; it
@@ -1963,8 +2025,23 @@ function KnowledgeMarkdownLink(
 function KnowledgeMarkdownCode(props: { children?: ReactNode; className?: string }) {
   const ctx = useContext(KnowledgeLinkContext)
   const { isBlock, language, text } = classifyFence(props.children, props.className)
-  if (isBlock && language === 'query' && ctx.workspaceId && ctx.collectionId) {
-    return <KbQueryFenceEmbed workspaceId={ctx.workspaceId} collectionId={ctx.collectionId} query={text} />
+  if (isBlock && language === 'query') {
+    if (ctx.workspaceId && ctx.collectionId) {
+      return <KbQueryFenceEmbed workspaceId={ctx.workspaceId} collectionId={ctx.collectionId} query={text} />
+    }
+    return (
+      <div data-testid="kb-query-fence-inert">
+        <InheritedCode {...props} />
+        <p
+          data-testid="kb-query-fence-inert-reason"
+          className="mt-1 text-[11px] text-[var(--color-muted)]"
+        >
+          {ctx.nestedTransclusion === true
+            ? 'This query is shown as text — a query inside a transcluded note is not run. Open the note itself to see its results.'
+            : 'This query is shown as text — it can only run inside a knowledge base.'}
+        </p>
+      </div>
+    )
   }
   return <InheritedCode {...props} />
 }
@@ -2049,6 +2126,7 @@ export function KnowledgeBaseMarkdown({
       linkHref: link.linkHref,
       workspaceId: link.workspaceId,
       collectionId: link.collectionId,
+      nestedTransclusion: link.nestedTransclusion,
     }),
     [
       link.notePath,
@@ -2058,6 +2136,7 @@ export function KnowledgeBaseMarkdown({
       link.linkHref,
       link.workspaceId,
       link.collectionId,
+      link.nestedTransclusion,
     ],
   )
 

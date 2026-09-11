@@ -40,6 +40,7 @@ import {
   remarkKbVideoImages,
   remarkKbWikilinks,
   resolveCollectionPath,
+  type EmbedResolutionResolved,
 } from './knowledgeMarkdown'
 
 // Sentinels — each proves a specific branch ran.
@@ -80,6 +81,26 @@ const CHAT_REMARK_PLUGINS = [remarkGfm, remarkMath]
 
 function bodyText(): string {
   return document.body.textContent ?? ''
+}
+
+/** A COMPLETE `resolved` embed resolution — every field the real resolver
+ *  (`KnowledgeNoteView`'s `resolveEmbedAgainstGraph`) sets when it answers
+ *  `resolved`. These fixtures used to omit `path`/`workspaceId`/
+ *  `workspacePath`, which was only expressible because `EmbedResolution` was
+ *  a bag of optionals; now the union requires them, and a fixture that
+ *  cannot be constructed is a state production cannot reach either. */
+function resolvedEmbed(
+  url: string,
+  over: Partial<EmbedResolutionResolved> = {},
+): EmbedResolutionResolved {
+  return {
+    state: 'resolved',
+    url,
+    path: 'files/target',
+    workspaceId: 'ws-1',
+    workspacePath: 'work/files/target',
+    ...over,
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -478,7 +499,7 @@ describe('wikilinks and embeds (FR-060, US-7 AS-1/AS-2)', () => {
     render(
       <KnowledgeBaseMarkdown
         content={'![[diagram.png]]'}
-        resolveEmbedUrl={() => ({ state: 'resolved', url: 'https://example.test/diagram.png' })}
+        resolveEmbedUrl={() => resolvedEmbed('https://example.test/diagram.png')}
       />,
     )
     expect(screen.getByTestId('chat-image').getAttribute('src')).toBe('https://example.test/diagram.png')
@@ -491,7 +512,7 @@ describe('wikilinks and embeds (FR-060, US-7 AS-1/AS-2)', () => {
     render(
       <KnowledgeBaseMarkdown
         content={'![[logo.svg]]'}
-        resolveEmbedUrl={() => ({ state: 'resolved', url: 'https://example.test/logo.svg' })}
+        resolveEmbedUrl={() => resolvedEmbed('https://example.test/logo.svg')}
       />,
     )
     expect(screen.getByTestId('chat-image').getAttribute('src')).toBe('https://example.test/logo.svg')
@@ -603,7 +624,7 @@ describe('wikilinks and embeds (FR-060, US-7 AS-1/AS-2)', () => {
     render(
       <KnowledgeBaseMarkdown
         content={'![[report.pdf]]'}
-        resolveEmbedUrl={() => ({ state: 'resolved', path: 'files/report.pdf', url: 'https://example.test/x' })}
+        resolveEmbedUrl={() => resolvedEmbed('https://example.test/x', { path: 'files/report.pdf' })}
         linkHref={(p) => `/#/library?path=${p}`}
       />,
     )
@@ -620,13 +641,13 @@ describe('wikilinks and embeds (FR-060, US-7 AS-1/AS-2)', () => {
     render(
       <KnowledgeBaseMarkdown
         content={'![[report.pdf]]'}
-        resolveEmbedUrl={() => ({
-          state: 'resolved',
-          path: 'files/report.pdf',
-          url: 'https://example.test/x',
-          ambiguous: true,
-          candidates: ['archive/report.pdf'],
-        })}
+        resolveEmbedUrl={() =>
+          resolvedEmbed('https://example.test/x', {
+            path: 'files/report.pdf',
+            ambiguous: true,
+            candidates: ['archive/report.pdf'],
+          })
+        }
       />,
     )
     const el = screen.getByTestId('markdown-link')
@@ -897,5 +918,146 @@ describe('classifyEmbedKind (unit, ADR-083 EMB-034)', () => {
     expect(classifyEmbedKind('README')).toBe('other')
     expect(classifyEmbedKind('archive.zip')).toBe('other')
     expect(classifyEmbedKind('notes.txt')).toBe('other')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE NOTE RENDERER ACTUALLY USES ITS REHYPE PLUGINS
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// A SURVIVING MUTANT, found by the test-integrity audit: deleting
+// `rehypePlugins={KB_REHYPE_PLUGINS}` from `KnowledgeBaseMarkdown` kills
+// KaTeX *and* the Phosphor emoji translator in every knowledge-base note, and
+// 132 tests across 8 files stayed green. `kbMathAlreadyWorking.test.tsx`
+// renders `ReactMarkdown` and the plugin arrays DIRECTLY and never imports
+// `KnowledgeBaseMarkdown` at all — so it proves the plugins work, which was
+// never in doubt. It does not prove the note renderer uses them.
+//
+// These two render through `KnowledgeBaseMarkdown` itself, which is the
+// component a reader's note actually goes through.
+
+describe('KnowledgeBaseMarkdown applies its own rehype plugins (not just the arrays existing)', () => {
+  it('renders inline math through the REAL note renderer, so removing its rehypePlugins fails here', () => {
+    render(<KnowledgeBaseMarkdown content={'Energy is $E = mc^2$ here.'} />)
+
+    // Positive: KaTeX ran inside the note composition.
+    expect(document.querySelector('.katex')).not.toBeNull()
+    // Paired negative: the raw delimiters are gone, so this cannot be
+    // passing on a renderer that left the text untouched.
+    expect(screen.queryByText('$E = mc^2$', { exact: false })).not.toBeInTheDocument()
+  })
+
+  it('renders block math through the REAL note renderer', () => {
+    render(<KnowledgeBaseMarkdown content={'$$\n\\int_0^1 x\\,dx = \\tfrac12\n$$'} />)
+    expect(document.querySelector('.katex-display')).not.toBeNull()
+  })
+
+  it('translates an emoji to a Phosphor icon through the REAL note renderer — the OTHER half the same mutation kills', () => {
+    // The emoji translator is the second rehype plugin in the same array, so
+    // one deletion takes out both. Asserting both halves means the mutation
+    // cannot be half-restored and still pass.
+    render(<KnowledgeBaseMarkdown content={'Shipped 🚀 today.'} />)
+
+    // Positive: the rehype plugin emitted a `data-phosphor-icon` span and
+    // the `span` slot turned it into a real Phosphor icon — an <svg>, which
+    // is the only element this paragraph can contain if the translation ran.
+    expect(document.querySelector('p svg')).not.toBeNull()
+    // Paired negative: the raw emoji character is gone from the text (UI
+    // rules: no emoji in UI chrome — it becomes a Phosphor icon), while the
+    // surrounding words survive, so this cannot pass on a renderer that
+    // dropped the paragraph entirely.
+    expect(document.body.textContent ?? '').not.toContain('🚀')
+    expect(document.body.textContent ?? '').toContain('Shipped')
+    expect(document.body.textContent ?? '').toContain('today.')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A `query` fence that cannot run says so (silent-failure audit M7)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('KnowledgeMarkdownCode — a query fence with no workspace/collection context', () => {
+  it('renders the fence text AND a stated reason, never an ordinary-looking code block', () => {
+    // `KnowledgeNoteView` is the only host that supplies workspaceId and
+    // collectionId. A refactor that dropped them used to turn every query
+    // fence in every note back into a static code block, indistinguishable
+    // from an author's deliberate one — invisible for as long as nobody
+    // happened to look.
+    render(<KnowledgeBaseMarkdown content={'```query\nquarterly report\n```'} />)
+
+    const inert = screen.getByTestId('kb-query-fence-inert')
+    expect(inert).toBeInTheDocument()
+    // The author's own text is still shown…
+    expect(inert.textContent ?? '').toContain('quarterly report')
+    // …with the reason named.
+    expect(screen.getByTestId('kb-query-fence-inert-reason')).toHaveTextContent(
+      /can only run inside a knowledge base/i,
+    )
+  })
+
+  it('gives the DELIBERATE nested-transclusion exclusion its own wording, not the missing-context one (EMB-060/N1)', () => {
+    render(<KnowledgeBaseMarkdown content={'```query\nquarterly report\n```'} nestedTransclusion />)
+
+    const reason = screen.getByTestId('kb-query-fence-inert-reason')
+    expect(reason).toHaveTextContent(/inside a transcluded note is not run/i)
+    expect(reason.textContent ?? '').not.toMatch(/can only run inside a knowledge base/i)
+  })
+
+  it('control — an ordinary non-query fence is untouched: no inert marker, no reason line', () => {
+    render(<KnowledgeBaseMarkdown content={'```ts\nconst a = 1\n```'} />)
+
+    expect(screen.queryByTestId('kb-query-fence-inert')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('kb-query-fence-inert-reason')).not.toBeInTheDocument()
+    // And it still renders as code.
+    expect(document.body.textContent ?? '').toContain('const a = 1')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EmbedFallback never badges an unrecognised state "verified" (type-design F2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('EmbedFallback — the confident render is reachable only from a proved `resolved`', () => {
+  it('treats an UNRECOGNISED embed state as "no verdict", never as a verified link', () => {
+    // The state crosses the remark pipeline as a flat attribute string. When
+    // `EmbedFallback` took `state: string` and matched it with an if-chain,
+    // any value it did not recognise fell through to the tail — which
+    // rendered `<CollectionLink … verified>`, a link BADGED as confirmed for
+    // a target the graph never confirmed. That is the exact inversion
+    // EMB-012/EMB-013 exist to prevent, and `npm run typecheck` stayed
+    // silent throughout.
+    render(
+      <KnowledgeBaseMarkdown
+        content={'![[report.pdf]]'}
+        // A state no build knows about. The resolver type now forbids
+        // constructing one, so this reaches the renderer the only way it
+        // still can — as the raw attribute value.
+        resolveEmbedUrl={() =>
+          ({ state: 'ambiguous_skipped', reason: 'a state this build does not know' }) as unknown as ReturnType<
+            NonNullable<React.ComponentProps<typeof KnowledgeBaseMarkdown>['resolveEmbedUrl']>
+          >
+        }
+      />,
+    )
+
+    const el = screen.getByTestId('markdown-link')
+    // `data-kb-state` is 'resolved' ONLY for a link CollectionLink was told
+    // was verified (its own `verified ? 'resolved' : 'unknown'`). Before the
+    // exhaustive switch this read 'resolved' for a state nothing confirmed.
+    expect(el.getAttribute('data-kb-state')).not.toBe('resolved')
+  })
+
+  it('positive control — a genuinely RESOLVED embed with no inline renderer IS badged verified', () => {
+    render(
+      <KnowledgeBaseMarkdown
+        content={'![[report.pdf]]'}
+        resolveEmbedUrl={() => resolvedEmbed('https://example.test/x', { path: 'files/report.pdf' })}
+        linkHref={(p) => `/#/library?path=${p}`}
+      />,
+    )
+
+    const el = screen.getByTestId('markdown-link')
+    expect(el.getAttribute('data-kb-state')).toBe('resolved')
+    expect(el.tagName).toBe('A')
   })
 })

@@ -40,6 +40,15 @@
 // successful write's own response, or a conflict's follow-up read — never
 // copied from a prop after the initial mount, so a token is never sent
 // paired with a value this component did not itself read.
+//
+// WHEN THAT RE-READ ITSELF FAILS, the conflict banner is NOT shown. The
+// banner's whole claim is "here is what the server holds now"; with no
+// successful re-read there is no such value to show, and displaying the
+// reader's own pre-edit copy underneath that sentence asserts something
+// false. The failure gets its own message and clears `versionToken`, so the
+// next attempt is refused with a real reason rather than looping forever on
+// a token already known to be stale. Same rule for a 200 that carries no
+// token: an anomaly that is stated, never a silent no-op.
 
 import { useEffect, useState, type MouseEvent, type ReactNode } from 'react'
 import { PencilSimple, SpinnerGap, WarningCircle } from '@phosphor-icons/react'
@@ -60,12 +69,15 @@ import { isEditableCell, recordPropertyText, type EditableCellType } from './vie
 /** One successful inline field write, reported upward. The ONLY intended
  *  wiring point is the screen that owns this view's TanStack Query cache
  *  (BasePreview) — it invalidates the per-note caches ADR-083 §4.5 names
- *  (content, outline, links) and the view-result queries for the written
- *  collection, and may patch its own cached rows so every mounted embed of
- *  the same view reflects the write at once (§4.5's "two embeds of the same
- *  view" requirement). This component holds no query client of its own and
+ *  (content, outline, links) for the WRITTEN NOTE, and the view-result
+ *  queries for the written COLLECTION, so every mounted embed of every view
+ *  over that collection reflects the write at once (§4.5's "two embeds of
+ *  the same view" requirement, and its "a different view of the same
+ *  collection" sibling). This component holds no query client of its own and
  *  invalidates nothing outside its own local editing state. */
 export interface RecordFieldWriteResult {
+  /** WORKSPACE-relative path of the written note — what the per-note cache
+   *  keys (`libraryQueryKeys.content`, outline, links) are addressed by. */
   path: string
   recordId: string
   property: string
@@ -73,8 +85,13 @@ export interface RecordFieldWriteResult {
    *  response — never the raw text the user typed, so a server-side
    *  normalisation (e.g. a declared decimal scale) is reflected honestly. */
   value: string
-  /** The record's version_token AFTER this write. */
-  versionToken: string
+  /** The record's version_token AFTER this write, or `undefined` when the
+   *  200 carried none. Optional BECAUSE that case is real (the server omits
+   *  the field whenever its own version read came back empty) and must not
+   *  be papered over: this callback fires either way, since the write landed
+   *  either way and the caches downstream are stale either way. The editor
+   *  itself refuses the next edit rather than reusing a stale token. */
+  versionToken: string | undefined
 }
 
 /** What an inline editor needs to write through RecordWriteRequest at all —
@@ -127,6 +144,17 @@ function resolveEditTarget(
   }
 }
 
+/** One editable cell type's value, in the shape RecordWriteRequest accepts.
+ *
+ *  The `default` arm is a COMPILE-TIME guard, not defensive runtime code:
+ *  widening `EditableCellType` (adding `checkbox`, say — which this file's own
+ *  header calls "a scope decision, not a second data-integrity gate") without
+ *  adding a case here fails `npm run typecheck` on the `never` assignment.
+ *  Left open, that same edit returned `undefined`, the request body became
+ *  `values: [undefined]`, `RecordWriteRequestSchema.parse` threw an uncaught
+ *  Zod error on the way out, and the reader saw the generic "Could not save
+ *  this field" — a message about the server for a fault entirely on this
+ *  side of the wire. */
 function buildRecordValue(type: EditableCellType, raw: string): RecordValue {
   switch (type) {
     case 'enum':
@@ -135,6 +163,10 @@ function buildRecordValue(type: EditableCellType, raw: string): RecordValue {
       return { type: 'date', date: raw }
     case 'text':
       return { type: 'text', text: raw }
+    default: {
+      const unhandled: never = type
+      throw new Error(`RecordFieldEditor: no write shape for cell type ${String(unhandled)}`)
+    }
   }
 }
 
@@ -228,29 +260,62 @@ export function EditableCell({
       setDraft(newValue)
       setEditing(false)
       setConflictMessage(undefined)
+      // The write LANDED — so the caches downstream are stale NOW, whether or
+      // not the response carried a fresh token. `onFieldWritten` is the only
+      // thing that drives that invalidation, so it fires unconditionally.
+      // (It was inside the token check, whose false branch did nothing and
+      // said nothing: the cell painted the new value, a second embed of the
+      // same view kept the old one indefinitely, and the next edit re-sent the
+      // PRE-WRITE token — producing a 409 the UI then explained as "this
+      // changed while you were editing", blaming a phantom concurrent editor
+      // for the server's own omission.)
+      target.onFieldWritten?.({
+        path: row.path,
+        recordId: target.recordId,
+        property: cell.property,
+        value: newValue,
+        versionToken: written.version_token,
+      })
       if (written.version_token !== undefined) {
         setVersionToken(written.version_token)
-        target.onFieldWritten?.({
-          path: row.path,
-          recordId: target.recordId,
-          property: cell.property,
-          value: newValue,
-          versionToken: written.version_token,
-        })
+      } else {
+        // A 200 with no token is an ANOMALY, not a no-op. Dropping the token
+        // makes the next edit fail commit()'s own guard above with the real
+        // reason ("could not confirm this record's current version") instead
+        // of silently sending a token known to be stale.
+        setVersionToken(undefined)
+        setError('Saved, but this record’s version could not be confirmed — reopen it before editing again.')
       }
     } catch (err) {
       if (isKnowledgeRecordConflict(err)) {
         setEditing(false)
-        setConflictMessage('This changed while you were editing.')
         try {
           const fresh = await fetchVaultRecord(target.workspaceId, target.recordId)
           const freshValue = recordPropertyText(fresh, cell.property)
           setValue(freshValue)
           setDraft(freshValue)
+          setConflictMessage('This changed while you were editing.')
           if (fresh.version_token !== undefined) setVersionToken(fresh.version_token)
-        } catch {
-          // Could not refresh — the conflict banner stays up with whatever
-          // value/token this editor last held; Retry (below) tries again.
+        } catch (refreshErr) {
+          // The re-read that is supposed to SHOW the reader the server's
+          // current value failed. This used to be an empty catch, and the
+          // result was the worst available render: the conflict banner stayed
+          // up beside the reader's OWN pre-edit value, asserting it was the
+          // server's, while Retry reopened the editor still holding the stale
+          // token — so the next write 409'd, the refresh failed again, and the
+          // loop was unbounded with no diagnostic anywhere. The banner is only
+          // honest when the re-read actually succeeded, so it is set INSIDE
+          // the try above and this branch states what really happened.
+          setConflictMessage(undefined)
+          setVersionToken(undefined)
+          // Both halves, deliberately: the SITUATION the reader needs to act
+          // on, then the real underlying cause. `getErrorMessage` alone
+          // would render a bare "network down" — technically true, and it
+          // tells the reader nothing about what just happened to their edit
+          // or what to do next.
+          setError(
+            `This changed on the server, and the current value could not be read — reopen the record. (${getErrorMessage(refreshErr, 'the read failed')})`,
+          )
         }
       } else {
         setError(getErrorMessage(err, 'Could not save this field'))
@@ -269,6 +334,7 @@ export function EditableCell({
           {conflictMessage}
         </span>
         <button
+          tabIndex={0}
           type="button"
           onMouseDown={stop}
           onClick={(event) => {
@@ -290,6 +356,7 @@ export function EditableCell({
     return (
       <span className="inline-flex items-center gap-1.5">
         <select
+          tabIndex={0}
           value={value}
           disabled={saving}
           onMouseDown={stop}
@@ -327,31 +394,48 @@ export function EditableCell({
   }
 
   if (!editing) {
+    // The error is rendered HERE as well as inside the open editor below.
+    // Both cases that close the editor and then set an error — a conflict
+    // whose re-read failed, and a 200 that carried no version_token — land
+    // on this branch, so an error shown only in the editing branch would be
+    // set and never drawn: the state exists, the reader sees an ordinary
+    // cell. That is the same invisible-failure shape the error is there to
+    // prevent, one level down.
     return (
-      <button
-        type="button"
-        onMouseDown={stop}
-        onClick={(event) => {
-          stop(event)
-          setDraft(value)
-          setEditing(true)
-        }}
-        data-testid="viewpart-cell-editor-trigger"
-        aria-label={`Edit ${cell.property}`}
-        className="group inline-flex max-w-full min-w-0 items-center gap-1 text-left"
-      >
-        <span className="min-w-0 truncate">{renderValue(value)}</span>
-        <PencilSimple
-          size={11}
-          className="shrink-0 text-[var(--color-muted)] opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100"
-        />
-      </button>
+      <span className="inline-flex max-w-full min-w-0 flex-wrap items-center gap-1.5">
+        <button
+          tabIndex={0}
+          type="button"
+          onMouseDown={stop}
+          onClick={(event) => {
+            stop(event)
+            setError(undefined)
+            setDraft(value)
+            setEditing(true)
+          }}
+          data-testid="viewpart-cell-editor-trigger"
+          aria-label={`Edit ${cell.property}`}
+          className="group inline-flex max-w-full min-w-0 items-center gap-1 text-left"
+        >
+          <span className="min-w-0 truncate">{renderValue(value)}</span>
+          <PencilSimple
+            size={11}
+            className="shrink-0 text-[var(--color-muted)] opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100"
+          />
+        </button>
+        {error !== undefined && (
+          <span role="alert" data-testid="viewpart-cell-error" className="text-[11px] text-[var(--color-warning)]">
+            {error}
+          </span>
+        )}
+      </span>
     )
   }
 
   return (
     <span className="inline-flex min-w-0 items-center gap-1.5" onMouseDown={stop} onClick={stop}>
       <input
+        tabIndex={0}
         type={cell.type === 'date' ? 'date' : 'text'}
         value={draft}
         autoFocus

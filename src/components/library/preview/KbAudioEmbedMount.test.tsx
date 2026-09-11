@@ -26,11 +26,19 @@ const ENTRY: LibraryEntry = {
   is_text_editable: false,
 }
 
+// URL ORACLE. `libraryDownloadUrl` is deliberately NOT mocked: the real one
+// builds its query string with `URLSearchParams`, which percent-encodes the
+// path separator, and a hand-written mock here re-implemented it WITHOUT
+// that — so this file asserted `path=audio/song.mp3`, a URL production never
+// emits. The expected string below is the real builder's actual output,
+// written out as a literal, so a change to how download URLs are built fails
+// this test instead of silently agreeing with a second copy of the old rule.
+const EXPECTED_SRC = '/api/v1/library/ws-1/download?path=audio%2Fsong.mp3'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
-    libraryDownloadUrl: (wsId: string, path: string) => `/api/v1/library/${wsId}/download?path=${path}`,
     fetchLibraryEntries: vi.fn(),
   }
 })
@@ -53,10 +61,7 @@ describe('KbAudioEmbedMount', () => {
 
     // Positive: the shared renderer's own surface actually appears.
     const audio = await screen.findByTestId('library-audio-preview')
-    expect(audio.querySelector('audio')).toHaveAttribute(
-      'src',
-      '/api/v1/library/ws-1/download?path=audio/song.mp3',
-    )
+    expect(audio.querySelector('audio')).toHaveAttribute('src', EXPECTED_SRC)
     // Paired negative: the loading/error placeholders are gone once it has.
     expect(screen.queryByTestId('kb-embed-mount-loading')).not.toBeInTheDocument()
     expect(screen.queryByTestId('kb-embed-mount-error')).not.toBeInTheDocument()
@@ -71,8 +76,11 @@ describe('KbAudioEmbedMount', () => {
     expect(screen.queryByTestId('library-audio-preview')).not.toBeInTheDocument()
   })
 
-  it('shows a visible, named error and a working retry when the entry cannot be found', async () => {
-    vi.mocked(fetchLibraryEntries).mockResolvedValue([])
+  // A SUCCESSFUL listing that does not contain the file is its own state —
+  // see the "missing is not error" block at the bottom of this file. It used
+  // to render this same generic error, which is the defect that block covers.
+  it('shows a visible, named error and a working retry when the listing request FAILS', async () => {
+    vi.mocked(fetchLibraryEntries).mockRejectedValue(new Error('listing failed'))
     renderMount()
 
     const error = await screen.findByTestId('kb-embed-mount-error')
@@ -91,5 +99,53 @@ describe('KbAudioEmbedMount', () => {
 
     await waitFor(() => expect(screen.getByTestId('kb-embed-mount-error')).toBeInTheDocument())
     expect(screen.queryByTestId('library-audio-preview')).not.toBeInTheDocument()
+  })
+})
+
+// ── "Missing" is not "error" (silent-failure audit M1) ──────────────────────
+//
+// A directory listing that came back FINE without this file (a rename, a
+// move, a delete) used to render the SAME sentence and the SAME Retry button
+// as a listing that never arrived. Different cause, different remedy, and
+// only one of them can be fixed by pressing Retry — so a reader whose
+// colleague renamed `song.mp3` was told the server was flaky and never
+// learned the link needed updating.
+
+describe('KbAudioEmbedMount — a renamed/deleted target is distinguishable from a failed request', () => {
+  it('names the file and its folder, and offers NO Retry, when the listing succeeded without it', async () => {
+    // The listing RESOLVED — it just does not contain this path.
+    vi.mocked(fetchLibraryEntries).mockResolvedValue([
+      { ...ENTRY, name: 'intro.mp3', path: 'audio/intro.mp3' },
+    ])
+    renderMount()
+
+    const missing = await screen.findByTestId('kb-embed-mount-missing')
+    expect(missing).toHaveTextContent('song.mp3')
+    expect(missing).toHaveTextContent('audio')
+    expect(missing).toHaveTextContent(/needs updating/i)
+    // No Retry: the listing already succeeded, so retrying returns the same
+    // answer and teaches the reader to blame the server.
+    expect(missing.querySelector('button')).toBeNull()
+
+    // Paired negatives: this is NOT the generic error box, and no player
+    // mounted for a target that is not there.
+    expect(screen.queryByTestId('kb-embed-mount-error')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('library-audio-preview')).not.toBeInTheDocument()
+  })
+
+  it('a FAILED listing still renders the generic error WITH a working Retry — the two states are not the same render', async () => {
+    vi.mocked(fetchLibraryEntries).mockRejectedValue(new Error('network down'))
+    renderMount()
+
+    const error = await screen.findByTestId('kb-embed-mount-error')
+    expect(error).toHaveTextContent(/could not read this file/i)
+    // This one DOES offer Retry, and it works.
+    const retry = error.querySelector('button')
+    expect(retry).not.toBeNull()
+    expect(screen.queryByTestId('kb-embed-mount-missing')).not.toBeInTheDocument()
+
+    vi.mocked(fetchLibraryEntries).mockResolvedValueOnce([ENTRY])
+    retry?.click()
+    await screen.findByTestId('library-audio-preview')
   })
 })
