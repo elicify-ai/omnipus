@@ -38,24 +38,34 @@
 // load are reported as a count rather than as quietly missing tabs.
 
 import { useEffect, useMemo, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Code, DownloadSimple, SpinnerGap, Warning } from '@phosphor-icons/react'
 
 import { Button } from '@/components/ui/button'
 import { QueryErrorState } from '@/components/shared/QueryErrorState'
 import {
   fetchKnowledgeBaseViews,
+  fetchKnowledgeGraph,
   fetchKnowledgeViewResult,
   fetchLibraryContent,
   libraryDownloadUrl,
   libraryQueryKeys,
 } from '@/lib/api'
 import type { LibraryEntry } from '@/lib/api'
-import type { KnowledgeBaseViews, ViewResult } from '@/lib/api/generated/openapi-types'
+import type {
+  KnowledgeBaseViews,
+  KnowledgeGraphEdge,
+  KnowledgeGraphNode,
+  ViewResult,
+} from '@/lib/api/generated/openapi-types'
 
 import { LibraryCodePreview } from './LibraryCodePreview'
 import { ViewPartsRenderer } from './viewparts/ViewPartsRenderer'
-import { collectionPathToWorkspacePath, libraryNoteHref } from '../knowledge/KnowledgeBacklinks'
+import {
+  collectionPathToWorkspacePath,
+  libraryNoteHref,
+  type KnowledgeGraphLoader,
+} from '../knowledge/KnowledgeBacklinks'
 import type { KbLinkResolution } from './knowledgeMarkdown'
 import { INLINE_PREVIEW_BOX_CLASS } from './libraryPreviewVariant'
 import type { LibraryPreviewVariant } from './libraryPreviewVariant'
@@ -66,7 +76,57 @@ export interface BasePreviewLoaders {
   loadContent?: (workspaceId: string, path: string) => Promise<{ content?: string; is_text: boolean; too_large: boolean }>
   loadBaseViews?: (workspaceId: string, path: string) => Promise<KnowledgeBaseViews>
   loadViewResult?: (workspaceId: string, collectionId: string, view: string) => Promise<ViewResult>
+  /** WL-1's remaining half (docs/internal/defect-list-wikilink-rendering-
+   *  2026-09-08.md) — see `COLLECTION_LINK_ROW_QUERY_CAP`'s doc comment
+   *  below for why this exists and what it fetches. Production default is
+   *  the real client (`defaultLoadGraph`); tests inject a stub. */
+  loadGraph?: KnowledgeGraphLoader
 }
+
+/**
+ * WL-1's remaining half. A standalone `.base` pane (no host note to inherit a
+ * resolver from, unlike an embedded view — see BasePreviewEmbedOptions'
+ * `resolveWikilink` doc above) could previously only ever answer `resolved`
+ * (the target names one of THIS view's own loaded rows) or `unknown` (it does
+ * not) — because that was the only evidence in hand. Most relation-cell
+ * targets are not the title of a row the SAME view happens to display, so
+ * most links rendered `unknown` (white) even though the identical wikilink
+ * text resolves perfectly well elsewhere in the collection and renders GOLD
+ * there.
+ *
+ * The fix reuses the SAME mechanism the note reader uses — the link graph,
+ * `kind: 'links'` (KnowledgeNoteView.tsx's own `resolveWikilink`) — rather
+ * than inventing a second resolution path. It is deliberately NOT pointed at
+ * the `.base` file's own path: a `.base` is YAML, and `BuildLinkGraph`
+ * (pkg/knowledge/graph.go) only opens `.md`/`.markdown` sources for outbound
+ * links, so a `.base` file's own `links` answer is always empty — that would
+ * be a harmless no-op, not a fix.
+ *
+ * The relation cell's literal `[[wikilink]]` text is not written in the
+ * `.base` file at all — it is written in the ROW's own markdown file (a
+ * relation cell's rendered value IS that row's own frontmatter/body content;
+ * pkg/knowledge/links.go: "a note can name another note in a frontmatter
+ * field, and a rename has to rewrite it"). So the collection-wide answer for
+ * this view's own cells lives in each ROW's own outbound-links graph, fetched
+ * by that row's collection-relative path — exactly how KnowledgeNoteView
+ * fetches its answer for the one note it has open, just pointed at a bounded
+ * set of paths (one per loaded row) instead of one.
+ *
+ * Bounded so a very large view cannot fan out into hundreds of parallel graph
+ * fetches. Rows past the cap keep the same honest fallback (row-title match,
+ * else `unknown`) they always had — never silently promoted to `resolved`,
+ * which is the exact dishonesty the three-state model exists to prevent.
+ */
+const COLLECTION_LINK_ROW_QUERY_CAP = 40
+
+const defaultLoadGraph: KnowledgeGraphLoader = ({ workspaceId, collectionId, kind, path, hops, limit }) =>
+  fetchKnowledgeGraph(workspaceId, {
+    collectionId,
+    kind,
+    ...(path === undefined ? {} : { path }),
+    ...(hops === undefined ? {} : { hops }),
+    ...(limit === undefined ? {} : { limit }),
+  })
 
 /**
  * ADR-083 EMB-040/EMB-043/EMB-046/EMB-047/EMB-048/EMB-049 — the extra
@@ -139,15 +199,27 @@ export interface BasePreviewProps extends BasePreviewLoaders {
 }
 
 /** The record identifier a relation cell's `[[wikilink]]` token most often
- *  names, checked against the rows THIS view actually loaded (KB-8b). A view
- *  never has the whole collection's link graph, only its own row set, so this
- *  can honestly answer `resolved` (found here) or `unknown` (not found in
- *  what it has) — never `unresolved`, which would claim knowledge of the
- *  whole collection this view does not have. */
+ *  names, checked against the rows THIS view actually loaded (KB-8b). This is
+ *  the FALLBACK tier of `resolveWikilink` below — it never has the whole
+ *  collection's link graph, only its own row set, so on its own it can
+ *  honestly answer `resolved` (found here) or `unknown` (not found in what it
+ *  has) — never `unresolved`, which would claim knowledge of the whole
+ *  collection this tier alone does not have. (The FIRST tier, WL-1's
+ *  collection-wide row-link-graph lookup, can honestly answer `unresolved`.) */
 function basenameNoExt(path: string): string {
   const base = path.split('/').pop() ?? path
   const dot = base.lastIndexOf('.')
   return dot <= 0 ? base : base.slice(0, dot)
+}
+
+/** A KnowledgeGraphEdge's `to_path` basename, WITH its extension — mirrors
+ *  KnowledgeNoteView.tsx's own private `basenameOf` exactly (edge matching
+ *  compares against the collection-relative path a resolved edge reports,
+ *  which keeps its extension; `basenameNoExt` above is a different, row-
+ *  identity comparison and must not be reused here). */
+function basenameOf(path: string): string {
+  const parts = path.split('/')
+  return parts[parts.length - 1] || path
 }
 
 /**
@@ -197,6 +269,7 @@ export function BasePreview({
   loadContent = fetchLibraryContent,
   loadBaseViews = fetchKnowledgeBaseViews,
   loadViewResult = fetchKnowledgeViewResult,
+  loadGraph = defaultLoadGraph,
   variant = 'pane',
   embed,
   onOpenNote,
@@ -354,6 +427,57 @@ export function BasePreview({
   // view's own rows — never `unresolved`, which this view cannot honestly
   // claim about the whole collection.
   const result = resultQuery.data
+
+  // ── WL-1 remaining half: a collection-wide resolver for the standalone pane ─
+  // See COLLECTION_LINK_ROW_QUERY_CAP's doc comment above for the full
+  // rationale. Skipped entirely when an embed already supplies a complete
+  // resolver (EMB-028: an embed's byte-for-byte-unaffected guarantee), and
+  // whenever there is no result yet to draw row paths from.
+  const collectionLinkRowPaths = useMemo(() => {
+    if (embed?.resolveWikilink) return [] as string[]
+    if (!result) return [] as string[]
+    const seen = new Set<string>()
+    const paths: string[] = []
+    for (const r of result.rows) {
+      if (seen.has(r.path)) continue
+      seen.add(r.path)
+      paths.push(r.path)
+      if (paths.length >= COLLECTION_LINK_ROW_QUERY_CAP) break
+    }
+    return paths
+  }, [result, embed?.resolveWikilink])
+
+  const collectionLinkQueries = useQueries({
+    queries: collectionLinkRowPaths.map((rowPath) => ({
+      // Mirrors KnowledgeNoteView's own links-graph query key shape — same
+      // cache, same request, just addressed by a row's path instead of the
+      // one open note's path.
+      queryKey: ['library', workspaceId, 'knowledge', 'graph', 'links', collectionId, rowPath],
+      queryFn: () =>
+        loadGraph({ workspaceId, collectionId: collectionId as string, kind: 'links' as const, path: rowPath }),
+      enabled: collectionId !== undefined,
+      staleTime: 60_000,
+      retry: false,
+      refetchOnWindowFocus: false,
+    })),
+  })
+
+  const collectionLinkEdges = useMemo(() => {
+    const edges: KnowledgeGraphEdge[] = []
+    for (const q of collectionLinkQueries) {
+      if (q.data) edges.push(...q.data.edges)
+    }
+    return edges
+  }, [collectionLinkQueries])
+
+  const collectionLinkNodes = useMemo(() => {
+    const nodes: KnowledgeGraphNode[] = []
+    for (const q of collectionLinkQueries) {
+      if (q.data) nodes.push(...q.data.nodes)
+    }
+    return nodes
+  }, [collectionLinkQueries])
+
   // ADR-083 EMB-048/WL-1: an embed's own `resolveWikilink` (the note reader's
   // real link graph) takes over completely when supplied — never merged with
   // the row-scoped fallback below, which can only ever answer `resolved` or
@@ -363,12 +487,28 @@ export function BasePreview({
     if (embed?.resolveWikilink) return embed.resolveWikilink
     if (!result) return undefined
     return (target: string): KbLinkResolution => {
+      // 1. WL-1: real, collection-wide evidence first — the SAME edge the
+      //    note reader would see, drawn from whichever loaded row's own
+      //    markdown actually carries this wikilink text (see the cap's doc
+      //    comment for why this can be a real `resolved`/`unresolved`
+      //    verdict rather than the old resolved-or-unknown-only guess).
+      const edge = collectionLinkEdges.find(
+        (e) => e.link_text === target || e.to_path === target || basenameOf(e.to_path) === target,
+      )
+      if (edge) {
+        if (edge.resolution === 'unresolved') return { state: 'unresolved' }
+        const node = collectionLinkNodes.find((n) => n.path === edge.to_path)
+        if (node && node.exists === false) return { state: 'unresolved' }
+        return { state: 'resolved', path: edge.to_path }
+      }
+      // 2. Fallback: does the target literally name one of the rows THIS
+      //    view loaded (KB-8b) — resolved-or-unknown only.
       const match = result.rows.find(
         (r) => r.title === target || r.id === target || basenameNoExt(r.path) === target,
       )
       return match ? { state: 'resolved', path: match.path } : { state: 'unknown' }
     }
-  }, [result, embed?.resolveWikilink])
+  }, [result, embed?.resolveWikilink, collectionLinkEdges, collectionLinkNodes])
 
   // ── States before a result can render ─────────────────────────────────────
   // Every one renders inside the SAME `base-preview` container, so "the base

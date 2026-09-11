@@ -25,8 +25,14 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query'
-import type { KnowledgeBaseViews, ViewResult } from '@/lib/api/generated/openapi-types'
+import type {
+  KnowledgeBaseViews,
+  KnowledgeGraphEdge,
+  KnowledgeGraphResponse,
+  ViewResult,
+} from '@/lib/api/generated/openapi-types'
 import type { LibraryEntry } from '@/lib/api'
+import type { KnowledgeGraphLoader } from '../knowledge/KnowledgeBacklinks'
 import { BasePreview } from './BasePreview'
 
 vi.mock('react-shiki', () => ({
@@ -89,10 +95,40 @@ function result(over: Partial<ViewResult> = {}): ViewResult {
   }
 }
 
+// WL-1's remaining half (docs/internal/defect-list-wikilink-rendering-
+// 2026-09-08.md): BasePreview's new collection-wide resolver fetches
+// `kind: 'links'` for each loaded row's own path. `graph()`/`linkEdge()`
+// mirror KnowledgeNoteView.test.tsx's own fixture shape exactly, since this
+// is the SAME wire type answered by the SAME mechanism.
+function graph(over: Partial<KnowledgeGraphResponse> = {}): KnowledgeGraphResponse {
+  return {
+    collection_id: 'kb_1',
+    kind: 'links',
+    nodes: [],
+    edges: [],
+    skipped: [],
+    truncated: false,
+    ...over,
+  }
+}
+
+function linkEdge(over: Partial<KnowledgeGraphEdge> = {}): KnowledgeGraphEdge {
+  return {
+    heading_found: false,
+    from_path: 'a.md',
+    to_path: 'companies/korn-ferry.md',
+    link_text: 'Korn Ferry',
+    resolution: 'exact_path',
+    ambiguous: false,
+    ...over,
+  }
+}
+
 interface Loaders {
   loadContent?: (ws: string, path: string) => Promise<{ content?: string; is_text: boolean; too_large: boolean }>
   loadBaseViews?: (ws: string, path: string) => Promise<KnowledgeBaseViews>
   loadViewResult?: (ws: string, collectionId: string, view: string) => Promise<ViewResult>
+  loadGraph?: KnowledgeGraphLoader
 }
 
 function renderBase(loaders: Loaders = {}, e = entry(), onOpenNote?: (workspacePath: string) => void) {
@@ -100,6 +136,10 @@ function renderBase(loaders: Loaders = {}, e = entry(), onOpenNote?: (workspaceP
     loaders.loadContent ?? vi.fn().mockResolvedValue({ content: BASE_CONTENT, is_text: true, too_large: false })
   const loadBaseViews = loaders.loadBaseViews ?? vi.fn().mockResolvedValue(baseViews())
   const loadViewResult = loaders.loadViewResult ?? vi.fn().mockResolvedValue(result())
+  // Default: an empty answer for every row queried. Every existing test in
+  // this suite predates WL-1's row-link-graph fetch and must see it find
+  // nothing, so its own row-scoped fallback behaves exactly as before.
+  const loadGraph = loaders.loadGraph ?? vi.fn().mockResolvedValue(graph())
   render(
     <QueryClientProvider client={makeClient()}>
       <BasePreview
@@ -108,11 +148,12 @@ function renderBase(loaders: Loaders = {}, e = entry(), onOpenNote?: (workspaceP
         loadContent={loadContent}
         loadBaseViews={loadBaseViews}
         loadViewResult={loadViewResult}
+        loadGraph={loadGraph}
         {...(onOpenNote ? { onOpenNote } : {})}
       />
     </QueryClientProvider>,
   )
-  return { loadContent, loadBaseViews, loadViewResult }
+  return { loadContent, loadBaseViews, loadViewResult, loadGraph }
 }
 
 describe('BasePreview — tabs over the views the server says this base owns', () => {
@@ -397,6 +438,66 @@ describe('BasePreview — tabs over the views the server says this base owns', (
         const link = screen.getByTestId('viewpart-cell-link')
         expect(link).toHaveAttribute('data-kb-state', 'unknown')
         expect(link.textContent).toContain('Nobody Here')
+      })
+
+      // WL-1's remaining half (docs/internal/defect-list-wikilink-rendering-
+      // 2026-09-08.md): a relation link inside a base opened DIRECTLY in the
+      // Library must resolve against the collection, exactly as the same
+      // wikilink resolves gold inside a note — not merely against the
+      // handful of rows this one view happened to load.
+      describe('WL-1 — the standalone pane resolves against the collection, not just this view\'s rows', () => {
+        it('resolves a target that names NO row in this view, but IS a real wikilink recorded in a loaded row\'s own file — the case that used to read UNKNOWN', async () => {
+          const loadGraph: KnowledgeGraphLoader = vi.fn(async (req) => {
+            // "Korn Ferry" is not the title/id/basename of any row THIS view
+            // loaded (there is only one row, "INV-A") — the old row-scoped
+            // resolver could never resolve it. It IS, however, a real
+            // wikilink written in that row's own file ("a.md"), so the
+            // collection's link graph resolves it.
+            if (req.path === 'a.md') {
+              return graph({ edges: [linkEdge()], nodes: [{ path: 'companies/korn-ferry.md', exists: true }] })
+            }
+            return graph()
+          })
+          renderBase({
+            loadGraph,
+            loadViewResult: vi.fn().mockResolvedValue(
+              result({
+                parts: [{ part: 'table', source: { part: 'table' }, columns: ['file.name', 'client'] }],
+                rows: [
+                  { path: 'a.md', title: 'INV-A', cells: [{ property: 'client', value: '[[Korn Ferry]]' }], joins: [] },
+                ],
+              }),
+            ),
+          })
+          await screen.findByTestId('viewpart-table')
+          await waitFor(() =>
+            expect(loadGraph).toHaveBeenCalledWith(
+              expect.objectContaining({ collectionId: 'kb_1', kind: 'links', path: 'a.md' }),
+            ),
+          )
+          const link = await screen.findByTestId('viewpart-cell-link')
+          await waitFor(() => expect(link).toHaveAttribute('data-kb-state', 'resolved'))
+        })
+
+        it('control: a target that resolves NOWHERE — not as a row, not as any loaded row\'s own link — still never reads as resolved', async () => {
+          const loadGraph = vi.fn().mockResolvedValue(graph()) // every row's own graph answers empty
+          renderBase({
+            loadGraph,
+            loadViewResult: vi.fn().mockResolvedValue(
+              result({
+                parts: [{ part: 'table', source: { part: 'table' }, columns: ['file.name', 'client'] }],
+                rows: [
+                  { path: 'a.md', title: 'INV-A', cells: [{ property: 'client', value: '[[Nobody Anywhere]]' }], joins: [] },
+                ],
+              }),
+            ),
+          })
+          await screen.findByTestId('viewpart-table')
+          await waitFor(() => expect(loadGraph).toHaveBeenCalled())
+          const link = screen.getByTestId('viewpart-cell-link')
+          expect(link).not.toHaveAttribute('data-kb-state', 'resolved')
+          expect(link).toHaveAttribute('data-kb-state', 'unknown')
+        })
       })
     })
 
