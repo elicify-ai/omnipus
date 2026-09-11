@@ -729,6 +729,19 @@ export function BasePreview({
             {...(onOpenPath ? { onOpenPath } : {})}
             {...(resolveWikilink ? { resolveWikilink } : {})}
             linkHref={linkHref}
+            // ADR-083 Step 5 (D-D). Passing workspaceId is what ENABLES inline
+            // record editing — ViewPartsRenderer builds its edit context from it,
+            // and without this line the editors exist but no view can reach them.
+            // Which cells actually offer an editor is decided per-cell from the
+            // wire (a derived or relation cell never does), not here.
+            workspaceId={workspaceId}
+            // A successful write changes the stored record, so the rendered view
+            // is now stale. Invalidate rather than patching in place: the server
+            // owns derived columns, and a locally-patched row would show a stale
+            // computed value beside a fresh one.
+            onFieldWritten={() => {
+              void queryClient.invalidateQueries({ queryKey: resultQueryKey, exact: true })
+            }}
           />
         ) : null}
       </div>
