@@ -24,7 +24,7 @@
 #   bedrock    compiles in the real AWS Bedrock provider (stub without it)
 # =============================================================================
 
-.PHONY: all build install uninstall clean help test vet vet-windows gen-contracts verify-contracts lint-wire-types lint-tool-error-status lint-no-jpeg-screencast lint-no-removed-providers spa-embed release-snapshot release-build golangci-lint-version-check
+.PHONY: all build install uninstall clean help test vet vet-windows gen-contracts verify-contracts lint-wire-types lint-tool-error-status lint-no-jpeg-screencast lint-no-duplicate-renderer lint-no-removed-providers spa-embed release-snapshot release-build golangci-lint-version-check
 
 # Build variables
 BINARY_NAME=omnipus
@@ -468,6 +468,11 @@ lint-no-jpeg-screencast:
 ## Regression guard for ADR-077 — see scripts/check-no-fail-closed-backfill.sh's header comment.
 lint-no-fail-closed-backfill:
 	bash scripts/check-no-fail-closed-backfill.sh
+
+## lint-no-duplicate-renderer: Fail if LibraryAudioPreview is defined more than once outside its canonical module
+## Regression guard for ADR-083 EMB-027 — see scripts/check-no-duplicate-renderer.sh's header comment.
+lint-no-duplicate-renderer:
+	bash scripts/check-no-duplicate-renderer.sh
 
 ## lint-e2e-login-crosstalk: Fail if any E2E spec calls POST /api/v1/auth/login
 ## Regression guard: login re-mints the SINGLE-SLOT session_token_hash, silently invalidating the

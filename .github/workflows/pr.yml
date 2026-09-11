@@ -847,6 +847,17 @@ jobs:
         # reintroduce" rule.
         run: bash scripts/check-no-fail-closed-backfill.sh
 
+      - name: Run duplicate-renderer removal guard
+        # ADR-083 EMB-027: LibraryAudioPreview must be defined exactly once,
+        # in its canonical module (src/components/library/preview/
+        # LibraryAudioPreview.tsx), shared between the Library preview pane
+        # and the inline note embed. A branch cut before the extraction still
+        # contains the old private copy inside LibraryPreviewPane.tsx, so a
+        # merge re-adds it as an ordinary, conflict-free addition alongside
+        # the new module — git has no idea the duplication is the defect
+        # EMB-027 exists to prevent.
+        run: bash scripts/check-no-duplicate-renderer.sh
+
       - name: Run E2E auth cross-talk guard
         # POST /api/v1/auth/login re-mints the SINGLE-SLOT session_token_hash,
         # invalidating the shared storageState cookie for every spec that runs

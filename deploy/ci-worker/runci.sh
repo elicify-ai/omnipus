@@ -140,6 +140,9 @@ run_lint() {
   # backfill (RepairIncompleteToolPolicyCoverage / ValidateAgentOwnToolPolicyCoverage)
   # must not return.
   bash scripts/check-no-fail-closed-backfill.sh || return 1
+  # ADR-083 EMB-027 regression guard: LibraryAudioPreview must be defined exactly
+  # once (its canonical module), never re-duplicated inside LibraryPreviewPane.tsx.
+  bash scripts/check-no-duplicate-renderer.sh || return 1
   # E2E auth cross-talk guard: no spec may POST /api/v1/auth/login (it rotates the
   # single-slot session_token_hash and invalidates the shared storageState cookie
   # for every LATER spec — a failure that lands in an unrelated file). Self-test
