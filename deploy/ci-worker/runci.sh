@@ -60,6 +60,16 @@ export HOME="${HOME:-/root}"   # non-login SSH shell has no HOME; gen-contracts.
 export TMPDIR=/cache/tmp
 mkdir -p "$TMPDIR"
 
+# E2E SHARD STATE LIVES ON /cache, NOT /tmp.
+#
+# /tmp shares the 7.8G ROOT OVERLAY; /cache is the 40G volume. Each shard's
+# OMNIPUS_HOME is ~400MB and there are 15 shards, so the matrix needs ~6G and
+# the root overlay cannot hold it. Measured 2026-09-11: the run filled / to 96%
+# and shards began failing with "ENOSPC: no space left on device", which reads
+# as a test failure and is not one. TMPDIR above already redirects anything
+# honouring it; these paths were hardcoded and bypassed it.
+export E2E_DIR=/cache/e2e
+
 log() { printf '\n\033[1;36m=== %s ===\033[0m\n' "$*"; }
 rc=0; step() { local name="$1"; shift; log "$name"; "$@"; local e=$?; printf '\033[1m%s -> exit %d\033[0m\n' "$name" "$e"; [ $e -ne 0 ] && rc=1; return 0; }
 
@@ -585,7 +595,7 @@ _e2e_build() {
 # pkill-by-pattern — a pattern can match this very shell (see deploy/ci-worker/CLAUDE.md).
 _e2e_reap_pidfiles() {
   local f pid
-  for f in /tmp/e2e-shard-*.gwpid; do
+  for f in "$E2E_DIR"/e2e-shard-*.gwpid; do
     [ -e "$f" ] || continue
     pid="$(cat "$f" 2>/dev/null || true)"
     [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
@@ -601,10 +611,10 @@ _e2e_reap_pidfiles() {
 # a hard-killed run can still be reaped by _e2e_reap_pidfiles.
 _e2e_run_shard() {
   local name="$1" port="$2" key="$3" specs="$4" pwargs="$5"
-  local home="/tmp/omnipus-e2e-$name"
-  local logf="/tmp/omnipus-e2e-$name.gw.log"
-  local pidfile="/tmp/e2e-shard-$name.gwpid"
-  local authfile="/tmp/e2e-$name-auth.json"
+  local home="$E2E_DIR/omnipus-e2e-$name"
+  local logf="$E2E_DIR/omnipus-e2e-$name.gw.log"
+  local pidfile="$E2E_DIR/e2e-shard-$name.gwpid"
+  local authfile="$E2E_DIR/e2e-$name-auth.json"
   local GATEWAY_PID=
 
   # Inlined (not a nested fn) so it can see the local GATEWAY_PID under `set -u`.
@@ -717,7 +727,7 @@ EOF
   OMNIPUS_HOME="$home" \
   OMNIPUS_URL="http://localhost:$port" \
   OMNIPUS_AUTH_FILE="$authfile" \
-  OMNIPUS_SKIP_MANIFEST_PATH="/tmp/e2e-$name-results/skip-manifest.json" \
+  OMNIPUS_SKIP_MANIFEST_PATH="$E2E_DIR/e2e-$name-results/skip-manifest.json" \
   OPENROUTER_API_KEY="$key" \
   OPENROUTER_API_KEY_CI="$key" \
     npx playwright test $specs $pwargs
@@ -728,6 +738,15 @@ run_e2e() {
   KEY_A="${OPENROUTER_API_KEY:?e2e gate requires OPENROUTER_API_KEY Fly secret}"
   KEY_B="${OPENROUTER_API_KEY_B:-$KEY_A}"
   KEY_C="${OPENROUTER_API_KEY_C:-$KEY_A}"
+
+  # WIPE THE SHARD STATE DIR FIRST. Leftovers from a previous run are not
+  # harmless: a stale /tmp/e2e-shard-<name>.log is indistinguishable from this
+  # run's own, and on 2026-09-11 two-day-old logs were twice read as this run's
+  # failures (three CSP failures that did not exist, then a headed-shard result
+  # from a different commit). Starting empty makes "no log" mean "did not run"
+  # instead of "ran two days ago".
+  rm -rf "$E2E_DIR"
+  mkdir -p "$E2E_DIR"
 
   # One virtual display for every shard (see _e2e_run_shard's comment for why).
   # Reaped by exact pid on the way out; never pkill-by-pattern on this box.
@@ -819,8 +838,8 @@ run_e2e() {
       # flaked ui specs at MAX_PARALLEL=2 when they overlapped a CPU-heavy shard).
       while [ "$running" -gt 0 ]; do _e2e_reap_one; done
       log "e2e: launch shard $group (port $port, key slot $slot; SOLO)"
-      ( _e2e_run_shard "$group" "$port" "$key" "$specs" "--output=/tmp/e2e-$group-results --reporter=list" ) \
-        > "/tmp/e2e-shard-$group.log" 2>&1
+      ( _e2e_run_shard "$group" "$port" "$key" "$specs" "--output=$E2E_DIR/e2e-$group-results --reporter=list" ) \
+        > "$E2E_DIR/e2e-shard-$group.log" 2>&1
       src=$?
       NAMES+=("$group")
       if [ "$src" -eq 0 ]; then
@@ -834,8 +853,8 @@ run_e2e() {
     # Concurrency gate: block until a slot frees up.
     while [ "$running" -ge "$MAX_PARALLEL" ]; do _e2e_reap_one; done
     log "e2e: launch shard $group (port $port, key slot $slot; $((running + 1))/$MAX_PARALLEL in flight)"
-    ( _e2e_run_shard "$group" "$port" "$key" "$specs" "--output=/tmp/e2e-$group-results --reporter=list" ) \
-      > "/tmp/e2e-shard-$group.log" 2>&1 &
+    ( _e2e_run_shard "$group" "$port" "$key" "$specs" "--output=$E2E_DIR/e2e-$group-results --reporter=list" ) \
+      > "$E2E_DIR/e2e-shard-$group.log" 2>&1 &
     PID2NAME[$!]="$group"; NAMES+=("$group"); running=$((running + 1))
   done < <(scripts/e2e-shards.sh list 2>/dev/null)
 
@@ -851,7 +870,7 @@ run_e2e() {
     local n
     for n in "${FAILED[@]}"; do
       log "e2e: FAILED shard '$n' — output"
-      cat "/tmp/e2e-shard-$n.log" 2>/dev/null || echo "(no log for $n)"
+      cat "$E2E_DIR/e2e-shard-$n.log" 2>/dev/null || echo "(no log for $n)"
     done
     echo "e2e: FAILED shards: ${FAILED[*]}" >&2
   fi
