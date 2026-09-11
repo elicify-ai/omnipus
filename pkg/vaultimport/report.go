@@ -105,10 +105,14 @@ type Report struct {
 	// TypeInference is FR-104b's per-note account of every note that
 	// arrived carrying no `type:` key.
 	TypeInference TypeInferenceReport
-	Bases         []BaseOutcome
-	SchemaReload  *records.SchemaLoadReport
-	ViewReload    *records.ViewLoadReport
-	Validation    ValidationSummary
+	// IdentityStamps is the ADR-068 D7 identifier pass: which notes were
+	// given an `id:`, which already had one, and which declare a type this
+	// vault has no schema for and were therefore deliberately left alone.
+	IdentityStamps IdentityStampReport
+	Bases          []BaseOutcome
+	SchemaReload   *records.SchemaLoadReport
+	ViewReload     *records.ViewLoadReport
+	Validation     ValidationSummary
 }
 
 // Render writes the full, human-readable report.
@@ -257,6 +261,8 @@ func (r *Report) Render(w io.Writer) {
 	for _, n := range ti.Notes {
 		fmt.Fprintf(w, "  %s: %s\n", n.RelPath, n.Reason)
 	}
+
+	r.renderIdentityStamps(w)
 
 	fmt.Fprintln(w, "\n-- FR-105: the broadening prohibition, applied --")
 	produced, disabled := 0, 0
