@@ -209,13 +209,13 @@ describe('the composition inherits chat’s renderers (FR-013a/b — spec test 8
     }
   })
 
-  it('diverges from the stage-1 KB map in exactly one slot: `a`', () => {
+  it('diverges from the stage-1 KB map in exactly two slots: `code` and `a` (ADR-083 Step 6 added the `code` divergence)', () => {
     const divergent = Object.keys(knowledgeMarkdownComponents).filter(
       (key) =>
         knowledgeMarkdownComponents[key as keyof typeof knowledgeMarkdownComponents] !==
         kbMarkdownComponents[key as keyof typeof kbMarkdownComponents],
     )
-    expect(divergent).toEqual(['a'])
+    expect(divergent).toEqual(['code', 'a'])
     // And no slot was ADDED or REMOVED — a new key is a divergence too.
     expect(Object.keys(knowledgeMarkdownComponents).sort()).toEqual(
       Object.keys(kbMarkdownComponents).sort(),

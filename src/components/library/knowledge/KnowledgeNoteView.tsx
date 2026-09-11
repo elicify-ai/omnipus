@@ -712,6 +712,8 @@ export function KnowledgeNoteView({
       <KnowledgeReader
         content={content}
         path={collectionNotePath}
+        workspaceId={workspaceId}
+        collectionId={collectionId}
         layout={layout}
         {...(navigate ? { onNavigate: navigate } : {})}
         {...(resolveWikilink ? { resolveWikilink } : {})}

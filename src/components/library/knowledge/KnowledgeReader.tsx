@@ -78,6 +78,12 @@ export interface KnowledgeReaderProps {
   /** Collection-relative path of the open note. Relative links resolve against
    *  its directory. */
   path: string
+  /** The open note's workspace and knowledge-base collection id (ADR-083
+   *  Step 6, US-12) — threaded to `KnowledgeBaseMarkdown` so a ```query
+   *  fence can run a real search. Omit outside a knowledge base; a query
+   *  fence then falls back to the inherited, non-searching code renderer. */
+  workspaceId?: string
+  collectionId?: string
   layout?: ReaderLayout
   /** Opens another note. */
   onNavigate?: (path: string, heading?: string) => void
@@ -158,6 +164,8 @@ export function findHeadingElement(
 export function KnowledgeReader({
   content,
   path,
+  workspaceId,
+  collectionId,
   layout = 'auto',
   onNavigate,
   resolveWikilink,
@@ -206,6 +214,8 @@ export function KnowledgeReader({
       <KnowledgeBaseMarkdown
         content={content}
         notePath={path}
+        workspaceId={workspaceId}
+        collectionId={collectionId}
         onNavigate={onNavigate}
         onHeadingLink={handleHeadingLink}
         resolveWikilink={resolveWikilink}

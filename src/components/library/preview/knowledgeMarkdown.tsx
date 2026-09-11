@@ -19,27 +19,36 @@
 //        ↓ (spread)
 //   knowledgeMarkdown.tsx      →  knowledgeMarkdownComponents (stage 2: this file)
 //
-// Every entry except `a` is inherited by reference. `p`, `h1`–`h3`, `ul`, `ol`,
-// `li`, `strong`, `em`, `blockquote`, `table`, `th`, `td`, `hr`, `pre`, `code`
-// (fence classification + mermaid routing + Shiki), `span` and `img` are chat's
-// own objects — not re-declared, so they cannot drift.
+// Every entry except `a` and `code` is inherited by reference. `p`, `h1`–`h3`,
+// `ul`, `ol`, `li`, `strong`, `em`, `blockquote`, `table`, `th`, `td`, `hr`,
+// `pre`, `span` and `img` are chat's own objects — not re-declared, so they
+// cannot drift.
 //
-// ── The two permitted divergences (FR-013b), and nothing else ────────────────
+// ── The three permitted divergences (FR-013b), and nothing else ─────────────
 //   (1) the `a` slot — `KnowledgeMarkdownLink` below: wikilinks, in-document
 //       heading links, collection-relative path links, an allow-listed video
 //       destination (ADR-083 B11/EMB-075 — mounts VideoEmbed, never the graph),
 //       and a visible unresolved state. Everything it does not recognise is
 //       handed to the INHERITED renderer, so external and unsafe hrefs behave
 //       exactly as in chat.
-//   (2) appended remark plugins — private-comment stripping (inherited from
+//   (2) the `code` slot — `KnowledgeMarkdownCode` below (ADR-083 Step 6,
+//       added after this file's original two-divergence count): a
+//       ```query fence runs a real search when the open note's workspace and
+//       collection id are in context; everything else — inline code,
+//       mermaid, every other language, a query fence with no such context —
+//       is handed to the INHERITED renderer, so fence classification, mermaid
+//       routing and Shiki highlighting still cannot drift from stage 1.
+//   (3) appended remark plugins — private-comment stripping (inherited from
 //       stage 1, not re-implemented), frontmatter suppression, callouts,
 //       highlights, wikilinks/embeds, and rewriting a video-shaped `![]()`
 //       image into a link (`remarkKbVideoImages`) so an IMAGE-form video
 //       destination reaches divergence (1) instead of opening a second one.
-// There is no third divergence: no rehype plugin is added (KB_REHYPE_PLUGINS is
-// re-exported from stage 1 unchanged), and no other component slot is replaced
-// — `img` still renders through chat's own, untouched renderer in every case,
-// including a video-shaped image, which arrives at the `a` slot as a link.
+// No rehype plugin is added (KB_REHYPE_PLUGINS is re-exported from stage 1
+// unchanged), and no OTHER component slot is replaced — `img` still renders
+// through chat's own, untouched renderer in every case, including a
+// video-shaped image (arrives at the `a` slot as a link) and a sized picture
+// embed standing alone (still `img`'s own DOM element, mounted through the
+// `a` slot's block-promotion, never a fourth divergence on `img` itself).
 //
 // ── Chat is untouched (FR-013d) ──────────────────────────────────────────────
 // Nothing in this file is imported by any chat module, and no chat array or map
@@ -78,10 +87,17 @@ import { LibraryImagePreview } from './LibraryImagePreview'
 // parser — reused here, never re-implemented, so "what counts as a video
 // destination" has exactly one definition on either side of the dispatch.
 import { VideoEmbed, parseVideoEmbedUrl } from './VideoEmbed'
-// codeText already extracts plain text from react-markdown children for a
-// fence's contents (markdown-shared.tsx); reused here for a link/image's
-// caption rather than a second implementation of the same walk.
-import { codeText } from '@/components/chat/markdown-shared'
+// codeText/classifyFence already extract plain text and {language, text} from
+// react-markdown `code`/link children (markdown-shared.tsx); reused here
+// rather than a second implementation of either walk.
+import { codeText, classifyFence } from '@/components/chat/markdown-shared'
+// The four Step 6 mounts (ADR-083 EMB-105) — built and proven standalone in
+// their own files/tests; this module is what dispatches to them. Never a
+// second renderer for any of these kinds (EMB-027).
+import { KbAudioEmbedMount } from './KbAudioEmbedMount'
+import { KbVideoEmbedMount } from './KbVideoEmbedMount'
+import { KbPdfPageEmbedMount } from './KbPdfPageEmbedMount'
+import { KbQueryFenceEmbed } from './KbQueryFenceEmbed'
 
 type RemarkPlugins = ComponentProps<typeof ReactMarkdown>['remarkPlugins']
 
@@ -339,6 +355,12 @@ export interface ParsedWikilink {
    *  block id is never matched against heading text (ADR-083 EMB-011, EMB-036,
    *  mirroring `pkg/knowledge/links.go`'s `Link.BlockID`/`Link.Heading` split). */
   block?: string
+  /** 1-based page number from a `[[doc.pdf#page=3]]` fragment (ADR-083 Step 6,
+   *  EMB-105, US-12 AS-4) — a THIRD fragment form alongside heading and block,
+   *  mutually exclusive with both. Whether that page actually exists in the
+   *  document is a render-time question `LibraryPdfPreview` already answers;
+   *  parsing only recognises the notation. */
+  page?: number
   /** Display text: the alias when one was given, else the raw inner text.
    *  Never the raw digits of a `width` (below) — a bar segment is read as
    *  EITHER a size OR a caption, never both, and never the wrong one. */
@@ -367,6 +389,13 @@ export interface ParsedWikilink {
  *  not a separate height. */
 const EMBED_WIDTH_PATTERN = /^(\d+)(?:x\d+)?$/
 
+/** A `page=N` fragment (ADR-083 Step 6, EMB-105) — the third form a `#`
+ *  fragment can take, alongside a heading and a `^`-prefixed block anchor.
+ *  Recognised on any target's fragment, not just a `.pdf` one: whether the
+ *  target is actually a PDF is `classifyEmbedKind`'s job, downstream of
+ *  parsing, not this pattern's. */
+const PAGE_FRAGMENT_PATTERN = /^page=(\d+)$/
+
 /** Parses the inside of a `[[…]]`, in Obsidian's order: alias last, heading
  *  before it. Exported because the outline/backlink rails parse the same forms.
  *  Returns null for an empty or whitespace-only body. */
@@ -382,10 +411,13 @@ export function parseWikilink(inner: string, embed = false): ParsedWikilink | nu
   if (target === '' && !fragment) return null
 
   // `^` prefixes a block anchor, not a heading (Obsidian's own distinction —
-  // see the `block` field's doc comment above).
+  // see the `block` field's doc comment above). `page=N` is the third,
+  // mutually exclusive form (see PAGE_FRAGMENT_PATTERN's own doc).
   const isBlock = fragment !== undefined && fragment.startsWith('^')
-  const heading = isBlock ? undefined : fragment
+  const pageMatch = !isBlock && fragment !== undefined ? PAGE_FRAGMENT_PATTERN.exec(fragment) : null
+  const heading = isBlock || pageMatch ? undefined : fragment
   const block = isBlock ? fragment.slice(1) || undefined : undefined
+  const page = pageMatch ? Number.parseInt(pageMatch[1] as string, 10) : undefined
 
   // EMB-030: on an EMBED, a bar segment shaped like a size is read as one —
   // never as the caption a size was never meant to be, even when the target
@@ -404,6 +436,7 @@ export function parseWikilink(inner: string, embed = false): ParsedWikilink | nu
     text: alias && alias !== '' ? alias : head,
     embed,
     ...(width !== undefined ? { width } : {}),
+    ...(page !== undefined ? { page } : {}),
   }
 }
 
@@ -443,14 +476,23 @@ export function classifyEmbedKind(target: string): LibraryPreviewKind {
   return 'other'
 }
 
-/** The kinds Step 1 mounts an inline renderer for. Every other kind — `pdf`,
- *  `base` and `markdown` included — MUST fall back to the link treatment
- *  today (ADR-083 EMB-025): their renderers (the PDF pool, the saved-view
- *  renderer, one-level transclusion) are separate, not-yet-landed phases of
- *  the same ADR, and an embed must never claim to render a kind it cannot
- *  actually mount. `html`, `other` and `text` never gain one — that part of
- *  EMB-025 is permanent, not a "not yet". */
-const KINDS_WITH_INLINE_RENDERER: ReadonlySet<LibraryPreviewKind> = new Set(['image'])
+/** The kinds this file mounts a media-shaped inline renderer for — `image`
+ *  (Step 1) plus `audio`/`video` (Step 6, ADR-083 EMB-105). Membership here
+ *  governs only the IMAGE branch just below: a picture is the one kind that
+ *  maps onto a literal `image` mdast node, so its eligibility is checked and
+ *  built right here. Audio and video have no such node to become — a media
+ *  player is a `<div>`-rooted mount, not an inline HTML element — so for
+ *  them this check is a no-op that falls through to the SAME "reported,
+ *  never faked" embed-link section every other kind already goes through;
+ *  what actually promotes an audio/video embed to its real mount is
+ *  `isPromotableBlockEmbedNode` recognising `data-kb-embed-kind` below, the
+ *  same mechanism `base`/`markdown` use WITHOUT ever being in this set.
+ *  `pdf` is likewise never added here — only a `#page=N` fragment on a pdf
+ *  target is promotable (`KbPdfPageEmbedMount`); a whole-document pdf embed
+ *  has no renderer yet and stays link-only (EMB-025). `html`, `other` and
+ *  `text` never gain one at all — that part of EMB-025 is permanent, not a
+ *  "not yet". */
+const KINDS_WITH_INLINE_RENDERER: ReadonlySet<LibraryPreviewKind> = new Set(['image', 'audio', 'video'])
 
 /** What the reader knows about an embed's target — the resolver's answer.
  *
@@ -568,43 +610,53 @@ export function remarkKbWikilinks(options: KbWikilinkOptions = {}) {
           NO_RESOLVER_EMBED_RESOLUTION
 
         if (KINDS_WITH_INLINE_RENDERER.has(kind) && resolution.state === 'resolved' && resolution.url) {
-          // Still a plain `image` node in every case (EMB-030 does not
-          // change WHERE this renders, only whether a width reaches it) —
-          // an unsized picture is byte-for-byte what this returned before.
-          // A SIZED one additionally carries the width and workspace
-          // coordinates as `data.hProperties`: inert here (this composition
-          // never touches the `img` slot — FR-013d — so `MarkdownImage`
-          // reads only `src`/`alt` and drops the rest), but read back by
-          // `promoteStandaloneEmbeds` below, which is the ONLY place that
-          // knows whether this embed stood alone in its own paragraph —
-          // `LibraryImagePreview`'s width prop needs that block-safe
-          // placement (its own root is a `<div>`), the same reason a `.base`
-          // or markdown embed needs it. An embed mixed inline with other
-          // words is not decidable yet at this point in the pipeline, so it
-          // is deferred, not guessed.
-          const sizable = parsed.width !== undefined && resolution.workspaceId && resolution.workspacePath
-          return {
-            type: 'image',
-            url: resolution.url,
-            alt: parsed.text,
-            children: [],
-            ...(sizable
-              ? {
-                  data: {
-                    hProperties: {
-                      'data-kb-embed-width': String(parsed.width),
-                      'data-kb-embed-workspace-id': resolution.workspaceId,
-                      'data-kb-embed-workspace-path': resolution.workspacePath,
+          if (kind === 'image') {
+            // Still a plain `image` node in every case (EMB-030 does not
+            // change WHERE this renders, only whether a width reaches it) —
+            // an unsized picture is byte-for-byte what this returned before.
+            // A SIZED one additionally carries the width and workspace
+            // coordinates as `data.hProperties`: inert here (this composition
+            // never touches the `img` slot — FR-013d — so `MarkdownImage`
+            // reads only `src`/`alt` and drops the rest), but read back by
+            // `promoteStandaloneEmbeds` below, which is the ONLY place that
+            // knows whether this embed stood alone in its own paragraph —
+            // `LibraryImagePreview`'s width prop needs that block-safe
+            // placement (its own root is a `<div>`), the same reason a `.base`
+            // or markdown embed needs it. An embed mixed inline with other
+            // words is not decidable yet at this point in the pipeline, so it
+            // is deferred, not guessed.
+            const sizable = parsed.width !== undefined && resolution.workspaceId && resolution.workspacePath
+            return {
+              type: 'image',
+              url: resolution.url,
+              alt: parsed.text,
+              children: [],
+              ...(sizable
+                ? {
+                    data: {
+                      hProperties: {
+                        'data-kb-embed-width': String(parsed.width),
+                        'data-kb-embed-workspace-id': resolution.workspaceId,
+                        'data-kb-embed-workspace-path': resolution.workspacePath,
+                      },
                     },
-                  },
-                }
-              : {}),
+                  }
+                : {}),
+            }
           }
+          // audio / video (ADR-083 Step 6, EMB-105): no mdast node maps to a
+          // media player, so this falls through, unreturned, to the SAME
+          // "reported, never faked" embed-link section below that `base` and
+          // `markdown` already reach without ever being in
+          // KINDS_WITH_INLINE_RENDERER — that section already carries the
+          // kind, state and workspace coordinates KbAudioEmbedMount/
+          // KbVideoEmbedMount need, via isPromotableBlockEmbedNode below.
         }
         // Every other combination is reported, never faked: a resolved
-        // non-image embed (no inline renderer for its kind yet), an
-        // unresolved/indeterminate/loading/graph_unavailable target, or an
-        // image whose resolver returned no URL despite `resolved` state.
+        // embed of a kind with no inline renderer AT THIS POINT (base,
+        // markdown, audio, video, a whole-document pdf, or an image whose
+        // resolver returned no URL despite `resolved` state), or an
+        // unresolved/indeterminate/loading/graph_unavailable target.
 
         const candidates = resolution.candidates ?? []
         return {
@@ -616,6 +668,11 @@ export function remarkKbWikilinks(options: KbWikilinkOptions = {}) {
               'data-kb-target': parsed.target,
               ...(parsed.heading ? { 'data-kb-heading': parsed.heading } : {}),
               ...(parsed.block ? { 'data-kb-block': parsed.block } : {}),
+              // ADR-083 Step 6 — a pdf's `#page=N` fragment (EMB-105): read
+              // back by isPromotableBlockEmbedNode/KnowledgeMarkdownLink to
+              // decide whether THIS embed has a page to mount, distinct from
+              // a whole-document pdf embed which never carries this.
+              ...(parsed.page !== undefined ? { 'data-kb-embed-page': String(parsed.page) } : {}),
               'data-kb-embed': '',
               'data-kb-embed-kind': kind,
               'data-kb-embed-state': resolution.state,
@@ -645,21 +702,28 @@ export function remarkKbWikilinks(options: KbWikilinkOptions = {}) {
 // (ADR-083 Step 2/Step 3)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** True for a resolved `.base` or markdown embed node — the two kinds that
- *  mount BLOCK content (a table, another note's own headings and
- *  paragraphs) rather than an inline picture or a styled span. A sized
- *  image embed is a SEPARATE case (`isSizableImageEmbedNode` below) — it is
- *  still a plain `image` mdast node at this point, not yet converted to a
- *  link, so it would not match this check even if `image` were added to the
- *  kind list here. Everything else (an unresolved/indeterminate/loading
- *  state, a resolved embed of a kind with no inline renderer) is unaffected
- *  and keeps rendering wherever `remarkKbWikilinks` put it. */
+/** True for a resolved embed node whose kind mounts BLOCK content — a table,
+ *  another note's own headings and paragraphs, an audio/video player, or a
+ *  single pdf page (ADR-083 Step 2/3/6) — rather than an inline picture or a
+ *  styled span. A sized image embed is a SEPARATE case
+ *  (`isSizableImageEmbedNode` below) — it is still a plain `image` mdast
+ *  node at this point, not yet converted to a link, so it would not match
+ *  this check even if `image` were added to the kind list here. A `pdf`
+ *  embed is promotable ONLY when it carries a page fragment
+ *  (`data-kb-embed-page`, EMB-105) — a whole-document pdf embed has no
+ *  renderer yet and MUST keep the ordinary link-fallback treatment
+ *  (EMB-025). Everything else (an unresolved/indeterminate/loading state, a
+ *  resolved embed of a kind with genuinely no inline renderer) is
+ *  unaffected and keeps rendering wherever `remarkKbWikilinks` put it. */
 function isPromotableBlockEmbedNode(node: MdNode): boolean {
   const props = node.data?.hProperties
   if (!props || props['data-kb-embed'] === undefined) return false
   const kind = props['data-kb-embed-kind']
   const state = props['data-kb-embed-state']
-  return (kind === 'base' || kind === 'markdown') && state === 'resolved'
+  if (state !== 'resolved') return false
+  if (kind === 'base' || kind === 'markdown' || kind === 'audio' || kind === 'video') return true
+  if (kind === 'pdf' && props['data-kb-embed-page'] !== undefined) return true
+  return false
 }
 
 /** True for a resolved, WIDTH-bearing image embed (EMB-030) —
@@ -797,6 +861,17 @@ export interface KnowledgeLinkContextValue {
    * hazard the unresolved case documents and avoids by not being an anchor.
    */
   linkHref?: (collectionPath: string, heading?: string) => string | undefined
+  /**
+   * The open note's own workspace and knowledge-base collection id (ADR-083
+   * Step 6, US-12) — needed by a ```query fence (`KbQueryFenceEmbed`) to run
+   * a real search, which no remark plugin can see and no other field here
+   * carries. Absent outside a knowledge base, or inside a transcluded note's
+   * nested pass (`KbTransclusionContent` deliberately does not forward
+   * these) — nesting a live query is OUT (EMB-060/N1), so a query fence
+   * there falls back to the inherited, non-searching code renderer.
+   */
+  workspaceId?: string
+  collectionId?: string
 }
 
 const KnowledgeLinkContext = createContext<KnowledgeLinkContextValue>({})
@@ -807,6 +882,17 @@ export const KnowledgeLinkProvider = KnowledgeLinkContext.Provider
  *  external and unsafe hrefs to CHAT's renderer. Taken by reference so the
  *  scheme allow-list and the struck-through unsafe treatment cannot drift. */
 const InheritedLink = kbMarkdownComponents.a as (props: ComponentPropsWithoutRef<'a'>) => ReactNode
+
+/** The inherited code renderer — stage 1's `code` slot (fence classification,
+ *  mermaid routing, Shiki). Taken by reference for the same reason as
+ *  `InheritedLink`: every case this file does not itself recognise (inline
+ *  code, mermaid, any language but `query`, or a `query` fence with no
+ *  workspace/collection context to search) must render EXACTLY as stage 1
+ *  would, never a second copy that can drift. */
+const InheritedCode = kbMarkdownComponents.code as (props: {
+  children?: ReactNode
+  className?: string
+}) => ReactNode
 
 /** A link whose target the reader has verified. Exported so any OTHER surface
  *  that resolves a wikilink against its own data (e.g. a base view's cells,
@@ -1642,6 +1728,7 @@ function KnowledgeMarkdownLink(
     'data-kb-embed-workspace-id'?: string
     'data-kb-embed-workspace-path'?: string
     'data-kb-embed-width'?: string
+    'data-kb-embed-page'?: string
   },
 ) {
   const { href, children } = props
@@ -1707,6 +1794,30 @@ function KnowledgeMarkdownLink(
               block={props['data-kb-block']}
             />
           )
+        }
+        // ADR-083 Step 6 (EMB-105) — a `![[song.mp3]]`/`![[clip.mp4]]` that
+        // stood alone in its own paragraph mounts the SAME player the
+        // Library preview pane uses (EMB-027), via the shared
+        // useResolvedEmbedEntry lookup those mounts already own.
+        if (embedKind === 'audio') {
+          return <KbAudioEmbedMount workspaceId={embedWorkspaceId} workspacePath={embedWorkspacePath} />
+        }
+        if (embedKind === 'video') {
+          return <KbVideoEmbedMount workspaceId={embedWorkspaceId} workspacePath={embedWorkspacePath} />
+        }
+        // ADR-083 Step 6 (EMB-105) — a `![[doc.pdf#page=3]]` that stood
+        // alone. `isPromotableBlockEmbedNode` only marks this standalone at
+        // all when a page fragment is present, so `page` is always defined
+        // here in practice; the check stays explicit rather than asserted,
+        // matching every other field this dispatch reads defensively.
+        if (embedKind === 'pdf') {
+          const pageRaw = props['data-kb-embed-page']
+          const page = pageRaw ? Number.parseInt(pageRaw, 10) : undefined
+          if (page !== undefined) {
+            return (
+              <KbPdfPageEmbedMount workspaceId={embedWorkspaceId} workspacePath={embedWorkspacePath} page={page} />
+            )
+          }
         }
         // EMB-030 — a sized picture that stood alone in its own paragraph
         // (see `isSizableImageEmbedNode`/`promoteStandaloneEmbeds`'s own
@@ -1832,14 +1943,43 @@ function KnowledgeMarkdownLink(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Divergence 3 — the `code` slot, ADR-083 Step 6 (US-12, EMB-105)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The KB `code` slot: a fenced ```query block runs a real search
+ * (`KbQueryFenceEmbed`) when the open note carries a workspace and
+ * collection id in context; everything else — inline code, mermaid, any
+ * other language, and a `query` fence with no such context (a nested
+ * transclusion pass, or this composition used outside a knowledge base) —
+ * is handed to the INHERITED `code` renderer unchanged, so mermaid routing
+ * and Shiki highlighting cannot drift from stage 1.
+ *
+ * This is divergence (2) of the file header's three — unlike the `a` slot's
+ * wikilink/embed vocabulary, this one recognises nothing about NOTATION; it
+ * only decides, from context a remark plugin cannot see, whether one
+ * specific fence LANGUAGE has a live renderer.
+ */
+function KnowledgeMarkdownCode(props: { children?: ReactNode; className?: string }) {
+  const ctx = useContext(KnowledgeLinkContext)
+  const { isBlock, language, text } = classifyFence(props.children, props.className)
+  if (isBlock && language === 'query' && ctx.workspaceId && ctx.collectionId) {
+    return <KbQueryFenceEmbed workspaceId={ctx.workspaceId} collectionId={ctx.collectionId} query={text} />
+  }
+  return <InheritedCode {...props} />
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // The composition
 // ─────────────────────────────────────────────────────────────────────────────
 
 // MODULE SCOPE — see the perf note in this file's header (FR-013c). Every entry
-// except `a` is inherited by reference from stage 1, which inherits chat's.
+// except `a` and `code` is inherited by reference from stage 1, which
+// inherits chat's.
 export const knowledgeMarkdownComponents = {
   ...kbMarkdownComponents,
   a: KnowledgeMarkdownLink,
+  code: KnowledgeMarkdownCode,
 }
 
 /** The parameterless half of the appended remark plugins, module scope.
@@ -1907,8 +2047,18 @@ export function KnowledgeBaseMarkdown({
       onNavigate: link.onNavigate,
       onHeadingLink: link.onHeadingLink,
       linkHref: link.linkHref,
+      workspaceId: link.workspaceId,
+      collectionId: link.collectionId,
     }),
-    [link.notePath, link.resolveWikilink, link.onNavigate, link.onHeadingLink, link.linkHref],
+    [
+      link.notePath,
+      link.resolveWikilink,
+      link.onNavigate,
+      link.onHeadingLink,
+      link.linkHref,
+      link.workspaceId,
+      link.collectionId,
+    ],
   )
 
   return (

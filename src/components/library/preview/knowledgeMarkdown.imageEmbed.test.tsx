@@ -146,8 +146,16 @@ describe('a sized picture embed mixed inline with other text keeps the plain-ima
 })
 
 describe('a size on a NON-PICTURE embed is ignored at read time, without eating the display text (EMB-030)', () => {
-  it('shows the audio file’s own name as the fallback link text, never "400"', async () => {
-    renderNote('![[song.mp3|400]]', resolverFor(AUDIO_PATH))
+  // ADR-083 Step 6 (EMB-105) gave audio its OWN standalone inline renderer
+  // (KbAudioEmbedMount — see knowledgeMarkdown.step6.test.tsx), so a
+  // standalone `![[song.mp3|400]]` now mounts the real player instead of
+  // falling back to a link at all; that file proves "400" never leaks into
+  // anything there. This test keeps exercising the ORIGINAL concern — a
+  // size-shaped bar segment must never be read as display text — in the one
+  // shape that still legitimately produces the link fallback for ANY kind,
+  // audio included: mixed inline with other text (block-promotion gate).
+  it('shows the audio file’s own name as the fallback link text, never "400", when mixed inline with other text', async () => {
+    renderNote('See ![[song.mp3|400]] for the recording.', resolverFor(AUDIO_PATH))
     await waitFor(() => expect(screen.getByTestId('markdown-link')).toBeInTheDocument())
     const text = screen.getByTestId('markdown-link').textContent ?? ''
     expect(text).toContain('song.mp3')
