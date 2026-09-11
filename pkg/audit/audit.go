@@ -140,6 +140,20 @@ func IsValidEventName(e EventName) bool {
 		EventPolicyEval,
 		EventRateLimit,
 		EventSSRF,
+		// SECURITY events emitted as BARE LITERALS with no Event* constant, so
+		// events_exhaustive_test.go (which walks the constants) never saw them
+		// and IsValidEventName rejected every one — meaning each landed via the
+		// warn-once "unknown Event value" path instead of being recognised.
+		// These are refusals: a CSRF rejection, a blocked SSRF egress attempt,
+		// and a sandbox restriction that failed to apply. They are the entries
+		// an operator most needs to find, so the wrong name is worst here.
+		// Found by event_literal_emitters_test.go, which scans emitters rather
+		// than constants.
+		"csrf_mismatch",
+		"egress_ssrf_blocked",
+		"sandbox_restrict_failed",
+		"git_evidence_sandbox_block",
+		"path.access_denied",
 		EventStartup,
 		EventShutdown,
 		EventBootAbort,
@@ -253,6 +267,9 @@ func IsValidEventName(e EventName) bool {
 		// (empty for an anonymous pre-auth caller), source_ip, the resulting
 		// state, and whether the answer came from the cost-avoiding cache.
 		"provider.deleted",
+		// pkg/gateway/rest_sign_in.go. Bare literals, no constants.
+		"provider.signed_in",
+		"provider.signed_out",
 		"provider.credential_swept",
 		"provider.sign_in_status_checked",
 		// pkg/tools/memory.go: long-term memory write events.
@@ -263,6 +280,14 @@ func IsValidEventName(e EventName) bool {
 		"memory.remember",
 		"memory.retrospective",
 		"memory.rate_limited",
+		// pkg/agent/session_end.go's auditRecap. Emitted as a bare literal,
+		// which is why it escaped notice: events_exhaustive_test.go walks the
+		// Event* CONSTANTS, so a literal emitter with no constant is invisible
+		// to it. It was also unobservable in practice until audit logging
+		// became ON by default (2026-09-11) — with a nil logger the emit path
+		// never ran, so the warn-once "unknown Event value" never fired. Turning
+		// audit on surfaced it on the first real run.
+		"memory.auto_recap",
 		// Board tasks (pkg/gateway/rest_board.go) and workspaces
 		// (pkg/gateway/rest_workspaces.go: workspace.create/update/delete).
 		// The legacy "project.*" names are retained here for back-compat
@@ -278,6 +303,16 @@ func IsValidEventName(e EventName) bool {
 		"workspace.create",
 		"workspace.update",
 		"workspace.delete",
+		// Mount lifecycle (pkg/gateway/rest_workspace_mounts.go) and the
+		// one-shot setup-token consumption (pkg/gateway/websocket.go). All
+		// bare literals with no Event* constant, which is why
+		// events_exhaustive_test.go never saw them.
+		"workspace.mount.create",
+		"workspace.mount.delete",
+		"workspace.setup_consumed",
+		"workspace.delegation.update",
+		// pkg/gateway/rest_tasks.go's recurrence edit.
+		"task.trigger.recurrence_changed",
 		// Workspace media library mutation events (FR-008, FR-009, FR-033).
 		// Emitted by pkg/media/library/library.go (single-file delete) and
 		// pkg/workspace/media_delete.go (cascade-delete on workspace removal).
