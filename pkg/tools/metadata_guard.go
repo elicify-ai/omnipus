@@ -3,12 +3,12 @@
 // Implements the fail-closed guard for agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md:
 // any generic file tool (read_file, write_file, edit_file, append_file) that
 // resolves to one of these paths is rejected with a structured error that
-// suggests agent.read_metadata / agent.write_metadata instead.
+// suggests update_agent (write) / read_agent_metadata (read) instead.
 //
 // The guard is case-insensitive over the four canonical names.
 //
-// Security property: the guard runs BEFORE validatePathWithAllowPaths — it
-// resolves the tool's path argument itself (via resolveAbsPath, which applies
+// Security property: the guard runs BEFORE ResolvePath — it resolves the
+// tool's path argument itself (via resolveAbsPath, which applies
 // filepath.EvalSymlinks best-effort) so that "SOUL.md", "./soul.md", an
 // absolute path, a "../"-reentrant path, and a symlink to SOUL.md all trigger
 // the same check. In sandbox-on (os.Root) mode the symlink vector is already
@@ -20,13 +20,11 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"strings"
-
-	"github.com/dapicom-ai/omnipus/pkg/config"
 )
 
 // canonicalMetadataNames maps the canonical key (lowercase) to the on-disk
-// capitalised filename.  These are the four files that must only be read or
-// written through agent.read_metadata / agent.write_metadata.
+// capitalised filename.  These are the four files that must only be read
+// through read_agent_metadata, or written through update_agent.
 //
 // This is the single source of truth for the metadata-guard / metadata-tool
 // security pair; pkg/sysagent/tools/metadata.go consumes it via the exported
@@ -47,7 +45,7 @@ func CanonicalMetadataFilename(key string) (string, bool) {
 	return name, ok
 }
 
-// userProfileWriteBlocked reports whether absPath is the global USER.md.
+// userProfileWriteBlocked reports whether resolvedPath is the global USER.md.
 //
 // WRITES ONLY. USER.md is the user's own profile and its content is already
 // injected into every agent's prompt, so blocking reads would buy nothing.
@@ -61,38 +59,23 @@ func CanonicalMetadataFilename(key string) (string, bool) {
 // is the same class of gap that once left workspaces/<id>/AGENT.md unguarded
 // while agents/<id>/AGENT.md was covered — see pkg/workspace/instructions.go.
 //
-// With the sandbox on, a confined tool cannot reach the home root at all and
-// this never fires. It exists for god mode, which is precisely when the
-// app-level guards are the only thing left.
-func userProfileWriteBlocked(absPath, op string) bool {
-	if op != "write" {
+// BOTH arguments must already be symlink-resolved, and by the SAME resolver.
+// An equality check against a raw $OMNIPUS_HOME fails OPEN wherever the home
+// traverses a symlink — a symlinked home directory is ordinary, and on macOS
+// the default temp dir alone is enough (/var -> /private/var). Structural
+// matchers like metadataFileMatch do not have this problem because they match
+// on shape; an equality check has to normalise. Resolution happens in
+// guardMetadataPath (filesystem.go), which is the file FR-034's allow-list
+// sanctions for it — this function performs no filesystem I/O at all.
+//
+// With the sandbox on, a confined tool cannot reach the home root and this
+// never fires. It exists for god mode, which is precisely when the app-level
+// guards are the only thing left.
+func userProfileWriteBlocked(resolvedPath, resolvedProfile, op string) bool {
+	if op != "write" || resolvedProfile == "" {
 		return false
 	}
-	profile := config.UserProfilePath()
-	if filepath.Clean(absPath) == filepath.Clean(profile) {
-		return true
-	}
-	// absPath arrives already resolved through EvalSymlinks (resolveAbsPath).
-	// The profile path does not, so compare resolved-to-resolved as well —
-	// otherwise a single symlink anywhere in OMNIPUS_HOME (a symlinked home
-	// directory is ordinary) makes this guard silently fail OPEN. On macOS the
-	// default temp dir alone is enough: /var is a symlink to /private/var.
-	//
-	// Structural guards like metadataFileMatch do not have this problem
-	// because they match on shape rather than on equality with a known
-	// absolute path. An equality check has to normalise both sides.
-	resolvedProfile, err := filepath.EvalSymlinks(profile)
-	if err != nil {
-		// The profile does not exist yet, so a write would CREATE it — still
-		// the shared file, so still refused. Resolve the parent instead and
-		// fail closed if even that is not resolvable.
-		parent, parentErr := filepath.EvalSymlinks(filepath.Dir(profile))
-		if parentErr != nil {
-			return false
-		}
-		resolvedProfile = filepath.Join(parent, filepath.Base(profile))
-	}
-	return filepath.Clean(absPath) == filepath.Clean(resolvedProfile)
+	return filepath.Clean(resolvedPath) == filepath.Clean(resolvedProfile)
 }
 
 // userProfileGuardError is the structured refusal for a blocked USER.md write.
@@ -145,8 +128,28 @@ func metadataFileMatch(absPath string) (fileKey, agentID string, ok bool) {
 	return "", "", false
 }
 
+// MetadataGuardNotice is the shared, single-source-of-truth explanation of the
+// metadata guard's policy: which tool to use instead of a generic file tool
+// for agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md. Referenced by the
+// write_file, edit_file, and append_file tool descriptions
+// (pkg/tools/filesystem.go, pkg/tools/edit.go) and by metadataGuardError
+// below, so a future change to this policy (e.g. a renamed replacement tool)
+// only needs one edit.
+const MetadataGuardNotice = "Agent metadata files (SOUL.md, HEARTBEAT.md, AGENT.md, MEMORY.md under agents/<id>/) are off-limits to generic file tools — use update_agent to write them, or read_agent_metadata to read them."
+
+// updateAgentFieldForMetadataKey maps a metadata key to the update_agent
+// parameter that writes it, for the keys update_agent has a direct field for
+// (soul, heartbeat — see pkg/sysagent/tools/agent.go's AgentUpdateTool.
+// Parameters()). "memory" (written via the remember tool) and "agent" (raw
+// AGENT.md frontmatter, redundant with update_agent's structured fields) have
+// no direct field and fall back to a generic update_agent(...) pointer.
+var updateAgentFieldForMetadataKey = map[string]string{
+	"soul":      "soul",
+	"heartbeat": "heartbeat",
+}
+
 // metadataGuardError returns a structured JSON error string that tells the
-// agent to use agent.read_metadata / agent.write_metadata instead.
+// agent to use read_agent_metadata (read) / update_agent (write) instead.
 //
 // op should be "read" or "write". absPath is the resolved absolute path that
 // was blocked. Callers always confirm a metadataFileMatch before invoking this
@@ -154,26 +157,28 @@ func metadataFileMatch(absPath string) (fileKey, agentID string, ok bool) {
 // if it does not, the message degrades gracefully to the raw basename.
 func metadataGuardError(absPath, op string) string {
 	fileKey, agentID, _ := metadataFileMatch(absPath)
+	if agentID == "" {
+		agentID = "(unknown)"
+	}
 
 	var suggestion string
 	if op == "read" {
-		suggestion = `use system.agent.read_metadata(file="` + fileKey + `")`
+		suggestion = `use read_agent_metadata(file="` + fileKey + `")`
+	} else if field, ok := updateAgentFieldForMetadataKey[fileKey]; ok {
+		suggestion = `use update_agent(id="` + agentID + `", ` + field + `=...)`
 	} else {
-		suggestion = `use system.agent.write_metadata(file="` + fileKey + `", content=...)`
+		suggestion = `use update_agent(id="` + agentID + `", ...)`
 	}
 
 	canonical := canonicalMetadataNames[fileKey]
 	if canonical == "" {
 		canonical = filepath.Base(absPath)
 	}
-	if agentID == "" {
-		agentID = "(unknown)"
-	}
 
 	msg := map[string]any{
 		"error": map[string]any{
 			"code":       "USE_METADATA_TOOL",
-			"message":    "agents/" + agentID + "/" + canonical + " is managed by agent metadata tools",
+			"message":    "agents/" + agentID + "/" + canonical + " is managed by agent metadata tools. " + MetadataGuardNotice,
 			"suggestion": suggestion,
 		},
 	}
