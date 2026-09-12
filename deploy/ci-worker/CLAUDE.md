@@ -50,12 +50,21 @@ as if it were a full pass):
    them on here is not the answer: this box has no dbus and a slow shared Chrome, so they
    fail on the environment (`page load failed: context deadline exceeded`) rather than on
    the code, which is precisely how a false RED trains people to ignore a gate.
-2. **`run_gotest` excuses flakes.** A package that fails the parallel run but passes the
-   isolated `-p 1` re-run prints `FLAKE (passed isolated)` and the gate still returns 0.
-   That is intentional for timing-sensitive integration tests — but it means a green
-   verdict can contain an absorbed failure. **Read the log for `FLAKE (passed isolated)`
-   before treating a green as clean.** (This is exactly how a real `pkg/agent` failure
-   was absorbed on 2026-07-26 and reported upstream as an unqualified pass.)
+2. **`run_gotest` and `run_gorace` excuse HANG-SHAPED flakes only — never assertion
+   failures.** A package that fails the contended run but passes the isolated `-p 1`
+   re-run prints `FLAKE (passed isolated)` and the gate still returns 0. That is
+   intentional for timing-sensitive integration tests. **Since 2026-09-12 both gates
+   refuse to excuse any output containing `--- FAIL`**: contention causes timeouts and
+   hangs, it does not cause a named assertion to fail, so a `--- FAIL` line is real
+   under any load and is reported as `REAL FAILURE (assertion failure detected — never
+   excused)`. What can still be excused is exclusively a bare `FAIL <pkg>` summary with
+   no `--- FAIL` anywhere — the hang/contention signature. This closes the hole that
+   absorbed a real `pkg/agent` failure on 2026-07-26 and reported it upstream as an
+   unqualified pass; `.github/workflows/pr.yml`'s plain step had the guard, the race
+   step and this worker did not. **Still read the log for `FLAKE (passed isolated)`**
+   — an excused hang is worth knowing about, and on 2026-09-12 one turned out to be a
+   harness port race that needed no contention at all (`pkg/agent/testutil`'s
+   `allocatePort` doc comment has the three mechanisms).
 
    A detected `DATA RACE` is now carved out and can never be flake-excused (mirrors the
    guard in `pr.yml`) — but since nothing here runs with `-race`, that carve-out only
@@ -104,7 +113,33 @@ v0.1.0 epic, 2026-06-14; the third on 2026-07-26):
    install. If the e2e gate ever goes broadly red again, check the failure DURATIONS
    before reading it as a regression.
 
-**E2E gate (Playwright).** The `e2e` gate (and the `e2e` step inside `all`) builds the SPA + gateway binary once, then **fans the Playwright suite out across the shards defined in `tests/e2e/shards.json`** — the SAME plan `.github/workflows/pr.yml` uses (both consume `scripts/e2e-shards.sh`), so the two CI surfaces can never drift. Each shard boots its OWN isolated gateway (own port `6060`–`6064`, own `OMNIPUS_HOME`, own `credentials.json`, own auth + skip-manifest files), completes onboarding via the public API, runs its slice of the matrix with `--reporter=list --output=/tmp/e2e-<shard>-results`, and is torn down via a per-shard `trap RETURN`. A whole-run interrupt reaps survivors by **exact pid** from `/tmp/e2e-shard-*.gwpid` — never pkill-by-pattern (self-kill risk). Because the shards run concurrently, wall-clock drops from the old ~3 h single serial run to roughly the slowest single shard (~15 min). `scripts/e2e-shards.sh check` runs first and **FAILS the gate** if any `tests/e2e/*.spec.ts` is unassigned (it would silently never run) or the plan references a deleted spec. Per-shard PASS/FAIL is printed at the end, and each failing shard's full log (`/tmp/e2e-shard-<name>.log`) is dumped.
+4. **Missing-display false-RED (headed shard).** `playwright.config.ts`'s `preview-headed`
+   project runs `headless: false` on purpose — ADR-067 tests 57/58 measure what a REAL
+   browser's PDF viewer does, which headless cannot answer. This box has no X display, so
+   without a virtual one every headed test dies inside `browserType.launch` in **2–4 ms**
+   with `Target page, context or browser has been closed`, across specs that share
+   nothing. Same tell as trap 3: a real assertion cannot finish in 4 ms. Fixed 2026-09-11:
+   `run_e2e` starts one `Xvfb :99` and exports `DISPLAY` before any shard launches (NOT
+   `xvfb-run`, which needs `xauth`, which this image lacks — measured). If the shard goes
+   red this way again, the gate prints a WARNING on stderr naming it as environmental.
+
+5. **Disk-full false-RED (`ENOSPC`).** Each e2e shard's `OMNIPUS_HOME` is ~400 MB and
+   there are 15 shards; until 2026-09-11 they were hardcoded to `/tmp`, which shares the
+   **7.8 GB root overlay**, and the matrix filled it to 96 % — shards then failed with
+   `no space left on device`, which reads as a test failure. Shard state now lives under
+   `$E2E_DIR=/cache/e2e` on the 40 GB volume, wiped at the start of every run. If a
+   shard log contains `ENOSPC`, it is the environment, not the code: check `df -h /`.
+
+**Where the evidence goes, and how long it lives.** `$E2E_DIR` is wiped at the START of
+every e2e run so a stale log can never be mistaken for this run's (two-day-old shard
+logs were read as current failures twice on 2026-09-11). Failed shards leave a
+`e2e-shard-<name>.FAILED` marker the moment they fail, and the NEXT run copies those
+shards' console log, Playwright trace/screenshot/video/error-context and gateway logs to
+`$E2E_DIR.last-failed/<shard>/` before wiping — overwritten each run, so it cannot grow.
+The `~400 MB` session data is not copied. Read `last-failed` before re-running: on
+2026-09-12 a re-run destroyed the only artifacts that would have explained a failure.
+
+**E2E gate (Playwright).** The `e2e` gate (and the `e2e` step inside `all`) builds the SPA + gateway binary once, then **fans the Playwright suite out across the shards defined in `tests/e2e/shards.json`** — the SAME plan `.github/workflows/pr.yml` uses (both consume `scripts/e2e-shards.sh`), so the two CI surfaces can never drift. Each shard boots its OWN isolated gateway (own port `6060`–`6064`, own `OMNIPUS_HOME`, own `credentials.json`, own auth + skip-manifest files), completes onboarding via the public API, runs its slice of the matrix with `--reporter=list --output=$E2E_DIR/e2e-<shard>-results`, and is torn down via a per-shard `trap RETURN`. A whole-run interrupt reaps survivors by **exact pid** from `$E2E_DIR/e2e-shard-*.gwpid` — never pkill-by-pattern (self-kill risk). Because the shards run concurrently, wall-clock drops from the old ~3 h single serial run to roughly the slowest single shard (~15 min). `scripts/e2e-shards.sh check` runs first and **FAILS the gate** if any `tests/e2e/*.spec.ts` is unassigned (it would silently never run) or the plan references a deleted spec. Per-shard PASS/FAIL is printed at the end, and each failing shard's full log (`$E2E_DIR/e2e-shard-<name>.log`) is dumped.
 
   **Env knobs:** `E2E_SPECS="<space-separated specs>"` runs the OLD single-gateway path for a fast targeted re-verify (keeps the HTML report); `E2E_SHARDED=0` forces the single-gateway path for the full matrix.
 
