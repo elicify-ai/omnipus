@@ -2797,35 +2797,12 @@ func (h *WSHandler) handleAttachSession(
 	//
 	//   Back-pressure defense (architect Finding #4): each frame send inside the
 	//   drain uses a 1-second deadline.  If sendCh is full and the client is slow,
-	//   the frame is dropped with a Warn rather than blocking the drain indefinitely.
-	//   The connection stays usable; the SPA will reconcile any missing frames on the
-	//   next attach_session.
-	wc.replayMu.Lock()
-	for {
-		select {
-		case raw := <-wc.replayDivertCh:
-			select {
-			case wc.sendCh <- raw:
-			case <-time.After(1 * time.Second):
-				slog.Warn("ws: replay drain frame timed out, dropping",
-					"session_id", attachID,
-					"chat_id", chatID)
-				wc.droppedFrames.Add(1)
-			case <-ctx.Done():
-				wc.isReplayingLive.Store(false)
-				wc.replayMu.Unlock()
-				return
-			}
-		default:
-			goto drainDone
-		}
+	//   the frame is dropped rather than blocking the drain indefinitely.  A drop
+	//   here is a live message the user will never see, so drainReplayDivert
+	//   reports it to the client instead of only counting it — see its doc comment.
+	if !drainReplayDivert(ctx, wc, attachID, chatID) {
+		return
 	}
-drainDone:
-	// Disarm AFTER drain, while still holding replayMu.Lock().  Releasing the lock
-	// after the Store ensures any writer that is queued behind our Lock() will see
-	// isReplayingLive==false on its re-check and route to sendCh directly.
-	wc.isReplayingLive.Store(false)
-	wc.replayMu.Unlock()
 
 	h.mu.Lock()
 	h.sessionIDs[chatID] = attachID
@@ -2962,6 +2939,111 @@ func (h *WSHandler) pingPump(wc *wsConn) {
 // droppedFramesWarnThreshold is the number of consecutively dropped non-critical
 // frames after which a "connection degraded" error is sent to the browser.
 const droppedFramesWarnThreshold = 20
+
+// drainReplayDivert moves every live frame buffered during a since-cursor replay
+// out of wc.replayDivertCh into wc.sendCh, then disarms the divert.  It returns
+// false when the connection context was cancelled mid-drain, in which case the
+// caller must abandon the rest of the attach.
+//
+// Ordering guarantee: the drain holds wc.replayMu.Lock() for the ENTIRE
+// drain+disarm sequence, and clears wc.isReplayingLive AFTER the drain, never
+// before.  Clearing first would let concurrent sendRawFrameBytes callers write
+// live frames straight to sendCh while buffered divert frames are still being
+// moved, inverting FIFO order.  See handleAttachSession's call site for the full
+// rationale.
+//
+// Dropped-frame reporting — the reason this is not just a counter bump:
+// a frame dropped here is a LIVE message that arrived while the client was
+// replaying and that the client will now never receive.  The connection stays
+// open and nothing else re-sends it, so the user sees a silently truncated reply
+// on reconnect.  Incrementing wc.droppedFrames alone cannot surface that: the
+// only threshold check that emits the user-visible "connection degraded" frame
+// lives in sendRawFrameBytes, and every success path in that function calls
+// wc.droppedFrames.Store(0) — so the next frame that goes through erases the
+// evidence before it can ever be reported.  We therefore count drops LOCALLY and
+// tell the client directly, once, as soon as the drain finishes.
+//
+// The report goes out as an "error" frame, which sendRawFrameBytes treats as
+// critical (see its isCritical expression): it takes the blocking path with a
+// 5 s budget instead of the best-effort backoff that dropped the frames in the
+// first place, so the report itself cannot be lost to the same backpressure.
+func drainReplayDivert(ctx context.Context, wc *wsConn, attachID, chatID string) bool {
+	var dropped int
+
+	wc.replayMu.Lock()
+drainLoop:
+	for {
+		select {
+		case raw := <-wc.replayDivertCh:
+			select {
+			case wc.sendCh <- raw:
+			case <-time.After(1 * time.Second):
+				// Counted locally, NOT on wc.droppedFrames — see the doc comment.
+				dropped++
+				slog.Warn("ws: replay drain frame timed out, dropping",
+					"session_id", attachID,
+					"chat_id", chatID)
+			case <-ctx.Done():
+				wc.isReplayingLive.Store(false)
+				wc.replayMu.Unlock()
+				if dropped > 0 {
+					// The connection is going away, so there is nobody left to
+					// tell — but the loss still happened and must not vanish
+					// from the record.
+					slog.Error("ws: replay drain dropped live frames before the connection closed",
+						"event", "replay_drain_frames_dropped",
+						"session_id", attachID,
+						"chat_id", chatID,
+						"dropped_count", dropped,
+						"reported_to_client", false)
+				}
+				return false
+			}
+		default:
+			break drainLoop
+		}
+	}
+	// Disarm AFTER drain, while still holding replayMu.Lock().  Releasing the lock
+	// after the Store ensures any writer that is queued behind our Lock() will see
+	// isReplayingLive==false on its re-check and route to sendCh directly.
+	wc.isReplayingLive.Store(false)
+	wc.replayMu.Unlock()
+
+	if dropped == 0 {
+		return true
+	}
+
+	slog.Error("ws: replay drain dropped live frames",
+		"event", "replay_drain_frames_dropped",
+		"session_id", attachID,
+		"chat_id", chatID,
+		"dropped_count", dropped,
+		"reported_to_client", true)
+
+	// Emitted AFTER the Unlock above: sendRawFrameBytes takes replayMu.RLock() on
+	// its divert path, and an "error" frame must in any case reach the canonical
+	// sendCh rather than the divert buffer we have just abandoned.
+	//
+	// The wording deliberately starts with the count (a digit) rather than an
+	// identifier: the SPA runs sanitizeLegacyErrorMessage (src/lib/llm-error.ts)
+	// over any untyped error message and replaces anything shaped like
+	// "<identifier>: ..." with a generic apology, which would erase the
+	// instruction this frame exists to deliver.
+	sessionIDCopy := attachID
+	const recovery = " Reopen this conversation to reload the full transcript."
+	message := fmt.Sprintf(
+		"%d live updates could not be delivered while reconnecting and are missing from this view.%s",
+		dropped, recovery)
+	if dropped == 1 {
+		message = "1 live update could not be delivered while reconnecting and is missing from this view." + recovery
+	}
+	sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+		Type:      string(generated.WsFrameTypeError),
+		SessionId: &sessionIDCopy,
+		Message:   message,
+	})
+	return true
+}
 
 // sendConnGenFrame marshals any generated frame type (from pkg/api/generated) and
 // routes it to the connection with the same backpressure and replay-divert logic as
