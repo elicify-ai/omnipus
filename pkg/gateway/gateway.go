@@ -172,6 +172,9 @@ func selfHealWriteHook(reg *configSelfWriteRegistry) config.SelfHealWriteHook {
 
 type services struct {
 	CronService *cron.CronService
+	// LiveLimits is ADR-066 rung 4; retained so shutdown can Close it (abort
+	// in-flight fetches, forbid cache writes) — see agent.LiveLimits.Close.
+	LiveLimits  *agent.LiveLimits
 	TaskTrigger *agent.TaskTriggerScheduler // fires once/every/recurring task triggers via a dedicated CronService
 	// TaskDrain owns the queued-task (`next` → dispatch) poll unconditionally,
 	// independent of which heartbeat path is active. The now-removed global
@@ -2453,8 +2456,11 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// The credential comes from the store via the provider's api_key_ref
 	// (InjectFromConfig's env injection first); a cloud row without one is
 	// skipped, never queried.
-	agent.SetLiveWindowLookup(
-		newLiveLimitsForBoot(homePath, credStore, agentLoop, reloadOnLiveWindow(agentLoop)).Lookup)
+	// The instance is RETAINED (runningServices.LiveLimits, below) so
+	// shutdown can Close it: a fetch that is still in flight when the gateway
+	// stops must not write cache/model_limits.json after RunContext returns.
+	liveLimits := newLiveLimitsForBoot(homePath, credStore, agentLoop, reloadOnLiveWindow(agentLoop))
+	agent.SetLiveWindowLookup(liveLimits.Lookup)
 
 	// FR-007 / US-2.AC2: an agent on a `locality: local` row the catalog
 	// cannot size resolved UNKNOWN above (the rung was not installed yet) and
@@ -2739,9 +2745,11 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	)
 	if err != nil {
 		stopNag() // don't leak the nag goroutine if service setup fails.
+		liveLimits.Close()
 		return err
 	}
 	runningServices.stopNagBanner = stopNag
+	runningServices.LiveLimits = liveLimits
 
 	// Boot-time browser warm-up steps 1 and 2 — the first TAB and the WebRTC
 	// CAPTURE (see startBrowserWarmBoot's block comment). Deliberately here,

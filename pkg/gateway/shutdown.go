@@ -67,6 +67,15 @@ func omnipusGracefulShutdown(
 	if runningServices.PlanEngine != nil {
 		runningServices.PlanEngine.Stop()
 	}
+	// ADR-066 rung 4 writes $OMNIPUS_HOME/cache/model_limits.json at the tail
+	// of a background fetch that nothing else waits for. Close it here, with
+	// the other background writers, so the write cannot land after RunContext
+	// returns (2026-09-12: 130 post-shutdown writes in one CI run, one of
+	// them mid-TempDir-RemoveAll). Close aborts the fetch and returns once its
+	// goroutine has exited.
+	if runningServices.LiveLimits != nil {
+		runningServices.LiveLimits.Close()
+	}
 
 	// US-7 / FR-008: Wait for active turns to complete before force-closing.
 	// Cap the wait to omnipusShutdownTimeout - 5 s so it always fits in the budget.

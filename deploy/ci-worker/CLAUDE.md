@@ -213,4 +213,14 @@ session restart; resume by reading `/tmp/ci-run.log` and `ps -eo pid,etime,cmd |
 '[r]unci.sh'`. A second `runci.sh` pid with the same argv and a younger `etime` is the shard
 runner's forked subshell, not a duplicate run.
 
+**Trap 6 — leftover `/cache/tmp/Test*` directories are post-shutdown writers.** Go's
+`t.TempDir` removes a test's home dir at cleanup; a directory that still exists after the
+run means something wrote into it AFTER the gateway reported stopped (the writer re-created
+the path). Usually that is silent — the test passes and the residue accumulates — and
+occasionally the write lands mid-`RemoveAll` and fails an otherwise green test with
+`directory not empty`. Read the residue as the defect, not the failure as the flake:
+`ls -d /cache/tmp/Test*/ | wc -l` should be 0 after a run, and
+`find /cache/tmp/Test*/ -type f` names the file, hence the subsystem. On 2026-09-12 it was
+130 dirs, all `cache/model_limits.json` (ADR-066 rung 4's fetch on a background context).
+
 **Cost / lifecycle**: the worker is stopped when idle (no public service). If `fly status` shows the machine `stopped`, run `fly machines start <id> --app ci-omnipus` once before invoking `runci.sh`; the SSH console will auto-start it otherwise. Watch the persistent `/cache` volume for disk pressure — `fly ssh console --app ci-omnipus -C 'df -h /cache'`.
