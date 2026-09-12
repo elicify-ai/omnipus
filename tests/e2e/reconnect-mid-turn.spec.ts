@@ -134,11 +134,38 @@ test.describe('reconnect mid-turn (ADR-082)', () => {
     test.setTimeout(420_000)
     const before = await startLongTurn(page)
 
+    // setOffline BLOCKS the network; the DOM `offline` event is what the app
+    // actually listens to, and the two are not the same thing.
+    //
+    // ws.ts's _onOffline is the fast detection path: on `offline` it closes
+    // the socket, which drives onDisconnected -> isConnected=false -> (after
+    // ChatScreen's deliberate 2s useSettledFlag debounce) the banner. Absent
+    // that event the ONLY other detector is the ping heartbeat, which needs
+    // two consecutive 30s ticks with no server frame — up to 60s, far past
+    // this assertion's budget AND past the 5s blip below, so the socket would
+    // be healthy again before it ever noticed.
+    //
+    // Playwright's setOffline emulates network conditions via CDP; it does
+    // not reliably fire `offline` or tear down an already-open WebSocket.
+    // That inconsistency is exactly what this test hit: same commit, the
+    // llm-agents shard PASSED on ci-omnipus and failed 3/3 on ci-omnipus-2,
+    // and the failure snapshot showed a normally-connected UI with "Stop
+    // generation" still visible 10s into being offline — the app was never
+    // told. So raise the event explicitly rather than hoping the emulation
+    // raises it for us.
+    //
+    // This does not soften what is under test. The contract is "the browser
+    // reports offline -> the app re-attaches by itself, with no user action",
+    // and every assertion below still has to hold on the real code path:
+    // real close, real reconnect scheduling, real banner, real catch-up of a
+    // turn that kept running server-side.
     await context.setOffline(true)
-    await expect(page.getByTestId('reconnect-banner')).toBeVisible({ timeout: 10_000 })
+    await page.evaluate(() => window.dispatchEvent(new Event('offline')))
+    await expect(page.getByTestId('reconnect-banner')).toBeVisible({ timeout: 15_000 })
     await page.waitForTimeout(5_000)
     await context.setOffline(false)
-    await expect(page.getByTestId('reconnect-banner')).not.toBeVisible({ timeout: 20_000 })
+    await page.evaluate(() => window.dispatchEvent(new Event('online')))
+    await expect(page.getByTestId('reconnect-banner')).not.toBeVisible({ timeout: 30_000 })
 
     await waitTurnDone(page)
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
