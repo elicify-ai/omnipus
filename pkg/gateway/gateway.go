@@ -174,8 +174,12 @@ type services struct {
 	CronService *cron.CronService
 	// LiveLimits is ADR-066 rung 4; retained so shutdown can Close it (abort
 	// in-flight fetches, forbid cache writes) — see agent.LiveLimits.Close.
-	LiveLimits  *agent.LiveLimits
-	TaskTrigger *agent.TaskTriggerScheduler // fires once/every/recurring task triggers via a dedicated CronService
+	LiveLimits *agent.LiveLimits
+	// catalogRefreshCancel / catalogRefreshDone are startCatalogRefreshLoop's
+	// handles; shutdown cancels, then waits on done (bounded).
+	catalogRefreshCancel context.CancelFunc
+	catalogRefreshDone   <-chan struct{}
+	TaskTrigger          *agent.TaskTriggerScheduler // fires once/every/recurring task triggers via a dedicated CronService
 	// TaskDrain owns the queued-task (`next` → dispatch) poll unconditionally,
 	// independent of which heartbeat path is active. The now-removed global
 	// HeartbeatService was skipped whenever a per-agent heartbeat was active,
@@ -5417,7 +5421,11 @@ func setupAndStartServices(
 	// of these forever per boot, each capable of landing a straggler write in
 	// homePath — including a t.TempDir() root already mid-RemoveAll —
 	// well after RunContext had already returned.
-	go runCatalogRefreshLoop(
+	// Cancel-and-wait, not fire-and-forget: the loop stops on ctx, but
+	// RunContext must not return while a refresh is still between "pull
+	// completed" and "file written". startCatalogRefreshLoop hands shutdown
+	// a cancel plus a done channel it waits on (step 1, shutdown.go).
+	runningServices.catalogRefreshCancel, runningServices.catalogRefreshDone = startCatalogRefreshLoop(
 		ctx,
 		providerCatalog,
 		catalog.NewFileStore(homePath),
@@ -5736,6 +5744,33 @@ func skipStartupPull(store persistedCatalogAger, window time.Duration) bool {
 // Every failure is non-fatal by construction: catalog.Refresh retains the
 // currently served document and logs its own reason-keyed WARN, so this
 // loop only records that the attempt failed and carries on ticking.
+// startCatalogRefreshLoop runs runCatalogRefreshLoop on its own goroutine
+// under a child context and returns the child's cancel plus a channel closed
+// when the goroutine has EXITED. Shutdown calls cancel and then waits on
+// done, so no refresh can be mid-persist when RunContext returns. On
+// 2026-09-12 the fire-and-forget form left providers_catalog.json being
+// written into integration-test home dirs after their gateway had stopped.
+func startCatalogRefreshLoop(
+	ctx context.Context,
+	cat *catalog.Catalog,
+	store persistedCatalogAger,
+	interval, refreshTimeout, skipWindow time.Duration,
+) (cancel context.CancelFunc, done <-chan struct{}) {
+	loopCtx, loopCancel := context.WithCancel(ctx)
+	ch := make(chan struct{})
+	go func() {
+		defer close(ch)
+		runCatalogRefreshLoop(loopCtx, cat, store, interval, refreshTimeout, skipWindow)
+	}()
+	return loopCancel, ch
+}
+
+// catalogRefreshStopTimeout bounds how long shutdown waits for the refresh
+// loop to exit after cancelling it. The loop's own attempt context is
+// cancelled with it, so an in-flight pull aborts at once; this only guards
+// against a wedged transport.
+const catalogRefreshStopTimeout = 10 * time.Second
+
 func runCatalogRefreshLoop(
 	ctx context.Context,
 	cat *catalog.Catalog,

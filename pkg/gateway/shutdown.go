@@ -76,6 +76,21 @@ func omnipusGracefulShutdown(
 	if runningServices.LiveLimits != nil {
 		runningServices.LiveLimits.Close()
 	}
+	// The provider-catalog refresh loop is the other post-boot background
+	// writer (providers_catalog.json, 2.4 MB, pulled from a GitHub release).
+	// Cancel it and wait for the goroutine to exit — bounded, because a wedged
+	// transport must not hold shutdown hostage.
+	if runningServices.catalogRefreshCancel != nil {
+		runningServices.catalogRefreshCancel()
+	}
+	if runningServices.catalogRefreshDone != nil {
+		select {
+		case <-runningServices.catalogRefreshDone:
+		case <-time.After(catalogRefreshStopTimeout):
+			slog.Warn("shutdown: catalog refresh loop did not exit in time; continuing",
+				"timeout", catalogRefreshStopTimeout)
+		}
+	}
 
 	// US-7 / FR-008: Wait for active turns to complete before force-closing.
 	// Cap the wait to omnipusShutdownTimeout - 5 s so it always fits in the budget.

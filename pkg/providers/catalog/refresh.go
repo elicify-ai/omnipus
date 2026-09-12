@@ -130,6 +130,16 @@ func (c *Catalog) refreshLocked(ctx context.Context) error {
 	// persist failure does not undo the apply — the document is already
 	// serving; the next boot just falls back one release.
 	if c.store != nil {
+		// A cancelled context here means the process is shutting down (or the
+		// attempt timed out) AFTER the pull completed: the document is applied
+		// in memory for whatever is left of this run, but the file must not
+		// be written — the data dir may already be gone. 2026-09-12: the
+		// 2.4 MB providers_catalog.json landed in integration-test home dirs
+		// after their gateway had stopped and t.TempDir had removed them.
+		if err := ctx.Err(); err != nil {
+			c.logInfo("catalog refresh: canceled before persist; pulled document applied in memory only", "error", err)
+			return err
+		}
 		if werr := c.store.Write(ctx, data); werr != nil {
 			c.logWarn("catalog refresh: persisting last-known-good failed", "error", werr)
 		}
