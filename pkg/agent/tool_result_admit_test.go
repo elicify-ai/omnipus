@@ -185,6 +185,9 @@ func TestChokePoint_EncodedLineBound(t *testing.T) {
 	})
 
 	t.Run("the bounded line is what reaches the archive and GetHistory reads it back", func(t *testing.T) {
+		if chokePointRaceDetector {
+			t.Skip("8 MB injection-scan under the race detector blows pkg/agent's 900s package budget")
+		}
 		al, ts, store := newChokePointTurn(t, 400_000)
 		seedAssistantCall(t, store, ts.sessionKey, "call_big", "bash", 1)
 		admitted := al.admitToolResult(ts, toolResultAdmission{

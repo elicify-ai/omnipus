@@ -97,7 +97,14 @@ run_grep() {
     include_args+=(--include="$inc")
   done
   local out status
-  out=$(grep -rnE "$pattern" "${include_args[@]}" "$@" 2>"$STDERR_FILE")
+  # -H is load-bearing: grep omits the filename when the scan target is a
+  # single file (clause (c) passes pkg/agent/browser_deferral.go that way),
+  # and strip_comments below requires file:line:content (NF >= 3). Without
+  # -H a planted RequestCancel in that file is dropped as NF=2 and the
+  # guard reports green. The self-test's park-deferral-file case exists
+  # to catch exactly this. Harmless on directory scans, which already emit
+  # the filename.
+  out=$(grep -rnHE "$pattern" "${include_args[@]}" "$@" 2>"$STDERR_FILE")
   status=$?
   if [ "$status" -gt 1 ]; then
     echo "check-no-browser-turn-park: grep failed (exit $status) scanning: $*" >&2
