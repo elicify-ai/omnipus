@@ -1746,7 +1746,35 @@ jobs:
             fi
             exit 1
           fi
-          # No race detected — now the ordinary short-circuit applies.
+          # --- FAIL carve-out, matching the PLAIN test step above.
+          #
+          # The flake filter below exists for ONE signature: CPU/IO contention
+          # on a loaded runner, which makes a test exceed a wall-clock budget
+          # or a package hit its timeout. Contention produces TIMEOUTS and bare
+          # `FAIL <pkg>` summaries — it does not produce assertion failures. So
+          # an `--- FAIL` line means a test evaluated its own assertion and the
+          # assertion was false, and re-running it alone can only ever hide
+          # that. An assertion failure is never excused by an isolated re-run.
+          #
+          # Same native-substring reasoning as DATA RACE above — no grep -q on
+          # the multi-megabyte $out.
+          if [[ $out == *"--- FAIL"* ]]; then
+            echo ""
+            echo "=== --- FAIL detected — an assertion failure is never excused by an isolated re-run ==="
+            failed=$(printf '%s\n' "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
+            if [ -n "$failed" ]; then
+              for p in $failed; do
+                echo "REAL FAILURE (assertion failure detected — never excused): $p"
+              done
+            else
+              echo "REAL FAILURE (assertion failure detected — never excused): --- FAIL detected but no package-level FAIL line matched; see full output above"
+            fi
+            exit 1
+          fi
+          # No race and no assertion failure detected — now the ordinary
+          # short-circuit applies. What reaches the flake filter below is
+          # exclusively the hang/contention signature: a bare `FAIL <pkg>`
+          # summary with no `--- FAIL` line anywhere in the run.
           [ $code -eq 0 ] && exit 0
           failed=$(printf '%s\n' "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
           [ -z "$failed" ] && exit $code
@@ -1754,7 +1782,17 @@ jobs:
           echo "=== FLAKE FILTER (-race): re-running failed packages isolated (-p 1): $failed ==="
           rc=0
           for p in $failed; do
-            if go test -race -tags goolm,stdjson -count=1 -timeout 900s -p 1 "$p" >/tmp/rr_race.log 2>&1; then
+            # The isolated re-run is grepped for DATA RACE, not just checked
+            # for a zero exit — deploy/ci-worker/runci.sh's run_gorace already
+            # does this and the two must stay in lockstep.
+            #
+            # The carve-out above exists because "a race can be reported
+            # without flipping go test's exit code". That is equally true of
+            # THIS run, so testing only its exit code let a race reported in
+            # the SECOND run be stamped "FLAKE (passed isolated)" and excused
+            # — precisely what the carve-out forbids.
+            if go test -race -tags goolm,stdjson -count=1 -timeout 900s -p 1 "$p" >/tmp/rr_race.log 2>&1 \
+               && ! grep -aq "DATA RACE" /tmp/rr_race.log; then
               echo "FLAKE (passed isolated): $p"
             else
               echo "REAL FAILURE (failed twice): $p"; grep -aE '^--- FAIL|DATA RACE' /tmp/rr_race.log | head; rc=1
