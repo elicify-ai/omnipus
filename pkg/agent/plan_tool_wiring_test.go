@@ -291,6 +291,16 @@ func TestPlanExecuteWired_CreatePlanAttachMemberExecutePlanEndToEnd(t *testing.T
 	// resolves it via tools.ToolWorkspaceID(ctx), falling back to the
 	// is_default workspace on disk, and this test harness's shared seed file
 	// (testHarnessWorkspaceMembershipID) is never flagged is_default.
+	//
+	// dod is supplied because operator decision D-C made definition-of-done
+	// mandatory alongside criteria on EVERY task-creation surface, at create
+	// AND at edit (GOAL-FR-021/D-C; the gate itself is create_task's own
+	// "required" schema list plus the explicit check in pkg/tools/task.go).
+	// This fixture predates that decision and asserted a create_task call
+	// with criteria but no dod would succeed — behaviour D-C retired. The
+	// gate stays; the call site gains the field. dod items are DISTINCT from
+	// criteria by contract (generic standing quality gates vs the
+	// outcome-specific check), so this is a different statement, not a copy.
 	taskCreateCtx := tools.WithWorkspaceID(ctx, testHarnessWorkspaceMembershipID)
 	createTaskResult := agentInst.Tools.Execute(taskCreateCtx, "create_task", map[string]any{
 		"title":    "do the thing",
@@ -298,6 +308,7 @@ func TestPlanExecuteWired_CreatePlanAttachMemberExecutePlanEndToEnd(t *testing.T
 		"agent_id": "planner-agent",
 		"plan_id":  createPayload.PlanID,
 		"criteria": []any{map[string]any{"kind": "prose", "text": "did it"}},
+		"dod":      []any{map[string]any{"kind": "prose", "text": "the work meets the team's quality bar"}},
 	})
 	if createTaskResult == nil || createTaskResult.IsError {
 		t.Fatalf("create_task(plan_id=%q) must succeed now that the plan store is wired, got %+v",

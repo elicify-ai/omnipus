@@ -90,6 +90,17 @@ func TestSetPlanStore_ReWiresSystoolsCreateTaskInWorkspace(t *testing.T) {
 	// Sanity: the gap really exists before the fix runs — the tool is wired
 	// (present on the agent), but its own copy of Deps still has a nil
 	// PlanStore, matching production's boot-order gap exactly.
+	//
+	// Both calls below carry dod because operator decision D-C made
+	// definition-of-done mandatory alongside criteria on EVERY task-creation
+	// surface, at create AND at edit (GOAL-FR-021/D-C, enforced in
+	// pkg/sysagent/tools/task.go whenever agent_id is set). That gate sits
+	// BEFORE the plan-linkage check, so a dod-less fixture never reaches the
+	// nil-store branch this test exists to observe: it was reporting the dod
+	// complaint instead of the "plan store is not configured" message, which
+	// is the gate working, not the wiring regressing. dod items are DISTINCT
+	// from criteria by contract (generic standing quality gates vs the
+	// outcome-specific check), so these are different statements, not copies.
 	ctx := tools.WithAgentID(context.Background(), "planner-agent")
 	before := agentInst.Tools.Execute(ctx, "create_task_in_workspace", map[string]any{
 		"name":         "member task",
@@ -97,6 +108,7 @@ func TestSetPlanStore_ReWiresSystoolsCreateTaskInWorkspace(t *testing.T) {
 		"agent_id":     "planner-agent",
 		"plan_id":      "does-not-matter",
 		"criteria":     []any{map[string]any{"kind": "prose", "text": "the work is done"}},
+		"dod":          []any{map[string]any{"kind": "prose", "text": "the work meets the team's quality bar"}},
 	})
 	if before == nil || !before.IsError {
 		t.Fatalf("create_task_in_workspace(plan_id=...) before SetPlanStore must fail closed, got %+v", before)
@@ -124,6 +136,7 @@ func TestSetPlanStore_ReWiresSystoolsCreateTaskInWorkspace(t *testing.T) {
 		"agent_id":     "planner-agent",
 		"plan_id":      p.ID,
 		"criteria":     []any{map[string]any{"kind": "prose", "text": "the work is done"}},
+		"dod":          []any{map[string]any{"kind": "prose", "text": "the work meets the team's quality bar"}},
 	})
 	if after == nil || after.IsError {
 		t.Fatalf("create_task_in_workspace(plan_id=...) after SetPlanStore must succeed, got %+v", after)

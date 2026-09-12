@@ -15,17 +15,20 @@
 // routing map before acting, so the ONLY route available is the one
 // production persisted.
 //
-// Store-failure arrange: several tests make the goal entity directory
-// read-only (0500). Reads still succeed and every write fails with
-// "permission denied", which is exactly the shape a full disk or a
-// permissions fault produces in the field — and the shape under which each of
-// SF-5/SF-6/SF-7 rendered a failure as a success.
+// Store-failure arrange: several tests fault the goal record's writes (and
+// SF-3 its session transcript's reads) via the helpers in
+// goal_store_fault_test.go. Reads still succeed and every write to the
+// record under test fails, which is exactly the shape a full disk or a
+// permissions fault produces in the field — and the shape under which each
+// of SF-5/SF-6/SF-7/SF-9 rendered a failure as a success. Those faults are
+// deliberately NOT permission bits: the CI worker runs as root, root ignores
+// permission bits, and a chmod-based arrange therefore never fired there.
+// See goal_store_fault_test.go's package comment for the mechanism and for
+// the self-tests that keep the arrange honest.
 package agent
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -40,27 +43,6 @@ import (
 )
 
 // --- arrange helpers -------------------------------------------------------
-
-// freezeGoalStore makes every goal-record WRITE fail for the rest of the test
-// while leaving every READ working, and restores the directory on cleanup.
-// This is the storage-fault arrange for SF-5/SF-6/SF-7 and for finding 9's
-// failure branch.
-func freezeGoalStore(t *testing.T) {
-	t.Helper()
-	dir := filepath.Join(config.OmnipusHomeDir(), "entities", "goals")
-	if err := os.Chmod(dir, 0o500); err != nil {
-		t.Fatalf("freezeGoalStore: chmod %q: %v", dir, err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
-
-	// Prove the arrange actually bites — a silently-still-writable store
-	// would make every assertion below pass for the wrong reason.
-	if _, err := goal.NewStore(config.OmnipusHomeDir()).Update("no-such-goal", func(*goal.Goal) error {
-		return nil
-	}); err == nil {
-		t.Fatal("freezeGoalStore: the goal store is still writable — the storage-fault arrange did not take")
-	}
-}
 
 // goalTranscriptContains reports whether any transcript entry on sid contains
 // needle. The user-visible surface for a handover: this is what the operator
@@ -82,7 +64,11 @@ func goalTranscriptContains(t *testing.T, store *session.UnifiedStore, sid, need
 // seedTaskWithJudgeableGoal builds a task plus its paired DEFINING-phase goal
 // record, exactly as rest_tasks.go's syncTaskGoalRecord does at task creation
 // (GOAL-FR-009), with criteria whose ids the canned judge providers answer.
-func seedTaskWithJudgeableGoal(t *testing.T, al *AgentLoop, taskID, condition string, srcChannel, srcChatID string) *task.Task {
+// It returns both, because a caller that wants to fault the task's goal
+// record must be able to name it — the task's own id is NOT the goal id.
+func seedTaskWithJudgeableGoal(
+	t *testing.T, al *AgentLoop, taskID, condition string, srcChannel, srcChatID string,
+) (*task.Task, *goal.Goal) {
 	t.Helper()
 	tk := &task.Task{
 		ID: taskID, AgentID: "native-agent", WorkspaceID: "test-ws", Title: condition,
@@ -100,7 +86,7 @@ func seedTaskWithJudgeableGoal(t *testing.T, al *AgentLoop, taskID, condition st
 	if err := goal.NewStore(config.OmnipusHomeDir()).Create(g); err != nil {
 		t.Fatalf("seedTaskWithJudgeableGoal: goal Create: %v", err)
 	}
-	return tk
+	return tk, g
 }
 
 // pushGoalActivityIntoThePast rewinds a goal record's activity clocks so the
@@ -196,7 +182,7 @@ func TestMetTaskGoalLeavesRealHistoryOnRerun(t *testing.T) {
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	const condition = "ship the CSV exporter"
-	tk := seedTaskWithJudgeableGoal(t, al, "t-history-1", condition, "webchat", "c1")
+	tk, _ := seedTaskWithJudgeableGoal(t, al, "t-history-1", condition, "webchat", "c1")
 
 	sid, err := al.taskExecutor.createTaskSessionSync(tk)
 	if err != nil {
@@ -277,7 +263,7 @@ func TestMetGoalIsNotTerminatedWhenItsVerdictCannotBePersisted(t *testing.T) {
 
 	result := &turnResult{finalContent: "[goal:evidence] all tests green\nGOAL_STATUS: met"}
 	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, result)
-	freezeGoalStore(t)
+	failGoalRecordWrites(t, g.GoalID)
 	al.dispatchDeferredGoalAdjudication(result.goalDeferredAdjudication)
 	cleanup()
 
@@ -317,7 +303,7 @@ func TestMetGoalIsNotTerminatedWhenItsVerdictCannotBePersisted(t *testing.T) {
 func TestActivateTaskGoalRecordsRouting(t *testing.T) {
 	t.Run("from the task's own chat origin", func(t *testing.T) {
 		al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-		tk := seedTaskWithJudgeableGoal(t, al, "t-route-1", "ship it", "telegram", "chat-77")
+		tk, _ := seedTaskWithJudgeableGoal(t, al, "t-route-1", "ship it", "telegram", "chat-77")
 
 		sid, err := al.taskExecutor.createTaskSessionSync(tk)
 		if err != nil {
@@ -336,7 +322,7 @@ func TestActivateTaskGoalRecordsRouting(t *testing.T) {
 
 	t.Run("board-created task falls back to a reachable system destination", func(t *testing.T) {
 		al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-		tk := seedTaskWithJudgeableGoal(t, al, "t-route-2", "ship it", "", "")
+		tk, _ := seedTaskWithJudgeableGoal(t, al, "t-route-2", "ship it", "", "")
 
 		sid, err := al.taskExecutor.createTaskSessionSync(tk)
 		if err != nil {
@@ -391,7 +377,7 @@ func TestKeeperReachesAQuietTaskWithoutTestWiring(t *testing.T) {
 	resetGoalTriggerStateForTest()
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	const condition = "ship the CSV exporter"
-	tk := seedTaskWithJudgeableGoal(t, al, "t-keeper-1", condition, "webchat", "c1")
+	tk, _ := seedTaskWithJudgeableGoal(t, al, "t-keeper-1", condition, "webchat", "c1")
 
 	sid, err := al.taskExecutor.createTaskSessionSync(tk)
 	if err != nil {
@@ -474,13 +460,9 @@ func TestClaimScanWatermarkSurvivesATranscriptReadError(t *testing.T) {
 		t.Fatalf("AppendTranscriptStrict: %v", err)
 	}
 
-	transcriptPath := filepath.Join(store.BaseDir(), sid, "transcript.jsonl")
-	if _, err := os.Stat(transcriptPath); err != nil {
-		t.Fatalf("arrange: transcript not where expected (%q): %v", transcriptPath, err)
-	}
-	if err := os.Chmod(transcriptPath, 0o000); err != nil {
-		t.Fatalf("arrange: chmod transcript: %v", err)
-	}
+	// The storage fault: every read of this session's transcript now ERRORS
+	// (not "returns nothing" — see failTranscriptReads), until restored.
+	restoreTranscript := failTranscriptReads(t, store, sid)
 
 	opts := processOptions{
 		TranscriptStore: store, TranscriptSessionID: sid,
@@ -493,17 +475,16 @@ func TestClaimScanWatermarkSurvivesATranscriptReadError(t *testing.T) {
 	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, failed)
 	if failed.goalDeferredAdjudication != nil {
 		t.Fatal("arrange: the transcript read was expected to fail, but a claim was resolved anyway — " +
-			"the chmod arrange did not take")
+			"the read-fault arrange did not reach the claim scan")
 	}
 	if _, ok := al.goalClaimScanWatermark(g.GoalID); ok {
 		t.Fatal("SF-3: the claim-scan watermark was advanced after a FAILED transcript read. " +
 			"The scan window has now moved past an unread, real claim and no later pass will ever find it")
 	}
 
-	// Turn 2: storage recovers. The claim must still be discoverable.
-	if err := os.Chmod(transcriptPath, 0o600); err != nil {
-		t.Fatalf("chmod transcript back: %v", err)
-	}
+	// Turn 2: storage recovers, with the transcript's own bytes back in
+	// place. The claim must still be discoverable.
+	restoreTranscript()
 	recovered := &turnResult{finalContent: "still working"}
 	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, recovered)
 	if recovered.goalDeferredAdjudication == nil {
@@ -542,7 +523,7 @@ func TestKeeperDoesNotDispatchAnUncountedPush(t *testing.T) {
 	al.recordGoalRouting(sid, g.GoalID, "webchat", "c1", "sk1", agentInst.ID)
 
 	dispatch := recordGoalDispatches(al)
-	freezeGoalStore(t)
+	failGoalRecordWrites(t, g.GoalID)
 
 	al.goalQuietWindowSettle(time.Now())
 
@@ -583,7 +564,7 @@ func TestIdleExpiryWritesNoHandoverWhenTheTransitionFails(t *testing.T) {
 		[]task.AcceptanceCriterion{terminalTestCriterion("the tests pass")}, nil)
 	pushGoalActivityIntoThePast(t, g.GoalID, time.Now().Add(-30*24*time.Hour))
 
-	freezeGoalStore(t)
+	failGoalRecordWrites(t, g.GoalID)
 	al.goalIdleExpirySweep(config.PlanningConfig{}, time.Now().UTC())
 
 	if goalTranscriptContains(t, store, sid, "idle-expired") {
@@ -644,7 +625,7 @@ func TestRejectedProjectionIsNotEmittedToTheUI(t *testing.T) {
 
 	result := &turnResult{finalContent: "[goal:evidence] partial\nGOAL_STATUS: met"}
 	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, result)
-	freezeGoalStore(t)
+	failGoalRecordWrites(t, g.GoalID)
 	al.dispatchDeferredGoalAdjudication(result.goalDeferredAdjudication)
 	cleanup()
 
@@ -761,9 +742,9 @@ func TestUnparseableGoalClaimIsReportedNotSwallowed(t *testing.T) {
 // (GOAL-FR-013) in the direction that hides a defect.
 func TestTaskGoalActivationFailureIsLoud(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	tk := seedTaskWithJudgeableGoal(t, al, "t-loud-1", "ship it", "webchat", "c1")
+	tk, taskGoal := seedTaskWithJudgeableGoal(t, al, "t-loud-1", "ship it", "webchat", "c1")
 
-	freezeGoalStore(t)
+	failGoalRecordWrites(t, taskGoal.GoalID)
 
 	sid, err := al.taskExecutor.createTaskSessionSync(tk)
 	if err != nil {
