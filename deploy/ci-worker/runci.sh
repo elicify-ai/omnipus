@@ -101,7 +101,30 @@ ensure_spa_stub() {
 }
 run_spaembed() { npm run build && rm -rf pkg/gateway/spa && cp -r dist/spa pkg/gateway/spa; }
 
-run_gofmt()    { local n; n=$(gofmt -l . 2>/dev/null | grep -v '^$' | wc -l); echo "gofmt unformatted=$n"; [ "$n" = 0 ]; }
+# gofmt's OWN exit code is read before anything counts lines.
+#
+# The old form was `n=$(gofmt -l . 2>/dev/null | grep -v '^$' | wc -l)`, which
+# reports WC's status, not gofmt's — the opening example in
+# docs/internal/false-green-patterns.md. A gofmt that died (parse error on a
+# malformed file, binary missing, I/O error) printed nothing, `wc` dutifully
+# counted 0, and the gate went green having format-checked NOTHING. The
+# `2>/dev/null` made it worse by throwing away the one message that would have
+# said so.
+run_gofmt() {
+  local out code n errf="$TMPDIR/gofmt.err"
+  out=$(gofmt -l . 2>"$errf"); code=$?
+  if [ $code -ne 0 ]; then
+    echo "GATE FAILURE: gofmt itself exited $code — NOTHING was format-checked:" >&2
+    cat "$errf" >&2
+    return 1
+  fi
+  n=$(printf '%s\n' "$out" | grep -c '[^[:space:]]')
+  echo "gofmt unformatted=$n"
+  [ "$n" = 0 ] && return 0
+  echo "unformatted files:" >&2
+  printf '%s\n' "$out" >&2
+  return 1
+}
 run_gobuild()  {
   ensure_spa_stub
   CGO_ENABLED=0 go build -tags "$TAGS" ./... || return 1
@@ -270,10 +293,24 @@ run_gorace() {
   # lockstep with pr.yml, which concurrency-only scheduling knobs are not part
   # of.
   #
-  # shellcheck disable=SC2046 — intentional word-splitting: race-packages.sh
-  # emits a space-separated package list that must expand to separate args.
+  # The package list is read into an ARRAY rather than relying on unquoted
+  # command-substitution splitting. The old form carried
+  # `# shellcheck disable=SC2046 — intentional word-splitting: …`, i.e. an
+  # explanation appended after the rule id ON THE SAME LINE. shellcheck rejects
+  # that as malformed (SC1125) and IGNORES THE WHOLE DIRECTIVE — the same trap
+  # as a nosec annotation with trailing prose: it reads like a considered
+  # suppression and suppresses nothing. pr.yml's race step already switched to
+  # mapfile for exactly this reason; this brings the worker back into lockstep.
+  local -a race_pkgs
+  mapfile -t race_pkgs < <(scripts/race-packages.sh)
+  if [ ${#race_pkgs[@]} -eq 0 ]; then
+    echo "GATE FAILURE: scripts/race-packages.sh produced no packages." >&2
+    echo "Refusing to run: a bare 'go test -race' with no package list would report a pass without" >&2
+    echo "testing the intended packages. (Mirrors the same guard in .github/workflows/pr.yml.)" >&2
+    return 1
+  fi
   out=$(CI=true GOMAXPROCS=4 CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -p 2 -timeout 900s \
-    $(scripts/race-packages.sh) 2>&1)
+    "${race_pkgs[@]}" 2>&1)
   local code=$?
   echo "$out"
   # Checked BEFORE the exit-code short-circuit, for the same reason pr.yml and
@@ -287,6 +324,39 @@ run_gorace() {
     echo "$out" | grep -aE '^FAIL[[:space:]]|DATA RACE' | head -20
     return 1
   fi
+  # --- FAIL carve-out, copied from pr.yml's PLAIN test step for parity.
+  #
+  # The flake filter below exists for ONE signature: CPU/IO contention on a
+  # loaded shared runner, which makes a test exceed a wall-clock budget or a
+  # package hit its timeout. Contention produces TIMEOUTS and bare `FAIL <pkg>`
+  # summaries — it does not produce assertion failures. So an `--- FAIL` line
+  # means a test evaluated its own assertion and the assertion was false, and
+  # re-running it alone can only ever hide that. Never excused.
+  #
+  # Same native bash substring match as DATA RACE above, and for the same
+  # reason: `echo | grep -q` closes the pipe on the first match, echo dies of
+  # SIGPIPE, and under `set -o pipefail` the test silently evaluates FALSE on
+  # any multi-MB log — i.e. on every real run.
+  if [[ $out == *"--- FAIL"* ]]; then
+    echo ""
+    echo "=== --- FAIL detected — an assertion failure is never excused by an isolated re-run ==="
+    local failed_assert
+    failed_assert=$(echo "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
+    if [ -n "$failed_assert" ]; then
+      local fp
+      for fp in $failed_assert; do
+        echo "REAL FAILURE (assertion failure detected — never excused): $fp"
+      done
+    else
+      echo "REAL FAILURE (assertion failure detected — never excused): --- FAIL detected but no package-level FAIL line matched; see full output above"
+    fi
+    echo "  failing tests:"
+    echo "$out" | grep -aoE '^\s*--- FAIL: [A-Za-z0-9_/]+' | awk '{print $3}' | sort -u | sed 's/^/    /'
+    return 1
+  fi
+  # No race and no assertion failure — now the ordinary short-circuit applies.
+  # What reaches the flake filter below is exclusively the hang/contention
+  # signature: a bare `FAIL <pkg>` summary with no `--- FAIL` line anywhere.
   [ $code -eq 0 ] && return 0
 
   # Flake filter — ALSO copied from pr.yml's race step, and required for
@@ -330,9 +400,15 @@ run_gorace() {
     # stamped a flake — or vice versa.
     if CI=true CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 900s -p 1 "$p" >"/tmp/rr_race_$(echo "$p" | tr '/' '_').log" 2>&1 \
        && ! grep -aq "DATA RACE" "/tmp/rr_race_$(echo "$p" | tr '/' '_').log"; then
+      # Excused — but say WHAT was excused. After the `--- FAIL` carve-out
+      # above, reaching this point means the contended run produced a bare
+      # `FAIL <pkg>` with NO named test failure (the hang/timeout signature),
+      # so the old "contended-run failures" list here would now always be
+      # empty. Print the signature that actually occurred instead of an empty
+      # list under a heading claiming real bugs.
       echo "FLAKE (passed isolated): $p"
-      echo "  contended-run failures (each is a REAL BUG that has not been diagnosed yet):"
-      grep -aoE '^\s*--- FAIL: [A-Za-z0-9_/]+' <<<"$out" | awk '{print $3}' | sort -u | sed 's/^/    /'
+      echo "  contended-run signature (no '--- FAIL' line — hang/timeout under contention, not an assertion):"
+      grep -aE "^FAIL[[:space:]]+$p|^panic:|test timed out after" <<<"$out" | head -5 | sed 's/^/    /'
     else
       echo "REAL FAILURE (failed twice): $p"
       # Per-package log: a single shared path was overwritten each iteration,
@@ -386,24 +462,74 @@ run_gotest() {
   # match and closes the pipe, echo dies of SIGPIPE, and under `set -o pipefail`
   # the pipeline status becomes 141 — the test would silently evaluate false on
   # any multi-MB log. (Mirrors the same guard in .github/workflows/pr.yml.)
+  #
+  # ⚠️ THIS PARTICULAR GREP IS ALL BUT DEAD IN THIS FUNCTION, and that is why
+  # the `--- FAIL` carve-out below is the LIVE guard here. The run above is
+  # `CGO_ENABLED=0 go test` with NO `-race`, so the detector is not even
+  # compiled in: the only way "DATA RACE" can reach $out is the narrow
+  # shell-out case the paragraph above describes (a test that itself invokes
+  # `go test -race` and echoes the child's stdout). Keep it — it costs nothing
+  # and it keeps this function in lockstep with run_gorace and pr.yml — but do
+  # not mistake it for this gate's protection against a flake-excused real
+  # failure. That is the `--- FAIL` block.
   if [[ $out == *"DATA RACE"* ]]; then
     echo ""
     echo "=== DATA RACE detected — never excused by an isolated re-run ==="
     echo "$out" | grep -aE '^FAIL[[:space:]]|DATA RACE' | head -20
     return 1
   fi
+  # --- FAIL carve-out, copied from pr.yml's PLAIN test step for parity.
+  #
+  # The flake filter below exists for ONE signature: CPU/IO contention on a
+  # loaded shared runner, which makes a test exceed a wall-clock budget or a
+  # package hit its timeout. Contention produces TIMEOUTS and bare `FAIL <pkg>`
+  # summaries — it does not produce assertion failures. So an `--- FAIL` line
+  # means a test evaluated its own assertion and the assertion was false, and
+  # re-running it alone can only ever hide that. Never excused.
+  #
+  # Same native bash substring match as DATA RACE above, and for the same
+  # reason: `echo | grep -q` closes the pipe on the first match, echo dies of
+  # SIGPIPE, and under `set -o pipefail` the test silently evaluates FALSE on
+  # any multi-MB log — i.e. on every real run.
+  if [[ $out == *"--- FAIL"* ]]; then
+    echo ""
+    echo "=== --- FAIL detected — an assertion failure is never excused by an isolated re-run ==="
+    local failed_assert
+    failed_assert=$(echo "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
+    if [ -n "$failed_assert" ]; then
+      local fp
+      for fp in $failed_assert; do
+        echo "REAL FAILURE (assertion failure detected — never excused): $fp"
+      done
+    else
+      echo "REAL FAILURE (assertion failure detected — never excused): --- FAIL detected but no package-level FAIL line matched; see full output above"
+    fi
+    echo "  failing tests:"
+    echo "$out" | grep -aoE '^\s*--- FAIL: [A-Za-z0-9_/]+' | awk '{print $3}' | sort -u | sed 's/^/    /'
+    echo "  --- detail ---"
+    echo "$out" | grep -aA 12 -E '^\s*--- FAIL' | head -120
+    return 1
+  fi
+  # No race and no assertion failure — now the ordinary short-circuit applies.
+  # What reaches the flake filter below is exclusively the hang/contention
+  # signature: a bare `FAIL <pkg>` summary with no `--- FAIL` line anywhere.
   [ $code -eq 0 ] && return 0
   local failed; failed=$(echo "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
   [ -z "$failed" ] && return $code
   echo ""; echo "=== FLAKE FILTER: re-running failed packages isolated (-p 1): $failed ==="
   local rc=0
+  # The old contended-vs-isolated test-name INTERSECTION that used to live here
+  # is gone, and deliberately so. It classified a repeat failure as "same test
+  # failed BOTH runs" vs "different tests failed each run" by comparing the
+  # `--- FAIL:` names of the two runs. After the `--- FAIL` carve-out above,
+  # the contended side of that comparison is EMPTY BY CONSTRUCTION — any
+  # `--- FAIL` line returns before ever reaching here — so the intersection
+  # would always be empty and every repeat failure would have been stamped
+  # "different tests failed each run — two independent flakes", which is the
+  # precise false label that logic was originally written to eliminate. A
+  # comparison whose input is structurally empty does not report a weaker
+  # verdict; it reports a WRONG one.
   for p in $failed; do
-    # Which TESTS failed the contended run, for this package only. Go prefixes
-    # nothing package-scoped onto "--- FAIL:" lines, so scope by taking the
-    # slice of $out between this package's first failure and its "^FAIL <pkg>"
-    # summary line; simpler and good enough: collect all contended failures once
-    # and intersect per package below (a test name is unique enough in practice).
-    local run1; run1=$(echo "$out" | grep -aoE '^\s*--- FAIL: [A-Za-z0-9_/]+' | awk '{print $3}' | sort -u)
     # CI=true here too: the isolated re-run must measure the same thing as the
     # contended run, or a package that only failed because it launched a real
     # Chrome would be re-run without one and stamped a flake (or vice versa).
@@ -411,32 +537,30 @@ run_gotest() {
     # isolated -p 1 re-run of a slow package (e.g. pkg/agent, ~19min
     # uncontended) is just as exposed to go test's 10m-per-binary default,
     # and this IS the exact re-run that would otherwise stamp such a package
-    # "REAL FAILURE (same test failed BOTH runs)" on a timeout artifact
-    # rather than a genuine repeat failure.
+    # a REAL FAILURE on a timeout artifact rather than a genuine repeat.
     if CI=true CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -timeout 1800s -p 1 "$p" >/tmp/rr.log 2>&1; then
+      # Excused — but say WHAT was excused. Reaching this point means the
+      # contended run produced a bare `FAIL <pkg>` with no named test failure,
+      # i.e. the hang/timeout signature, and the package passed alone.
       echo "FLAKE (passed isolated): $p"
-      echo "  contended-run failures (each one is a REAL BUG that has not been diagnosed yet):"
-      echo "$run1" | sed 's/^/    /'
+      echo "  contended-run signature (no '--- FAIL' line — hang/timeout under contention, not an assertion):"
+      echo "$out" | grep -aE "^FAIL[[:space:]]+$p|^panic:|test timed out after" | head -5 | sed 's/^/    /'
     else
+      # Failed contended AND failed alone. Whether the isolated run names
+      # specific tests or times out again, twice is not a flake.
+      echo "REAL FAILURE (failed contended AND isolated): $p"
       local run2; run2=$(grep -aoE '^\s*--- FAIL: [A-Za-z0-9_/]+' /tmp/rr.log | awk '{print $3}' | sort -u)
-      local both; both=$(comm -12 <(echo "$run1") <(echo "$run2"))
-      if [ -n "$both" ]; then
-        echo "REAL FAILURE (same test failed BOTH runs): $p"
-        echo "$both" | sed 's/^/    /'
+      if [ -n "$run2" ]; then
+        echo "  isolated run named these failing tests (the contended run named none — it hung or timed out):"
+        echo "$run2" | sed 's/^/    /'
       else
-        # Both runs failed, but on DIFFERENT tests. That is two independent
-        # flakes, NOT one deterministic failure — the old code called this
-        # "failed twice" and sent an investigation chasing a regression that
-        # did not exist. Still a gate failure; just labelled honestly.
-        echo "GATE FAILURE (different tests failed each run — two independent flakes, not one deterministic failure): $p"
-        echo "  contended run:"; echo "$run1" | sed 's/^/    /'
-        echo "  isolated run:";  echo "$run2" | sed 's/^/    /'
+        echo "  isolated run named no tests either — both runs hung or timed out; check the detail below"
       fi
       # Full assertion text, not just the "--- FAIL" header. The header alone
       # discards the indented failure message, which is the only thing that
       # makes a failure diagnosable from CI output.
       echo "  --- isolated-run detail ---"
-      grep -aA 12 -E '^\s*--- FAIL' /tmp/rr.log | head -120
+      grep -aA 12 -E '^\s*--- FAIL|^panic:|test timed out after' /tmp/rr.log | head -120
       rc=1
     fi
   done
@@ -496,7 +620,18 @@ run_cli_verb_guard() {
   fi
   echo "OK: no removed CLI verbs in infra."
 }
-run_npm()      { npm ci --no-audit --no-fund; }
+# npmLockStamp is written into node_modules after a successful `npm ci` so a
+# later gate can tell "node_modules matches THIS checkout" from "node_modules is
+# whatever the last run on this SHARED worker left behind". See
+# _e2e_ensure_deps.
+npmLockStamp="node_modules/.omnipus-ci-lock-stamp"
+
+run_npm() {
+  npm ci --no-audit --no-fund || return 1
+  # `npm ci` deletes node_modules first, so the stamp can only ever describe
+  # the install that just finished.
+  md5sum package-lock.json | awk '{print $1}' > "$npmLockStamp"
+}
 run_typecheck(){ npm run typecheck; }
 run_vitest()   { npx vitest run --maxWorkers=4; }  # cap workers: 8 oversubscribe shared vCPUs → perf-test timeouts
 run_contracts(){ make verify-contracts; }
@@ -536,10 +671,66 @@ run_contracts(){ make verify-contracts; }
 # Build the SPA, embed it, build the gateway binary to /tmp/omnipus-ci (the path
 # tests/e2e/setup.ts hardcodes as DEFAULT_OMNIPUS_BINARY for self-managed-gateway specs),
 # and install the matching Chromium. Shared by every shard — run exactly once.
+# Make node_modules match THIS checkout before anything builds against it.
+#
+# The `e2e)` gate runs `run_e2e` ALONE — unlike `all`, it never runs the npm-ci
+# step. So a targeted e2e run built against whatever node_modules the previous
+# run left behind, and on this SHARED worker (one /cache/omnipus checkout, every
+# operator's runs) that is frequently ANOTHER BRANCH's dependency set. A build
+# against the wrong dependency tree fails in ways that read as a code defect and
+# are not one.
+#
+# Cheapest correct form: the same `npm ci` that `all` runs, skipped when the
+# installed tree already corresponds to this checkout's package-lock.json.
+_e2e_ensure_deps() {
+  # npm aborts with `uv_os_homedir returned ENOENT` when HOME is empty, which a
+  # `fly ssh console -C` session genuinely has. This script sets HOME near the
+  # top (`export HOME="${HOME:-/root}"`, which covers empty as well as unset —
+  # `:-` not `-`), and nothing between there and here reassigns it, so this
+  # check should never fire. It exists because if it ever DOES, npm's own error
+  # names neither the variable nor the fix.
+  [ -n "${HOME:-}" ] || {
+    echo "GATE FAILURE: HOME is empty — npm will abort with 'uv_os_homedir returned ENOENT' before doing anything" >&2
+    return 1
+  }
+
+  local want
+  want=$(md5sum package-lock.json | awk '{print $1}')
+  if [ -f "$npmLockStamp" ] && [ "$(cat "$npmLockStamp" 2>/dev/null)" = "$want" ]; then
+    log "e2e: node_modules already matches this checkout's package-lock.json ($want) — skipping npm ci"
+    return 0
+  fi
+  if [ -f "$npmLockStamp" ]; then
+    log "e2e: node_modules was installed from a DIFFERENT package-lock.json ($(cat "$npmLockStamp")) — reinstalling for $want"
+  else
+    log "e2e: node_modules missing or unstamped (another run's leftovers?) — installing for package-lock $want"
+  fi
+  run_npm
+}
+
 _e2e_build() {
+  _e2e_ensure_deps || return 1
+
   # SPA + embed sync (the //go:embed in pkg/gateway/embed.go needs pkg/gateway/spa/ non-empty).
+  #
+  # The build's output is CAPTURED, never discarded. It used to be
+  # `npm run build >/dev/null || return 1`, so when the build failed the gate
+  # reported a bare non-zero and printed NOTHING about why — measured
+  # 2026-09-12: an e2e run died at this step with zero diagnostic, and the
+  # cause had to be guessed at. A build step that can fail must be able to say
+  # how.
   log "e2e: build SPA + sync to embed"
-  npm run build >/dev/null || return 1
+  local spaBuildLog="$TMPDIR/e2e-spa-build.log"
+  if ! npm run build >"$spaBuildLog" 2>&1; then
+    echo "GATE FAILURE: 'npm run build' failed during the e2e gate." >&2
+    echo "  env: HOME=${HOME:-<empty>} node=$(node --version 2>&1) npm=$(npm --version 2>&1) npm-cache=$(npm config get cache 2>&1)" >&2
+    echo "  --- first 40 lines ---" >&2
+    head -40 "$spaBuildLog" >&2
+    echo "  --- last 20 lines ---" >&2
+    tail -20 "$spaBuildLog" >&2
+    echo "  full log: $spaBuildLog" >&2
+    return 1
+  fi
   rm -rf pkg/gateway/spa
   cp -r dist/spa pkg/gateway/spa
   [ -n "$(ls -A pkg/gateway/spa/assets 2>/dev/null)" ] || { echo "SPA sync produced empty assets/" >&2; return 1; }
@@ -589,6 +780,54 @@ _e2e_build() {
     }
     process.exit(bad ? 1 : 0);
   ' || { echo "e2e: required browser revision absent after install — see MISSING above" >&2; return 1; }
+}
+
+# Copy the PREVIOUS run's FAILED-shard evidence out of $E2E_DIR before this run
+# wipes it.
+#
+# The wipe exists to kill the stale-log trap (two-day-old logs were twice read
+# as the current run's failures), and it must stay. But it also destroyed the
+# only copy of a failed shard's Playwright trace, screenshot, video and
+# error-context, plus its gateway log — so by the time anyone investigated a
+# failure, the next run had already deleted the evidence. One root cause was
+# recoverable only because a single value happened to be echoed into the run
+# log; that is luck, not a diagnostic process.
+#
+# What survives is deliberately narrow and clearly labelled: FAILED shards only,
+# from the PREVIOUS run only, under $E2E_DIR.last-failed, deleted and rewritten
+# at the start of every run so it cannot grow. The current run's own $E2E_DIR
+# still starts completely empty, so "no log" still means "this shard did not
+# run" and never "it ran two days ago".
+#
+# Copies the shard's logs and Playwright artifacts, plus the gateway's own
+# logs/ subtree — NOT the whole ~400MB OMNIPUS_HOME.
+_e2e_preserve_last_failed() {
+  local dest="$E2E_DIR.last-failed"
+  rm -rf "$dest"
+  [ -d "$E2E_DIR" ] || return 0
+
+  local marker name src kept=0
+  for marker in "$E2E_DIR"/e2e-shard-*.FAILED; do
+    [ -e "$marker" ] || continue
+    name=$(basename "$marker"); name=${name#e2e-shard-}; name=${name%.FAILED}
+    mkdir -p "$dest/$name"
+    for src in "e2e-shard-$name.log" "e2e-$name-results" "omnipus-e2e-$name.gw.log"; do
+      [ -e "$E2E_DIR/$src" ] && cp -a "$E2E_DIR/$src" "$dest/$name/"
+    done
+    [ -d "$E2E_DIR/omnipus-e2e-$name/logs" ] && cp -a "$E2E_DIR/omnipus-e2e-$name/logs" "$dest/$name/gateway-logs"
+    kept=$((kept + 1))
+  done
+
+  if [ "$kept" -gt 0 ]; then
+    log "e2e: PRESERVED evidence from $kept FAILED shard(s) of the PREVIOUS run"
+    echo "  location: $dest  (size: $(du -sh "$dest" 2>/dev/null | awk '{print $1}'))"
+    echo "  contents per shard: shard console log, Playwright results (trace/screenshot/video/error-context), gateway stdout+stderr, gateway logs/"
+    echo "  NOTE: this is the PREVIOUS run. The current run's own logs under $E2E_DIR start empty."
+    ls -1 "$dest" | sed 's/^/    /'
+  else
+    log "e2e: no FAILED shards from the previous run to preserve (nothing kept in $dest)"
+  fi
+  return 0
 }
 
 # Reap any still-running shard gateways by EXACT pid from their pidfiles. Never
@@ -739,6 +978,11 @@ run_e2e() {
   KEY_B="${OPENROUTER_API_KEY_B:-$KEY_A}"
   KEY_C="${OPENROUTER_API_KEY_C:-$KEY_A}"
 
+  # Rescue the PREVIOUS run's failed-shard evidence into $E2E_DIR.last-failed
+  # before the wipe below deletes it. Clearly labelled as the previous run; see
+  # _e2e_preserve_last_failed.
+  _e2e_preserve_last_failed
+
   # WIPE THE SHARD STATE DIR FIRST. Leftovers from a previous run are not
   # harmless: a stale /tmp/e2e-shard-<name>.log is indistinguishable from this
   # run's own, and on 2026-09-11 two-day-old logs were twice read as this run's
@@ -821,6 +1065,10 @@ run_e2e() {
     else
       printf '\033[1;31me2e shard %s: FAIL (exit %d)\033[0m\n' "$name" "$code"
       FAILED+=("$name"); shard_rc=1
+      # Marker read by the NEXT run's _e2e_preserve_last_failed. Written the
+      # moment the failure is known, not at the end of the run, so a run that
+      # is hard-killed mid-matrix still leaves its evidence recoverable.
+      : > "$E2E_DIR/e2e-shard-$name.FAILED"
     fi
   }
 
@@ -847,6 +1095,8 @@ run_e2e() {
       else
         printf '\033[1;31me2e shard %s: FAIL (exit %d)\033[0m\n' "$group" "$src"
         FAILED+=("$group"); shard_rc=1
+        # Same marker as the concurrent path — see _e2e_reap_one.
+        : > "$E2E_DIR/e2e-shard-$group.FAILED"
       fi
       continue
     fi
@@ -873,6 +1123,9 @@ run_e2e() {
       cat "$E2E_DIR/e2e-shard-$n.log" 2>/dev/null || echo "(no log for $n)"
     done
     echo "e2e: FAILED shards: ${FAILED[*]}" >&2
+    echo "e2e: artifacts for these shards live under $E2E_DIR until the NEXT e2e run starts, at which point" >&2
+    echo "     they are moved to $E2E_DIR.last-failed and survive exactly one further run. Copy anything you" >&2
+    echo "     need off the worker before a second run begins." >&2
   fi
   return "$shard_rc"
 }
