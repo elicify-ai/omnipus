@@ -45,6 +45,52 @@ func CanonicalMetadataFilename(key string) (string, bool) {
 	return name, ok
 }
 
+// userProfileWriteBlocked reports whether resolvedPath is the global USER.md.
+//
+// WRITES ONLY. USER.md is the user's own profile and its content is already
+// injected into every agent's prompt, so blocking reads would buy nothing.
+// Writes are different: the file is GLOBAL (config.UserProfilePath), so a
+// single agent rewriting it would rewrite what every other agent believes
+// about the user.
+//
+// Why this is a separate check rather than another entry in
+// canonicalMetadataNames: that table matches on the agents/<id>/<name>.md
+// SHAPE, and the user profile deliberately does not live under agents/. This
+// is the same class of gap that once left workspaces/<id>/AGENT.md unguarded
+// while agents/<id>/AGENT.md was covered — see pkg/workspace/instructions.go.
+//
+// BOTH arguments must already be symlink-resolved, and by the SAME resolver.
+// An equality check against a raw $OMNIPUS_HOME fails OPEN wherever the home
+// traverses a symlink — a symlinked home directory is ordinary, and on macOS
+// the default temp dir alone is enough (/var -> /private/var). Structural
+// matchers like metadataFileMatch do not have this problem because they match
+// on shape; an equality check has to normalise. Resolution happens in
+// guardMetadataPath (filesystem.go), which already owns path resolution — this
+// function performs no filesystem I/O at all.
+//
+// With the sandbox on, a confined tool cannot reach the home root and this
+// never fires. It exists for god mode, which is precisely when the app-level
+// guards are the only thing left.
+func userProfileWriteBlocked(resolvedPath, resolvedProfile, op string) bool {
+	if op != "write" || resolvedProfile == "" {
+		return false
+	}
+	return filepath.Clean(resolvedPath) == filepath.Clean(resolvedProfile)
+}
+
+// userProfileGuardError is the structured refusal for a blocked USER.md write.
+func userProfileGuardError() string {
+	payload := map[string]string{
+		"error":  "USER_PROFILE_READ_ONLY",
+		"detail": "USER.md is the user's own profile and is shared by every agent. It is edited by the user in Settings, not by an agent.",
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "USER_PROFILE_READ_ONLY: USER.md is the user's profile and is not agent-writable"
+	}
+	return string(encoded)
+}
+
 // metadataFileMatch reports whether absPath is one of the four canonical
 // metadata files inside an agents/<id>/ directory tree.
 //

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/docextract"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
@@ -372,6 +373,20 @@ func guardMetadataPath(workspace, path, op string) *ToolResult {
 	}
 	if _, _, matched := metadataFileMatch(absPath); matched {
 		return ErrorResult(metadataGuardError(absPath, op))
+	}
+	// Resolve the global USER.md through the SAME resolver as absPath, so the
+	// comparison in userProfileWriteBlocked is like-for-like. Doing it here
+	// rather than in metadata_guard.go keeps the EvalSymlinks call in the file
+	// that already owns path resolution; resolveAbsPath performs no data I/O
+	// and cannot grant filesystem access.
+	if resolvedProfile, profErr := resolveAbsPath(config.UserProfilePath(), workspace); profErr == nil {
+		if userProfileWriteBlocked(absPath, resolvedProfile, op) {
+			return ErrorResult(userProfileGuardError())
+		}
+	} else if op == "write" {
+		logger.WarnCF("filesystem", "could not resolve the global USER.md path; denying write (fail-closed)",
+			map[string]any{"path": path, "error": profErr.Error()})
+		return ErrorResult(userProfileGuardError())
 	}
 	return nil
 }
