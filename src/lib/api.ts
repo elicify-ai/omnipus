@@ -5105,6 +5105,16 @@ export async function downloadLibraryFileVersioned(
       ...(signal ? { signal } : {}),
     })
   } catch (cause) {
+    // An abort is the CALLER's own cancellation — it unmounted, or moved to
+    // another file — and it is not a network condition. Relabelling it as
+    // "Network unavailable" did two harmful things: it defeated the
+    // `name === 'AbortError'` guard the one caller (LibraryPdfPreview's load
+    // effect) writes to tell "we cancelled this" apart from "this failed",
+    // and it reported a routine cancellation to the user, and to CI logs, as
+    // a connectivity failure. Rethrow it exactly as the platform threw it.
+    if (typeof cause === 'object' && cause !== null && (cause as { name?: string }).name === 'AbortError') {
+      throw cause
+    }
     throw new ApiError(0, 'Network unavailable. Check your connection.', { cause })
   }
   if (!res.ok) throw await ApiError.fromResponse(res)

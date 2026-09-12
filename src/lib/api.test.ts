@@ -2896,6 +2896,49 @@ describe('Library version-carrying bespoke fetches (ADR-083 Step 0)', () => {
       expect(result.version).toBe('v1:9f2a7c40')
       expect(new Uint8Array(result.data)).toEqual(new Uint8Array([1, 2, 3]))
     })
+
+    it('rethrows the caller’s own AbortError unchanged, instead of relabelling a cancellation as a network failure', async () => {
+      // The blanket `catch` here used to turn EVERY rejection — including the
+      // DOMException `fetch` throws when the CALLER aborts — into
+      // `ApiError(0, 'Network unavailable. Check your connection.')`. Two
+      // harms, both silent: the one production caller
+      // (LibraryPdfPreview's load effect) discriminates cancellation by
+      // `name === 'AbortError'` and that test could never pass, so an unmount
+      // mid-download rendered a red "check your connection" error pane; and a
+      // routine cancellation was reported to the user, and into CI logs, as a
+      // connectivity fault that never happened.
+      const aborted = new DOMException('The user aborted a request.', 'AbortError')
+      fetchSpy.mockRejectedValueOnce(aborted)
+
+      const { downloadLibraryFileVersioned, ApiError: ApiErrorCtor } = await import('./api')
+      const controller = new AbortController()
+
+      // MUTATION THIS DIES ON: dropping the AbortError passthrough — the
+      // rejection would be an ApiError carrying a network message.
+      await expect(
+        downloadLibraryFileVersioned('ws-1', 'reports/doc.pdf', controller.signal),
+      ).rejects.toBe(aborted)
+      await expect(
+        downloadLibraryFileVersioned('ws-1', 'reports/doc.pdf', controller.signal),
+      ).rejects.not.toBeInstanceOf(ApiErrorCtor)
+    })
+
+    it('still reports a genuine transport failure as an ApiError naming the connection', async () => {
+      // The other half: the passthrough must be narrow. A real dropped
+      // connection is exactly what that message is for, and it has to keep
+      // arriving as an ApiError — this is the branch the PDF pane's retry
+      // affordance is shown for.
+      fetchSpy.mockRejectedValue(new TypeError('Failed to fetch'))
+
+      const { downloadLibraryFileVersioned, ApiError: ApiErrorCtor } = await import('./api')
+
+      await expect(downloadLibraryFileVersioned('ws-1', 'reports/doc.pdf')).rejects.toBeInstanceOf(
+        ApiErrorCtor,
+      )
+      await expect(downloadLibraryFileVersioned('ws-1', 'reports/doc.pdf')).rejects.toThrow(
+        /network unavailable/i,
+      )
+    })
   })
 
   describe('putLibraryContent (the text write door)', () => {
