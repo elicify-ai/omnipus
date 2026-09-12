@@ -5223,13 +5223,26 @@ func (al *AgentLoop) rewireBrowserManagerForKey(
 		pool.Release(key, prior)
 	}
 	if prior != nil {
-		// NOTE: no prior.Shutdown() here. pool.Release above already reaches
-		// the manager's dropConnection -> Shutdown; coordinator.go's own doc
-		// states Release is "a full substitute for the old prior.Shutdown()
-		// reload call". Calling it a second time is what panicked the gateway
-		// with "close of closed channel" during a Settings save. live.go's
-		// Shutdown is now idempotent so this can no longer crash, but the
-		// redundant call is still wrong and is gone.
+		// KEEP THIS SHUTDOWN. coordinator.go's doc calls Release "a full
+		// substitute for the old prior.Shutdown() reload call", and that
+		// sentence is true only when the pool instance HAS a coordinator:
+		// BrowserPool.Release does no teardown of its own — it deletes mgr
+		// from inst.mgrs and then calls inst.coord.Release, and only that
+		// reaches dropConnection -> m.Shutdown(). With inst.coord nil (no
+		// shared Chrome stood up yet) nothing is torn down at all, and the
+		// prior manager's Chromium allocator leaks on every hot reload.
+		// TestRegisterSharedTools_HotReload_ShutsDownReplacedBrowserManager
+		// pins exactly that case and caught this being deleted.
+		//
+		// The double-Shutdown that used to panic the gateway with "close of
+		// closed channel" on a Settings save was never this call's fault —
+		// it was LiveViewRegistry.Shutdown not being idempotent, which is
+		// fixed at the source (see its comment in pkg/tools/browser/live.go).
+		// Every other step of BrowserManager.Shutdown was already idempotent
+		// and its doc comment says so, so with the registry fixed the
+		// coordinator-present path's second call is a safe no-op and the
+		// coordinator-absent path is no longer a leak.
+		prior.Shutdown()
 		prior.InvalidateExecPathCache()
 	}
 }
