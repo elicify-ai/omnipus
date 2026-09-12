@@ -355,6 +355,25 @@ func TestTerminalGoalRetainsRecord_IdleExpired(t *testing.T) {
 // --- S-18 (EC): the Judge unavailable at a boundary is not terminal --------
 
 func TestTerminalGoalRetainsRecord_JudgeUnavailableAtBoundary_NotTerminal(t *testing.T) {
+	// SETUP ONLY (no assertion changed): bound the deferred dispatch's own
+	// context the way goal_loop_test.go's M2 test already does. The judge
+	// below always errors, so runVerifierAdjudication enters D7's
+	// retry-forever loop and judgeBackoffWait sleeps the REAL 60/120/300s
+	// schedule (judge.go's judgeRetryBackoff, judgeSleepFn = the production
+	// sleepWithContext) until dispatchDeferredGoalAdjudication's ctx expires
+	// — which, at the production goalJudgeRoundTimeout of 10 minutes, made
+	// this single test sit on a wall-clock sleep for ~10 minutes. That is
+	// what blew pkg/agent's 900s package budget under -race (observed
+	// 2026-09-12: goroutine parked in sleepWithContext(ctx, 300s) via
+	// judgeBackoffWait for 6 minutes at the timeout dump, zero DATA RACE
+	// anywhere in the log). Two seconds is still generous enough for the
+	// first real judge attempt to dispatch and fail — asserted below via
+	// judgeProv.callCount(), so a bound too short to let the judge run at
+	// all fails the test rather than passing it vacuously.
+	origJudgeRoundTimeout := goalJudgeRoundTimeout
+	t.Cleanup(func() { goalJudgeRoundTimeout = origJudgeRoundTimeout })
+	goalJudgeRoundTimeout = 2 * time.Second
+
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
@@ -372,9 +391,10 @@ func TestTerminalGoalRetainsRecord_JudgeUnavailableAtBoundary_NotTerminal(t *tes
 	// Last permitted attempt, exactly like S-14 — this is the boundary
 	// where an exhaustion would otherwise fire.
 	setGoalRecordMaxRounds(t, g.GoalID, 1)
-	judgeInst.Provider = &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+	judgeProv := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
 		return nil, context.DeadlineExceeded
 	}}
+	judgeInst.Provider = judgeProv
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1)
 	defer cancel()
@@ -389,6 +409,15 @@ func TestTerminalGoalRetainsRecord_JudgeUnavailableAtBoundary_NotTerminal(t *tes
 	// fakeJudgeProvider below always errors regardless, which is what
 	// actually drives the unavailable-boundary outcome this test proves.
 	al.dispatchDeferredGoalAdjudication(result.goalDeferredAdjudication)
+
+	// The unavailability this test asserts on must be the REAL thing — a
+	// judge that was dispatched and errored — not "the adjudication never
+	// got off the ground". Without this, a future change that stopped
+	// reaching the judge at all would leave the record untouched and every
+	// assertion below would still pass.
+	if judgeProv.callCount() == 0 {
+		t.Fatal("the Judge was never called — this test's unavailable-boundary outcome would be vacuous (S-18)")
+	}
 
 	after := readGoalRecord(t, g.GoalID)
 	if after.State != generated.GoalStateActive {

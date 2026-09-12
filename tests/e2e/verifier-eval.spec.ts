@@ -384,6 +384,25 @@ async function createTask(
         status: 'pending',
       },
     ],
+    // Operator decision D-C (2026-09-11): a definition of done is mandatory at
+    // task creation and must be DISTINCT from the acceptance criteria
+    // (GOAL-FR-021/FR-048) — POST /tasks answers 400 without it.
+    //
+    // This eval asserts on `per_criterion[0]`, so the DoD must not disturb that
+    // index: the task adjudication path judges `Task.Criteria` only
+    // (pkg/agent/task_executor.go's adjudicateClaim) and, where criteria and
+    // DoD ARE unioned for a judge, criteria are appended FIRST
+    // (pkg/agent/goal_compile.go's compiledGoalCriteriaFor). A DELIVERY
+    // statement, never a restatement of `critText` — the whole point of this
+    // eval is that the criterion's own met/unmet answer is unambiguous.
+    dod: [
+      {
+        kind: 'prose',
+        text: 'the worker ran this task and left its reply on the task record',
+        author: { kind: 'user', id: 'admin' },
+        status: 'pending',
+      },
+    ],
   });
   if (!res.ok) {
     throw new Error(`verifier-eval: POST /api/v1/tasks failed ${res.status}: ${res.raw}`);
