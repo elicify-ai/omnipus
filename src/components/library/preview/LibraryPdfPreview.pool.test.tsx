@@ -324,6 +324,38 @@ describe('LibraryPdfPreview — bounded worker pool (EMB-032, ceiling 2)', () =>
     expect(within(doc3.container).queryByTestId('library-pdf-error')).not.toBeInTheDocument()
   })
 
+  it('terminates the worker THREAD of a plainly unmounted document — the pool counts leases, only this counts threads', async () => {
+    // The gap this closes: every other test in this file measures the pool,
+    // and the pool counts LEASES. A lease released on unmount says nothing
+    // about whether the `Worker` that lease stood for is still running. The
+    // only assertion in this suite that ever looked at `terminated` was on
+    // the ERROR path (the poisoned-worker eviction, above) — so a document
+    // that simply scrolled out of view and unmounted, which is the common
+    // case `LazyEmbedMount` produces on every scroll, was never checked at
+    // all. It was in fact leaking: `loadingTask.destroy()` does not
+    // terminate a caller-supplied worker (see the load effect's cleanup for
+    // the three measured reasons), so each scroll-past-and-back left a live
+    // thread holding a parsed PDF while the pool kept reporting a tidy two.
+    const doc1 = await mountDoc('reports/a.pdf')
+    await waitFor(() => expect(constructedWorkers).toHaveLength(1))
+    await waitFor(() => expect(h.pendingDocs).toHaveLength(1))
+
+    // A document that opened and rendered for real — not a failed one, not
+    // one abandoned mid-load. Nothing is wrong with it; it is simply gone.
+    h.pendingDocs[0]?.resolve(makePdfDoc())
+    await waitFor(() => expect(within(doc1.container).getByTestId('library-pdf-page')).toBeInTheDocument())
+    const worker = constructedWorkers[0]
+    expect(worker.terminated).toBe(false)
+
+    doc1.unmount()
+
+    // MUTATION THIS DIES ON: dropping `port.terminate()` from the load
+    // effect's cleanup and trusting `loadingTask.destroy()` to end the
+    // thread — which is exactly what the code used to do, under a comment
+    // claiming "one call covers both".
+    await waitFor(() => expect(worker.terminated).toBe(true))
+  })
+
   it('releases a queued lease when the component unmounts before its turn, without ever constructing that worker', async () => {
     const doc1 = await mountDoc('reports/a.pdf')
     await mountDoc('reports/b.pdf') // occupies the pool's second slot; never queried further
