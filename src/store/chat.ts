@@ -980,11 +980,75 @@ function applyMessageArray(
   }
 }
 
-/** Advance lastReceivedEventTime if the provided timestamp is newer (lexicographic ISO-8601 comparison). */
-function advanceEventTime(current: string | null, incoming: string | null | undefined): string | null {
+/** Captures an ISO-8601 timestamp's head, its fractional-seconds digits, and any trailing zone designator. */
+const ISO_FRACTIONAL_SECONDS = /^(.*T\d{2}:\d{2}:\d{2})\.(\d+)(.*)$/
+
+/**
+ * Splits an ISO-8601 timestamp into its whole-second-plus-milliseconds part and
+ * the sub-millisecond remainder, so two timestamps can be ordered CHRONOLOGICALLY.
+ *
+ * Why this is not a plain string compare, and not a plain `Date.parse` either:
+ *
+ * The gateway writes these timestamps with Go's `time.RFC3339Nano`
+ * (pkg/gateway/replay.go, `buildReplayErrorFrame`), which STRIPS trailing zeros
+ * from the fractional seconds. Two chronologically ordered instants can therefore
+ * arrive with different fractional widths:
+ *
+ *   "2026-09-12T10:00:00.5Z"        (earlier)
+ *   "2026-09-12T10:00:00.5000001Z"  (later)
+ *
+ *   - A string compare gets this BACKWARDS: at the first differing character it
+ *     compares '0' (0x30) against 'Z' (0x5A), so the later timestamp sorts BELOW
+ *     the earlier one and the cursor refuses to advance past it.
+ *   - `Date.parse` alone cannot separate them either: JS `Date` has only
+ *     millisecond resolution, so both collapse to the same epoch value and the
+ *     `>` test is false — the cursor again fails to advance.
+ *
+ * Either way the cursor is left behind the newest entry the SPA has actually
+ * seen, the next reconnect sends a `since` that is too early, and the server
+ * (whose `applySinceCursor` compares real parsed instants with `.After()`)
+ * correctly replays entries the SPA already has — duplicate bubbles.
+ *
+ * So: take the first three fractional digits as milliseconds and hand those to
+ * `Date.parse` explicitly (never relying on how a given engine truncates or
+ * rounds the rest), and keep the remaining digits as an integer tiebreaker
+ * normalised to a FIXED six-digit width so they compare as plain numbers. Go
+ * emits at most nine fractional digits, so three + six covers the whole wire
+ * range with nothing to truncate.
+ *
+ * Returns null when the value is not a parseable timestamp.
+ */
+function parseEventTime(value: string): { ms: number; subMs: number } | null {
+  const match = ISO_FRACTIONAL_SECONDS.exec(value)
+  if (!match) {
+    const whole = Date.parse(value)
+    return Number.isNaN(whole) ? null : { ms: whole, subMs: 0 }
+  }
+  const [, head, digits, tail] = match
+  const ms = Date.parse(`${head}.${digits.slice(0, 3).padEnd(3, '0')}${tail}`)
+  if (Number.isNaN(ms)) return null
+  return { ms, subMs: Number(digits.slice(3, 9).padEnd(6, '0')) }
+}
+
+/**
+ * Advance lastReceivedEventTime if `incoming` is chronologically newer than
+ * `current`. Monotonic: it never moves the cursor backwards.
+ *
+ * Exported for direct unit testing — see chat.replay-cursor.test.ts.
+ */
+export function advanceEventTime(current: string | null, incoming: string | null | undefined): string | null {
   if (!incoming) return current
   if (!current) return incoming
-  return incoming > current ? incoming : current
+  const inc = parseEventTime(incoming)
+  // An unparseable incoming value must never move the cursor: erring towards a
+  // stale cursor costs a duplicate replay, erring forwards would lose messages.
+  if (!inc) return current
+  const cur = parseEventTime(current)
+  // A cursor we can no longer parse is useless — the server rejects it and falls
+  // back to a full replay — so a parseable incoming value is strictly better.
+  if (!cur) return incoming
+  if (inc.ms !== cur.ms) return inc.ms > cur.ms ? incoming : current
+  return inc.subMs > cur.subMs ? incoming : current
 }
 
 interface ChatStore {
@@ -3268,13 +3332,35 @@ export const useChatStore = create<ChatStore>((set, get) => {
       // HIGH-2: reset unknown-frame counter on every known-good frame.
       unknownFrameCount = 0
 
-      // I1: advance the reconnect `since` cursor for ANY frame that carries a
-      // sequence timestamp — not only replay_message. The cursor is sent as
-      // `since` on attach_session so the gateway skips frames the SPA already
-      // saw; if it only advanced on replay_message, every replayed/live frame
-      // that DID carry a timestamp would be re-replayed on the next reconnect.
-      // advanceEventTime is monotonic (only moves forward), so this is safe to
-      // run before the per-frame reducer regardless of dedup/early-return paths.
+      // I1: advance the reconnect `since` cursor from whatever frame carries a
+      // `timestamp` field. The cursor is sent as `since` on attach_session so the
+      // gateway skips transcript entries the SPA already saw.
+      //
+      // What this actually covers today — the generic `frame.timestamp` read
+      // below reads broadly, but the set of frames that can satisfy it is small
+      // and worth stating plainly rather than leaving as "any frame":
+      //   - `replay_error` is the ONLY frame the gateway currently sends with a
+      //     populated timestamp (pkg/gateway/replay.go, `buildReplayErrorFrame`
+      //     is the single `Timestamp:` assignment in the replay path).
+      //   - `replay_message` declares an OPTIONAL `timestamp` in the contract
+      //     (contracts/components/schemas/ReplayMessageFrame.yaml) but neither
+      //     gateway construction site populates it, so in production it never
+      //     advances the cursor. The reducer still honours it if that changes.
+      //   - `token` / `done` / `session_state` have no `timestamp` field at all
+      //     and never advance the cursor.
+      //
+      // So the cursor moves rarely and lags the true high-water mark. That is
+      // conservative in the SAFE direction: too-old a `since` costs a duplicate
+      // replay the dedup paths absorb, whereas too-new would silently skip
+      // messages. Do not "fix" the lag by advancing on a frame whose timestamp
+      // is not a transcript-entry time — the server compares `since` against
+      // TranscriptEntry.Timestamp, so only those values are meaningful here.
+      //
+      // advanceEventTime is monotonic (only moves forward) and compares
+      // chronologically, not lexicographically — see its doc comment for why the
+      // difference matters on RFC3339Nano's variable-width fractional seconds.
+      // Being monotonic, it is safe to run before the per-frame reducer
+      // regardless of dedup/early-return paths.
       {
         const frameTimestamp = (frame as { timestamp?: string }).timestamp
         if (frameTimestamp && targetSid) {
