@@ -121,6 +121,17 @@ func SetGitDenyAuditHook(fn func(*audit.Entry)) {
 	gitDenyAuditHook.Store(&fn)
 }
 
+// GitDenyAuditHookWired reports whether a git-evidence denial emitter is
+// installed. It exists so a boot-level test can prove the gateway actually
+// wires the hook: on 2026-09-12 the setter had existed for months with no
+// caller, and 182 evidence-repo denials in one CI run reached slog only,
+// never the audit trail.
+func GitDenyAuditHookWired() bool { return gitDenyAuditHook.Load() != nil }
+
+// RestrictAuditHookWired is GitDenyAuditHookWired's twin for the per-thread
+// restrict-failure emitter.
+func RestrictAuditHookWired() bool { return restrictAuditHook.Load() != nil }
+
 // emitGitDeny records a git-evidence sandbox denial (Decision == "deny") with
 // the full explainable PolicyRule, argv, and cwd. Falls back to slog.Warn when
 // no hook is wired so the denial is never silent.

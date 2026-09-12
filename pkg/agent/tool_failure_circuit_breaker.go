@@ -53,6 +53,16 @@ const (
 	toolFailureCircuitBreakThreshold = 6
 )
 
+// nonSemanticToolArgs lists, per tool, the argument keys that tool declares
+// as documentation-only — they change nothing about what is executed, so
+// they must not distinguish one retry from the next. Keep this in lockstep
+// with the tool's own schema text: bash's `description` is declared
+// "(documentation only)" in pkg/tools/shell.go and is never read by the
+// executor. Add a key here only when the tool's schema says the same.
+var nonSemanticToolArgs = map[string]map[string]bool{
+	"bash": {"description": true},
+}
+
 // toolCallSignature derives a stable per-turn identity for a tool call from
 // its name and arguments, so the streak counter tracks "the exact same call"
 // rather than "this tool, called with anything". encoding/json.Marshal on a
@@ -62,7 +72,25 @@ const (
 // back to fmt's %#v, which is not guaranteed key-stable but only degrades
 // this to "the streak resets more often than ideal" — never a bug, never a
 // panic, never a wrong-tool collision (the tool name is always the prefix).
+//
+// Arguments the tool itself declares as having no effect on execution are
+// EXCLUDED before hashing (nonSemanticToolArgs). Without that, a model that
+// varies only a cosmetic field defeats the breaker completely: on 2026-09-12
+// (CI e2e, Conformance_t0_ChatGoalE2E) a model re-issued the byte-identical
+// `git commit -m "evidence"` 182 times in 4m22s against a sandbox denial,
+// each with a fresh bash `description` ("(third attempt)" … "(one hundred
+// eighty-first attempt)") — 182 distinct signatures, max streak 1, neither
+// threshold ever fired, and the turn only ended at max_tool_iterations.
 func toolCallSignature(toolName string, args map[string]any) string {
+	if skip := nonSemanticToolArgs[toolName]; len(skip) > 0 && len(args) > 0 {
+		filtered := make(map[string]any, len(args))
+		for k, v := range args {
+			if !skip[k] {
+				filtered[k] = v
+			}
+		}
+		args = filtered
+	}
 	b, err := json.Marshal(args)
 	if err != nil {
 		return toolName + "\x00" + fmt.Sprintf("%#v", args)

@@ -2532,31 +2532,10 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		}()
 	}
 
-	// B1.2(d): wire the per-thread restrict-failure audit emitter into the
-	// sandbox package now that the agent loop (and thus the audit logger) is
-	// constructed. The hook bridges sandbox → audit without an import cycle —
-	// sandbox only knows about the *audit.Entry type, not the agent loop.
-	// SetRestrictAuditHook is idempotent so this is safe across hot reloads
-	// and the test gateway helpers that re-boot in-process.
-	{
-		al := agentLoop
-		sandbox.SetRestrictAuditHook(func(entry *audit.Entry) {
-			if al == nil {
-				return
-			}
-			logger := al.AuditLogger()
-			if logger == nil {
-				slog.Error("sandbox: per-thread restrict failed (audit logger disabled)",
-					"event", entry.Event, "details", entry.Details)
-				return
-			}
-			// B1.2(a): logger.Log is nil-safe; no further guard needed.
-			if logErr := logger.Log(entry); logErr != nil {
-				slog.Error("sandbox: restrict-failure audit write failed",
-					"event", entry.Event, "error", logErr)
-			}
-		})
-	}
+	// B1.2(d) + ADR-053 D17: wire the sandbox → audit bridges now that the
+	// agent loop (and thus the audit logger) is constructed. See
+	// sandbox_audit_hooks.go; unwired symmetrically in shutdown.go.
+	wireSandboxAuditHooks(agentLoop)
 
 	// Spec-4 FR-5.3 (M-4): GC orphaned external-CLI run directories left behind by
 	// a prior process (crash / SIGKILL / power loss). Runs ONCE at boot, BEFORE any

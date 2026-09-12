@@ -13,7 +13,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/daemon"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // omnipusShutdownTimeout is the maximum time to wait for in-flight operations
@@ -166,11 +165,11 @@ func omnipusGracefulShutdown(
 		runningServices.stopNagBanner()
 	}
 
-	// Sweep-5: clear the per-thread restrict-failure audit hook so in-process
-	// test scaffolding that boots and tears down multiple gateways does not leak
-	// the hook's closure (which captures agentLoop) from one boot into the next.
-	// SetRestrictAuditHook is thread-safe and idempotent.
-	sandbox.SetRestrictAuditHook(nil)
+	// Sweep-5: clear the sandbox → audit hooks so in-process test scaffolding
+	// that boots and tears down multiple gateways does not leak a closure
+	// (which captures agentLoop) from one boot into the next. Both setters are
+	// thread-safe and idempotent.
+	unwireSandboxAuditHooks()
 
 	// Remove the self-registered PID file so `omnipus status` correctly reports
 	// not-running after a clean shutdown. Best-effort: a missing homePath (e.g.
