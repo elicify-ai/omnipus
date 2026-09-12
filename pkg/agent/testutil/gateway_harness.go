@@ -27,6 +27,126 @@ const testMasterKey = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1
 // testBearerToken is the bearer token injected when WithBearerAuth() is used.
 const testBearerToken = "test-bearer-token-for-harness"
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Gateway port allocation — a private window BELOW the kernel's ephemeral floor
+//
+// The port a test gateway binds cannot be chosen with the usual
+// `net.Listen("tcp", "127.0.0.1:0")` → read → close → reuse idiom, because
+// RunContext does not accept a listener: the port has to be written into
+// config.json BEFORE boot, and the gateway only binds it ~0.65s later (config
+// write + an Argon2id credential seed + full boot). The old code did use that
+// idiom, under a comment claiming "the OS will not reuse the port immediately".
+//
+// THAT CLAIM IS FALSE, and the gap is wide enough that it was measured losing
+// the port ~0.5% of boots (~1-in-8 per `tests/integration` run) on Linux. There
+// are three distinct ways the port is lost, and only the first needs a rival
+// process to exist at all:
+//
+//	A. A rival test binary's gateway picks the same port and binds it first.
+//	B. ANY outbound connection anywhere on the host is auto-assigned that port
+//	   as its SOURCE port. `:0` returns a port from the kernel's ephemeral
+//	   range — precisely the range connect() draws source ports from.
+//	C. The harness's OWN readiness probe does it. /health is polled every 50ms
+//	   during the pre-bind window, and each probe is an outbound connect() that
+//	   can be assigned the very port it is waiting for. This needs no competing
+//	   process whatsoever, which is why "the test passed when run isolated" is
+//	   NOT evidence that contention was the cause.
+//
+// The fix is to stop drawing from the ephemeral range at all. Ports come from
+// [portRangeLo, portRangeHi), which sits below the lowest ephemeral floor on
+// every platform we run on (Linux's net.ipv4.ip_local_port_range starts at
+// 32768 — the CI worker included; macOS/BSD and Windows start at 49152). The
+// kernel will never auto-assign a port from this window to a connect(), so B
+// and C are impossible BY CONSTRUCTION rather than by luck of timing. A is
+// handled by giving each test binary its own disjoint region of the window,
+// keyed off its PID (see portRegionForPID), plus a bind probe on each
+// candidate so a port held by anything else is skipped rather than handed out.
+const (
+	// portRangeLo is the first port of the harness's private window.
+	portRangeLo = 20000
+	// portRangeHi is one past the last port of the window. It MUST stay <=
+	// the lowest ephemeral floor of any supported platform (32768 on Linux)
+	// or mechanisms B and C come straight back — see
+	// TestAllocatePort_HarnessWindowIsDisjointFromEphemeralRange.
+	portRangeHi = 32000
+	// portRegionSize is how many ports one test binary may draw from. The
+	// window divides into portRegionCount disjoint regions of this size, one
+	// per process, so two concurrent `go test` binaries cannot collide (A)
+	// until one of them has booted more than this many gateways.
+	portRegionSize = 100
+	// portRegionCount is the number of disjoint regions the window holds.
+	portRegionCount = (portRangeHi - portRangeLo) / portRegionSize
+)
+
+// portRegionBase is the first port of THIS process's region. Fixed for the
+// lifetime of the process.
+var portRegionBase = portRangeLo + portRegionForPID(os.Getpid())*portRegionSize
+
+// portCursor is the number of candidate ports this process has already
+// offered. It only ever advances; allocatePort maps it into the process's own
+// region, so a port is never handed out twice until the region wraps.
+var portCursor atomic.Uint32
+
+// portRegionForPID maps a PID onto one of portRegionCount disjoint regions.
+//
+// The splitmix64 finalizer is used rather than a bare `pid % portRegionCount`
+// because concurrently-running test binaries are typically started back to
+// back and therefore hold ADJACENT pids — which `%` would map to ADJACENT
+// regions, i.e. exactly the neighbours most likely to overrun into each other.
+// The mix spreads adjacent inputs across the whole window instead.
+func portRegionForPID(pid int) int {
+	x := uint64(pid) + 0x9E3779B97F4A7C15
+	x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9
+	x = (x ^ (x >> 27)) * 0x94D049BB133111EB
+	x ^= x >> 31
+	return int(x % uint64(portRegionCount))
+}
+
+// peekCandidatePort reports the port allocatePort will try NEXT, without
+// consuming it. Only the package's own tests use it — it is what lets a test
+// pre-occupy the exact port the allocator is about to offer (mechanism A)
+// deterministically, instead of racing it.
+func peekCandidatePort() int {
+	return portRegionBase + int(portCursor.Load()%portRegionSize)
+}
+
+// nextCandidatePort consumes and returns the next candidate port for this
+// process, advancing the cursor.
+func nextCandidatePort() int {
+	n := portCursor.Add(1) - 1
+	return portRegionBase + int(n%portRegionSize)
+}
+
+// allocatePort returns a port in this process's region of the private window
+// that nothing currently holds. Each candidate is bind-probed (listen, then
+// close) so a port occupied by another process — or by an earlier gateway in
+// this one that has not fully released — is skipped rather than handed to a
+// gateway that would then fail to bind.
+//
+// The probe still leaves a close-then-rebind window, but unlike `:0` that
+// window can only be taken by something DELIBERATELY binding this exact port.
+// It can no longer be taken by an arbitrary outbound connect() on the host, or
+// by the harness's own /health probe.
+func allocatePort() (int, error) {
+	var lastErr error
+	for range portRegionSize {
+		p := nextCandidatePort()
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", p))
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if cerr := ln.Close(); cerr != nil {
+			return 0, fmt.Errorf("close bind probe on port %d: %w", p, cerr)
+		}
+		return p, nil
+	}
+	return 0, fmt.Errorf(
+		"no free port in this process's region [%d,%d) of the harness window [%d,%d) after %d candidates; last bind error: %w",
+		portRegionBase, portRegionBase+portRegionSize, portRangeLo, portRangeHi, portRegionSize, lastErr,
+	)
+}
+
 // runContextFunc is set by RegisterGatewayRunner. It matches the signature of
 // gateway.RunContext so the harness can call the real gateway without importing
 // the gateway package (which would create an import cycle).
@@ -110,6 +230,15 @@ func (g *TestGateway) ConfigPath() string { return g.configPath }
 // Token returns the bearer token in use for authenticated requests.
 // Empty string means the gateway is running without token auth (DevModeBypass=true).
 func (g *TestGateway) Token() string { return g.bearerToken }
+
+// loadBootErr returns the error RunContext returned, or nil if it has not
+// returned (or returned cleanly).
+func (g *TestGateway) loadBootErr() error {
+	if p := g.bootErr.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Readiness polling — extracted so the decision logic is unit-testable without
@@ -253,9 +382,72 @@ func pollUntilReady(cfg pollConfig) pollResult {
 	}
 }
 
+// foreignGatewayError returns a non-nil error when pollUntilReady declared the
+// gateway healthy but OUR gateway had already failed to boot.
+//
+// The readiness probe is an unauthenticated GET /health that checks nothing
+// but `StatusCode == 200` — the response carries no instance identity, so it
+// cannot tell OUR gateway from ANY other process listening on that port. Left
+// unchecked, the harness hands the test body a *stranger's* gateway and every
+// subsequent assertion is measured against the wrong process: writes land in
+// someone else's home dir, reads return someone else's data, and the failure
+// (or false pass) is attributed to whatever the test was nominally about.
+//
+// Our own boot error is the one signal available here that the 200 came from
+// elsewhere: if RunContext has already returned an error, our gateway is not
+// serving anything, so something else answered. pollUntilReady checks bootErr
+// only BEFORE each probe and never on the ready path, so this re-check after
+// it returns is what closes that gap.
+//
+// Residual window, deliberately left open: a gateway that fails its FIRST bind
+// attempt and then succeeds on a retry sets no lasting bootErr, so a foreign
+// 200 observed in between is still invisible here. Closing it properly needs a
+// per-instance nonce echoed by /health, which is production code (pkg/health)
+// and out of this harness's lane.
+func foreignGatewayError(baseURL string, result pollResult, ourBootErr error) error {
+	if result.kind != pollReady || ourBootErr == nil {
+		return nil
+	}
+	return fmt.Errorf(
+		"readiness probe at %s/health returned 200 but OUR gateway never served it — "+
+			"RunContext had already failed with: %w. A 200 with our own process dead means a "+
+			"DIFFERENT process is listening on that port (a rival test binary's gateway, or a "+
+			"leftover from an earlier run), and the test body would have run against that foreign "+
+			"gateway. Failing here so the result is never mis-attributed to the test's own subject. "+
+			"(The narrow alternative reading — our gateway became healthy and then exited within the "+
+			"same instant — is equally fatal to this test)",
+		baseURL, ourBootErr,
+	)
+}
+
+// portRaceHint returns a sentence naming the port race when bootErr looks like
+// a failed bind, and "" otherwise. Without it a lost-port boot failure reads as
+// a generic "gateway failed to boot", which is how this defect stayed
+// mis-diagnosed as flakiness: the real cause is that the port written into
+// config.json was taken between allocation and bind.
+func portRaceHint(port int, bootErr error) string {
+	if bootErr == nil {
+		return ""
+	}
+	msg := bootErr.Error()
+	if !strings.Contains(msg, "address already in use") &&
+		!strings.Contains(msg, "bind") &&
+		!strings.Contains(msg, "Only one usage of each socket address") {
+		return ""
+	}
+	return fmt.Sprintf(
+		" — THIS IS THE PORT RACE, not a gateway defect: port %d was free when the harness "+
+			"allocated it but something else held it by the time RunContext bound it. Ports are drawn "+
+			"from [%d,%d), below the kernel's ephemeral floor, so this cannot be an outbound "+
+			"connection stealing it; look for another process deliberately bound to %d",
+		port, portRangeLo, portRangeHi, port,
+	)
+}
+
 // StartTestGateway boots a real gateway via the registered RunContextFunc on
-// an ephemeral port and returns a TestGateway once the /health endpoint
-// responds 200.
+// a port from the harness's private below-ephemeral window (see the port
+// allocation block at the top of this file) and returns a TestGateway once the
+// /health endpoint responds 200.
 //
 // It requires RegisterGatewayRunner to have been called first (typically from
 // a TestMain in the test package that imports pkg/gateway). If it has not
@@ -264,7 +456,9 @@ func pollUntilReady(cfg pollConfig) pollResult {
 // It:
 //   - Creates a temp dir for OMNIPUS_HOME via t.TempDir().
 //   - Sets OMNIPUS_MASTER_KEY to a fixed test value via t.Setenv.
-//   - Picks a free ephemeral port using the listen/close/reuse idiom.
+//   - Picks a free port from this process's own region of the harness's
+//     private [portRangeLo, portRangeHi) window, which sits below the kernel's
+//     ephemeral floor so no outbound connect() can be assigned it.
 //   - Writes a config.json seeded with a real OpenRouter+glm provider entry.
 //   - Seeds OPENROUTER_API_KEY (from env, or a stub if env is empty) into
 //     credentials.json so credentials.InjectFromConfig succeeds at boot.
@@ -329,19 +523,15 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 	// integration tests do not run in parallel (no t.Parallel()).
 	t.Setenv("OMNIPUS_HOME", homeDir)
 
-	// Pick an ephemeral port by opening a listener, reading the port, then closing it.
-	// The OS will not reuse the port immediately, giving RunContext time to bind.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	// Pick the port the gateway will bind. It has to be decided HERE, ~0.65s
+	// before the bind actually happens, because it goes into config.json and
+	// RunContext has no way to accept a pre-made listener. See the port
+	// allocation block near the top of this file for the three ways the old
+	// `net.Listen("tcp", "127.0.0.1:0")` idiom lost the port in that window —
+	// including to this harness's own /health probe.
+	port, err := allocatePort()
 	if err != nil {
 		t.Fatalf("testutil.StartTestGateway: allocate port: %v", err)
-	}
-	tcpAddr, ok := ln.Addr().(*net.TCPAddr)
-	if !ok {
-		t.Fatalf("testutil.StartTestGateway: unexpected listener address type %T (want *net.TCPAddr)", ln.Addr())
-	}
-	port := tcpAddr.Port
-	if err = ln.Close(); err != nil {
-		t.Fatalf("testutil.StartTestGateway: close ephemeral listener: %v", err)
 	}
 
 	cfg := buildConfig(hc, homeDir, port)
@@ -436,18 +626,21 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 			}
 			return probeOutcome{}
 		},
-		bootErr: func() error {
-			if p := gw.bootErr.Load(); p != nil {
-				return *p
-			}
-			return nil
-		},
+		bootErr:                  gw.loadBootErr,
 		interval:                 healthProbeInterval,
 		consecutiveFailThreshold: healthConsecutiveFailThreshold,
 		hardBackstop:             healthHardBackstop,
 		now:                      time.Now,
 		sleep:                    time.Sleep,
 	})
+
+	// A "ready" verdict is not yet trustworthy: the probe has no way to tell
+	// our gateway from a stranger's on the same port. See foreignGatewayError.
+	if foreignErr := foreignGatewayError(baseURL, result, gw.loadBootErr()); foreignErr != nil {
+		cancel()
+		<-done
+		t.Fatalf("testutil.StartTestGateway: %v", foreignErr)
+	}
 
 	if result.kind != pollReady {
 		cancel()
@@ -458,8 +651,9 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 			t.Fatalf(
 				"testutil.StartTestGateway: gateway at %s failed to boot: %v "+
 					"(fast-fail: %d probe attempt(s), %s elapsed — this is a genuine boot "+
-					"error surfaced immediately, not a timeout)",
+					"error surfaced immediately, not a timeout)%s",
 				baseURL, result.bootErr, result.attempts, result.elapsed,
+				portRaceHint(port, result.bootErr),
 			)
 		case pollConsecutiveFailures:
 			var bootErrMsg string
@@ -470,8 +664,9 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 				"testutil.StartTestGateway: gateway at %s never became healthy after "+
 					"%d consecutive failed health probes (%s elapsed) — this indicates a "+
 					"genuine boot failure, not a scheduling stall (a frozen host would "+
-					"produce FEW probes, not failed ones); last probe error: %v%s",
+					"produce FEW probes, not failed ones); last probe error: %v%s%s",
 				baseURL, result.consecutiveFails, result.elapsed, result.lastProbeErr, bootErrMsg,
+				portRaceHint(port, result.bootErr),
 			)
 		case pollHardBackstop:
 			var bootErrMsg string
@@ -482,8 +677,9 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 				"testutil.StartTestGateway: gateway at %s hit the %s hard backstop after "+
 					"only %d probe attempt(s) (%s elapsed) without becoming healthy — this is "+
 					"the absolute ceiling, not the primary failure signal; probes are likely "+
-					"hanging (gateway wedged/hung, not merely slow to boot); last probe error: %v%s",
+					"hanging (gateway wedged/hung, not merely slow to boot); last probe error: %v%s%s",
 				baseURL, healthHardBackstop, result.attempts, result.elapsed, result.lastProbeErr, bootErrMsg,
+				portRaceHint(port, result.bootErr),
 			)
 		}
 	}
