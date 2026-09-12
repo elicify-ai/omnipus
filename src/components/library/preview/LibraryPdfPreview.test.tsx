@@ -86,6 +86,15 @@ const h = vi.hoisted(() => ({
   pageAnnotations: [] as unknown[],
   /** `doc.getFieldObjects()` resolution — null models "no AcroForm fields". */
   fieldObjects: null as Record<string, unknown[]> | null,
+  /** When set, `doc.getFieldObjects()` REJECTS with this. Distinct from
+   *  `fieldObjects: null`: one is "this document has no fields", the other is
+   *  "we could not find out", and the component used to render both as the
+   *  same nothing. */
+  fieldObjectsError: null as Error | null,
+  /** Page numbers whose `AnnotationLayer.render()` must reject. Keyed by page
+   *  (read off the div's own `data-page-number`) because the mocked `page`
+   *  object is shared by every page and cannot tell them apart. */
+  annotationLayerFailPages: [] as number[],
   /** `doc.saveDocument()` resolution. */
   savedBytes: new Uint8Array([1, 2, 3]),
   saveDocumentCalls: 0,
@@ -157,6 +166,11 @@ vi.mock('pdfjs-dist', () => {
     }
     render(args: Record<string, unknown>) {
       h.annotationLayerRenderArgs.push(args)
+      const div = args.div as HTMLElement | undefined
+      const pageNumber = Number(div?.getAttribute('data-page-number') ?? '0')
+      if (h.annotationLayerFailPages.includes(pageNumber)) {
+        return Promise.reject(new Error(`annotation layer exploded on page ${pageNumber}`))
+      }
       return Promise.resolve()
     }
   }
@@ -179,7 +193,8 @@ vi.mock('pdfjs-dist', () => {
           numPages: h.numPages,
           getPage: () => Promise.resolve(page),
           annotationStorage: makeAnnotationStorage(),
-          getFieldObjects: () => Promise.resolve(h.fieldObjects),
+          getFieldObjects: () =>
+            h.fieldObjectsError ? Promise.reject(h.fieldObjectsError) : Promise.resolve(h.fieldObjects),
           saveDocument: () => {
             h.saveDocumentCalls++
             return Promise.resolve(h.savedBytes)
@@ -297,6 +312,8 @@ beforeEach(async () => {
   h.numPages = 1
   h.pageAnnotations = []
   h.fieldObjects = null
+  h.fieldObjectsError = null
+  h.annotationLayerFailPages = []
   h.savedBytes = new Uint8Array([1, 2, 3])
   h.saveDocumentCalls = 0
   h.annotationStorageSetValueCalls = []
@@ -686,6 +703,147 @@ describe('LibraryPdfPreview — no AcroForm fields (honest state)', () => {
 
     await waitFor(() => expect(h.annotationLayerRenderArgs).toHaveLength(1))
     expect(screen.queryByTestId('library-pdf-no-fields-note')).not.toBeInTheDocument()
+  })
+})
+
+// ── Edit mode, when something in it FAILS ──────────────────────────────────
+// Everything above tests Edit mode working. The three tests below are the
+// cases where a piece of it did not, all of which used to end in an overlay
+// that looked exactly like "this PDF has no fields".
+
+/**
+ * The toast store as the COMPONENT sees it.
+ *
+ * `vi.resetModules()` in beforeEach gives every test a fresh module registry,
+ * so the `useUiStore` imported at the top of this FILE is a different store
+ * object than the one the freshly-imported component pushes toasts into —
+ * exactly the hazard the `PreviewHeaderSlotProvider` and `mockedPutBinary`
+ * comments above describe. Reading the stale one always reports an empty
+ * list, i.e. an assertion that cannot fail; this was caught by writing the
+ * assertion first and watching it fail against working code.
+ */
+async function currentToastMessages(): Promise<string[]> {
+  const { useUiStore: liveStore } = await import('@/store/ui')
+  return liveStore.getState().toasts.map((t) => t.message)
+}
+
+/** How many times an AnnotationLayer render was attempted for a given page —
+ *  read off the div the component passed, since the mocked `page` object is
+ *  shared by every page. */
+function annotationRendersForPage(pageNumber: number): number {
+  return h.annotationLayerRenderArgs.filter(
+    (args) => (args.div as HTMLElement | undefined)?.getAttribute('data-page-number') === String(pageNumber),
+  ).length
+}
+
+describe('LibraryPdfPreview — a page whose form layer fails (F5)', () => {
+  it('says so, still builds the LATER pages, and retries that page the next time Edit is entered', async () => {
+    h.numPages = 2
+    h.annotationLayerFailPages = [1]
+    await renderPreview()
+    await enterEditMode()
+
+    // MUTATION THIS DIES ON: no try/catch around the layer render — the
+    // rejection escapes the bare `void (async () => …)()`, the loop ends, and
+    // nothing is ever said.
+    const note = await screen.findByTestId('library-pdf-edit-layer-error')
+    expect(note.textContent).toMatch(/page 1/i)
+    expect(note.textContent).toMatch(/annotation layer exploded/i)
+    expect(await currentToastMessages()).toEqual(
+      expect.arrayContaining([expect.stringMatching(/page 1/i)]),
+    )
+
+    // MUTATION THIS DIES ON: letting one page's failure end the loop — page 2
+    // is a perfectly good page and must still get its interactive layer.
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-testid="library-pdf-annotation-layer"][data-page-number="2"]'),
+      ).not.toBeNull(),
+    )
+    // The failed page's empty overlay is removed, not left floating over the
+    // page pretending to be a form layer.
+    expect(
+      document.querySelector('[data-testid="library-pdf-annotation-layer"][data-page-number="1"]'),
+    ).toBeNull()
+
+    expect(annotationRendersForPage(1)).toBe(1)
+    expect(annotationRendersForPage(2)).toBe(1)
+
+    // Leave Edit and come back.
+    fireEvent.click(screen.getByTestId('library-pdf-mode-view'))
+    await waitFor(() => expect(document.querySelector('.omnipus-pdf-annotation-layer')).toBeNull())
+    fireEvent.click(screen.getByTestId('library-pdf-mode-edit'))
+
+    // A failed page is retried on the next Edit entry.
+    //
+    // HONESTY NOTE, because this assertion is weaker than it looks: moving
+    // the `annotationLayerDivsRef` registration back BEFORE the render (the
+    // old order) does NOT break this — measured, not assumed. Leaving Edit
+    // mode clears that whole map (the `mode !== 'edit'` teardown), so the
+    // `has()` guard never survives a toggle either way. The review note that
+    // prompted this fix claimed early registration made the skip permanent;
+    // against this code it does not. Registering only after a successful
+    // render is still the right shape — the map's entries then mean what
+    // their name says — but this line is NOT what proves it.
+    //
+    // MUTATION THIS DIES ON: dropping the `.clear()` from that teardown, or
+    // leaving a failed page's div registered and in the DOM — either makes a
+    // page that failed once stay broken with no way back.
+    await waitFor(() => expect(annotationRendersForPage(1)).toBe(2))
+  })
+})
+
+describe('LibraryPdfPreview — the fillable-fields probe failed (F6)', () => {
+  it('says the check could not be made, rather than rendering the same nothing as "no fields"', async () => {
+    h.fieldObjectsError = new Error('field objects unavailable')
+    await renderPreview()
+    await enterEditMode()
+
+    // MUTATION THIS DIES ON: `.catch(() => setHasFormFields(null))` — the
+    // error is discarded and `null` is indistinguishable from "not asked
+    // yet", so the reader is told nothing at all.
+    const note = await screen.findByTestId('library-pdf-field-probe-error')
+    expect(note.textContent).toMatch(/could not check/i)
+    // And it must NOT claim the document has no fields — that is a different,
+    // and here unknown, fact.
+    expect(screen.queryByTestId('library-pdf-no-fields-note')).not.toBeInTheDocument()
+  })
+})
+
+describe('LibraryPdfPreview — a signature that cannot be drawn (F7)', () => {
+  it('is not written into the document at all, and says why', async () => {
+    await renderPreview()
+    await enterEditMode()
+    await waitFor(() => expect(h.annotationLayerConstructorArgs).toHaveLength(1))
+
+    fireEvent.click(screen.getByTestId('library-pdf-add-signature'))
+    const canvas = await screen.findByTestId('library-pdf-signature-canvas')
+    fireEvent.pointerDown(canvas, { clientX: 10, clientY: 10, pointerId: 1 })
+    fireEvent.pointerMove(canvas, { clientX: 40, clientY: 30, pointerId: 1 })
+    fireEvent.pointerUp(canvas, { clientX: 40, clientY: 30, pointerId: 1 })
+
+    // The preview canvas now fails to give up a 2D context — one of the three
+    // ways `renderSignaturePreview` can bail, every one of which used to bail
+    // AFTER the ink had already been committed to annotationStorage.
+    vi.mocked(HTMLCanvasElement.prototype.getContext).mockReturnValue(
+      null as unknown as CanvasRenderingContext2D,
+    )
+    fireEvent.click(screen.getByTestId('library-pdf-signature-insert'))
+
+    // MUTATION THIS DIES ON: calling `annotationStorage.setValue` before
+    // drawing (the old order) — an invisible ink annotation would be in the
+    // document, and in the next saved file, with nothing on screen to show
+    // for it or to remove it with.
+    expect(h.annotationStorageSetValueCalls).toHaveLength(0)
+    expect(screen.queryByTestId('library-pdf-signature-preview')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('library-pdf-signature-list')).not.toBeInTheDocument()
+
+    // Pressing Insert produced a signature or a reason — never silence.
+    await waitFor(async () =>
+      expect(await currentToastMessages()).toEqual(
+        expect.arrayContaining([expect.stringMatching(/could not be drawn/i)]),
+      ),
+    )
   })
 })
 

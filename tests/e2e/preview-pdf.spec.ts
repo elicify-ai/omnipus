@@ -459,16 +459,29 @@ async function selectEntry(page: Page, entryPath: string): Promise<void> {
 async function waitForPdfSurface(page: Page): Promise<void> {
   await expect(page.getByTestId('library-pdf-preview')).toBeVisible({ timeout: 30_000 })
   const errorPane = page.getByTestId('library-pdf-error')
+  // Wait for whichever TERMINAL state lands first, then judge it.
+  //
+  // This used to poll `.toBe('rendered')`, so an error pane that appeared in
+  // under a second was re-read unchanged for the full 30s before the poll
+  // gave up — and the failure was then reported as a 30-second timeout. That
+  // disguise cost a real investigation its first day: the recorded value was
+  // a terminal `error: … Network unavailable.`, not a slow render. Same
+  // fail-fast shape as csp-assumptions.spec.ts's `pdfOutcome`.
   await expect
     .poll(
       async () => {
         if ((await page.getByTestId('library-pdf-page').count()) > 0) return 'rendered'
-        if ((await errorPane.count()) > 0) return `error: ${await errorPane.innerText()}`
+        if ((await errorPane.count()) > 0) return 'error'
         return 'pending'
       },
-      { timeout: 30_000, intervals: [250], message: 'the PDF must produce a page surface' },
+      { timeout: 30_000, intervals: [250], message: 'the PDF must reach a terminal state' },
     )
-    .toBe('rendered')
+    .not.toBe('pending')
+  if ((await page.getByTestId('library-pdf-page').count()) === 0) {
+    throw new Error(
+      `the PDF must produce a page surface, but the viewer errored instead: ${await errorPane.innerText()}`,
+    )
+  }
 }
 
 /**
