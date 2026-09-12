@@ -576,15 +576,34 @@ const controlIdleSweepTick = 30 * time.Second
 // Idempotent guard is the caller's responsibility (newLiveViewRegistry calls
 // it exactly once). Stopped by Shutdown.
 func (r *LiveViewRegistry) startControlIdleSweeper() {
-	r.sweepStop = make(chan struct{})
-	r.sweepDone = make(chan struct{})
+	// CAPTURE BOTH CHANNELS AS LOCALS. The goroutine must never read
+	// r.sweepStop / r.sweepDone through the receiver, for two reasons:
+	//
+	//  1. DEADLOCK. Shutdown nils r.sweepStop under r.mu so a second call is
+	//     a no-op. A select re-reads its channel operand on every pass, so a
+	//     goroutine selecting on the FIELD starts receiving from a nil
+	//     channel the instant Shutdown nils it — and a receive on a nil
+	//     channel blocks forever. The sweeper then never returns, never runs
+	//     its `defer close(done)`, and Shutdown's own `<-done` hangs the
+	//     caller. Measured: TestLiveViewRegistryShutdownIsIdempotent sat
+	//     until go test's 10m timeout, with goroutine 9 in `chan receive` at
+	//     Shutdown and goroutine 10 still parked in this select.
+	//  2. DATA RACE. Shutdown writes both fields under r.mu; this goroutine
+	//     read them under no lock at all.
+	//
+	// Locals are immune to both: the goroutine owns the exact channel pair it
+	// was started with, whatever the fields later say.
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	r.sweepStop = stop
+	r.sweepDone = done
 	go func() {
-		defer close(r.sweepDone)
+		defer close(done)
 		ticker := time.NewTicker(controlIdleSweepTick)
 		defer ticker.Stop()
 		for {
 			select {
-			case <-r.sweepStop:
+			case <-stop:
 				return
 			case <-ticker.C:
 				r.sweepTick()
@@ -598,11 +617,37 @@ func (r *LiveViewRegistry) startControlIdleSweeper() {
 // hand-built test registry that never called startControlIdleSweeper) —
 // nil-guarded.
 func (r *LiveViewRegistry) Shutdown() {
-	if r.sweepStop == nil {
+	// IDEMPOTENT, and it must be. The nil guard alone was not enough: the
+	// second call reached close() on an already-closed channel and PANICKED
+	// the whole gateway process with "close of closed channel". It fired on
+	// the config-reload path, where pkg/agent/loop.go's
+	// rewireBrowserManagerForKey called pool.Release(key, prior) — which
+	// reaches m.Shutdown() via coordinator.Release -> dropConnection — and
+	// THEN called prior.Shutdown() again.
+	//
+	// Found by the ADR-084/085/086 CI run: the ui-heavy e2e shard died at
+	// live.go:604 mid-reload and took eleven later tests with it as cascade
+	// casualties. ui-heavy was the only shard affected because it is the only
+	// one that actually drives Chrome, so it is the only one whose manager is
+	// coordinator-registered.
+	//
+	// ADR-085 FR-031a introduced the sweeper and this close(); every other
+	// step of BrowserManager.Shutdown was already idempotent (map deletes,
+	// nil'd cancels, started=false) and its doc comment says so. This restores
+	// that property. Taking r.mu makes concurrent Shutdowns safe too, and
+	// nil'ing sweepStop under the lock is what makes the second call a no-op.
+	r.mu.Lock()
+	stop := r.sweepStop
+	done := r.sweepDone
+	r.sweepStop = nil
+	r.mu.Unlock()
+	if stop == nil {
 		return
 	}
-	close(r.sweepStop)
-	<-r.sweepDone
+	close(stop)
+	if done != nil {
+		<-done
+	}
 }
 
 // sweepTick is one FR-031a/FR-052 pass: for every tab set currently stood

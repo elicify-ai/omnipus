@@ -5223,7 +5223,13 @@ func (al *AgentLoop) rewireBrowserManagerForKey(
 		pool.Release(key, prior)
 	}
 	if prior != nil {
-		prior.Shutdown()
+		// NOTE: no prior.Shutdown() here. pool.Release above already reaches
+		// the manager's dropConnection -> Shutdown; coordinator.go's own doc
+		// states Release is "a full substitute for the old prior.Shutdown()
+		// reload call". Calling it a second time is what panicked the gateway
+		// with "close of closed channel" during a Settings save. live.go's
+		// Shutdown is now idempotent so this can no longer crash, but the
+		// redundant call is still wrong and is gone.
 		prior.InvalidateExecPathCache()
 	}
 }
