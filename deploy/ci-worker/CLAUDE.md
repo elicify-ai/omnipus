@@ -1,4 +1,4 @@
-# CLAUDE.md — CI worker (`ci-omnipus`)
+# CLAUDE.md — CI workers (`ci-omnipus`, `ci-omnipus-3`)
 
 Scoped guidance for the `deploy/ci-worker/` directory. Loaded automatically by Claude Code
 whenever a file in this directory (or a descendant) is read. See the root `CLAUDE.md`'s
@@ -182,5 +182,35 @@ queued behind or overlapping another. Never kill another operator's run, and nev
 pattern-kill (self-kill risk, above). **Redeploying `/cache/runci.sh` while a run is in
 flight still mutates the script underneath it** — the lock does not protect against that,
 so hold redeploys until the worker is idle.
+
+**Second worker: `ci-omnipus-3` (added 2026-09-12).** When `ci-omnipus` is held by another
+session's run (the flock above can queue you for up to 90 minutes), use the clone instead of
+waiting or killing anything. It is the same image, same `fly.toml` shape (`sin`,
+`performance-8x/16GB`, its own `ci_cache` volume at `/cache`), same secrets slot `a`
+(`OPENROUTER_API_KEY`), and its own independent `/tmp/runci.lock`, so a run there never
+touches the first worker's checkout, binary, or shard homes. Everything in this file applies
+verbatim with `--app ci-omnipus-3`:
+
+```bash
+fly ssh console --app ci-omnipus-3 -C "/cache/runci.sh <ref> <gate>"
+```
+
+Three things to know before trusting it:
+
+1. **`/cache/runci.sh` is deployed PER WORKER.** A redeploy to one does not reach the other;
+   compare `md5sum /cache/runci.sh` on each against the repo file before reading a verdict,
+   or you will run an older script on one box and a newer one on the other.
+2. **`fly ssh console -C` does not forward stdin**, so the base64-pipe recipe above echoes the
+   payload instead of writing it. Use `fly ssh sftp put deploy/ci-worker/runci.sh
+   /cache/runci.sh --app <app>` then `chmod +x` over the console. (Found when first provisioning
+   this worker.)
+3. **`OPENROUTER_API_KEY_B`/`_C` are not set on it** (only slot `a`), so the LLM shards run at
+   single-key parallelism; a 429 burst there is a rate-limit artefact, not a code regression.
+   Set them with `fly secrets set --app ci-omnipus-3` when the extra keys are to hand.
+
+Detached runs (`nohup … > /tmp/ci-run.log &` over the console) survive an SSH drop and a
+session restart; resume by reading `/tmp/ci-run.log` and `ps -eo pid,etime,cmd | grep
+'[r]unci.sh'`. A second `runci.sh` pid with the same argv and a younger `etime` is the shard
+runner's forked subshell, not a duplicate run.
 
 **Cost / lifecycle**: the worker is stopped when idle (no public service). If `fly status` shows the machine `stopped`, run `fly machines start <id> --app ci-omnipus` once before invoking `runci.sh`; the SSH console will auto-start it otherwise. Watch the persistent `/cache` volume for disk pressure — `fly ssh console --app ci-omnipus -C 'df -h /cache'`.
