@@ -937,6 +937,19 @@ func judgeRubricFromConfig(agentInst *AgentInstance) string {
 // could be resolved). Framed explicitly as DATA, never as instructions
 // (Constraint: "the verifier must not receive the work-under-review as
 // instructions" — prompt-injection guard).
+// judgeGatesHeading introduces the Definition-of-Done section of the Judge's
+// user content. It states the gate rule INLINE, next to the items it governs,
+// so it holds even on an install whose Judge SOUL.md predates the matching
+// sentence in coreagent.JudgeDefaultRubric (the rubric is seeded to disk once
+// and is operator-editable; this text is code and always current).
+const judgeGatesHeading = "## Definition-of-Done gates (return exactly one entry per id; judged as GATES)\n" +
+	"A gate is a standing quality rule, not an outcome to prove. A gate is met=true unless the evidence " +
+	"you were given shows a violation of it. If you find a violation, quote it in evidence_quote and set " +
+	"met=false. If you find none, set met=true — evidence_quote may be the span you inspected, or \"\" " +
+	"when there was nothing to inspect. Absence of output, of a diff, of a summary, or of any factual " +
+	"claim is NOT a violation; a redaction marker such as [REDACTED] or [FILTERED] IS evidence that a " +
+	"secret was present.\n"
+
 func buildJudgeUserContent(
 	criteria []task.AcceptanceCriterion,
 	evidence []task.EvidenceRecord,
@@ -947,21 +960,58 @@ func buildJudgeUserContent(
 		sb.WriteString(extraContext)
 		sb.WriteString("\n\n")
 	}
-	sb.WriteString("## Prose criteria to judge (return exactly one entry per id)\n")
 	type criterionForPrompt struct {
 		ID   string `json:"id"`
 		Text string `json:"text"`
 	}
-	forPrompt := make([]criterionForPrompt, 0, len(criteria))
+	// ADR-080 D-DOD: a goal's Definition of Done is "generic standing quality
+	// gates" and is DISTINCT from its acceptance criteria ("outcome-specific
+	// checks"); the Judge evaluates the union. A DoD item is exactly one that
+	// carries a provenance tag (the tag is "meaningful only on DoD items"),
+	// so provenance is the split.
+	//
+	// The two kinds need OPPOSITE burdens of proof, and the rubric's single
+	// fail-closed rule (NFR-2: nothing to quote → unmet) is right only for the
+	// first. An outcome check ("the README documents the flag") is unmet until
+	// evidence shows it done. A standing gate ("No secrets or credentials
+	// appear in the output", "Every factual claim is grounded") is a
+	// PROHIBITION: it is met unless the evidence shows a violation, and an
+	// empty output violates nothing. Judged under NFR-2 the floor gates were
+	// unprovable by construction — the Judge's recorded reason in CI run
+	// 1465ae58f (2026-09-12) said so verbatim: "the machine check of `true`
+	// produced no output, so there is no output content that could be
+	// inspected for secrets", met=false — which made every goal carrying the
+	// floor (i.e. every goal) impossible to complete. Rendering the gates
+	// under their own heading with their own rule, per id, keeps NFR-2 intact
+	// for outcome criteria and makes the ADR's gates judgeable as gates.
+	outcome := make([]criterionForPrompt, 0, len(criteria))
+	gates := make([]criterionForPrompt, 0, len(criteria))
 	for _, c := range criteria {
-		forPrompt = append(forPrompt, criterionForPrompt{ID: c.ID, Text: c.Text})
+		item := criterionForPrompt{ID: c.ID, Text: c.Text}
+		if c.Provenance != "" {
+			gates = append(gates, item)
+			continue
+		}
+		outcome = append(outcome, item)
 	}
-	critJSON, err := json.MarshalIndent(forPrompt, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("marshal criteria: %w", err)
+	if len(outcome) > 0 {
+		sb.WriteString("## Prose criteria to judge (return exactly one entry per id)\n")
+		critJSON, err := json.MarshalIndent(outcome, "", "  ")
+		if err != nil {
+			return "", fmt.Errorf("marshal criteria: %w", err)
+		}
+		sb.Write(critJSON)
+		sb.WriteString("\n\n")
 	}
-	sb.Write(critJSON)
-	sb.WriteString("\n\n")
+	if len(gates) > 0 {
+		sb.WriteString(judgeGatesHeading)
+		gateJSON, err := json.MarshalIndent(gates, "", "  ")
+		if err != nil {
+			return "", fmt.Errorf("marshal gates: %w", err)
+		}
+		sb.Write(gateJSON)
+		sb.WriteString("\n\n")
+	}
 	// G-3/G-15 (FR-144): the real, write-set-scoped workspace diff from the
 	// Phase-1 git evidence layer — the prose Judge sees the actual file
 	// changes, not a transcript window alone. Empty when the git layer is
