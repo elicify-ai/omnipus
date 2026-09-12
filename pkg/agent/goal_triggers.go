@@ -89,9 +89,10 @@ var goalIdleQuietWindow = 60 * time.Second //nolint:gochecknoglobals
 const goalBareClaimCostThreshold = 2
 
 // goalRoute captures the channel/chat/sessionKey a goal's chat lives on, so an
-// idle-settlement unmet verdict can re-inject a steering turn via the
-// async-notifier (the SAME re-inject seam checkGoalLoopAfterTurn uses via
-// result.followUps — there is no result to attach to from the tick path).
+// idle-settlement unmet verdict can re-inject a steering turn on the SAME bus
+// seam checkGoalLoopAfterTurn's claim path uses via result.followUps — there
+// is no result to attach to from the tick path, so idleSteerDeliverer
+// publishes the bus.InboundMessage itself using these captured fields.
 type goalRoute struct {
 	channel    string
 	chatID     string
@@ -561,38 +562,146 @@ func (al *AgentLoop) maybeSettleGoalIdle(now time.Time, store *session.UnifiedSt
 }
 
 // idleSteerDeliverer returns a deliverSteer func that re-injects an unmet
-// idle verdict's steering via the async-notifier — the SAME re-inject seam
-// checkGoalLoopAfterTurn uses via result.followUps, adapted for the tick path
-// (which has no turnResult to attach to). An unmet verdict's steer
-// re-dispatch IS new activity (G-2): the Notify-originated turn bumps
-// GoalLastActivityAt via checkGoalLoopAfterTurn's activity path, re-arming the
-// quiet window. Best-effort: a notify failure is logged (the round was already
-// consumed + persisted; the user can still drive the next turn manually).
+// idle verdict's steering on the SAME bus seam checkGoalLoopAfterTurn's claim
+// path uses (a bus.InboundMessage stamped goalLoopFollowUpSenderID, which the
+// claim path appends to result.followUps and runAgentLoop republishes),
+// adapted for the tick path — which has no turnResult to attach to and so
+// publishes the message itself.
+//
+// WHY NOT THE ASYNC NOTIFIER (the wedge this replaced — conformance-chat e2e,
+// 2026-09-12): this used to deliver the steer via al.asyncNotifier.Notify.
+// That publishes on the "system" channel with Sender.CanonicalID
+// "async:goal_idle_settle" (async_notifier.go's Notify), which routes to
+// processSystemMessage — and processSystemMessage builds its processOptions
+// WITHOUT a SenderID and without UserInitiated (loop.go). So the steer turn
+// reached checkGoalLoopAfterTurn with UserInitiated=false and SenderID="" and
+// was dropped by that function's origin gate before it could bump the
+// activity clock or clear the idleSettling marker.
+//
+// The consequence was a silent, permanent wedge, not a slowdown: the marker
+// is cleared ONLY by bumpGoalActivityOnTurn, so after the FIRST idle
+// settlement every later PlanEngine tick early-returned on goalIsIdleSettling
+// forever. The goal stayed `active` with no further adjudication, no round
+// consumed, no terminal state and no pill change — exactly the "goal never
+// reaches done and never reaches failed either" shape observed in CI. (It was
+// not reachable by `/goal clear`'s cleanup either, but that is FR-114's
+// user-initiated contract — cancel the in-flight verifier/compilation, remove
+// the goal, inert the claim trigger — not an automatic terminal path the
+// engine could have taken on its own.)
+//
+// The design ALREADY described the intended behaviour — FR-109's "the
+// verifier's own turn MUST count as activity", realized in runGoalAdjudication
+// as the unmet verdict's steer re-dispatch being the activity that re-arms the
+// next FR-102 settlement — only the delivery mechanism disagreed with it.
+// Publishing on the claim path's own seam makes the two paths identical, which
+// is what the comment claimed all along.
+//
+// Best-effort: an undeliverable steer is logged and the goal is re-armed
+// anyway (the round was already consumed + persisted; leaving the marker set
+// would re-create the wedge for a transient bus error or a missing route).
 func (al *AgentLoop) idleSteerDeliverer(sessionID string) func(steer string) {
 	return func(steer string) {
-		if steer == "" || al.asyncNotifier == nil {
+		if steer == "" {
 			return
 		}
+		reason, fields := "", map[string]any{"session_id": sessionID}
 		route := goalTriggers().routeFor(sessionID)
-		if route.channel == "" || route.chatID == "" {
-			logger.WarnCF("agent", "goal idle settle: no routing to re-inject steer; left for next turn",
-				map[string]any{"session_id": sessionID})
-			return
+		switch {
+		case route.channel == "" || route.chatID == "":
+			reason = "no routing recorded for this goal"
+		case al.bus == nil:
+			reason = "no message bus available"
+		default:
+			pubCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := al.bus.PublishInbound(pubCtx, bus.InboundMessage{
+				Channel:    route.channel,
+				ChatID:     route.chatID,
+				Sender:     bus.SenderInfo{CanonicalID: goalLoopFollowUpSenderID},
+				Content:    steer,
+				SessionID:  sessionID,
+				SessionKey: route.sessionKey,
+			}); err != nil {
+				reason, fields["error"] = "publish failed", err.Error()
+			}
 		}
-		notifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := al.asyncNotifier.Notify(notifyCtx, AsyncNotifyEvent{
-			Channel:             route.channel,
-			ChatID:              route.chatID,
-			AgentID:             route.agentID,
-			TranscriptSessionID: sessionID,
-			SourceKind:          "goal_idle_settle",
-			Content:             steer,
-		}); err != nil {
-			logger.WarnCF("agent", "goal idle settle: steer re-inject failed",
-				map[string]any{"session_id": sessionID, "error": err.Error()})
+		if reason == "" {
+			return // delivered — the steer turn itself will re-arm (FR-109)
 		}
+		fields["reason"] = reason
+		logger.WarnCF("agent", "goal idle settle: steer not re-injected; re-arming the quiet window anyway", fields)
+		al.goalMarkIdleSettling(sessionID, false)
 	}
+}
+
+// rearmGoalAfterAbnormalTurn re-arms sessionID's idle quiet window after a
+// turn that ran but never reached checkGoalLoopAfterTurn.
+//
+// F2 (conformance-chat e2e, 2026-09-12): runAgentLoop returns EARLY — before
+// its checkGoalLoopAfterTurn call — on two abnormal outcomes: a non-nil
+// runTurn error (a provider failure, ErrTurnTimedOut, an unrecoverable
+// context, any system-initiated abort) and a user-initiated hard abort
+// (TurnEndStatusAborted). Neither path bumped the goal's activity clock or
+// cleared the idleSettling marker, so a goal whose steer turn died ONCE was
+// wedged `active` forever: no further adjudication, no round consumed, no
+// terminal state, nothing for the pill to render.
+//
+// This is deliberately the SMALLEST re-arm and nothing more. It does NOT
+// judge, does NOT consume a round, does NOT claim, and does NOT terminate the
+// goal — an abnormal turn is not evidence about the goal either way. It only
+// restores the goal to a state where the ordinary idle sweep can fire again
+// (the FR-102 "re-arm only on new activity" rule; a turn that RAN is that
+// activity), so the goal continues through its NORMAL state machine to a
+// normal terminal state (a MET verdict, the GoalMaxRounds bound, the
+// token-budget brake, or the multi-day idle-expiry brake) instead of stalling
+// outside it.
+//
+// ORIGIN GATE — the same one checkGoalLoopAfterTurn applies (goal_loop.go,
+// "review r2 RV3"), and it is load-bearing here for the SAME reason: `/goal`
+// and `/loop` can coexist on one session, and BOTH of this function's call
+// sites in runAgentLoop are also reached by ProcessScheduled and
+// processSystemMessage, whose turns carry UserInitiated=false and SenderID="".
+// Without the gate, a heartbeat/cron/async turn that fails more often than
+// goalIdleQuietWindow (60 s) would bump GoalLastActivityAt forever and the
+// quiet window would NEVER elapse — the opposite wedge to the one this
+// function exists to fix, and a harder one to see. Only a genuine user turn
+// or the goal loop's own re-injected follow-up may re-arm.
+//
+// Fast no-op for every turn whose session carries no active goal.
+func (al *AgentLoop) rearmGoalAfterAbnormalTurn(opts processOptions) {
+	if opts.IsTaskRun || opts.TranscriptStore == nil || opts.TranscriptSessionID == "" {
+		return
+	}
+	if !opts.UserInitiated && opts.SenderID != goalLoopFollowUpSenderID {
+		return // scheduled / cron / heartbeat / async origin — must not touch the goal
+	}
+	sessionID := opts.TranscriptSessionID
+	meta, err := opts.TranscriptStore.GetMeta(sessionID)
+	if err != nil {
+		// Not folded into the "no active goal" fast path: an unreadable meta
+		// is a storage fault, not an absent goal, and silently treating it as
+		// one is how a wedged goal stays invisible.
+		logger.WarnCF("agent", "goal: could not read session meta to re-arm after an abnormal turn",
+			map[string]any{"session_id": sessionID, "error": err.Error()})
+		return
+	}
+	if meta == nil || meta.GoalCondition == "" {
+		return // no active goal — fast path
+	}
+	al.bumpGoalActivityOnTurn(opts.TranscriptStore, sessionID)
+	logger.InfoCF("agent", "goal: re-armed idle settlement after an abnormal turn end",
+		map[string]any{"session_id": sessionID, "goal_id": meta.GoalID})
+	// A waiting_on_user pause is a DELIBERATE suspension (G-5/FR-104) and its
+	// pill stays put. maybeSettleGoalIdle already suppresses settlement on the
+	// flag regardless of the activity clock, so the bump above is harmless —
+	// but repainting the pill `active` here would tell the user the goal is
+	// working when it is in fact still parked waiting for them. Emit nothing
+	// rather than a pill that contradicts the live state.
+	if al.goalIsWaitingOnUser(sessionID) {
+		return
+	}
+	al.emitGoalStatusFrame(sessionID, meta.GoalID, meta.GoalCondition, meta.GoalRoundsUsed,
+		meta.GoalMaxRounds, meta.GoalLatestReason, goalPillActive)
 }
 
 // routeFor returns the captured routing for sessionID (helper on the singleton

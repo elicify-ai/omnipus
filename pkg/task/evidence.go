@@ -80,6 +80,18 @@ func (es *EvidenceStore) taskEvidenceDir(taskID string) string {
 // check-criterion attempt (FR-019..022). The sentinel ExitCode -1 is applied
 // automatically when timedOut or policyDenied is true, matching the
 // EvidenceRecord.ExitCode contract.
+//
+// Record is exactly Build + write: every redaction/cap rule lives in Build,
+// so a caller with nothing to persist against still gets an identically
+// scrubbed record (see Build's own doc comment).
+//
+// On a WRITE failure Record returns the built record AND the error (not a nil
+// record). The record is already fully redacted and capped, and the write is
+// the only thing that failed — a caller that needs it for something other
+// than the audit trail (the Judge's evidence bundle) can use it rather than
+// rebuilding a second, differently-identified copy. A caller that only cares
+// about persistence still checks err first, exactly as before. VALIDATION
+// failures still return (nil, err): there is no valid record in that case.
 func (es *EvidenceStore) Record(
 	taskID, criterionID string,
 	attempt int,
@@ -90,6 +102,44 @@ func (es *EvidenceStore) Record(
 	if err := validateID(taskID); err != nil {
 		return nil, fmt.Errorf("task: evidence: invalid task_id: %w", err)
 	}
+	rec, err := es.Build(taskID, criterionID, attempt, command, output, exitCode, timedOut, policyDenied)
+	if err != nil {
+		return nil, err
+	}
+	if err := es.write(rec); err != nil {
+		return rec, err // built-but-unpersisted; see the doc comment
+	}
+	return rec, nil
+}
+
+// Build assembles one check-criterion attempt's EvidenceRecord — redacted and
+// size-capped by the SAME rules Record persists under — WITHOUT writing
+// anything to disk.
+//
+// It exists because the on-disk evidence layout is partitioned by task id
+// (<home>/tasks_evidence/<task_id>/…), while the prose Judge's evidence
+// bundle is NOT a task-scoped concern: a chat `/goal` adjudication carries no
+// TaskID at all (JudgeCriteriaInput.TaskID is empty for
+// task.VerdictScopeGoal by construction). Before this split, the agent-side
+// wrapper answered "no task id" with a nil record, so a goal whose machine
+// check genuinely PASSED reached the Judge with an empty machine-check
+// section and its floor DoD prose criteria ("No secrets or credentials appear
+// in the output", "Every factual claim is grounded, not assumed") were
+// structurally unprovable — the Judge fail-closed them forever and the goal
+// could never be met. Building the record without persisting it keeps the
+// Judge's evidence honest without inventing a second, goal-shaped evidence
+// store (DoD-11 anti-drift).
+//
+// taskID may be EMPTY here — it is only the on-disk partition key, which an
+// unpersisted record does not need. Record validates it before calling in, so
+// no unvalidated id can ever reach write() through this seam.
+func (es *EvidenceStore) Build(
+	taskID, criterionID string,
+	attempt int,
+	command, output string,
+	exitCode int,
+	timedOut, policyDenied bool,
+) (*EvidenceRecord, error) {
 	if err := validateID(criterionID); err != nil {
 		return nil, fmt.Errorf("task: evidence: invalid criterion_id: %w", err)
 	}
@@ -132,9 +182,6 @@ func (es *EvidenceStore) Record(
 		TimedOut:     timedOut,
 		PolicyDenied: policyDenied,
 		RecordedAt:   time.Now().UTC().Format(time.RFC3339),
-	}
-	if err := es.write(rec); err != nil {
-		return nil, err
 	}
 	return rec, nil
 }

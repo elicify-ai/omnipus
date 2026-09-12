@@ -523,7 +523,7 @@ func (al *AgentLoop) runMachineCheck(
 			assigneeAgentID,
 		)
 		verdict.Reason = reason
-		return verdict, al.persistEvidence(taskID, c.ID, attempt, c.Check.Command, reason, -1, false, false),
+		return verdict, al.machineCheckEvidence(taskID, c.ID, attempt, c.Check.Command, reason, -1, false, false),
 			NonVerdictUnableToVerify
 	}
 
@@ -539,7 +539,7 @@ func (al *AgentLoop) runMachineCheck(
 			policy, assigneeAgentID,
 		)
 		verdict.Reason = reason
-		return verdict, al.persistEvidence(taskID, c.ID, attempt, c.Check.Command, reason, -1, false, true),
+		return verdict, al.machineCheckEvidence(taskID, c.ID, attempt, c.Check.Command, reason, -1, false, true),
 			NonVerdictUnableToVerify
 	}
 
@@ -607,7 +607,7 @@ func (al *AgentLoop) runMachineCheck(
 				workspaceID, assigneeAgentID, wsErr.Error(),
 			)
 			verdict.Reason = reason
-			return verdict, al.persistEvidence(taskID, c.ID, attempt, c.Check.Command, reason, -1, false, false),
+			return verdict, al.machineCheckEvidence(taskID, c.ID, attempt, c.Check.Command, reason, -1, false, false),
 				NonVerdictUnableToVerify
 		}
 		callCtx = tools.WithTurnWorkspaceDir(callCtx, wsDir)
@@ -629,7 +629,7 @@ func (al *AgentLoop) runMachineCheck(
 	if len(output) > machineCheckOutputCap {
 		output = output[:machineCheckOutputCap]
 	}
-	ev := al.persistEvidence(taskID, c.ID, attempt, c.Check.Command, output, exitCode, timedOut, false)
+	ev := al.machineCheckEvidence(taskID, c.ID, attempt, c.Check.Command, output, exitCode, timedOut, false)
 
 	// G-3/FR-116/FR-137 (blocked-check honesty, the M1 predicate): the
 	// verification MECHANISM ran to completion only when bash returned a
@@ -744,26 +744,68 @@ func interpretBashResult(result *tools.ToolResult) (timedOut bool, exitCode int,
 	return false, -1, output
 }
 
-// persistEvidence writes an EvidenceRecord via the redacting EvidenceStore.
-// Returns nil (no on-disk record) when taskID is empty — a plan-scope round
-// (Wave 2-B) has no task to correlate evidence under in this wave; the
-// verdict itself is still computed correctly in-memory regardless.
-func (al *AgentLoop) persistEvidence(
+// machineCheckEvidence produces the EvidenceRecord for ONE machine-check
+// attempt, redacted and size-capped by the EvidenceStore's own rules, and
+// persists it when there is a task to file it under.
+//
+// The record is returned in BOTH cases — that is the whole point of this
+// seam. The on-disk evidence layout is partitioned by task id; the prose
+// Judge's evidence bundle is not. A chat `/goal` adjudication carries no
+// TaskID (JudgeCriteriaInput.TaskID is empty for task.VerdictScopeGoal by
+// construction, and in.validate() enforces that shape), and a plan-scope
+// round has none either.
+//
+// PRODUCT DEFECT this fixes (conformance-chat e2e, 2026-09-12): the previous
+// version of this function returned nil whenever taskID was empty, so every
+// goal-scope adjudication reached buildJudgeUserContent with an EMPTY
+// evidence slice and the Judge was shown the literal text "(no machine-check
+// results on this attempt)" — even for a goal whose `[check: true exit:0]`
+// criterion had genuinely just passed. The built-in floor DoD items —
+// "No secrets or credentials appear in the output" and "Every factual claim
+// is grounded, not assumed", whose literals live in goal_compile.go's
+// newFloorDoD and whose authority is ADR-080's D-DOD layer 3 ("no
+// secrets/credentials in the output; factual claims grounded") — are then
+// unprovable from the bundle, the Judge correctly fail-closes them, and the
+// goal can NEVER be met. The Judge's own
+// recorded reason in all three CI attempts named the gap verbatim: "no
+// workspace diff, machine-check results, or worker summary were provided".
+// The verdict maths never depended on this record (runMachineCheck computes
+// the criterion verdict itself); only the Judge's VIEW of the evidence did.
+//
+// Persistence failure is logged and degrades to the unpersisted record rather
+// than to nil — the audit trail is worse off, but the Judge must still see
+// what actually ran.
+func (al *AgentLoop) machineCheckEvidence(
 	taskID, criterionID string,
 	attempt int,
 	command, output string,
 	exitCode int,
 	timedOut, policyDenied bool,
 ) *task.EvidenceRecord {
-	if taskID == "" {
-		return nil
-	}
 	es := al.evidenceStore()
+	if taskID == "" {
+		rec, err := es.Build("", criterionID, attempt, command, output, exitCode, timedOut, policyDenied)
+		if err != nil {
+			logger.WarnCF("agent", "judge: could not build machine-check evidence for a task-less adjudication",
+				map[string]any{"criterion_id": criterionID, "attempt": attempt, "error": err.Error()})
+			return nil
+		}
+		return rec
+	}
 	rec, err := es.Record(taskID, criterionID, attempt, command, output, exitCode, timedOut, policyDenied)
 	if err != nil {
-		logger.WarnCF("agent", "judge: failed to persist machine-check evidence",
-			map[string]any{"task_id": taskID, "criterion_id": criterionID, "attempt": attempt, "error": err.Error()})
-		return nil
+		// Record returns the built-but-unpersisted record alongside a WRITE
+		// error (nil only on a validation error), so the Judge still sees the
+		// real machine-check result instead of "(no machine-check results)" —
+		// and sees the SAME record the failed write carried, not a second
+		// build with a different id and timestamp.
+		logger.WarnCF("agent", "judge: failed to persist machine-check evidence; "+
+			"the Judge is fed the unpersisted record, the audit trail is missing this attempt",
+			map[string]any{
+				"task_id": taskID, "criterion_id": criterionID, "attempt": attempt,
+				"error": err.Error(), "record_recovered": rec != nil,
+			})
+		return rec
 	}
 	return rec
 }
@@ -771,16 +813,24 @@ func (al *AgentLoop) persistEvidence(
 // evidenceStore builds the redacting EvidenceStore on demand. Constructing
 // one is cheap (no I/O — only Record/List/DeleteTaskEvidence touch disk), so
 // there is no need to cache it on AgentLoop; this keeps loop.go's
-// constructor/struct untouched. redact is resolved lazily per call so a
+// constructor/struct untouched. The redactor is resolved lazily per call so a
 // config reload's newly-registered sensitive values are always honored.
+//
+// SEC (2026-09-13 review, F-2): this used to wire cfg.FilterSensitiveData,
+// which is GATED on the operator-settable tools.filter_sensitive_data flag
+// (shipped true, but a plain bool — false on any config that does not set it)
+// and applies no secret-PATTERN layer at all. Machine-check Output is fed
+// verbatim into the prose Judge's prompt (buildJudgeUserContent's
+// machine-check section), so an install with that flag off, or a credential
+// the agent only just read out of a file, put raw secret material in front of
+// the verifier. It now uses the SAME ungated two-layer redactor the verifier
+// window uses (windowEvidenceRedactor: registered credential values +
+// audit.Redactor's SEC-16 patterns) — one redaction bar for every channel of
+// evidence in that prompt, rather than a strict one and a laxer one. The
+// persisted audit trail under tasks_evidence/ is scrubbed by the same
+// (strictly stronger) bar as a side effect.
 func (al *AgentLoop) evidenceStore() *task.EvidenceStore {
-	redact := func(s string) string {
-		if cfg := al.GetConfig(); cfg != nil {
-			return cfg.FilterSensitiveData(s)
-		}
-		return s
-	}
-	return task.NewEvidenceStore(config.OmnipusHomeDir(), redact)
+	return task.NewEvidenceStore(config.OmnipusHomeDir(), al.windowEvidenceRedactor())
 }
 
 // --- Prose judge (real verifier-role agent turn, own session) --------------

@@ -23,6 +23,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -31,6 +32,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
@@ -337,8 +339,76 @@ func (al *AgentLoop) sessionWindowText(store *session.UnifiedStore, sessionID st
 		logger.WarnCF("agent", "verifier: could not read session for window feed", fields)
 		return ""
 	}
-	return renderVerifierWindowText(entries, budgetTokens)
+	return renderVerifierWindowText(entries, budgetTokens, al.windowEvidenceRedactor())
 }
+
+// windowEvidenceRedactor returns the scrubber applied to the tool OUTPUT text
+// this package now renders into a verifier/compile window (see
+// renderToolCallLines). Two layers, in order:
+//
+//  1. the operator's REGISTERED credential values
+//     (config.RegisterSensitiveValues at boot — resolved credential-store
+//     values, provider keys, channel tokens).
+//  2. audit.Redactor's pattern set — SEC-16's known secret SHAPES (sk-…,
+//     ghp_…, AKIA…, JWTs, Bearer tokens). Catches a credential that was never
+//     registered because the agent only just read it out of a file, which
+//     layer 1 structurally cannot see. Precedent for applying this redactor
+//     to LLM-facing text: pkg/agent/envcontext/render.go's defaultRedactor.
+//
+// Layer 1 deliberately calls SensitiveDataReplacer DIRECTLY rather than
+// cfg.FilterSensitiveData. FilterSensitiveData is gated on the
+// operator-settable tools.filter_sensitive_data flag — shipped true
+// (pkg/config/defaults.go), but a plain bool, so false on any config that
+// does not set it. Tool output reaching the verifier is a NEW exposure
+// introduced by this change, into a prompt whose job explicitly includes
+// judging the built-in floor DoD item "No secrets or credentials appear in
+// the output" (the literal lives in goal_compile.go's newFloorDoD; its
+// authority is ADR-080's D-DOD layer 3, "a few universal gates (no
+// secrets/credentials in the output; factual claims grounded)"). A registered
+// credential must not land in front of the Judge because a general
+// tool-output display toggle was flipped off. Layer 2 is unconditional for
+// the same reason.
+//
+// judge.go's evidenceStore() wires THIS redactor too (SEC F-2), so the
+// machine-check evidence and the transcript window in one Judge prompt are
+// scrubbed to the same bar rather than a strict one and a laxer one.
+//
+// Both layers replace rather than delete, so a scrubbed span stays VISIBLE to
+// the Judge as a marker. That matters for the same floor item: a
+// silently-deleted secret would read as a clean output. A redaction marker
+// reads as what it is.
+//
+// The config is resolved on every CALL, not captured at construction, so a
+// reload's newly-registered sensitive values are honored immediately (the
+// property judge.go's evidenceStore() doc comment has always claimed). A nil
+// config degrades to the pattern layer alone, never to a passthrough.
+func (al *AgentLoop) windowEvidenceRedactor() func(string) string {
+	return func(s string) string {
+		if cfg := al.GetConfig(); cfg != nil {
+			s = cfg.SensitiveDataReplacer().Replace(s)
+		}
+		return windowPatternRedactor.Redact(s)
+	}
+}
+
+// windowPatternRedactor is the SEC-16 pattern redactor used by
+// windowEvidenceRedactor. Built once; the pattern set is hardcoded in
+// pkg/audit, so a construction error is a programming bug, and the
+// fail-SAFE reaction to one is a redactor that scrubs nothing only because
+// there is nothing else it could do — which is why it is logged loudly
+// rather than swallowed.
+//
+//nolint:gochecknoglobals // immutable, process-wide; mirrors envcontext.defaultRedactor.
+var windowPatternRedactor = func() *audit.Redactor {
+	r, err := audit.NewRedactor(nil)
+	if err != nil {
+		logger.ErrorCF("agent", "verifier: could not build the window-evidence pattern redactor; "+
+			"tool output fed to the Judge will carry registered-credential redaction only",
+			map[string]any{"error": err.Error()})
+		return audit.DisabledRedactor()
+	}
+	return r
+}()
 
 // goalSessionWindowText renders the transcript window for a chat /goal
 // verification (FR-032): the last N tokens of the session carrying the goal
@@ -442,7 +512,7 @@ func (al *AgentLoop) taskSessionWindowText(taskID, assigneeAgentID string) strin
 // resolves that same class of criterion deterministically, with no LLM
 // verifier dispatch at all — this rendering exists for whatever a prose
 // criterion's own window still needs.
-func renderTranscriptEntriesForWindow(entries []session.TranscriptEntry) []providers.Message {
+func renderTranscriptEntriesForWindow(entries []session.TranscriptEntry, redact func(string) string) []providers.Message {
 	out := make([]providers.Message, 0, len(entries))
 	for _, e := range entries {
 		if strings.TrimSpace(e.Content) != "" {
@@ -455,11 +525,87 @@ func renderTranscriptEntriesForWindow(entries []session.TranscriptEntry) []provi
 		for _, tc := range e.ToolCalls {
 			out = append(out, providers.Message{
 				Role:    "assistant",
-				Content: fmt.Sprintf("[tool_call] %s -> %s", tc.Tool, tc.Status),
+				Content: renderToolCallLines(tc, redact),
 			})
 		}
 	}
 	return out
+}
+
+// verifierToolOutputCap bounds ONE tool call's rendered output inside the
+// window, in bytes. Deliberately far smaller than the machine-check evidence
+// cap (task.DefaultEvidenceOutputCap, 64 KiB): a window holds MANY tool calls
+// competing for one token budget, so the goal here is that every recent call
+// contributes something readable rather than one call consuming the lot. The
+// enclosing budget walk in renderVerifierWindowText is still the real bound.
+const verifierToolOutputCap = 2048
+
+// verifierToolOutputTruncationMarker is appended to a tool output cut at
+// verifierToolOutputCap, so the Judge can tell "the output was this" from
+// "the output was longer than this" — an unmarked cut would let a truncated
+// success read as a complete one.
+const verifierToolOutputTruncationMarker = "…[tool output truncated]"
+
+// renderToolCallLines renders ONE persisted tool call for the verifier /
+// compile window: the call line, plus its OUTPUT when the transcript
+// preserved any.
+//
+// PRODUCT DEFECT this fixes (conformance-chat e2e, 2026-09-12): this used to
+// emit only "[tool_call] <name> -> <status>", so a prose criterion judged
+// against "the output" had no output to read. The Judge said so verbatim in
+// every failed CI attempt — "the transcript window contains only tool-call
+// lines and worker narration, so nothing addresses whether the factual claims
+// made are grounded" — and correctly fail-closed the built-in floor DoD
+// (goal_compile.go's newFloorDoD, authorized by ADR-080's D-DOD layer 3)
+// forever. The worker's only remaining route to a MET verdict was to
+// MANUFACTURE evidence (write a file, commit it so a diff existed), which is
+// precisely the behaviour the git-evidence sandbox exists to deny. An
+// unjudgeable criterion is a compile-time or evidence-time defect, never
+// something the worker should be able to route around.
+//
+// The Result map is the bounded projection the model itself saw
+// (loop.go's tcRecord: {"text": …}, the media/{"text"…} shape, or the sync
+// delegate shape) — not the raw pre-cap tool output, which is deliberately
+// not in the transcript. Redaction precedes truncation (the SD-A13 rule
+// pkg/task's EvidenceStore already follows) so a secret straddling the cap
+// boundary cannot survive half-scrubbed.
+func renderToolCallLines(tc session.ToolCall, redact func(string) string) string {
+	line := fmt.Sprintf("[tool_call] %s -> %s", tc.Tool, tc.Status)
+	body := toolCallOutputText(tc)
+	label := "[tool_output]"
+	if body == "" && strings.TrimSpace(tc.Error) != "" {
+		body, label = tc.Error, "[tool_error]"
+	}
+	if strings.TrimSpace(body) == "" {
+		return line
+	}
+	if redact != nil {
+		body = redact(body)
+	}
+	if len(body) > verifierToolOutputCap {
+		body = body[:verifierToolOutputCap] + verifierToolOutputTruncationMarker
+	}
+	return line + "\n" + label + " " + body
+}
+
+// toolCallOutputText extracts the human-readable output from a persisted tool
+// call's Result map. "text" is the key every writer in loop.go's tcRecord
+// construction uses for the model-visible text; anything else (a media-only
+// result, a future shape) falls back to a compact JSON rendering so the
+// Judge sees SOMETHING real rather than silently nothing. An unmarshalable
+// map yields "" — a rendering failure must not become fabricated evidence.
+func toolCallOutputText(tc session.ToolCall) string {
+	if len(tc.Result) == 0 {
+		return ""
+	}
+	if text, ok := tc.Result["text"].(string); ok && strings.TrimSpace(text) != "" {
+		return text
+	}
+	data, err := json.Marshal(tc.Result)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 // renderVerifierWindowText takes entries, converts them via
@@ -469,8 +615,8 @@ func renderTranscriptEntriesForWindow(entries []session.TranscriptEntry) []provi
 // older is dropped. Renders the kept tail as plain "role: content" lines —
 // this is prompt TEXT for the verifier's user message, not a message list
 // sent to a provider directly.
-func renderVerifierWindowText(entries []session.TranscriptEntry, budgetTokens int) string {
-	msgs := renderTranscriptEntriesForWindow(entries)
+func renderVerifierWindowText(entries []session.TranscriptEntry, budgetTokens int, redact func(string) string) string {
+	msgs := renderTranscriptEntriesForWindow(entries, redact)
 	if len(msgs) == 0 {
 		return ""
 	}

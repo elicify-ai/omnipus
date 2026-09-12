@@ -8344,7 +8344,14 @@ func (al *AgentLoop) runAgentLoop(
 	al.lastTurnResultMu.Lock()
 	al.lastTurnResult = result
 	al.lastTurnResultMu.Unlock()
+	// F2: both early-returns below skip checkGoalLoopAfterTurn, which is the
+	// ONLY caller of bumpGoalActivityOnTurn. A goal-bearing session whose turn
+	// dies here therefore never re-arms its idle quiet window and is wedged
+	// `active` forever with no terminal state. rearmGoalAfterAbnormalTurn is
+	// a fast no-op unless this session carries an active goal; it re-arms and
+	// nothing else (no verdict, no round, no termination) — see its doc.
 	if err != nil {
+		al.rearmGoalAfterAbnormalTurn(opts)
 		return "", err
 	}
 	if result.status == TurnEndStatusAborted {
@@ -8352,6 +8359,7 @@ func (al *AgentLoop) runAgentLoop(
 		// returns a non-nil error for every system-initiated abort (case 2),
 		// which the `if err != nil` branch above already returned from. See
 		// abortTurn's doc comment for the full case split.
+		al.rearmGoalAfterAbnormalTurn(opts)
 		return "", nil
 	}
 

@@ -215,7 +215,7 @@ func TestVerifierWindowFeed_RenderIncludesDelegateChildEntries(t *testing.T) {
 		{Role: "assistant", Content: "delegated narration", ParentSpawnCallID: "call-1"},
 		{Role: "assistant", Content: "top-level answer"},
 	}
-	msgs := renderTranscriptEntriesForWindow(entries)
+	msgs := renderTranscriptEntriesForWindow(entries, nil)
 	if len(msgs) != 3 {
 		t.Fatalf("got %d messages, want 3 (the ParentSpawnCallID-tagged entry must no longer be skipped, FR-034/FR-038): %+v", len(msgs), msgs)
 	}
@@ -234,7 +234,7 @@ func TestVerifierWindowFeed_RenderIncludesToolCallSummaries(t *testing.T) {
 			},
 		},
 	}
-	msgs := renderTranscriptEntriesForWindow(entries)
+	msgs := renderTranscriptEntriesForWindow(entries, nil)
 	if len(msgs) != 2 {
 		t.Fatalf("got %d messages, want 2 (content line + tool-call summary): %+v", len(msgs), msgs)
 	}
@@ -250,7 +250,7 @@ func TestVerifierWindowFeed_TrimsToTokenBudgetKeepingTail(t *testing.T) {
 		{Role: "user", Content: "recent-and-short"},
 	}
 	// A tiny budget can only fit the LAST message.
-	got := renderVerifierWindowText(entries, 10)
+	got := renderVerifierWindowText(entries, 10, nil)
 	if strings.Contains(got, "aaaa") || strings.Contains(got, "bbbb") {
 		t.Errorf("trimmed window must drop the older, larger messages: %q", got)
 	}
@@ -260,7 +260,7 @@ func TestVerifierWindowFeed_TrimsToTokenBudgetKeepingTail(t *testing.T) {
 }
 
 func TestVerifierWindowFeed_EmptyEntriesReturnsEmptyString(t *testing.T) {
-	if got := renderVerifierWindowText(nil, 20000); got != "" {
+	if got := renderVerifierWindowText(nil, 20000, nil); got != "" {
 		t.Errorf("empty entries must render \"\", got %q", got)
 	}
 }
