@@ -80,8 +80,8 @@ func TestGoalRecordsSweptOnSessionRetention(t *testing.T) {
 		t.Errorf("expired = %d, want 0 (no dangling active goal in this fixture)", expired)
 	}
 
-	if _, err := s.Get(old.GoalID); !errors.Is(err, entity.ErrNotFound) {
-		t.Errorf("Get(%q) after sweep: error = %v, want errors.Is(err, entity.ErrNotFound) — the 10-day-old record must be gone", old.GoalID, err)
+	if _, getErr := s.Get(old.GoalID); !errors.Is(getErr, entity.ErrNotFound) {
+		t.Errorf("Get(%q) after sweep: error = %v, want errors.Is(err, entity.ErrNotFound) — the 10-day-old record must be gone", old.GoalID, getErr)
 	}
 	got, err := s.Get(recent.GoalID)
 	if err != nil {

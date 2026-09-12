@@ -16,9 +16,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,19 +28,23 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // taskRunNowSuccessProvider is a scripted LLMProvider that always returns a
 // genuine ADR-043 completion signal (TASK_STATUS marker, preceded by the
-// ADR-052 FR-035 [goal:evidence] line the evidence-marker gate requires) —
-// the same fixed content proven to reach task.StatusDone with no Judge System
-// Agent registered in TestStartOccurrenceRun_IdempotentAgainstConcurrentSchedulerFire
-// (pkg/agent/task_run_history_test.go): with no acceptance criteria, the soft
-// tier applies (adjudicateClaim, pkg/agent/task_executor.go) and, finding no
-// Judge agent in this minimal test harness's registry, trusts the claim
-// directly.
+// ADR-052 FR-035 [goal:evidence] line the evidence-marker gate requires).
+//
+// A completion signal is now a CLAIM, not a completion. ADR-084/GOAL-FR-022
+// (joint delivery plan row R-27) deleted both trust-the-claim branches from
+// TaskExecutor.adjudicateClaim: "an unreachable Judge is a reason the claim
+// CANNOT be adjudicated, not evidence that it is true". This provider's
+// marker therefore only gets the task as far as adjudication — reaching
+// task.StatusDone additionally requires a registered Judge System Agent that
+// returns a met verdict, which is what bindMetVerdictJudge supplies below.
 //
 // Exists because restMockProvider's bare &providers.LLMResponse{} (no
 // parseable TASK_STATUS line) makes a task land on `failed` for an ordinary,
@@ -66,6 +72,70 @@ func (p *taskRunNowSuccessProvider) Chat(
 }
 
 func (p *taskRunNowSuccessProvider) GetDefaultModel() string { return "test-model" }
+
+// metVerdictJudgeProvider answers every verifier adjudication with a MET
+// verdict covering exactly the criteria the task under review actually
+// carries, resolved at call time via criteriaIDs.
+//
+// Resolved lazily rather than baked in because the criterion ids are minted
+// by the store at create time: a verdict that omitted a criterion would be
+// classified criterion_unjudgeable (JUDGE-FR-138) and resolve UNMET, so the
+// task would land on `next` via consumeAttemptOrExhaust instead of `done` —
+// the same red this fixture exists to rule out, for a different reason.
+type metVerdictJudgeProvider struct {
+	criteriaIDs func() []string
+}
+
+func (p *metVerdictJudgeProvider) Chat(
+	_ context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	ids := p.criteriaIDs()
+	items := make([]string, 0, len(ids))
+	for _, id := range ids {
+		items = append(items, fmt.Sprintf(
+			`{"id":%q,"met":true,"reason":"the claim's evidence satisfies the criterion"}`, id))
+	}
+	return &providers.LLMResponse{
+		Content: fmt.Sprintf(`{"met": true, "criteria": [%s]}`, strings.Join(items, ",")),
+	}, nil
+}
+
+func (p *metVerdictJudgeProvider) GetDefaultModel() string { return "fake-judge-model" }
+
+// judgeAgentForTaskRunTests is the Judge System Agent entry a harness must
+// register for a worker's completion claim to be adjudicable at all
+// (ADR-084/GOAL-FR-022/R-27 — see taskRunNowSuccessProvider's doc comment).
+func judgeAgentForTaskRunTests(t *testing.T) config.AgentConfig {
+	t.Helper()
+	return config.AgentConfig{
+		ID:   string(coreagent.IDJudge),
+		Name: "Judge",
+		Type: config.AgentTypeSystem,
+		Home: t.TempDir(),
+	}
+}
+
+// bindMetVerdictJudge binds a canned MET-verdict provider to the registry's
+// Judge agent.
+//
+// Registering the Judge is necessary but NOT sufficient: an AgentInstance
+// built from config inherits the loop's shared worker provider, which here
+// replays the WORKER's task text. Fed to the verifier that parses as no
+// judgment at all, so every criterion comes back unjudgeable and the claim
+// resolves unmet. The Judge needs its own provider that answers a verdict.
+func bindMetVerdictJudge(t *testing.T, api *restAPI, criteriaIDs func() []string) {
+	t.Helper()
+	judgeInst, ok := api.agentLoop.GetRegistry().GetAgent(string(coreagent.IDJudge))
+	require.True(t, ok,
+		"the Judge System Agent (%s) is not registered — adjudicateClaim takes the EC-6 "+
+			"judge-unavailable pause (GOAL-FR-022/R-27) and the task can never reach a terminal status",
+		coreagent.IDJudge)
+	judgeInst.Provider = &metVerdictJudgeProvider{criteriaIDs: criteriaIDs}
+}
 
 // getTaskRuns sends GET /api/v1/tasks/{id}/runs through HandleTasks (the
 // real dispatcher a live request takes) and returns the recorder.
@@ -298,11 +368,27 @@ func TestTaskRunsEndpoint(t *testing.T) {
 // specific Done status plus the scripted provider's own summary text in
 // Result is what a canceled-context failure can never produce.
 func TestTaskRunNow_LiveExecutor_ViaRealServer(t *testing.T) {
-	api := newTestRestAPIAlignedStoresWithProvider(t, &taskRunNowSuccessProvider{})
+	api := newTestRestAPIAlignedStoresWithProvider(
+		t, &taskRunNowSuccessProvider{}, judgeAgentForTaskRunTests(t))
 	wsID := ensureTestWorkspace(t, api)
 	setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 
 	tsk := createTaskViaAPI(t, api, "RunNowLiveServerTask", wsID)
+	// ADR-084/GOAL-FR-022/R-27: the worker's TASK_STATUS marker is a claim,
+	// not a completion — a met verdict from the Judge is the only route to
+	// Done. The ids are read back from the store on each verifier call so the
+	// verdict always covers the criteria this task really carries.
+	bindMetVerdictJudge(t, api, func() []string {
+		stored, err := api.taskStore.Get(tsk.Id)
+		if err != nil {
+			return nil
+		}
+		ids := make([]string, 0, len(stored.Criteria))
+		for _, c := range stored.Criteria {
+			ids = append(ids, c.ID)
+		}
+		return ids
+	})
 	wAssign := patchTask(t, api, tsk.Id, `{"agent_id":"mia"}`)
 	require.Equal(t, http.StatusOK, wAssign.Code,
 		"assigning agent_id=mia must succeed; body=%s", wAssign.Body.String())

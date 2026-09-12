@@ -131,7 +131,6 @@ func TestGoalSessionLockOrder_ConcurrentDifferentIDsDoNotDeadlock(t *testing.T) 
 	withLockObserver(t, func() {
 		var wg sync.WaitGroup
 		for _, id := range ids {
-			id := id
 			wg.Add(1)
 			go func() {
 				defer wg.Done()

@@ -70,7 +70,7 @@ func TestTaskCreate_PriorityBoundaryMatrix(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			body := fmt.Sprintf(
-				`{%s"title":"PriorityMatrix-%s","action":"llm","workspace_id":%q}`,
+				`{%s"title":"PriorityMatrix-%s","action":"llm","workspace_id":%q,`+minimalCriteriaDodJSON+`}`,
 				c.priorityJSON, c.name, wsID,
 			)
 			w := postTaskCreate(t, api, body)
@@ -115,7 +115,7 @@ func TestTaskCreate_PriorityZero_NoTaskPersisted(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	wsID := ensureTestWorkspace(t, api)
 
-	body := fmt.Sprintf(`{"priority":0,"title":"ShouldNotExist","action":"llm","workspace_id":%q}`, wsID)
+	body := fmt.Sprintf(`{"priority":0,"title":"ShouldNotExist","action":"llm","workspace_id":%q,`+minimalCriteriaDodJSON+`}`, wsID)
 	w := postTaskCreate(t, api, body)
 	require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
 

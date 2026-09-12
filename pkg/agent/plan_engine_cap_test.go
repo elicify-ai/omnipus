@@ -67,8 +67,8 @@ func mustCreateCapTestGoal(t *testing.T, s *goal.Store, ownerKind generated.Goal
 	if err != nil {
 		t.Fatalf("goal.New(%s/%s): %v", ownerKind, ownerID, err)
 	}
-	if err := s.Create(g); err != nil {
-		t.Fatalf("goal store Create(%s/%s): %v", ownerKind, ownerID, err)
+	if createErr := s.Create(g); createErr != nil {
+		t.Fatalf("goal store Create(%s/%s): %v", ownerKind, ownerID, createErr)
 	}
 	if !active {
 		return g

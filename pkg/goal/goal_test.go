@@ -141,9 +141,17 @@ func TestGoalCriteriaAreTypedLists(t *testing.T) {
 	// And at the Go type level: the fields are real, typed Go slices of the
 	// shared ADR-080 criterion type — this is enforced by the compiler, but
 	// assert it anyway so a future refactor to []byte/string is caught here.
-	var _ []task.AcceptanceCriterion = g.Criteria
-	var _ []task.AcceptanceCriterion = g.DoD
+	assertIsAcceptanceCriterionSlice(g.Criteria)
+	assertIsAcceptanceCriterionSlice(g.DoD)
 }
+
+// assertIsAcceptanceCriterionSlice fails to COMPILE unless its argument is
+// assignable to []task.AcceptanceCriterion — exactly the guarantee the
+// `var _ []task.AcceptanceCriterion = x` form gave, expressed as a call so
+// the element type stays written down explicitly (staticcheck QF1011 asks
+// for the type to be dropped from a `var` declaration, which would make the
+// assertion vacuous: the whole point is naming the type, not inferring it).
+func assertIsAcceptanceCriterionSlice([]task.AcceptanceCriterion) {}
 
 // TestGoalCarriesKeeperCounters (FR-004, S-09) asserts the keeper's own
 // durable counters — the recordless-nudge/zero-output-push streak and the

@@ -2438,7 +2438,7 @@ func registerSharedTools(
 				// idle-release sweeper's window and the take-control
 				// enablement flag it reads on every tick — see
 				// browser.BrowserConfig's doc comments on both fields.
-				browserCfg.ControlIdleReleaseSec = time.Duration(
+				browserCfg.ControlIdleRelease = time.Duration(
 					cfg.Tools.Browser.EffectiveControlIdleReleaseSec(),
 				) * time.Second
 				browserCfg.TakeControlEnabled = cfg.Tools.Browser.TakeControlEnabled

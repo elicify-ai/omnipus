@@ -178,12 +178,12 @@ func TestActivateTaskGoal_ReRunReactivatesTerminalRecord(t *testing.T) {
 	}
 
 	gs := goal.NewStore(config.OmnipusHomeDir())
-	if _, err := gs.Update(g.GoalID, func(cur *goal.Goal) error {
+	if _, updErr := gs.Update(g.GoalID, func(cur *goal.Goal) error {
 		cur.Round = 3
 		cur.AttemptsUsed = 2
 		return cur.Terminate(generated.GoalStateExhausted, "round bound reached", time.Now().UTC())
-	}); err != nil {
-		t.Fatalf("simulate terminal run: %v", err)
+	}); updErr != nil {
+		t.Fatalf("simulate terminal run: %v", updErr)
 	}
 
 	// Re-run: the task mints a SECOND session (a fresh task run mints its

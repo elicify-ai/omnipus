@@ -363,7 +363,7 @@ func TestTransition_DoneRepeatingTaskRunNow(t *testing.T) {
 		setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 
 		body := fmt.Sprintf(
-			`{"title":"RerunMe","action":"llm","workspace_id":%q,"agent_id":"mia","trigger":{"type":"every","config":{"every_ms":60000}}}`,
+			`{"title":"RerunMe","action":"llm","workspace_id":%q,"agent_id":"mia","trigger":{"type":"every","config":{"every_ms":60000}},`+singleAttemptJSON+`,`+minimalCriteriaDodJSON+`}`,
 			wsID,
 		)
 		w := httptest.NewRecorder()
@@ -447,7 +447,7 @@ func TestHandleTaskPatch_RepeatingRunNow_RejectedLeavesDataUnchanged(t *testing.
 	setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 
 	body := fmt.Sprintf(
-		`{"title":"RerunFailPreserve","action":"llm","workspace_id":%q,"agent_id":"mia","trigger":{"type":"every","config":{"every_ms":60000}}}`,
+		`{"title":"RerunFailPreserve","action":"llm","workspace_id":%q,"agent_id":"mia","trigger":{"type":"every","config":{"every_ms":60000}},`+singleAttemptJSON+`,`+minimalCriteriaDodJSON+`}`,
 		wsID,
 	)
 	w := httptest.NewRecorder()
@@ -604,7 +604,17 @@ func newTestRestAPIAlignedStores(t *testing.T) *restAPI {
 // parameterized on the LLM provider, so a caller that needs the agent's
 // response content to be genuine and meaningful (not the bare no-op
 // restMockProvider) can supply its own scripted providers.LLMProvider.
-func newTestRestAPIAlignedStoresWithProvider(t *testing.T, provider providers.LLMProvider) *restAPI {
+// extraAgents are appended to the harness config's agent list verbatim. It
+// exists for one reason: ADR-084/GOAL-FR-022 (plan row R-27) deleted the last
+// trust-the-claim branch from TaskExecutor.adjudicateClaim, so a worker's
+// completion claim now reaches `done` ONLY through a real met verdict from
+// the seeded Judge System Agent. A test that drives a task all the way to a
+// genuine Done must therefore register a Judge (and bind it a provider that
+// answers a verdict — see rest_task_runs_test.go's bindMetVerdictJudge).
+// Callers that pass nothing keep the judge-less registry they had.
+func newTestRestAPIAlignedStoresWithProvider(
+	t *testing.T, provider providers.LLMProvider, extraAgents ...config.AgentConfig,
+) *restAPI {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	tmpDir := t.TempDir()
@@ -630,7 +640,7 @@ func newTestRestAPIAlignedStoresWithProvider(t *testing.T, provider providers.LL
 			// fallback); that sentinel is gone with no back-compat, so this
 			// harness must seed a real agent explicitly instead — see
 			// TestHandleTaskPatch_InProgress_WithKnownAgent and friends below.
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: append([]config.AgentConfig{{ID: "mia"}}, extraAgents...),
 		},
 	}
 	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[{"id":"mia"}]},"providers":[]}`)

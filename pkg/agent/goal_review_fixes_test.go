@@ -720,12 +720,19 @@ func TestUnparseableGoalClaimIsReportedNotSwallowed(t *testing.T) {
 	}
 
 	before := GoalClaimUnparseableResults()
-	found, _, _, _, readErr := al.resolveToolClaim(store, sid, time.Time{})
+	found, status, evidence, goalID, readErr := al.resolveToolClaim(store, sid, time.Time{})
 	if readErr != nil {
 		t.Fatalf("the transcript read must succeed here: %v", readErr)
 	}
 	if found {
 		t.Fatal("an unparseable goal_claim result must NOT resolve as a claim — there is nothing usable in it")
+	}
+	// The three payload returns must be empty alongside found=false: a caller
+	// that reads them without checking found must not pick up a half-parsed
+	// status/evidence/goal id out of an unusable claim.
+	if status != "" || evidence != "" || goalID != "" {
+		t.Fatalf("an unresolved claim must carry no payload, got status=%q evidence=%q goal_id=%q",
+			status, evidence, goalID)
 	}
 	if got := GoalClaimUnparseableResults() - before; got != uint64(len(cases)) {
 		t.Fatalf("SF-4: %d unparseable goal_claim results were reported, want %d. Each unusable claim "+

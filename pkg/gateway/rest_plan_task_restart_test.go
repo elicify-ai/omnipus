@@ -52,7 +52,7 @@ func mustCreateTask(t *testing.T, api *restAPI, wsID, title, planID string) stri
 	if planID != "" {
 		body += `,"plan_id":"` + planID + `"`
 	}
-	body += `}`
+	body += `,` + minimalCriteriaDodJSON + `}`
 	w := postTask(t, api, body)
 	require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
 	var created gen.Task

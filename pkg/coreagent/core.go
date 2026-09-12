@@ -1455,26 +1455,7 @@ func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 	allow := config.ToolPolicyAllow
 	switch id {
 	case IDJudge:
-		// JUDGE-FR-058 (D10, C5) is deliberately NOT implemented here. The
-		// resolution (stamp "mcp_*": deny directly onto the map
-		// denyAllThenOverride returns, since "mcp_*" is a wildcard and must
-		// NOT be a member of allStaticToolNames) is correct, but
-		// pkg/coreagent/judge_seed_test.go::TestSeed_JudgeSystemAgent /
-		// TestSeed_JudgeExactSetReEnforced assert
-		// require.Len(t, pol, len(coreagent.AllStaticToolNames())) — an
-		// EXACT length match with no room for a non-catalog key — and the
-		// joint delivery plan (adr-084-086-joint-delivery-plan.md) assigns
-		// pkg/coreagent/judge_seed_test.go, together with JUDGE-FR-058
-		// itself, to wave T4 (round 7, depends on E9/E10/E11/E13/E0), NOT
-		// this wave. Landing the stamp here would turn that pre-existing,
-		// currently-green test red for six rounds with no wave in between
-		// that fixes it — the exact "leave pkg/agent non-compiling for a
-		// later wave to fix" shape Standing Rule 15 says signals a
-		// mis-scoped wave. Verified by reproduction: adding the stamp here
-		// makes TestSeed_JudgeSystemAgent fail with "should have 98
-		// item(s), but has 99". Reported rather than silently worked
-		// around or silently dropped.
-		return denyAllThenOverride(map[string]config.ToolPolicy{
+		judgePolicies := denyAllThenOverride(map[string]config.ToolPolicy{
 			"read_file":       allow,
 			"list_directory":  allow,
 			"inspect_session": allow,
@@ -1489,6 +1470,32 @@ func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// menu advertises skills but nothing else can ever load one.
 			"Skill": allow,
 		})
+		// JUDGE-FR-058 (D10, C5): the Judge's MCP closure. Stamped DIRECTLY
+		// onto the map denyAllThenOverride returned rather than passed into
+		// it, because "mcp_*" is a WILDCARD key and must NOT be a member of
+		// allStaticToolNames — denyAllThenOverride's validateOverrideKeys
+		// would (correctly) reject it, and adding it to the catalog would
+		// break the gateway's catalog-drift equality test against the live
+		// registry, where no such tool exists.
+		//
+		// This is the one sanctioned exception to CLAUDE.md constraint #6's
+		// no-wildcard rule ("Exception — MCP tools: MCP-server tool names
+		// aren't known until an operator connects the server at runtime, so
+		// they can't be statically pre-enumerated; per-server mcp_<server>_*
+		// wildcard bulk policies remain the mechanism there"). Without this
+		// literal key the Judge has NO opinion on MCP-namespaced tools at
+		// all, so they resolve from the global ceiling alone — an operator
+		// who grants an MCP server globally would silently hand the verifier
+		// a mutation surface outside its read-only set.
+		//
+		// Scope, stated so it is not mistaken for more than it is: deny wins
+		// the global x per-agent merge regardless of specificity
+		// (resolveEffectivePolicyWith), but god mode short-circuits BEFORE
+		// the per-agent map is consulted, so this stamp provides no
+		// protection under sandbox "off" — that case is FR-057's refusal
+		// path, not this one's.
+		judgePolicies[config.MCPToolPolicyKeyPrefix+"*"] = config.ToolPolicyDeny
+		return judgePolicies
 	case IDPlanSupervisor:
 		// ADR-055 / plan-supervisor-spec FR-008. PlanSupervisor's grant is
 		// EXACTLY THREE tools: plan_correct (its role-specific grant),
@@ -2604,7 +2611,16 @@ func seedSystemAgents(cfg *config.Config, existing map[string]bool) bool {
 			// the Judge declares a non-nil, EMPTY allowlist (systemAgentSkills),
 			// so it is re-enforced on every boot exactly like PlanSupervisor's.
 			if skills != nil && !stringSlicesEqual(a.Skills, skills) {
-				a.Skills = append([]string(nil), skills...)
+				// make(...,0,len) rather than append([]string(nil), ...):
+				// appending zero elements to a nil slice yields nil, which
+				// would repair the Judge's JUDGE-FR-059 allowlist to the very
+				// nil shape FR-059 exists to replace. Reach is identical
+				// either way (skillAllowed denies nil and [] alike, ADR-072
+				// D5/C12) and so is the persisted JSON (omitempty drops
+				// both), but "re-enforce the EXACT seeded allowlist" should
+				// mean exactly that for every System Agent, empty seed
+				// included.
+				a.Skills = append(make([]string, 0, len(skills)), skills...)
 				modified = true
 			}
 			// Re-enforce the EXACT seeded tool policy on EVERY boot (ADR-052

@@ -148,7 +148,7 @@ func TestHandleTasks_Post_Subagent3pAssignee_OnWorkspaceTeam_Returns201(t *testi
 
 	postTask := func(agentID string) *httptest.ResponseRecorder {
 		body := fmt.Sprintf(
-			`{"title":"AssignTo-%s","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":%q}`,
+			`{"title":"AssignTo-%s","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":%q,`+minimalCriteriaDodJSON+`}`,
 			agentID, wsID, agentID,
 		)
 		w := httptest.NewRecorder()

@@ -152,7 +152,7 @@ func TestHandleTasksPOST(t *testing.T) {
 	wsID := createWorkspaceViaAPI(t, api, "E4TestWorkspace", "")
 
 	w := httptest.NewRecorder()
-	body := fmt.Sprintf(`{"title":"Test task","action":"llm","workspace_id":%q}`, wsID)
+	body := fmt.Sprintf(`{"title":"Test task","action":"llm","workspace_id":%q,`+minimalCriteriaDodJSON+`}`, wsID)
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r.URL.Path = "/api/v1/tasks"
@@ -355,7 +355,7 @@ func TestTaskPersistence(t *testing.T) {
 		// Include a prompt so the task is fully-captured: per Detail #8 a partial
 		// task (no prompt/description) cannot be advanced to next (422). This test
 		// exercises the PATCH→next persistence path, so the task must be complete.
-		body := fmt.Sprintf(`{"title":%q,"prompt":"do the thing","action":"llm","workspace_id":%q}`, title, wsID)
+		body := fmt.Sprintf(`{"title":%q,"prompt":"do the thing","action":"llm","workspace_id":%q,`+minimalCriteriaDodJSON+`}`, title, wsID)
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
 		r.Header.Set("Content-Type", "application/json")

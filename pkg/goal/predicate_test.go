@@ -57,10 +57,10 @@ func TestActiveGoalExists_C25(t *testing.T) {
 		t.Fatal("ActiveGoalExists = false for an active goal")
 	}
 
-	if _, err := s.Update(g.GoalID, func(gg *Goal) error {
+	if _, updErr := s.Update(g.GoalID, func(gg *Goal) error {
 		return gg.Terminate(generated.GoalStateMet, "done", time.Now().UTC())
-	}); err != nil {
-		t.Fatalf("Update (terminate): %v", err)
+	}); updErr != nil {
+		t.Fatalf("Update (terminate): %v", updErr)
 	}
 
 	exists, err = s.ActiveGoalExists(generated.GoalOwnerKindSession, "s1")
@@ -185,8 +185,8 @@ func TestGetByOwner_TaskUniqueAcrossPhases(t *testing.T) {
 	}
 
 	now := time.Now().UTC()
-	if _, err := s.Update(g.GoalID, func(gg *Goal) error { return gg.Activate("sess-1", now) }); err != nil {
-		t.Fatalf("Update (activate): %v", err)
+	if _, updErr := s.Update(g.GoalID, func(gg *Goal) error { return gg.Activate("sess-1", now) }); updErr != nil {
+		t.Fatalf("Update (activate): %v", updErr)
 	}
 	found, err = s.GetByOwner(generated.GoalOwnerKindTask, "task-1")
 	if err != nil {

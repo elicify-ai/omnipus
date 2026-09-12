@@ -133,8 +133,8 @@ func (g *Goal) SupersedeCriteria(newCriteria, newDoD []task.AcceptanceCriterion,
 	if err != nil {
 		return fmt.Errorf("goal: supersede criteria: criteria: %w", err)
 	}
-	if err := validateCriteriaList(normCriteria, "criteria"); err != nil {
-		return err
+	if vErr := validateCriteriaList(normCriteria, "criteria"); vErr != nil {
+		return vErr
 	}
 	normDoD, err := task.NormalizeCriteria(newDoD)
 	if err != nil {

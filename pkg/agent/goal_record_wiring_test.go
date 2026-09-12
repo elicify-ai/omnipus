@@ -51,8 +51,8 @@ func seedActiveGoalRecord(t *testing.T, sid, prompt string, criteria, dod []task
 	if err != nil {
 		t.Fatalf("seedActiveGoalRecord: New: %v", err)
 	}
-	if err := gstore.Create(g); err != nil {
-		t.Fatalf("seedActiveGoalRecord: Create: %v", err)
+	if createErr := gstore.Create(g); createErr != nil {
+		t.Fatalf("seedActiveGoalRecord: Create: %v", createErr)
 	}
 	updated, err := gstore.Update(g.GoalID, func(cur *goal.Goal) error {
 		return cur.Activate(sid, time.Now().UTC())

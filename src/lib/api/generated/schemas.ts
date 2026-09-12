@@ -11720,7 +11720,7 @@ export const JudgeVerdictFrame = z
       evidence: z.array(z
       .object({
         part: z.string().max(1000),
-        source: z.enum(["diff", "transcript", "machine_check", "file_read", "session_read"]).optional(),
+        source: z.string().optional(),
         target: z.string().optional(),
         quote: z.string().max(500),
       })

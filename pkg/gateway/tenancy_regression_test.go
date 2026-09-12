@@ -93,7 +93,7 @@ func TestTask_CrossOwnerTag_Accepted(t *testing.T) {
 	wsID := createWorkspaceViaAPI(t, api, "BobWorkspace", "")
 
 	// "alice" creates a task tagged "release-1".
-	bodyAlice := fmt.Sprintf(`{"title":"Alice Task","action":"llm","workspace_id":%q,"tags":["release-1"]}`, wsID)
+	bodyAlice := fmt.Sprintf(`{"title":"Alice Task","action":"llm","workspace_id":%q,"tags":["release-1"],`+minimalCriteriaDodJSON+`}`, wsID)
 	wAlice := httptest.NewRecorder()
 	rAlice := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(bodyAlice))
 	rAlice.Header.Set("Content-Type", "application/json")
@@ -103,7 +103,7 @@ func TestTask_CrossOwnerTag_Accepted(t *testing.T) {
 	require.Equal(t, http.StatusCreated, wAlice.Code, "alice's task must be created; body=%s", wAlice.Body.String())
 
 	// "bob" creates a task with the SAME tag. FR-1.9: no owner gate on tags.
-	bodyBob := fmt.Sprintf(`{"title":"Bob Task","action":"llm","workspace_id":%q,"tags":["release-1"]}`, wsID)
+	bodyBob := fmt.Sprintf(`{"title":"Bob Task","action":"llm","workspace_id":%q,"tags":["release-1"],`+minimalCriteriaDodJSON+`}`, wsID)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(bodyBob))
 	r.Header.Set("Content-Type", "application/json")
@@ -345,7 +345,7 @@ func TestTenancy_MultiUser_CrossOwnerTask_Returns200(t *testing.T) {
 
 	// Create a task as alice (admin so POST succeeds without owner complications).
 	taskName := "AliceTask_" + t.Name()
-	taskBody := fmt.Sprintf(`{"title":%q,"action":"llm","workspace_id":%q,"status":"inbox"}`, taskName, wsID)
+	taskBody := fmt.Sprintf(`{"title":%q,"action":"llm","workspace_id":%q,"status":"inbox",`+minimalCriteriaDodJSON+`}`, taskName, wsID)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(taskBody))
 	r.Header.Set("Content-Type", "application/json")

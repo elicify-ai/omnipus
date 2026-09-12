@@ -114,7 +114,8 @@ func TestBrowserTools_ControlGateMembershipMatchesExemptions(t *testing.T) {
 
 	// The membership assertion itself, in both directions at once. wantGated
 	// is now "everything except the exempt roster" — i.e. action ∪ capture —
-	// which is the METADATA-scoped 14 of 17 (11 action + 3 capture).
+	// which is the METADATA-scoped 14 of 18 (11 action + 3 capture; the
+	// other four are the exempt roster above, browser_handover included).
 	assert.ElementsMatch(t, wantGated, gated,
 		"the controlledResult-gated set is not the registered catalog minus the declared "+
 			"exemptions (action ∪ capture, ADR-085 FR-035). A name missing from the gated side is a "+

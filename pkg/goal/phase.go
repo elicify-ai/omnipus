@@ -36,10 +36,10 @@ const (
 
 // Phase classifies g's current State into the three-phase model.
 func (g *Goal) Phase() Phase {
-	switch {
-	case g.State == generated.GoalStateDefining:
+	switch g.State {
+	case generated.GoalStateDefining:
 		return PhaseDefining
-	case g.State == generated.GoalStateActive:
+	case generated.GoalStateActive:
 		return PhaseActive
 	default:
 		return PhaseTerminal

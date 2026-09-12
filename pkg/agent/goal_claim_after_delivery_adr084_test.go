@@ -54,6 +54,19 @@ func TestAdjudicationDispatchedAfterOutboundPublish(t *testing.T) {
 	// fixed verdict JSON shape below (goal_triggers_test.go).
 	setGoalRoundsArmedRecorded(t, store, sid, "goal after-delivery ordering", 0, time.Now())
 
+	// FR-098's dispatch is fire-and-forget (runAgentLoop launches it in a bare
+	// goroutine and returns), so the test body has nothing to join: without this
+	// seam the adjudication is still writing the goal entity under this test's
+	// t.TempDir while the cleanup walks it, and RemoveAll fails with "directory
+	// not empty". Joining the goroutine is also the stronger assertion — the
+	// deferred adjudication must actually RUN to completion, not merely have
+	// reached the judge's LLM call.
+	adjudicationDone := make(chan struct{})
+	var doneOnce sync.Once
+	origDoneFn := goalDeferredAdjudicationDoneFn
+	t.Cleanup(func() { goalDeferredAdjudicationDoneFn = origDoneFn })
+	goalDeferredAdjudicationDoneFn = func(string) { doneOnce.Do(func() { close(adjudicationDone) }) }
+
 	var mu sync.Mutex
 	var publishedAt, judgeCalledAt time.Time
 	judgeDone := make(chan struct{})
@@ -105,5 +118,14 @@ func TestAdjudicationDispatchedAfterOutboundPublish(t *testing.T) {
 	}
 	if !judge.After(pub) {
 		t.Fatalf("JUDGE-FR-098: judge called at %v, want strictly after the outbound publish at %v", judge, pub)
+	}
+
+	// Only now let the test (and its t.TempDir cleanup) finish: the dispatched
+	// adjudication keeps writing — the judge's own session transcript, the
+	// verdict, the goal entity — well after the judge's LLM call returned.
+	select {
+	case <-adjudicationDone:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the deferred adjudication never finished after being dispatched")
 	}
 }

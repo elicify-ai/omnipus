@@ -948,6 +948,24 @@ type goalDeferredAdjudicationWork struct {
 	claimText   string
 }
 
+// goalDeferredAdjudicationDoneFn is a TEST SEAM ONLY — production leaves it
+// nil and behaviour is identical either way (same precedent as
+// task_executor.go's goroutineCtxHook and verifier_adjudication.go's
+// judgeSleepFn). dispatchDeferredGoalAdjudication calls it on its OWN
+// goroutine, on every exit path, once that adjudication's writes have
+// landed.
+//
+// It exists because FR-098's dispatch is deliberately fire-and-forget: the
+// turn that produced the claim has already returned to its caller, so a test
+// driving runAgentLoop has nothing to join and its t.TempDir cleanup races
+// the adjudication's still-running writes (observed: the goal entity file
+// under entities/goals/ being written while RemoveAll walked the tree →
+// "directory not empty"). Joining the goroutine through this seam is the
+// honest fix — waiting for a proxy signal (the judge LLM call returning)
+// only narrows the window, because every write AFTER the verdict is still
+// outstanding at that point.
+var goalDeferredAdjudicationDoneFn func(sessionID string)
+
 // dispatchDeferredGoalAdjudication performs JUDGE-FR-098's deferred
 // dispatch: re-reads the session's current goal state fresh (never the
 // turn-time snapshot — see goalDeferredAdjudicationWork's own doc comment),
@@ -965,6 +983,9 @@ type goalDeferredAdjudicationWork struct {
 func (al *AgentLoop) dispatchDeferredGoalAdjudication(work *goalDeferredAdjudicationWork) {
 	if work == nil || work.sessionID == "" {
 		return
+	}
+	if fn := goalDeferredAdjudicationDoneFn; fn != nil {
+		defer fn(work.sessionID)
 	}
 	store := al.GetSessionStore()
 	if store == nil {

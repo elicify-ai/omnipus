@@ -241,14 +241,14 @@ const (
 	//
 	// The four constants below are declared by wave B7 ("Browser audit
 	// event vocabulary") for consumption by wave B123 (ADR-085's gate
-	// semantics / lock lifecycle / turn engine lanes), which has not yet
-	// landed as of this commit. Nothing in this package emits them yet —
-	// B123 is the sole intended caller of all four, from
-	// pkg/tools/browser/audit.go (new EventBrowserControlDeferred and
-	// EventBrowserHandover emitters via recordControlDeferral) and from
-	// pkg/tools/browser/live.go's LiveViewRegistry sweeper (new
-	// EventBrowserControlIdleRelease and EventBrowserControlDisabledRelease
-	// emitters). They form one flat-underscore "browser_control_*" family
+	// semantics / lock lifecycle / turn engine lanes). All four are now
+	// emitted for real: EventBrowserControlDeferred and
+	// EventBrowserHandover from pkg/tools/browser (audit.go's
+	// recordControlDeferral and tools_handover.go), and
+	// EventBrowserControlIdleRelease / EventBrowserControlDisabledRelease
+	// from the LiveViewRegistry sweeper release path
+	// (pkg/gateway/browser_ws.go's auditServerRelease).
+	// They form one flat-underscore "browser_control_*" family
 	// (plus EventBrowserHandover, named after its tool per the
 	// EventBrowserUploadFile precedent above) rather than the dotted
 	// "browser.live.*" family immediately above, because
@@ -257,14 +257,13 @@ const (
 	// MUST be audited as a distinct outcome, `browser_control_idle_release`"
 	// — FR-031a) and the other three are named to match it.
 	//
-	// KNOWN GAP, not this wave's to close: pkg/audit/audit.go's
-	// isKnownEventName list (the "warn-once on unknown event" registry) is
-	// outside every wave's write-set in this delivery (checked: neither B7
-	// nor B123 nor any other row in
-	// docs/internal/specs/adr-084-086-joint-delivery-plan.md §3 lists
-	// pkg/audit/audit.go). B123's first emission of any of these four will
-	// therefore trip that file's warn-once path until a later change
-	// registers them there. Reported, not silently worked around.
+	// CLOSED GAP: all four are registered in IsValidEventName's switch
+	// (audit.go), so an emission does not trip the "warn-once on unknown
+	// event" path. They were left unregistered when B7 declared them —
+	// pkg/audit/audit.go sat outside every wave's write-set in
+	// docs/internal/specs/adr-084-086-joint-delivery-plan.md §3 — and
+	// TestIsValidEventName_ExhaustiveOverEventConsts caught it. Any new
+	// Event* constant added below MUST also be added to that switch.
 
 	// EventBrowserControlDeferred — WARN. A live-view control take by a
 	// human operator caused a queued agent tool call to defer rather than
@@ -315,7 +314,7 @@ const (
 
 	// EventBrowserControlIdleRelease — INFO. The LiveViewRegistry sweeper
 	// released a held-but-idle wheel because tools.browser.control_idle_release
-	// (Go field ControlIdleReleaseSec, default 900s, 0 disables) elapsed with
+	// (Go field ControlIdleRelease, default 900s, 0 disables) elapsed with
 	// no proof of life — no input, no attach/detach, no ViewerHeartbeat, no
 	// live media track (ADR-085 D4, BROWSER-FR-031a). This literal value is
 	// mandated verbatim by the ADR-085 spec: "the release MUST be audited as

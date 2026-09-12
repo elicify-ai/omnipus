@@ -794,7 +794,7 @@ export interface JudgeVerdictFrame {
     provenance?: "judge_read" | "deterministic_check" | "diff" | "transcript" | "session_read" | "none";
     evidence?: Array<{
       part: string;
-      source?: "diff" | "transcript" | "machine_check" | "file_read" | "session_read";
+      source?: string;
       target?: string;
       quote: string;
     }>;

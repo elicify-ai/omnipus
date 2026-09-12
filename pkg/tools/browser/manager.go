@@ -137,7 +137,7 @@ type BrowserConfig struct {
 
 	// --- ADR-085 browser control handover (BROWSER-FR-031a/FR-052) ---
 
-	// ControlIdleReleaseSec is the LiveViewRegistry idle-release sweeper's
+	// ControlIdleRelease is the LiveViewRegistry idle-release sweeper's
 	// window (tools.browser.control_idle_release), ALREADY resolved to its
 	// effective value by config.BrowserToolConfig.EffectiveControlIdleReleaseSec
 	// before it reaches here (registerSharedTools' translation) — this
@@ -147,7 +147,14 @@ type BrowserConfig struct {
 	// Named to match this field's own config key rather than the
 	// IdleTTL/IdleCloseTTL naming above, because it governs a DIFFERENT
 	// thing (a held control lock, not a browsing context).
-	ControlIdleReleaseSec time.Duration `json:"control_idle_release,omitempty"`
+	//
+	// It carries NO "Sec" suffix even though its config counterpart does:
+	// this one is a time.Duration (the suffix would be a lie, and
+	// staticcheck's ST1011 says so), while config.BrowserToolConfig's
+	// ControlIdleReleaseSec is an int of seconds and earns it. Two
+	// differently-typed fields, one config key — the translation between
+	// them is loop.go's registerSharedTools.
+	ControlIdleRelease time.Duration `json:"control_idle_release,omitempty"`
 	// TakeControlEnabled mirrors config.BrowserToolConfig.TakeControlEnabled
 	// (tools.browser.take_control_enabled). Read by the sweeper on every
 	// tick (BROWSER-FR-052): with this false, no take can succeed

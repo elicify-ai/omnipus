@@ -159,19 +159,23 @@ func (t *HandoverTool) Execute(ctx context.Context, args map[string]any) *tools.
 	return tools.NewToolResult(msg)
 }
 
-// truncateRunes returns s unchanged if it has at most max runes, otherwise
-// the first max runes. Rune-based (not byte-based) so a multi-byte
+// truncateRunes returns s unchanged if it has at most limit runes, otherwise
+// the first limit runes. Rune-based (not byte-based) so a multi-byte
 // character is never split mid-encoding — BROWSER-FR-048a's cap is stated
 // in runes ("200 runes"), not bytes.
-func truncateRunes(s string, max int) string {
+//
+// The parameter is named limit rather than max because max is a predeclared
+// identifier since Go 1.21 and golangci-lint's `predeclared` linter rejects
+// shadowing it.
+func truncateRunes(s string, limit int) string {
 	if s == "" {
 		return s
 	}
 	r := []rune(s)
-	if len(r) <= max {
+	if len(r) <= limit {
 		return s
 	}
-	return string(r[:max])
+	return string(r[:limit])
 }
 
 // recordHandover writes the ADR-085 BROWSER-FR-062 audit record for one

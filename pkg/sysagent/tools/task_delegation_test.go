@@ -62,6 +62,20 @@ func workspaceCriteriaArg() []any {
 	}
 }
 
+// workspaceDoDArg returns a minimal well-formed "dod" tool-call argument (one
+// prose definition-of-done item, deliberately distinct in wording from
+// workspaceCriteriaArg's criterion). Operator decision D-C makes criteria AND
+// a definition of done MANDATORY on every agent-assigned task at creation and
+// at edit ("EDIT GATE: criteria + definition-of-done are mandatory at CREATION
+// **and** EDIT. Uniform rule.", GOAL-FR-021/D-C), so a create whose concern is
+// something other than the dod gate itself must supply this to reach the gate
+// it actually exercises.
+func workspaceDoDArg() []any {
+	return []any{
+		map[string]any{"kind": "prose", "text": "the reviewer has signed the work off"},
+	}
+}
+
 // writeTask writes a task.Task directly to the home's tasks dir for setup.
 func writeTask(t *testing.T, home string, tk task.Task) {
 	t.Helper()
@@ -138,6 +152,7 @@ func TestCreateTaskInWorkspace_DelegationAllowed(t *testing.T) {
 		"workspace_id": testWorkspaceID,
 		"agent_id":     "trusted-agent",
 		"criteria":     workspaceCriteriaArg(),
+		"dod":          workspaceDoDArg(),
 	})
 	require.False(t, r1.IsError, "permitted delegation must succeed; got: %s", r1.ForLLM)
 
@@ -148,6 +163,7 @@ func TestCreateTaskInWorkspace_DelegationAllowed(t *testing.T) {
 		"workspace_id": testWorkspaceID,
 		"agent_id":     "caller-agent",
 		"criteria":     workspaceCriteriaArg(),
+		"dod":          workspaceDoDArg(),
 	})
 	require.False(t, r2.IsError, "self-assignment must succeed; got: %s", r2.ForLLM)
 }
@@ -167,6 +183,7 @@ func TestCreateTaskInWorkspace_NilGateFailOpen(t *testing.T) {
 		"workspace_id": testWorkspaceID,
 		"agent_id":     "any-agent",
 		"criteria":     workspaceCriteriaArg(),
+		"dod":          workspaceDoDArg(),
 	})
 	require.False(t, result.IsError, "unwired gate must fail-open; got: %s", result.ForLLM)
 }
@@ -428,6 +445,7 @@ func TestCreateTaskInWorkspace_AllowsSubagent3pWorker_WhenDelegationAllows(t *te
 		"workspace_id": testWorkspaceID,
 		"agent_id":     externalCLIWorkerID,
 		"criteria":     workspaceCriteriaArg(),
+		"dod":          workspaceDoDArg(),
 	})
 
 	require.False(t, result.IsError, "expected the subagent_3p target to be accepted; got: %s", result.ForLLM)

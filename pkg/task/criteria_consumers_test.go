@@ -103,9 +103,17 @@ func TestTaskCriteriaIsAGoalReference(t *testing.T) {
 	// task-side one (a structural guarantee the compiler enforces: this
 	// line would not compile if goal.Goal.Criteria's element type ever
 	// diverged from task.Task.Criteria's).
-	var _ []task.AcceptanceCriterion = found.Criteria
-	var _ []task.AcceptanceCriterion = tk.Criteria
+	assertIsAcceptanceCriterionSlice(found.Criteria)
+	assertIsAcceptanceCriterionSlice(tk.Criteria)
 }
+
+// assertIsAcceptanceCriterionSlice fails to COMPILE unless its argument is
+// assignable to []task.AcceptanceCriterion — exactly the guarantee the
+// `var _ []task.AcceptanceCriterion = x` form gave, expressed as a call so
+// the element type stays written down explicitly (staticcheck QF1011 asks
+// for the type to be dropped from a `var` declaration, which would make the
+// assertion vacuous: the whole point is naming the type, not inferring it).
+func assertIsAcceptanceCriterionSlice([]task.AcceptanceCriterion) {}
 
 // TestAllTaskCriteriaConsumersRepointed is the goal spec's own
 // TestAllTaskCriteriaConsumersRepointed (FR-030, S-04). FR-030 enumerates

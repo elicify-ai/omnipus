@@ -73,8 +73,8 @@ func TestSeed_BrowserHandoverAtAllThreeConstraint6Sites(t *testing.T) {
 		byID[ac.ID] = ac
 	}
 	for _, id := range []coreagent.CoreAgentID{coreagent.IDJim, coreagent.IDRay, coreagent.IDExplorer, coreagent.IDResearcher} {
-		ac, ok := byID[string(id)]
-		require.True(t, ok, "agent %q must be seeded", id)
+		ac, seeded := byID[string(id)]
+		require.True(t, seeded, "agent %q must be seeded", id)
 		p, present := ac.Tools.Builtin.Policies["browser_handover"]
 		require.True(t, present, "browser-capable agent %q must have an explicit browser_handover policy", id)
 		assert.Equal(t, config.ToolPolicyAllow, p, "browser-capable agent %q must resolve browser_handover allow", id)

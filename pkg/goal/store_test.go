@@ -148,11 +148,11 @@ func TestStore_UpdateAttemptsUsedObservableAfterCall(t *testing.T) {
 		t.Fatalf("AttemptsUsed before any RecordAttempt = %d, want 0", before.AttemptsUsed)
 	}
 
-	if _, err := s.Update(g.GoalID, func(gg *Goal) error {
+	if _, updErr := s.Update(g.GoalID, func(gg *Goal) error {
 		gg.RecordAttempt(time.Now().UTC())
 		return nil
-	}); err != nil {
-		t.Fatalf("Update: %v", err)
+	}); updErr != nil {
+		t.Fatalf("Update: %v", updErr)
 	}
 
 	after, err := s.Get(g.GoalID)

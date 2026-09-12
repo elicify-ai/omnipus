@@ -4769,14 +4769,17 @@ func yamlStringSet(t *testing.T, v any) map[string]bool {
 // Manual break test: edit any one hand-synced copy's `type`, `enum`, or
 // nested `properties` (e.g. add an enum value to just the asyncapi.yaml
 // inline copy) and re-run — the corresponding subtest must go red. This
-// comparator already caught a live drift in the current tree: asyncapi.yaml's
-// inline JudgeVerdictFrame.per_criterion.items.evidence[].source carries a
-// closed `enum`, while CriterionVerdict.yaml and JudgeVerdictFrame.yaml's own
-// evidence[].source are both deliberately plain `type: string` (each says so
+// comparator caught exactly that drift for real: asyncapi.yaml's inline
+// JudgeVerdictFrame.per_criterion.items.evidence[].source carried a closed
+// `enum` while CriterionVerdict.yaml and JudgeVerdictFrame.yaml's own
+// evidence[].source were both deliberately plain `type: string` (each says so
 // in its own description, "not a closed enum ... a codegen constraint").
-// That is exactly the class of drift FR-073a exists to catch — reported here,
-// not silently normalized away, because contracts/** is outside this wave's
-// write-set (F1 owns it).
+// Left unfixed, the generated zod schema would have rejected — and the SPA
+// silently DROPPED — every judge-verdict frame carrying a per-clause evidence
+// source outside that enum, with `make verify-contracts` green throughout.
+// Resolved by removing the stray enum from the asyncapi.yaml inline copy, so
+// all three copies agree on plain `type: string`; the subtest below is what
+// keeps them that way.
 //
 // Traces to: docs/internal/specs/judge-active-reviewer-spec.md FR-073,
 // FR-073a (lines ~2100-2135) and the copies table (lines ~1341-1372);

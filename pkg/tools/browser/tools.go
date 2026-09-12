@@ -1399,8 +1399,8 @@ var controlGateEscapeHatchTools = map[string]bool{
 // reaching this package again — and the engine can only decide that from the
 // tool name alone, since short-circuiting here means this gate never runs.
 //
-// Returns the METADATA-scoped roster (BrowserBuiltinMetadata — 17 tools,
-// 14 of them gated), not the registry-scoped one (16 tools, 13 gated): a
+// Returns the METADATA-scoped roster (BrowserBuiltinMetadata — 18 tools,
+// 14 of them gated), not the registry-scoped one (17 tools, 13 gated): a
 // name in it that the registry never actually registers (browser_upload_file
 // held-but-unregistered) is harmless — the engine short-circuits on a name
 // the model can never call — while a REGISTERED gated name missing from it

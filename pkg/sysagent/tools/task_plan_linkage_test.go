@@ -50,6 +50,7 @@ func TestCreateTaskInWorkspace_PlanLinkage_Happy(t *testing.T) {
 		"agent_id":     "worker-agent",
 		"plan_id":      planID,
 		"criteria":     workspaceCriteriaArg(),
+		"dod":          workspaceDoDArg(),
 	})
 	require.False(t, result.IsError, "create_task_in_workspace with plan_id: %s", result.ForLLM)
 
@@ -81,8 +82,15 @@ func TestCreateTaskInWorkspace_PlanLinkage_CrossWorkspaceRejected(t *testing.T) 
 		"agent_id":     "worker-agent",
 		"plan_id":      planID,
 		"criteria":     workspaceCriteriaArg(),
+		"dod":          workspaceDoDArg(),
 	})
-	assert.True(t, result.IsError, "expected rejection for a cross-workspace plan_id")
+	require.True(t, result.IsError, "expected rejection for a cross-workspace plan_id")
+	// Assert the REASON, not merely that something failed: before the dod
+	// argument above was supplied this call was rejected by the D-C
+	// criteria/dod gate and never reached the plan-linkage check at all, so a
+	// bare IsError assertion passed while proving nothing.
+	assert.Contains(t, result.ForLLM, "belongs to a different workspace",
+		"rejection must come from the plan-linkage FK, not an earlier gate")
 }
 
 // TestCreateTaskInWorkspace_PlanLinkage_TerminalPlanRejected proves linking
@@ -111,8 +119,11 @@ func TestCreateTaskInWorkspace_PlanLinkage_TerminalPlanRejected(t *testing.T) {
 		"agent_id":     "worker-agent",
 		"plan_id":      planID,
 		"criteria":     workspaceCriteriaArg(),
+		"dod":          workspaceDoDArg(),
 	})
-	assert.True(t, result.IsError, "expected rejection for a terminal plan")
+	require.True(t, result.IsError, "expected rejection for a terminal plan")
+	assert.Contains(t, result.ForLLM, "terminal",
+		"rejection must come from the terminal-plan check, not an earlier gate")
 }
 
 // TestCreateTaskInWorkspace_PlanLinkage_UnwiredStore_FailsClosed proves a
@@ -130,8 +141,11 @@ func TestCreateTaskInWorkspace_PlanLinkage_UnwiredStore_FailsClosed(t *testing.T
 		"agent_id":     "worker-agent",
 		"plan_id":      "some-plan-id",
 		"criteria":     workspaceCriteriaArg(),
+		"dod":          workspaceDoDArg(),
 	})
-	assert.True(t, result.IsError, "expected fail-closed rejection when the plan store is unwired")
+	require.True(t, result.IsError, "expected fail-closed rejection when the plan store is unwired")
+	assert.Contains(t, result.ForLLM, "plan store is not configured",
+		"rejection must be the fail-closed unwired-store branch, not an earlier gate")
 }
 
 // TestCreateTaskInWorkspace_NoPlanID_Unaffected proves an ordinary call with
@@ -148,6 +162,7 @@ func TestCreateTaskInWorkspace_NoPlanID_Unaffected(t *testing.T) {
 		"workspace_id": testWorkspaceID,
 		"agent_id":     "worker-agent",
 		"criteria":     workspaceCriteriaArg(),
+		"dod":          workspaceDoDArg(),
 	})
 	assert.False(t, result.IsError, "plan-less create_task_in_workspace must be unaffected by an unwired plan store: %s", result.ForLLM)
 }

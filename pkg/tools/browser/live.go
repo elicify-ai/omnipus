@@ -618,7 +618,7 @@ func (r *LiveViewRegistry) Shutdown() {
 // the release.
 func (r *LiveViewRegistry) sweepTick() {
 	disabled := !r.mgr.cfg.TakeControlEnabled
-	idleWindow := r.mgr.cfg.ControlIdleReleaseSec
+	idleWindow := r.mgr.cfg.ControlIdleRelease
 
 	r.mu.Lock()
 	keys := make([]string, 0, len(r.views))

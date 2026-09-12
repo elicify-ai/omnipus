@@ -1391,12 +1391,12 @@ func (al *AgentLoop) runVerifierAdjudication(
 	// burn the goal's rounds for a posture problem. Deliberately NOT retried
 	// on the backoff schedule: god mode clears by operator action, not by
 	// waiting, and a retry loop would only spin.
-	if reason, refuse := VerifierGodModeRefusalReason(GodModeActive(al.GetConfig())); refuse {
+	if godModeReason, refuse := VerifierGodModeRefusalReason(GodModeActive(al.GetConfig())); refuse {
 		logger.ErrorCF("agent",
 			"verifier: adjudication refused — god mode is active (JUDGE-FR-057); "+
 				"no verifier session was created and no Judge turn ran",
-			map[string]any{"unit_id": unitID, "scope": in.Scope, "reason": reason})
-		return nil, "", "", true, reason, nil
+			map[string]any{"unit_id": unitID, "scope": in.Scope, "reason": godModeReason})
+		return nil, "", "", true, godModeReason, nil
 	}
 
 	windowText := al.resolveVerifierWindowText(in)

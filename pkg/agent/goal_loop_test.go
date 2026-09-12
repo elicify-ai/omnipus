@@ -449,11 +449,36 @@ func TestGoalClear_CancelsInFlightGoalVerifierSession(t *testing.T) {
 		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
 	activatePendingGoal(t, al, agentInst, &opts)
 
+	// The backoff between adjudication attempts is stubbed out (same seam and
+	// rationale as verifier_cancel_adr084_test.go's setUpBlockedVerifierTurn):
+	// the cancelled first dispatch below returns a turn error, which
+	// runVerifierAdjudication treats as D7 unavailability and retries after a
+	// real ~60s sleep. Nothing here is asserting on wall-clock backoff, and
+	// paying for it would make this one test the slowest in the package.
+	origSleep := judgeSleepFn
+	t.Cleanup(func() { judgeSleepFn = origSleep })
+	judgeSleepFn = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
+
 	registered := make(chan struct{})
 	proceed := make(chan struct{})
-	fake := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
-		close(registered)
-		<-proceed
+	// Only the FIRST dispatch takes part in the handshake. Under ADR-084 the
+	// adjudication is a real tool-using turn dispatched inside
+	// runVerifierAdjudication's attempt loop, and JUDGE-FR-082 reports a
+	// cancelled turn as a turn ERROR ("the adjudication is discarded whole"),
+	// which that loop handles as D7 unavailability: it backs off and dispatches
+	// a SECOND attempt. That re-dispatch is the delivered design — its
+	// convergence is what verifier_cancel_adr084_test.go's
+	// TestVerifierTurn_CancelDuringToolCallProducesNoVerdict manages explicitly —
+	// so this double must survive being called more than once instead of
+	// close()ing an already-closed channel. The gate still holds attempt 1
+	// inside Chat until the test has finished asserting on the cancel, which is
+	// the ordering this handshake exists to pin; attempt 2 can only run after
+	// close(proceed) at the end.
+	fake := &fakeJudgeProvider{chatFn: func(callNum int) (*providers.LLMResponse, error) {
+		if callNum == 1 {
+			close(registered)
+			<-proceed
+		}
 		return &providers.LLMResponse{
 			Content: `{"met": true, "criteria": [{"id":"goal-condition","met":true,"reason":"ok"}]}`,
 		}, nil

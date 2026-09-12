@@ -103,6 +103,12 @@ func TestUpdateTaskTool_RunningTask_RefusesFrozenDefinitionFields(t *testing.T) 
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			// Each case builds its own store under its own t.TempDir() and
+			// shares no state with its siblings, so the subtests are
+			// parallel-safe — and a parent that calls t.Parallel() while its
+			// subtests do not is what golangci-lint's tparallel flags.
+			t.Parallel()
+
 			store := task.New(t.TempDir())
 			tk := seedFreezeTask(t, store, task.StatusInProgress)
 			tool := NewTaskUpdateTool(store)

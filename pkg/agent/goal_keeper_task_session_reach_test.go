@@ -167,9 +167,13 @@ func TestKeeperReachesSessionMintedByARealTaskRun(t *testing.T) {
 		t.Fatalf("goal record Round = %d, want 0 — the keeper pushes, it never adjudicates (JUDGE-FR-095/FR-097)",
 			after.Round)
 	}
-	if judgeInst.Provider.(*fakeJudgeProvider).callCount() != 0 {
-		t.Fatalf("the Judge was called %d times from the idle keeper, want 0",
-			judgeInst.Provider.(*fakeJudgeProvider).callCount())
+	judgeProvider, ok := judgeInst.Provider.(*fakeJudgeProvider)
+	if !ok {
+		t.Fatalf("the Judge's provider is %T, want *fakeJudgeProvider — the harness no longer installs "+
+			"the double this assertion counts calls on", judgeInst.Provider)
+	}
+	if judgeProvider.callCount() != 0 {
+		t.Fatalf("the Judge was called %d times from the idle keeper, want 0", judgeProvider.callCount())
 	}
 }
 

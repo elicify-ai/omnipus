@@ -74,7 +74,7 @@ func armGoalRecord(
 	past := lastActivity.UTC()
 	gs := goal.NewStore(config.OmnipusHomeDir())
 
-	gid := ""
+	var gid string
 	if existing := activeGoalForSession(sid); existing != nil {
 		gid = existing.GoalID
 	} else {

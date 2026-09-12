@@ -4990,12 +4990,18 @@ components:
                       maxLength: 1000
                     source:
                       type: string
-                      enum:
-                        - diff
-                        - transcript
-                        - machine_check
-                        - file_read
-                        - session_read
+                      description: >
+                        Plain string, deliberately NOT a closed enum —
+                        hand-synced with CriterionVerdict.yaml and
+                        JudgeVerdictFrame.yaml, both of which state the same
+                        (FR-073a copies-table rows 1-3). A closed enum here
+                        would make the generated zod schema reject — and the
+                        SPA silently DROP — every judge-verdict frame whose
+                        per-clause evidence source is anything the enum does
+                        not list, while `make verify-contracts` stayed green.
+                        This per-entry value is a REPORTING detail (D-B),
+                        never compared against by code the way the
+                        verdict-level `evidence_source` is (FR-066).
                     target:
                       type: string
                     quote:
