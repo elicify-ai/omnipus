@@ -58,7 +58,7 @@ func TestEveryBareLiteralEventNameIsRegistered(t *testing.T) {
 		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
-		data, readErr := os.ReadFile(path) //nolint:gosec // test walks the repo's own source
+		data, readErr := os.ReadFile(path)
 		if readErr != nil {
 			return readErr
 		}
