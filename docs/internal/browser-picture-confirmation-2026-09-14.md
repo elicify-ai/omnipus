@@ -79,4 +79,13 @@ it is compatibility coverage, not a deterministic reproduction of the race.
 Three isolated source mutations were caught by behavioral assertions: disabling
 recovery, removing navigation-event fences, and allowing duplicate terminal
 errors. The real source was never mutated. The final targeted document/capture tests also passed with race detection.
-Deployed-candidate verification is pending.
+Amsterdam now runs `88f12e6c37f73ac9bb11308f3f6f90f0b6d034ba`.
+Installed and running binary SHA256 both match
+`96f7d929f7459f0150652be7995f3923893e4c15b6beadc89b2aa8f636346c6c`.
+Existing machine configuration and Amsterdam region were preserved.
+The deployed navigation/history/client-redirect test passed in 20.3 seconds
+(22.4 seconds including runner), requiring final-document pixels and exact
+click, text and key-release state on dedicated input channels.
+The live probe did not log a reconciliation attempt; the deterministic
+regression and mutation checks establish that specific recovery path.
+The user's original page and long-duration sessions still need retesting.
