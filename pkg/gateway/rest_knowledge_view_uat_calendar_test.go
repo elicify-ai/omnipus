@@ -10,6 +10,7 @@ import (
 	"context"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -105,4 +106,38 @@ func TestKnowledgeView_DeclaredCalendarPartKeepsItsOwnDate_D69(t *testing.T) {
 	require.Len(t, res.Parts, 1)
 	require.NotNil(t, res.Parts[0].Source.Date)
 	assert.Equal(t, "start", *res.Parts[0].Source.Date)
+}
+
+// Codex review 2026-09-14 #13: the legacy-calendar date inference used to run
+// in buildPart, AFTER buildSelect had already narrowed the engine's column
+// selection to the view's own `properties` and AFTER collectRows had run
+// with it. A view selecting only name+status therefore NAMED `start` as its
+// date binding while no row carried a `start` cell — the SPA's grid plotted
+// nothing and every dated record showed as unscheduled. The binding must be
+// inferred BEFORE the columns are selected and the rows collected.
+func TestKnowledgeView_LegacyCalendarInfersDateBeforeSelectingColumns_Codex13(t *testing.T) {
+	api, ws, colID := buildCalendarTestVault(t, calendarTestSchemaWithDate, map[string]string{
+		// Legacy layout, and a property list that deliberately does NOT
+		// include the date column the grid needs.
+		"cal-no-date-col.yaml": "name: cal-no-date-col\ntype: project\nlayout: calendar\nproperties:\n  - file.name\n  - status\n",
+	})
+	res, code := getViewResult(t, api, ws, colID, "cal-no-date-col")
+	require.Equal(t, http.StatusOK, code)
+	require.Nil(t, res.Refusal)
+	require.Len(t, res.Parts, 1)
+	part := res.Parts[0]
+	require.NotNil(t, part.Source.Date, "the binding must still be inferred")
+	assert.Equal(t, "start", *part.Source.Date)
+	require.Len(t, res.Rows, 3)
+	dated := 0
+	for _, row := range res.Rows {
+		for _, c := range row.Cells {
+			if c.Property == "start" && strings.TrimSpace(c.Value) != "" {
+				dated++
+			}
+		}
+	}
+	// DIES ON the old code: the `start` cell was never selected, so no row
+	// carried one and the two dated projects showed as unscheduled.
+	assert.Equal(t, 2, dated, "both dated records must carry their start cell so the grid can place them")
 }

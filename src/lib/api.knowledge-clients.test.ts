@@ -23,7 +23,14 @@
 // endpoint (ADR-081) and is not covered here.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { fetchKnowledgeBaseInfo, fetchKnowledgeOutline, fetchKnowledgeGraph, ApiSchemaError, ApiError } from './api'
+import {
+  fetchKnowledgeBaseInfo,
+  fetchKnowledgeOutline,
+  fetchKnowledgeGraph,
+  fetchKnowledgeCollectionViews,
+  ApiSchemaError,
+  ApiError,
+} from './api'
 import type { KnowledgeBaseInfo, KnowledgeGraphResponse, KnowledgeOutline } from './api/generated/openapi-types'
 
 let fetchSpy: ReturnType<typeof vi.fn>
@@ -215,6 +222,57 @@ describe('fetchKnowledgeGraph — GET /library/{ws}/knowledge/graph', () => {
 
     await expect(
       fetchKnowledgeGraph('ws_7f3a', { collectionId: 'kb_1', kind: 'backlinks', path: 'a.md' }),
+    ).rejects.toBeInstanceOf(ApiSchemaError)
+  })
+})
+
+// ── UAT D-135 / D-13 (fan-out round) ─────────────────────────────────────────
+
+describe('fetchKnowledgeGraph — the multi-path kind=links query (UAT D-135)', () => {
+  it('sends every path as its own repeated query key, never a comma-joined string', async () => {
+    fetchSpy = vi.fn().mockResolvedValue(ok({ ...GRAPH, kind: 'links', source_path: undefined }))
+    vi.stubGlobal('fetch', fetchSpy)
+
+    await fetchKnowledgeGraph('ws_7f3a', {
+      collectionId: 'kb_3d1c9a7e5b2f4806',
+      kind: 'links',
+      paths: ['rows/a.md', 'rows/b.md'],
+    })
+
+    const url = new URL(calledUrl(), 'https://omnipus.test')
+    expect(url.searchParams.getAll('paths')).toEqual(['rows/a.md', 'rows/b.md'])
+    // And no single `path` — the contract makes them mutually exclusive.
+    expect(url.searchParams.get('path')).toBeNull()
+    expect(url.searchParams.get('kind')).toBe('links')
+  })
+})
+
+describe('fetchKnowledgeCollectionViews — GET /library/{ws}/knowledge/views (UAT D-13)', () => {
+  it('sends the required collection_id and validates the response', async () => {
+    fetchSpy = vi.fn().mockResolvedValue(
+      ok({
+        collection_id: 'kb_3d1c9a7e5b2f4806',
+        views: [{ name: 'authored--active', label: 'Active' }],
+        unloadable_count: 0,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchSpy)
+
+    const out = await fetchKnowledgeCollectionViews('ws_7f3a', 'kb_3d1c9a7e5b2f4806')
+
+    expect(calledUrl()).toContain(
+      '/api/v1/library/ws_7f3a/knowledge/views?collection_id=kb_3d1c9a7e5b2f4806',
+    )
+    expect(calledInit().credentials).toBe('include')
+    expect(out.views[0]?.name).toBe('authored--active')
+  })
+
+  it('rejects a response whose views array is missing — "always an array, never null"', async () => {
+    fetchSpy = vi.fn().mockResolvedValue(ok({ collection_id: 'kb_1', unloadable_count: 0 }))
+    vi.stubGlobal('fetch', fetchSpy)
+
+    await expect(
+      fetchKnowledgeCollectionViews('ws_7f3a', 'kb_1'),
     ).rejects.toBeInstanceOf(ApiSchemaError)
   })
 })

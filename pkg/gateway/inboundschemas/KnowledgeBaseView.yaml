@@ -64,3 +64,13 @@ properties:
       with the remedy — records.ViewServeRefusal's Reason and Remedy.
       Present exactly when `unservable` is true.
     example: "the view is stored disabled because an expression in its filter could not be translated — write the filter directly to run it"
+  source:
+    type: string
+    minLength: 1
+    description: >
+      The vault-relative path of the `.base` file this view was imported
+      from, when the saved view file records one (UAT D-13). Absent for a
+      view authored in place (knowledge_configure create_view / write_view)
+      — such a view belongs to the collection, not to any file, which is
+      exactly why a views list addressed by collection exists at all.
+    example: "Projects.base"

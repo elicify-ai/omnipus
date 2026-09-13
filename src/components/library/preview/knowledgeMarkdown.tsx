@@ -76,6 +76,7 @@ import { kbMarkdownComponents, KB_REHYPE_PLUGINS, KB_REMARK_PLUGINS } from './kb
 import { libraryEntryExt, LIBRARY_PREVIEW_KINDS, type LibraryPreviewKind } from './libraryPreviewKind'
 import { fetchKnowledgeBaseViews, fetchLibraryContent, fetchLibraryEntries, libraryQueryKeys } from '@/lib/api'
 import { LazyEmbedMount } from './LazyEmbedMount'
+import { KbMarkdownImage } from './KbMarkdownImage'
 // The ONE definition of the shared loading/error chrome every inline embed
 // mount shows (this file's `base`/`markdown`/`image` mounts and the Step 6
 // `KbAudio`/`KbVideo`/`KbPdfPage` mounts alike). This file used to carry a
@@ -2279,12 +2280,20 @@ function KnowledgeMarkdownCode(props: { children?: ReactNode; className?: string
 // ─────────────────────────────────────────────────────────────────────────────
 
 // MODULE SCOPE — see the perf note in this file's header (FR-013c). Every entry
-// except `a` and `code` is inherited by reference from stage 1, which
+// except `a`, `code` and `img` is inherited by reference from stage 1, which
 // inherits chat's.
 export const knowledgeMarkdownComponents = {
   ...kbMarkdownComponents,
   a: KnowledgeMarkdownLink,
   code: KnowledgeMarkdownCode,
+  // UAT D-40 / D-134 / D-101 (fan-out round): the knowledge composition's
+  // OWN image slot — chat's MarkdownImage→ChatImage took no width (an inline
+  // `![[x|400]]` rendered at container width), laid an intrinsically-sizeless
+  // SVG out at 0×0, and downloaded every picture on the page at once.
+  // KbMarkdownImage honours the |N hint, bounds the sizeless SVG, and mounts
+  // through LazyEmbedMount. Stage 1 (kbMarkdownBase) and chat keep
+  // MarkdownImage — the KB divergence is this composition alone.
+  img: KbMarkdownImage,
 }
 
 /** The parameterless half of the appended remark plugins, module scope.

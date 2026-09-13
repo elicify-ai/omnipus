@@ -247,7 +247,12 @@ type viewResultBuilder struct {
 	// `parts:` key rather than being synthesised from a legacy `layout:`.
 	// D6's read-time G1 gate applies only to the former — see partBindingGate.
 	declaredParts bool
-	out           *gen.ViewResult
+	// bindingProblems collects problems found while inferring legacy
+	// bindings BEFORE the rows are collected (Codex #13) — collectRows
+	// resets out.Problems to the engine's list, so these are merged in
+	// after it rather than appended to out.Problems directly.
+	bindingProblems []gen.RecordProblem
+	out             *gen.ViewResult
 }
 
 func buildViewResult(ctx context.Context, env vaultprops.FindEnv, name, collectionRoot string) gen.ViewResult {
@@ -325,11 +330,20 @@ func buildViewResult(ctx context.Context, env vaultprops.FindEnv, name, collecti
 		declaredParts: v.Def.Parts != nil && len(*v.Def.Parts) > 0,
 		out:           &out,
 	}
+	// Codex review 2026-09-14 #13: bindings a legacy layout leaves implicit
+	// are inferred HERE, before the column selection is built and the rows
+	// are collected — a binding inferred after either of those names a
+	// property no row carries a cell for.
+	parts = b.inferLegacyCalendarBindings(parts)
+	b.parts = parts
 	b.sel = b.buildSelect(parts)
 
 	if refused := b.collectRows(name); refused != nil {
 		return *refused
 	}
+	// collectRows replaces out.Problems with the engine's own list; the
+	// binding problems recorded before it are added back here, after it.
+	out.Problems = append(out.Problems, b.bindingProblems...)
 	attachRowVersionTokens(out.Rows, collectionRoot)
 
 	for _, src := range parts {
@@ -1512,27 +1526,9 @@ func (b *viewResultBuilder) buildPart(src gen.ViewPart) gen.ViewResultPart {
 		return p
 	}
 
-	// UAT D-69 — a legacy `layout: calendar` (the shape every imported
-	// Obsidian calendar arrives in) synthesises a calendar part with no
-	// `date:` binding, and the SPA's month grid plots against exactly that
-	// binding — so the grid drew every month empty while the view file's
-	// own `untranslated` note promised a table. The binding is inferred
-	// here, from the view's own property list first and the record type's
-	// declaration order second; when no date property exists at all the
-	// answer says so in `problems` instead of serving an empty grid as fact.
-	if src.Part == gen.ViewPartPartCalendar && !b.declaredParts && viewPartDateUnbound(src) {
-		if inferred, ok := b.inferCalendarDate(src); ok {
-			p.Source.Date = &inferred
-		} else {
-			fix := "add a date property to the record type, or give the view a `parts` stack with `date:` through knowledge_configure"
-			b.out.Problems = append(b.out.Problems, gen.RecordProblem{
-				Code:    gen.ViewPartIneligible,
-				Reason:  "the calendar layout names no date property to place records on, and none of this view's properties is a date — the grid has nothing to plot",
-				Fix:     &fix,
-				Records: []string{},
-			})
-		}
-	}
+	// A legacy calendar's `date:` binding (UAT D-69) is already on `src` by
+	// the time a part is built — see inferLegacyCalendarBindings, which runs
+	// before the column selection so the bound property is also a CELL.
 
 	switch src.Part {
 	case gen.ViewPartPartTable, gen.ViewPartPartList, gen.ViewPartPartTiles,
@@ -1547,6 +1543,51 @@ func (b *viewResultBuilder) buildPart(src gen.ViewPart) gen.ViewResultPart {
 		b.buildCrosstabPartData(&p, src)
 	}
 	return p
+}
+
+// inferLegacyCalendarBindings gives a legacy `layout: calendar` part (the
+// shape every imported Obsidian calendar arrives in) the `date:` binding it
+// was synthesised without (UAT D-69): the SPA's month grid plots against
+// exactly that binding, so without it the grid drew every month empty while
+// the view file's own `untranslated` note promised a table. The property is
+// taken from the view's own property list first and the record type's
+// declaration order second; when no date property exists at all the answer
+// says so in `problems` instead of serving an empty grid as fact.
+//
+// ORDER IS THE POINT (Codex review 2026-09-14 #13). This used to run inside
+// buildPart — AFTER buildSelect had narrowed the engine's column selection to
+// the view's own `properties` and AFTER collectRows had run with it. A view
+// selecting only name+status then NAMED `start` as its date while no row
+// carried a `start` cell, and every dated record showed as unscheduled. It
+// now runs before either, so buildSelect widens the selection to the bound
+// property and each row's cell reaches the grid. Declared `parts` stacks are
+// left exactly as written: D6's read-time gate (partBindingGate) reports a
+// declared part that names no date, and inventing one for it would silently
+// repair a file the author is being told to fix.
+func (b *viewResultBuilder) inferLegacyCalendarBindings(parts []gen.ViewPart) []gen.ViewPart {
+	if b.declaredParts {
+		return parts
+	}
+	out := append([]gen.ViewPart(nil), parts...)
+	for i := range out {
+		src := out[i]
+		if src.Part != gen.ViewPartPartCalendar || !viewPartDateUnbound(src) {
+			continue
+		}
+		if inferred, ok := b.inferCalendarDate(src); ok {
+			date := inferred
+			out[i].Date = &date
+			continue
+		}
+		fix := "add a date property to the record type, or give the view a `parts` stack with `date:` through knowledge_configure"
+		b.bindingProblems = append(b.bindingProblems, gen.RecordProblem{
+			Code:    gen.ViewPartIneligible,
+			Reason:  "the calendar layout names no date property to place records on, and none of this view's properties is a date — the grid has nothing to plot",
+			Fix:     &fix,
+			Records: []string{},
+		})
+	}
+	return out
 }
 
 // viewPartDateUnbound reports whether a part carries no usable `date:`.

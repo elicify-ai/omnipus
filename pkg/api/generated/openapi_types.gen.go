@@ -12334,6 +12334,9 @@ type KnowledgeBaseView struct {
 	// Name The saved view's own name — the authoritative slug, to be passed VERBATIM as the `view` query parameter of GET /library/{workspace_id}/knowledge/view. Never reconstructed by a client.
 	Name string `json:"name"`
 
+	// Source The vault-relative path of the `.base` file this view was imported from, when the saved view file records one (UAT D-13). Absent for a view authored in place (knowledge_configure create_view / write_view) — such a view belongs to the collection, not to any file, which is exactly why a views list addressed by collection exists at all.
+	Source *string `json:"source,omitempty"`
+
 	// Unservable True when the view loaded but CANNOT be served — it is stored `disabled` (FR-105), or its filter cannot be carried into the query grammar. Absent or false means it can be evaluated normally.
 	//
 	// Reported rather than hidden: a view the vault declares and this surface silently omits is indistinguishable from a view that was never imported, and the operator's fix differs completely between the two.
@@ -12371,6 +12374,26 @@ type KnowledgeBaseViews struct {
 	UnloadableCount int `json:"unloadable_count"`
 
 	// Views The views imported from this base, in the collection's own load order (filename order, so it is stable across runs). Always present — an empty array is the honest answer for a `.base` nothing imported, and the caller must render it as such rather than as a blank.
+	Views []KnowledgeBaseView `json:"views"`
+}
+
+// KnowledgeCollectionViews Every saved view a collection owns, addressed by collection rather than by a `.base` file (UAT D-13, web half).
+//
+// WHY THIS EXISTS. `knowledge_configure create_view` writes `<vault>/.omnipus-vault/views/<slug>.yaml` and produces NO `.base` file, so a collection without a `.base` still has saved views that answered correctly over the API while having no UI surface at all — the base-views endpoint (`GET .../knowledge/base-views?path=<.base>`) is file-addressed and cannot list them. This response is the collection-addressed list: every view file the loader accepts, each with the slug it is actually addressed by, its label, its kind, whether it can be served, and — for an imported view — the `.base` it came from.
+//
+// Base previews and dashboard embeds keep listing by `source`; this is the list for the collection itself. Every `name` is read from the saved view file and must be passed VERBATIM to GET .../knowledge/view (the same no-rederivation rule KnowledgeBaseView states).
+// A collection outside the caller's workspace scope returns this same empty-but-complete shape (US-9 / FR-052 / FR-053) — never a 403, never a 404, which would confirm the collection exists.
+type KnowledgeCollectionViews struct {
+	// CollectionId The collection whose saved views are listed, echoed from the request.
+	CollectionId string `json:"collection_id"`
+
+	// Unloadable Each rejected view file, with the loader's own code and reason (UAT D-70's naming rule: a count alone says nothing a reader can act on). Present whenever unloadable_count is greater than zero.
+	Unloadable *[]KnowledgeBaseUnloadableView `json:"unloadable,omitempty"`
+
+	// UnloadableCount How many view FILES could not be loaded at all (rejected by the loader, e.g. a duplicate view name or an unloadable file) and are therefore not in `views`. Reported rather than hidden: silently showing fewer views than the vault declares is indistinguishable from a vault that never declared them.
+	UnloadableCount int `json:"unloadable_count"`
+
+	// Views The collection's servable and unservable-but-listable saved views, ordered by the loader's own stable order. Always an array, never null — an empty array is the positive statement that the collection authored no views.
 	Views []KnowledgeBaseView `json:"views"`
 }
 
@@ -20000,6 +20023,9 @@ type GetKnowledgeGraphParams struct {
 	// Path Collection-relative path of the note the query is about. Required for links, backlinks and neighbourhood; ignored for unresolved and orphans, which are collection-wide.
 	Path *string `form:"path,omitempty" json:"path,omitempty"`
 
+	// Paths Collection-relative paths of SEVERAL notes whose outbound links are wanted in one answer (UAT D-135). Only valid with kind=links, and mutually exclusive with path — a caller sends one or the other. The response is the UNION of every listed note's outbound edges; each edge still names its own from_path, and source_path is absent because the query is not about any single note. A caller rendering many rows (a base view's relation cells) sends this instead of one request per row, which is what tripped the gateway's own rate limiter. Bounded: at most 64 paths per query, refused up front with a 400 naming the cap when exceeded.
+	Paths *[]string `form:"paths,omitempty" json:"paths,omitempty"`
+
 	// Hops Maximum hops for a neighbourhood query. Clamped to the server bound; the value actually used is echoed as hop_limit_applied.
 	Hops *int `form:"hops,omitempty" json:"hops,omitempty"`
 
@@ -20023,6 +20049,12 @@ type GetKnowledgeViewResultParams struct {
 
 	// View The saved view's name, exactly as declared.
 	View string `form:"view" json:"view"`
+}
+
+// ListKnowledgeViewsParams defines parameters for ListKnowledgeViews.
+type ListKnowledgeViewsParams struct {
+	// CollectionId The KnowledgeBaseInfo.collection_id whose saved views are listed.
+	CollectionId string `form:"collection_id" json:"collection_id"`
 }
 
 // UploadLibraryFilesMultipartBody defines parameters for UploadLibraryFiles.

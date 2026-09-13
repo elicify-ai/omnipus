@@ -312,6 +312,8 @@ components:
       $ref: ./components/schemas/KnowledgeBaseView.yaml
     KnowledgeBaseUnloadableView:
       $ref: ./components/schemas/KnowledgeBaseUnloadableView.yaml
+    KnowledgeCollectionViews:
+      $ref: ./components/schemas/KnowledgeCollectionViews.yaml
     KnowledgeOutline:
       $ref: ./components/schemas/KnowledgeOutline.yaml
     KnowledgeOutlineHeading:
@@ -9135,6 +9137,29 @@ paths:
           for links, backlinks and neighbourhood; ignored for unresolved and
           orphans, which are collection-wide.
         example: "architecture/sandboxing.md"
+      - name: paths
+        in: query
+        required: false
+        schema:
+          type: array
+          items:
+            type: string
+            minLength: 1
+          minItems: 1
+        style: form
+        explode: true
+        description: >
+          Collection-relative paths of SEVERAL notes whose outbound links are
+          wanted in one answer (UAT D-135). Only valid with kind=links, and
+          mutually exclusive with path — a caller sends one or the other. The
+          response is the UNION of every listed note's outbound edges; each
+          edge still names its own from_path, and source_path is absent
+          because the query is not about any single note. A caller rendering
+          many rows (a base view's relation cells) sends this instead of one
+          request per row, which is what tripped the gateway's own rate
+          limiter. Bounded: at most 64 paths per query, refused up front with
+          a 400 naming the cap when exceeded.
+        example: "notes/a.md"
       - name: hops
         in: query
         required: false
@@ -9292,6 +9317,70 @@ paths:
           $ref: '#/components/responses/403Forbidden'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/knowledge/views:
+    get:
+      operationId: listKnowledgeViews
+      summary: Every saved view a collection owns, file or no file
+      description: >
+        Lists ALL of a collection's saved views — the `.omnipus-vault/views/`
+        directory this collection owns, NOT the views of one `.base` file
+        (UAT D-13, web half). A view authored with knowledge_configure's
+        create_view/write_view writes a saved view file and no `.base` at
+        all, so before this endpoint such a view answered correctly over the
+        API while having no UI surface: the base-views listing is
+        file-addressed and cannot see it.
+
+
+        Each entry carries the slug it is actually addressed by (pass it
+        VERBATIM to GET .../knowledge/view), its display label, its kind,
+        whether it can be served, and — for an imported view — the `.base`
+        it came from. Base previews and dashboard embeds keep listing by
+        source; this is the collection's own list.
+
+
+        A collection_id outside this workspace's scope returns the same
+        empty-but-complete shape as an unknown collection (FR-052/FR-053) —
+        never a 403 or 404, which would confirm the collection exists. View
+        files the loader rejected are counted in unloadable_count and named
+        in unloadable, never silently dropped.
+      tags:
+      - Knowledge
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      - name: collection_id
+        in: query
+        required: true
+        schema:
+          type: string
+        description: The KnowledgeBaseInfo.collection_id whose saved views are listed.
+        example: "kb_3d1c9a7e5b2f4806"
+      responses:
+        '200':
+          description: The collection's saved views, servable or not.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KnowledgeCollectionViews'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
         '500':
           $ref: '#/components/responses/500InternalServerError'
 

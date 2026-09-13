@@ -221,6 +221,9 @@ import {
   // (contract-first #8).
   ViewResult as ViewResultSchema,
   KnowledgeBaseViews as KnowledgeBaseViewsSchema,
+  // UAT D-13 — the collection-addressed saved-views list (a `.base`-less
+  // collection still owns its authored views).
+  KnowledgeCollectionViews as KnowledgeCollectionViewsSchema,
   // HP-1 fix (defect-list-html-preview-2026-09-08.md) — the mint client for
   // the sandboxed HTML/SVG preview frame (ADR-067 §10.3, spec FR-003f):
   LibraryPreviewTokenResponse as LibraryPreviewTokenResponseSchema,
@@ -546,6 +549,8 @@ import type {
   // view-kinds-design-2026-09-03 §7 — evaluated saved-view results:
   ViewResult,
   KnowledgeBaseViews,
+  // UAT D-13 — the collection-addressed saved-views list:
+  KnowledgeCollectionViews,
   // ADR-083 CW-4/CW-7 (EMB-085/EMB-086/EMB-087/EMB-094) — the typed record
   // read/write layer, wired to the gateway/SPA boundary for the inline
   // record-field editor (step 5):
@@ -4530,6 +4535,11 @@ export interface KnowledgeGraphQuery { // not-wire-format: query-parameter argum
   /** COLLECTION-relative path of the note the query is about. Required by the
    *  contract for links/backlinks/neighbourhood. */
   path?: string
+  /** UAT D-135 — kind=links only, mutually exclusive with `path`: several
+   *  notes whose outbound links are wanted in ONE answer (the union of their
+   *  edges; `source_path` is then absent on the wire). Bounded by the contract
+   *  to 64 paths. */
+  paths?: string[]
   hops?: number
   limit?: number
 }
@@ -4549,6 +4559,9 @@ export function fetchKnowledgeGraph(
 ): Promise<KnowledgeGraphResponse> {
   const params = new URLSearchParams({ collection_id: query.collectionId, kind: query.kind })
   if (query.path !== undefined && query.path !== '') params.set('path', query.path)
+  // Repeated keys (paths=a&paths=b), matching the contract's explode: true —
+  // one member per row whose links are wanted, never a comma-joined string.
+  for (const p of query.paths ?? []) params.append('paths', p)
   if (query.hops !== undefined) params.set('hops', String(query.hops))
   if (query.limit !== undefined) params.set('limit', String(query.limit))
   return request<KnowledgeGraphResponse>(
@@ -4608,6 +4621,31 @@ export function fetchKnowledgeBaseViews(
     `/library/${encodeURIComponent(workspaceId)}/knowledge/base-views?${qs}`,
     signal ? { signal } : undefined,
     KnowledgeBaseViewsSchema as ZodType<KnowledgeBaseViews>,
+  )
+}
+
+/**
+ * EVERY saved view a collection owns, file or no file (UAT D-13,
+ * GET /library/{workspace_id}/knowledge/views).
+ *
+ * A view authored with knowledge_configure's create_view/write_view writes a
+ * saved view file and NO `.base`, so the file-addressed base-views listing
+ * cannot see it; this collection-addressed list is the one surface where such
+ * a view exists. Every `name` is the server's own slug and must be passed
+ * VERBATIM to fetchKnowledgeViewResult; `source` (when present) names the
+ * `.base` an imported view came from. An out-of-scope collection_id answers
+ * the same empty list as an unknown one.
+ */
+export function fetchKnowledgeCollectionViews(
+  workspaceId: string,
+  collectionId: string,
+  signal?: AbortSignal,
+): Promise<KnowledgeCollectionViews> {
+  const qs = new URLSearchParams({ collection_id: collectionId }).toString()
+  return request<KnowledgeCollectionViews>(
+    `/library/${encodeURIComponent(workspaceId)}/knowledge/views?${qs}`,
+    signal ? { signal } : undefined,
+    KnowledgeCollectionViewsSchema as ZodType<KnowledgeCollectionViews>,
   )
 }
 

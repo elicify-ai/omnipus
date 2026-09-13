@@ -121,27 +121,42 @@ describe('a standalone, sized picture embed applies its width through LibraryIma
   })
 
   // The paired negative control (test-integrity discipline): the IDENTICAL
-  // target, unsized, must still go through the ORIGINAL plain-<img> path —
-  // proving the width-routing branch is read from the notation, not merely
-  // "every resolved picture embed now mounts LibraryImagePreview".
+  // target, unsized, must still go through the plain-<img> path — proving the
+  // width-routing branch is read from the notation, not merely "every
+  // resolved picture embed now mounts LibraryImagePreview". Since UAT
+  // D-40/D-134/D-101 the plain path is the knowledge composition's OWN image
+  // slot (KbMarkdownImage), not chat's ChatImage.
   it('an UNSIZED embed of the same file keeps the original plain-image treatment, not LibraryImagePreview', async () => {
     renderNote('![[diagram.png]]', resolverFor(IMAGE_PATH))
-    await waitFor(() => expect(screen.getByTestId('chat-image')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTestId('kb-markdown-image')).toBeInTheDocument())
     expect(screen.queryByTestId('library-image-preview')).not.toBeInTheDocument()
     // A directory listing is never fetched at all for the unsized path —
     // LibraryImagePreview's real-LibraryEntry lookup never runs.
     expect(vi.mocked(fetchLibraryEntries)).not.toHaveBeenCalled()
+    // And no width was invented for it.
+    expect(screen.getByTestId('kb-markdown-image').style.width).toBe('')
   })
 })
 
-describe('a sized picture embed mixed inline with other text keeps the plain-image treatment (block-promotion gate, EMB-030)', () => {
-  it('does not mount LibraryImagePreview when other words share its paragraph — the width is inert there, never a downgrade to a link', async () => {
+describe('a sized picture embed mixed inline with other text (UAT D-40, fan-out round)', () => {
+  it('applies its width INLINE through the KB image slot — never inert, and never a downgrade to a link', async () => {
+    // DIES ON the pre-D-40 code: the inline picture rendered through chat's
+    // ChatImage, which takes no width — every inline picture drew at
+    // container width regardless of the author's |N (T4 measured it ignored
+    // across eleven notes).
     renderNote('See ![[diagram.png|400]] for the diagram.', resolverFor(IMAGE_PATH))
-    await waitFor(() => expect(screen.getByTestId('chat-image')).toBeInTheDocument())
+    const img = await screen.findByTestId('kb-markdown-image')
+    expect(img.style.width).toBe('400px')
     expect(screen.queryByTestId('library-image-preview')).not.toBeInTheDocument()
     // Crucially: still the PICTURE, never the "embed shown as a link"
     // fallback treatment a non-image embed kind would get.
     expect(screen.queryByText('embed shown as a link')).not.toBeInTheDocument()
+  })
+
+  it('the inline picture stays in the sentence — the mount wrapper is inline-block', async () => {
+    renderNote('See ![[diagram.png|400]] for the diagram.', resolverFor(IMAGE_PATH))
+    const img = await screen.findByTestId('kb-markdown-image')
+    expect(img.closest('[data-testid="lazy-embed-mount"]')?.className).toContain('inline-block')
   })
 })
 
@@ -160,5 +175,13 @@ describe('a size on a NON-PICTURE embed is ignored at read time, without eating 
     const text = screen.getByTestId('markdown-link').textContent ?? ''
     expect(text).toContain('song.mp3')
     expect(text).not.toContain('400')
+  })
+})
+
+describe('chat rendering is unchanged (the divergence is the knowledge composition alone)', () => {
+  it('stage 1\'s composition still maps img to chat\'s MarkdownImage by reference', async () => {
+    const { kbMarkdownComponents } = await import('./kbMarkdownBase')
+    const { MarkdownImage } = await import('@/components/chat/markdown-shared')
+    expect(kbMarkdownComponents.img).toBe(MarkdownImage)
   })
 })

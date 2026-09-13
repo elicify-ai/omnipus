@@ -79,6 +79,10 @@ export interface KnowledgeGraphRequest {
   kind: KnowledgeGraphResponse["kind"];
   /** Collection-relative path of the note the query is about. */
   path?: string;
+  /** UAT D-135 — kind=links only, mutually exclusive with `path`: several
+   *  notes whose outbound links are wanted in ONE answer (the union). A view
+   *  with many relation rows sends this instead of one request per row. */
+  paths?: string[];
   hops?: number;
   limit?: number;
 }

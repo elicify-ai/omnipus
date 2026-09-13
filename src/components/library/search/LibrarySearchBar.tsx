@@ -42,7 +42,7 @@
 // produced still renders, with an explicit marker, never dropped and never
 // fabricated; a file-search walk that stopped early states the bound it hit.
 
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -71,6 +71,16 @@ import { cn } from '@/lib/utils'
 import { fetchKnowledgeViewResult } from '@/lib/api'
 import type { ViewResult } from '@/lib/api/generated/openapi-types'
 import { ViewPartsRenderer } from '../preview/viewparts/ViewPartsRenderer'
+// Codex review #12: the saved-view dialog resolves a relation cell's
+// `[[wikilink]]` against the COLLECTION, with the same evidence ladder and
+// the same ONE multi-path request the base preview uses — never a second,
+// divergent resolution path, and never the raw wikilink text as a path.
+import {
+  collectionLinkRowPaths,
+  defaultKnowledgeGraphLoader,
+  makeCollectionLinkResolver,
+  useCollectionLinkGraph,
+} from '../preview/useCollectionLinkGraph'
 // WL-2: the note reader's own wikilink stripper, imported rather than
 // reimplemented. A search hit's snippet and a record's cell value are RAW
 // byte excerpts of file content — frontmatter included — so a match falling
@@ -84,6 +94,7 @@ import { stripWikilinkNotation } from '../preview/wikilinkNotation'
 // the bar never disagrees with the engine about which words a hit matched.
 import { foldForMatch, foldedMatchRanges } from './foldForMatch'
 import { collectionPathToWorkspacePath, libraryNoteHref } from '../knowledge/KnowledgeBacklinks'
+import type { KnowledgeGraphLoader } from '../knowledge/KnowledgeBacklinks'
 import { LibraryErrorBanner } from '../LibraryErrorBanner'
 import {
   useVaultSearch,
@@ -188,6 +199,9 @@ export interface LibrarySearchBarProps {
   searchFilesFn?: FileSearchFn
   loadCollectionInfo?: LoadCollectionInfoFn
   loadViewResult?: LoadViewResultFn
+  /** Codex #12: the link-graph client behind the saved-view dialog's
+   *  collection-aware cell resolver. Same seam BasePreview exposes. */
+  loadGraph?: KnowledgeGraphLoader
   className?: string
 }
 
@@ -201,6 +215,14 @@ function countBadge(n: number, more = false) {
       {more ? '+' : ''}
     </Badge>
   )
+}
+
+/** "3 notes" / "1 record" — the per-kind phrase of the D-129/D-130 results
+ *  summary, pluralised so a sentence a reader trusts never reads "1 records". */
+function kindCountPhrase(n: number, kind: 'notes' | 'records' | 'views' | 'attachments'): string {
+  const singular =
+    kind === 'notes' ? 'note' : kind === 'records' ? 'record' : kind === 'views' ? 'view' : 'attachment'
+  return `${n.toLocaleString('en-US')} ${n === 1 ? singular : kind}`
 }
 
 /** KB-6 coverage chips: which of the query's own words this hit actually
@@ -603,6 +625,7 @@ export function LibrarySearchBar({
   searchFilesFn,
   loadCollectionInfo,
   loadViewResult = fetchKnowledgeViewResult,
+  loadGraph = defaultKnowledgeGraphLoader,
   className,
 }: LibrarySearchBarProps) {
   const [text, setText] = useState('')
@@ -775,6 +798,35 @@ export function LibrarySearchBar({
     retry: false,
   })
 
+  // ── Codex review #12: a collection-aware resolver for the saved-view dialog ──
+  // The dialog's relation cells used to render with NO resolver, so
+  // ViewCellLink fell back to the RAW wikilink target as the path — a
+  // basename cell ("[[Sofia Marchetti]]") navigated to the literal
+  // "vault/Sofia Marchetti" and landed on not-found. The dialog now draws
+  // its evidence from the SAME one multi-path link-graph request the base
+  // preview makes (useCollectionLinkGraph), over the dialog's own rows, and
+  // resolves with the same two-tier ladder (makeCollectionLinkResolver) —
+  // an edge names the real note, and only a target naming one of the rows
+  // in THIS view falls back to resolved-or-unknown.
+  const dialogViewResult = viewResultQuery.data
+  const dialogLinkRowPaths = useMemo(
+    () => (dialogViewResult ? collectionLinkRowPaths(dialogViewResult.rows) : []),
+    [dialogViewResult],
+  )
+  const dialogLinkGraph = useCollectionLinkGraph({
+    workspaceId,
+    collectionId,
+    paths: dialogLinkRowPaths,
+    loadGraph,
+  })
+  const dialogResolveWikilink = useMemo(
+    () =>
+      dialogViewResult
+        ? makeCollectionLinkResolver(dialogLinkGraph.edges, dialogLinkGraph.nodes, dialogViewResult.rows)
+        : undefined,
+    [dialogViewResult, dialogLinkGraph.edges, dialogLinkGraph.nodes],
+  )
+
   // ── Vault-mode honesty (US-1 honesty port) ────────────────────────────────
   const notReadyReason = response && !response.complete ? response.complete_reason : undefined
   const notReady = notReadyReason !== undefined || (response !== undefined && !response.complete)
@@ -853,20 +905,39 @@ export function LibrarySearchBar({
             </p>
           )}
 
-          {/* UAT D-130 (bar half) — a kind at the per-kind cap is a LOWER
-              bound, stated as a sentence next to the results rather than
-              only as a "+" on a tab badge. */}
-          {!error && isVaultMode && response && (
-            (() => {
-              const capped = (['notes', 'records', 'views', 'attachments'] as const).filter((k) => kindAtLimit(k))
-              if (capped.length === 0) return null
-              return (
-                <p data-testid="library-search-kind-cap" className="px-2 text-[11px] leading-snug text-[var(--color-muted)]">
-                  Showing the first {effectiveLimit} {capped.join(', ')} — the search returns at most {effectiveLimit} per
-                  kind, so more may exist. Narrow the search to see the rest.
-                </p>
-              )
-            })()
+          {/* UAT D-129/D-130 (leftover wording round) — ONE summary sentence
+              under the tabs stating exactly what was searched, how many hits
+              exist, and how many are shown. A kind at its per-kind cap is a
+              LOWER bound ("at least N … the search returns at most N per
+              kind"), never a fabricated total; an uncapped answer says every
+              hit is shown. Attachment hits are name-only matches (FR-039a),
+              stated beside the counts so the note count is never read as
+              covering them. */}
+          {!error && isVaultMode && response && counts.all > 0 && (
+            <p data-testid="library-search-results-summary" className="px-2 text-[11px] leading-snug text-[var(--color-muted)]">
+              {(() => {
+                const kinds = (['notes', 'records', 'views', 'attachments'] as const).filter((k) => counts[k] > 0)
+                const phrases = kinds.map((k) =>
+                  kindAtLimit(k) ? `at least ${kindCountPhrase(counts[k], k)}` : kindCountPhrase(counts[k], k),
+                )
+                const capped = kinds.some((k) => kindAtLimit(k))
+                if (capped) {
+                  return (
+                    <>
+                      Hits for “{text.trim()}”: {phrases.join(', ')} — the search returns at most {effectiveLimit} per
+                      kind, so more may exist.
+                    </>
+                  )
+                }
+                return (
+                  <>
+                    Showing all {counts.all.toLocaleString('en-US')} {counts.all === 1 ? 'hit' : 'hits'} for “
+                    {text.trim()}”: {phrases.join(', ')}.
+                  </>
+                )
+              })()}
+              {response.attachments !== undefined && ' Attachments are matched by filename only, never their contents.'}
+            </p>
           )}
 
           {!error && isVaultMode && (
@@ -907,13 +978,17 @@ export function LibrarySearchBar({
                   typeof response?.notes_searched === 'number' &&
                   typeof response.notes_total_known === 'number' && (
                     <p data-testid="library-search-coverage-ratio">
-                      {response.notes_searched.toLocaleString('en-US')} of{' '}
-                      {response.notes_total_known.toLocaleString('en-US')} notes searched.
+                      {/* UAT D-129: the pair counts markdown NOTES whose full
+                          text the index holds — attachments are name-only
+                          (FR-039a) and are never inside this number — so the
+                          sentence says exactly what was searched. */}
+                      Searched the full text of {response.notes_searched.toLocaleString('en-US')} of{' '}
+                      {response.notes_total_known.toLocaleString('en-US')} notes.
                     </p>
                   )}
                 {coverage === 'so-far' && typeof response?.notes_searched === 'number' && (
                   <p data-testid="library-search-coverage-so-far">
-                    {response.notes_searched.toLocaleString('en-US')} notes searched so far.
+                    Searched the full text of {response.notes_searched.toLocaleString('en-US')} notes so far.
                   </p>
                 )}
               </div>
@@ -1208,7 +1283,10 @@ export function LibrarySearchBar({
           )}
           {/* UAT D-72: the SAME row-open and relation-cell link wiring the
               base preview has, so a `[[Sofia Marchetti]]` cell is a real
-              link here too instead of raw brackets. */}
+              link here too instead of raw brackets. Codex #12: the cell is
+              RESOLVED against the collection first (dialogResolveWikilink),
+              so the click opens the note the link graph names — never the
+              literal wikilink text as a path. */}
           {viewResultQuery.data && (
             <ViewPartsRenderer
               result={viewResultQuery.data}
@@ -1216,6 +1294,7 @@ export function LibrarySearchBar({
                 openNote(p)
                 setOpenView(null)
               }}
+              {...(dialogResolveWikilink ? { resolveWikilink: dialogResolveWikilink } : {})}
               {...(workspaceId !== null && collectionRootPath !== undefined
                 ? {
                     linkHref: (p: string) =>

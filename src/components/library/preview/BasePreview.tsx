@@ -38,31 +38,32 @@
 // load are reported as a count rather than as quietly missing tabs.
 
 import { useEffect, useMemo, useState } from 'react'
-import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Code, DownloadSimple, SpinnerGap, Warning } from '@phosphor-icons/react'
 
 import { Button } from '@/components/ui/button'
 import { QueryErrorState } from '@/components/shared/QueryErrorState'
 import {
   fetchKnowledgeBaseViews,
-  fetchKnowledgeGraph,
   fetchKnowledgeViewResult,
   fetchLibraryContent,
   libraryDownloadUrl,
   libraryQueryKeys,
 } from '@/lib/api'
 import type { LibraryEntry } from '@/lib/api'
-import { ApiError } from '@/lib/api-error'
 import type {
   KnowledgeBaseView,
   KnowledgeBaseViews,
-  KnowledgeGraphEdge,
-  KnowledgeGraphNode,
   ViewResult,
 } from '@/lib/api/generated/openapi-types'
 
 import { LibraryCodePreview } from './LibraryCodePreview'
 import { ViewPartsRenderer } from './viewparts/ViewPartsRenderer'
+import {
+  collectionLinkRowPaths as collectionLinkRowPathsFn,
+  makeCollectionLinkResolver,
+  useCollectionLinkGraph,
+} from './useCollectionLinkGraph'
 import {
   collectionPathToWorkspacePath,
   libraryNoteHref,
@@ -109,59 +110,24 @@ export interface BasePreviewLoaders {
  * relation cell's rendered value IS that row's own frontmatter/body content;
  * pkg/knowledge/links.go: "a note can name another note in a frontmatter
  * field, and a rename has to rewrite it"). So the collection-wide answer for
- * this view's own cells lives in each ROW's own outbound-links graph, fetched
- * by that row's collection-relative path — exactly how KnowledgeNoteView
- * fetches its answer for the one note it has open, just pointed at a bounded
- * set of paths (one per loaded row) instead of one.
+ * this view's own cells lives in the union of its rows' own outbound-links
+ * graphs — fetched since UAT D-135 as ONE multi-path `paths[]` request
+ * through useCollectionLinkGraph (the shared hook this file and the search
+ * bar's saved-view dialog both use), instead of one request per row.
  *
- * Bounded so a very large view cannot fan out into hundreds of parallel graph
- * fetches. Rows past the cap keep the same honest fallback (row-title match,
- * else `unknown`) they always had — never silently promoted to `resolved`,
- * which is the exact dishonesty the three-state model exists to prevent.
+ * Bounded so a very large view cannot ask for an unbounded walk. Rows past
+ * the cap keep the same honest fallback (row-title match, else `unknown`)
+ * they always had — never silently promoted to `resolved`, which is the
+ * exact dishonesty the three-state model exists to prevent.
  */
-const COLLECTION_LINK_ROW_QUERY_CAP = 40
-
-/** UAT D-135: does any cell of this row carry a `[[wikilink]]`? Only such a
- *  row has anything for the collection-wide link resolver to check; the
- *  rest are skipped before a request is ever issued. Exported as a test
- *  seam. */
-export function rowCarriesWikilink(row: { cells?: { value: string }[] }): boolean {
-  return (row.cells ?? []).some((c) => c.value.includes('[['))
-}
-
-/** UAT D-135: page-wide ceiling on concurrent link-graph requests. Every
- *  row query used to be issued in one burst (40 at once for a 40-row view),
- *  and the gateway's rate limiter answered with 429s that the panel then
- *  hid behind a bare "Evaluating view…" spinner. Queued requests wait for a
- *  slot; the server's answer is never assumed. Exported as a test seam. */
-export const LINK_GRAPH_MAX_IN_FLIGHT = 4
-let linkGraphInFlight = 0
-const linkGraphWaiters: Array<() => void> = []
-export async function withLinkGraphSlot<T>(run: () => Promise<T>): Promise<T> {
-  if (linkGraphInFlight >= LINK_GRAPH_MAX_IN_FLIGHT) {
-    await new Promise<void>((resolve) => linkGraphWaiters.push(resolve))
-  }
-  linkGraphInFlight += 1
-  try {
-    return await run()
-  } finally {
-    linkGraphInFlight -= 1
-    linkGraphWaiters.shift()?.()
-  }
-}
-/** Test seam: how many link-graph requests are on the wire right now. */
-export function linkGraphInFlightCount(): number {
-  return linkGraphInFlight
-}
-
-const defaultLoadGraph: KnowledgeGraphLoader = ({ workspaceId, collectionId, kind, path, hops, limit }) =>
-  fetchKnowledgeGraph(workspaceId, {
-    collectionId,
-    kind,
-    ...(path === undefined ? {} : { path }),
-    ...(hops === undefined ? {} : { hops }),
-    ...(limit === undefined ? {} : { limit }),
-  })
+export {
+  COLLECTION_LINK_ROW_QUERY_CAP,
+  rowCarriesWikilink,
+  LINK_GRAPH_MAX_IN_FLIGHT,
+  withLinkGraphSlot,
+  linkGraphInFlightCount,
+} from './useCollectionLinkGraph'
+import { defaultKnowledgeGraphLoader as defaultLoadGraph } from './useCollectionLinkGraph'
 
 /**
  * ADR-083 EMB-040/EMB-043/EMB-046/EMB-047/EMB-048/EMB-049 — the extra
@@ -233,29 +199,10 @@ export interface BasePreviewProps extends BasePreviewLoaders {
   onOpenNote?: (workspacePath: string) => void
 }
 
-/** The record identifier a relation cell's `[[wikilink]]` token most often
- *  names, checked against the rows THIS view actually loaded (KB-8b). This is
- *  the FALLBACK tier of `resolveWikilink` below — it never has the whole
- *  collection's link graph, only its own row set, so on its own it can
- *  honestly answer `resolved` (found here) or `unknown` (not found in what it
- *  has) — never `unresolved`, which would claim knowledge of the whole
- *  collection this tier alone does not have. (The FIRST tier, WL-1's
- *  collection-wide row-link-graph lookup, can honestly answer `unresolved`.) */
-function basenameNoExt(path: string): string {
-  const base = path.split('/').pop() ?? path
-  const dot = base.lastIndexOf('.')
-  return dot <= 0 ? base : base.slice(0, dot)
-}
-
-/** A KnowledgeGraphEdge's `to_path` basename, WITH its extension — mirrors
- *  KnowledgeNoteView.tsx's own private `basenameOf` exactly (edge matching
- *  compares against the collection-relative path a resolved edge reports,
- *  which keeps its extension; `basenameNoExt` above is a different, row-
- *  identity comparison and must not be reused here). */
-function basenameOf(path: string): string {
-  const parts = path.split('/')
-  return parts[parts.length - 1] || path
-}
+// basenameNoExt/basenameOf — the row-identity and edge-target basename
+// helpers this file's resolver used to define privately — moved to
+// useCollectionLinkGraph.ts (makeCollectionLinkResolver) when the resolver
+// itself became shared with the search bar's saved-view dialog.
 
 /**
  * Triggers a real browser download of the file, the same click-a-detached-
@@ -507,117 +454,52 @@ export function BasePreview({
   // rationale. Skipped entirely when an embed already supplies a complete
   // resolver (EMB-028: an embed's byte-for-byte-unaffected guarantee), and
   // whenever there is no result yet to draw row paths from.
-  const collectionLinkRowPaths = useMemo(() => {
-    if (embed?.resolveWikilink) return [] as string[]
-    if (!result) return [] as string[]
-    const seen = new Set<string>()
-    const paths: string[] = []
-    for (const r of result.rows) {
-      if (seen.has(r.path)) continue
-      seen.add(r.path)
-      // UAT D-135: a graph request is only worth issuing for a row that
-      // actually carries a wikilink in one of its cells — a view whose rows
-      // hold no `[[…]]` at all used to fire one request per row (40 for a
-      // 40-row view, each rebuilding the collection's whole link graph on
-      // the server) for nothing, and ten such views in a row tripped the
-      // gateway's own rate limiter.
-      if (!rowCarriesWikilink(r)) continue
-      paths.push(r.path)
-      if (paths.length >= COLLECTION_LINK_ROW_QUERY_CAP) break
-    }
-    return paths
-  }, [result, embed?.resolveWikilink])
+  const linkRowPaths = useMemo(
+    () =>
+      embed?.resolveWikilink || !result
+        ? ([] as string[])
+        : collectionLinkRowPathsFn(result.rows),
+    [result, embed?.resolveWikilink],
+  )
 
-  const collectionLinkQueries = useQueries({
-    queries: collectionLinkRowPaths.map((rowPath) => ({
-      // Mirrors KnowledgeNoteView's own links-graph query key shape — same
-      // cache, same request, just addressed by a row's path instead of the
-      // one open note's path.
-      queryKey: ['library', workspaceId, 'knowledge', 'graph', 'links', collectionId, rowPath],
-      // UAT D-135: at most LINK_GRAPH_MAX_IN_FLIGHT of these on the wire at
-      // once, page-wide — never the whole row set in one burst.
-      queryFn: () =>
-        withLinkGraphSlot(() =>
-          loadGraph({ workspaceId, collectionId: collectionId as string, kind: 'links' as const, path: rowPath }),
-        ),
-      enabled: collectionId !== undefined,
-      staleTime: 60_000,
-      retry: false,
-      refetchOnWindowFocus: false,
-    })),
+  // UAT D-135: ONE multi-path kind=links request covers every
+  // wikilink-carrying row — see useCollectionLinkGraph's own doc for why one
+  // request per row (the old shape) tripped the gateway's rate limiter.
+  const linkGraph = useCollectionLinkGraph({
+    workspaceId,
+    collectionId,
+    paths: linkRowPaths,
+    loadGraph,
   })
 
-  const collectionLinkEdges = useMemo(() => {
-    const edges: KnowledgeGraphEdge[] = []
-    for (const q of collectionLinkQueries) {
-      if (q.data) edges.push(...q.data.edges)
-    }
-    return edges
-  }, [collectionLinkQueries])
-
-  const collectionLinkNodes = useMemo(() => {
-    const nodes: KnowledgeGraphNode[] = []
-    for (const q of collectionLinkQueries) {
-      if (q.data) nodes.push(...q.data.nodes)
-    }
-    return nodes
-  }, [collectionLinkQueries])
-
-  // WL-1's fix is only as good as the evidence behind it, and every one of
-  // these queries is `retry: false`. A failed one contributes no edges and,
-  // until now, said nothing — so the resolver silently dropped back to the
-  // old row-title-match tier that can only answer `resolved` or `unknown`,
-  // and every relation cell went white again. That is EXACTLY the symptom
-  // WL-1 was written to fix, reappearing with nothing on screen to show the
-  // fix had stopped working. Counted here and stated once at page level
-  // below — the same "handled ONE page-level statement, never per embed"
-  // treatment `graph_unavailable` already gets in the note reader.
-  const failedCollectionLinkQueries = useMemo(
-    () => collectionLinkQueries.filter((q) => q.isError).length,
-    [collectionLinkQueries],
-  )
-  // UAT D-135: how many of those failures were the gateway's own rate
-  // limiter (HTTP 429) — named in the banner rather than hidden behind a
-  // spinner, so a reader can tell "throttled, wait" from "broken".
-  const rateLimitedCollectionLinkQueries = useMemo(
-    () => collectionLinkQueries.filter((q) => q.isError && q.error instanceof ApiError && q.error.status === 429).length,
-    [collectionLinkQueries],
-  )
+  // WL-1's fix is only as good as the evidence behind it, and the query is
+  // `retry: false`. A failure contributes no edges and, until this banner
+  // existed, said nothing — so the resolver silently dropped back to the old
+  // row-title-match tier that can only answer `resolved` or `unknown`, and
+  // every relation cell went white again. That is EXACTLY the symptom WL-1
+  // was written to fix, reappearing with nothing on screen to show the fix
+  // had stopped working. Stated once at page level below — the same
+  // "handled ONE page-level statement, never per embed" treatment
+  // `graph_unavailable` already gets in the note reader.
+  const failedCollectionLinkQueries = linkGraph.failed
+  // UAT D-135: whether the failure was the gateway's own rate limiter
+  // (HTTP 429) — named in the banner rather than hidden behind a spinner,
+  // so a reader can tell "throttled, wait" from "broken".
+  const rateLimitedCollectionLinkQueries = linkGraph.rateLimited
 
   // ADR-083 EMB-048/WL-1: an embed's own `resolveWikilink` (the note reader's
   // real link graph) takes over completely when supplied. The row-scoped
   // fallback below is no longer resolved-or-unknown-only: it now checks each
   // loaded row's own link-graph edges FIRST and can return a real
   // `unresolved` verdict from that evidence. Only rows beyond
-  // `COLLECTION_LINK_ROW_QUERY_CAP` — and cells whose graph query failed,
-  // which the banner above the table reports — fall through to the older
-  // guess, which renders a genuinely broken link as merely unverified.
+  // `COLLECTION_LINK_ROW_QUERY_CAP` — and a failed graph request, which the
+  // banner above the table reports — fall through to the older guess, which
+  // renders a genuinely broken link as merely unverified.
   const resolveWikilink = useMemo(() => {
     if (embed?.resolveWikilink) return embed.resolveWikilink
     if (!result) return undefined
-    return (target: string): KbLinkResolution => {
-      // 1. WL-1: real, collection-wide evidence first — the SAME edge the
-      //    note reader would see, drawn from whichever loaded row's own
-      //    markdown actually carries this wikilink text (see the cap's doc
-      //    comment for why this can be a real `resolved`/`unresolved`
-      //    verdict rather than the old resolved-or-unknown-only guess).
-      const edge = collectionLinkEdges.find(
-        (e) => e.link_text === target || e.to_path === target || basenameOf(e.to_path) === target,
-      )
-      if (edge) {
-        if (edge.resolution === 'unresolved') return { state: 'unresolved' }
-        const node = collectionLinkNodes.find((n) => n.path === edge.to_path)
-        if (node && node.exists === false) return { state: 'unresolved' }
-        return { state: 'resolved', path: edge.to_path }
-      }
-      // 2. Fallback: does the target literally name one of the rows THIS
-      //    view loaded (KB-8b) — resolved-or-unknown only.
-      const match = result.rows.find(
-        (r) => r.title === target || r.id === target || basenameNoExt(r.path) === target,
-      )
-      return match ? { state: 'resolved', path: match.path } : { state: 'unknown' }
-    }
-  }, [result, embed?.resolveWikilink, collectionLinkEdges, collectionLinkNodes])
+    return makeCollectionLinkResolver(linkGraph.edges, linkGraph.nodes, result.rows)
+  }, [result, embed?.resolveWikilink, linkGraph.edges, linkGraph.nodes])
 
   // ── States before a result can render ─────────────────────────────────────
   // Every one renders inside the SAME `base-preview` container, so "the base
@@ -804,12 +686,12 @@ export function BasePreview({
         </div>
       )}
 
-      {/* WL-1 honesty surface. ONE page-level statement when any of the
-          per-row link-graph queries failed — never one marker per cell, which
-          is how the note reader treats `graph_unavailable` too. Without it,
-          the whole collection-wide resolver degrades back to its pre-WL-1
+      {/* WL-1 honesty surface. ONE page-level statement when the view's
+          link-graph request failed — never one marker per cell, which is how
+          the note reader treats `graph_unavailable` too. Without it, the
+          whole collection-wide resolver degrades back to its pre-WL-1
           behaviour (relation cells rendering white/unverified) with nothing
-          on screen to say the evidence never arrived; the queries are
+          on screen to say the evidence never arrived; the query is
           `retry: false`, so a single blip is enough to trigger it. */}
       {failedCollectionLinkQueries > 0 && (
         <div
@@ -817,15 +699,14 @@ export function BasePreview({
           className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-warning)]/10 px-3 py-2 text-[11px] leading-snug text-[var(--color-warning)]"
         >
           <span>
-            Link checking is incomplete for {failedCollectionLinkQueries}{' '}
-            {failedCollectionLinkQueries === 1 ? 'row' : 'rows'} — their links show as unverified
-            rather than confirmed broken.
+            Link checking is incomplete for this view — its links show as unverified rather than
+            confirmed broken.
             {/* UAT D-135: a throttled request is named as such, never hidden. */}
-            {rateLimitedCollectionLinkQueries > 0 && (
+            {rateLimitedCollectionLinkQueries && (
               <span data-testid="base-preview-link-graph-rate-limited">
                 {' '}
-                The gateway rate-limited {rateLimitedCollectionLinkQueries} of the link-checking requests
-                (HTTP 429); wait a moment before retrying.
+                The gateway rate-limited the link-checking request (HTTP 429); wait a moment before
+                retrying.
               </span>
             )}
           </span>
@@ -833,7 +714,7 @@ export function BasePreview({
             type="button"
             tabIndex={0}
             onClick={() => {
-              for (const q of collectionLinkQueries) if (q.isError) void q.refetch()
+              if (linkGraph.query.isError) void linkGraph.query.refetch()
             }}
             data-testid="base-preview-link-graph-retry"
             className="shrink-0 rounded border border-current px-2 py-0.5 text-[10px] uppercase tracking-wide hover:opacity-80"

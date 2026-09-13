@@ -60,6 +60,7 @@ import { useKnowledgeIndexStore } from '@/store/knowledgeIndex'
 import { cn } from '@/lib/utils'
 
 import { KnowledgeEmptyState, type KnowledgeFirstRunState } from './KnowledgeEmptyState'
+import { KnowledgeViewsList, type LoadCollectionViewsFn } from './KnowledgeViewsList'
 
 /** Last path segment of a workspace-relative folder path; '' for the root. */
 function folderNameOf(rootPath: string): string {
@@ -200,6 +201,8 @@ export interface KnowledgePanelProps { // not-wire-format: SPA-only component pr
   children?: ReactNode
   /** Test seam: overrides the contract call. Production passes nothing. */
   loadInfo?: (workspaceId: string, path: string) => Promise<KnowledgeBaseInfo>
+  /** Test seam for the D-13 Views list's fetch. Production passes nothing. */
+  loadViews?: LoadCollectionViewsFn
   className?: string
 }
 
@@ -211,6 +214,7 @@ export function KnowledgePanel({
   onCreateNote,
   children,
   loadInfo = fetchKnowledgeBaseInfo,
+  loadViews,
   className,
 }: KnowledgePanelProps) {
   // Subscribed BEFORE the early returns below, because hooks must be. The
@@ -324,6 +328,19 @@ export function KnowledgePanel({
       {surfaceEnabled && (
         <div data-testid="knowledge-panel-surface" className="flex flex-col gap-2">
           {children}
+          {/* UAT D-13 (web half): the collection's own Views list. A view
+              authored through knowledge_configure writes no `.base` file, so
+              the base preview can never surface it — this list is
+              collection-addressed and opens each view's evaluated result.
+              Renders nothing when the collection owns no views. */}
+          {info.collection_id !== undefined && (
+            <KnowledgeViewsList
+              workspaceId={workspaceId}
+              collectionId={info.collection_id}
+              collectionRootPath={info.root_path}
+              {...(loadViews === undefined ? {} : { loadViews })}
+            />
+          )}
         </div>
       )}
     </div>

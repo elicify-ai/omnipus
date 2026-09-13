@@ -230,13 +230,13 @@ describe('the composition inherits chat’s renderers (FR-013a/b — spec test 8
     }
   })
 
-  it('diverges from the stage-1 KB map in exactly two slots: `code` and `a` (ADR-083 Step 6 added the `code` divergence)', () => {
+  it('diverges from the stage-1 KB map in exactly three slots: `code`, `img` and `a` (ADR-083 Step 6 added `code`; UAT D-40/D-134/D-101 added the KB-owned `img`)', () => {
     const divergent = Object.keys(knowledgeMarkdownComponents).filter(
       (key) =>
         knowledgeMarkdownComponents[key as keyof typeof knowledgeMarkdownComponents] !==
         kbMarkdownComponents[key as keyof typeof kbMarkdownComponents],
     )
-    expect(divergent).toEqual(['code', 'a'])
+    expect(divergent).toEqual(['code', 'img', 'a'])
     // And no slot was ADDED or REMOVED — a new key is a divergence too.
     expect(Object.keys(knowledgeMarkdownComponents).sort()).toEqual(
       Object.keys(kbMarkdownComponents).sort(),
@@ -272,6 +272,11 @@ describe('the composition inherits chat’s renderers (FR-013a/b — spec test 8
   })
 
   it('renders ordinary markdown byte-identically to chat', () => {
+    // No image in this source: since UAT D-40/D-134/D-101 the `img` slot is
+    // the ONE deliberate divergence (the KB-owned KbMarkdownImage — width
+    // hints, sizeless-SVG boxing, LazyEmbedMount), pinned by its own suite
+    // and by the "renders images through the KB's own image renderer" test
+    // below. Every OTHER slot must stay byte-identical.
     const source = [
       'A paragraph with **bold** and `inline`.',
       '',
@@ -283,8 +288,6 @@ describe('the composition inherits chat’s renderers (FR-013a/b — spec test 8
       '- two',
       '',
       '> plain quote',
-      '',
-      '![pic](https://example.test/a.png)',
     ].join('\n')
 
     const chat = render(<HistoricalMessageMarkdown content={source} />)
@@ -306,9 +309,10 @@ describe('the composition inherits chat’s renderers (FR-013a/b — spec test 8
     expect(screen.getByTestId('mermaid-diagram').textContent).toBe('graph TD')
   })
 
-  it('renders images through chat’s image renderer', () => {
+  it('renders images through the KB\'s own image renderer, never chat\'s (UAT D-40/D-134/D-101)', () => {
     render(<KnowledgeBaseMarkdown content={'![alt](https://example.test/a.png)'} />)
-    expect(screen.getByTestId('chat-image').getAttribute('src')).toBe('https://example.test/a.png')
+    expect(screen.getByTestId('kb-markdown-image').getAttribute('src')).toBe('https://example.test/a.png')
+    expect(screen.queryByTestId('chat-image')).not.toBeInTheDocument()
   })
 })
 
@@ -502,12 +506,12 @@ describe('wikilinks and embeds (FR-060, US-7 AS-1/AS-2)', () => {
         resolveEmbedUrl={() => resolvedEmbed('https://example.test/diagram.png')}
       />,
     )
-    expect(screen.getByTestId('chat-image').getAttribute('src')).toBe('https://example.test/diagram.png')
+    expect(screen.getByTestId('kb-markdown-image').getAttribute('src')).toBe('https://example.test/diagram.png')
   })
 
   it('renders ![[diagram.svg]] as an image, never as an inline <svg> (EMB-031)', () => {
-    // A scripted SVG injected inline would execute; drawn inside <img> (chat's
-    // image slot, secure static mode) it never does. DIES ON: routing `.svg`
+    // A scripted SVG injected inline would execute; drawn inside <img> (the
+    // KB image slot, secure static mode) it never does. DIES ON: routing `.svg`
     // through a different node type than other image extensions.
     render(
       <KnowledgeBaseMarkdown
@@ -515,7 +519,7 @@ describe('wikilinks and embeds (FR-060, US-7 AS-1/AS-2)', () => {
         resolveEmbedUrl={() => resolvedEmbed('https://example.test/logo.svg')}
       />,
     )
-    expect(screen.getByTestId('chat-image').getAttribute('src')).toBe('https://example.test/logo.svg')
+    expect(screen.getByTestId('kb-markdown-image').getAttribute('src')).toBe('https://example.test/logo.svg')
     expect(document.querySelector('svg')).toBeNull()
   })
 

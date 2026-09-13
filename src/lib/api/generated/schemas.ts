@@ -285,12 +285,19 @@ type KnowledgeBaseView = {
   kind?: string | undefined;
   unservable?: boolean | undefined;
   unservable_reason?: string | undefined;
+  source?: string | undefined;
 };
 type KnowledgeBaseUnloadableView = {
   name?: string | undefined;
   paths: Array<string>;
   code: string;
   reason: string;
+};
+type KnowledgeCollectionViews = {
+  collection_id: string;
+  views: Array<KnowledgeBaseView>;
+  unloadable_count: number;
+  unloadable?: Array<KnowledgeBaseUnloadableView> | undefined;
 };
 type KnowledgeOutline = {
   path: string;
@@ -4674,6 +4681,7 @@ export const KnowledgeBaseView: z.ZodType<KnowledgeBaseView> = z.object({
   kind: z.string().optional(),
   unservable: z.boolean().optional(),
   unservable_reason: z.string().min(1).optional(),
+  source: z.string().min(1).optional(),
 });
 export const KnowledgeBaseUnloadableView: z.ZodType<KnowledgeBaseUnloadableView> =
   z.object({
@@ -4692,6 +4700,13 @@ export const KnowledgeBaseViews: z.ZodType<KnowledgeBaseViews> = z.object({
   unloadable_count: z.number().int().gte(0),
   unloadable: z.array(KnowledgeBaseUnloadableView).optional(),
 });
+export const KnowledgeCollectionViews: z.ZodType<KnowledgeCollectionViews> =
+  z.object({
+    collection_id: z.string().min(1),
+    views: z.array(KnowledgeBaseView),
+    unloadable_count: z.number().int().gte(0),
+    unloadable: z.array(KnowledgeBaseUnloadableView).optional(),
+  });
 export const ViewPropertyConfig: z.ZodType<ViewPropertyConfig> = z
   .object({ display_name: z.string().min(1) })
   .partial();
@@ -8255,6 +8270,11 @@ Every query is bounded by hop count and node count (FR-054) and reports its own 
         schema: z.string().optional(),
       },
       {
+        name: "paths",
+        type: "Query",
+        schema: z.array(z.string().min(1)).min(1).optional(),
+      },
+      {
         name: "hops",
         type: "Query",
         schema: z.number().int().gte(1).optional(),
@@ -8548,6 +8568,63 @@ A view that cannot be answered — unknown, stored disabled (FR-105), refused at
       },
     ],
     response: ViewResult,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/library/:workspace_id/knowledge/views",
+    alias: "listKnowledgeViews",
+    description: `Lists ALL of a collection&#x27;s saved views — the &#x60;.omnipus-vault/views/&#x60; directory this collection owns, NOT the views of one &#x60;.base&#x60; file (UAT D-13, web half). A view authored with knowledge_configure&#x27;s create_view/write_view writes a saved view file and no &#x60;.base&#x60; at all, so before this endpoint such a view answered correctly over the API while having no UI surface: the base-views listing is file-addressed and cannot see it.
+
+Each entry carries the slug it is actually addressed by (pass it VERBATIM to GET .../knowledge/view), its display label, its kind, whether it can be served, and — for an imported view — the &#x60;.base&#x60; it came from. Base previews and dashboard embeds keep listing by source; this is the collection&#x27;s own list.
+
+A collection_id outside this workspace&#x27;s scope returns the same empty-but-complete shape as an unknown collection (FR-052/FR-053) — never a 403 or 404, which would confirm the collection exists. View files the loader rejected are counted in unloadable_count and named in unloadable, never silently dropped.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "collection_id",
+        type: "Query",
+        schema: z.string(),
+      },
+    ],
+    response: KnowledgeCollectionViews,
     errors: [
       {
         status: 400,
