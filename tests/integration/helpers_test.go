@@ -135,15 +135,40 @@ func startIntegrationGateway(t *testing.T) *testutil.TestGateway {
 
 // wsConnect dials the gateway's WS endpoint and sends the mandatory auth frame.
 // Returns the open connection, which the caller must Close when done.
+//
+// Deliberately sends NO Origin header (Q2 fix, 2026-09-14). Before this fix
+// the header was set to gw.URL, which made every connection this helper
+// opens indistinguishable from a real browser's WebSocket handshake to
+// pkg/gateway/websocket.go's wsHandshakeIsBrowser (Origin header present ==
+// browser, per RFC 6455 §4.1 / the WHATWG WebSocket spec — see that
+// function's doc comment). Since 3f9954d1 ("a websocket that cannot
+// authenticate now says so, instead of going quiet"), a handshake classified
+// as a browser with no session cookie is refused IMMEDIATELY by
+// classifyWSAuthRefusal (futile=true) — the connection is closed with 1008
+// "not signed in: no session cookie on the websocket handshake" before the
+// server ever reads the auth frame this function sends below, so that frame
+// was silently dead code. That is exactly the intended, non-regressive
+// behavior for a real browser (which post-Wave-1 has no token to send
+// anyway — src/lib/ws.ts), but this is a Go test client using gorilla's
+// Dialer, not a browser, and it DOES have a real credential to present the
+// legacy way. Per wsHandshakeIsBrowser's own doc comment: "a false positive
+// costs a hypothetical non-browser client that sets Origin its frame
+// handshake" — this helper was exactly that hypothetical client. Omitting
+// Origin makes classifyWSAuthRefusal correctly treat this as the
+// programmatic client it actually is (same class as `omnipus run` and the
+// CLI readiness probe), so it waits for and reads the auth frame below,
+// which resolveBearerIdentity/the OMNIPUS_BEARER_TOKEN env fallback in
+// authenticateWS then accepts normally. wsCheckOrigin (websocket.go) already
+// allows an empty Origin unconditionally ("non-browser or same-origin"), so
+// this costs nothing on the upgrade-origin-policy side either.
+//
 // Traces to: Bug-3 (concurrent sessions), Bug-5 (replay ordering).
 func wsConnect(tb testing.TB, gw *testutil.TestGateway) *websocket.Conn {
 	tb.Helper()
 	wsURL := strings.Replace(gw.URL, "http://", "ws://", 1) + "/api/v1/chat/ws"
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
-	header := http.Header{}
-	header.Set("Origin", gw.URL)
 
-	conn, resp, err := dialer.Dial(wsURL, header)
+	conn, resp, err := dialer.Dial(wsURL, nil)
 	if err != nil {
 		if resp != nil {
 			_ = resp.Body.Close()
