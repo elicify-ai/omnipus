@@ -615,14 +615,24 @@ func (r *ToolRegistry) ExecuteWithContext(
 		if result.IsError {
 			decision = audit.DecisionError
 		}
+		// UAT 2026-09-13 D-85: carry WHAT the call acted on (path, id,
+		// operation, property — the identifying keys only, never content) and
+		// which session it ran in, so an auditor can reconstruct which note
+		// changed and how, not merely that a tool ran. audit.SalientToolArgs
+		// owns the allowlist.
+		details := map[string]any{
+			"duration_ms": duration.Milliseconds(),
+		}
+		if salient := audit.SalientToolArgs(name, args); salient != nil {
+			details["args"] = salient
+		}
 		if err := auditLog.Log(&audit.Entry{
-			Event:    audit.EventToolCall,
-			Decision: decision,
-			AgentID:  agentID,
-			Tool:     name,
-			Details: map[string]any{
-				"duration_ms": duration.Milliseconds(),
-			},
+			Event:     audit.EventToolCall,
+			Decision:  decision,
+			AgentID:   agentID,
+			SessionID: ToolTranscriptSessionID(ctx),
+			Tool:      name,
+			Details:   details,
 		}); err != nil {
 			slog.Error("SEC-15: audit log write failed for tool execution",
 				"tool", name, "agent", agentID, "error", err)
