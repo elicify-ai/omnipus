@@ -3191,6 +3191,24 @@ func (e MessageToolCallsStatus) Valid() bool {
 	}
 }
 
+// Defines values for MessageTruncationReason.
+const (
+	MessageTruncationReasonCancelled       MessageTruncationReason = "cancelled"
+	MessageTruncationReasonMaxOutputTokens MessageTruncationReason = "max_output_tokens"
+)
+
+// Valid indicates whether the value is a known member of the MessageTruncationReason enum.
+func (e MessageTruncationReason) Valid() bool {
+	switch e {
+	case MessageTruncationReasonCancelled:
+		return true
+	case MessageTruncationReasonMaxOutputTokens:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MessageType.
 const (
 	MessageTypeCompaction   MessageType = "compaction"
@@ -5768,6 +5786,24 @@ func (e SessionDetailMessagesToolCallsStatus) Valid() bool {
 	case SessionDetailMessagesToolCallsStatusRunning:
 		return true
 	case SessionDetailMessagesToolCallsStatusSuccess:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesTruncationReason.
+const (
+	SessionDetailMessagesTruncationReasonCancelled       SessionDetailMessagesTruncationReason = "cancelled"
+	SessionDetailMessagesTruncationReasonMaxOutputTokens SessionDetailMessagesTruncationReason = "max_output_tokens"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesTruncationReason enum.
+func (e SessionDetailMessagesTruncationReason) Valid() bool {
+	switch e {
+	case SessionDetailMessagesTruncationReasonCancelled:
+		return true
+	case SessionDetailMessagesTruncationReasonMaxOutputTokens:
 		return true
 	default:
 		return false
@@ -12503,8 +12539,11 @@ type Message struct {
 		Tool string `json:"tool"`
 	} `json:"tool_calls,omitempty"`
 
-	// Truncated Set to true on the last assistant entry when a turn is canceled mid-stream (FR-14). Only present when true. The SPA renders an "(interrupted)" suffix on the bubble when this is set.
+	// Truncated Set to true on the last assistant entry when the entry is incomplete — see `truncation_reason` for why. Only present when true.
 	Truncated *bool `json:"truncated,omitempty"`
+
+	// TruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means "cancelled" — every entry written before this field existed predates it and was always a cancel (ADR-087 D2).
+	TruncationReason *MessageTruncationReason `json:"truncation_reason,omitempty"`
 
 	// TurnId Turn identifier — present only on type="turn_canceled" entries (FR-15). Identifies the turn that was canceled.
 	TurnId *string `json:"turn_id,omitempty"`
@@ -12602,6 +12641,9 @@ type MessageToolCallsContentState string
 
 // MessageToolCallsStatus Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 type MessageToolCallsStatus string
+
+// MessageTruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means "cancelled" — every entry written before this field existed predates it and was always a cancel (ADR-087 D2).
+type MessageTruncationReason string
 
 // MessageType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
 type MessageType string
@@ -15059,8 +15101,11 @@ type SessionDetail struct {
 			Tool string `json:"tool"`
 		} `json:"tool_calls,omitempty"`
 
-		// Truncated Set to true on the last assistant entry when a turn is canceled mid-stream (FR-14). Only present when true. The SPA renders an "(interrupted)" suffix on the bubble when this is set.
+		// Truncated Set to true on the last assistant entry when the entry is incomplete — see `truncation_reason` for why. Only present when true.
 		Truncated *bool `json:"truncated,omitempty"`
+
+		// TruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means "cancelled" — every entry written before this field existed predates it and was always a cancel (ADR-087 D2).
+		TruncationReason *SessionDetailMessagesTruncationReason `json:"truncation_reason,omitempty"`
 
 		// TurnId Turn identifier — present only on type="turn_canceled" entries (FR-15). Identifies the turn that was canceled.
 		TurnId *string `json:"turn_id,omitempty"`
@@ -15267,6 +15312,9 @@ type SessionDetailMessagesToolCallsContentState string
 
 // SessionDetailMessagesToolCallsStatus Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 type SessionDetailMessagesToolCallsStatus string
+
+// SessionDetailMessagesTruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means "cancelled" — every entry written before this field existed predates it and was always a cancel (ADR-087 D2).
+type SessionDetailMessagesTruncationReason string
 
 // SessionDetailMessagesType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
 type SessionDetailMessagesType string

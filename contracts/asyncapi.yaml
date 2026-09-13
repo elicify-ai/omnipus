@@ -1702,6 +1702,9 @@ components:
         tool_args:
           message: "The model filled in a tool’s arguments incorrectly. Retry — Verbose chat shows which tool and what went wrong."
           attribution: model
+        tool_call_truncated:
+          message: "The model's tool call was cut off at its output limit before it finished. Ask for less in one step, or split the work."
+          attribution: model
         schema:
           message: "We sent the model provider a request it couldn’t process — that’s a bug on our side, not yours. Retry the turn, or open Verbose chat for technical details."
           attribution: product
@@ -1750,6 +1753,7 @@ components:
             - content_policy
             - context_too_long
             - tool_args
+            - tool_call_truncated
             - schema
             - agent_not_configured
             - workspace_unavailable
@@ -1851,6 +1855,9 @@ components:
         tool_args:
           message: "The model filled in a tool’s arguments incorrectly. Retry — Verbose chat shows which tool and what went wrong."
           attribution: model
+        tool_call_truncated:
+          message: "The model's tool call was cut off at its output limit before it finished. Ask for less in one step, or split the work."
+          attribution: model
         schema:
           message: "We sent the model provider a request it couldn’t process — that’s a bug on our side, not yours. Retry the turn, or open Verbose chat for technical details."
           attribution: product
@@ -1899,6 +1906,7 @@ components:
             - content_policy
             - context_too_long
             - tool_args
+            - tool_call_truncated
             - schema
             - agent_not_configured
             - workspace_unavailable
@@ -2843,9 +2851,10 @@ components:
             '
         turn_id:
           type: string
-          description: 'Turn-correlation identifier (from TranscriptEntry.TurnID), stamped on assistant entries and turn-cancellation
+          description: >
+            Turn-correlation identifier (from TranscriptEntry.TurnID), stamped on assistant entries and turn-cancellation
             entries. Lets the client match a replayed turn_canceled entry to the specific preceding assistant message it cancels,
-            without relying on stream adjacency (async delegation can interleave other agents''/turns'' frames in between).
+            without relying on stream adjacency (async delegation can interleave other agents'/turns' frames in between).
             Omitted for legacy entries written before turn-id stamping landed.
         producing_session_id:
           type: string
@@ -2854,8 +2863,26 @@ components:
             ADR-057 FR-012/FR-013. Present iff it differs from session_id.
             Class (b) (FR-089): absent for this frame type — emitted by the
             gateway replay path, not by a turn.
-
-            '
+        truncated:
+          type: boolean
+          description: >
+            ADR-087 D2. Populated from TranscriptEntry.Truncated when replaying an
+            incomplete assistant entry — see truncation_reason for why. Only
+            present when true. Replay emits this even when content is empty
+            (an entry with Truncated && Content == "" still passes through, so
+            the SPA can render a suffix with no body).
+        truncation_reason:
+          type: string
+          enum:
+          - cancelled
+          - max_output_tokens
+          description: >
+            ADR-087 D2. Populated from TranscriptEntry.TruncationReason. Narrows
+            why truncated is true: "cancelled" (the user canceled the turn
+            mid-stream) or "max_output_tokens" (the provider's output-token limit
+            cut the answer off before it finished). Absent on a truncated: true
+            frame means "cancelled" — every entry written before this field
+            existed predates it and was always a cancel.
     ReplayErrorFrame:
       title: ReplayErrorFrame
       description: 'Server → client. Replay of a system-error transcript entry (Phase 1B, FR-014). Emitted by the replay path

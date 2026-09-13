@@ -3732,10 +3732,16 @@ export interface components {
              */
             messages_compacted?: number;
             /**
-             * @description Set to true on the last assistant entry when a turn is canceled mid-stream (FR-14). Only present when true. The SPA renders an "(interrupted)" suffix on the bubble when this is set.
+             * @description Set to true on the last assistant entry when the entry is incomplete — see `truncation_reason` for why. Only present when true.
              * @example true
              */
             truncated?: boolean;
+            /**
+             * @description Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means "cancelled" — every entry written before this field existed predates it and was always a cancel (ADR-087 D2).
+             * @example max_output_tokens
+             * @enum {string}
+             */
+            truncation_reason?: "cancelled" | "max_output_tokens";
             /**
              * @description Turn identifier — present only on type="turn_canceled" entries (FR-15). Identifies the turn that was canceled.
              * @example turn-T3

@@ -455,14 +455,22 @@ func FixtureReplayMessageFrame_Populated() ReplayMessageFrame {
 	agentId := "jim"
 	msgId := "msg-uuid-1"
 	ts := "2026-05-17T10:00:00Z"
+	// ADR-087 D2: truncated + truncation_reason populated so this fixture
+	// actually exercises the additionalProperties:false schema check for
+	// these two fields — an omitempty field with no populated fixture would
+	// ship green without ever being validated.
+	truncated := true
+	truncationReason := "max_output_tokens"
 	return ReplayMessageFrame{
-		Type:      "replay_message",
-		SessionId: "sess-1",
-		Role:      "assistant",
-		Content:   "Hello! How can I help you today?",
-		AgentId:   &agentId,
-		Id:        &msgId,
-		Timestamp: &ts,
+		Type:             "replay_message",
+		SessionId:        "sess-1",
+		Role:             "assistant",
+		Content:          "Hello! How can I help you today?",
+		AgentId:          &agentId,
+		Id:               &msgId,
+		Timestamp:        &ts,
+		Truncated:        &truncated,
+		TruncationReason: &truncationReason,
 	}
 }
 

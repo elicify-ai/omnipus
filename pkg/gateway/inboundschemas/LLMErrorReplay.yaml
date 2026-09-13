@@ -77,6 +77,9 @@ x-user-messages:
   tool_args:
     message: "The model filled in a tool’s arguments incorrectly. Retry — Verbose chat shows which tool and what went wrong."
     attribution: model
+  tool_call_truncated:
+    message: "The model's tool call was cut off at its output limit before it finished. Ask for less in one step, or split the work."
+    attribution: model
   schema:
     message: "We sent the model provider a request it couldn’t process — that’s a bug on our side, not yours. Retry the turn, or open Verbose chat for technical details."
     attribution: product
@@ -125,6 +128,7 @@ properties:
       - content_policy
       - context_too_long
       - tool_args
+      - tool_call_truncated
       - schema
       - agent_not_configured
       - workspace_unavailable
