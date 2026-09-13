@@ -1180,14 +1180,13 @@ func (t *DescribeTool) Name() string { return "knowledge_describe" }
 // it grants — here the whole-vault integrity sweep, not the common
 // orientation read.
 func (t *DescribeTool) Description() string {
-	return "Read this knowledge base before querying it. Compact text: the SAVED VIEWS that already " +
-		"exist (look before inventing a filter), collections in scope, every record type with " +
-		"its properties and enum values, the note templates, and index freshness. Call " +
-		"this first — a guessed property, type or template name is refused, and the real ones " +
-		"are here. check_integrity sweeps the WHOLE knowledge base for duplicate identifiers, " +
-		"relations resolving to nothing or the wrong type, broken wikilinks, orphan notes, " +
-		"index rows with no note, ambiguous note names, malformed frontmatter and values that do " +
-		"not conform to their declaration; bounded, says when it clamps. Reads only."
+	return "Read this knowledge base before querying it. Compact text: SAVED VIEWS (look before " +
+		"inventing a filter), collections in scope, each record type's properties and enum values, " +
+		"note templates, index freshness. Call this first — a guessed property, type or template " +
+		"name is refused; the real ones are here. check_integrity sweeps the WHOLE knowledge base " +
+		"for duplicate identifiers, relations resolving to nothing or the wrong type, broken " +
+		"wikilinks, orphan notes, index rows with no note, ambiguous note names, malformed " +
+		"frontmatter and non-conforming values; bounded, says when it clamps. Reads only."
 }
 
 // Scope classifies the tool for per-agent visibility filtering.

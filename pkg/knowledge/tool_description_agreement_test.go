@@ -520,7 +520,7 @@ var integrityCategoryPhrase = map[IntegrityCategory]string{
 	// UAT 2026-09-13, D-06: the two health categories the indexer used to
 	// detect and discard.
 	CategoryMalformedFrontmatter: "malformed frontmatter",
-	CategoryNonConformingValue:   "values that do not conform to their declaration",
+	CategoryNonConformingValue:   "non-conforming values",
 }
 
 // TestDescribeDescription_NamesEveryIntegrityCategory — FR-079 requires the
