@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 import { installPixels, instrumentRoutes, stateIs, type InputState } from './input-connection-probe';
 
-// Harness-only tests: native page events and canvas→video decode are real;
+// Local Playwright harness tests: native page events and canvas→video decode are real;
 // no gateway, encoder or remote transport claim is made by this suite.
 const html = fs.readFileSync(fileURLToPath(new URL('./input-connection-fixture.html', import.meta.url)), 'utf8');
 const initial: InputState = { nonce: 12345, clicks: 0, downs: 0, ups: 0, held: 0, scroll: 0, drags: 0, errors: 0, text: '' };

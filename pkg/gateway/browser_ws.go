@@ -1391,7 +1391,7 @@ func (h *BrowserWSHandler) handleAttach(
 	// away would be a lie the SPA would act on.
 	if !state.bindAttachment(epoch, mgr, chatSessionID, panelSessionID) {
 		slog.Debug("browser-ws: attach superseded before commit — detaching what it built",
-			"viewer_id", viewerID, "session_id", chatSessionID, "panel_session_id", panelSessionID)
+			"viewer_id", browserLogValue(viewerID), "session_id", browserLogValue(chatSessionID), "panel_session_id", browserLogValue(panelSessionID))
 		h.detach(mgr, chatSessionID, panelSessionID, viewerID, userID)
 		return
 	}
@@ -2003,7 +2003,7 @@ func (h *BrowserWSHandler) handleViewportContext(ctx context.Context, wc *browse
 		markBrowserInputControlSuccess(ctx)
 	}
 	if err != nil && !commandWasSuperseded(ctx, attachment) {
-		slog.Warn("browser-ws: viewport resize failed", "error", err, "viewer_id", viewerID)
+		slog.Warn("browser-ws: viewport resize failed", "error", browserLogValue(err.Error()), "viewer_id", browserLogValue(viewerID))
 		sendFailure("could not resize the browser viewport", "viewport-failed")
 	}
 }

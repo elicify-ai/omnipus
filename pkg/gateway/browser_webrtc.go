@@ -404,7 +404,7 @@ func (h *BrowserWSHandler) handleWebRTCOffer(
 		if errors.Is(offerErr, webrtc.ErrNoIngestVideoTrack) {
 			reason = "ingest_timeout"
 		}
-		slog.Warn("browser-webrtc: viewer offer failed", "error", offerErr, "agent_id", frame.AgentId, "viewer_id", viewerID, "reason", reason)
+		slog.Warn("browser-webrtc: viewer offer failed", "error", browserLogValue(offerErr.Error()), "agent_id", browserLogValue(frame.AgentId), "viewer_id", browserLogValue(viewerID), "reason", browserLogValue(reason))
 		h.auditStream(userID, frame.AgentId, audit.SeverityWarn, audit.EventBrowserWebRTCViewerOfferFailed,
 			map[string]any{"session_id": sessID, "viewer_id": viewerID, "reason": reason, "error": offerErr.Error()})
 		sendState(true, false, false, reason, offerErr)
@@ -665,12 +665,12 @@ func (h *BrowserWSHandler) watchEncoderLiveness(cs *browser.CaptureSession, agen
 			lastReceipt = serial
 			if stallTicks >= encoderLivenessVideoStallTicks {
 				if cs.ReportCaptureFailureForObservation(health) {
-					slog.Warn("browser-webrtc: capture stage failed; requesting bounded recovery", "stage", stageFailure, "agent_id", agentID, "receipt_serial", serial, "stall_ticks", stallTicks, "check_interval", checkInterval)
+					slog.Warn("browser-webrtc: capture stage failed; requesting bounded recovery", "stage", stageFailure, "agent_id", browserLogValue(agentID), "receipt_serial", serial, "stall_ticks", stallTicks, "check_interval", checkInterval)
 				}
 				stallTicks = 0
 			}
 			if cs.StopIfIngestHeartbeatStale(snapshot.BindingEpoch, snapshot.LastPingAt, now, staleAfter) {
-				slog.Warn("browser-webrtc: encoder liveness watchdog — no ping beacon received, stopping capture session", "agent_id", agentID, "last_ping_at", snapshot.LastPingAt, "stale_after", staleAfter)
+				slog.Warn("browser-webrtc: encoder liveness watchdog — no ping beacon received, stopping capture session", "agent_id", browserLogValue(agentID), "last_ping_at", snapshot.LastPingAt, "stale_after", staleAfter)
 				return
 			}
 		}

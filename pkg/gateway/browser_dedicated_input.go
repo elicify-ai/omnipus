@@ -134,7 +134,7 @@ func (h *BrowserWSHandler) dispatchDedicatedInputOffer(wc *browserWSConn, state 
 			return
 		}
 		if old != nil {
-			if err := mgr.Live().ReleaseInputSourceContext(ctx, a.panelSessionID, old.RetiredSource()); err != nil {
+			if releaseErr := mgr.Live().ReleaseInputSourceContext(ctx, a.panelSessionID, old.RetiredSource()); releaseErr != nil {
 				sendState("Previous input release failed. Retry input.")
 				cancel()
 				return
@@ -155,11 +155,11 @@ func (h *BrowserWSHandler) dispatchDedicatedInputOffer(wc *browserWSConn, state 
 			closed := h.mediaClosed
 			h.mediaConnMu.Unlock()
 			if closed {
-				return nil, errors.New("Browser transport is closed.")
+				return nil, errors.New("browser transport is closed")
 			}
 			return webrtc.NewDedicatedInputPeer(route, webrtc.Config{StunServer: cfg.Tools.Browser.WebRTCStunServer, MediaUDPMux: h.sharedMediaUDPMux(cfg), MediaTCPMux: h.sharedMediaTCPMux(cfg), PublicIPs: resolveWebRTCPublicIPs(cfg)}, f.InputEpoch, control, func(origin context.Context, in generated.BrowserInputFrame) {
-				raw, err := json.Marshal(in)
-				if err == nil {
+				raw, marshalErr := json.Marshal(in)
+				if marshalErr == nil {
 					sink(origin, viewer, raw)
 				}
 			}, func(raw []byte) error {

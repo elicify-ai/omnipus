@@ -47,9 +47,9 @@ func TestDedicatedInputWireContracts(t *testing.T) {
 				bad["input_epoch"] = value
 				check(bad, false)
 			}
-			max := clone()
-			max["input_epoch"] = 9007199254740991.0
-			check(max, true)
+			maximum := clone()
+			maximum["input_epoch"] = 9007199254740991.0
+			check(maximum, true)
 			zero := clone()
 			zero["control_epoch"] = 0
 			check(zero, true)

@@ -164,7 +164,7 @@ func (h *captureIngestWSHandler) readCaptureIngest(ctx context.Context, cancel c
 				continue
 			}
 			if recordCaptureHealth(cs, epoch, frame) && frame.Reason != nil && *frame.Reason != "" {
-				slog.Warn("capture-ingest: encoder reported a stream-quality failure", "reason", *frame.Reason, "browsing_key", browsingKey)
+				slog.Warn("capture-ingest: encoder reported a stream-quality failure", "reason", browserLogValue(*frame.Reason), "browsing_key", browserLogValue(browsingKey))
 			}
 		}
 	}

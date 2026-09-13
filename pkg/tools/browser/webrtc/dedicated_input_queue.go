@@ -75,7 +75,9 @@ func (q *dedicatedInputQueue) run(ctx context.Context, done chan struct{}, wake 
 		}
 	}
 }
-func validInputCounter(v *int, min int) bool { return v != nil && *v >= min && *v <= maxInputSequence }
+func validInputCounter(v *int, minimum int) bool {
+	return v != nil && *v >= minimum && *v <= maxInputSequence
+}
 func inputTransition(kind string) bool {
 	return kind == "mouse_down" || kind == "mouse_up" || kind == "key_down" || kind == "key_up"
 }

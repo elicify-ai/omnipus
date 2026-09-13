@@ -24,7 +24,7 @@ async function instrumentFault(page: Page, stage: Stage) {
   await instrumentRoutes(page);
   await page.addInitScript((fault: Stage) => {
     const peers: Array<{ pc: RTCPeerConnection; channels: RTCDataChannel[] }> = [];
-    let firstInput: RTCPeerConnection | null = null;
+    const faultTarget: { peer: RTCPeerConnection | null } = { peer: null };
     let armed = false;
     let input: { pc: RTCPeerConnection; channels: RTCDataChannel[] } | undefined;
     let release = () => {};
@@ -39,7 +39,7 @@ async function instrumentFault(page: Page, stage: Stage) {
     const probe: FinalProbe = {
       held: false, sent, received, events,
       snapshot: () => ({ atMs: performance.now(), peers: peers.map(({ pc, channels }, peer) => ({ peer, state: pc.connectionState, iceState: pc.iceConnectionState, signalingState: pc.signalingState, channels: channels.map(ch => ({ label: ch.label, state: ch.readyState })) })) }),
-      arm() { armed = true; firstInput = null; }, release: () => release(),
+      arm() { armed = true; faultTarget.peer = null; }, release: () => release(),
       bindInput() {
         const active = peers.filter(row => row.channels.some(ch => ch.label === 'input-reliable') && row.pc.connectionState === 'connected');
         if (active.length !== 1) throw Error('Exactly one connected input peer required');
@@ -67,14 +67,14 @@ async function instrumentFault(page: Page, stage: Stage) {
         peers.find(row => row.pc === this)!.channels.push(channel);
         record(this, 'channel-created', label);
         for (const event of ['open', 'error', 'close']) channel.addEventListener(event, () => record(this, `channel-${event}`, label));
-        if (label === 'input-reliable' && firstInput === null) firstInput = this;
+        if (label === 'input-reliable' && faultTarget.peer === null) faultTarget.peer = this;
         return channel;
       }
       createOffer(options?: RTCOfferOptions): Promise<RTCSessionDescriptionInit>;
       createOffer(success: RTCSessionDescriptionCallback, failure: RTCPeerConnectionErrorCallback, options?: RTCOfferOptions): Promise<void>;
       async createOffer(options?: RTCOfferOptions | RTCSessionDescriptionCallback, failure?: RTCPeerConnectionErrorCallback, legacyOptions?: RTCOfferOptions): Promise<RTCSessionDescriptionInit | void> {
         record(this, 'createOffer-enter');
-        if (armed && fault === 'before-offer' && this === firstInput) await hold(this);
+        if (armed && fault === 'before-offer' && this === faultTarget.peer) await hold(this);
         if (typeof options === 'function') return super.createOffer(options, failure!, legacyOptions);
         const offer = await super.createOffer(options);
         record(this, 'createOffer-complete');
@@ -82,7 +82,7 @@ async function instrumentFault(page: Page, stage: Stage) {
       }
       async setRemoteDescription(description: RTCSessionDescriptionInit) {
         record(this, 'setRemoteDescription-enter', description.type);
-        if (armed && (fault === 'answer-pending' || fault === 'answer-timeout') && this === firstInput) await hold(this);
+        if (armed && (fault === 'answer-pending' || fault === 'answer-timeout') && this === faultTarget.peer) await hold(this);
         try {
           await super.setRemoteDescription(description);
           record(this, 'setRemoteDescription-complete', description.type);
@@ -159,7 +159,7 @@ for (const stage of ['media-close', 'before-offer', 'answer-pending', 'answer-ti
       await page.keyboard.press('x');
       expect((await routeEvidence(page)).routes).toHaveLength(routesBefore);
       // Release the now-retired native call; the next peer is not the armed
-      // firstInput and must negotiate normally after explicit user Retry.
+      // fault target and must negotiate normally after explicit user Retry.
       await page.evaluate(() => (window as unknown as FinalWindow).__browserFinal.release());
       await page.getByRole('button', { name: 'Retry input', exact: true }).click();
       await ready(page);
