@@ -256,23 +256,84 @@ func isBroadMountTarget(resolved string) bool {
 	if home, err := os.UserHomeDir(); err == nil && filepath.Clean(home) == resolved {
 		return true
 	}
-	switch resolved {
-	case "/etc", "/usr", "/var", "/System", "/Library", "/bin", "/sbin", "/opt", "/Users", "/home":
+	if isSystemMountTarget(resolved) {
+		return true
+	}
+	if _, listed := broadMountRoots[resolved]; listed {
+		return true
+	}
+	// Compare on real paths too: on macOS /tmp and /var are symlinks into
+	// /private, so a target the operator typed as /tmp arrives here as
+	// /private/tmp and must still be judged as the broad location it is
+	// (UAT 2026-09-13 D-117: /tmp mounted with no warning at all).
+	for root := range broadMountRoots {
+		if realPath, err := filepath.EvalSymlinks(root); err == nil && realPath == resolved {
+			return true
+		}
+	}
+	// Somebody's home directory: a direct child of /Users or /home.
+	if parent := filepath.Dir(resolved); parent == "/Users" || parent == "/home" {
 		return true
 	}
 	return false
 }
+
+// broadMountRoots are locations that are LEGITIMATE to mount but so wide that
+// the operator must be warned (FR-7.4 warn-and-allow): every file under them
+// becomes writable by every agent on the workspace.
+var broadMountRoots = map[string]struct{}{
+	"/tmp": {}, "/private/tmp": {}, "/var/tmp": {}, "/private/var/tmp": {},
+	"/opt": {}, "/Users": {}, "/home": {}, "/Volumes": {}, "/Applications": {},
+	"/mnt": {}, "/media": {}, "/srv": {},
+}
+
+// systemMountRoots are operating-system-owned trees that no agent workspace
+// legitimately lives in. Mounting one is refused outright (UAT 2026-09-13
+// D-117): writing into /etc, /usr or /System is never "a folder the agent
+// works in", it is a machine-wide change, and a refusal here is the one
+// case the founder's 2026-08-12 warn-and-allow ruling did not contemplate
+// (that ruling addressed $HOME and /, which remain warn-and-allow). A
+// subdirectory of one of these (e.g. /var/www, /usr/local/src) is NOT
+// refused — only the root of the tree is.
+var systemMountRoots = map[string]struct{}{
+	"/etc": {}, "/private/etc": {}, "/usr": {}, "/bin": {}, "/sbin": {}, "/lib": {}, "/lib64": {},
+	"/var": {}, "/private/var": {}, "/private": {}, "/System": {}, "/Library": {},
+	"/dev": {}, "/proc": {}, "/sys": {}, "/boot": {}, "/root": {}, "/cores": {},
+	`C:\Windows`: {}, `C:\Program Files`: {}, `C:\Program Files (x86)`: {},
+}
+
+// isSystemMountTarget reports whether resolved IS one of systemMountRoots,
+// comparing real paths as well so the macOS /etc -> /private/etc symlink
+// pair is judged the same whichever spelling arrives.
+func isSystemMountTarget(resolved string) bool {
+	if _, ok := systemMountRoots[resolved]; ok {
+		return true
+	}
+	for root := range systemMountRoots {
+		if realPath, err := filepath.EvalSymlinks(root); err == nil && realPath == resolved {
+			return true
+		}
+	}
+	return false
+}
+
+// IsSystemMountTarget is the exported form of isSystemMountTarget, for the
+// host-folder picker, so it greys out the same directories the create path
+// refuses.
+func IsSystemMountTarget(resolved string) bool { return isSystemMountTarget(resolved) }
 
 // CheckMountTarget resolves rawHostPath to its realpath and classifies it
 // against omnipusHome (spec FR-7.4-FR-7.7, ADR-063 D6, operator decision
 // 2026-08-12 overruling ADR-063 D6's original wider-refusal text: "warn and
 // allow applies to all but the omnipus directory").
 //
-//   - REFUSES (FR-7.5, non-nil error wrapping ErrMountRefused) only when the
+//   - REFUSES (FR-7.5, non-nil error wrapping ErrMountRefused) when the
 //     REALPATH-RESOLVED target IS omnipusHome or lies INSIDE it — so a
 //     symlink pointing at $OMNIPUS_HOME is refused too, which is the form
 //     FR-7.5 calls out as the one nobody would reach for directly but must
-//     still be covered.
+//     still be covered — and (UAT 2026-09-13 D-117) when the target IS the
+//     root of an operating-system tree (systemMountRoots: /etc, /usr,
+//     /System, …). / and $HOME stay warn-and-allow per the 2026-08-12 ruling.
 //   - Otherwise WARNS AND ALLOWS (FR-7.6/FR-7.4): a non-empty warning string
 //     is returned (nil error) when the target CONTAINS omnipusHome (mounting
 //     $HOME or / when $OMNIPUS_HOME lives underneath — FR-7.6) or is
@@ -304,6 +365,12 @@ func CheckMountTarget(rawHostPath, omnipusHome string) (resolved string, warning
 		return "", "", fmt.Errorf(
 			"%w: %q %s the Omnipus data directory (%q) — mounting it would make config.json and master.key writable and let an agent disable its own sandbox (FR-7.5, ADR-063 D6)",
 			ErrMountRefused, resolved, relation, resolvedHome,
+		)
+	}
+	if isSystemMountTarget(resolved) {
+		return "", "", fmt.Errorf(
+			"%w: %q is an operating-system directory — no agent workspace lives there, and writing into it changes the whole machine. Mount a specific folder inside it if you really need one (UAT D-117)",
+			ErrMountRefused, resolved,
 		)
 	}
 

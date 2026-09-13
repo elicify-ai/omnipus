@@ -8780,6 +8780,48 @@ paths:
         '500':
           $ref: '#/components/responses/500InternalServerError'
 
+  /library/preview-token/{token}:
+    delete:
+      operationId: revokeLibraryPreviewToken
+      summary: Revoke a Library preview token before it expires
+      description: >
+        Invalidates one preview token immediately (UAT 2026-09-13 D-110).
+        Closing a preview used to leave its token answering 200 for the rest
+        of its 15-minute lifetime; the only revocation was opening ANOTHER
+        preview in the same pane. The SPA calls this when a preview pane is
+        closed so the URL stops working the moment the reader is done with
+        it.
+
+
+        Idempotent and deliberately uninformative: 204 whether the token was
+        live, already expired, already revoked, or never existed (FR-003n —
+        a 404 here would be an oracle for whether a token ever existed). The
+        caller must be authenticated, but any session may revoke any token
+        it holds: knowing the value IS holding the credential, and revoking
+        it can only narrow access.
+      tags:
+      - Library
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+        description: The token string returned by mintLibraryPreviewToken.
+      responses:
+        '204':
+          description: The token is no longer valid (or never was). No response body.
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
   /library/{workspace_id}/inline-disposition:
     get:
       operationId: getLibraryInlineDisposition

@@ -2799,6 +2799,16 @@ func registerSharedTools(
 						if !ok {
 							return false, name + " — agent not found"
 						}
+						// UAT 2026-09-13 D-84: a policy deny that bites at
+						// tool-LOAD time used to leave no deny row at all — the
+						// refusal surfaced only as a ToolSearch error, so an
+						// auditor searching for denied writes to a tool found
+						// nothing. Every policy-denied load below goes through
+						// this one closure so the audit row is never forgotten.
+						deniedByPolicy := func() (bool, string) {
+							al.emitToolLoadPolicyDenyAudit(ctx, callerID, name)
+							return false, name + " — denied by this agent's policy"
+						}
 						allAgentTools := callerAgent.Tools.GetAll()
 						policyFiltered, policyVerdicts := tools.FilterToolsByPolicy(
 							allAgentTools,
@@ -2821,7 +2831,7 @@ func registerSharedTools(
 								}
 							}
 							// Policy-denied full-tier (or genuinely not found for this tier).
-							return false, name + " — denied by this agent's policy"
+							return deniedByPolicy()
 						}
 						for _, t := range policyFiltered {
 							if t.Name() == name {
@@ -2859,13 +2869,13 @@ func registerSharedTools(
 								return true, ""
 							}
 							// Tool exists (visible or hidden) but policy denies it.
-							return false, name + " — denied by this agent's policy"
+							return deniedByPolicy()
 						}
 						// Tool is not in GetAll() and not hidden — check if it's in the full
 						// registered set but policy-filtered out (i.e. registered but denied).
 						for _, t := range allAgentTools {
 							if t.Name() == name {
-								return false, name + " — denied by this agent's policy"
+								return deniedByPolicy()
 							}
 						}
 						// Genuinely unknown: suggest the closest registered name so the model
@@ -11459,6 +11469,15 @@ turnLoop:
 			} else {
 				ts.recordToolSuccess(toolCBSig)
 			}
+			// UAT 2026-09-13 D-23: a loop of SUCCESSFUL, mutually-cancelling
+			// calls (create X / delete X / create X …) never touches the
+			// streak above. Record every dispatched call's signature and warn
+			// once the turn's history repeats a short cycle; the pre-dispatch
+			// check above (toolCircuitBreakerTripped) refuses the call that
+			// would extend it past the break point.
+			if loopNotice := ts.recordToolCallForLoopDetection(toolCBSig); loopNotice != "" {
+				toolResult.ForLLM = toolResult.ContentForLLM() + loopNotice
+			}
 			// Always deliver any media the tool produced AND tag the result with
 			// artifact references so the LLM can reason about them in the
 			// follow-up call. The follow-up call itself is now unconditional —
@@ -14045,6 +14064,25 @@ func (al *AgentLoop) emitPolicyDenyAudit(
 		SessionID: ts.sessionKey,
 		User:      ts.auditUser(), // FR-017
 		Details:   details,
+	})
+}
+
+// emitToolLoadPolicyDenyAudit writes the tool.policy.deny_attempted row for a
+// tool whose LOAD (ToolSearch) was refused by the calling agent's policy
+// (UAT 2026-09-13 D-84). Same event and decision as emitPolicyDenyAudit's
+// dispatch-time deny, so one audit query finds both; Details.context names
+// which gate refused. Nil audit logger is a no-op (audit.EmitEntry).
+func (al *AgentLoop) emitToolLoadPolicyDenyAudit(ctx context.Context, agentID, toolName string) {
+	audit.EmitEntry(al.auditLogger, &audit.Entry{
+		Event:     audit.EventToolPolicyDenyAttempted,
+		Decision:  audit.DecisionDeny,
+		AgentID:   agentID,
+		Tool:      toolName,
+		SessionID: tools.ToolTranscriptSessionID(ctx),
+		Details: map[string]any{
+			"resolved_policy": "deny",
+			"context":         "tool_load",
+		},
 	})
 }
 

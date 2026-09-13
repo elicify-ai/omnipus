@@ -295,6 +295,11 @@ func (a *restAPI) registerLibraryPreviewRoutes(cm httpHandlerRegistrar) *Preview
 		libraryPreviewMintPath,
 		a.withAuth(withRateLimit(libraryPreviewMintLimiter, routes.handleMintPreviewToken)),
 	)
+	// DELETE /api/v1/library/preview-token/{token} — D-110 revoke-on-close.
+	cm.RegisterHTTPHandler(
+		libraryPreviewMintPath+"/",
+		a.withAuth(withRateLimit(libraryPreviewMintLimiter, routes.handleRevokePreviewToken)),
+	)
 	cm.RegisterHTTPHandler(libraryPreviewPathPrefix, routes.serveHandler())
 	return routes.tokens
 }
@@ -438,7 +443,7 @@ func (p *libraryPreviewRoutes) handleMintPreviewToken(w http.ResponseWriter, r *
 		entryRel = scopeRoot + "/" + cleanEntry
 	}
 
-	token, grant, mintErr := p.tokens.Mint(sessionKey, req.WorkspaceId, scopeRoot, scope)
+	token, grant, mintErr := p.tokens.MintWithEntry(sessionKey, req.WorkspaceId, scopeRoot, scope, entryRel)
 	if mintErr != nil {
 		writeMintError(w, req.WorkspaceId, mintErr)
 		return
@@ -540,6 +545,25 @@ func (p *libraryPreviewRoutes) handleServeLibraryPreview(w http.ResponseWriter, 
 		return
 	}
 
+	// UAT 2026-09-13 D-106: a preview URL opened as a TOP-LEVEL document
+	// (pasted into a tab, "Open frame in new tab") keeps every confidentiality
+	// control but loses every presentation one — the untrusted file owns the
+	// viewport and the tab title on the product's own host, with no
+	// "untrusted content" banner, and can navigate the top window. Browsers
+	// mark such a request Sec-Fetch-Dest: document (a framed navigation is
+	// "iframe"; subresources are "script", "style", "image", …), so the
+	// document case is refused with an interstitial that says where the
+	// preview does open. A browser that sends no Sec-Fetch-Dest at all is
+	// not distinguishable and is served as before.
+	if strings.EqualFold(r.Header.Get("Sec-Fetch-Dest"), "document") {
+		writeLibraryPreviewErrorPage(w, r, http.StatusForbidden,
+			"This preview only opens inside Omnipus",
+			"Preview links show untrusted files inside an isolated frame in the Library. "+
+				"Opened as a page of its own, a file could imitate Omnipus itself. "+
+				"Go back to the Library and open the file there.")
+		return
+	}
+
 	rest, hasPrefix := strings.CutPrefix(r.URL.Path, libraryPreviewPathPrefix)
 	if !hasPrefix {
 		writeLibraryPreviewTokenFailure(w, r)
@@ -567,6 +591,16 @@ func (p *libraryPreviewRoutes) handleServeLibraryPreview(w http.ResponseWriter, 
 	// String-level scope check, layered BEFORE — never instead of — the
 	// syscall-confined open below.
 	if !grant.AllowsRelPath(rel) {
+		writeLibraryPreviewNotFound(w, r)
+		return
+	}
+	// UAT 2026-09-13 D-105: a bundle token serves its entry document and the
+	// WEB ASSETS a page needs (styles, scripts, images, fonts, media, other
+	// pages of the same site) — not every file that happens to share the
+	// directory. A sibling note, spreadsheet, PDF or data file is not what
+	// "a preview of this page" grants; the reader opens those from the
+	// Library and gets their own token.
+	if grant.Scope == PreviewScopeBundle && rel != grant.Entry && !libraryPreviewBundleAssetExt(libraryExtOf(rel)) {
 		writeLibraryPreviewNotFound(w, r)
 		return
 	}
@@ -629,6 +663,50 @@ func (p *libraryPreviewRoutes) handleServeLibraryPreview(w http.ResponseWriter, 
 	// bundle's audio and video can seek, conditional GETs, and correct HEAD
 	// semantics.
 	http.ServeContent(w, r, "", fi.ModTime(), f)
+}
+
+// libraryPreviewBundleAssetExt reports whether a lower-cased extension names
+// a web asset a bundle page may legitimately load or link to (D-105). The
+// list is closed and deliberately excludes every document format that is
+// content in its own right — .md, .txt, .pdf, .json, .csv, office files —
+// and anything executable outside the page (.wasm). Empty extension (a
+// dotfile, or no extension) is refused.
+func libraryPreviewBundleAssetExt(ext string) bool {
+	switch strings.ToLower(ext) {
+	case ".html", ".htm", ".xhtml",
+		".css", ".js", ".mjs", ".map",
+		".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif", ".ico", ".bmp",
+		".woff", ".woff2", ".ttf", ".otf", ".eot",
+		".mp3", ".mp4", ".m4a", ".m4v", ".webm", ".ogg", ".ogv", ".oga", ".wav", ".flac", ".vtt":
+		return true
+	}
+	return false
+}
+
+// handleRevokePreviewToken implements DELETE /api/v1/library/preview-token/{token}
+// (UAT 2026-09-13 D-110): closing a preview used to leave its token answering
+// 200 until expiry — the only revocation was opening another preview in the
+// same pane. The SPA calls this when a preview pane is closed.
+//
+// Idempotent and uninformative by design (FR-003n): 204 whether the token was
+// live, expired, revoked or never existed. Any authenticated session may
+// revoke any token it holds — knowing the value is holding the credential,
+// and revocation can only narrow access.
+func (p *libraryPreviewRoutes) handleRevokePreviewToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		w.Header().Set("Allow", http.MethodDelete)
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	token := strings.Trim(strings.TrimPrefix(r.URL.Path, libraryPreviewMintPath), "/")
+	if token == "" || strings.Contains(token, "/") || len(token) > 128 {
+		jsonErr(w, http.StatusBadRequest, "invalid token")
+		return
+	}
+	if p.tokens.InvalidateToken(token) {
+		logger.InfoCF("rest", "library preview: token revoked on close", map[string]any{})
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // libraryPreviewNeedsCORS reports whether an extension is a webfont, the one

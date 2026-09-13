@@ -467,7 +467,9 @@ func TestLibraryPreview_PolicyIsTheSpecLiteralOnEveryResponse(t *testing.T) {
 		"outside scope":   f.serve(t, http.MethodGet, tokenURL(minted.Token, "secret.txt")),
 		"missing file":    f.serve(t, http.MethodGet, tokenURL(minted.Token, "site/nope.html")),
 		"rejected method": f.serve(t, http.MethodPost, minted.Url),
-		"attachment type": f.serve(t, http.MethodGet, tokenURL(minted.Token, "site/data.bin")),
+		// D-105: a bundle token no longer serves a non-asset sibling; the
+		// attachment-type response is produced through a file grant instead.
+		"attachment type": f.serve(t, http.MethodGet, tokenURL(f.mint(t, gen.LibraryPreviewTokenRequestScopeFile, "site/data.bin").Token, "site/data.bin")),
 	}
 	for name, rec := range responses {
 		assert.Equal(t, want, rec.Header().Get("Content-Security-Policy"),
@@ -930,7 +932,13 @@ func TestLibraryPreview_DispositionFollowsTheAllowList(t *testing.T) {
 		{"site/assets/body.woff2", "font/woff2", true},
 		{"site/data.bin", libraryDefaultContentType, false},
 	} {
-		rec := f.serve(t, http.MethodGet, tokenURL(minted.Token, tc.rel))
+		tok := minted.Token
+		if !libraryPreviewBundleAssetExt(libraryExtOf(tc.rel)) {
+			// D-105: a bundle token serves web assets only; a data file is
+			// reachable through its own file grant.
+			tok = f.mint(t, gen.LibraryPreviewTokenRequestScopeFile, tc.rel).Token
+		}
+		rec := f.serve(t, http.MethodGet, tokenURL(tok, tc.rel))
 		require.Equal(t, http.StatusOK, rec.Code, tc.rel)
 		assert.Equal(t, tc.contentType, rec.Header().Get("Content-Type"),
 			"%s: FR-015b — the type comes from the compiled-in table", tc.rel)

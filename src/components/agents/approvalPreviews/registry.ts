@@ -21,6 +21,5 @@ export const TOOL_APPROVAL_PREVIEWS: Record<string, ToolApprovalPreviewEntry> = 
     title: (ctx) => `${ctx.agentName} wants to add a folder`,
     primaryLabel: 'Add folder',
     secondaryLabel: "Don't add",
-    showCancel: false,
   },
 }

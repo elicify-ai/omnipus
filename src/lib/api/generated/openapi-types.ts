@@ -2909,6 +2909,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/library/preview-token/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke a Library preview token before it expires
+         * @description Invalidates one preview token immediately (UAT 2026-09-13 D-110). Closing a preview used to leave its token answering 200 for the rest of its 15-minute lifetime; the only revocation was opening ANOTHER preview in the same pane. The SPA calls this when a preview pane is closed so the URL stops working the moment the reader is done with it.
+         *
+         *     Idempotent and deliberately uninformative: 204 whether the token was live, already expired, already revoked, or never existed (FR-003n — a 404 here would be an oracle for whether a token ever existed). The caller must be authenticated, but any session may revoke any token it holds: knowing the value IS holding the credential, and revoking it can only narrow access.
+         */
+        delete: operations["revokeLibraryPreviewToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/library/{workspace_id}/inline-disposition": {
         parameters: {
             query?: never;
@@ -7835,8 +7857,14 @@ export interface components {
         /**
          * AgentToolsUpdateRequest
          * @description Request body for PUT /api/v1/agents/{id}/tools. Replaces the agent's tool policy configuration. Supports both the current policy format (builtin.policies, a complete map) and the legacy explicit/inherit mode format (builtin.mode + builtin.visible) for backward compatibility. Legacy fields are converted to policy format server-side before persisting.
+         *     ROUND-TRIP SHAPE (UAT 2026-09-13 D-86): the body of a GET /api/v1/agents/{id}/tools response (AgentToolsResponse — config + tools + agent_type) is ALSO accepted as-is. When the top-level `builtin` is absent and `config.builtin` is present, the server reads the policy map from `config.builtin` (and MCP bindings from `config.mcp`); `tools` and `agent_type` are read-only echoes and are ignored on write. A body carrying neither `builtin` nor `config.builtin` is rejected with 400, never persisted as an empty policy map.
          */
         AgentToolsUpdateRequest: {
+            config?: components["schemas"]["AgentToolsCfg"];
+            /** @description Ignored on write. Present so a GET response body round-trips through PUT unchanged (D-86); the effective per-tool list is always recomputed by the server. */
+            tools?: components["schemas"]["AgentToolEntry"][];
+            /** @description Ignored on write. Present so a GET response body round-trips through PUT unchanged (D-86); an agent's type is not editable here. Deliberately NOT an enum: a second copy of the agent-type enum changes oapi-codegen's collision-avoidance constant naming for the whole file and breaks the hand-written pkg/api/generated/fixtures.go. */
+            agent_type?: string;
             /** @description Builtin tool policy configuration for this agent. */
             builtin?: {
                 /** @description Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field. Required on every request that includes builtin. Legacy callers that only have mode/visible available must resolve them to a complete policies map before sending this request; the server still accepts mode/visible alongside policies (ignored) for one release of transitional compatibility but no longer accepts them alone. */
@@ -21476,6 +21504,30 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    revokeLibraryPreviewToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The token string returned by mintLibraryPreviewToken. */
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The token is no longer valid (or never was). No response body. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["401Unauthorized"];
             429: components["responses"]["429TooManyRequests"];
             500: components["responses"]["500InternalServerError"];
         };

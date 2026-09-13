@@ -48,6 +48,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -816,7 +817,61 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 		ownerSessionID := ToolTranscriptSessionID(ctx)
 		return t.runBackground(ctx, command, cwd, timeoutSeconds, lim, ownerSessionID, cb)
 	}
-	return t.runForeground(ctx, command, lim, timeoutSeconds)
+	started := time.Now()
+	result := t.runForeground(ctx, command, lim, timeoutSeconds)
+	return t.sweepAfterRun(ctx, command, cwd, baseDir, started, result)
+}
+
+// sweepAfterRun runs the post-command escaping-symlink sweep (D-14, see
+// shell_escape_sweep.go) over the turn's roots and appends its report to the
+// tool result. God mode is the operator's explicit opt-out of confinement
+// and is skipped; so is an unrestricted tool (restrictToWorkspace=false),
+// whose whole point is that the workspace is not a boundary. Background runs
+// are not swept: their completion is delivered asynchronously and a sweep
+// there would race the command that is still writing.
+func (t *ExecTool) sweepAfterRun(ctx context.Context, command, cwd, baseDir string, started time.Time, result *ToolResult) *ToolResult {
+	if result == nil || t.godMode || !t.restrictToWorkspace {
+		return result
+	}
+	roots := []string{baseDir}
+	if resolved, err := filepath.EvalSymlinks(baseDir); err == nil {
+		roots = []string{resolved}
+	}
+	if authored, err := ResolveTurnFSPolicy(ctx, t.workingDir, t.restrictToWorkspace); err == nil {
+		roots = append(roots, authored.AllowedRoots...)
+	}
+	res := sweepEscapingSymlinks(roots, roots, started)
+	notice := escapeSweepNotice(res)
+	if notice == "" {
+		return result
+	}
+	if len(res.Removed) > 0 {
+		links := make([]map[string]string, 0, len(res.Removed))
+		for _, r := range res.Removed {
+			links = append(links, map[string]string{"link": r.Link, "target": r.Target})
+		}
+		if t.auditLogger != nil {
+			if err := t.auditLogger.Log(&audit.Entry{
+				Event:    audit.EventExec,
+				Decision: audit.DecisionDeny,
+				AgentID:  ToolAgentID(ctx),
+				Tool:     t.Name(),
+				Command:  command,
+				Details: map[string]any{
+					"cwd":               cwd,
+					"escaping_symlinks": links,
+					"reason":            "symlink(s) escaping the workspace removed after the command ran",
+				},
+			}); err != nil {
+				slog.Warn("bash: audit write failed", "agent_id", ToolAgentID(ctx), "error", err)
+			}
+		}
+	}
+	result.ForLLM = result.ContentForLLM() + notice
+	if result.ForUser != "" {
+		result.ForUser += notice
+	}
+	return result
 }
 
 // turnKernelPolicy derives the per-turn kernel policy for this bash call from
@@ -1109,7 +1164,10 @@ func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string) string
 		// command text, so it must be computed here (byte offsets exist only at
 		// this call site) and threaded down into checkPathSegment, which sees
 		// the path string alone.
-		readOnly := classifier.isReadOnly(start) && !expansionDerived
+		use := classifier.classify(start)
+		if expansionDerived {
+			use.readOnly = false
+		}
 
 		// Colon-joined path list (PATH= assignments, -I a:b-style flags):
 		// each `:`-separated segment is checked independently against the
@@ -1125,7 +1183,7 @@ func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string) string
 		// whatever the command does with it, it does with all of it.
 		if strings.Contains(raw, ":") && colonPathListPattern.MatchString(raw) {
 			for _, seg := range strings.Split(raw, ":") {
-				if msg := t.checkPathSegment(seg, cwdPath, mountRoots, turnPolicy, readPolicyOK, readOnly, expansionDerived); msg != "" {
+				if msg := t.checkPathSegment(seg, cwdPath, mountRoots, turnPolicy, readPolicyOK, use, expansionDerived); msg != "" {
 					return msg
 				}
 			}
@@ -1146,7 +1204,7 @@ func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string) string
 			}
 		}
 
-		if msg := t.checkPathSegment(raw, cwdPath, mountRoots, turnPolicy, readPolicyOK, readOnly, expansionDerived); msg != "" {
+		if msg := t.checkPathSegment(raw, cwdPath, mountRoots, turnPolicy, readPolicyOK, use, expansionDerived); msg != "" {
 			return msg
 		}
 	}
@@ -1161,13 +1219,15 @@ func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string) string
 // turn's workspace mounts (mountRoots, from ResolveTurnFSPolicy.AllowedRoots).
 // Returns "" when the segment is allowed, or a rejection message otherwise.
 //
-// readOnly is the caller's ADR-068 classification of this candidate: true only
-// when guardCommand's pathUseClassifier could PROVE, from the command text,
-// that the reference is a read. It changes exactly one thing — the final
-// out-of-working-directory rejection. Everything above that point (safePaths,
-// the operator allowlist, containment, mounts) is identical for reads and
-// writes, so no existing exemption widens or narrows because of this parameter.
-func (t *ExecTool) checkPathSegment(raw, cwdPath string, mountRoots []string, turnPolicy fspolicy.FSPolicy, readPolicyOK, readOnly, expansionDerived bool) string {
+// use is the caller's ADR-068 classification of this candidate: use.readOnly
+// is true only when guardCommand's pathUseClassifier could PROVE, from the
+// command text, that the reference is a read. It changes exactly one thing —
+// the final out-of-working-directory rejection (and, via use.exec/use.reason,
+// what that rejection SAYS). Everything above that point (safePaths, the
+// operator allowlist, containment, mounts) is identical for reads and writes,
+// so no existing exemption widens or narrows because of this parameter.
+func (t *ExecTool) checkPathSegment(raw, cwdPath string, mountRoots []string, turnPolicy fspolicy.FSPolicy, readPolicyOK bool, use pathUseVerdict, expansionDerived bool) string {
+	readOnly := use.readOnly
 	p, err := filepath.Abs(raw)
 	if err != nil {
 		return "Command blocked by safety guard (cannot resolve path)"
@@ -1250,14 +1310,61 @@ func (t *ExecTool) checkPathSegment(raw, cwdPath string, mountRoots []string, tu
 		// the env var is the recovery path that outranks it. Neither is the
 		// kernel sandbox (`sandbox.mode`) — the confusion between the two is
 		// precisely what UAT defect 002 reported.
-		return fmt.Sprintf(
-			"Command blocked by safety guard (path outside working dir): %q is outside the effective working directory %q and no mount covers it. "+
-				"Rule: bash workspace path guard (RestrictToWorkspace) — a WRITE outside the working directory needs an approved workspace mount; reads outside it are allowed (ADR-068). "+
-				"Fixes: request a mount for that folder (request_mount), or have an operator set sandbox.workspace_path_guard=false (env OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE=false). "+
-				"This is NOT the kernel sandbox setting (sandbox.mode).",
-			p, cwdPath)
+		return outsideWorkDirRefusal(p, cwdPath, use, readOnly && !readPolicyOK)
 	}
 	return ""
+}
+
+// outsideWorkDirRefusal builds the message for an absolute path outside the
+// working directory that no mount covers. It says exactly which of three
+// things was refused — running a program, a reference the guard could not
+// prove is a read, or a read withheld because the turn policy was
+// unresolvable — instead of calling every one of them "a WRITE" (UAT
+// 2026-09-13 D-66, D-44). It also states plainly what this guard is (D-14):
+// a scan of the command text, which a path assembled at runtime never
+// reaches, and names the layer that actually enforces the boundary on this
+// host.
+func outsideWorkDirRefusal(p, cwdPath string, use pathUseVerdict, readWithheld bool) string {
+	var what string
+	switch {
+	case use.exec:
+		what = "RUNNING a program from outside the working directory by its absolute path is refused: ADR-068 opens reads only, and executing is neither a read nor a write. " +
+			"Fix: copy or install the program inside the workspace, or run it through an approved mount."
+	case readWithheld:
+		what = "This looks like a read, but the turn's filesystem policy could not be resolved, so the read exemption is withheld for this command (fail closed). Retry; if it persists, the gateway log names the cause."
+	default:
+		reason := use.reason
+		if reason == "" {
+			reason = "the guard could not prove from the command text that the reference is a read"
+		}
+		what = fmt.Sprintf("The guard treats this reference as a WRITE because %s. Reads outside the working directory are allowed (ADR-068) only when the guard can PROVE the reference is a read from the command text; every other reference needs an approved workspace mount. "+
+			"read_file and list_directory answer the same read without this limitation.", reason)
+	}
+	return fmt.Sprintf(
+		"Command blocked by safety guard (path outside working dir): %q is outside the effective working directory %q and no mount covers it. %s "+
+			"Rule: bash workspace path guard (RestrictToWorkspace). "+
+			"Fixes: request a mount for that folder (request_mount), or have an operator set sandbox.workspace_path_guard=false (env OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE=false). "+
+			"This is NOT the kernel sandbox setting (sandbox.mode). %s",
+		p, cwdPath, what, guardNatureStatement())
+}
+
+// guardNatureStatement is the honest one-liner every path-guard refusal
+// carries (UAT 2026-09-13 D-14): this guard reads the command TEXT, so a path
+// the command assembles at runtime (an interpreter concatenating strings) is
+// invisible to it. It is a courtesy check for a cooperative agent, not the
+// boundary. The boundary is the kernel sandbox where the platform has one;
+// where it does not, the statement says so rather than implying a protection
+// that is not there. The post-command symlink sweep (sweepEscapingSymlinks)
+// is named because it is the one check that does look at what the command
+// actually did rather than what it said.
+func guardNatureStatement() string {
+	if sandbox.TurnPolicyBaseInstalled() {
+		return "Note: this guard scans the command text and is advisory — a path assembled at runtime is not seen by it. " +
+			"The enforced boundary is the kernel sandbox, which confines the command by the real path it touches; " +
+			"symlinks created inside the workspace that point outside it are removed after the command runs."
+	}
+	return "Note: this guard scans the command text and is advisory — a path assembled at runtime is not seen by it. " +
+		"On this host NO kernel sandbox is active, so this scan and the post-command symlink sweep are the only checks on where a command writes."
 }
 
 // --- read/write classification (ADR-068 §1, option A) ------------------------
@@ -1366,11 +1473,35 @@ func newPathUseClassifier(cmd string) pathUseClassifier {
 	}
 }
 
-// isReadOnly reports whether the absolute-path candidate beginning at byte
-// offset start is provably a read. See the type's doc comment for the rules.
-func (c pathUseClassifier) isReadOnly(start int) bool {
-	if !c.classifiable || start < 0 || start >= len(c.cmd) {
-		return false
+// pathUseVerdict is what the classifier can say about one absolute-path
+// candidate from the command TEXT alone. readOnly is the ADR-068 proof;
+// exec and reason exist so a refusal can name WHY the proof failed (UAT
+// 2026-09-13 D-44/D-66) instead of describing every unproven reference as
+// "a WRITE".
+type pathUseVerdict struct {
+	// readOnly is true only when rules 1-6 all hold.
+	readOnly bool
+	// exec is true when the candidate sits in the segment's command position
+	// — the command would RUN it, which is neither a read nor a write.
+	exec bool
+	// head is the literal command word of the candidate's segment, "" when
+	// the segment could not be parsed.
+	head string
+	// reason explains, for a human or an agent, why the read proof failed.
+	// Empty when readOnly is true.
+	reason string
+}
+
+// classify reports whether the absolute-path candidate beginning at byte
+// offset start is provably a read, with its reasoning attached. See the
+// type's doc comment for the rules; each early return below names the rule
+// it applies.
+func (c pathUseClassifier) classify(start int) pathUseVerdict {
+	if !c.classifiable {
+		return pathUseVerdict{reason: "the command contains quoting or a command/process substitution this guard cannot parse, so it cannot tell which file each reference opens"}
+	}
+	if start < 0 || start >= len(c.cmd) {
+		return pathUseVerdict{reason: "the reference could not be located in the command text"}
 	}
 
 	segStart, segEnd := c.segmentBounds(start)
@@ -1378,7 +1509,7 @@ func (c pathUseClassifier) isReadOnly(start int) bool {
 
 	// Rule 3: unmodelled brace expansion.
 	if strings.ContainsAny(seg, "{}") {
-		return false
+		return pathUseVerdict{reason: "the command uses brace expansion ({ }), which rewrites its words before they run"}
 	}
 
 	// Rule 2: literal, allowlisted head — named EXACTLY, with no directory
@@ -1395,25 +1526,42 @@ func (c pathUseClassifier) isReadOnly(start int) bool {
 	// costs only the absolute spellings (`/bin/cat f`) and keeps the doctrine
 	// intact: prove a read, or call it a write.
 	head, headIsExpansion, headNormalised := shellCommandHeadDetailed(seg)
-	if headIsExpansion || headNormalised || !readOnlyShellCommands[head] {
-		return false
-	}
-
 	word := c.wordStart(start, segStart)
 
-	// Rule 4: command position is exec, not read.
+	// Rule 4: command position is exec, not read. Checked before the head
+	// allowlist so an absolute path in command position is reported as an
+	// EXEC rather than as "head not on the allowlist" (D-66).
 	if word == c.firstWordStart(segStart, segEnd) {
-		return false
+		return pathUseVerdict{exec: true, head: head, reason: "the path is in command position — the shell would RUN it, which is not a read"}
+	}
+	switch {
+	case headIsExpansion:
+		return pathUseVerdict{head: head, reason: "the command word is a shell expansion, so the guard cannot tell which program runs"}
+	case headNormalised:
+		return pathUseVerdict{head: head, reason: fmt.Sprintf("the command word is spelled with a directory prefix or in upper case (%q), which the read-only allowlist matches only literally", head)}
+	case !readOnlyShellCommands[head]:
+		return pathUseVerdict{head: head, reason: fmt.Sprintf("%q is not on the guard's read-only allowlist (%s) — it has a flag or mode that can write to a path named on its command line, so the guard cannot prove this use is a read", head, readOnlyShellCommandsSummary())}
 	}
 	// Rule 5: this word is a redirect target.
 	if c.precededByOutputRedirect(word, segStart) {
-		return false
+		return pathUseVerdict{head: head, reason: "the path is the target of an output redirect"}
 	}
 	// Rule 6: some other redirect in this segment writes somewhere we cannot see.
 	if !c.redirectTargetsAreLiteral(segStart, segEnd) {
-		return false
+		return pathUseVerdict{head: head, reason: "the same command segment redirects output to a target the guard cannot see (an expansion or a glob)"}
 	}
-	return true
+	return pathUseVerdict{readOnly: true, head: head}
+}
+
+// readOnlyShellCommandsSummary renders the allowlist for a refusal message,
+// sorted so the text is stable across runs.
+func readOnlyShellCommandsSummary() string {
+	names := make([]string, 0, len(readOnlyShellCommands))
+	for n := range readOnlyShellCommands {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }
 
 // segmentBounds returns the half-open byte range of the command segment

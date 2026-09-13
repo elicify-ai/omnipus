@@ -126,8 +126,12 @@ describe('ToolApprovalModal — request_mount readable summary (Deliverable 2)',
     })
     render(<ToolApprovalModal />)
     expect(
-      screen.getByText('Jim will be able to read and change files in this folder until you remove it.'),
+      screen.getByText('Jim will be able to change files in this folder until you remove it.'),
     ).toBeInTheDocument()
+    // UAT 2026-09-13 D-15: the decision is about write access only; the copy
+    // must never claim that declining withholds reading (ADR-068 opens reads).
+    expect(screen.queryByText(/able to read and change/)).toBeNull()
+    expect(screen.getByText(/declining keeps this folder read-only for Jim, it does not hide it/)).toBeInTheDocument()
   })
 
   it('falls back to the raw agent id in the consequence line when the agent name is not cached', () => {
@@ -137,7 +141,7 @@ describe('ToolApprovalModal — request_mount readable summary (Deliverable 2)',
     render(<ToolApprovalModal />)
     expect(
       screen.getByText(
-        'agent-jim will be able to read and change files in this folder until you remove it.',
+        'agent-jim will be able to change files in this folder until you remove it.',
       ),
     ).toBeInTheDocument()
   })
@@ -484,7 +488,7 @@ describe('ToolApprovalModal — reconnect gap, end-to-end (store fix + modal ren
 
     render(<ToolApprovalModal />)
 
-    expect(screen.getByText('Approval expired — the agent will receive a denial.')).toBeInTheDocument()
+    expect(screen.getByText(/Approval expired unanswered — the agent is told nobody answered/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Deny/i })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Dismiss/i })).toBeInTheDocument()
   })

@@ -200,6 +200,11 @@ type WSHandler struct {
 	// Injected at boot by the gateway after construction.  Nil until then.
 	approvalRegV2 *approvalRegistryV2
 
+	// approvalOwnerFn overrides the session-owner lookup used to scope
+	// approval frames to the requesting account (ws_tool_approval.go's
+	// approvalOwner). Nil in production; tests inject it.
+	approvalOwnerFn approvalAudienceOwnerFn
+
 	// askUserReg is the AskUserQuestion pending registry (askuserquestion-
 	// tool-spec v3; pkg/askuser). Injected at boot alongside approvalRegV2.
 	// Nil until then — handleAskUserAnswer and emitSessionState's

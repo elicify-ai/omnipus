@@ -1068,6 +1068,28 @@ type ExecutorConfig = Partial<{
 }>;
 type ExternalCliTool = "claude-code" | "codex" | "opencode";
 type ContextWindowSource = "operator" | "live" | "catalog" | "floor";
+type AgentToolsUpdateRequest = Partial<{
+  config: AgentToolsCfg;
+  tools: Array<AgentToolEntry>;
+  agent_type: string;
+  builtin: {
+    policies: {};
+    mode?: ("explicit" | "inherit") | undefined;
+    visible?: Array<string> | undefined;
+  };
+  mcp: Partial<{
+    servers: Array<{
+      id: string;
+      tools?: Array<string> | undefined;
+    }>;
+  }>;
+}>;
+type AgentToolEntry = {
+  name: string;
+  configured_policy: "allow" | "ask" | "deny";
+  effective_policy: "allow" | "ask" | "deny";
+  manifest_tier: "full" | "compressed" | "infra";
+};
 type AgentCreateRequest =
   | AgentCreateRequestMain
   | AgentCreateRequestSubagent
@@ -1553,12 +1575,6 @@ type AgentToolsResponse = {
   agent_type?:
     | ("core" | "system" | "Main" | "Subagent" | "subagent_3p")
     | undefined;
-};
-type AgentToolEntry = {
-  name: string;
-  configured_policy: "allow" | "ask" | "deny";
-  effective_policy: "allow" | "ask" | "deny";
-  manifest_tier: "full" | "compressed" | "infra";
 };
 type ChannelEnabledResponse = {
   id: ChannelId;
@@ -3005,8 +3021,11 @@ export const AgentToolsResponse: z.ZodType<AgentToolsResponse> = z.object({
     .enum(["core", "system", "Main", "Subagent", "subagent_3p"])
     .optional(),
 });
-export const AgentToolsUpdateRequest = z
+export const AgentToolsUpdateRequest: z.ZodType<AgentToolsUpdateRequest> = z
   .object({
+    config: AgentToolsCfg,
+    tools: z.array(AgentToolEntry),
+    agent_type: z.string(),
     builtin: z
       .object({
         policies: z.record(z.enum(["allow", "ask", "deny"])),
@@ -8893,6 +8912,41 @@ The serving prefix itself is deliberately NOT in this document: it is a bare, to
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/library/preview-token/:token",
+    alias: "revokeLibraryPreviewToken",
+    description: `Invalidates one preview token immediately (UAT 2026-09-13 D-110). Closing a preview used to leave its token answering 200 for the rest of its 15-minute lifetime; the only revocation was opening ANOTHER preview in the same pane. The SPA calls this when a preview pane is closed so the URL stops working the moment the reader is done with it.
+
+Idempotent and deliberately uninformative: 204 whether the token was live, already expired, already revoked, or never existed (FR-003n — a 404 here would be an oracle for whether a token ever existed). The caller must be authenticated, but any session may revoke any token it holds: knowing the value IS holding the credential, and revoking it can only narrow access.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "token",
+        type: "Path",
+        schema: z.string().min(1).max(128),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
       {
