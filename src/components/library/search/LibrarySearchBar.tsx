@@ -80,7 +80,7 @@ import { ViewPartsRenderer } from '../preview/viewparts/ViewPartsRenderer'
 // wikilinkNotation.ts because the `query` fence inside a note shows excerpts
 // from the same engine's same field and needs the identical fix.
 import { stripWikilinkNotation } from '../preview/wikilinkNotation'
-import { collectionPathToWorkspacePath } from '../knowledge/KnowledgeBacklinks'
+import { collectionPathToWorkspacePath, libraryNoteHref } from '../knowledge/KnowledgeBacklinks'
 import { LibraryErrorBanner } from '../LibraryErrorBanner'
 import {
   useVaultSearch,
@@ -1155,7 +1155,32 @@ export function LibrarySearchBar({
         <DialogContent className="max-w-3xl" data-testid="library-search-view-dialog">
           <DialogHeader>
             <DialogTitle>{openView?.label}</DialogTitle>
-            <DialogDescription>Saved view</DialogDescription>
+            <DialogDescription>
+              {/* UAT D-136: name the file the view lives in and offer to open
+                  it — the view is reachable as a tab there. */}
+              {viewResultQuery.data?.source !== undefined ? (
+                <span data-testid="library-search-view-source">
+                  Saved view from{' '}
+                  <button
+                    type="button"
+                    tabIndex={0}
+                    data-testid="library-search-view-source-open"
+                    onClick={() => {
+                      const src = viewResultQuery.data?.source
+                      if (src !== undefined) {
+                        openNote(src)
+                        setOpenView(null)
+                      }
+                    }}
+                    className="underline underline-offset-2 hover:text-[var(--color-secondary)]"
+                  >
+                    {viewResultQuery.data.source}
+                  </button>
+                </span>
+              ) : (
+                'Saved view'
+              )}
+            </DialogDescription>
           </DialogHeader>
           {viewResultQuery.isPending && (
             <div role="status" className="flex items-center gap-2 py-6 text-sm text-[var(--color-muted)]">
@@ -1173,7 +1198,24 @@ export function LibrarySearchBar({
               testId="library-search-view-error"
             />
           )}
-          {viewResultQuery.data && <ViewPartsRenderer result={viewResultQuery.data} />}
+          {/* UAT D-72: the SAME row-open and relation-cell link wiring the
+              base preview has, so a `[[Sofia Marchetti]]` cell is a real
+              link here too instead of raw brackets. */}
+          {viewResultQuery.data && (
+            <ViewPartsRenderer
+              result={viewResultQuery.data}
+              onOpenPath={(p) => {
+                openNote(p)
+                setOpenView(null)
+              }}
+              {...(workspaceId !== null && collectionRootPath !== undefined
+                ? {
+                    linkHref: (p: string) =>
+                      libraryNoteHref(workspaceId, collectionPathToWorkspacePath(collectionRootPath, p)),
+                  }
+                : {})}
+            />
+          )}
         </DialogContent>
       </Dialog>
     </div>

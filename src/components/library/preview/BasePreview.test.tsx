@@ -23,7 +23,7 @@
 // syntax highlighting.
 
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query'
 import type {
   KnowledgeBaseViews,
@@ -568,5 +568,83 @@ describe('BasePreview — tabs over the views the server says this base owns', (
       expect(clickSpy).toHaveBeenCalledTimes(1)
       vi.restoreAllMocks()
     })
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UAT 2026-09-13 — D-70 (unloadable views named) and D-78 (duplicate labels,
+// default tab)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('UAT D-70 — the unloadable notice names each missing view and its reason', () => {
+  it('lists the view name and the loader reason beneath the count', async () => {
+    renderBase({
+      loadBaseViews: vi.fn().mockResolvedValue(
+        baseViews({
+          unloadable_count: 2,
+          unloadable: [
+            {
+              name: 'projects--active-projects',
+              paths: ['.omnipus-vault/views/projects--active-projects.yaml'],
+              code: 'view_unknown_property',
+              reason: 'view "projects--active-projects" names property "priority" in properties, which record type "project" does not declare',
+            },
+            {
+              paths: ['.omnipus-vault/views/broken.yaml'],
+              code: 'view_malformed',
+              reason: 'yaml: line 3: could not find expected key',
+            },
+          ],
+        }),
+      ),
+    })
+    const notice = await screen.findByTestId('base-preview-unloadable')
+    // DIES ON the old notice: only "2 views ... could not be loaded".
+    const entries = within(notice).getAllByTestId('base-preview-unloadable-entry')
+    expect(entries).toHaveLength(2)
+    expect(entries[0]?.textContent).toContain('projects--active-projects')
+    expect(entries[0]?.textContent).toContain('does not declare')
+    expect(entries[1]?.textContent).toContain('broken.yaml')
+    expect(entries[1]?.textContent).toContain('could not find expected key')
+  })
+})
+
+describe('UAT D-78 — two views sharing a label are told apart, and the default tab is servable', () => {
+  const twins = [
+    {
+      name: 'projects--all-projects',
+      label: 'All Projects',
+      unservable: true,
+      unservable_reason: 'sort direction "descending" is not one the query grammar accepts',
+    },
+    { name: 'All Projects', label: 'All Projects' },
+  ]
+
+  it('suffixes a duplicated label with the view name on each tab', async () => {
+    renderBase({ loadBaseViews: vi.fn().mockResolvedValue(baseViews({ views: twins })) })
+    const tablist = await screen.findByTestId('base-preview-tablist')
+    // DIES ON the old tablist: both tabs read exactly "All Projects".
+    expect(within(tablist).getByTestId('base-view-tab-projects--all-projects').textContent).toContain(
+      'All Projects (projects--all-projects)',
+    )
+    expect(within(tablist).getByTestId('base-view-tab-All Projects').textContent).toContain('All Projects (All Projects)')
+  })
+
+  it('lands on the first SERVABLE view, not on an unservable twin that sorts first', async () => {
+    const loadViewResult = vi.fn().mockResolvedValue(result())
+    renderBase({ loadBaseViews: vi.fn().mockResolvedValue(baseViews({ views: twins })), loadViewResult })
+    await screen.findByTestId('base-preview-tablist')
+    // DIES ON the old default (`views[0]`): the broken twin was selected.
+    await waitFor(() =>
+      expect(screen.getByTestId('base-view-tab-All Projects').getAttribute('aria-selected')).toBe('true'),
+    )
+    await waitFor(() => expect(loadViewResult.mock.calls.some((c) => c[2] === 'All Projects')).toBe(true))
+    expect(loadViewResult.mock.calls.some((c) => c[2] === 'projects--all-projects')).toBe(false)
+  })
+
+  it('leaves a lone label untouched', async () => {
+    renderBase()
+    const tablist = await screen.findByTestId('base-preview-tablist')
+    expect(within(tablist).getByTestId('base-view-tab-invoices--outstanding').textContent).not.toContain('(')
   })
 })

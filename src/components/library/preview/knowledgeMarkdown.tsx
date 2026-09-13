@@ -1664,6 +1664,12 @@ function KbBaseEmbedContent({
           {count === 1
             ? `The one view imported from ${entry.name} could not be loaded, so this embed cannot be checked against it.`
             : `All ${count} views imported from ${entry.name} could not be loaded, so this embed cannot be checked against them.`}
+          {/* UAT D-70: the reason, not only the count. */}
+          {(viewsQuery.data.unloadable ?? []).map((u, i) => (
+            <span key={`${u.code}-${i}`} className="block pl-2" data-testid="kb-base-embed-unloadable-entry">
+              {u.name ?? u.paths.join(', ')} — {u.reason}
+            </span>
+          ))}
         </div>
       )
     }

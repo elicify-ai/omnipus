@@ -1408,3 +1408,60 @@ describe('UAT D-130 (bar half) — a kind at the per-kind cap is stated as a low
     expect(screen.queryByTestId('library-search-kind-cap')).not.toBeInTheDocument()
   })
 })
+
+describe('UAT D-72 / D-136 — the saved-view dialog links relation cells and names its source file', () => {
+  it('renders a relation cell as a real link, with the brackets stripped', async () => {
+    const loadViewResult = vi.fn().mockResolvedValue(
+      viewResult({
+        parts: [{ part: 'table', source: { part: 'table' }, columns: ['file.name', 'owner'] }],
+        rows: [
+          {
+            path: 'Projects/a.md',
+            title: 'Core Platform Migration',
+            cells: [{ property: 'owner', value: '[[Sofia Marchetti]]', relation: true }],
+            joins: [],
+          },
+        ],
+      }),
+    )
+    renderBar({ res: response({ views: [{ view: 'open-deals', label: 'Open deals' }] }), loadViewResult })
+    type('deals')
+    await waitFor(() => expect(screen.getByText('Open deals')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('vault-search-view-hit'))
+    const dialog = await screen.findByTestId('library-search-view-dialog')
+    // DIES ON the old dialog: ViewPartsRenderer got no link wiring, so the
+    // cell read "[[Sofia Marchetti]]" as literal text with no link element.
+    await waitFor(() => expect(within(dialog).getByTestId('viewpart-cell-link')).toBeInTheDocument())
+    expect(within(dialog).queryByText('[[Sofia Marchetti]]')).not.toBeInTheDocument()
+    // Unverified (the dialog has no collection-wide resolver, so the link
+    // carries the sr-only "not verified" note) — but a LINK, named after
+    // the target, never the raw notation.
+    expect(within(dialog).getByTestId('viewpart-cell-link').textContent).toContain('Sofia Marchetti')
+    expect(within(dialog).getByTestId('viewpart-cell-link').textContent).not.toContain('[[')
+  })
+
+  it('names the .base file the view came from and opens it on request', async () => {
+    const onOpenNote = vi.fn()
+    const loadViewResult = vi.fn().mockResolvedValue(viewResult({ source: 'Projects.base' }))
+    renderBar({ res: response({ views: [{ view: 'open-deals', label: 'Open deals' }] }), loadViewResult, onOpenNote })
+    type('deals')
+    await waitFor(() => expect(screen.getByText('Open deals')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('vault-search-view-hit'))
+    const src = await screen.findByTestId('library-search-view-source')
+    // DIES ON the old dialog: the description read only "Saved view".
+    expect(src.textContent).toContain('Projects.base')
+    fireEvent.click(screen.getByTestId('library-search-view-source-open'))
+    expect(onOpenNote).toHaveBeenCalledWith('vault/Projects.base')
+  })
+
+  it('still says "Saved view" for an authored view with no source', async () => {
+    const loadViewResult = vi.fn().mockResolvedValue(viewResult())
+    renderBar({ res: response({ views: [{ view: 'open-deals', label: 'Open deals' }] }), loadViewResult })
+    type('deals')
+    await waitFor(() => expect(screen.getByText('Open deals')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('vault-search-view-hit'))
+    await screen.findByTestId('library-search-view-dialog')
+    await waitFor(() => expect(screen.getByText('Saved view')).toBeInTheDocument())
+    expect(screen.queryByTestId('library-search-view-source')).not.toBeInTheDocument()
+  })
+})

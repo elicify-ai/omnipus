@@ -274,6 +274,11 @@ func buildViewResult(ctx context.Context, env vaultprops.FindEnv, name, collecti
 		k := string(*v.Def.Kind)
 		out.Kind = &k
 	}
+	// UAT D-136: provenance for a surface that reached this view by name
+	// alone (a search hit) and must say which `.base` file it lives in.
+	if src := v.DeclaredSource(); src != "" {
+		out.Source = &src
+	}
 	if v.Def.Type != nil {
 		t := *v.Def.Type
 		out.Type = &t

@@ -93,3 +93,14 @@ properties:
       A file so broken that its own `source` key is unreadable cannot be
       attributed to any base and is counted against none.
     example: 1
+  unloadable:
+    type: array
+    description: >
+      The rejections behind `unloadable_count`, one per rejection (a
+      duplicate-name conflict is ONE entry naming several files, so this
+      list can be shorter than the count) — name, files, code and reason
+      (UAT 2026-09-13 D-70). Present exactly when `is_knowledge_base` is
+      true; empty when nothing failed.
+    items:
+      $ref: "./KnowledgeBaseUnloadableView.yaml"
+      x-go-type: KnowledgeBaseUnloadableView
