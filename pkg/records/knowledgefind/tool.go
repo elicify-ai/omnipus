@@ -549,10 +549,10 @@ func normalizeFilterLiterals(raw json.RawMessage, where string, depth int) (json
 			fmt.Sprintf("the filter tree at %s is nested more than %d levels deep", where, filterLiteralMaxDepth),
 			"flatten the filter; a tree this deep cannot be a real predicate"), nil)
 	}
-	var node map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &node); err != nil {
+	node, isObject := filterNodeObject(raw)
+	if !isObject {
 		// Not an object: the generated type's own decode refuses it with the
-		// right message.
+		// right message, so the bytes pass through unchanged.
 		return raw, nil
 	}
 	changed := false
@@ -714,6 +714,17 @@ func scalarLiteralText(raw []byte, where string) (string, *RefusalError) {
 			fmt.Sprintf("the literal at %s is not valid JSON", where), ""), nil)
 	}
 	return text, nil
+}
+
+// filterNodeObject reads one filter node as a JSON object, reporting only
+// whether it IS one — a non-object is not an error at this layer (the
+// generated decoder refuses it by name), so no error is carried.
+func filterNodeObject(raw json.RawMessage) (map[string]json.RawMessage, bool) {
+	var node map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &node); err != nil {
+		return nil, false
+	}
+	return node, true
 }
 
 // unknownParameterRemedy points at the argument that does the job, for the

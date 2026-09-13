@@ -634,10 +634,10 @@ func restoreCursorQuery(req *generated.VaultFindRequest) *RefusalError {
 	sent.Cursor = nil
 	sentJSON, err1 := json.Marshal(sent)
 	carriedJSON, err2 := json.Marshal(*carried)
-	if err1 != nil || err2 != nil {
-		return nil
-	}
 	switch {
+	case err1 != nil || err2 != nil:
+		// Neither side could be compared; checkCursor judges the cursor on
+		// its own, as for a token that carries no query.
 	case string(sentJSON) == "{}":
 		*req = *carried
 		req.Cursor = &cursor

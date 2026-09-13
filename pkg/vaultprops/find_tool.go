@@ -649,7 +649,7 @@ func openUsableFindStore(ctx context.Context, path, collectionRoot string, synce
 	// store seeded by nothing but single-path instant writes fails that
 	// comparison and is repaired by openFindStore's Sync before it is used
 	// for a typed query.
-	if store.NeedsFullIndex() && !(synced != nil && synced.Scanned == 0) {
+	if store.NeedsFullIndex() && (synced == nil || synced.Scanned != 0) {
 		return closeUnusable("it holds no files yet")
 	}
 	rowCount, expected, coverErr := propertiesStoreCoverage(ctx, store, collectionRoot, synced)
@@ -684,11 +684,11 @@ func openUsableFindStore(ctx context.Context, path, collectionRoot string, synce
 // second, parallel counting query would be a second idea of what "every
 // row" means to drift out of sync with the first.
 func propertiesStoreCoverage(ctx context.Context, store propindex.Store, collectionRoot string, synced *SyncStats) (rowCount, expected int, err error) {
-	if err := store.AllPaths(ctx, func(propindex.IndexedNote) error {
+	if walkErr := store.AllPaths(ctx, func(propindex.IndexedNote) error {
 		rowCount++
 		return nil
-	}); err != nil {
-		return 0, 0, fmt.Errorf("walking the properties index: %w", err)
+	}); walkErr != nil {
+		return 0, 0, fmt.Errorf("walking the properties index: %w", walkErr)
 	}
 	if synced != nil {
 		expected = synced.Scanned
@@ -704,15 +704,4 @@ func propertiesStoreCoverage(ctx context.Context, store propindex.Store, collect
 		return 0, 0, fmt.Errorf("scanning the collection: %w", err)
 	}
 	return rowCount, len(scan.Entries), nil
-}
-
-// propertiesStoreCoversCollection is the boolean form of
-// propertiesStoreCoverage against a fresh scan, kept for callers and tests
-// that only need the verdict.
-func propertiesStoreCoversCollection(ctx context.Context, store propindex.Store, collectionRoot string) (bool, error) {
-	rows, expected, err := propertiesStoreCoverage(ctx, store, collectionRoot, nil)
-	if err != nil {
-		return false, err
-	}
-	return rows == expected, nil
 }

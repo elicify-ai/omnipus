@@ -230,26 +230,6 @@ func sortSurvivors(rows []survivor, q *query) {
 	})
 }
 
-// compareByProperty orders two survivors on one property.
-//
-// ABSENCE SORTS LAST in both directions, and that is deliberate rather than
-// incidental. A record with no value has not got a small value; putting it at
-// the top of a descending sort would put "nobody recorded this" where the reader
-// is looking for the largest.
-func compareByProperty(a, b survivor, name string) (int, bool) {
-	av, aok := firstValue(a, name)
-	bv, bok := firstValue(b, name)
-	switch {
-	case !aok && !bok:
-		return 0, false
-	case !aok:
-		return 1, true
-	case !bok:
-		return -1, true
-	}
-	return records.Compare(av, bv)
-}
-
 func firstValue(s survivor, name string) (records.TypedValue, bool) {
 	pv, ok := s.values[name]
 	if !ok || pv.State != records.StatePresent || len(pv.Values) == 0 {

@@ -76,7 +76,7 @@ func (f *asciiFoldTokenFilter) Filter(in analysis.TokenStream) analysis.TokenStr
 	return in
 }
 
-func asciiFoldTokenFilterConstructor(map[string]interface{}, *registry.Cache) (analysis.TokenFilter, error) {
+func asciiFoldTokenFilterConstructor(map[string]any, *registry.Cache) (analysis.TokenFilter, error) {
 	return &asciiFoldTokenFilter{fold: asciifolding.New()}, nil
 }
 
@@ -90,16 +90,16 @@ func init() {
 // mapping. It is called from buildIndexMapping, so every index this package
 // creates persists the definition alongside the fields that reference it.
 func registerProseAnalyzer(m *bleveMapping.IndexMappingImpl) error {
-	if err := m.AddCustomTokenFilter(nfcTokenFilterName, map[string]interface{}{
+	if err := m.AddCustomTokenFilter(nfcTokenFilterName, map[string]any{
 		"type": unicodenorm.Name,
 		"form": unicodenorm.NFC,
 	}); err != nil {
 		return err
 	}
-	return m.AddCustomAnalyzer(proseAnalyzerName, map[string]interface{}{
+	return m.AddCustomAnalyzer(proseAnalyzerName, map[string]any{
 		"type":      custom.Name,
 		"tokenizer": unicode.Name,
-		"token_filters": []interface{}{
+		"token_filters": []any{
 			en.PossessiveName,
 			lowercase.Name,
 			nfcTokenFilterName,
