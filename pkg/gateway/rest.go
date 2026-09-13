@@ -2491,6 +2491,87 @@ func agentCreateShellPolicyFromWire(wp *struct {
 	return out
 }
 
+// agentModelParamsInput is a request-shape-agnostic normalization of the
+// wire model_params object, mirroring agentCreateShellPolicyInput above.
+// gen.AgentCreateRequestMain, gen.AgentCreateRequestSubagent, and
+// gen.AgentUpdateRequest each generate their own anonymous ModelParams
+// struct (none $refs AgentModelParams.yaml — oapi-codegen inlines
+// model_params separately per schema), but all three are structurally
+// identical (same field names/types/tags/order), so one non-generic helper
+// below handles every call site.
+type agentModelParamsInput struct {
+	Temperature *float64
+	MaxTokens   *int
+	TopP        *float64
+}
+
+// agentModelParamsFromWire converts any of the three request variants'
+// model_params wire object into the common agentModelParamsInput, or nil
+// when mp is nil. gen.AgentCreateRequestSubagent3p has no model_params
+// property at all (the external runner manages its own sampling
+// parameters), so this is never called for that variant.
+func agentModelParamsFromWire(mp *struct {
+	MaxTokens   *int     `json:"max_tokens,omitempty"`
+	Temperature *float64 `json:"temperature,omitempty"`
+	TopP        *float64 `json:"top_p,omitempty"`
+},
+) *agentModelParamsInput {
+	if mp == nil {
+		return nil
+	}
+	return &agentModelParamsInput{Temperature: mp.Temperature, MaxTokens: mp.MaxTokens, TopP: mp.TopP}
+}
+
+// rejectUnsupportedModelParamsTopP is the single validation seam for
+// model_params.top_p, introduced by commit 2b057e15 (Q1 fix) for
+// updateAgent and reused here by createAgent so the two paths cannot drift.
+// No provider adapter in this codebase implements nucleus sampling and
+// there is no agents.defaults equivalent to fall back to, so accepting it
+// silently (200/201, persisted and echoed, never honored on any turn) would
+// be exactly the ADR-037 anti-pattern this fix exists to close, just moved
+// one layer down. Returns true when the request is clean; on a rejected
+// top_p it writes the 400 response itself and returns false so the caller
+// can `return` directly without persisting anything.
+func rejectUnsupportedModelParamsTopP(w http.ResponseWriter, in *agentModelParamsInput) bool {
+	if in == nil || in.TopP == nil {
+		return true
+	}
+	jsonErr(w, http.StatusBadRequest, "model_params.top_p is not supported by any provider adapter")
+	return false
+}
+
+// mergeAgentModelParams is the single persistence seam for model_params,
+// introduced by commit 2b057e15 (Q1 fix) for updateAgent and reused here by
+// createAgent so the two paths cannot drift — a createAgent that silently
+// dropped model_params would be exactly the same ADR-037 anti-pattern the
+// Q1 fix closed for PUT. Field-level merge: only the sub-fields the caller
+// actually sent overwrite the persisted value (mirrors the ShellPolicy
+// partial-patch pattern elsewhere in this file), so a partial patch (e.g.
+// only max_tokens) does not clobber an existing temperature. existing may
+// be nil (e.g. on create, or an agent with no prior override); in is
+// assumed already validated via rejectUnsupportedModelParamsTopP (or to
+// have no top_p at all) — this function does not itself reject top_p, it
+// simply never copies it (config.AgentModelParams has no TopP field).
+func mergeAgentModelParams(existing *config.AgentModelParams, in *agentModelParamsInput) *config.AgentModelParams {
+	if in == nil {
+		return existing
+	}
+	merged := &config.AgentModelParams{}
+	if existing != nil {
+		cp := *existing
+		merged = &cp
+	}
+	if in.Temperature != nil {
+		v := *in.Temperature
+		merged.Temperature = &v
+	}
+	if in.MaxTokens != nil {
+		v := *in.MaxTokens
+		merged.MaxTokens = &v
+	}
+	return merged
+}
+
 // agentCreateToolsCfgFromWire converts either variant's tools_cfg wire object
 // into the common agentCreateToolsCfgInput, or nil when tc is nil. Generic
 // over P — the per-variant enum type oapi-codegen emits for Builtin.Policies'
@@ -2648,6 +2729,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		shellPolicyIn  *agentCreateShellPolicyInput
 		toolsCfgIn     *agentCreateToolsCfgInput
 		executorIn     *executorRequestInput
+		modelParamsIn  *agentModelParamsInput
 	)
 
 	switch *typePeek.Type {
@@ -2667,6 +2749,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		fallbackModels = vreq.FallbackModels
 		shellPolicyIn = agentCreateShellPolicyFromWire(vreq.ShellPolicy)
 		toolsCfgIn = agentCreateToolsCfgFromWire(vreq.ToolsCfg)
+		modelParamsIn = agentModelParamsFromWire(vreq.ModelParams)
 	case "Subagent":
 		var vreq gen.AgentCreateRequestSubagent
 		if !decodeAgentCreateVariant(w, raw, *typePeek.Type, variantName, &vreq) {
@@ -2683,6 +2766,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		fallbackModels = vreq.FallbackModels
 		shellPolicyIn = agentCreateShellPolicyFromWire(vreq.ShellPolicy)
 		toolsCfgIn = agentCreateToolsCfgFromWire(vreq.ToolsCfg)
+		modelParamsIn = agentModelParamsFromWire(vreq.ModelParams)
 	case "subagent_3p":
 		var vreq gen.AgentCreateRequestSubagent3p
 		if !decodeAgentCreateVariant(w, raw, *typePeek.Type, variantName, &vreq) {
@@ -2770,6 +2854,12 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "fallback_models exceeds maxItems: 2")
 		return
 	}
+	// model_params.top_p (T1 follow-up to Q1/2b057e15): mirrors updateAgent's
+	// early top_p rejection so the create path cannot silently drop it the
+	// way it silently dropped the whole model_params object before this fix.
+	if !rejectUnsupportedModelParamsTopP(w, modelParamsIn) {
+		return
+	}
 	// W2 spec §4.7 / §9.2 row 8: whitespace-only soul is rejected (the wire
 	// schema enforces minLength:1; whitespace-only is the natural
 	// soft-bypass). Backend trims before validation.
@@ -2817,6 +2907,13 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 			ac.Model.Provider = strings.TrimSpace(*provider)
 		}
 	}
+	// model_params (T1 fix): createAgent previously decoded model_params fine
+	// (both AgentCreateRequestMain.yaml and AgentCreateRequestSubagent.yaml
+	// carry it) but had nowhere to persist it — same ADR-037 anti-pattern
+	// commit 2b057e15 (Q1) fixed for PUT. mergeAgentModelParams is the exact
+	// helper that fix introduced for updateAgent; existing is nil here since
+	// this is a brand-new agent record.
+	ac.ModelParams = mergeAgentModelParams(nil, modelParamsIn)
 	// shell_policy: mapped onto AgentConfig so it is actually persisted.
 	// subagent_3p has no shell_policy property on the wire (shellPolicyIn
 	// stays nil for that variant — the CLI manages its own isolation), so it
@@ -3494,17 +3591,17 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		return
 	}
 
-	// model_params.top_p (Q1 follow-up): the wire schema carries a top_p
-	// property, but no provider adapter in this codebase implements
-	// nucleus sampling and there is no global default for it either —
-	// wiring it would be new cross-provider feature work, not this
-	// persistence fix. Accepting it silently (200, quietly ignored on every
-	// turn) would be exactly the ADR-037 anti-pattern this fix exists to
-	// close, just moved one layer down (persisted and echoed, but never
-	// honored). Reject it explicitly instead of pretending it works.
-	if req.ModelParams != nil && req.ModelParams.TopP != nil {
-		jsonErr(w, http.StatusBadRequest,
-			"model_params.top_p is not supported by any provider adapter")
+	// model_params.top_p (Q1 follow-up, extracted to
+	// rejectUnsupportedModelParamsTopP so createAgent reuses the identical
+	// check — T1 fix): the wire schema carries a top_p property, but no
+	// provider adapter in this codebase implements nucleus sampling and
+	// there is no global default for it either — wiring it would be new
+	// cross-provider feature work, not this persistence fix. Accepting it
+	// silently (200, quietly ignored on every turn) would be exactly the
+	// ADR-037 anti-pattern this fix exists to close, just moved one layer
+	// down (persisted and echoed, but never honored). Reject it explicitly
+	// instead of pretending it works.
+	if !rejectUnsupportedModelParamsTopP(w, agentModelParamsFromWire(req.ModelParams)) {
 		return
 	}
 
@@ -3806,36 +3903,26 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 				// change — this conversion does not persist them either,
 				// matching (not worsening) that pre-existing behavior.
 				//
-				// req.ModelParams (Q1 fix, 2026-09-14): this USED to be in the
-				// same "no field to persist into" bucket as the two fields
-				// above — model_params decoded fine but AgentConfig had
-				// nowhere to write it, so the PUT returned 200 and changed
-				// nothing on disk, and GET always echoed model_params: null
-				// (the ADR-037 anti-pattern). config.AgentModelParams now
-				// exists for exactly this, and pkg/agent/instance.go reads it
-				// at AgentInstance construction time so the override reaches
-				// the next turn's provider call. Field-level merge (mirrors
-				// ShellPolicy below): only the sub-fields the caller actually
-				// sent overwrite the persisted value; an omitted sub-field
-				// leaves it untouched, so a partial patch (e.g. only
-				// max_tokens) does not clobber an existing temperature.
-				// top_p is rejected 400 earlier in this handler (no provider
-				// adapter implements it) and never reaches here.
+				// req.ModelParams (Q1 fix, 2026-09-14; extracted to the shared
+				// mergeAgentModelParams helper for the T1 fix so createAgent
+				// reuses the identical merge instead of drifting from it):
+				// this USED to be in the same "no field to persist into"
+				// bucket as the two fields above — model_params decoded fine
+				// but AgentConfig had nowhere to write it, so the PUT
+				// returned 200 and changed nothing on disk, and GET always
+				// echoed model_params: null (the ADR-037 anti-pattern).
+				// config.AgentModelParams now exists for exactly this, and
+				// pkg/agent/instance.go reads it at AgentInstance
+				// construction time so the override reaches the next turn's
+				// provider call. Field-level merge (mirrors ShellPolicy
+				// below): only the sub-fields the caller actually sent
+				// overwrite the persisted value; an omitted sub-field leaves
+				// it untouched, so a partial patch (e.g. only max_tokens)
+				// does not clobber an existing temperature. top_p is
+				// rejected 400 earlier in this handler (no provider adapter
+				// implements it) and never reaches here.
 				if req.ModelParams != nil {
-					existing := &config.AgentModelParams{}
-					if agentRec.ModelParams != nil {
-						cp := *agentRec.ModelParams
-						existing = &cp
-					}
-					if req.ModelParams.Temperature != nil {
-						v := *req.ModelParams.Temperature
-						existing.Temperature = &v
-					}
-					if req.ModelParams.MaxTokens != nil {
-						v := *req.ModelParams.MaxTokens
-						existing.MaxTokens = &v
-					}
-					agentRec.ModelParams = existing
+					agentRec.ModelParams = mergeAgentModelParams(agentRec.ModelParams, agentModelParamsFromWire(req.ModelParams))
 				}
 				if req.MaxToolIterations != nil {
 					agentRec.MaxToolIterations = *req.MaxToolIterations
