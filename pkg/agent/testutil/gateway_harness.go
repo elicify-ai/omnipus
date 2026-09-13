@@ -602,6 +602,29 @@ func (g *TestGateway) Close() {
 	// shutdown drains, so writers never stopped at all).
 	waitForHomeQuiescent(g.homeDir, 150*time.Millisecond, 3*time.Second)
 
+	// THEN REMOVE THE TREE OURSELVES, WITH RETRIES.
+	//
+	// Quiescence alone was not enough, and could not be: it is a TOCTOU check.
+	// It proves the tree looked still a moment ago, not that every writer has
+	// stopped, so a straggler landing between the last scan and t.TempDir's
+	// RemoveAll still fails the test — and fails it with a message that names
+	// the TEST rather than the writer:
+	//
+	//   --- FAIL: TestCSRFCORSReflectionGate (0.34s)
+	//   TempDir RemoveAll cleanup: unlinkat /var/folders/.../001: directory not empty
+	//
+	// Observed on macos-latest/arm64 while every Linux runner passed the same
+	// commit, which is the signature of a timing race rather than a defect in
+	// the test that gets blamed.
+	//
+	// t.Cleanup is LIFO and t.TempDir registered its removal when homeDir was
+	// created — before StartTestGateway registered this Close — so Close runs
+	// FIRST. That ordering is what makes this work: remove the tree here, with
+	// retries, and t.TempDir's own RemoveAll afterwards finds nothing to race
+	// on (RemoveAll on a missing path is a no-op, not an error). A straggler
+	// write between attempts is simply deleted by the next one.
+	removeHomeWithRetry(g.t, g.homeDir)
+
 	// Surface any boot error that occurred after the gateway became ready.
 	if p := g.bootErr.Load(); p != nil && *p != nil {
 		if g.t != nil {
@@ -650,6 +673,58 @@ func waitForHomeQuiescent(homeDir string, settle, budget time.Duration) {
 			stableSince = time.Time{}
 		}
 		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+// removeHomeWithRetry deletes homeDir, retrying while a late writer keeps
+// re-creating entries under it.
+//
+// It exists because waitForHomeQuiescent cannot close the window it was built
+// to close (see Close's comment). Retrying is the honest response: if the tree
+// is genuinely quiet the first attempt succeeds and this costs nothing, and if
+// a straggler write lands between attempts the next attempt removes it too.
+//
+// If it still cannot clear the tree it reports the failure LOUDLY, naming the
+// paths that survived. The previous safety net gave up SILENTLY on budget
+// exhaustion, which is how this surfaced as an unexplained "directory not
+// empty" against an innocent test instead of "this writer never stopped".
+func removeHomeWithRetry(t *testing.T, homeDir string) {
+	if homeDir == "" {
+		return
+	}
+	if t != nil {
+		t.Helper()
+	}
+
+	const (
+		attempts = 10
+		pause    = 100 * time.Millisecond
+	)
+
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		if lastErr = os.RemoveAll(homeDir); lastErr == nil {
+			return
+		}
+		time.Sleep(pause)
+	}
+
+	// Still there. Name what survived — that is the writer worth chasing.
+	var survivors []string
+	_ = filepath.WalkDir(homeDir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil //nolint:nilerr // best-effort diagnostic scan
+		}
+		if !d.IsDir() && len(survivors) < 20 {
+			survivors = append(survivors, p)
+		}
+		return nil
+	})
+	if t != nil {
+		t.Errorf("testutil.TestGateway.Close: could not remove the test home after %d attempts "+
+			"(%s): %v\nA writer is still active after RunContext returned — this is a real "+
+			"shutdown leak, not a cleanup nuisance. Surviving files: %v",
+			attempts, time.Duration(attempts)*pause, lastErr, survivors)
 	}
 }
 
