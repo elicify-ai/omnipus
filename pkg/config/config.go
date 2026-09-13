@@ -1004,6 +1004,31 @@ func (m AgentModelConfig) MarshalJSON() ([]byte, error) {
 	return json.Marshal(raw(m))
 }
 
+// AgentModelParams holds per-agent LLM sampling parameter overrides
+// (contracts/components/schemas/AgentUpdateRequest.yaml's `model_params`).
+// Every field is a pointer so nil distinguishes "caller never set this" from
+// an explicit zero value (e.g. temperature 0.0 for fully deterministic
+// output) — the same pointer-optionality convention MemoryEnabled and
+// ContextWindowOverride use elsewhere on AgentConfig. Both fields are read
+// by pkg/agent/instance.go's per-agent override resolution (per-agent value
+// wins, then agents.defaults, then a hardcoded fallback — the same ladder
+// MaxToolIterations already uses).
+//
+// Deliberately NOT here: TopP. The wire schema carries model_params.top_p,
+// but no provider adapter in this codebase implements nucleus sampling and
+// there is no agents.defaults equivalent either — pkg/gateway/rest.go's
+// updateAgent rejects any PUT carrying top_p with 400 rather than silently
+// persisting a value nothing will ever honor (that would just move the
+// ADR-037 "200 that changes nothing real" anti-pattern from "not persisted"
+// to "persisted but not applied").
+type AgentModelParams struct {
+	// Temperature is the sampling temperature (0.0-2.0). Lower = more
+	// deterministic.
+	Temperature *float64 `json:"temperature,omitempty"`
+	// MaxTokens is the maximum tokens to generate per turn.
+	MaxTokens *int `json:"max_tokens,omitempty"`
+}
+
 // FallbackModel is one entry in an agent's fallback chain. It carries its
 // own provider so a fallback can route through a different provider than
 // the primary (FR-007). FR-005 pins the wire format to [{model, provider}]
@@ -1283,6 +1308,16 @@ type AgentConfig struct {
 	// the derived effective window / source / clamped flag are computed by
 	// the resolver and never persisted here.
 	ContextWindowOverride *int `json:"context_window_override,omitempty"`
+	// ModelParams holds per-agent LLM sampling parameter overrides
+	// (temperature, max_tokens) — AgentUpdateRequest.yaml's `model_params`.
+	// nil = every field inherits the agents.defaults value. Added to close
+	// a persistence gap (Q1, discovered 2026-09-14): PUT /api/v1/agents/{id}
+	// decoded model_params but had no corresponding AgentConfig field to
+	// write it into, so the request returned 200 and changed nothing on
+	// disk — the ADR-037 anti-pattern. Read by pkg/agent/instance.go at
+	// AgentInstance construction time; see AgentModelParams's own doc
+	// comment for field semantics and the top_p carve-out.
+	ModelParams *AgentModelParams `json:"model_params,omitempty"`
 	// Tools, when non-nil, overrides scope-based tool visibility for this agent.
 	// Nil means all tools allowed by the agent's type are available.
 	Tools *AgentToolsCfg `json:"tools,omitempty"`

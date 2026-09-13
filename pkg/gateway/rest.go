@@ -1985,6 +1985,24 @@ func applyAgentOverrides(ag *gen.Agent, ac *config.AgentConfig) {
 		}
 		ag.FallbackModels = &fm
 	}
+	// model_params: echo the persisted per-agent sampling-parameter override
+	// (Q1 fix). Previously config.AgentConfig had no ModelParams field at
+	// all, so a PUT that set it returned 200 and GET always echoed
+	// model_params: null — the ADR-037 anti-pattern (mirrors the
+	// FallbackModels/ShellPolicy echo fixes above). top_p is intentionally
+	// left unset here: it is rejected 400 at write time (no provider
+	// adapter implements it), so ac.ModelParams.TopP never exists to echo.
+	if ac.ModelParams != nil {
+		mp := struct { // not-wire-format: mirrors gen.Agent.ModelParams inline shape
+			MaxTokens   *int     `json:"max_tokens,omitempty"`
+			Temperature *float64 `json:"temperature,omitempty"`
+			TopP        *float64 `json:"top_p,omitempty"`
+		}{
+			MaxTokens:   ac.ModelParams.MaxTokens,
+			Temperature: ac.ModelParams.Temperature,
+		}
+		ag.ModelParams = &mp
+	}
 }
 
 // buildAgentDefaults populates the execution-related fields from config defaults.
@@ -3476,6 +3494,20 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		return
 	}
 
+	// model_params.top_p (Q1 follow-up): the wire schema carries a top_p
+	// property, but no provider adapter in this codebase implements
+	// nucleus sampling and there is no global default for it either —
+	// wiring it would be new cross-provider feature work, not this
+	// persistence fix. Accepting it silently (200, quietly ignored on every
+	// turn) would be exactly the ADR-037 anti-pattern this fix exists to
+	// close, just moved one layer down (persisted and echoed, but never
+	// honored). Reject it explicitly instead of pretending it works.
+	if req.ModelParams != nil && req.ModelParams.TopP != nil {
+		jsonErr(w, http.StatusBadRequest,
+			"model_params.top_p is not supported by any provider adapter")
+		return
+	}
+
 	if foundAgent.Locked {
 		// Protected: name, description, soul (prompt content),
 		// color, icon, and skills are identity/capability fields — reject on locked agents.
@@ -3764,15 +3796,47 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 					agentRec.Model.Provider = strings.TrimSpace(*req.Provider)
 				}
 				// NOTE (discovered during ADR-054 conversion, pre-existing gap,
-				// out of scope here): req.TimeoutSeconds, req.ModelParams, and
-				// req.RateLimits have NO corresponding config.AgentConfig field
-				// — config.AgentConfig has no TimeoutSeconds/ModelParams/
-				// RateLimits at all (only agents.defaults.timeout_seconds, a
-				// global setting). The pre-conversion code wrote them to raw
-				// map keys with no Go struct field to read them back into, so
-				// they never survived a struct-based config reload even
-				// before this change — this conversion does not persist them
-				// either, matching (not worsening) that pre-existing behavior.
+				// out of scope here): req.TimeoutSeconds and req.RateLimits
+				// have NO corresponding config.AgentConfig field —
+				// config.AgentConfig has no TimeoutSeconds/RateLimits at all
+				// (only agents.defaults.timeout_seconds, a global setting).
+				// The pre-conversion code wrote them to raw map keys with no
+				// Go struct field to read them back into, so they never
+				// survived a struct-based config reload even before this
+				// change — this conversion does not persist them either,
+				// matching (not worsening) that pre-existing behavior.
+				//
+				// req.ModelParams (Q1 fix, 2026-09-14): this USED to be in the
+				// same "no field to persist into" bucket as the two fields
+				// above — model_params decoded fine but AgentConfig had
+				// nowhere to write it, so the PUT returned 200 and changed
+				// nothing on disk, and GET always echoed model_params: null
+				// (the ADR-037 anti-pattern). config.AgentModelParams now
+				// exists for exactly this, and pkg/agent/instance.go reads it
+				// at AgentInstance construction time so the override reaches
+				// the next turn's provider call. Field-level merge (mirrors
+				// ShellPolicy below): only the sub-fields the caller actually
+				// sent overwrite the persisted value; an omitted sub-field
+				// leaves it untouched, so a partial patch (e.g. only
+				// max_tokens) does not clobber an existing temperature.
+				// top_p is rejected 400 earlier in this handler (no provider
+				// adapter implements it) and never reaches here.
+				if req.ModelParams != nil {
+					existing := &config.AgentModelParams{}
+					if agentRec.ModelParams != nil {
+						cp := *agentRec.ModelParams
+						existing = &cp
+					}
+					if req.ModelParams.Temperature != nil {
+						v := *req.ModelParams.Temperature
+						existing.Temperature = &v
+					}
+					if req.ModelParams.MaxTokens != nil {
+						v := *req.ModelParams.MaxTokens
+						existing.MaxTokens = &v
+					}
+					agentRec.ModelParams = existing
+				}
 				if req.MaxToolIterations != nil {
 					agentRec.MaxToolIterations = *req.MaxToolIterations
 				}
@@ -4062,7 +4126,16 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// both paths in sync via the same fastAgentUpsert rebuild Soul already
 	// uses.
 	contextWindowOverrideChanged := req.ContextWindowOverride != nil || clearsContextWindowOverride
-	needsReload := req.Soul != nil || defaultAgentIDChanged || contextWindowOverrideChanged || req.Skills != nil
+	// req.ModelParams != nil (Q1 fix): AgentInstance.MaxTokens/Temperature
+	// are resolved and CACHED once at construction (pkg/agent/instance.go),
+	// same as the context-window and skill-allowlist cases documented
+	// above — a bare config swap would leave the running instance serving
+	// the old sampling params until a restart. fastAgentUpsert rebuilds
+	// just this one AgentInstance via the same NewAgentInstance constructor
+	// that now reads agentCfg.ModelParams, so folding this into needsReload
+	// is sufficient; no separate live-apply path (like ApplyAgentModel) is
+	// needed.
+	needsReload := req.Soul != nil || defaultAgentIDChanged || contextWindowOverrideChanged || req.Skills != nil || req.ModelParams != nil
 	var reloadWarning string
 	if needsReload {
 		reloadWarning = a.fastAgentUpsert(id)
