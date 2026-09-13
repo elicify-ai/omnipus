@@ -1595,6 +1595,23 @@ components:
           type: boolean
         turn_failed:
           type: boolean
+        truncated:
+          type: boolean
+          description: >
+            ADR-087 D2 (finding #10). Mirrors Message.truncation_reason for the live done
+            frame, so a turn cut off while the user is still watching renders the notice
+            immediately instead of only after reload/reattach via replay. Only present
+            when true. Absent on a normal turn.
+        truncation_reason:
+          type: string
+          enum:
+          - cancelled
+          - max_output_tokens
+          description: >
+            ADR-087 D2 (finding #10). Mirrors Message.truncation_reason for the live done
+            frame: narrows why truncated is true — "cancelled" (the user canceled the turn
+            mid-stream) or "max_output_tokens" (the provider's output-token limit cut the
+            answer off before it finished). Absent on a normal turn.
     DoneFrame:
       title: DoneFrame
       description: >

@@ -139,6 +139,8 @@ export interface DoneStats {
   truncated_result_count?: number;
   replay_error?: boolean;
   turn_failed?: boolean;
+  truncated?: boolean;
+  truncation_reason?: "cancelled" | "max_output_tokens";
   [key: string]: unknown;
 }
 

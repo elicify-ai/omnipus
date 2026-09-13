@@ -220,6 +220,12 @@ func FixtureDoneFrame_Populated() DoneFrame {
 	dupCount := float64(0)
 	truncCount := float64(1)
 	replayErr := false
+	// ADR-087 D2 (finding #10): truncated + truncation_reason populated so
+	// this fixture actually exercises these two fields — an omitempty field
+	// with no populated fixture would ship green without ever being
+	// validated. Mirrors FixtureReplayMessageFrame_Populated's rationale.
+	truncated := true
+	truncationReason := "max_output_tokens"
 	return DoneFrame{
 		Type:      "done",
 		SessionId: "sess-1",
@@ -233,6 +239,8 @@ func FixtureDoneFrame_Populated() DoneFrame {
 			DuplicateToolCallIdCount: &dupCount,
 			TruncatedResultCount:     &truncCount,
 			ReplayError:              &replayErr,
+			Truncated:                &truncated,
+			TruncationReason:         &truncationReason,
 		},
 	}
 }

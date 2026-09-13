@@ -358,8 +358,12 @@ type DoneStats struct {
 	ReplayError              *bool    `json:"replay_error,omitempty"`
 	Tokens                   *float64 `json:"tokens,omitempty"`
 	TokensDropped            *float64 `json:"tokens_dropped,omitempty"`
-	TruncatedResultCount     *float64 `json:"truncated_result_count,omitempty"`
-	TurnFailed               *bool    `json:"turn_failed,omitempty"`
+	// ADR-087 D2 (finding #10). Mirrors Message.truncation_reason for the live done frame, so a turn cut off while the user is still watching renders the notice immediately instead of only after reload/reattach via replay. Only present when true. Absent on a normal turn.
+	Truncated            *bool    `json:"truncated,omitempty"`
+	TruncatedResultCount *float64 `json:"truncated_result_count,omitempty"`
+	// ADR-087 D2 (finding #10). Mirrors Message.truncation_reason for the live done frame: narrows why truncated is true — "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a normal turn.
+	TruncationReason *string `json:"truncation_reason,omitempty"`
+	TurnFailed       *bool   `json:"turn_failed,omitempty"`
 }
 
 // ErrorFrame — Server → client. Error notification. May be global (no session_id, e.g., auth failure) or session-scoped. The SPA displays the message as a toast or inline error. Does NOT terminate the WebSocket connection.

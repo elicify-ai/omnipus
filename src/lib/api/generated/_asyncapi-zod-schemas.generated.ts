@@ -102,6 +102,8 @@ export const DoneStats = z
     truncated_result_count: z.number().min(0).optional(),
     replay_error: z.boolean().optional(),
     turn_failed: z.boolean().optional(),
+    truncated: z.boolean().optional(),
+    truncation_reason: z.enum(["cancelled", "max_output_tokens"]).optional(),
   })
   .passthrough();
 
