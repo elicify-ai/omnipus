@@ -102,9 +102,10 @@ describe('a markdown IMAGE naming a video is recognised the same way, and a wiki
     expect(await screen.findByTestId('video-embed-play')).toBeInTheDocument()
 
     // Negative half, same fixture: the wikilink IMAGE embed — resolved to a
-    // real, same-origin file — renders as a picture through the inherited
-    // image renderer, never as VideoEmbed.
-    const picture = screen.getByTestId('chat-image')
+    // real, same-origin file — renders as a picture through the KB image
+    // renderer (KbMarkdownImage since UAT D-40/D-134/D-101), never as
+    // VideoEmbed.
+    const picture = screen.getByTestId('kb-markdown-image')
     expect(picture).toHaveAttribute('src', 'https://example.test/internal.png')
     expect(screen.getAllByTestId('video-embed')).toHaveLength(1)
   })

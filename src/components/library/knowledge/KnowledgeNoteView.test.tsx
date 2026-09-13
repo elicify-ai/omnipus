@@ -449,7 +449,9 @@ describe('KnowledgeNoteView — the embed resolver (ADR-083 EMB-011 through EMB-
 
     renderEmbedNote({ content: '![[diagram.png]]', loadGraph })
 
-    const img = await screen.findByTestId('chat-image')
+    // The KB composition's own image slot (KbMarkdownImage, since UAT
+    // D-40/D-134/D-101) — chat's renderer is no longer the img slot here.
+    const img = await screen.findByTestId('kb-markdown-image')
     expect(img.getAttribute('src') ?? '').toContain('diagram.png')
   })
 
