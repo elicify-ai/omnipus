@@ -7,6 +7,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // UAT fix (fix/uat-defects-2026-08-22, Defect 1): a live UAT drove run_task
@@ -47,10 +48,33 @@ const (
 	// toolFailureWarnThreshold is the consecutive-identical-failure count at
 	// which the tool result gains an explicit "stop retrying" notice.
 	toolFailureWarnThreshold = 3
-	// toolFailureCircuitBreakThreshold is the consecutive-identical-failure
-	// count at which further identical calls are refused outright for the
-	// rest of the turn, without even being dispatched.
+	// toolFailureCircuitBreakThreshold is the ATTEMPT number at which an
+	// identical call is refused outright for the rest of the turn, without
+	// being dispatched: after toolFailureCircuitBreakThreshold-1 consecutive
+	// identical failures, attempt number toolFailureCircuitBreakThreshold is
+	// the first one that never runs (UAT 2026-09-13 D-81 — the earlier
+	// reading "trip AFTER the 6th failure" let the 6th identical call execute
+	// and only refused the 7th, so the escalation the plan expects at 6 never
+	// visibly happened).
 	toolFailureCircuitBreakThreshold = 6
+
+	// Oscillation detection (UAT 2026-09-13 D-23). The streak counter above
+	// is blind to a loop of SUCCESSFUL, mutually-cancelling calls — the UAT
+	// drove create_record_type X / delete_record_type X five times in a row,
+	// every call succeeding, and nothing fired. A loop is a repeating cycle
+	// of call signatures: the last oscillationWarnCycles full repetitions of
+	// a period-2..oscillationMaxPeriod pattern (with at least two distinct
+	// calls in it) earns a notice on the result; the call that would extend
+	// the pattern to oscillationBreakCycles repetitions is refused without
+	// dispatch. A call that breaks the pattern is always allowed — this only
+	// ever bites exact repetition.
+	oscillationMinPeriod   = 2
+	oscillationMaxPeriod   = 4
+	oscillationWarnCycles  = 3
+	oscillationBreakCycles = 5
+	// toolCallHistoryCap bounds the per-turn signature history the detector
+	// scans; oscillationMaxPeriod*oscillationBreakCycles is all it needs.
+	toolCallHistoryCap = 64
 )
 
 // nonSemanticToolArgs lists, per tool, the argument keys that tool declares
@@ -136,13 +160,95 @@ func (ts *turnState) tripToolCircuitBreaker(sig, reason string) {
 	ts.toolCircuitBroken[sig] = reason
 }
 
-// toolCircuitBreakerTripped reports whether sig is currently hard-blocked
-// for this turn, and the reason recorded when it tripped.
+// toolCircuitBreakerTripped reports whether sig must be refused without
+// dispatch for this turn, and why. Three conditions trip it, checked in
+// order:
+//
+//  1. sig was already marked broken earlier this turn.
+//  2. sig has failed identically toolFailureCircuitBreakThreshold-1 times
+//     in a row, so THIS attempt is number toolFailureCircuitBreakThreshold
+//     (D-81): it is refused and sig is marked broken for the rest of the
+//     turn.
+//  3. Dispatching sig would extend the turn's call history into
+//     oscillationBreakCycles repetitions of a short cycle (D-23). Nothing
+//     is marked broken here: the refusal is per-call, so a call that breaks
+//     the pattern still runs. (Because a refused call is never appended to
+//     the history, repeating the refused call is refused again.)
 func (ts *turnState) toolCircuitBreakerTripped(sig string) (reason string, tripped bool) {
-	ts.mu.RLock()
-	defer ts.mu.RUnlock()
-	reason, tripped = ts.toolCircuitBroken[sig]
-	return reason, tripped
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if reason, tripped = ts.toolCircuitBroken[sig]; tripped {
+		return reason, true
+	}
+	if streak := ts.toolFailureStreaks[sig]; streak >= toolFailureCircuitBreakThreshold-1 {
+		toolName, _, _ := strings.Cut(sig, "\x00")
+		reason = toolFailureCircuitBreakerReason(toolName, streak)
+		if ts.toolCircuitBroken == nil {
+			ts.toolCircuitBroken = make(map[string]string)
+		}
+		ts.toolCircuitBroken[sig] = reason
+		return reason, true
+	}
+	if period, cycles := detectOscillation(append(append([]string(nil), ts.toolCallHistory...), sig)); cycles >= oscillationBreakCycles {
+		toolName, _, _ := strings.Cut(sig, "\x00")
+		return toolOscillationBreakerReason(toolName, period, cycles), true
+	}
+	return "", false
+}
+
+// recordToolCallForLoopDetection appends sig to this turn's dispatched-call
+// history (success or failure alike — a loop of successes is the case this
+// exists for) and returns a notice to append to the tool result when the
+// history's tail now forms oscillationWarnCycles or more repetitions of a
+// short cycle. Call it once per DISPATCHED call, after the result is known;
+// never for a call the breaker refused.
+func (ts *turnState) recordToolCallForLoopDetection(sig string) string {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.toolCallHistory = append(ts.toolCallHistory, sig)
+	if len(ts.toolCallHistory) > toolCallHistoryCap {
+		ts.toolCallHistory = ts.toolCallHistory[len(ts.toolCallHistory)-toolCallHistoryCap:]
+	}
+	period, cycles := detectOscillation(ts.toolCallHistory)
+	if cycles < oscillationWarnCycles {
+		return ""
+	}
+	toolName, _, _ := strings.Cut(sig, "\x00")
+	return toolOscillationWarnNotice(toolName, period, cycles)
+}
+
+// detectOscillation finds the longest run of exact repetitions of a short
+// cycle at the END of history. For each period p in
+// [oscillationMinPeriod, oscillationMaxPeriod] it counts how many complete
+// cycles of length p the tail repeats and returns the period with the most
+// cycles (ties go to the shorter period). A cycle whose p members are all
+// the same signature is not an oscillation — that is the identical-failure
+// streak's business — and is reported as 0.
+func detectOscillation(history []string) (period, cycles int) {
+	n := len(history)
+	for p := oscillationMinPeriod; p <= oscillationMaxPeriod; p++ {
+		if n < 2*p {
+			continue
+		}
+		distinct := make(map[string]struct{}, p)
+		for _, s := range history[n-p:] {
+			distinct[s] = struct{}{}
+		}
+		if len(distinct) < 2 {
+			continue
+		}
+		matched := 0
+		for i := n - p - 1; i >= 0 && history[i] == history[i+p]; i-- {
+			matched++
+		}
+		c := (matched + p) / p
+		// One occurrence of a cycle is not a repetition: report only from
+		// the second full repetition on.
+		if c >= 2 && c > cycles {
+			period, cycles = p, c
+		}
+	}
+	return period, cycles
 }
 
 // toolFailureWarnNotice is appended to a failing tool result's content once
@@ -170,6 +276,28 @@ func toolFailureCircuitBreakerReason(toolName string, streak int) string {
 			"in outcome — the dispatch layer is refusing further identical attempts for the "+
 			"rest of this turn",
 		toolName, streak,
+	)
+}
+
+// toolOscillationWarnNotice is appended to a tool result once the turn's
+// call history repeats a short cycle oscillationWarnCycles times.
+func toolOscillationWarnNotice(toolName string, period, cycles int) string {
+	return fmt.Sprintf(
+		"\n\n[SYSTEM NOTICE: the last %d tool calls repeat the same %d-call cycle %d times in a row "+
+			"(this %q call closes the latest repetition). Each round undoes or repeats the previous one, "+
+			"so the vault is churning and nothing is converging. Stop the loop: decide the end state once, "+
+			"apply it once, or tell the user you are stuck.]",
+		period*cycles, period, cycles, toolName,
+	)
+}
+
+// toolOscillationBreakerReason is the refusal reason for the call that would
+// extend an oscillation to oscillationBreakCycles repetitions.
+func toolOscillationBreakerReason(toolName string, period, cycles int) string {
+	return fmt.Sprintf(
+		"this %q call would be the %dth repetition of the same %d-call cycle this turn — "+
+			"the dispatch layer is refusing to extend the loop",
+		toolName, cycles, period,
 	)
 }
 

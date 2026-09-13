@@ -11459,6 +11459,15 @@ turnLoop:
 			} else {
 				ts.recordToolSuccess(toolCBSig)
 			}
+			// UAT 2026-09-13 D-23: a loop of SUCCESSFUL, mutually-cancelling
+			// calls (create X / delete X / create X …) never touches the
+			// streak above. Record every dispatched call's signature and warn
+			// once the turn's history repeats a short cycle; the pre-dispatch
+			// check above (toolCircuitBreakerTripped) refuses the call that
+			// would extend it past the break point.
+			if loopNotice := ts.recordToolCallForLoopDetection(toolCBSig); loopNotice != "" {
+				toolResult.ForLLM = toolResult.ContentForLLM() + loopNotice
+			}
 			// Always deliver any media the tool produced AND tag the result with
 			// artifact references so the LLM can reason about them in the
 			// follow-up call. The follow-up call itself is now unconditional —

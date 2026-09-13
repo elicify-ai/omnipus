@@ -122,11 +122,15 @@ func TestRunTurn_ToolFailureCircuitBreaker_CapsIdenticalRetries(t *testing.T) {
 		"the turn must reach the SECOND scripted LLM response, proving it continued past the breaker")
 
 	// (1) The core proof: Execute is called EXACTLY
-	// toolFailureCircuitBreakThreshold times, never totalScripted times. A
-	// do-nothing implementation would report totalScripted here.
-	assert.Equal(t, toolFailureCircuitBreakThreshold, stub.callCount(),
-		"CRITICAL: the tool executed more than toolFailureCircuitBreakThreshold times for an "+
-			"identical, persistently-failing call — the circuit breaker is not capping real dispatch")
+	// toolFailureCircuitBreakThreshold-1 times, never totalScripted times —
+	// attempt number toolFailureCircuitBreakThreshold is the first one
+	// refused without dispatch (UAT 2026-09-13 D-81). A do-nothing
+	// implementation would report totalScripted here; the pre-D-81 breaker
+	// reported toolFailureCircuitBreakThreshold (it let the 6th run).
+	assert.Equal(t, toolFailureCircuitBreakThreshold-1, stub.callCount(),
+		"CRITICAL: the tool executed toolFailureCircuitBreakThreshold or more times for an "+
+			"identical, persistently-failing call — the circuit breaker is not refusing attempt %d",
+		toolFailureCircuitBreakThreshold)
 
 	// (2) Every call past the threshold must be denied without dispatch: a
 	// ToolExecSkipped event whose reason names the circuit breaker, never a
@@ -146,8 +150,9 @@ func TestRunTurn_ToolFailureCircuitBreaker_CapsIdenticalRetries(t *testing.T) {
 			"skip reason should name the circuit breaker so an operator reading events can tell why")
 		breakerDenials++
 	}
-	assert.Equal(t, totalScripted-toolFailureCircuitBreakThreshold, breakerDenials,
-		"expected exactly the calls past the trip point to be denied pre-dispatch")
+	assert.Equal(t, totalScripted-(toolFailureCircuitBreakThreshold-1), breakerDenials,
+		"expected exactly the calls from attempt %d onward to be denied pre-dispatch",
+		toolFailureCircuitBreakThreshold)
 
 	if _, ok := findEvent(events, EventKindError); ok {
 		t.Error("no EventKindError expected — the turn must complete without aborting")
