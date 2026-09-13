@@ -110,7 +110,10 @@
 // then match nothing and pass.
 
 import { useEffect, useRef, useState } from 'react'
-import { SpinnerGap, Eye, PencilSimple, FloppyDisk, Signature, X } from '@phosphor-icons/react'
+import { SpinnerGap, Eye, PencilSimple, FloppyDisk, Signature, X,
+  MagnifyingGlassMinus,
+  MagnifyingGlassPlus,
+} from '@phosphor-icons/react'
 import { ApiError, downloadLibraryFileVersioned, putLibraryContentBinary, isLibraryVersionConflict } from '@/lib/api'
 import type { LibraryEntry } from '@/lib/api'
 import type { AutoSaveStatus } from '@/hooks/useAutoSave'
@@ -154,6 +157,41 @@ const ASSET_DIR_MEANING: Record<string, string> = {
  *  exceeds browsers' canvas area limits and renders as a blank bitmap. */
 const MIN_SCALE = 0.25
 const MAX_SCALE = 4
+
+/** UAT D-37 (2026-09-13): the reader's own magnification, applied to the
+ *  pages container as a CSS `zoom` ON TOP of the automatic fit-to-width
+ *  render scale (`MIN_SCALE`/`MAX_SCALE` above clamp THAT, and were the only
+ *  "scale" in this file — a reader had no control at all). A display zoom,
+ *  not a re-render: re-rendering would reload the document (the render
+ *  effect owns the fetch), and the canvas is already drawn at the device
+ *  pixel ratio, so it stays sharp up to the 200% cap. */
+export const PDF_ZOOM_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const
+export const PDF_ZOOM_DEFAULT = 1
+
+/** The next zoom step in `direction`, or the current value at either end. */
+export function nextPdfZoom(current: number, direction: 'in' | 'out'): number {
+  const idx = PDF_ZOOM_STEPS.findIndex((z) => Math.abs(z - current) < 1e-6)
+  const at = idx === -1 ? PDF_ZOOM_STEPS.indexOf(1) : idx
+  const next = direction === 'in' ? at + 1 : at - 1
+  if (next < 0 || next >= PDF_ZOOM_STEPS.length) return PDF_ZOOM_STEPS[at]
+  return PDF_ZOOM_STEPS[next]
+}
+
+/** UAT D-63 (2026-09-13): the page a reader is LOOKING AT — the first
+ *  rendered page whose bottom edge is below the container's scroll top — so
+ *  the signature dialog defaults to it rather than to the last page of the
+ *  document. Falls back to 1 when nothing is rendered yet. */
+export function firstVisiblePdfPage(container: HTMLElement): number {
+  const pages = container.querySelectorAll<HTMLElement>('[data-page-number]')
+  const top = container.scrollTop
+  for (const el of pages) {
+    if (el.offsetTop + el.offsetHeight > top) {
+      const n = Number(el.getAttribute('data-page-number'))
+      if (Number.isInteger(n) && n >= 1) return n
+    }
+  }
+  return 1
+}
 
 /** Cap the canvas backing store at 2x. Beyond that the memory cost per page
  *  grows faster than the visible gain on a 3x display. */
@@ -423,6 +461,10 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
   const [status, setStatus] = useState<'queued' | 'loading' | 'ready' | 'error'>('loading')
   const [error, setError] = useState<string | null>(null)
   const [pageCount, setPageCount] = useState(0)
+  // D-37: display zoom (see PDF_ZOOM_STEPS). D-63: the page the signature
+  // dialog should default to, captured at the moment it is opened.
+  const [zoom, setZoom] = useState<number>(PDF_ZOOM_DEFAULT)
+  const [signatureDefaultPage, setSignatureDefaultPage] = useState(1)
   // Distinct from `status === 'ready'`: that flips as soon as the DOCUMENT
   // opens, while pages still render progressively afterwards (existing
   // behaviour, unchanged). Edit mode needs every page's viewport/annotations
@@ -1571,11 +1613,53 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
             <PencilSimple size={15} weight={mode === 'edit' ? 'fill' : 'regular'} />
           </button>
         </div>
+        <div className="flex items-center gap-0.5" role="group" aria-label="Zoom">
+          <button
+            type="button"
+            tabIndex={0}
+            onClick={() => setZoom((z) => nextPdfZoom(z, 'out'))}
+            disabled={zoom <= PDF_ZOOM_STEPS[0]}
+            aria-label="Zoom out"
+            title="Zoom out"
+            data-testid="library-pdf-zoom-out"
+            className={LIBRARY_ICON_BTN}
+          >
+            <MagnifyingGlassMinus size={15} />
+          </button>
+          <button
+            type="button"
+            tabIndex={0}
+            onClick={() => setZoom(PDF_ZOOM_DEFAULT)}
+            aria-label={`Zoom ${Math.round(zoom * 100)} percent — reset to 100 percent`}
+            title="Reset zoom"
+            data-testid="library-pdf-zoom-reset"
+            className="rounded px-1 text-[11px] tabular-nums text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
+          >
+            {Math.round(zoom * 100)}%
+          </button>
+          <button
+            type="button"
+            tabIndex={0}
+            onClick={() => setZoom((z) => nextPdfZoom(z, 'in'))}
+            disabled={zoom >= PDF_ZOOM_STEPS[PDF_ZOOM_STEPS.length - 1]}
+            aria-label="Zoom in"
+            title="Zoom in"
+            data-testid="library-pdf-zoom-in"
+            className={LIBRARY_ICON_BTN}
+          >
+            <MagnifyingGlassPlus size={15} />
+          </button>
+        </div>
         {mode === 'edit' && (
           <button
             type="button"
             tabIndex={0}
-            onClick={() => setSignaturePadOpen(true)}
+            onClick={() => {
+              // D-63: read the page on screen NOW, not the document's last page.
+              const c = containerRef.current
+              setSignatureDefaultPage(c ? firstVisiblePdfPage(c) : 1)
+              setSignaturePadOpen(true)
+            }}
             disabled={!allPagesRendered}
             aria-label="Add signature"
             title="Draw and place a signature"
@@ -1714,6 +1798,15 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
       <div
         ref={containerRef}
         className={`min-h-0 flex-1 overflow-auto p-2 ${status === 'ready' ? '' : 'hidden'}`}
+        // D-37: the reader's magnification. `zoom` (not `transform`) so the
+        // scroll extents follow the magnified content.
+        style={{ zoom }}
+        data-zoom={zoom}
+        onWheel={(event) => {
+          if (!(event.ctrlKey || event.metaKey)) return
+          event.preventDefault()
+          setZoom((z) => nextPdfZoom(z, event.deltaY < 0 ? 'in' : 'out'))
+        }}
         data-testid="library-pdf-pages"
         aria-label={
           pageFragment !== undefined
@@ -1726,7 +1819,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
         open={signaturePadOpen && readyForFormsAndSignature}
         onOpenChange={setSignaturePadOpen}
         pageCount={pageCount}
-        defaultPageNumber={pageCount}
+        defaultPageNumber={signatureDefaultPage}
         onInsert={handleInsertSignature}
       />
     </div>

@@ -62,12 +62,14 @@ import { cn } from '@/lib/utils'
 import {
   fetchLibraryWorkspaces,
   fetchLibraryEntries,
+  fetchKnowledgeBaseInfo,
   deleteLibraryEntry,
   renameLibraryEntry,
   moveLibraryEntry,
   copyLibraryEntry,
   uploadLibraryFiles,
   mkdirLibraryEntry,
+  createLibraryTextFile,
   libraryDownloadUrl,
   libraryQueryKeys,
   createWorkspaceMount,
@@ -83,6 +85,7 @@ import { LibraryCreateMenu } from './LibraryCreateMenu'
 import { LibraryMountsDialog } from './LibraryMountsDialog'
 import { mountNameFromPath } from './libraryMountName'
 import { LibraryNewFolderDialog } from './LibraryNewFolderDialog'
+import { LibraryNewNoteDialog } from './LibraryNewNoteDialog'
 import { LibraryPreviewPane } from './LibraryPreviewPane'
 import { LibraryErrorBanner } from './LibraryErrorBanner'
 import { KnowledgePanel } from './knowledge/KnowledgePanel'
@@ -206,6 +209,27 @@ function baseNameOf(filePath: string): string {
   return cut === -1 ? filePath : filePath.slice(cut + 1)
 }
 
+/**
+ * The upload toast (UAT D-124, 2026-09-13). A duplicate upload is correctly
+ * auto-suffixed server-side (`photo (1).png`), but the toast said only
+ * "Uploaded 1 file." — the reader who uploaded `photo.png` found out it was
+ * now `photo (2).png` only by reading the list. Renames are matched by
+ * position: the server returns one entry per uploaded file, in order.
+ * Exported for the test; pure.
+ */
+export function uploadOutcomeMessage(fileNames: readonly string[], savedNames: readonly string[]): string {
+  const count = savedNames.length
+  let message = `Uploaded ${count} file${count === 1 ? '' : 's'}.`
+  const renamed: string[] = []
+  for (let i = 0; i < Math.min(fileNames.length, savedNames.length); i++) {
+    if (fileNames[i] !== savedNames[i]) renamed.push(`${fileNames[i]} was saved as ${savedNames[i]}`)
+  }
+  if (renamed.length > 0) {
+    message += ` ${renamed.join('; ')} because ${renamed.length === 1 ? 'that name was' : 'those names were'} already taken.`
+  }
+  return message
+}
+
 export function LibraryExplorer({
   initialWorkspaceId,
   address,
@@ -271,6 +295,9 @@ export function LibraryExplorer({
   const [uploadError, setUploadError] = useState<string>()
   const [newFolderOpen, setNewFolderOpen] = useState(false)
   const [newFolderError, setNewFolderError] = useState<string>()
+  // UAT #699 / D-115: "New note" — a markdown file in the current folder.
+  const [newNoteOpen, setNewNoteOpen] = useState(false)
+  const [newNoteError, setNewNoteError] = useState<string>()
 
   useEffect(() => {
     onWorkspaceChange?.(workspaceId)
@@ -301,6 +328,37 @@ export function LibraryExplorer({
     if (selectedDir === null) return
     setBrowsedDir((cur) => (cur === selectedDir ? cur : selectedDir))
   }, [selectedDir])
+
+  // UAT D-108 (2026-09-13): `address.folder` used to be read ONCE, as the
+  // mount-time seed above, so a same-route navigation to a different
+  // `folder=` (a pasted link, the back button) changed the URL and nothing
+  // else — the breadcrumb and listing stayed where they were and the address
+  // bar became a quiet lie. A CHANGE in the folder param, with no file
+  // selected to imply a folder instead, is now acted on. It fires only when
+  // the param actually changes: in-app folder navigation never rewrites the
+  // param (goTo reports paths, not folders), so it cannot fight the click.
+  const addressFolder = addressed ? address?.folder : undefined
+  useEffect(() => {
+    if (!addressed || selectedPath !== null || addressFolder === undefined) return
+    setBrowsedDir((cur) => (cur === addressFolder ? cur : addressFolder))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addressFolder])
+
+  // UAT D-64 (2026-09-13): switching workspace BY URL kept the previous
+  // workspace's browsed folder, so the breadcrumb read
+  // "Library › My Workspace › UAT Vault › Projects" for a folder that never
+  // existed there — and the listing query fired for it. In-app workspace
+  // navigation already resets the folder (handleOpenWorkspaceNode); an
+  // addressed change does the same here, to whatever the new address itself
+  // implies — the selected file's folder, the folder param, or the root.
+  // Adjusted DURING render (React's derived-state pattern: state remembers
+  // the workspace it was computed for) rather than in an effect, so the
+  // entries query below never runs even once against the stale folder.
+  const [browsedForWorkspace, setBrowsedForWorkspace] = useState(workspaceId)
+  if (browsedForWorkspace !== workspaceId) {
+    setBrowsedForWorkspace(workspaceId)
+    if (addressed) setBrowsedDir(selectedDir ?? addressFolder ?? '')
+  }
 
   // Always fetched (cheap, small list) — backs the virtual-root listing AND
   // resolves the current workspace's display name for the breadcrumb + the
@@ -359,12 +417,26 @@ export function LibraryExplorer({
     workspaceId !== null &&
     selectedDir === browsedDir &&
     entriesQuery.isSuccess
+  // UAT D-36 (2026-09-13): a `path` that names a FOLDER in the listing is not
+  // "not found" — it is right there, one row down. Saying so was a plain
+  // falsehood (the OP lane read it as an encoding bug). Such an address now
+  // OPENS the folder: the browsed folder becomes the path, and the address
+  // drops the path so the URL and the screen agree. No banner is shown for
+  // it, not even for the one render before the effect runs.
+  const deepLinkIsFolder =
+    deepLinkUnresolved && selectedPath !== null && sortedEntries.some((e) => e.is_dir && e.path === selectedPath)
+  useEffect(() => {
+    if (!deepLinkIsFolder || selectedPath === null) return
+    setBrowsedDir(selectedPath)
+    goTo(workspaceId, null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepLinkIsFolder, selectedPath])
   // A dot-prefixed target IS in the folder, just filtered out of the listing.
   // Saying "not found" there would be a plain falsehood, so it gets its own
   // wording and the action that fixes it.
   const deepLinkHiddenFromView =
     deepLinkUnresolved && selectedPath !== null && baseNameOf(selectedPath).startsWith('.') && !includeHidden
-  const deepLinkMessage = !deepLinkUnresolved
+  const deepLinkMessage = !deepLinkUnresolved || deepLinkIsFolder
     ? null
     : deepLinkHiddenFromView
       ? `"${selectedPath}" is a hidden file. Turn on Show hidden to open it.`
@@ -484,12 +556,27 @@ export function LibraryExplorer({
     },
   })
 
+  // UAT #701 / D-123 (2026-09-13): inside a knowledge base the Library's
+  // delete goes to `.omnipus-vault/trash/` and its rename rewrites inbound
+  // links, so the dialogs must say so. Same key KnowledgePanel already uses
+  // for the browsed folder, so this is a cache hit whenever the panel is up.
+  const browsedKnowledgeQuery = useQuery({
+    queryKey: ['knowledge-base-info', workspaceId, browsedDir],
+    queryFn: () => fetchKnowledgeBaseInfo(workspaceId as string, browsedDir),
+    enabled: workspaceId !== null,
+    staleTime: 30_000,
+  })
+  const browsedInOmnipusVault =
+    browsedKnowledgeQuery.data?.is_knowledge_base === true && browsedKnowledgeQuery.data.marker === 'omnipus_vault'
+  const isVaultNote = (e: LibraryEntry | null): boolean =>
+    e !== null && !e.is_dir && browsedInOmnipusVault && /\.(md|markdown)$/i.test(e.name)
+
   const deleteMutation = useMutation({
     mutationFn: ({ wsId, entryPath }: { wsId: string; entryPath: string }) => deleteLibraryEntry(wsId, entryPath),
     onSuccess: (_data, vars) => {
       invalidateEntries(vars.wsId)
       invalidateWorkspaces()
-      addToast({ message: 'Deleted.', variant: 'success' })
+      addToast({ message: isVaultNote(deleteTarget) ? 'Moved to the knowledge base’s trash.' : 'Deleted.', variant: 'success' })
       setDeleteTarget(null)
       if (selectedPath === vars.entryPath) goTo(workspaceId, null)
     },
@@ -573,7 +660,10 @@ export function LibraryExplorer({
       invalidateWorkspaces()
       setUploadError(undefined)
       addToast({
-        message: `Uploaded ${data.entries.length} file${data.entries.length === 1 ? '' : 's'}.`,
+        message: uploadOutcomeMessage(
+          vars.files.map((f) => f.name),
+          data.entries.map((e) => e.name),
+        ),
         variant: 'success',
       })
     },
@@ -608,6 +698,43 @@ export function LibraryExplorer({
       setNewFolderError(getLibraryErrorMessage(err, 'Could not create folder'))
     },
   })
+
+  // UAT #699 / D-115 (2026-09-13). The note is created through the same
+  // compare-and-swap PUT the editor saves with, sending the ABSENT version
+  // token: a name that is already taken comes back as a 409 with the
+  // server's own reason, never an overwrite. On success the new file is
+  // SELECTED (goTo with its path), so the reader lands in it — the pane's
+  // Edit button is one click away and the view shows the seeded title.
+  const newNoteMutation = useMutation({
+    mutationFn: ({ wsId, path, content }: { wsId: string; path: string; content: string }) =>
+      createLibraryTextFile(wsId, path, content),
+    onMutate: () => {
+      setNewNoteError(undefined)
+    },
+    onSuccess: (result, vars) => {
+      invalidateEntries(vars.wsId)
+      invalidateWorkspaces()
+      setNewNoteOpen(false)
+      setNewNoteError(undefined)
+      addToast({ message: `Created ${result.data.name}.`, variant: 'success' })
+      goTo(vars.wsId, result.data.path)
+    },
+    onError: (err) => {
+      setNewNoteError(getLibraryErrorMessage(err, 'Could not create the note'))
+    },
+  })
+
+  function openNewNoteDialog() {
+    setNewNoteError(undefined)
+    setNewNoteOpen(true)
+  }
+
+  function handleCreateNote(fileName: string) {
+    if (!workspaceId) return
+    const path = browsedDir ? `${browsedDir}/${fileName}` : fileName
+    const title = fileName.replace(/\.(md|markdown)$/i, '')
+    newNoteMutation.mutate({ wsId: workspaceId, path, content: `# ${title}\n\n` })
+  }
 
   function openRenameDialog(entry: LibraryEntry) {
     setRenameError(undefined)
@@ -805,6 +932,7 @@ export function LibraryExplorer({
             mountedCount={workspaceMounts.length}
             uploadPending={uploadMutation.isPending}
             onNewFolder={openNewFolderDialog}
+            onNewNote={openNewNoteDialog}
             onAddMount={() => setAddMountOpen(true)}
             onManageMounts={() => setMountsOpen(true)}
             onUpload={() => fileInputRef.current?.click()}
@@ -892,7 +1020,35 @@ export function LibraryExplorer({
           poll — the frame is the contract's answer to progress (FR-080). */}
       {workspaceId !== null && (
         <div className="shrink-0 p-2 pb-0">
-          <KnowledgePanel workspaceId={workspaceId} path={browsedDir} />
+          {/* UAT #699 / D-115: the empty-collection state's "Write the first
+              note" button is live only when a handler is wired; with none the
+              panel used to say nothing at all about how a note gets made. */}
+          <KnowledgePanel
+            workspaceId={workspaceId}
+            path={browsedDir}
+            {...(!isReservedLibraryDir ? { onCreateNote: openNewNoteDialog } : {})}
+          />
+          {/* UAT D-122 (2026-09-13): a folder with `.obsidian/` and no
+              `.omnipus-vault/` is detected and its notes are indexed, but
+              every search reported Records 0 / Views 0 with nothing saying
+              why — the zeros looked like an empty vault rather than an
+              un-imported one. The import is CLI-only today (Appendix B /
+              FR-103), so that is stated rather than hidden. */}
+          {browsedKnowledgeQuery.data?.is_knowledge_base === true &&
+            browsedKnowledgeQuery.data.marker === 'obsidian' && (
+              <div
+                role="status"
+                data-testid="library-obsidian-not-imported"
+                className="mt-2 rounded-md border border-[var(--color-accent)]/30 bg-[var(--color-accent)]/5 px-3 py-2 text-xs leading-relaxed text-[var(--color-muted)]"
+              >
+                This is an Obsidian vault that has not been imported into Omnipus yet. Its notes are
+                indexed and searchable, but record types, records and views stay at zero until the
+                vault is imported — today that is done from the command line with{' '}
+                <span className="font-mono text-[var(--color-secondary)]">omnipus records import-obsidian</span>
+                . Importing writes an <span className="font-mono">.omnipus-vault</span> folder here and never
+                changes the <span className="font-mono">.obsidian</span> one.
+              </div>
+            )}
         </div>
       )}
 
@@ -1058,6 +1214,7 @@ export function LibraryExplorer({
           }
         }}
         entry={renameTarget}
+        rewritesLinks={isVaultNote(renameTarget)}
         siblingNames={new Set(sortedEntries.filter((e) => e.path !== renameTarget?.path).map((e) => e.name))}
         isPending={renameMutation.isPending}
         error={renameError}
@@ -1078,6 +1235,19 @@ export function LibraryExplorer({
         isPending={mkdirMutation.isPending}
         error={newFolderError}
         onSubmit={handleCreateFolder}
+      />
+
+      {/* ── New note dialog (UAT #699 / D-115; creates inside the CURRENT directory) ── */}
+      <LibraryNewNoteDialog
+        open={newNoteOpen}
+        onOpenChange={(open) => {
+          setNewNoteOpen(open)
+          if (!open) setNewNoteError(undefined)
+        }}
+        siblingNames={new Set(sortedEntries.map((e) => e.name))}
+        isPending={newNoteMutation.isPending}
+        error={newNoteError}
+        onSubmit={handleCreateNote}
       />
 
       {/* ── Move / Copy dialog (D-9, cross-workspace) ──────────────────────── */}
@@ -1201,12 +1371,26 @@ export function LibraryExplorer({
       <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete {deleteTarget?.is_dir ? 'folder' : 'file'}?</AlertDialogTitle>
+            <AlertDialogTitle>
+              {deleteTarget?.name === VAULT_MARKER_DIR
+                ? 'Delete this knowledge base’s settings?'
+                : isVaultNote(deleteTarget)
+                  ? 'Move note to trash?'
+                  : `Delete ${deleteTarget?.is_dir ? 'folder' : 'file'}?`}
+            </AlertDialogTitle>
             <AlertDialogDescription>
               {deleteTarget
-                ? deleteTarget.is_dir
-                  ? `"${deleteTarget.name}" and everything inside it will be permanently deleted. This cannot be undone.`
-                  : `"${deleteTarget.name}" will be permanently deleted. This cannot be undone.`
+                ? deleteTarget.name === VAULT_MARKER_DIR
+                  ? // UAT D-121 (2026-09-13): the marker folder IS the
+                    // knowledge base. The generic folder wording said
+                    // nothing about that, and the UI cannot recreate a
+                    // knowledge base over the same folder afterwards.
+                    `"${VAULT_MARKER_DIR}" is what makes "${parentFolderName(deleteTarget.path)}" a knowledge base. Deleting it removes its record types, id sequences, saved views and trash — the notes stay as plain files, but the folder stops being a knowledge base and cannot be made one again from here. This cannot be undone.`
+                  : isVaultNote(deleteTarget)
+                    ? `"${deleteTarget.name}" will be moved to this knowledge base’s trash. Links to it from other notes will stop resolving until it is restored; an agent can restore it from the trash.`
+                    : deleteTarget.is_dir
+                      ? `"${deleteTarget.name}" and everything inside it will be permanently deleted. This cannot be undone.`
+                      : `"${deleteTarget.name}" will be permanently deleted. This cannot be undone.`
                 : ''}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -1221,7 +1405,7 @@ export function LibraryExplorer({
                 deleteMutation.mutate({ wsId: workspaceId, entryPath: deleteTarget.path })
               }}
             >
-              {deleteMutation.isPending ? 'Deleting…' : 'Delete'}
+              {deleteMutation.isPending ? 'Deleting…' : isVaultNote(deleteTarget) ? 'Move to trash' : 'Delete'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -1242,6 +1426,15 @@ function ListSkeleton() {
       ))}
     </div>
   )
+}
+
+/** The knowledge-base marker directory's name (pkg/knowledge's VaultDir). */
+const VAULT_MARKER_DIR = '.omnipus-vault'
+
+/** The display name of the folder that contains `path`, or the workspace root. */
+function parentFolderName(path: string): string {
+  const parts = path.split('/').filter(Boolean)
+  return parts.length >= 2 ? parts[parts.length - 2] : 'this workspace'
 }
 
 function EmptyState({ icon, message }: { icon: React.ReactNode; message: string }) {

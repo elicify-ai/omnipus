@@ -115,11 +115,17 @@ describe('useLibraryFileEditor — save', () => {
     act(() => result.current.save())
 
     await waitFor(() => expect(result.current.status).toBe('saved'))
-    expect(mockedPut).toHaveBeenCalledWith('ws-1', {
-      path: 'report.md',
-      content: '# Report\n\nEdited.\n',
-      expect_version: 'v1:abc123',
-    })
+    // Third argument is the D-98 save-deadline signal — see
+    // useLibraryFileEditor.timeout.test.tsx; only its presence matters here.
+    expect(mockedPut).toHaveBeenCalledWith(
+      'ws-1',
+      {
+        path: 'report.md',
+        content: '# Report\n\nEdited.\n',
+        expect_version: 'v1:abc123',
+      },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
     expect(result.current.isDirty).toBe(false)
     expect(isLibraryEditorDirty()).toBe(false)
     expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({ size: 40 }))

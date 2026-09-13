@@ -255,7 +255,19 @@ export function LibraryEntryRow({
       </div>
 
       {/* Row action menu — stop propagation so opening it doesn't also
-          trigger the row's own onClick (navigate/select). */}
+          trigger the row's own onClick (navigate/select).
+
+          KEYDOWN IS STOPPED TOO (UAT D-100, 2026-09-13). The row above opens
+          on Enter/Space from its own onKeyDown, and only `click` used to be
+          stopped here — so Enter on this button bubbled to the row and, on a
+          folder, NAVIGATED INTO IT instead of opening the menu: Rename / Move
+          / Copy / Delete were unreachable by keyboard on any folder, and on a
+          file one Enter opened the menu AND the preview. The menu's content
+          is portalled, but React synthetic events still bubble through the
+          React tree, so Enter on a menu ITEM reached the row the same way;
+          it is stopped on the content as well. Radix's own key handling is
+          composed with these handlers, not replaced by them, so Enter/Space
+          still open the menu and still activate an item. */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button
@@ -264,12 +276,17 @@ export function LibraryEntryRow({
             aria-label={`Actions for ${entry.name}`}
             data-testid={`library-row-menu-${entry.path}`}
             onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
             className="shrink-0 rounded p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-secondary)] transition-colors"
           >
             <DotsThree size={18} weight="bold" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+        <DropdownMenuContent
+          align="end"
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
           {!entry.is_dir && (
             <DropdownMenuItem onSelect={() => onSelectFile(entry)} className="flex items-center gap-2">
               <Eye size={14} /> Details

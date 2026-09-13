@@ -220,11 +220,16 @@ describe('LibraryPreviewPane — edit and save', () => {
     fireEvent.click(saveButton)
 
     await waitFor(() =>
-      expect(mockedPutContent).toHaveBeenCalledWith('ws-1', {
-        path: 'report.md',
-        content: '# Report\n\nUpdated body.\n',
-        expect_version: 'v1:read-token',
-      }),
+      expect(mockedPutContent).toHaveBeenCalledWith(
+        'ws-1',
+        {
+          path: 'report.md',
+          content: '# Report\n\nUpdated body.\n',
+          expect_version: 'v1:read-token',
+        },
+        // D-98 save-deadline signal (useLibraryFileEditor.timeout.test.tsx).
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      ),
     )
     await waitFor(() => expect(screen.getByText(/saved/i)).toBeInTheDocument())
     expect(useUiStore.getState().toasts.some((t) => t.variant === 'success')).toBe(true)

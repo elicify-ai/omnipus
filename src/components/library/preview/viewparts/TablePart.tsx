@@ -14,7 +14,7 @@
 // SGD", design §5), and the unit property loses its own column when both are
 // listed.
 
-import type { ReactNode } from 'react'
+import type { MouseEvent, ReactNode } from 'react'
 import type { VaultFindRow, ViewResult, ViewResultPart } from '@/lib/api/generated/openapi-types'
 import {
   cellValue,
@@ -27,7 +27,7 @@ import {
 } from './viewResultData'
 import { ExcludedRowMark, GroupHeaderLabel, TotalsFooter, UnitValue } from './PartChrome'
 import { CellText, type ViewCellLinkResolver } from './ViewCellLink'
-import { EditableCell, type RecordEditContext } from './RecordFieldEditor'
+import { EditableCell, canEditCell, type RecordEditContext } from './RecordFieldEditor'
 
 /** The row-level click target every openable part shares: mouse convenience
  *  on the row/card itself, plus one real, keyboard-reachable button that is
@@ -133,9 +133,20 @@ function Cell({
   // never inline-editable).
   const cell = findCell(row, property)
   const renderCellValue = (v: string): ReactNode => (cellLinks ? <CellText value={v} resolver={cellLinks} /> : v)
+  // UAT D-113: on an EDITING surface, a schema-described cell with no
+  // editor must not inherit the row's pointer cursor or its click-to-open —
+  // the whole <td>, padding included, not just the text inside it.
+  const inert =
+    editContext !== undefined && !primary && cell !== undefined && cell.type !== undefined && !canEditCell(editContext, row, cell)
+  const inertProps = inert
+    ? { className: 'cursor-default', onClick: (event: MouseEvent<HTMLTableCellElement>) => event.stopPropagation() }
+    : { className: '' }
   if (!numeric) {
     return (
-      <td className="max-w-[16rem] truncate border-b border-[var(--color-border)] px-3 py-1.5 text-[var(--color-secondary)]">
+      <td
+        className={`max-w-[16rem] truncate border-b border-[var(--color-border)] px-3 py-1.5 text-[var(--color-secondary)] ${inertProps.className}`}
+        {...(inert ? { onClick: inertProps.onClick, 'data-inert': 'true' } : {})}
+      >
         {primary && onOpenPath ? (
           <RowOpenButton rowTitle={row.title} onOpen={() => onOpenPath(row.path)} className="block w-full truncate text-left">
             {value}

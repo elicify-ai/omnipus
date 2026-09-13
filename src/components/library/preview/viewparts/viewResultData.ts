@@ -22,17 +22,25 @@ export const FILE_NAME_PROPERTY = 'file.name'
 
 /**
  * The declared cell types this surface knows how to draw an inline editor
- * for (ADR-083 §4.6): 'enum' → dropdown, 'date' → date input, 'text' →
- * inline text. Every other declared type (`integer`, `decimal`, `checkbox`,
- * `relation`, `person`) is a scope decision, not a gate — no editor control
- * for them exists yet, so a cell of one of those types falls through to the
- * same "anything else the schema does not describe" read-only row §4.6's
- * table names, even though the schema DOES describe it.
+ * for (ADR-083 §4.6): 'enum' → dropdown (with a blank entry, D-71), 'date' →
+ * date input, 'text' → inline text, and — since UAT #700 (2026-09-13) —
+ * 'integer' / 'decimal' → a numeric text input whose exact digits are sent
+ * as the string the contract requires (never a float), 'checkbox' → a real
+ * checkbox. `relation` and `person` remain outside this set: they are
+ * modified through RelationWriteRequest's explicit verbs (FR-045), which
+ * have no REST door yet, so a picker cannot be offered here honestly.
  */
-export type EditableCellType = 'enum' | 'date' | 'text'
+export type EditableCellType = 'enum' | 'date' | 'text' | 'integer' | 'decimal' | 'checkbox'
 
 function isEditableCellType(type: VaultFindCell['type']): type is EditableCellType {
-  return type === 'enum' || type === 'date' || type === 'text'
+  return (
+    type === 'enum' ||
+    type === 'date' ||
+    type === 'text' ||
+    type === 'integer' ||
+    type === 'decimal' ||
+    type === 'checkbox'
+  )
 }
 
 /**
@@ -114,11 +122,15 @@ export function recordPropertyText(record: VaultRecord, property: string): strin
       return v.integer ?? ''
     case 'decimal':
       return v.decimal ?? ''
+    case 'checkbox':
+      // The same spelling VaultFindCell.value carries for a checkbox, so a
+      // value read back after a write compares equal to a rendered cell.
+      return v.checkbox === undefined ? '' : v.checkbox ? 'true' : 'false'
     default:
-      // relation / person / checkbox — not a type this surface renders as
-      // plain text here; callers never ask for one of these (isEditableCell
-      // already excludes them), so this is a defensive fallback, not a path
-      // any editable field reaches.
+      // relation / person — not a type this surface renders as plain text
+      // here; callers never ask for one of these (isEditableCell already
+      // excludes them), so this is a defensive fallback, not a path any
+      // editable field reaches.
       return ''
   }
 }

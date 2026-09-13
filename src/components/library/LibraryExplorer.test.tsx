@@ -406,6 +406,72 @@ describe('LibraryExplorer — destructive-action confirm (delete)', () => {
     expect(mockedDelete).not.toHaveBeenCalled()
     expect(screen.getByTestId('library-row-draft.md')).toBeInTheDocument()
   })
+
+  // UAT D-121 (2026-09-13): the knowledge-base marker folder got the generic
+  // folder wording, which said nothing about it BEING the knowledge base or
+  // that the UI cannot make the folder one again afterwards.
+  it('deleting ".omnipus-vault" names what it is and what is lost, unlike an ordinary folder', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    mockedFetchEntries.mockResolvedValue([
+      makeEntry({ name: '.omnipus-vault', path: 'UAT Vault/.omnipus-vault', is_dir: true }),
+      makeEntry({ name: 'Assets', path: 'UAT Vault/Assets', is_dir: true }),
+    ])
+
+    renderExplorer('ws-1')
+
+    await waitFor(() => expect(screen.getByTestId('library-row-UAT Vault/.omnipus-vault')).toBeInTheDocument())
+    await openRowMenuAndClick('UAT Vault/.omnipus-vault', /delete/i)
+    await waitFor(() => expect(screen.getByTestId('library-delete-confirm')).toBeInTheDocument())
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(/is what makes "UAT Vault" a knowledge base/i)
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(/record types, id sequences, saved views and trash/i)
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(/cannot be made one again from here/i)
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
+    await waitFor(() => expect(screen.queryByTestId('library-delete-confirm')).not.toBeInTheDocument())
+
+    // Positive control: an ordinary folder keeps the generic wording.
+    await openRowMenuAndClick('UAT Vault/Assets', /delete/i)
+    await waitFor(() => expect(screen.getByTestId('library-delete-confirm')).toBeInTheDocument())
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(/"Assets" and everything inside it will be permanently deleted/i)
+    expect(screen.getByRole('alertdialog')).not.toHaveTextContent(/knowledge base/i)
+  })
+
+  // UAT #701 / D-123 (2026-09-13): inside a knowledge base a note goes to the
+  // trash and a rename rewrites links — the dialogs must say so, and a plain
+  // folder (no knowledge base) must keep the permanent-delete wording.
+  it('a note inside a knowledge base: delete offers "Move to trash", rename mentions links', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    mockedFetchEntries.mockResolvedValue([makeEntry({ name: 'Tobias.md', path: 'vault/People/Tobias.md' })])
+    mockedKnowledgeInfo.mockResolvedValue(makeKnowledgeInfo({ is_knowledge_base: true, marker: 'omnipus_vault' }))
+
+    renderExplorer('ws-1')
+
+    await waitFor(() => expect(screen.getByTestId('library-row-vault/People/Tobias.md')).toBeInTheDocument())
+    await waitFor(() => expect(mockedKnowledgeInfo).toHaveBeenCalled())
+    await openRowMenuAndClick('vault/People/Tobias.md', /delete/i)
+    await waitFor(() => expect(screen.getByTestId('library-delete-confirm')).toHaveTextContent('Move to trash'))
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(/moved to this knowledge base’s trash/i)
+    expect(screen.getByRole('alertdialog')).not.toHaveTextContent(/permanently deleted/i)
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
+
+    await openRowMenuAndClick('vault/People/Tobias.md', /rename/i)
+    await waitFor(() => expect(screen.getByTestId('library-rename-links-note')).toBeInTheDocument())
+  })
+
+  it('a note OUTSIDE any knowledge base keeps the permanent-delete wording and no links note', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    mockedFetchEntries.mockResolvedValue([makeEntry({ name: 'loose.md', path: 'loose.md' })])
+    mockedKnowledgeInfo.mockResolvedValue(makeKnowledgeInfo({ is_knowledge_base: false, marker: 'none' }))
+
+    renderExplorer('ws-1')
+    await waitFor(() => expect(screen.getByTestId('library-row-loose.md')).toBeInTheDocument())
+    await openRowMenuAndClick('loose.md', /delete/i)
+    await waitFor(() => expect(screen.getByTestId('library-delete-confirm')).toHaveTextContent('Delete'))
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(/permanently deleted/i)
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
+    await openRowMenuAndClick('loose.md', /rename/i)
+    await waitFor(() => expect(screen.getByTestId('library-rename-dialog')).toBeInTheDocument())
+    expect(screen.queryByTestId('library-rename-links-note')).not.toBeInTheDocument()
+  })
 })
 
 describe('LibraryExplorer — unsaved-edit navigation guard', () => {

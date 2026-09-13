@@ -86,7 +86,7 @@ describe('useLibraryFileEditor — test 7: sends the token it read', () => {
     act(() => result.current.save())
 
     await waitFor(() => expect(mockedPut).toHaveBeenCalled())
-    const [, body] = mockedPut.mock.calls[0] as [string, { expect_version: string }]
+    const [, body] = mockedPut.mock.calls[0] as [string, { expect_version: string }, unknown?]
     // MUTATION THIS DIES ON: sending '' or a hardcoded/placeholder token
     // instead of the one the read actually returned.
     expect(body.expect_version).toBe('v1:9f2a7c40')
@@ -178,7 +178,7 @@ describe('useLibraryFileEditor — test 8: surfaces conflict without resending',
 
     // The load-bearing assertion: the retry sends the FRESH token the 409
     // body handed back, never the stale one the refused attempt sent.
-    const [, retryBody] = mockedPut.mock.calls[1] as [string, { expect_version: string }]
+    const [, retryBody] = mockedPut.mock.calls[1] as [string, { expect_version: string }, unknown?]
     expect(retryBody.expect_version).toBe('v1:fresh-token')
     expect(retryBody.expect_version).not.toBe('v1:stale-token')
 
@@ -245,7 +245,7 @@ describe('useLibraryFileEditor — B1: pairs the token with the bytes it was rea
     act(() => result.current.save())
 
     await waitFor(() => expect(mockedPut).toHaveBeenCalled())
-    const [, body] = mockedPut.mock.calls[0] as [string, { content: string; expect_version: string }]
+    const [, body] = mockedPut.mock.calls[0] as [string, { content: string; expect_version: string }, unknown?]
 
     // The load-bearing assertion: the diff is built on the bytes the token
     // was actually read with, never on the stale initialContent.
@@ -409,5 +409,45 @@ describe('useLibraryFileEditor — stale-promise resurrection', () => {
     await waitFor(() => expect(result.current.status).toBe('error'))
     expect(mockedPut).toHaveBeenCalledTimes(1)
     expect(result.current.error).toMatch(/version/i)
+  })
+})
+
+// UAT D-126 (2026-09-13): while the conflict banner was up, the file list
+// still showed the PRE-conflict size — only the editor knew the file had
+// moved on. A 409 is proof the file changed on disk, so the listing must be
+// refreshed like a successful save refreshes it.
+describe('useLibraryFileEditor — D-126 a 409 refreshes the folder listing', () => {
+  it('invalidates the workspace entries queries when a save is refused as a conflict', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    const sharedWrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+    mockedFetchVersioned.mockResolvedValue({
+      data: { path: 'Q4/marek.md', content: '# M\n', size: 4, is_text: true, too_large: false },
+      version: 'v1:stale-token',
+    })
+    mockedPut.mockRejectedValueOnce(
+      new LibraryVersionConflictError(
+        {
+          error: 'Q4/marek.md changed on disk since you opened it',
+          code: 'library_version_conflict',
+          path: 'Q4/marek.md',
+          expected_version: 'v1:stale-token',
+          actual_version: 'v1:fresh-token',
+        },
+        JSON.stringify({ error: 'Q4/marek.md changed on disk since you opened it' }),
+      ),
+    )
+
+    const { result } = renderHook(
+      () => useLibraryFileEditor({ workspaceId: 'ws-1', path: 'Q4/marek.md', initialContent: '# M\n' }),
+      { wrapper: sharedWrapper },
+    )
+    act(() => result.current.setDraft('# M\n\nmore\n'))
+    act(() => result.current.save())
+
+    await waitFor(() => expect(result.current.status).toBe('conflict'))
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['library', 'ws-1', 'entries'] })
   })
 })

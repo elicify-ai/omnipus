@@ -4980,6 +4980,7 @@ async function putLibraryVersionedWrite<TRes>(
   apiPath: string,
   body: unknown,
   resSchema: ZodType<TRes>,
+  signal?: AbortSignal,
 ): Promise<LibraryVersionedResult<TRes>> {
   if (readCSRFCookie() === null) {
     throw new ApiError(
@@ -4988,13 +4989,14 @@ async function putLibraryVersionedWrite<TRes>(
       { code: 'csrf_missing' },
     )
   }
-  return withCsrfRetry(() => attemptPutLibraryVersionedWrite(apiPath, body, resSchema))
+  return withCsrfRetry(() => attemptPutLibraryVersionedWrite(apiPath, body, resSchema, signal))
 }
 
 async function attemptPutLibraryVersionedWrite<TRes>(
   apiPath: string,
   body: unknown,
   resSchema: ZodType<TRes>,
+  signal?: AbortSignal,
 ): Promise<LibraryVersionedResult<TRes>> {
   let res: Response
   try {
@@ -5003,6 +5005,11 @@ async function attemptPutLibraryVersionedWrite<TRes>(
       credentials: 'include',
       headers: buildHeaders(),
       body: JSON.stringify(body),
+      // UAT D-98 (2026-09-13): a save with no deadline hung in "Saving…"
+      // for as long as the network was down — Save disabled, no error, no
+      // retry. The editor hook passes a timeout signal so a stalled PUT
+      // fails loudly and the button comes back.
+      ...(signal ? { signal } : {}),
     })
   } catch (cause) {
     throw new ApiError(0, 'Network unavailable. Check your connection.', { cause })
@@ -5135,6 +5142,7 @@ export async function downloadLibraryFileVersioned(
 export async function putLibraryContent(
   workspaceId: string,
   body: LibraryContentRequest & { expect_version: string },
+  opts?: { signal?: AbortSignal },
 ): Promise<LibraryVersionedResult<LibraryEntry>> {
   // `async` (not a bare `throw` in a non-async function returning a Promise
   // type) is deliberate: every OTHER rejection path in this module surfaces
@@ -5153,7 +5161,39 @@ export async function putLibraryContent(
     `/library/${encodeURIComponent(workspaceId)}/content`,
     body,
     LibraryEntrySchema as ZodType<LibraryEntry>,
+    opts?.signal,
   )
+}
+
+/**
+ * The version token that says "I believe this file does not exist yet" —
+ * `pkg/knowledge/version.go`'s `TokenAbsent`, spelled the same way here so a
+ * CREATE goes through the same compare-and-swap door an update does: the
+ * server refuses with 409 when a file already occupies the path, so two
+ * people creating the same note at once can never silently overwrite each
+ * other (UAT #699 / D-115, 2026-09-13).
+ */
+export const LIBRARY_VERSION_ABSENT = 'v1:absent'
+
+/**
+ * Create a NEW text file (UAT #699 / D-115: the Library's "New note").
+ *
+ * This is `putLibraryContent` with the absent-token sentinel, not a separate
+ * endpoint: PUT .../content already treats `expect_version: "v1:absent"` as
+ * an exclusive create (`checkLibraryVersion` in pkg/gateway/rest_library.go
+ * accepts it only when nothing is at the path). A path that is already
+ * taken therefore surfaces as LibraryVersionConflictError (409) — the same
+ * error class the editor already knows how to explain — never as an
+ * overwrite. Inside a knowledge base the file watcher indexes the new note
+ * like any other write, so the record-create door (which needs a declared
+ * record type and at least one property) is not required for a plain note.
+ */
+export function createLibraryTextFile(
+  workspaceId: string,
+  path: string,
+  content: string,
+): Promise<LibraryVersionedResult<LibraryEntry>> {
+  return putLibraryContent(workspaceId, { path, content, expect_version: LIBRARY_VERSION_ABSENT })
 }
 
 /**

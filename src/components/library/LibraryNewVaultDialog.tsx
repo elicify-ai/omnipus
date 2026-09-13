@@ -36,6 +36,7 @@ import { LibraryErrorBanner } from './LibraryErrorBanner'
 import { getLibraryErrorMessage } from './libraryErrorMessage'
 import { createVault, isApiError, libraryQueryKeys, type LibraryEntry } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
+import { returnFocusToCreateMenu } from './returnFocusToCreateMenu'
 
 interface LibraryNewVaultDialogProps {
   open: boolean
@@ -71,7 +72,13 @@ export function LibraryNewVaultDialog({
   const trimmedName = name.trim()
   const hasSlash = trimmedName.includes('/') || trimmedName.includes('\\')
   const isDotName = trimmedName === '.' || trimmedName === '..'
-  const nameInvalid = trimmedName.length === 0 || hasSlash || isDotName
+  // UAT D-116 (2026-09-13): a name starting with "." is a HIDDEN folder. The
+  // server accepted `.hidden`, dropped the user inside a working knowledge
+  // base, and back at the workspace root — "Show hidden" off by default — it
+  // was simply gone from the list, with no explanation. Refused here, with
+  // the reason, before anything is created.
+  const isHiddenName = !isDotName && trimmedName.startsWith('.')
+  const nameInvalid = trimmedName.length === 0 || hasSlash || isDotName || isHiddenName
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -107,7 +114,7 @@ export function LibraryNewVaultDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent data-testid="library-new-vault-dialog">
+      <DialogContent data-testid="library-new-vault-dialog" onCloseAutoFocus={returnFocusToCreateMenu}>
         <DialogHeader>
           <DialogTitle>New knowledge base</DialogTitle>
           <DialogDescription>
@@ -134,6 +141,12 @@ export function LibraryNewVaultDialog({
           {!hasSlash && isDotName && (
             <p className="text-xs text-[var(--color-error)]" data-testid="library-new-vault-name-dot">
               "{trimmedName}" isn't a valid knowledge base name.
+            </p>
+          )}
+          {!hasSlash && isHiddenName && (
+            <p className="text-xs text-[var(--color-error)]" data-testid="library-new-vault-name-hidden">
+              A name starting with "." would make this a hidden folder — it wouldn't show in the
+              list unless "Show hidden" is on. Choose a name without the leading dot.
             </p>
           )}
           {error && <LibraryErrorBanner message={error} testId="library-new-vault-error" />}

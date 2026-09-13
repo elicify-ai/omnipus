@@ -40,6 +40,7 @@ function renderMenu(over: Partial<ComponentProps<typeof LibraryCreateMenu>> = {}
     mountedCount: 0,
     uploadPending: false,
     onNewFolder: vi.fn(),
+    onNewNote: vi.fn(),
     onAddMount: vi.fn(),
     onManageMounts: vi.fn(),
     onUpload: vi.fn(),
@@ -173,5 +174,26 @@ describe('LibraryCreateMenu', () => {
         parent_rel_path: 'projects',
       }),
     )
+  })
+})
+
+// UAT #699 / D-115 (2026-09-13): "New note" was missing from the menu entirely.
+describe('LibraryCreateMenu — New note (UAT #699 / D-115)', () => {
+  it('offers New note inside a workspace and fires onNewNote', async () => {
+    const user = userEvent.setup()
+    const props = renderMenu()
+    await user.click(screen.getByTestId('library-create-menu-trigger'))
+    const item = await screen.findByTestId('library-create-menu-new-note')
+    expect(item).toHaveTextContent('New note')
+    await user.click(item)
+    await waitFor(() => expect(props.onNewNote).toHaveBeenCalledTimes(1))
+  })
+
+  it('is disabled (not hidden) inside the reserved .library folder, like New folder', async () => {
+    const user = userEvent.setup()
+    renderMenu({ isReservedLibraryDir: true })
+    await user.click(screen.getByTestId('library-create-menu-trigger'))
+    const item = await screen.findByTestId('library-create-menu-new-note')
+    expect(item).toHaveAttribute('data-disabled')
   })
 })

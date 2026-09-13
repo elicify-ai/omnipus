@@ -159,7 +159,11 @@ export function LibrarySignaturePad({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent data-testid="library-pdf-signature-dialog" className="sm:max-w-md">
+      {/* UAT D-43 (2026-09-13): `sm:max-w-md` (28rem) could not hold the
+          480 px drawing canvas, so "Place signature" rendered PAST the
+          dialog's right edge, invisible unless the reader guessed to scroll
+          sideways. 36rem fits the canvas plus the dialog's own padding. */}
+      <DialogContent data-testid="library-pdf-signature-dialog" className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>Draw a signature</DialogTitle>
           <DialogDescription>

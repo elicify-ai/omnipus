@@ -34,6 +34,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import {
   Books,
+  FilePlus,
   FolderPlus,
   Plus,
   SpinnerGap,
@@ -51,6 +52,8 @@ interface LibraryCreateMenuProps {
   mountedCount: number
   uploadPending: boolean
   onNewFolder: () => void
+  /** UAT #699 / D-115: a markdown note in the current folder. */
+  onNewNote: () => void
   onAddMount: () => void
   onManageMounts: () => void
   onUpload: () => void
@@ -65,6 +68,7 @@ export function LibraryCreateMenu({
   mountedCount,
   uploadPending,
   onNewFolder,
+  onNewNote,
   onAddMount,
   onManageMounts,
   onUpload,
@@ -100,6 +104,17 @@ export function LibraryCreateMenu({
                 className="flex items-center gap-2"
               >
                 <Books size={15} /> New knowledge base
+              </DropdownMenuItem>
+              {/* UAT #699 / D-115 (2026-09-13): the one thing this menu was
+                  missing. A note is the unit of a knowledge base, and the
+                  only UI route to one used to be Copy… on an existing file. */}
+              <DropdownMenuItem
+                onSelect={onNewNote}
+                disabled={!canWriteHere}
+                data-testid="library-create-menu-new-note"
+                className="flex items-center gap-2"
+              >
+                <FilePlus size={15} /> New note
               </DropdownMenuItem>
               <DropdownMenuItem
                 onSelect={onNewFolder}

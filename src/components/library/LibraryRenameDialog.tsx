@@ -41,6 +41,10 @@ interface LibraryRenameDialogProps {
    * its idle state with no explanation. The parent clears this whenever the
    * dialog is (re)opened or a new attempt starts. */
   error?: string
+  /** True when the entry is a note inside a knowledge base — the server then
+   *  rewrites every inbound wikilink as part of the rename (UAT #701 /
+   *  D-123), and the dialog says so instead of leaving the reader to guess. */
+  rewritesLinks?: boolean
 }
 
 export function LibraryRenameDialog({
@@ -51,6 +55,7 @@ export function LibraryRenameDialog({
   onSubmit,
   isPending,
   error,
+  rewritesLinks = false,
 }: LibraryRenameDialogProps) {
   const [name, setName] = useState('')
 
@@ -98,6 +103,11 @@ export function LibraryRenameDialog({
           {collides && !hasSlash && (
             <p className="text-xs text-[var(--color-error)]" data-testid="library-rename-collision">
               An entry named "{trimmed}" already exists here.
+            </p>
+          )}
+          {rewritesLinks && !entry.is_dir && (
+            <p className="text-xs text-[var(--color-muted)]" data-testid="library-rename-links-note">
+              Links to this note from other notes in this knowledge base will be updated to the new name.
             </p>
           )}
           {error && (

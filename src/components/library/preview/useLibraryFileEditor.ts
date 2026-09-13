@@ -103,7 +103,29 @@ interface UseLibraryFileEditorOptions {
    * (updated size/modified_at) — callers use this to refresh their own
    * cached entry metadata (e.g. the header strip's size/modified display). */
   onSaved?: (entry: LibraryEntry) => void
+  /** How long one save may stay in flight before it is abandoned and
+   * reported as a failure (UAT D-98). Defaults to SAVE_TIMEOUT_MS; tests
+   * shorten it. */
+  saveTimeoutMs?: number
 }
+
+// UAT D-98 (2026-09-13): a save attempted during a network outage used to
+// hang in "Saving…" indefinitely — Save disabled, no error, no retry — and
+// after ~130 s the pane's background refetch replaced the editor with
+// "Could not load this file", taking the unsaved text with it. The PUT now
+// has a deadline: when it passes, the attempt is aborted, the draft is kept
+// exactly as typed, Save is re-enabled and the reason is stated.
+//
+// 30 s is generous for a text file on a healthy link and short enough that a
+// person still remembers what they typed; it is a ceiling on SILENCE, not on
+// the write itself. A save that was in fact received by the server just as
+// the deadline passed is not lost either: the next Save sends the token this
+// editor last saw, the server answers 409 with the fresh one, and the
+// ordinary conflict path takes it from there.
+export const SAVE_TIMEOUT_MS = 30_000
+
+const SAVE_TIMED_OUT_MESSAGE =
+  'Saving took too long and was stopped — your text is kept here. Check your connection and press Save again.'
 
 /** Detail of a save refused with a 409 (ADR-083 EMB-004) — surfaced
  * separately from `error` so a caller can render something more specific
@@ -144,6 +166,7 @@ export function useLibraryFileEditor({
   path,
   initialContent,
   onSaved,
+  saveTimeoutMs = SAVE_TIMEOUT_MS,
 }: UseLibraryFileEditorOptions): UseLibraryFileEditorResult {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
@@ -345,7 +368,27 @@ export function useLibraryFileEditor({
           { code: 'expect_version_unavailable' },
         )
       }
-      return putLibraryContent(workspaceId, { path, content, expect_version: expectVersion })
+      // D-98 — the deadline. Abort the PUT when it passes and report it as
+      // its own failure (not the transport's generic "Network unavailable"),
+      // because the reader's next action is different: nothing is known
+      // about whether the server got the bytes, so the honest instruction is
+      // "press Save again", and the draft must be exactly as they left it.
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), saveTimeoutMs)
+      try {
+        return await putLibraryContent(
+          workspaceId,
+          { path, content, expect_version: expectVersion },
+          { signal: controller.signal },
+        )
+      } catch (err) {
+        if (controller.signal.aborted) {
+          throw new ApiError(0, SAVE_TIMED_OUT_MESSAGE, { code: 'save_timeout', cause: err })
+        }
+        throw err
+      } finally {
+        clearTimeout(timer)
+      }
     },
     onMutate: () => {
       setStatus('saving')
@@ -390,6 +433,12 @@ export function useLibraryFileEditor({
         setStatus('conflict')
         setError(err.userMessage)
         addToast({ message: err.userMessage, variant: 'error' })
+        // UAT D-126 (2026-09-13): the folder listing kept showing the
+        // PRE-conflict size and time while the banner said the file had
+        // moved on — only the editor knew. A 409 is proof the file changed
+        // on disk, so the listing is refreshed the same way a successful
+        // save refreshes it.
+        void queryClient.invalidateQueries({ queryKey: ['library', workspaceId, 'entries'] })
         return
       }
       setConflict(undefined)

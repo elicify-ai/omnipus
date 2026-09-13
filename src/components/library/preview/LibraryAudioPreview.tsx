@@ -67,6 +67,13 @@ export function LibraryAudioPreview({ workspaceId, entry, variant = 'pane' }: Li
           src={src}
           onError={() => setFailed(true)}
           className="w-full max-w-lg"
+          // UAT D-102 (2026-09-13): the document declares no `color-scheme`,
+          // so Chromium painted its LIGHT native control bar — a 448×54 white
+          // pill in the middle of #0A0A0B. `<video>` escaped only because its
+          // controls are an overlay. Declared on the element itself so the
+          // browser draws its dark form-control variant regardless of what
+          // the rest of the page opts into.
+          style={{ colorScheme: 'dark' }}
           data-testid="library-audio-element"
         >
           Your browser does not support playing this audio file. Use Download instead.

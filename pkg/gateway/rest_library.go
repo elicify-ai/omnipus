@@ -616,12 +616,16 @@ func newLibraryConflictErr(relPath, expected, actual string) *libraryConflictErr
 		e := expected
 		body.ExpectedVersion = &e
 	}
+	// UAT D-126 (2026-09-13): `error` is the sentence a PERSON reads in the
+	// editor's conflict banner. It used to carry the "library: " log
+	// namespace, which made it read like an internal log line. The namespace
+	// belongs in the log record (logLibraryWriteRefused), not the wire text.
 	if actual == "" {
-		body.Error = fmt.Sprintf("library: %s changed on disk since you opened it: it has been deleted", relPath)
+		body.Error = fmt.Sprintf("%s changed on disk since you opened it: it has been deleted", relPath)
 	} else {
 		act := actual
 		body.ActualVersion = &act
-		body.Error = fmt.Sprintf("library: %s changed on disk since you opened it", relPath)
+		body.Error = fmt.Sprintf("%s changed on disk since you opened it", relPath)
 	}
 	return &libraryConflictError{body: body}
 }
@@ -759,6 +763,19 @@ func (a *restAPI) handleLibraryEntryDelete(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	defer root.Close()
+
+	// UAT #701 / D-123: a note inside a knowledge base goes to that
+	// knowledge base's trash (restorable), the way the agent door deletes —
+	// see rest_library_knowledge_cascade.go.
+	note, governed, noteErr := a.libraryNoteInCollection(root, rel)
+	if noteErr != nil {
+		mapLibraryErr(w, "delete entry", workspaceID, noteErr)
+		return
+	}
+	if governed {
+		a.trashNoteInCollection(w, r, workspaceID, note, rel)
+		return
+	}
 
 	if err := root.Delete(rel); err != nil {
 		mapLibraryErr(w, "delete entry", workspaceID, err)
@@ -1659,6 +1676,19 @@ func (a *restAPI) handleLibraryRename(w http.ResponseWriter, r *http.Request, wo
 		return
 	}
 
+	// UAT #701 / D-123: a note renamed within its knowledge base has every
+	// inbound wikilink rewritten, the way the agent door renames — see
+	// rest_library_knowledge_cascade.go.
+	note, governed, noteErr := a.libraryNoteInCollection(root, fromRel)
+	if noteErr != nil {
+		mapLibraryErr(w, "rename", workspaceID, noteErr)
+		return
+	}
+	if governed && sameCollectionDestination(root, note, toRel) {
+		a.renameNoteInCollection(w, r, "rename", workspaceID, root, note, fromRel, toRel)
+		return
+	}
+
 	fi, err := root.Rename(fromRel, toRel)
 	if err != nil {
 		mapLibraryErr(w, "rename", workspaceID, err)
@@ -1803,6 +1833,24 @@ func (a *restAPI) handleLibraryTransfer(w http.ResponseWriter, r *http.Request, 
 	// of a mount into workspace storage, would skip the check entirely.
 	if !checkCreateName(w, toRoot, toRel, string(mode), req.ToWorkspaceId) {
 		return
+	}
+
+	// UAT #701 / D-123: a same-workspace MOVE of a note to another folder of
+	// the SAME knowledge base is a rename in the knowledge layer's terms —
+	// every inbound wikilink is rewritten. A copy duplicates bytes and
+	// rewrites nothing; a cross-workspace or cross-knowledge-base move is a
+	// real departure the link graph cannot follow, so both keep the plain
+	// filesystem semantics.
+	if mode == transferModeMove && sameWorkspace {
+		note, governed, noteErr := a.libraryNoteInCollection(fromRoot, fromRel)
+		if noteErr != nil {
+			mapLibraryErr(w, string(mode), req.FromWorkspaceId, noteErr)
+			return
+		}
+		if governed && sameCollectionDestination(fromRoot, note, toRel) {
+			a.renameNoteInCollection(w, r, string(mode), req.FromWorkspaceId, fromRoot, note, fromRel, toRel)
+			return
+		}
 	}
 
 	var fi os.FileInfo

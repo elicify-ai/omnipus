@@ -207,6 +207,25 @@ export function LibraryTransferDialog({
               </p>
             )}
           </div>
+          {/* UAT D-120 (2026-09-13): leaving the workspace is the MORE
+              consequential escape and used to be the silent one — only a
+              mount destination warned. A move to another workspace takes
+              the entry away from every agent here and breaks every link to
+              it from notes here; a copy leaves the original behind, so it
+              only needs the first half said. */}
+          {destWorkspaceId !== sourceWorkspaceId && (
+            <p
+              className="flex items-start gap-2 text-sm text-[var(--color-warning)]"
+              data-testid="library-transfer-workspace-warning"
+            >
+              <Warning size={16} className="mt-0.5 shrink-0" />
+              <span>
+                {mode === 'move'
+                  ? `This ${entry.is_dir ? 'folder' : 'file'} will leave this workspace. Agents here will no longer see it, and links to it from notes in this workspace will stop resolving.`
+                  : `The copy will belong to the other workspace; agents here will not see it. The original stays here unchanged.`}
+              </span>
+            </p>
+          )}
           {destMount && (
             <p
               className="flex items-start gap-2 text-sm text-[var(--color-warning)]"
