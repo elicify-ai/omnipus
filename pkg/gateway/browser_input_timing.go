@@ -23,6 +23,7 @@ const (
 // coarse correlation aid; it does not establish synchronization with Chrome.
 type browserInputTiming struct {
 	inputEpoch, controlEpoch, reliableSeq, hoverSeq int
+	firstReliableSeq, lastReliableSeq, inputCount   int
 	compact                                         bool
 	stages                                          [12]float64
 	seen                                            uint16
@@ -69,6 +70,7 @@ func makeBrowserInputTiming(in generated.BrowserInputFrame, received time.Time) 
 	p := &browserInputTiming{received: received, kind: in.Kind, outcome: "not_dispatched", now: time.Now, emit: func(args ...any) { slog.Info("browser input timing", args...) }}
 	p.inputEpoch, p.controlEpoch = boundedTimingCounter(in.InputEpoch), boundedTimingCounter(in.ControlEpoch)
 	p.reliableSeq, p.hoverSeq = boundedTimingCounter(in.ReliableSeq), boundedTimingCounter(in.HoverSeq)
+	p.firstReliableSeq, p.lastReliableSeq, p.inputCount = p.reliableSeq, p.reliableSeq, 1
 
 	// Frame identifiers are generated hex digests; never log arbitrary supplied
 	// strings, text, keys, coordinates, URLs, session IDs, or error messages.
@@ -204,7 +206,7 @@ func (p *browserInputTiming) finish() {
 			}
 		}
 	}
-	args := []any{"input_ordinal", p.ordinal, "kind", p.kind, "input_epoch", p.inputEpoch, "control_epoch", p.controlEpoch, "reliable_seq", p.reliableSeq, "hover_seq", p.hoverSeq, "capture_id", p.captureID, "capture_generation", p.generation, "received_unix_ms", p.received.UnixMilli(), "stage_offsets_ms", p.offsets, "outcome", p.outcome}
+	args := []any{"input_ordinal", p.ordinal, "kind", p.kind, "input_epoch", p.inputEpoch, "control_epoch", p.controlEpoch, "reliable_seq", p.reliableSeq, "hover_seq", p.hoverSeq, "first_reliable_seq", p.firstReliableSeq, "last_reliable_seq", p.lastReliableSeq, "input_count", p.inputCount, "capture_id", p.captureID, "capture_generation", p.generation, "received_unix_ms", p.received.UnixMilli(), "stage_offsets_ms", p.offsets, "outcome", p.outcome}
 	if p.benignReason != "" {
 		args = append(args, "benign_reason", p.benignReason)
 	}

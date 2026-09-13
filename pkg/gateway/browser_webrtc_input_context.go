@@ -40,7 +40,7 @@ func withWebRTCInputRoute(parent context.Context, mgr *browser.BrowserManager, p
 	return context.WithValue(parent, webRTCInputRouteKey{}, route), nil
 }
 
-func newWebRTCContextInputSink(validateInbound bool, enqueued ...func() time.Time) webrtc.ContextInputSink {
+func newWebRTCContextInputSink(validateInbound bool, enqueued ...func() webrtc.InputQueueTiming) webrtc.ContextInputSink {
 	return newWebRTCContextInputSinkWithDispatch(validateInbound, func(ctx context.Context, mgr *browser.BrowserManager, panel, viewer string, in browser.LiveInput) error {
 		return mgr.Live().InputContext(ctx, panel, viewer, in)
 	}, enqueued...)
@@ -48,7 +48,7 @@ func newWebRTCContextInputSink(validateInbound bool, enqueued ...func() time.Tim
 
 // The dispatch function is the existing browser-input module boundary. Route,
 // validation and source ownership remain in this gateway adapter.
-func newWebRTCContextInputSinkWithDispatch(validateInbound bool, dispatch func(context.Context, *browser.BrowserManager, string, string, browser.LiveInput) error, enqueued ...func() time.Time) webrtc.ContextInputSink {
+func newWebRTCContextInputSinkWithDispatch(validateInbound bool, dispatch func(context.Context, *browser.BrowserManager, string, string, browser.LiveInput) error, enqueued ...func() webrtc.InputQueueTiming) webrtc.ContextInputSink {
 	timingEnabled := os.Getenv("OMNIPUS_BROWSER_INPUT_TIMING") == "1"
 	sampling := &browserInputTimingSampling{}
 	return func(ctx context.Context, viewerID string, raw []byte) {
@@ -76,12 +76,19 @@ func newWebRTCContextInputSinkWithDispatch(validateInbound bool, dispatch func(c
 		var probe *browserInputTiming
 		if timingEnabled {
 			received := time.Now()
+			var queued webrtc.InputQueueTiming
 			if len(enqueued) > 0 {
-				if queued := enqueued[0](); !queued.IsZero() {
-					received = queued
+				queued = enqueued[0]()
+				if !queued.EnqueuedAt.IsZero() {
+					received = queued.EnqueuedAt
 				}
 			}
 			probe = sampling.begin(frame, received)
+			// The merged wire frame keeps the first reliable sequence. The observer
+			// alone supplies the complete range; it never changes input authorization.
+			if probe != nil && queued.FirstReliableSeq == probe.reliableSeq && queued.LastReliableSeq >= queued.FirstReliableSeq && queued.LastReliableSeq <= 9007199254740991 && queued.InputCount == queued.LastReliableSeq-queued.FirstReliableSeq+1 {
+				probe.firstReliableSeq, probe.lastReliableSeq, probe.inputCount = queued.FirstReliableSeq, queued.LastReliableSeq, queued.InputCount
+			}
 			probe.mark("queue_started")
 			defer probe.finish()
 		}

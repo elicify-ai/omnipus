@@ -3,6 +3,8 @@ package webrtc
 import (
 	"context"
 	"errors"
+	"math"
+	"reflect"
 	"sync"
 	"time"
 
@@ -15,8 +17,18 @@ const maxInputSequence = 1<<53 - 1
 const reliableInputMaxWait = time.Second
 
 type queuedDedicatedInput struct {
-	frame    generated.BrowserInputFrame
-	enqueued time.Time
+	frame                                         generated.BrowserInputFrame
+	enqueued                                      time.Time
+	firstReliableSeq, lastReliableSeq, inputCount int
+}
+
+// InputQueueTiming describes admitted inputs represented by one serial dispatch.
+// EnqueuedAt always belongs to the oldest input, including when wheels merge.
+type InputQueueTiming struct {
+	EnqueuedAt       time.Time
+	FirstReliableSeq int
+	LastReliableSeq  int
+	InputCount       int
 }
 
 // dedicatedInputQueue merges one reliable FIFO and one replaceable hover slot.
@@ -38,7 +50,7 @@ type dedicatedInputQueue struct {
 	sink                             func(context.Context, generated.BrowserInputFrame)
 	fail                             func(string)
 	expiry                           *time.Timer
-	observeQueue                     func(generated.BrowserInputFrame, time.Time)
+	observeQueue                     func(generated.BrowserInputFrame, InputQueueTiming)
 }
 
 func newDedicatedInputQueue(parent context.Context, peer, control int, sink func(context.Context, generated.BrowserInputFrame), fail func(string)) *dedicatedInputQueue {
@@ -86,7 +98,7 @@ func (q *dedicatedInputQueue) run(ctx context.Context, done chan struct{}, wake 
 		if found {
 			if ctx.Err() == nil {
 				if observer != nil {
-					observer(queued.frame, queued.enqueued)
+					observer(queued.frame, InputQueueTiming{EnqueuedAt: queued.enqueued, FirstReliableSeq: queued.firstReliableSeq, LastReliableSeq: queued.lastReliableSeq, InputCount: queued.inputCount})
 				}
 				if ctx.Err() == nil {
 					q.sink(ctx, queued.frame)
@@ -136,10 +148,39 @@ func (q *dedicatedInputQueue) expireLocked() {
 	q.hover = nil
 	q.stopExpiryLocked()
 }
-func (q *dedicatedInputQueue) setTimingObserver(observer func(generated.BrowserInputFrame, time.Time)) {
+func (q *dedicatedInputQueue) setTimingObserver(observer func(generated.BrowserInputFrame, InputQueueTiming)) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.observeQueue = observer
+}
+
+// Only a waiting tail can merge. Comparing the remaining complete frame also
+// fences optional geometry and any otherwise irrelevant claims; nothing crosses
+// an action, capture change, direction reversal, or held-input transition.
+func mergePendingWheel(tail *queuedDedicatedInput, next generated.BrowserInputFrame) bool {
+	previous := tail.frame
+	if previous.Kind != "wheel" || next.Kind != "wheel" || previous.X == nil || previous.Y == nil || previous.CaptureId == nil || *previous.CaptureId == "" || previous.CaptureGeneration == nil || *previous.CaptureGeneration <= 0 || previous.DeltaX == nil || previous.DeltaY == nil || next.DeltaX == nil || next.DeltaY == nil || (previous.Modifiers != nil && *previous.Modifiers != 0) || (previous.Button != nil && *previous.Button != "none") {
+		return false
+	}
+	dx, dy := *previous.DeltaX+*next.DeltaX, *previous.DeltaY+*next.DeltaY
+	for _, axis := range [][2]float64{{*previous.DeltaX, *next.DeltaX}, {*previous.DeltaY, *next.DeltaY}} {
+		if math.IsNaN(axis[0]) || math.IsNaN(axis[1]) || math.IsInf(axis[0], 0) || math.IsInf(axis[1], 0) || (axis[0] < 0 && axis[1] > 0) || (axis[0] > 0 && axis[1] < 0) {
+			return false
+		}
+	}
+	if math.IsInf(dx, 0) || math.IsInf(dy, 0) || math.IsNaN(dx) || math.IsNaN(dy) {
+		return false
+	}
+	a, b := previous, next
+	a.ReliableSeq, b.ReliableSeq = nil, nil
+	a.DeltaX, b.DeltaX, a.DeltaY, b.DeltaY = nil, nil, nil, nil
+	if !reflect.DeepEqual(a, b) {
+		return false
+	}
+	tail.frame.DeltaX, tail.frame.DeltaY = &dx, &dy
+	tail.lastReliableSeq = *next.ReliableSeq
+	tail.inputCount++
+	return true
 }
 func validInputCounter(v *int, minimum int) bool {
 	return v != nil && *v >= minimum && *v <= maxInputSequence
@@ -180,7 +221,7 @@ func (q *dedicatedInputQueue) enqueueLocked(hover bool, f generated.BrowserInput
 			return ""
 		}
 		q.hoverSequence = *f.HoverSeq
-		q.hover = &queuedDedicatedInput{frame: f, enqueued: time.Now()}
+		q.hover = &queuedDedicatedInput{frame: f, enqueued: time.Now(), inputCount: 1}
 	} else {
 		switch f.Kind {
 		case "mouse_move", "mouse_down", "mouse_up", "wheel", "key_down", "key_up", "text":
@@ -228,7 +269,10 @@ func (q *dedicatedInputQueue) enqueueLocked(hover bool, f generated.BrowserInput
 				delete(q.held, key)
 			}
 		}
-		q.frames = append(q.frames, queuedDedicatedInput{frame: f, enqueued: time.Now()})
+		if len(q.frames) > 0 && len(q.held) == 0 && mergePendingWheel(&q.frames[len(q.frames)-1], f) {
+			return ""
+		}
+		q.frames = append(q.frames, queuedDedicatedInput{frame: f, enqueued: time.Now(), firstReliableSeq: *f.ReliableSeq, lastReliableSeq: *f.ReliableSeq, inputCount: 1})
 		if len(q.frames) == 1 {
 			q.armExpiryLocked()
 		}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -22,6 +23,7 @@ type browserDedicatedInput struct {
 	peer                           *webrtc.DedicatedInputPeer
 	cancel                         context.CancelFunc
 	controlChanged                 chan struct{}
+	failureLoggedEpoch             int
 }
 
 func (s *browserConnState) dedicatedInput() *browserDedicatedInput {
@@ -60,12 +62,41 @@ func (d *browserDedicatedInput) current(epoch, offer int) bool {
 	return !d.closed && d.epoch == epoch && d.offer == offer
 }
 
+// Diagnostic labels are fixed; transport errors and browser payloads never
+// become log fields. One current-epoch failure is recorded even if its source
+// has already been canceled and cannot receive the WebSocket notification.
+func dedicatedFailureLogReason(reason string) string {
+	switch reason {
+	case "reliable input queue expired":
+		return "queue_expired"
+	case "reliable input queue full":
+		return "queue_full"
+	case "input connection closed", "input data channel closed", "input data channel failed":
+		return "connection_closed"
+	case "input channels did not open", "input channels not ready":
+		return "channels_not_ready"
+	case "invalid input data channel", "invalid input message", "invalid input payload", "button input requires coordinates", "invalid input identity", "invalid hover payload", "invalid reliable payload", "invalid reliable sequence", "invalid gesture barrier":
+		return "invalid_input"
+	case "Input negotiation failed. Retry input.":
+		return "negotiation_failed"
+	default:
+		return "other"
+	}
+}
+
 // stateSender reads the current control epoch when a connection event occurs.
 func (d *browserDedicatedInput) stateSender(wc *browserWSConn, request browserAttachmentRequest, viewer string, f generated.BrowserInputOfferFrame, source context.Context) func(string) {
 	return func(reason string) {
 		d.mu.Lock()
 		control := d.control
+		logFailure := reason != "ready" && !d.closed && d.epoch == f.InputEpoch && d.offer == f.OfferId && d.failureLoggedEpoch != f.InputEpoch
+		if logFailure {
+			d.failureLoggedEpoch = f.InputEpoch
+		}
 		d.mu.Unlock()
+		if logFailure {
+			slog.Warn("browser dedicated input failed", "input_epoch", f.InputEpoch, "offer_id", f.OfferId, "control_epoch", control, "reason", dedicatedFailureLogReason(reason))
+		}
 		stateName := "failed"
 		var detail *string
 		if reason == "ready" {
@@ -140,8 +171,8 @@ func (h *BrowserWSHandler) dispatchDedicatedInputOffer(wc *browserWSConn, state 
 				return
 			}
 		}
-		var enqueuedAt time.Time
-		sink := newWebRTCContextInputSink(true, func() time.Time { return enqueuedAt })
+		var queueTiming webrtc.InputQueueTiming
+		sink := newWebRTCContextInputSink(true, func() webrtc.InputQueueTiming { return queueTiming })
 		route, err := withWebRTCInputRoute(source, mgr, a.panelSessionID, func(origin context.Context, kind string, err error) {
 			wc.sendCriticalScopedGen(operationErrorStatus(a.sessionID, fmt.Sprintf("browser input failed: %s", err)), dropContext(a.sessionID, viewer, "dedicated-input-error"), origin, current)
 		})
@@ -177,7 +208,7 @@ func (h *BrowserWSHandler) dispatchDedicatedInputOffer(wc *browserWSConn, state 
 			return
 		}
 		if h.inputTimingEnabled {
-			peer.SetQueueTimingObserver(func(_ generated.BrowserInputFrame, enqueued time.Time) { enqueuedAt = enqueued })
+			peer.SetQueueTimingObserver(func(_ generated.BrowserInputFrame, timing webrtc.InputQueueTiming) { queueTiming = timing })
 		}
 		defer func() { peer.Close(); <-peer.Closed() }()
 		answer, err := peer.Answer(ctx, f.Sdp)

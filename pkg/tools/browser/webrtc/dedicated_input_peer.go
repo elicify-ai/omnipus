@@ -103,7 +103,7 @@ func (p *DedicatedInputPeer) fail(reason string) {
 
 // SetQueueTimingObserver observes admission time immediately before serial
 // dispatch without changing the input source context or the wire frame.
-func (p *DedicatedInputPeer) SetQueueTimingObserver(observer func(generated.BrowserInputFrame, time.Time)) {
+func (p *DedicatedInputPeer) SetQueueTimingObserver(observer func(generated.BrowserInputFrame, InputQueueTiming)) {
 	p.queue.setTimingObserver(observer)
 }
 

@@ -9,19 +9,97 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/tools/browser"
+	"github.com/elicify-ai/omnipus/pkg/tools/browser/webrtc"
 	"github.com/stretchr/testify/require"
 )
 
-type dedicatedTimingLog struct{ records chan map[string]any }
+type dedicatedTimingLog struct {
+	records chan map[string]any
+	message string
+}
 
 func (h *dedicatedTimingLog) Enabled(context.Context, slog.Level) bool { return true }
 func (h *dedicatedTimingLog) Handle(_ context.Context, r slog.Record) error {
-	if r.Message == "browser input timing" {
+	message := h.message
+	if message == "" {
+		message = "browser input timing"
+	}
+	if r.Message == message {
 		record := map[string]any{}
 		r.Attrs(func(a slog.Attr) bool { record[a.Key] = a.Value.Any(); return true })
 		h.records <- record
 	}
 	return nil
+}
+
+func TestDedicatedFailureLogSurvivesCanceledSourceAndIsBounded(t *testing.T) {
+	capture := &dedicatedTimingLog{records: make(chan map[string]any, 8), message: "browser dedicated input failed"}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(capture))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	source, cancel := context.WithCancel(context.Background())
+	cancel()
+	d := &browserDedicatedInput{epoch: 1, offer: 1, control: 2}
+	conn := newTestBrowserWSConn()
+	sender := d.stateSender(conn, browserAttachmentRequest{ctx: source}, "PRIVATE viewer", generated.BrowserInputOfferFrame{InputEpoch: 1, OfferId: 1, SessionId: "PRIVATE session"}, source)
+	sender("reliable input queue expired")
+	sender("input connection closed")
+	select {
+	case record := <-capture.records:
+		require.Equal(t, map[string]any{"input_epoch": int64(1), "offer_id": int64(1), "control_epoch": int64(2), "reason": "queue_expired"}, record)
+	default:
+		t.Fatal("queue retirement lost its server diagnostic when source ended")
+	}
+	select {
+	case <-capture.records:
+		t.Fatal("duplicate failure log for one epoch")
+	default:
+	}
+	d.epoch, d.offer = 2, 2
+	sender("reliable input queue expired")
+	select {
+	case <-capture.records:
+		t.Fatal("stale source logged a new failure")
+	default:
+	}
+	d.stateSender(conn, browserAttachmentRequest{ctx: source}, "PRIVATE viewer", generated.BrowserInputOfferFrame{InputEpoch: 2, OfferId: 2}, source)("PRIVATE\nFORGED error")
+	select {
+	case record := <-capture.records:
+		require.Equal(t, map[string]any{"input_epoch": int64(2), "offer_id": int64(2), "control_epoch": int64(2), "reason": "other"}, record)
+	default:
+		t.Fatal("new epoch must retain its own bounded failure diagnostic")
+	}
+}
+
+func TestDedicatedTimingReportsMergedRangeAndOldestArrival(t *testing.T) {
+	f := newHandlerContextFixture(t, false)
+	t.Setenv("OMNIPUS_BROWSER_INPUT_TIMING", "1")
+	capture := &dedicatedTimingLog{records: make(chan map[string]any, 8)}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(capture))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	source, err := withWebRTCInputRoute(f.original, f.manager, "panel", nil)
+	require.NoError(t, err)
+	oldest := time.Now().Add(-250 * time.Millisecond)
+	queued := webrtc.InputQueueTiming{EnqueuedAt: oldest, FirstReliableSeq: 41, LastReliableSeq: 44, InputCount: 4}
+	sink := newWebRTCContextInputSinkWithDispatch(true, func(ctx context.Context, _ *browser.BrowserManager, _, _ string, in browser.LiveInput) error {
+		require.Same(t, source, ctx, "metadata must not replace source identity")
+		require.Same(t, source, in.SourceContext)
+		return nil
+	}, func() webrtc.InputQueueTiming { return queued })
+	sink(source, "fixture-viewer", []byte(`{"type":"browser_input","kind":"wheel","input_epoch":7,"control_epoch":3,"reliable_seq":41}`))
+	select {
+	case record := <-capture.records:
+		require.Equal(t, int64(41), record["reliable_seq"], "merged wire identity remains the first sequence")
+		require.Equal(t, int64(41), record["first_reliable_seq"])
+		require.Equal(t, int64(44), record["last_reliable_seq"])
+		require.Equal(t, int64(4), record["input_count"])
+		require.Equal(t, oldest.UnixMilli(), record["received_unix_ms"])
+		require.Equal(t, "completed", record["outcome"])
+	default:
+		t.Fatal("merged dispatch emitted no diagnostic")
+	}
 }
 
 func TestDedicatedTimingKeepsFailureQuotaAfterHoverSamples(t *testing.T) {
@@ -161,6 +239,9 @@ func TestDedicatedTimingCoversEveryGestureWithoutPayload(t *testing.T) {
 			require.Equal(t, 7, record["input_epoch"])
 			require.Equal(t, 3, record["control_epoch"])
 			require.Equal(t, 41, record["reliable_seq"])
+			require.Equal(t, 41, record["first_reliable_seq"])
+			require.Equal(t, 41, record["last_reliable_seq"])
+			require.Equal(t, 1, record["input_count"])
 			for _, field := range []string{"text", "key", "code", "x", "y", "url"} {
 				require.NotContains(t, record, field, "diagnostics must not contain gesture contents")
 			}
