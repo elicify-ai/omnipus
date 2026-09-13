@@ -38,6 +38,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
+	"github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
@@ -796,6 +797,15 @@ func stripOrphanToolCallMarkup(response *providers.LLMResponse) (providers.Orpha
 	return first, found
 }
 
+// truncationOutputCapSentence is the advice given to a model whose
+// generation was cut off at the output-token limit before it finished:
+// make the next attempt smaller. Factored out of orphanToolMarkupRepairMessage
+// (ADR-087 D3.6) so both repair paths — the orphan-markup re-prompt and
+// toolCallTruncationRepairMessage below — send the model byte-identical
+// wording for the same underlying fault.
+const truncationOutputCapSentence = " Your previous response was also cut off at the output-token limit before the call was complete. " +
+	"Make this call smaller: send shorter arguments, or split the work across several calls."
+
 // orphanToolMarkupRepairMessage builds the corrective turn sent back to a
 // model whose tool call arrived as text.
 //
@@ -815,8 +825,7 @@ func orphanToolMarkupRepairMessage(finishReason string) providers.Message {
 		"Re-issue that call now using the tool-calling interface — a structured tool call, not text. " +
 		"Do not write tool-call markup, XML tags, or a JSON description of the call into your message body.")
 	if isTruncatedFinishReason(finishReason) {
-		b.WriteString(" Your previous response was also cut off at the output-token limit before the call was complete. " +
-			"Make this call smaller: send shorter arguments, or split the work across several calls.")
+		b.WriteString(truncationOutputCapSentence)
 	}
 	return providers.Message{Role: "user", Content: b.String()}
 }
@@ -831,6 +840,354 @@ func isTruncatedFinishReason(reason string) bool {
 		return true
 	}
 	return false
+}
+
+// ── ADR-087 D3/D4/D5/D6/D9: the truncation outcome handler ──
+//
+// runTurn calls the provider from three sites (§2.7: the main retry loop,
+// the media-downgrade retry, and the empty-response retry's own attempt).
+// D9 requires D3 (error arm) and D4/D6 (success arm) to be evaluated
+// identically at all three — implemented here as two shared functions
+// (evaluateTruncatedToolCallError, evaluateTruncatedSuccess) that runTurn
+// calls at each site; Go's labeled continue/break for turnLoop can only be
+// written in runTurn itself, so the functions return a verdict rather than
+// controlling the loop directly, and runTurn's three call sites act on it
+// identically (§7.9 pins this).
+const (
+	// truncationReasonMaxOutputTokens is the only Message.truncation_reason
+	// value this package writes (ADR-087 D2) — "cancelled" is cancel.go's
+	// own, unrelated writer.
+	truncationReasonMaxOutputTokens = "max_output_tokens"
+	// maxTruncationContinuations bounds ADR-087 D6's auto-continue rounds
+	// per turn (D6.3).
+	maxTruncationContinuations = 2
+	// truncatedToolCallRetryReason labels a D3 tool-call-truncation repair
+	// on the event bus, distinct from orphanToolMarkupRetryReason and the
+	// plain "empty_response"/"timeout" reasons already in use.
+	truncatedToolCallRetryReason = "tool_call_truncated"
+	// truncationContinueRetryReason labels a D6 auto-continue round on the
+	// event bus.
+	truncationContinueRetryReason = "truncation_continue"
+)
+
+// toolCallTruncationRepairMessage builds the corrective turn sent back to a
+// model whose tool call was cut off at the output-token limit before it
+// could be decoded (ADR-087 D3). Reuses truncationOutputCapSentence
+// (D3.6) — the same advice orphanToolMarkupRepairMessage gives for the
+// sibling fault.
+func toolCallTruncationRepairMessage() providers.Message {
+	return providers.Message{
+		Role: "user",
+		Content: "Your tool call was cut off at the output-token limit before it finished, so it could not run and nothing was changed." +
+			truncationOutputCapSentence,
+	}
+}
+
+// truncationContinueMessage is the D6.9 instruction appended after the
+// partial answer when a truncated response earns an auto-continue round.
+// Never persisted as a user-role session-history message (D6.7) — it lives
+// only in the turn-local `messages` slice used to build the next request.
+func truncationContinueMessage() providers.Message {
+	return providers.Message{
+		Role: "user",
+		Content: "Your previous message was cut off at the output-token limit. Continue from exactly where it stopped. " +
+			"Do not repeat any text you already wrote, and do not restate or summarise it.",
+	}
+}
+
+// evaluateTruncatedToolCallError implements ADR-087 D3: a tool call cut off
+// at the output-token limit gets exactly one bounded repair per turnLoop
+// round before the turn falls through to the terminal error path.
+//
+// Returns (repairedMessages, true) when a repair was dispatched — the
+// caller must retry the provider call with repairedMessages. Returns
+// (nil, false) when the caller's EXISTING error handling (ClassifyError,
+// media downgrade, PDF fallback, the generic terminal path) must run
+// completely unchanged: the error was not a truncated tool call, nothing
+// was streamed's worth of content was already shown, the round already
+// spent its one repair, no provider retry remains, or a hard abort is
+// already in flight.
+func (al *AgentLoop) evaluateTruncatedToolCallError(
+	ts *turnState,
+	err error,
+	callMessages []providers.Message,
+	retry, maxRetries int,
+	roundRepairUsed *bool,
+	llmModel string,
+	iteration int,
+) ([]providers.Message, bool) {
+	if err == nil || !errors.Is(err, common.ErrToolArgumentsUndecodable) {
+		return nil, false
+	}
+	// D3.2: only repair when nothing was streamed yet this attempt — a
+	// partially-streamed response has already shown the user real text;
+	// repairing here would duplicate it. Same idiom as the timeout-retry
+	// guard at :10487.
+	if sc, ok := ts.lastStreamer.(interface{ StreamedContentLen() int }); ok && sc.StreamedContentLen() > 0 {
+		return nil, false
+	}
+	// D3.3: a `continue` on the last retry exits the loop without making
+	// the promised call — do not count or announce a repair that cannot
+	// run.
+	if retry >= maxRetries {
+		return nil, false
+	}
+	// D3.4: one repair per turnLoop round; the caller resets
+	// roundRepairUsed at the top of every round.
+	if roundRepairUsed == nil || *roundRepairUsed {
+		return nil, false
+	}
+	// D3.8: re-check hard-abort explicitly before dispatching the repair
+	// call — `continue` skips sleepWithContext, which is where this check
+	// normally lands.
+	if ts.hardAbortRequested() {
+		return nil, false
+	}
+
+	*roundRepairUsed = true
+
+	// D3.9: the refused attempt was billed by the provider even though the
+	// call was refused locally — debit its usage exactly once, the same
+	// accounting the success arm uses (loop.go's usage-debit block).
+	var tae *common.ToolArgumentsError
+	if errors.As(err, &tae) && tae.Usage != nil {
+		callCost := estimateLLMCallCost(llmModel, tae.Usage)
+		if al.tokenBudget != nil && tae.Usage.TotalTokens > 0 {
+			al.tokenBudget.Debit(int64(tae.Usage.TotalTokens))
+		}
+		ts.AddTurnStats(int64(tae.Usage.TotalTokens), callCost)
+		ts.AddTurnCacheStats(tae.Usage.CacheReadTokens, tae.Usage.CacheWriteTokens)
+		ts.AddTurnIOStats(tae.Usage.PromptTokens, tae.Usage.CompletionTokens)
+	}
+
+	logger.WarnCF("agent", "tool call cut off at the output-token limit — re-prompting the model once",
+		map[string]any{
+			"agent_id":  ts.agent.ID,
+			"iteration": iteration,
+			"model":     llmModel,
+			"error":     err.Error(),
+		})
+	al.emitEvent(
+		EventKindLLMRetry,
+		ts.eventMeta("runTurn", "turn.llm.retry"),
+		LLMRetryPayload{
+			Attempt:    1,
+			MaxRetries: 1,
+			Reason:     truncatedToolCallRetryReason,
+			Error:      err.Error(),
+		},
+	)
+
+	// D3.5/D3.6: append to a FRESH copy of callMessages — never mutate the
+	// turn's own `messages`, never bare-append (aliasing risk, same idiom
+	// as :9867). D3.7: the refused response itself is never appended to
+	// history — only this repair note is.
+	repaired := append(append([]providers.Message(nil), callMessages...), toolCallTruncationRepairMessage())
+	return repaired, true
+}
+
+// truncationSuccessAction is evaluateTruncatedSuccess's verdict — see its
+// doc comment for what each caller must do.
+type truncationSuccessAction int
+
+const (
+	// truncationActionNone: the guard did not match (not truncated, or the
+	// response carried tool calls) — the caller's existing logic runs
+	// completely unchanged.
+	truncationActionNone truncationSuccessAction = iota
+	// truncationActionContinue: D6 — the caller must set `messages` to
+	// verdict.messages and `continue turnLoop`.
+	truncationActionContinue
+	// truncationActionEnd: D4a or D4b — the caller must set finalContent to
+	// verdict.finalContent and `break turnLoop`.
+	truncationActionEnd
+)
+
+// truncationSuccessVerdict is evaluateTruncatedSuccess's return value.
+type truncationSuccessVerdict struct {
+	action       truncationSuccessAction
+	finalContent string
+	messages     []providers.Message
+}
+
+// evaluateTruncatedSuccess implements ADR-087 D4 (one branch, three
+// outcomes) and D6 (auto-continue). Called once, ahead of the legacy
+// empty-response retry loop, for every one of runTurn's three provider-call
+// sites (D9) — main, media-downgrade retry, and the empty-response retry's
+// own successful attempt (via its own call site inside that loop).
+//
+// continuationChainLen is the caller's turn-scoped bookkeeping (declared
+// once, ahead of turnLoop) for how many trailing entries of `messages` are
+// currently the D6 continuation chain — mutated here so a later round
+// REPLACES the previous round's chain instead of accumulating duplicate
+// copies of the answer-so-far (D6.7's "re-appended exactly once").
+func (al *AgentLoop) evaluateTruncatedSuccess(
+	ts *turnState,
+	response *providers.LLMResponse,
+	responseContent string,
+	messages []providers.Message,
+	providerToolDefs []providers.ToolDefinition,
+	gracefulTerminal bool,
+	iteration int,
+	llmModel string,
+	continuationChainLen *int,
+) truncationSuccessVerdict {
+	if response == nil || !isTruncatedFinishReason(response.FinishReason) || len(response.ToolCalls) > 0 {
+		// D6.10 (part): a round that did not need the truncation branch at
+		// all resolves any chain a PRIOR round left pending.
+		ts.resolveContinuation()
+		return truncationSuccessVerdict{action: truncationActionNone}
+	}
+
+	accumulated := ts.appendToAccumulator(responseContent)
+
+	if strings.TrimSpace(accumulated) == "" {
+		// D4a: nothing was ever produced. No retry, no fallback
+		// substitution, no markTurnFailed — the annotation is the whole
+		// answer. loop.go's tail (and, for a streamed turn,
+		// finalizeStreamer) own writing the zero-content entry this
+		// annotates.
+		ts.setTruncationReason(truncationReasonMaxOutputTokens)
+		ts.resolveContinuation()
+		logger.WarnCF("agent", "LLM response truncated at the output-token limit with no content produced",
+			map[string]any{"agent_id": ts.agent.ID, "iteration": iteration, "model": llmModel})
+		return truncationSuccessVerdict{action: truncationActionEnd, finalContent: ""}
+	}
+
+	if responseContent != "" {
+		if newMessages, ok := al.truncationContinuationEligible(
+			ts, messages, providerToolDefs, gracefulTerminal, iteration, continuationChainLen, accumulated,
+		); ok {
+			ts.markContinuationDispatched()
+			al.emitEvent(
+				EventKindLLMRetry,
+				ts.eventMeta("runTurn", "turn.llm.retry"),
+				LLMRetryPayload{
+					Attempt:    ts.continuationRoundsSnapshot(),
+					MaxRetries: maxTruncationContinuations,
+					Reason:     truncationContinueRetryReason,
+				},
+			)
+			logger.InfoCF("agent", "LLM response cut off at the output-token limit; auto-continuing",
+				map[string]any{
+					"agent_id":  ts.agent.ID,
+					"iteration": iteration,
+					"model":     llmModel,
+					"round":     ts.continuationRoundsSnapshot(),
+				})
+			return truncationSuccessVerdict{action: truncationActionContinue, messages: newMessages}
+		}
+	}
+
+	// D4b: not eligible for a further continuation (bound reached,
+	// iteration capacity, graceful stop already used, or the request
+	// cannot fit) — the accumulated answer stands.
+	ts.setTruncationReason(truncationReasonMaxOutputTokens)
+	ts.resolveContinuation()
+	logger.WarnCF("agent", "LLM response remained truncated at the output-token limit; ending the turn with the partial answer",
+		map[string]any{"agent_id": ts.agent.ID, "iteration": iteration, "model": llmModel})
+	return truncationSuccessVerdict{action: truncationActionEnd, finalContent: accumulated}
+}
+
+// truncationContinuationEligible implements D6's gates 3-6 (D6.2's content
+// gate and D4's own "content produced" check are the caller's
+// responsibility, above). Returns the candidate `messages` slice — with the
+// collapsed continuation chain appended, admission-checked via
+// midTurnWindowCheck (D6.6) — and whether a further round may be
+// dispatched.
+func (al *AgentLoop) truncationContinuationEligible(
+	ts *turnState,
+	messages []providers.Message,
+	providerToolDefs []providers.ToolDefinition,
+	gracefulTerminal bool,
+	iteration int,
+	continuationChainLen *int,
+	accumulated string,
+) ([]providers.Message, bool) {
+	// D6.3: bounded at 2 continuations per turn.
+	if ts.continuationRoundsSnapshot() >= maxTruncationContinuations {
+		return nil, false
+	}
+	// D6.4 (Codex C4): never spend the LAST permitted iteration on a
+	// continuation — D4b takes over instead of the toolLimitResponse
+	// fallback.
+	if ts.agent.MaxIterations > 0 && iteration+1 >= ts.agent.MaxIterations {
+		return nil, false
+	}
+	// D6.5 (Codex C3): cancellation beats recovery — never continue once
+	// the turn has already gone through its graceful-stop terminal
+	// request.
+	if gracefulTerminal {
+		return nil, false
+	}
+
+	base := messages
+	if continuationChainLen != nil && *continuationChainLen > 0 && len(base) >= *continuationChainLen {
+		base = base[:len(base)-*continuationChainLen]
+	}
+	candidate := append(append([]providers.Message(nil), base...),
+		providers.Message{Role: "assistant", Content: accumulated},
+		truncationContinueMessage(),
+	)
+
+	// D6.6 (Codex pass 2, M2): `continue turnLoop` does not re-run the
+	// proactive windowTrim — run the existing mid-turn admission check
+	// against what the continuation would add. A guard hit here means D4b
+	// with the partial (the caller sees ok=false), never typedTurnExit.
+	checked, err := al.midTurnWindowCheck(ts, candidate, providerToolDefs)
+	if err != nil {
+		return nil, false
+	}
+	if continuationChainLen != nil {
+		*continuationChainLen = 2
+	}
+	return checked, true
+}
+
+// preserveTruncatedAccumulator implements ADR-087 D6.8: every terminal exit
+// that can fire while a D6 continuation is unresolved must keep what was
+// already written, annotated truncated/max_output_tokens, instead of
+// silently discarding it behind its own real error. No-op
+// (ts.continuationUnresolved() false) for the overwhelming majority of
+// calls through the shared exit paths this is wired into (typedTurnExit,
+// abortTurn, the generic LLM-error terminal path, the pre-call rate-limit
+// denial) — a pending D6 chain is the exception, not the rule.
+//
+// For a streamed turn the write happens later, inside finalizeStreamer's
+// deferred call (which reads ts.finalContent/ts.truncationReason set here);
+// for a non-streamed turn this writes the transcript entry directly, since
+// no later choke point exists for that path. Either way, D6.8's "makes no
+// provider call" half of the contract is satisfied by construction: this
+// function never calls the provider.
+func (al *AgentLoop) preserveTruncatedAccumulator(ts *turnState) {
+	if ts == nil || !ts.continuationUnresolved() {
+		return
+	}
+	accumulated := ts.continuationAccumulated()
+	ts.SetFinalContent(accumulated)
+	ts.setTruncationReason(truncationReasonMaxOutputTokens)
+	ts.resolveContinuation()
+
+	ts.mu.RLock()
+	hasStreamer := ts.lastStreamer != nil
+	ts.mu.RUnlock()
+	if hasStreamer {
+		// finalizeStreamer's deferred call (registered once, early in
+		// runTurn) fires after this function returns and picks up the
+		// ts.finalContent / ts.truncationReason just set above.
+		return
+	}
+	if accumulated != "" {
+		ts.appendAssistantTranscript(accumulated)
+	} else {
+		ts.appendAssistantTranscriptAllowEmpty("")
+	}
+	if ts.transcriptStore != nil && ts.transcriptSessionID != "" {
+		if markErr := ts.transcriptStore.MarkLastEntryTruncated(ts.transcriptSessionID, ts.turnID, truncationReasonMaxOutputTokens); markErr != nil {
+			logger.WarnCF("agent", "failed to mark truncated accumulator on terminal exit",
+				map[string]any{"session_id": ts.transcriptSessionID, "turn_id": ts.turnID, "error": markErr.Error()})
+		}
+	}
 }
 
 // ErrReloadNotConfigured is returned by TriggerReload when no reload function
@@ -9517,6 +9874,12 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// choke point below). Bounded so a model that cannot comply ends the turn
 	// with a visible error instead of looping on the user's budget.
 	orphanToolMarkupRepairs := 0
+	// continuationChainLen (ADR-087 D6.7) tracks how many trailing entries
+	// of `messages` are currently the D6 continuation chain, so the next
+	// round REPLACES it instead of accumulating duplicate copies of the
+	// answer-so-far. Declared before turnLoop so it survives both
+	// `continue turnLoop` and `goto turnLoop`.
+	continuationChainLen := 0
 
 turnLoop:
 	for ts.currentIteration() < ts.agent.MaxIterations || len(pendingMessages) > 0 || func() bool {
@@ -9530,6 +9893,13 @@ turnLoop:
 
 		iteration := ts.currentIteration() + 1
 		ts.setIteration(iteration)
+
+		// toolCallTruncationRepairUsed (ADR-087 D3.4) bounds a truncated
+		// tool call to exactly one repair per turnLoop round — reset every
+		// round (this `:=` runs again on every loop-body execution,
+		// including via `continue turnLoop`), shared across this round's
+		// three possible provider-call sites (D9).
+		toolCallTruncationRepairUsed := false
 
 		// Hard ceiling: never exceed 2x MaxIterations regardless of pending messages or
 		// graceful-interrupt state. This prevents an unbounded loop when the agent keeps
@@ -9576,6 +9946,11 @@ turnLoop:
 					map[string]any{"retry_after_seconds": result.RetryAfterSeconds},
 				)
 				turnStatus = TurnEndStatusError
+				// ADR-087 D6.8: a rate-limit denial makes no provider call —
+				// if a D6 continuation was left unresolved by a prior round,
+				// preserve it rather than silently discarding it behind
+				// this denial.
+				al.preserveTruncatedAccumulator(ts)
 				return turnResult{}, fmt.Errorf("rate limit: %s (retry after %.0fs)",
 					result.PolicyRule, result.RetryAfterSeconds)
 			}
@@ -10263,6 +10638,13 @@ turnLoop:
 			if err == nil {
 				break
 			}
+			// ADR-087 D3/D9 (main call site): a tool call cut off at the
+			// output-token limit gets one bounded repair before falling
+			// through to ClassifyError/the media-downgrade/PDF paths below.
+			if repaired, ok := al.evaluateTruncatedToolCallError(ts, err, callMessages, retry, maxRetries, &toolCallTruncationRepairUsed, llmModel, iteration); ok {
+				callMessages = repaired
+				continue
+			}
 			// Preserve the friendly image-only synthesis before the generic media
 			// downgrade path. PDF and mixed-media failures deliberately fall through.
 			pe := errorToProviderError(err)
@@ -10325,6 +10707,12 @@ turnLoop:
 						ts.setOutcomeRelabel(CodeMediaUnsupported)
 					}
 					break
+				}
+				// ADR-087 D3/D9 (media-downgrade retry call site): same
+				// bounded repair as the main call site above.
+				if repaired, ok := al.evaluateTruncatedToolCallError(ts, err, callMessages, retry, maxRetries, &toolCallTruncationRepairUsed, llmModel, iteration); ok {
+					callMessages = repaired
+					continue
 				}
 			}
 			if ts.hardAbortRequested() && errors.Is(err, context.Canceled) {
@@ -10557,6 +10945,19 @@ turnLoop:
 							// Site-3: post-timeout-trim assembly.
 							newHistory := ts.agent.Sessions.GetHistory(ts.sessionKey)
 							messages = al.assembleMessages(turnCtx, ts, newHistory, "", nil, activeSkillNames(ts.agent, ts.opts))
+							continuationChainLen = 0
+							if ts.continuationUnresolved() {
+								// ADR-087 D6.7: a history rebuild loses the D6
+								// continuation chain (it was never persisted
+								// to session history) — re-append it exactly
+								// once so the model still sees what it has
+								// already written.
+								messages = append(messages,
+									providers.Message{Role: "assistant", Content: ts.continuationAccumulated()},
+									truncationContinueMessage(),
+								)
+								continuationChainLen = 2
+							}
 							callMessages = messages
 							if gracefulTerminal {
 								callMessages = append(append([]providers.Message(nil), messages...), ts.interruptHintMessage())
@@ -10710,6 +11111,15 @@ turnLoop:
 				// Site-4: post-context-overflow-trim assembly.
 				newHistory := ts.agent.Sessions.GetHistory(ts.sessionKey)
 				messages = al.assembleMessages(turnCtx, ts, newHistory, "", nil, activeSkillNames(ts.agent, ts.opts))
+				continuationChainLen = 0
+				if ts.continuationUnresolved() {
+					// ADR-087 D6.7: same rebuild-restoration as Site-3 above.
+					messages = append(messages,
+						providers.Message{Role: "assistant", Content: ts.continuationAccumulated()},
+						truncationContinueMessage(),
+					)
+					continuationChainLen = 2
+				}
 				callMessages = messages
 				if gracefulTerminal {
 					callMessages = append(append([]providers.Message(nil), messages...), ts.interruptHintMessage())
@@ -10736,12 +11146,16 @@ turnLoop:
 			// never emit raw err.Error() to the assistant-facing bus /
 			// transcript. Build a *ProviderError from the wrapped chain
 			// (best-effort — falls back to substring matching on err.Error()
-			// when no FailoverError is in the chain), route through the
-			// shared translateLLMError, and surface the generic message
-			// instead of the raw provider text. Raw stays in logger.ErrorCF
-			// + the wrapped fmt.Errorf return for operator triage.
+			// when no FailoverError is in the chain) for the live
+			// ErrorPayload, and classify via TranslateTurnError (ADR-087
+			// D5): it recognizes a *common.ToolArgumentsError in err's chain
+			// (CodeToolCallTruncated vs CodeToolArgs, per whether the
+			// refusal carries real truncation evidence) before falling back
+			// to the exact same errorToProviderError + TranslateLLMError
+			// path this used to call directly — so a 401/413 buried in err
+			// still classifies correctly (Codex C6).
 			pe := errorToProviderError(err)
-			llm := TranslateLLMError(pe, err.Error())
+			llm := TranslateTurnError(err)
 
 			// FR-017a: label an inconclusive residual 4xx after a
 			// successful strip-retry. A later distinct classified
@@ -10774,6 +11188,10 @@ turnLoop:
 					"error":     err.Error(),
 					"code":      string(llm.Code),
 				})
+			// ADR-087 D6.8: exhausted retries make no further provider
+			// call — preserve a D6 continuation left unresolved by a prior
+			// round instead of silently discarding it.
+			al.preserveTruncatedAccumulator(ts)
 			return turnResult{}, fmt.Errorf("LLM call failed after retries: %w", err)
 		}
 
@@ -10800,11 +11218,14 @@ turnLoop:
 			}
 		}
 
-		// Save finishReason to turnState for SubTurn truncation detection.
+		// ADR-087 D8: this site used to also call the now-deleted
+		// SetLastFinishReason("for SubTurn truncation detection") — that
+		// consumer was never built (GetLastFinishReason had zero callers);
+		// see §5.1 of the ADR for the recorded gap. Usage tracking (the
+		// reason this block still exists) is unaffected.
 		// H5: use turnCtx (the per-turn context that carries the turnState value),
 		// not the outer ctx which may not have the turnState attached.
 		if innerTS := turnStateFromContext(turnCtx); innerTS != nil {
-			innerTS.SetLastFinishReason(response.FinishReason)
 			// Save usage for token budget tracking
 			if response.Usage != nil {
 				innerTS.SetLastUsage(response.Usage)
@@ -11023,6 +11444,28 @@ turnLoop:
 				pendingMessages = append(pendingMessages, steerMsgs...)
 				continue
 			}
+			// ADR-087 D4/D6/D9: the one success-arm truncation handler,
+			// ahead of the legacy empty-response retry loop below. Guarded
+			// internally on isTruncatedFinishReason(FinishReason) &&
+			// len(ToolCalls)==0 — when that guard does not match, the
+			// verdict is truncationActionNone and every line below runs
+			// completely unchanged (§7.10: a normal empty response with a
+			// non-truncated finish reason still falls through to the
+			// legacy loop). This single insertion covers both the main and
+			// media-downgrade-retry call sites, since both `break` into
+			// this shared downstream code on success; the empty-response
+			// retry's own successful attempt (site 3) reaches the
+			// identical branch again below, inside that loop.
+			if verdict := al.evaluateTruncatedSuccess(ts, response, responseContent, messages, providerToolDefs, gracefulTerminal, iteration, llmModel, &continuationChainLen); verdict.action != truncationActionNone {
+				switch verdict.action {
+				case truncationActionContinue:
+					messages = verdict.messages
+					continue turnLoop
+				case truncationActionEnd:
+					finalContent = verdict.finalContent
+					break turnLoop
+				}
+			}
 			// Empty response recovery (FR-006): if LLM returned empty content with no
 			// reasoning and no tool calls, retry once before surfacing a fallback message.
 			//
@@ -11058,16 +11501,41 @@ turnLoop:
 				// Re-call the LLM directly without advancing the outer turn iteration.
 				retryResp, retryErr := callLLM(callMessages, providerToolDefs)
 				if retryErr != nil {
-					// Propagate the error back to the outer error-handling block by
-					// overwriting response/err and breaking out of both loops.
-					response = nil
-					err = retryErr
-					break
+					// ADR-087 D3/D9 (empty-response retry call site): same
+					// bounded repair as the other two call sites — issue the
+					// repaired call directly rather than looping, since this
+					// mini-loop's own iteration budget is about EMPTY
+					// content, a different concern from a truncated tool
+					// call.
+					if repaired, ok := al.evaluateTruncatedToolCallError(ts, retryErr, callMessages, 0, 1, &toolCallTruncationRepairUsed, llmModel, iteration); ok {
+						callMessages = repaired
+						retryResp, retryErr = callLLM(callMessages, providerToolDefs)
+					}
+					if retryErr != nil {
+						// Propagate the error back to the outer error-handling block by
+						// overwriting response/err and breaking out of both loops.
+						response = nil
+						err = retryErr
+						break
+					}
 				}
 				response = retryResp
 				responseContent = response.Content
 				if responseContent == "" && response.ReasoningContent != "" {
 					responseContent = response.ReasoningContent
+				}
+				// ADR-087 D4/D6/D9: the empty-response retry's own
+				// successful attempt goes through the SAME success-arm
+				// handler as the other two call sites (§7.9).
+				if verdict := al.evaluateTruncatedSuccess(ts, response, responseContent, messages, providerToolDefs, gracefulTerminal, iteration, llmModel, &continuationChainLen); verdict.action != truncationActionNone {
+					switch verdict.action {
+					case truncationActionContinue:
+						messages = verdict.messages
+						continue turnLoop
+					case truncationActionEnd:
+						finalContent = verdict.finalContent
+						break turnLoop
+					}
 				}
 			}
 			// If the inner retry loop set an error, surface it via the outer error path.
@@ -11082,9 +11550,13 @@ turnLoop:
 				turnStatus = TurnEndStatusError
 				// Wave 1 (error-provenance hardening): translate via the
 				// shared classifier (CRIT-001). Never surface raw err.Error()
-				// to the assistant / bus / transcript.
+				// to the assistant / bus / transcript. ADR-087 D5/D9: this
+				// empty-response retry's own error path is subsumed into the
+				// same TranslateTurnError classification the main terminal
+				// path uses, so a truncated tool call refused here reports
+				// CodeToolCallTruncated identically to every other site.
 				pe := errorToProviderError(err)
-				llm := TranslateLLMError(pe, err.Error())
+				llm := TranslateTurnError(err)
 
 				// FR-017a: label an inconclusive residual 4xx after a
 				// successful strip-retry. A later distinct classified
@@ -11102,6 +11574,10 @@ turnLoop:
 				// FR-002: persist this provider error to the transcript (write
 				// choke point).
 				ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
+				// ADR-087 D6.8: no further provider call follows this
+				// error either — preserve a D6 continuation left
+				// unresolved by a prior round.
+				al.preserveTruncatedAccumulator(ts)
 				return turnResult{}, fmt.Errorf("LLM call failed during empty-response retry: %w", err)
 			}
 			if strings.TrimSpace(responseContent) == "" {
@@ -11109,6 +11585,17 @@ turnLoop:
 				ts.markTurnFailed()
 				logger.WarnCF("agent", "LLM returned empty response after retry; using fallback message",
 					map[string]any{"agent_id": ts.agent.ID, "iteration": iteration})
+			}
+			// ADR-087 D6.10: this round did not go through
+			// evaluateTruncatedSuccess (it was not itself truncated, or it
+			// carried tool calls on an earlier pass through this loop) —
+			// but if an EARLIER round in this same turn dispatched a D6
+			// continuation, the accumulator holds that earlier content and
+			// must be prefixed here, or the prior round's answer is
+			// silently dropped and only this round's own text survives.
+			if ts.hadContinuation() {
+				responseContent = ts.appendToAccumulator(responseContent)
+				ts.resolveContinuation()
 			}
 			finalContent = responseContent
 			logger.InfoCF("agent", "LLM response without tool calls (direct answer)",
@@ -11118,6 +11605,28 @@ turnLoop:
 					"content_chars": len(finalContent),
 				})
 			break
+		}
+
+		// ADR-087 D6.10 / D4 (last paragraph, "truncated and has complete
+		// tool calls"): a round with tool calls never reaches
+		// evaluateTruncatedSuccess (its guard requires len(ToolCalls)==0),
+		// so this is the one place that distinguishes the two cases:
+		//   - FinishReason NOT truncated: an ordinary follow-up round
+		//     resolves any D6 chain a prior round left pending.
+		//   - FinishReason truncated but the response still carried
+		//     complete tool calls (parseStreamResponse succeeds once every
+		//     collected argument set decodes, regardless of finishReason):
+		//     execute the calls once (unchanged below) but carry the
+		//     truncation forward as pending — this round produced no
+		//     resolving text answer, so D6.8 must still be able to rescue
+		//     the accumulator if the turn ends before a later round
+		//     resolves it. Never re-executed because of a continuation:
+		//     nothing here re-dispatches these tool calls.
+		if isTruncatedFinishReason(response.FinishReason) {
+			ts.appendToAccumulator(response.Content)
+			ts.markContinuationPending()
+		} else {
+			ts.resolveContinuation()
 		}
 
 		normalizedToolCalls := make([]providers.ToolCall, 0, len(response.ToolCalls))
@@ -12742,7 +13251,13 @@ turnLoop:
 	}
 
 	if finalContent == "" {
-		if ts.currentIteration() >= ts.agent.MaxIterations && ts.agent.MaxIterations > 0 {
+		if ts.getTruncationReason() != "" {
+			// ADR-087 D4a: this IS the deliberate outcome, not a fallthrough
+			// — a truncated turn that produced literally no content. No
+			// retry, no fallback substitution, no markTurnFailed; finalContent
+			// stays "" and the write choke points below persist a zero-content
+			// entry for MarkLastEntryTruncated to find.
+		} else if ts.currentIteration() >= ts.agent.MaxIterations && ts.agent.MaxIterations > 0 {
 			// Genuine failure: tool-iteration ceiling hit without a final response.
 			// markTurnFailed so DoneStats.TurnFailed=true reaches the done frame.
 			finalContent = toolLimitResponse
@@ -12801,8 +13316,26 @@ turnLoop:
 	ts.mu.RLock()
 	hasActiveStreamer := ts.lastStreamer != nil
 	ts.mu.RUnlock()
-	if !hasActiveStreamer && finalContent != "" {
-		ts.appendAssistantTranscript(finalContent)
+	truncReason := ts.getTruncationReason()
+	if !hasActiveStreamer {
+		if finalContent != "" {
+			ts.appendAssistantTranscript(finalContent)
+		} else if truncReason != "" {
+			// ADR-087 D4a: the zero-content entry MarkLastEntryTruncated
+			// (below) needs something to find — appendAssistantTranscript's
+			// ordinary content=="" no-op does not apply here.
+			ts.appendAssistantTranscriptAllowEmpty("")
+		}
+		// ADR-087 D4a/D4b: this is the non-streaming write choke point —
+		// mark the entry just written (or, for the streaming case,
+		// finalizeStreamer's own deferred call does the equivalent AFTER
+		// wsStreamer.Finalize persists its entry).
+		if truncReason != "" && ts.transcriptStore != nil && ts.transcriptSessionID != "" {
+			if markErr := ts.transcriptStore.MarkLastEntryTruncated(ts.transcriptSessionID, ts.turnID, truncReason); markErr != nil {
+				logger.WarnCF("agent", "failed to mark truncated transcript entry",
+					map[string]any{"session_id": ts.transcriptSessionID, "turn_id": ts.turnID, "error": markErr.Error()})
+			}
+		}
 	}
 
 	ts.setPhase(TurnPhaseCompleted)
@@ -12854,6 +13387,10 @@ const hardInterruptAbortReason = "turn canceled by hard interrupt request"
 // session_worker callers that errors.Is the context error keep working and
 // TranslateTurnError classifies the chain to the same code. Never `unknown`.
 func (al *AgentLoop) typedTurnExit(ts *turnState, iteration int, llmModel string, cause error) (turnResult, TurnEndStatus, error) {
+	// ADR-087 D6.8: every typed exit (cancel, timeout, context-unrecoverable)
+	// makes no further provider call — preserve a D6 continuation left
+	// unresolved by a prior round instead of silently discarding it.
+	al.preserveTruncatedAccumulator(ts)
 	code, ok := typedExitCode(cause)
 	if !ok {
 		// Not a typed exit — callers only route context errors here; fall
@@ -12924,6 +13461,10 @@ func (al *AgentLoop) typedTurnExit(ts *turnState, iteration int, llmModel string
 //     terminal user-facing frame every channel already knows how to render
 //     (rather than silently dropping the user with no explanation).
 func (al *AgentLoop) abortTurn(ts *turnState, stage, reason string) (turnResult, error) {
+	// ADR-087 D6.8: hard cancel and every system-initiated abort make no
+	// further provider call — preserve a D6 continuation left unresolved by
+	// a prior round instead of silently discarding it.
+	al.preserveTruncatedAccumulator(ts)
 	ts.setPhase(TurnPhaseAborted)
 	if !ts.opts.NoHistory {
 		if err := ts.restoreSession(ts.agent); err != nil {

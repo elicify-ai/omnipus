@@ -285,9 +285,49 @@ type turnState struct {
 	finishedChan    chan struct{}      // Closed when turn finishes
 
 	// Token budget tracking
-	tokenBudget      *atomic.Int64        // Shared token budget counter
-	lastFinishReason string               // Last LLM finish_reason
-	lastUsage        *providers.UsageInfo // Last LLM usage info
+	tokenBudget *atomic.Int64        // Shared token budget counter
+	lastUsage   *providers.UsageInfo // Last LLM usage info
+
+	// ADR-087 D6.1: the turn-scoped auto-continue accumulator — the
+	// load-bearing object for a truncated answer that gets one or more
+	// bounded continuation rounds. Guarded by mu like every other field
+	// here.
+	//
+	// continuationAccum is the concatenation of every round's own content
+	// produced while runTurn's D4/D6 branch (loop.go's
+	// evaluateTruncatedSuccess) has been handling a truncated-with-no-tool-
+	// calls response — updated on EVERY entry into that branch, whether or
+	// not the round goes on to actually continue. It is the value
+	// finalizeStreamer hands the streamer via SetContinuationContent (when
+	// hadContinuation() is true) and what D4b annotates as the turn's final
+	// content.
+	//
+	// continuationRounds counts how many times a continuation was actually
+	// DISPATCHED (D6.3's bound of 2) — never cleared, so hadContinuation()
+	// (continuationRounds > 0) stays true for the rest of the turn once at
+	// least one continuation has fired, even after the chain resolves. This
+	// is deliberately different from continuationPending (below): the
+	// streamer still needs to render the FULL accumulated answer for the
+	// whole rest of turn finalization, not just while a round is mid-flight.
+	//
+	// continuationPending is true only from the moment a continuation is
+	// dispatched until the chain resolves — a later round completing
+	// normally (clears via resolveContinuation, called both from a
+	// non-truncated/tool-calls response and from D4a/D4b's own
+	// resolution). preserveTruncatedAccumulator (loop.go, D6.8) gates on
+	// THIS field, not on continuationRounds: without the distinction, an
+	// unrelated terminal exit many iterations after an already-resolved
+	// continuation chain would wrongly re-surface stale partial content.
+	continuationAccum   string
+	continuationRounds  int
+	continuationPending bool
+
+	// truncationReason carries ADR-087 D2's narrow enum ("max_output_tokens"
+	// — the only value this package ever writes; "cancelled" is cancel.go's
+	// own, unrelated writer) for a turn whose final content was annotated by
+	// D4a/D4b or preserved mid-continuation by D6.8. Empty means no
+	// truncation annotation is pending for this turn's transcript entry.
+	truncationReason string
 
 	// Accumulated turn-level stats across all LLM iterations in this turn.
 	// Used to populate the "done" WS frame for the session UI (issue #12).
@@ -1304,6 +1344,104 @@ func (ts *turnState) setLastStreamer(s bus.Streamer) {
 	ts.lastStreamer = s
 }
 
+// appendToAccumulator extends ADR-087 D6.1's turn-scoped accumulator with
+// one more round's content and returns the running total. Does NOT bump
+// continuationRounds/continuationPending — see markContinuationDispatched
+// for that; this method only records what was produced, independent of
+// whether the caller goes on to actually continue.
+func (ts *turnState) appendToAccumulator(content string) string {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.continuationAccum += content
+	return ts.continuationAccum
+}
+
+// continuationAccumulated returns the concatenated answer accumulated so
+// far across this turn's ADR-087 D6 continuation rounds.
+func (ts *turnState) continuationAccumulated() string {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.continuationAccum
+}
+
+// markContinuationDispatched records that a D6 continuation round has been
+// sent (bumping the D6.3 round bound) and marks the chain unresolved until
+// resolveContinuation clears it.
+func (ts *turnState) markContinuationDispatched() {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.continuationRounds++
+	ts.continuationPending = true
+}
+
+// markContinuationPending marks the D6 chain unresolved WITHOUT counting a
+// dispatched continuation round (ADR-087 D4's "truncated and has complete
+// tool calls" carve-out — the tool calls are executed as normal, but the
+// truncated finish reason means this round produced no resolving text
+// answer, so D6.8 must still be able to rescue the accumulator if the turn
+// ends before a later round resolves it). Deliberately does not bump
+// continuationRounds — this is not a D6.3-counted auto-continue round.
+func (ts *turnState) markContinuationPending() {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.continuationPending = true
+}
+
+// resolveContinuation clears the D6.8 "unresolved" flag — called when a
+// later round completes without needing the truncation branch at all
+// (ordinary content or tool calls) and by D4a/D4b once they annotate the
+// final content. No-op (idempotent) when nothing is pending.
+func (ts *turnState) resolveContinuation() {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.continuationPending = false
+}
+
+// hadContinuation reports whether this turn has dispatched at least one D6
+// continuation round. Unlike continuationUnresolved, this never clears once
+// set — finalizeStreamer needs it for the rest of the turn's finalization,
+// not just while a round is mid-flight (see the field's own doc comment).
+func (ts *turnState) hadContinuation() bool {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.continuationRounds > 0
+}
+
+// continuationUnresolved reports whether a dispatched D6 continuation has
+// not yet resolved — the gate preserveTruncatedAccumulator (loop.go, D6.8)
+// uses to decide whether a terminal exit needs to rescue a mid-flight
+// partial answer.
+func (ts *turnState) continuationUnresolved() bool {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.continuationPending
+}
+
+// continuationRoundsSnapshot returns how many D6 continuation rounds this
+// turn has dispatched so far.
+func (ts *turnState) continuationRoundsSnapshot() int {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.continuationRounds
+}
+
+// setTruncationReason records ADR-087 D2's narrow reason enum for this
+// turn's final content annotation ("max_output_tokens" — the only value
+// this package writes).
+func (ts *turnState) setTruncationReason(reason string) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.truncationReason = reason
+}
+
+// getTruncationReason returns the pending truncation annotation reason, or
+// "" when this turn's final content needs no annotation.
+func (ts *turnState) getTruncationReason() string {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.truncationReason
+}
+
 // markLastStreamerProducedModel stamps the model that produced the response
 // on the active streamer. The streamer's Finalize writes the assistant
 // transcript entry directly (bypassing appendAssistantTranscript); we push
@@ -1447,6 +1585,21 @@ type streamerFailedSetter interface {
 	SetTurnFailed(failed bool)
 }
 
+// streamerContinuationSetter is an optional interface a Streamer may
+// implement to receive the full answer accumulated across this turn's
+// ADR-087 D6 truncation-continuation rounds (D6.1, §9 fixed E→C
+// interface), overriding whatever the streamer accumulated from its own
+// per-call token buffer. Only the LAST streamer is ever finalized (see
+// lastStreamer's own doc comment on the turn-scoped-vs-per-call mismatch,
+// §2.8), and a per-call streamer's buffer holds only the FINAL
+// continuation round's text — without this, a continued answer would
+// persist and render only its last segment, silently dropping every
+// earlier round even though the live bubble showed the full text as it
+// streamed.
+type streamerContinuationSetter interface {
+	SetContinuationContent(full string)
+}
+
 // markTurnFailed records that this turn did NOT end in a real, successful model
 // response. It is called from four sites in loop.go: (1) empty-response-after-
 // retry, (2) tool-iteration limit, (3) generic empty-content exhaustion when the
@@ -1552,6 +1705,7 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) {
 	completionTokens := ts.turnCompletionTokens
 	cacheRead := ts.turnCacheRead
 	cacheWrite := ts.turnCacheWrite
+	truncReason := ts.truncationReason
 	ts.lastStreamer = nil
 	ts.mu.Unlock()
 	if s != nil {
@@ -1564,6 +1718,16 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) {
 		if fsetter, ok := s.(streamerFailedSetter); ok {
 			fsetter.SetTurnFailed(failed)
 		}
+		// ADR-087 D6.1 (§9 fixed E→C interface): a continued answer's
+		// per-call streamer buffer holds only the LAST round's text — hand
+		// it the full accumulated answer instead so persistence and the
+		// live bubble agree with turnResult.finalContent. Called AFTER
+		// ts.mu.Unlock() above — both hadContinuation and
+		// continuationAccumulated take ts.mu.RLock() themselves, and
+		// sync.RWMutex is not reentrant.
+		if cs, ok := s.(streamerContinuationSetter); ok && ts.hadContinuation() {
+			cs.SetContinuationContent(ts.continuationAccumulated())
+		}
 		// Pass finalContent so the streamer can persist the assistant message
 		// even when its own accumulated-from-token buffer is empty — happens
 		// when the WS client disconnects mid-stream and every Update() call
@@ -1571,6 +1735,19 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) {
 		// without any tokens to record.
 		if err := s.Finalize(ctx, finalContent); err != nil {
 			logger.WarnCF("agent", "Turn-end streaming finalize error", map[string]any{"error": err.Error()})
+		}
+		// ADR-087 D4a/D4b/D6.8: the streaming write choke point is exactly
+		// here — Finalize (above) is what actually persists the assistant
+		// transcript entry for a streamed turn, so MarkLastEntryTruncated
+		// must run AFTER it, not before (an earlier call would find no
+		// entry yet and silently no-op). truncReason is set by
+		// evaluateTruncatedSuccess/preserveTruncatedAccumulator (loop.go)
+		// only when this turn's final content needs the annotation.
+		if truncReason != "" && ts.transcriptStore != nil && ts.transcriptSessionID != "" {
+			if markErr := ts.transcriptStore.MarkLastEntryTruncated(ts.transcriptSessionID, ts.turnID, truncReason); markErr != nil {
+				logger.WarnCF("agent", "failed to mark truncated transcript entry after streaming finalize",
+					map[string]any{"session_id": ts.transcriptSessionID, "turn_id": ts.turnID, "error": markErr.Error()})
+			}
 		}
 	}
 }
@@ -1901,12 +2078,32 @@ func (ts *turnState) appendIntermediateAssistantTranscript(content string, produ
 // producedModel is the model string that emitted THIS response. Pass ""
 // to fall back to ts.lastProducedModel.
 func (ts *turnState) appendAssistantTranscript(content string, producedModel ...string) {
+	ts.appendAssistantTranscriptImpl(content, false, producedModel...)
+}
+
+// appendAssistantTranscriptAllowEmpty is appendAssistantTranscript's ADR-087
+// D4a variant: a turn truncated at the output-token limit with literally no
+// content produced still needs a persisted assistant entry — otherwise
+// MarkLastEntryTruncated (the write choke point in finalizeStreamer / the
+// non-streaming tail in loop.go) has no entry to find and the annotation is
+// silently lost. Every other no-content call site keeps going through
+// appendAssistantTranscript's ordinary empty-content no-op; this bypass is
+// scoped to that one caller.
+func (ts *turnState) appendAssistantTranscriptAllowEmpty(producedModel ...string) {
+	ts.appendAssistantTranscriptImpl("", true, producedModel...)
+}
+
+// appendAssistantTranscriptImpl is the shared body behind
+// appendAssistantTranscript and appendAssistantTranscriptAllowEmpty —
+// allowEmpty controls only whether a "" content is written (D4a) or
+// no-opped (every other caller).
+func (ts *turnState) appendAssistantTranscriptImpl(content string, allowEmpty bool, producedModel ...string) {
 	if ts.abandoned.Load() {
 		abandonedWritesSuppressed.Add(1)
 		ts.warnAbandonedTranscriptWrite("appendAssistantTranscript")
 		return
 	}
-	if ts.transcriptStore == nil || ts.transcriptSessionID == "" || content == "" {
+	if ts.transcriptStore == nil || ts.transcriptSessionID == "" || (content == "" && !allowEmpty) {
 		return
 	}
 	agentID := ts.resolveActiveAgentID()
@@ -2299,20 +2496,6 @@ func (ts *turnState) SetOnCancelFinish(fn func(cancelMethod string)) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.onCancelFinish = fn
-}
-
-// GetLastFinishReason returns the last LLM finish_reason
-func (ts *turnState) GetLastFinishReason() string {
-	ts.mu.RLock()
-	defer ts.mu.RUnlock()
-	return ts.lastFinishReason
-}
-
-// SetLastFinishReason sets the last LLM finish_reason
-func (ts *turnState) SetLastFinishReason(reason string) {
-	ts.mu.Lock()
-	defer ts.mu.Unlock()
-	ts.lastFinishReason = reason
 }
 
 // GetLastUsage returns the last LLM usage info
