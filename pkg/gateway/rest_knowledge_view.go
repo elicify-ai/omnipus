@@ -279,6 +279,17 @@ func buildViewResult(ctx context.Context, env vaultprops.FindEnv, name, collecti
 	if src := v.DeclaredSource(); src != "" {
 		out.Source = &src
 	}
+	// UAT D-35: the view's own presentation map — a declared `display_name`
+	// is the column heading the author asked for; the machine key was being
+	// printed because this never left the server. Pure presentation: the
+	// engine never read it to produce the rows above.
+	if v.Def.PropertyConfig != nil && len(*v.Def.PropertyConfig) > 0 {
+		cfg := make(map[string]gen.ViewPropertyConfig, len(*v.Def.PropertyConfig))
+		for name, pc := range *v.Def.PropertyConfig {
+			cfg[name] = pc
+		}
+		out.PropertyConfig = &cfg
+	}
 	if v.Def.Type != nil {
 		t := *v.Def.Type
 		out.Type = &t

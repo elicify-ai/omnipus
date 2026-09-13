@@ -52,6 +52,7 @@ import {
   libraryQueryKeys,
 } from '@/lib/api'
 import type { LibraryEntry } from '@/lib/api'
+import { ApiError } from '@/lib/api-error'
 import type {
   KnowledgeBaseView,
   KnowledgeBaseViews,
@@ -119,6 +120,39 @@ export interface BasePreviewLoaders {
  * which is the exact dishonesty the three-state model exists to prevent.
  */
 const COLLECTION_LINK_ROW_QUERY_CAP = 40
+
+/** UAT D-135: does any cell of this row carry a `[[wikilink]]`? Only such a
+ *  row has anything for the collection-wide link resolver to check; the
+ *  rest are skipped before a request is ever issued. Exported as a test
+ *  seam. */
+export function rowCarriesWikilink(row: { cells?: { value: string }[] }): boolean {
+  return (row.cells ?? []).some((c) => c.value.includes('[['))
+}
+
+/** UAT D-135: page-wide ceiling on concurrent link-graph requests. Every
+ *  row query used to be issued in one burst (40 at once for a 40-row view),
+ *  and the gateway's rate limiter answered with 429s that the panel then
+ *  hid behind a bare "Evaluating view…" spinner. Queued requests wait for a
+ *  slot; the server's answer is never assumed. Exported as a test seam. */
+export const LINK_GRAPH_MAX_IN_FLIGHT = 4
+let linkGraphInFlight = 0
+const linkGraphWaiters: Array<() => void> = []
+export async function withLinkGraphSlot<T>(run: () => Promise<T>): Promise<T> {
+  if (linkGraphInFlight >= LINK_GRAPH_MAX_IN_FLIGHT) {
+    await new Promise<void>((resolve) => linkGraphWaiters.push(resolve))
+  }
+  linkGraphInFlight += 1
+  try {
+    return await run()
+  } finally {
+    linkGraphInFlight -= 1
+    linkGraphWaiters.shift()?.()
+  }
+}
+/** Test seam: how many link-graph requests are on the wire right now. */
+export function linkGraphInFlightCount(): number {
+  return linkGraphInFlight
+}
 
 const defaultLoadGraph: KnowledgeGraphLoader = ({ workspaceId, collectionId, kind, path, hops, limit }) =>
   fetchKnowledgeGraph(workspaceId, {
@@ -481,6 +515,13 @@ export function BasePreview({
     for (const r of result.rows) {
       if (seen.has(r.path)) continue
       seen.add(r.path)
+      // UAT D-135: a graph request is only worth issuing for a row that
+      // actually carries a wikilink in one of its cells — a view whose rows
+      // hold no `[[…]]` at all used to fire one request per row (40 for a
+      // 40-row view, each rebuilding the collection's whole link graph on
+      // the server) for nothing, and ten such views in a row tripped the
+      // gateway's own rate limiter.
+      if (!rowCarriesWikilink(r)) continue
       paths.push(r.path)
       if (paths.length >= COLLECTION_LINK_ROW_QUERY_CAP) break
     }
@@ -493,8 +534,12 @@ export function BasePreview({
       // cache, same request, just addressed by a row's path instead of the
       // one open note's path.
       queryKey: ['library', workspaceId, 'knowledge', 'graph', 'links', collectionId, rowPath],
+      // UAT D-135: at most LINK_GRAPH_MAX_IN_FLIGHT of these on the wire at
+      // once, page-wide — never the whole row set in one burst.
       queryFn: () =>
-        loadGraph({ workspaceId, collectionId: collectionId as string, kind: 'links' as const, path: rowPath }),
+        withLinkGraphSlot(() =>
+          loadGraph({ workspaceId, collectionId: collectionId as string, kind: 'links' as const, path: rowPath }),
+        ),
       enabled: collectionId !== undefined,
       staleTime: 60_000,
       retry: false,
@@ -529,6 +574,13 @@ export function BasePreview({
   // treatment `graph_unavailable` already gets in the note reader.
   const failedCollectionLinkQueries = useMemo(
     () => collectionLinkQueries.filter((q) => q.isError).length,
+    [collectionLinkQueries],
+  )
+  // UAT D-135: how many of those failures were the gateway's own rate
+  // limiter (HTTP 429) — named in the banner rather than hidden behind a
+  // spinner, so a reader can tell "throttled, wait" from "broken".
+  const rateLimitedCollectionLinkQueries = useMemo(
+    () => collectionLinkQueries.filter((q) => q.isError && q.error instanceof ApiError && q.error.status === 429).length,
     [collectionLinkQueries],
   )
 
@@ -768,6 +820,14 @@ export function BasePreview({
             Link checking is incomplete for {failedCollectionLinkQueries}{' '}
             {failedCollectionLinkQueries === 1 ? 'row' : 'rows'} — their links show as unverified
             rather than confirmed broken.
+            {/* UAT D-135: a throttled request is named as such, never hidden. */}
+            {rateLimitedCollectionLinkQueries > 0 && (
+              <span data-testid="base-preview-link-graph-rate-limited">
+                {' '}
+                The gateway rate-limited {rateLimitedCollectionLinkQueries} of the link-checking requests
+                (HTTP 429); wait a moment before retrying.
+              </span>
+            )}
           </span>
           <button
             type="button"

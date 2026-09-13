@@ -648,3 +648,76 @@ describe('UAT D-78 — two views sharing a label are told apart, and the default
     expect(within(tablist).getByTestId('base-view-tab-invoices--outstanding').textContent).not.toContain('(')
   })
 })
+
+// ── UAT 2026-09-13 D-135 — link-graph fan-out and hidden 429s ───────────────
+import { rowCarriesWikilink, withLinkGraphSlot, linkGraphInFlightCount, LINK_GRAPH_MAX_IN_FLIGHT } from './BasePreview'
+import { ApiError } from '@/lib/api-error'
+
+describe('UAT D-135 — a base view no longer fires one graph request per row', () => {
+  it('rowCarriesWikilink: only a row with a [[wikilink]] cell needs the link graph', () => {
+    expect(rowCarriesWikilink({ cells: [{ value: '[[Korn Ferry]]' }] })).toBe(true)
+    expect(rowCarriesWikilink({ cells: [{ value: 'plain' }, { value: '42' }] })).toBe(false)
+    expect(rowCarriesWikilink({ cells: [] })).toBe(false)
+    expect(rowCarriesWikilink({})).toBe(false)
+  })
+
+  it('issues a graph request for the wikilink-bearing row ONLY, not for every row', async () => {
+    const loadGraph = vi.fn().mockResolvedValue(graph())
+    renderBase({
+      loadGraph,
+      loadViewResult: vi.fn().mockResolvedValue(
+        result({
+          parts: [{ part: 'table', source: { part: 'table' }, columns: ['file.name', 'client'] }],
+          rows: [
+            { path: 'a.md', title: 'INV-A', cells: [{ property: 'client', value: '[[Korn Ferry]]' }], joins: [] },
+            { path: 'b.md', title: 'INV-B', cells: [{ property: 'client', value: 'Acme' }], joins: [] },
+            { path: 'c.md', title: 'INV-C', cells: [{ property: 'client', value: 'Bolt' }], joins: [] },
+          ],
+        }),
+      ),
+    })
+    await screen.findByTestId('viewpart-table')
+    await waitFor(() => expect(loadGraph).toHaveBeenCalledWith(expect.objectContaining({ path: 'a.md' })))
+    // DIES ON the old code: three rows → three requests, b.md and c.md included.
+    expect(loadGraph).toHaveBeenCalledTimes(1)
+  })
+
+  it(`withLinkGraphSlot: never more than ${LINK_GRAPH_MAX_IN_FLIGHT} link-graph requests on the wire at once`, async () => {
+    const resolvers: Array<() => void> = []
+    const runs = Array.from({ length: 7 }, () =>
+      withLinkGraphSlot(() => new Promise<void>((resolve) => resolvers.push(resolve))),
+    )
+    await Promise.resolve()
+    // DIES ON the old code, which had no limiter at all (7 in flight).
+    expect(linkGraphInFlightCount()).toBe(LINK_GRAPH_MAX_IN_FLIGHT)
+    expect(resolvers).toHaveLength(LINK_GRAPH_MAX_IN_FLIGHT)
+    resolvers.shift()?.()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(linkGraphInFlightCount()).toBe(LINK_GRAPH_MAX_IN_FLIGHT)
+    expect(resolvers).toHaveLength(LINK_GRAPH_MAX_IN_FLIGHT + 1 - 1)
+    while (resolvers.length > 0) {
+      resolvers.shift()?.()
+      await Promise.resolve()
+      await Promise.resolve()
+    }
+    await Promise.all(runs)
+    expect(linkGraphInFlightCount()).toBe(0)
+  })
+
+  it('names a gateway rate limit (HTTP 429) in the degraded-links banner instead of hiding it', async () => {
+    const loadGraph = vi.fn().mockRejectedValue(new ApiError(429, 'Too many requests'))
+    renderBase({
+      loadGraph,
+      loadViewResult: vi.fn().mockResolvedValue(
+        result({
+          parts: [{ part: 'table', source: { part: 'table' }, columns: ['file.name', 'client'] }],
+          rows: [{ path: 'a.md', title: 'INV-A', cells: [{ property: 'client', value: '[[Korn Ferry]]' }], joins: [] }],
+        }),
+      ),
+    })
+    const banner = await screen.findByTestId('base-preview-link-graph-degraded')
+    // DIES ON the old code: the banner never distinguished a 429.
+    expect(within(banner).getByTestId('base-preview-link-graph-rate-limited').textContent).toMatch(/429/)
+  })
+})

@@ -6128,6 +6128,17 @@ export interface components {
              * @example Projects.base
              */
             source?: string;
+            /**
+             * @description The view's own per-property PRESENTATION map (ViewDef.property_config — the `.base` file's top-level `properties:` block), echoed verbatim so a renderer can print a declared `display_name` as the column heading instead of the machine key (UAT 2026-09-13 D-35). Keyed by property name. Pure presentation: the engine never read it to produce `rows`, and a display name is never usable in a filter, sort or grouping. Absent when the view declares none.
+             * @example {
+             *       "formula.days_open": {
+             *         "display_name": "Days Open"
+             *       }
+             *     }
+             */
+            property_config?: {
+                [key: string]: components["schemas"]["ViewPropertyConfig"];
+            };
             /** @description Present exactly when the view could not be answered; `parts` and `rows` are then empty and `complete` is false. */
             refusal?: components["schemas"]["ViewResultRefusal"];
             /** @description The resolved part stack in render order — the view's own `parts`, or the single part a legacy `layout`-only view maps to (a no-parts view still serves as one table part). Always present — an empty array, never null; empty exactly when `refusal` is set. */

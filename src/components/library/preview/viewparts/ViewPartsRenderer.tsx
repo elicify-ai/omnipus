@@ -43,6 +43,7 @@ function renderPart(
   onOpenPath?: (path: string) => void,
   cellLinks?: ViewCellLinkResolver,
   editContext?: RecordEditContext,
+  labels?: ViewResult['property_config'],
 ) {
   switch (part.part) {
     case 'table':
@@ -53,6 +54,7 @@ function renderPart(
           {...(onOpenPath ? { onOpenPath } : {})}
           {...(cellLinks ? { cellLinks } : {})}
           {...(editContext ? { editContext } : {})}
+          {...(labels ? { labels } : {})}
         />
       )
     case 'list':
@@ -208,7 +210,7 @@ export function ViewPartsRenderer({
           className="border-b border-[var(--color-border)] last:border-b-0"
           data-testid={`view-part-${part.part}`}
         >
-          {renderPart(part, result.rows, resolveImageUrl, onOpenPath, cellLinks, editContext)}
+          {renderPart(part, result.rows, resolveImageUrl, onOpenPath, cellLinks, editContext, result.property_config)}
         </div>
       ))}
       {result.aggregates !== undefined && result.aggregates.length > 0 && (

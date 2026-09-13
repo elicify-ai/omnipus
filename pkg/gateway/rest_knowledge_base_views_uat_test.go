@@ -76,3 +76,25 @@ func TestKnowledgeView_EchoesTheBaseFileAnImportedViewCameFrom_D136(t *testing.T
 	require.Equal(t, http.StatusOK, code)
 	assert.Nil(t, authored.Source, "an authored view has no .base behind it and says so by absence")
 }
+
+func TestKnowledgeView_EchoesPropertyConfigDisplayNames_D35(t *testing.T) {
+	api, ws, colID := buildViewTestVault(t, map[string]string{
+		"invoices--labelled.yaml": "name: invoices--labelled\ntype: invoice\nlayout: table\n" +
+			"property_config:\n  amount:\n    display_name: Amount due\n",
+		"invoices--plain.yaml": "name: invoices--plain\ntype: invoice\nlayout: table\n",
+	})
+	res, code := getViewResult(t, api, ws, colID, "invoices--labelled")
+	require.Equal(t, http.StatusOK, code)
+	require.Nil(t, res.Refusal)
+	// DIES ON the old handler: the view's presentation map never left the
+	// server, so the SPA printed the machine key as the heading.
+	require.NotNil(t, res.PropertyConfig, "the view's property_config travels with the answer")
+	cfg, ok := (*res.PropertyConfig)["amount"]
+	require.True(t, ok)
+	require.NotNil(t, cfg.DisplayName)
+	assert.Equal(t, "Amount due", *cfg.DisplayName)
+
+	plain, code := getViewResult(t, api, ws, colID, "invoices--plain")
+	require.Equal(t, http.StatusOK, code)
+	assert.Nil(t, plain.PropertyConfig, "a view that declares none says so by absence")
+}

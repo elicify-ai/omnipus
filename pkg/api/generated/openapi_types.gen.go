@@ -19284,6 +19284,9 @@ type ViewResult struct {
 	// Problems Everything the evaluation could not include, and why — carried through from the engine unchanged. Always present — an empty array, never null.
 	Problems []RecordProblem `json:"problems"`
 
+	// PropertyConfig The view's own per-property PRESENTATION map (ViewDef.property_config — the `.base` file's top-level `properties:` block), echoed verbatim so a renderer can print a declared `display_name` as the column heading instead of the machine key (UAT 2026-09-13 D-35). Keyed by property name. Pure presentation: the engine never read it to produce `rows`, and a display name is never usable in a filter, sort or grouping. Absent when the view declares none.
+	PropertyConfig *map[string]ViewPropertyConfig `json:"property_config,omitempty"`
+
 	// Refusal Present exactly when the view could not be answered; `parts` and `rows` are then empty and `complete` is false.
 	Refusal *ViewResultRefusal `json:"refusal,omitempty"`
 
