@@ -24,6 +24,12 @@ import {
 } from '@/lib/api'
 import type { Task, TaskUpdateRequest, AcceptanceCriterion } from '@/lib/api'
 import { TagInput } from '@/components/workspaces/TagInput'
+import { WriteSetInput } from '@/components/workspaces/WriteSetInput'
+import {
+  JoinMemberCheckbox,
+  WRITE_SET_HELP,
+  WRITE_SET_LABEL,
+} from '@/components/workspaces/PlanMemberFields'
 import { AcceptanceCriteriaEditor } from '@/components/workspaces/AcceptanceCriteriaEditor'
 import { DefinitionOfDoneEditor } from '@/components/workspaces/DefinitionOfDoneEditor'
 import { CriteriaVerdictList } from '@/components/workspaces/CriteriaVerdictList'
@@ -708,6 +714,36 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           </p>
         )}
       </Field>
+
+      {/* Plan-member fields (ADR-053 §Contract Surface, US-11/G-16) — the
+          `write_set` and `is_join` inputs `pkg/plan/lint.go` reads when it
+          refuses a plan for overlapping parallel writes or a join-less
+          convergence point. Shown only on a task that belongs to a plan:
+          both are explicitly ignored on a standalone task (Task.yaml), so
+          offering them there would be a control with no effect. Each saves
+          on change through the same `doUpdate` PATCH every other field on
+          this panel uses, so the autosave indicator covers them too. */}
+      {task.plan_id && (
+        <>
+          <Field label={WRITE_SET_LABEL}>
+            <WriteSetInput
+              paths={task.write_set ?? []}
+              onChange={(write_set) => doUpdate({ write_set })}
+            />
+            <p className="text-[11px] text-[var(--color-muted)] leading-relaxed mt-1.5">
+              {WRITE_SET_HELP}
+            </p>
+          </Field>
+
+          <Field label="Parallel work">
+            <JoinMemberCheckbox
+              id="td-is-join"
+              checked={task.is_join ?? false}
+              onCheckedChange={(is_join) => doUpdate({ is_join })}
+            />
+          </Field>
+        </>
+      )}
 
       {/* Tags (ADR-049 — replaces the milestone dropdown). Migrated
           `milestone:<name>` tags render as ordinary chips here. */}

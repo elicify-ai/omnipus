@@ -71,6 +71,8 @@ import { useUiStore } from '@/store/ui'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderSubagentSpan, shouldRenderToolCall, shouldRenderJudgeVerdictInThread } from '@/lib/toolVisibility'
 import { isGoalRecordEmpty } from '@/lib/goalSetupState'
+import { goalCommandStatement } from '@/lib/goalCommandMessage'
+import { GoalCommandMarker } from '@/components/chat/GoalCommandMarker'
 import { GoalSetupFailureLine } from './tools/GoalSetupFailureLine'
 import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
 import type { SlashCommand, Skill, Agent } from '@/lib/api'
@@ -192,12 +194,25 @@ function UserMessage() {
 
   const commandLabels = commandLabelsWithAliases(commands)
 
+  // UAT defect B: a `/goal …` message is the ONE thing about an uncompiled
+  // goal that the transcript actually persists (the gateway appends the raw
+  // inbound text before the command rewrite; replay applies no slash-command
+  // filter). Marking it keeps a goal visible in the thread after a reload
+  // that lands before — or without — any live `goal_status` frame.
+  const goalStatement = goalCommandStatement(content)
+
   return (
-    <MessagePrimitive.Root data-testid="user-message" data-message-id={message.id} className="group flex gap-3 px-4 py-3 flex-row-reverse">
+    <MessagePrimitive.Root
+      data-testid="user-message"
+      data-message-id={message.id}
+      data-goal-command={goalStatement ? 'true' : undefined}
+      className="group flex gap-3 px-4 py-3 flex-row-reverse"
+    >
       <div className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center bg-[var(--color-accent)]/20 text-[var(--color-accent)]">
         <User size={14} weight="bold" />
       </div>
       <div className="flex flex-col items-end gap-1 max-w-[85%] min-w-0">
+        {goalStatement && <GoalCommandMarker />}
         {renderSkillAwareContent(content, skills, commandLabels, () => (
           <div className="rounded-xl px-4 py-3 text-sm leading-relaxed bg-[var(--color-surface-2)] text-[var(--color-secondary)] rounded-tr-sm">
             <MessagePrimitive.Parts>
@@ -1030,6 +1045,10 @@ export function VirtualUserMessageRow({
   commandLabels: string[]
 }) {
   const isError = message.status === 'error'
+  // See UserMessage above — the virtualized row is the other half of the same
+  // rendering and must carry the same goal marker, or the trace would appear
+  // and disappear depending on which path renders the thread.
+  const goalStatement = goalCommandStatement(message.content)
 
   return (
     <div
@@ -1037,12 +1056,14 @@ export function VirtualUserMessageRow({
       data-message-role="user"
       data-message-id={message.id}
       data-status={message.status}
+      data-goal-command={goalStatement ? 'true' : undefined}
       className="group flex gap-3 px-4 py-3 flex-row-reverse"
     >
       <div className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center bg-[var(--color-accent)]/20 text-[var(--color-accent)]">
         <User size={14} weight="bold" />
       </div>
       <div className="flex flex-col items-end gap-1.5 max-w-[85%] min-w-0">
+        {goalStatement && <GoalCommandMarker />}
         {/* Attachments the user sent — image thumbnails + colour-coded file
             cards, shown above the text like ChatGPT. */}
         {message.media && message.media.length > 0 && (

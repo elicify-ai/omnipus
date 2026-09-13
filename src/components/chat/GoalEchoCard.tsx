@@ -135,10 +135,46 @@ function GoalAccordionSection({
   )
 }
 
+/**
+ * True when two goal sentences say the same thing, modulo casing, whitespace
+ * runs and terminal punctuation.
+ *
+ * `condition` and `definition` are DIFFERENT things on the wire — `condition`
+ * is the raw text the goal was set with (`rec.Prompt` at every
+ * `emitGoalStatusFrameWithCriteriaAndDoD` call site), `definition` is the
+ * compiler's one-sentence SMART restatement. But the compiler is instructed
+ * to stay "close to the setter's own words" (`pkg/agent/goal_compile_llm.go`),
+ * so whenever the setter already typed one clean sentence the restatement
+ * comes back as that same sentence — and the card printed it twice, once as
+ * the statement and once as the condition.
+ *
+ * Comparing loosely rather than with `===` is deliberate: a restatement that
+ * differs from the raw text only by adding a full stop, fixing capitalisation
+ * or normalising a double space is still the same sentence to a reader, and
+ * rendering it twice would be the same defect wearing a disguise.
+ */
+export function isSameGoalSentence(a: string, b: string): boolean {
+  const normalize = (s: string) =>
+    s
+      .trim()
+      .replace(/\s+/g, ' ')
+      .replace(/[.!?]+$/, '')
+      .toLowerCase()
+  return normalize(a) === normalize(b)
+}
+
 export function GoalEchoCard({ frame, showProgress = true }: GoalEchoCardProps) {
   const criteria = frame.criteria ?? []
   const dod: CriteriaBreakdownItem[] = frame.dod ?? []
   const inferredDodCount = dod.filter((d) => d.provenance === 'inferred').length
+
+  // The statement (the compiled restatement) leads when present; the raw
+  // condition is then a SECONDARY line, shown only when it actually adds
+  // something the statement does not already say (see isSameGoalSentence).
+  // With no statement, the condition is all there is and stays the lead line.
+  const statement = frame.definition?.trim() ? frame.definition : ''
+  const condition = frame.condition?.trim() ? frame.condition : ''
+  const showCondition = condition !== '' && !(statement !== '' && isSameGoalSentence(statement, condition))
 
   return (
     <div
@@ -160,19 +196,44 @@ export function GoalEchoCard({ frame, showProgress = true }: GoalEchoCardProps) 
           the LEAD line above the compiled condition. Additive-optional: not
           present on marker-path/legacy/ambiguous frames (ADR-081 round-2
           B-3) — rendered gracefully absent, no placeholder. */}
-      {frame.definition && (
+      {statement !== '' && (
         <p
           className="text-[var(--color-secondary)] break-words font-medium"
           data-testid="goal-echo-statement"
         >
-          {frame.definition}
+          {statement}
         </p>
       )}
 
-      {/* Condition (the compiled goal definition) */}
-      <p className="text-[var(--color-secondary)] break-words" data-testid="goal-echo-condition">
-        {frame.condition}
-      </p>
+      {/* Condition — the raw text the goal was SET with. Suppressed entirely
+          when the statement above already says the same sentence (the common
+          case: the compiler is told to stay close to the setter's own words,
+          so a goal set as one clean sentence came back restated as itself and
+          the card printed it twice). When both are shown they are genuinely
+          different things, so the secondary one is captioned and de-emphasised
+          rather than left as a second anonymous sentence. */}
+      {showCondition && (
+        <>
+          {statement !== '' && (
+            <p
+              className="mt-1.5 font-mono text-[10px] uppercase tracking-widest text-[var(--color-muted)]"
+              data-testid="goal-echo-condition-caption"
+            >
+              Set as
+            </p>
+          )}
+          <p
+            className={
+              statement !== ''
+                ? 'text-[var(--color-muted)] break-words'
+                : 'text-[var(--color-secondary)] break-words'
+            }
+            data-testid="goal-echo-condition"
+          >
+            {condition}
+          </p>
+        </>
+      )}
 
       {/* Round accounting — only when the numbers are real (see showProgress). */}
       {showProgress && (

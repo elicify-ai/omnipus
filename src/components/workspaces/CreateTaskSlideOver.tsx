@@ -42,6 +42,8 @@ import { useWorkspaceTeamIds } from '@/hooks/useWorkspaceTeamIds'
 import { cn } from '@/lib/utils'
 import { PRIORITY_BADGE } from './TaskCard'
 import { TagInput } from './TagInput'
+import { WriteSetInput } from './WriteSetInput'
+import { JoinMemberCheckbox, WRITE_SET_HELP, WRITE_SET_LABEL } from './PlanMemberFields'
 import { AcceptanceCriteriaEditor } from './AcceptanceCriteriaEditor'
 import { DefinitionOfDoneEditor } from './DefinitionOfDoneEditor'
 import { datetimeLocalToIso, datetimeLocalToDate, dateToDatetimeLocal } from './taskFormFields'
@@ -74,6 +76,12 @@ interface FormState {
   todos: string[]
   // Tags (ADR-049 — replaces milestone grouping)
   tags: string[]
+  // Plan-member fields (ADR-053 §Contract Surface, US-11/G-16) — meaningful
+  // ONLY alongside a plan_id, so they are both rendered and submitted behind
+  // that condition. See PlanMemberFields.tsx for the copy and the two
+  // plan-lint refusals they make actionable.
+  writeSet: string[]
+  isJoin: boolean
   // Acceptance criteria (ADR-049 — Definition of Done)
   criteria: AcceptanceCriterion[]
   // Definition of Done (GOAL-FR-003/FR-048) — DISTINCT from `criteria`:
@@ -91,6 +99,8 @@ const INITIAL_FORM: FormState = {
   due: '',
   todos: [],
   tags: [],
+  writeSet: [],
+  isJoin: false,
   criteria: [],
   dod: [],
 }
@@ -244,6 +254,23 @@ export function CreateTaskSlideOver({
 
     if (form.tags.length > 0) {
       body.tags = form.tags
+    }
+
+    // Plan-member fields ride along only when this task actually joins a plan
+    // — `write_set` and `is_join` are "meaningful only alongside `plan_id`"
+    // (TaskCreateRequest.yaml) and are ignored on a standalone task. Gating
+    // the BODY (rather than clearing the state when the plan picker is
+    // cleared) means toggling the plan off and back on does not silently
+    // discard a write set the author already typed.
+    if (effectivePlanId) {
+      if (form.writeSet.length > 0) {
+        body.write_set = form.writeSet
+      }
+      // Only sent when true: absent/false is the common case and the schema
+      // carries no `default:` (see Task.yaml's `is_join`).
+      if (form.isJoin) {
+        body.is_join = true
+      }
     }
 
     return body
@@ -486,6 +513,41 @@ export function CreateTaskSlideOver({
               ]}
             />
           </div>
+
+          {/* Plan-member fields (ADR-053 §Contract Surface, US-11/G-16) —
+              `write_set` and `is_join`, the two inputs `pkg/plan/lint.go`
+              reads when it refuses a plan. Revealed only once a plan is
+              selected, because both are explicitly ignored on a standalone
+              task; sits directly under the Plan picker so the reveal is
+              adjacent to what triggers it. */}
+          {effectivePlanId && (
+            <div
+              className="flex flex-col gap-4 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3"
+              data-testid="ct-plan-member-fields"
+            >
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
+                Plan member
+              </p>
+
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="ct-write-set" className="text-[var(--color-secondary)]">
+                  {WRITE_SET_LABEL}
+                </Label>
+                <WriteSetInput
+                  id="ct-write-set"
+                  paths={form.writeSet}
+                  onChange={(writeSet) => setForm((s) => ({ ...s, writeSet }))}
+                />
+                <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">{WRITE_SET_HELP}</p>
+              </div>
+
+              <JoinMemberCheckbox
+                id="ct-is-join"
+                checked={form.isJoin}
+                onCheckedChange={(isJoin) => setForm((s) => ({ ...s, isJoin }))}
+              />
+            </div>
+          )}
 
           {/* Tags (ADR-049 — replaces the milestone selector) */}
           <div className="flex flex-col gap-1.5">
