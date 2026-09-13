@@ -165,6 +165,13 @@ func (a *restAPI) classifyHostFolder(full, name string) hostFolderEntryWire {
 	if _, _, err := workspace.CheckMountTarget(full, a.homePath); err != nil {
 		if errors.Is(err, workspace.ErrMountRefused) {
 			entry.Mountable = false
+			if workspace.IsSystemMountTarget(full) {
+				// UAT 2026-09-13 D-117: an operating-system directory is
+				// refused for a different reason than the data directory,
+				// and the picker must say the right one.
+				entry.Reason = strPtr("An operating-system directory — no agent workspace lives here, and writing into it changes the whole machine.")
+				return entry
+			}
 			entry.Reason = strPtr("Inside the Omnipus data directory — mounting it would expose your keys and let an agent disable its own sandbox.")
 			return entry
 		}

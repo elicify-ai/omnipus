@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -623,4 +624,51 @@ func TestMountBoundary_HardlinkEscape_DocumentedGap(t *testing.T) {
 	mutated, err := os.ReadFile(outsideFile)
 	require.NoError(t, err)
 	require.Equal(t, "mutated via the mount", string(mutated), "FR-6.5 gap confirmed: a write through the hardlink inside the mount reached a file OUTSIDE it")
+}
+
+// ---------------------------------------------------------------------------
+// UAT 2026-09-13 D-117 — system directories are refused; /tmp and per-user
+// homes are broad (warned), on real paths as well as typed ones.
+// ---------------------------------------------------------------------------
+
+func TestCheckMountTarget_D117_SystemDirsRefusedBroadDirsWarned(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX system-directory layout")
+	}
+	omnipusHome := filepath.Join(t.TempDir(), ".omnipus")
+	require.NoError(t, os.MkdirAll(omnipusHome, 0o700))
+
+	for _, sys := range []string{"/etc", "/usr", "/private"} {
+		if _, err := os.Stat(sys); err != nil {
+			continue
+		}
+		_, _, err := CheckMountTarget(sys, omnipusHome)
+		require.Error(t, err, "%s must be refused", sys)
+		require.True(t, errors.Is(err, ErrMountRefused), "%s: %v", sys, err)
+		assert.Contains(t, err.Error(), "operating-system directory")
+	}
+
+	for _, broad := range []string{"/tmp", "/opt", "/Users", "/home"} {
+		if _, err := os.Stat(broad); err != nil {
+			continue
+		}
+		resolved, warning, err := CheckMountTarget(broad, omnipusHome)
+		require.NoError(t, err, "%s is broad, not refused (warn-and-allow)", broad)
+		assert.NotEmpty(t, warning, "%s (resolved %s) must carry a breadth warning", broad, resolved)
+		assert.True(t, IsBroadMountTarget(resolved), "IsBroadMountTarget must agree on the real path %s", resolved)
+	}
+
+	// Somebody's home directory is broad even though it is not on any list.
+	if home, err := os.UserHomeDir(); err == nil {
+		assert.True(t, IsBroadMountTarget(filepath.Clean(home)))
+	}
+	assert.True(t, IsBroadMountTarget("/Users/somebody"))
+	assert.True(t, IsBroadMountTarget("/home/somebody"))
+
+	// A subdirectory of a system tree is neither refused nor broad.
+	sub := t.TempDir()
+	_, warning, err := CheckMountTarget(sub, omnipusHome)
+	require.NoError(t, err)
+	assert.Empty(t, warning)
+	assert.False(t, IsSystemMountTarget(sub))
 }
