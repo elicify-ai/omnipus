@@ -45,6 +45,10 @@ vi.mock('@/lib/api', async (importOriginal) => {
     // `null` (or wired to anything other than the real `mintLibraryPreviewToken`
     // import), that guard test fails because this mock is never called.
     mintLibraryPreviewToken: vi.fn(),
+    // UAT D-110: the HTML frame revokes its token on unmount. Stubbed so no
+    // test here fires a real DELETE at teardown; the revoke contract itself
+    // is pinned in LibraryPreviewPane.revoke.test.tsx.
+    revokeLibraryPreviewToken: vi.fn().mockResolvedValue(undefined),
   }
 })
 

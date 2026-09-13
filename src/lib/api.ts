@@ -5354,6 +5354,27 @@ export function mintLibraryPreviewToken(
 }
 
 /**
+ * Revoke one preview token before it expires
+ * (DELETE /library/preview-token/{token}, generated operation
+ * revokeLibraryPreviewToken — UAT 2026-09-13 D-110, Codex review #11).
+ *
+ * The endpoint shipped a round before this caller did: closing a preview
+ * cleared the pane's expiry timer and nothing else, so a copied frame URL
+ * kept answering 200 for the rest of its 15-minute life. LibraryPreviewPane's
+ * HTML frame now calls this from its unmount cleanup — including for a mint
+ * that completes AFTER the pane is gone — so the credential stops working the
+ * moment the reader is done with it.
+ *
+ * 204 whether the token was live, expired, already revoked or never existed
+ * (FR-003n): revoking can only narrow access, so a caller never needs to know
+ * which it was, and a 404 here would be an oracle for whether a token ever
+ * existed.
+ */
+export function revokeLibraryPreviewToken(token: string): Promise<void> {
+  return request<void>(`/library/preview-token/${encodeURIComponent(token)}`, { method: 'DELETE' })
+}
+
+/**
  * Upload one or more files into `path` inside a workspace's work tree (D-1 —
  * uploads land as real, named files, de-duplicated server-side on collision).
  * Multipart; mirrors uploadFiles's raw-fetch pattern above since request() is
