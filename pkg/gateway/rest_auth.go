@@ -110,6 +110,14 @@ type apiRateLimiter struct {
 	windows map[string]*slidingWindow
 	limit   int           // max requests in window
 	window  time.Duration // sliding window duration
+
+	// reads is the separate, larger budget withRateLimit draws on for an
+	// AUTHENTICATED GET/HEAD (UAT 2026-09-13 D-109 / D-135). Created on
+	// first use by readBudget; nil until then. Its own map means a burst of
+	// listing refreshes never consumes the strict budget above and a burst
+	// of writes never consumes the read budget.
+	readsOnce sync.Once
+	reads     *apiRateLimiter
 }
 
 type slidingWindow struct {
@@ -545,13 +553,62 @@ func (a *restAPI) requireAuthOutsideOnboarding(w http.ResponseWriter, r *http.Re
 	return false
 }
 
+// readBudgetMultiplier sizes the read budget relative to a limiter's strict
+// limit: an authenticated client may issue readBudgetMultiplier times as
+// many GET/HEAD requests per window as it may issue writes. Five was chosen
+// against the two measured incidents: D-109 (54 deletes plus two listing
+// refreshes each, ~90 s, on a 240/min limiter) and D-135 (ten base views at
+// 41 requests each in ~30 s, i.e. ~820/min) both fit inside 240*5 = 1200/min
+// with room to spare, while 20 reads per second per IP is still far below
+// what a scripted client would need to make a read endpoint expensive.
+const readBudgetMultiplier = 5
+
+// readBudget returns the limiter's companion budget for authenticated reads
+// (readBudgetMultiplier times the strict limit, same window), creating it on
+// first use.
+func (l *apiRateLimiter) readBudget() *apiRateLimiter {
+	l.readsOnce.Do(func() {
+		l.reads = newAPIRateLimiter(l.limit*readBudgetMultiplier, l.window)
+	})
+	return l.reads
+}
+
+// isAuthenticatedRead reports whether r is a GET or HEAD from a caller that
+// has already passed authentication — the only shape that draws on the read
+// budget. "Authenticated" is read from the request context: every auth path
+// (accounts, CLI token, dev-mode bypass, OMNIPUS_BEARER_TOKEN) stores a
+// non-nil *config.UserConfig under UserContextKey before the wrapped handler
+// runs, and withOptionalAuth leaves it absent for anonymous callers. Login,
+// onboarding and the pre-auth provider routes therefore stay on the strict
+// budget regardless of method.
+func isAuthenticatedRead(r *http.Request) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig)
+	return ok && user != nil
+}
+
 // withRateLimit wraps a handler with per-IP rate limiting. On limit exceeded,
 // returns 429 with a Retry-After header and JSON error body.
+//
+// Two budgets (UAT 2026-09-13 D-109 / D-135): a request is counted against
+// the limiter's strict budget unless it is an authenticated GET/HEAD, which
+// is counted against the limiter's separate, larger read budget
+// (readBudget). The strict budget was sized for mutations and pre-auth
+// traffic (login attempts, onboarding, provider probes) and must stay that
+// size; ordinary signed-in UI work is dominated by listing refreshes, which
+// arrive in bursts that a write-sized budget refused — invisibly, since the
+// SPA retried them. Both refusals carry Retry-After.
 func withRateLimit(limiter *apiRateLimiter, handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ip := clientIP(r)
-		if !limiter.allow(ip) {
-			retryAfter := limiter.retryAfter(ip)
+		budget := limiter
+		if isAuthenticatedRead(r) {
+			budget = limiter.readBudget()
+		}
+		if !budget.allow(ip) {
+			retryAfter := budget.retryAfter(ip)
 			w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
 			slog.Warn("api: rate limit exceeded", "ip", ip, "path", redactRequestPath(r.URL.Path), "retry_after", retryAfter)
 			jsonErr(

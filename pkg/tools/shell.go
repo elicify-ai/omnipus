@@ -815,7 +815,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 
 	if runInBackground {
 		ownerSessionID := ToolTranscriptSessionID(ctx)
-		return t.runBackground(ctx, command, cwd, timeoutSeconds, lim, ownerSessionID, cb)
+		return t.runBackground(ctx, command, cwd, baseDir, timeoutSeconds, lim, ownerSessionID, cb)
 	}
 	started := time.Now()
 	result := t.runForeground(ctx, command, lim, timeoutSeconds)
@@ -824,17 +824,30 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 
 // sweepAfterRun runs the post-command escaping-symlink sweep (D-14, see
 // shell_escape_sweep.go) over the turn's roots and appends its report to the
-// tool result. God mode is the operator's explicit opt-out of confinement
-// and is skipped; so is an unrestricted tool (restrictToWorkspace=false),
-// whose whole point is that the workspace is not a boundary. Background runs
-// are not swept: their completion is delivered asynchronously and a sweep
-// there would race the command that is still writing.
+// tool result. The sweep REPORTS and never removes (Codex review 2026-09-14
+// finding #2: a link inside the command's time window cannot be attributed
+// to the command, and deleting an unattributable link destroys a person's
+// work). Every finding is written to the audit log as well, so the operator
+// sees it even if the agent ignores the notice. God mode is the operator's
+// explicit opt-out of confinement and is skipped; so is an unrestricted tool
+// (restrictToWorkspace=false), whose whole point is that the workspace is
+// not a boundary. Background runs ARE swept — at their completion, in
+// runBackground's completion goroutine, the one place that knows the
+// process has exited and its pipes are drained, so the walk cannot race a
+// command that is still writing (Claude review 2026-09-14: sweeping only
+// the foreground path left a background run free to plant the very escape
+// the sweep exists to name).
 func (t *ExecTool) sweepAfterRun(ctx context.Context, command, cwd, baseDir string, started time.Time, result *ToolResult) *ToolResult {
 	if result == nil || t.godMode || !t.restrictToWorkspace {
 		return result
 	}
+	// baseDir is resolved through this package's own sanctioned resolver
+	// (the one ResolvePath itself uses) rather than a locally glued
+	// filepath.EvalSymlinks — FR-034 routes every path resolution in
+	// pkg/tools through resolveRealpathUnderWorkDir (see grep.go's
+	// guardCarveOuts comment for the established pattern).
 	roots := []string{baseDir}
-	if resolved, err := filepath.EvalSymlinks(baseDir); err == nil {
+	if resolved, err := resolveRealpathUnderWorkDir(baseDir, ""); err == nil {
 		roots = []string{resolved}
 	}
 	if authored, err := ResolveTurnFSPolicy(ctx, t.workingDir, t.restrictToWorkspace); err == nil {
@@ -845,22 +858,27 @@ func (t *ExecTool) sweepAfterRun(ctx context.Context, command, cwd, baseDir stri
 	if notice == "" {
 		return result
 	}
-	if len(res.Removed) > 0 {
-		links := make([]map[string]string, 0, len(res.Removed))
-		for _, r := range res.Removed {
+	if len(res.Found) > 0 {
+		links := make([]map[string]string, 0, len(res.Found))
+		for _, r := range res.Found {
 			links = append(links, map[string]string{"link": r.Link, "target": r.Target})
 		}
 		if t.auditLogger != nil {
+			// The command itself was allowed and ran; this entry is a
+			// warning attached to it, not a denial of anything. "removed"
+			// is deliberately absent from the details: nothing was.
 			if err := t.auditLogger.Log(&audit.Entry{
 				Event:    audit.EventExec,
-				Decision: audit.DecisionDeny,
+				Decision: audit.DecisionAllow,
 				AgentID:  ToolAgentID(ctx),
 				Tool:     t.Name(),
 				Command:  command,
 				Details: map[string]any{
 					"cwd":               cwd,
+					"warning":           "escaping_symlinks",
 					"escaping_symlinks": links,
-					"reason":            "symlink(s) escaping the workspace removed after the command ran",
+					"reason": "symlink(s) pointing outside the workspace appeared during this command's window; " +
+						"they were reported, not removed (creator cannot be attributed with certainty) — operator review",
 				},
 			}); err != nil {
 				slog.Warn("bash: audit write failed", "agent_id", ToolAgentID(ctx), "error", err)
@@ -1356,12 +1374,12 @@ func outsideWorkDirRefusal(p, cwdPath string, use pathUseVerdict, readWithheld b
 // where it does not, the statement says so rather than implying a protection
 // that is not there. The post-command symlink sweep (sweepEscapingSymlinks)
 // is named because it is the one check that does look at what the command
-// actually did rather than what it said.
+// actually did rather than what it said — and it reports, never removes.
 func guardNatureStatement() string {
 	if sandbox.TurnPolicyBaseInstalled() {
 		return "Note: this guard scans the command text and is advisory — a path assembled at runtime is not seen by it. " +
 			"The enforced boundary is the kernel sandbox, which confines the command by the real path it touches; " +
-			"symlinks created inside the workspace that point outside it are removed after the command runs."
+			"symlinks inside the workspace that point outside it are reported after the command runs (never removed) and recorded for the operator."
 	}
 	return "Note: this guard scans the command text and is advisory — a path assembled at runtime is not seen by it. " +
 		"On this host NO kernel sandbox is active, so this scan and the post-command symlink sweep are the only checks on where a command writes."
@@ -2068,21 +2086,24 @@ func sandboxLimitsEnv(lim sandbox.Limits) []string {
 // SessionManager.KillAllForSessions rather than a single exact match. The
 // completion goroutine below fires cb exactly once — on natural completion,
 // failure, timeout, or explicit kill (FR-B9) — via whichever ToolResult best
-// describes the final state.
+// describes the final state. baseDir is the same turn base directory
+// executeRun computed; the completion goroutine needs it for the D-14
+// post-command symlink sweep it runs before delivering the result.
 func (t *ExecTool) runBackground(
 	ctx context.Context,
-	command, cwd string,
+	command, cwd, baseDir string,
 	timeoutSeconds int32,
 	lim sandbox.Limits,
 	ownerSessionID string,
 	cb AsyncCallback,
 ) *ToolResult {
+	started := time.Now()
 	sessionID := generateSessionID()
 	session := &ProcessSession{
 		ID:             sessionID,
 		Command:        command,
 		Background:     true,
-		StartTime:      time.Now().Unix(),
+		StartTime:      started.Unix(),
 		Status:         StatusRunning,
 		OwnerSessionID: ownerSessionID,
 	}
@@ -2261,8 +2282,24 @@ func (t *ExecTool) runBackground(
 		// (timeoutSeconds <= 0): nothing ever selects on it in that case.
 		close(naturalCompletionCh)
 
+		// D-14 background coverage (Claude review 2026-09-14): run the
+		// post-command escaping-symlink sweep HERE, at the completion
+		// goroutine — the one place that knows the process has exited and
+		// its pipes are drained, so the walk cannot race a command that is
+		// still writing. Before this, only the foreground path swept, so a
+		// background run could plant the very symlink escape the sweep
+		// exists to name and never be reported. The sweep is report-only
+		// (see sweepAfterRun) and shares its skip conditions (god mode,
+		// unrestricted tool); it runs even when cb is nil so the operator's
+		// audit entry is still written, and its notice is folded into the
+		// completion result the callback delivers. sweepAfterRun reads only
+		// context VALUES off ctx (agent/workspace identity for the policy
+		// lookup and the audit entry), so a turn that has since ended does
+		// not silence it.
+		completion := backgroundCompletionResult(sessionID, finalStatus, finalExitCode, outputSoFar)
+		completion = t.sweepAfterRun(ctx, command, cwd, baseDir, started, completion)
 		if cb != nil {
-			cb(context.Background(), backgroundCompletionResult(sessionID, finalStatus, finalExitCode, outputSoFar))
+			cb(context.Background(), completion)
 		}
 	}()
 

@@ -7,6 +7,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"strings"
 )
 
@@ -170,10 +171,12 @@ func (ts *turnState) tripToolCircuitBreaker(sig, reason string) {
 //     (D-81): it is refused and sig is marked broken for the rest of the
 //     turn.
 //  3. Dispatching sig would extend the turn's call history into
-//     oscillationBreakCycles repetitions of a short cycle (D-23). Nothing
-//     is marked broken here: the refusal is per-call, so a call that breaks
-//     the pattern still runs. (Because a refused call is never appended to
-//     the history, repeating the refused call is refused again.)
+//     oscillationBreakCycles repetitions of a short cycle (D-23) — where a
+//     repetition means the same calls returning the SAME results (see
+//     detectOscillationAhead). Nothing is marked broken here: the refusal
+//     is per-call, so a call that breaks the pattern still runs. (Because
+//     a refused call is never appended to the history, repeating the
+//     refused call is refused again.)
 func (ts *turnState) toolCircuitBreakerTripped(sig string) (reason string, tripped bool) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
@@ -189,23 +192,83 @@ func (ts *turnState) toolCircuitBreakerTripped(sig string) (reason string, tripp
 		ts.toolCircuitBroken[sig] = reason
 		return reason, true
 	}
-	if period, cycles := detectOscillation(append(append([]string(nil), ts.toolCallHistory...), sig)); cycles >= oscillationBreakCycles {
+	if period, cycles := detectOscillationAhead(ts.toolCallHistory, sig); cycles >= oscillationBreakCycles {
 		toolName, _, _ := strings.Cut(sig, "\x00")
 		return toolOscillationBreakerReason(toolName, period, cycles), true
 	}
 	return "", false
 }
 
-// recordToolCallForLoopDetection appends sig to this turn's dispatched-call
-// history (success or failure alike — a loop of successes is the case this
-// exists for) and returns a notice to append to the tool result when the
-// history's tail now forms oscillationWarnCycles or more repetitions of a
-// short cycle. Call it once per DISPATCHED call, after the result is known;
-// never for a call the breaker refused.
+// loopHistoryEntry encodes one dispatched call for the oscillation
+// detector: the call's signature and a fingerprint of what it returned,
+// joined by a separator that cannot occur in either half (the signature is
+// name + "\x00" + JSON, the fingerprint is hex).
+func loopHistoryEntry(sig, resultKey string) string {
+	return sig + "\x01" + resultKey
+}
+
+// loopHistorySig recovers the call signature from a history entry.
+func loopHistorySig(entry string) string {
+	sig, _, _ := strings.Cut(entry, "\x01")
+	return sig
+}
+
+// toolResultLoopKey reduces a tool result's content to a short, stable
+// fingerprint for the history. Two results with the same content fingerprint
+// identically; any difference in content is "progress" to the detector.
+func toolResultLoopKey(content string) string {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(content))
+	return fmt.Sprintf("%016x", h.Sum64())
+}
+
+// loopResultUnknown is the fingerprint recorded when a call site does not
+// supply the result (recordToolCallForLoopDetection). Every such entry
+// fingerprints alike, so a history built without results behaves exactly
+// as the original signature-only detector did.
+const loopResultUnknown = ""
+
+// recordToolCallForLoopDetection is the result-blind form kept for the
+// existing dispatch site in loop.go. It records sig with an unknown result,
+// which the detector treats as identical to every other unknown result —
+// i.e. the pre-2026-09-14 behaviour, where alternating poll/read calls
+// against a progressing background job tripped the breaker (Codex review
+// finding #9). The fix is recordToolCallOutcomeForLoopDetection; the
+// dispatch site should pass toolResult.ContentForLLM() (captured BEFORE any
+// notice is appended to it) so that progress is visible to the detector.
 func (ts *turnState) recordToolCallForLoopDetection(sig string) string {
+	return ts.recordLoopHistoryEntry(sig, loopResultUnknown)
+}
+
+// recordToolCallOutcomeForLoopDetection appends sig and a fingerprint of
+// resultContent to this turn's dispatched-call history (success or failure
+// alike — a loop of successes is the case this exists for) and returns a
+// notice to append to the tool result when the history's tail now forms
+// oscillationWarnCycles or more repetitions of a short cycle WITH THE SAME
+// RESULTS each time. Call it once per DISPATCHED call, after the result is
+// known; never for a call the breaker refused.
+//
+// Codex review 2026-09-14 finding #9: the detector used to look at call
+// signatures alone, so an agent monitoring a background build — bash poll,
+// bash read, poll, read … — was refused at the fifth cycle even though every
+// read returned new output. A cycle whose results change is not a loop that
+// "undoes or repeats the previous one"; it is a job making progress. A cycle
+// whose results are byte-identical every time (the D-23 create/delete churn,
+// or a poll/read pair that has genuinely stalled) still trips at the
+// existing thresholds. No tool or sub-case is special-cased: the evidence
+// of progress is in the results, and pattern-matching on tool names is the
+// kind of rule that silently stops working when a tool is renamed.
+func (ts *turnState) recordToolCallOutcomeForLoopDetection(sig, resultContent string) string {
+	return ts.recordLoopHistoryEntry(sig, toolResultLoopKey(resultContent))
+}
+
+// recordLoopHistoryEntry is the shared tail of the two recording entry
+// points: append, cap, and report the current oscillation length.
+func (ts *turnState) recordLoopHistoryEntry(sig, resultKey string) string {
+	entry := loopHistoryEntry(sig, resultKey)
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
-	ts.toolCallHistory = append(ts.toolCallHistory, sig)
+	ts.toolCallHistory = append(ts.toolCallHistory, entry)
 	if len(ts.toolCallHistory) > toolCallHistoryCap {
 		ts.toolCallHistory = ts.toolCallHistory[len(ts.toolCallHistory)-toolCallHistoryCap:]
 	}
@@ -215,6 +278,32 @@ func (ts *turnState) recordToolCallForLoopDetection(sig string) string {
 	}
 	toolName, _, _ := strings.Cut(sig, "\x00")
 	return toolOscillationWarnNotice(toolName, period, cycles)
+}
+
+// detectOscillationAhead answers "if pendingSig were dispatched now and
+// returned the same result it returned one cycle ago, how long would the
+// oscillation be?" — the pre-dispatch question toolCircuitBreakerTripped
+// asks. The pending call has no result yet, so for each candidate period p
+// whose entry p places back carries the same signature, that entry (result
+// included) stands in for the pending call and the best count wins. A
+// history whose results changed across cycles (a progressing job) never
+// reaches oscillationBreakCycles here; one whose results are identical does,
+// exactly as the signature-only detector did.
+func detectOscillationAhead(history []string, pendingSig string) (period, cycles int) {
+	n := len(history)
+	for p := oscillationMinPeriod; p <= oscillationMaxPeriod && p <= n; p++ {
+		prior := history[n-p]
+		if loopHistorySig(prior) != pendingSig {
+			continue
+		}
+		candidate := make([]string, 0, n+1)
+		candidate = append(candidate, history...)
+		candidate = append(candidate, prior)
+		if pp, c := detectOscillation(candidate); c > cycles {
+			period, cycles = pp, c
+		}
+	}
+	return period, cycles
 }
 
 // detectOscillation finds the longest run of exact repetitions of a short
