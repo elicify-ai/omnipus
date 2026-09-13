@@ -1136,6 +1136,18 @@ func (h *BrowserWSHandler) readLoop(
 			}
 		}
 
+		// WebSocket carries navigation and control, never gestures. Enforce
+		// this before checking peer state so a missing or failed dedicated
+		// connection cannot fall back to the legacy command queue.
+		if typ.Type == string(generated.WsFrameTypeBrowserInput) {
+			var input generated.BrowserInputFrame
+			if err := json.Unmarshal(data, &input); err != nil || !inputKindIsDiscrete(input.Kind) {
+				wc.sendCriticalGen(operationErrorStatus(state.commandAttachment().sessionID,
+					"This attachment accepts gestures only on its dedicated input connection."),
+					dropContext("", viewerID, "dedicated-input-required"))
+				continue
+			}
+		}
 		if state.dedicatedInput() != nil {
 			switch typ.Type {
 			case "browser_input", "browser_control", "browser_tab_action", "browser_viewport":

@@ -30,6 +30,11 @@ const { mockSendControl, mockSendInput, callbacksRef } = vi.hoisted(() => ({
 // D5: importOriginal so the real translateBrowserErrorMessage (now imported
 // by BrowserLiveView for the D5 fix) stays live under this mock — only
 // BrowserLiveWsConnection itself is replaced.
+vi.mock('@/lib/browserInputWebRTC', async () => {
+  const { dedicatedInputSessionStub } = await import('./dedicatedInputTestUtils')
+  return { BrowserInputWebRTCSession: dedicatedInputSessionStub(mockSendInput) }
+})
+
 vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/browserLiveWs')>()
   return {
@@ -41,7 +46,7 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
           connect: vi.fn(),
           detach: vi.fn(),
           close: vi.fn(),
-          sendInput: mockSendInput,
+          sendInput: vi.fn(() => true),
           sendControl: mockSendControl,
           sendTabAction: vi.fn(() => true),
           // Adaptive viewport (2026-07-31): BrowserLiveView's ResizeObserver

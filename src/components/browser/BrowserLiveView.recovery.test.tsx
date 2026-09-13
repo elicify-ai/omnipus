@@ -89,7 +89,7 @@ describe('browser recovery through the real signaling session', () => {
     expect(offers(first)).toEqual([])
     expect(replacement.sent).toEqual([])
     act(() => replacement.onopen?.())
-    expect(replacement.sent).toEqual([{ type: 'browser_attach', session_id: 's1', agent_id: 'a1' }])
+    expect(replacement.sent).toEqual([{ type: 'browser_attach', session_id: 's1', agent_id: 'a1', input_mode: 'dedicated' }])
     await receive(replacement, { type: 'browser_status', state: 'attached' })
     await receive(replacement, { type: 'browser_webrtc_state', available: true })
     expect(offers(replacement)).toHaveLength(1)

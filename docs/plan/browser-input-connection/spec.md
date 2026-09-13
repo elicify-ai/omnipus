@@ -1,6 +1,12 @@
 # Dedicated browser input — compact specification
 
-Date: 2026-09-10. Scope: experimental A/B candidate on browser-improvements, based on release/v0.1.1. User approved the direction and requested one grill round and early hands-on testing. No new requirements-confirmation gate.
+## User-directed amendment — 2026-09-13
+
+Dedicated WebRTC gesture input is mandatory on this branch. The user explicitly revoked the A/B/default-WebSocket rollout after a misleading manual handoff. Normal URLs and any legacy `browserInput=websocket` query must select dedicated input. Mouse movement, buttons, keys, text and wheel must never execute through WebSocket or the media peer's legacy data channel, including before dedicated negotiation and after failure. There is no fallback. WebSocket remains solely for authenticated setup, navigation/tab/viewport intent and control/release coordination. Missing or failed dedicated input must remain visibly unavailable with explicit recovery.
+
+Verify default and legacy URLs against the real dedicated input session, reject legacy gestures at server boundaries, preserve safe control and held-release behavior, and migrate old test fixtures without restoring obsolete fallback expectations. Existing historical comparisons below remain evidence from earlier revisions, not current route requirements. User's latest dedicated-mode errors and viewport timeout reports remain an independent active stability investigation; do not claim they are fixed merely by changing the default. No new design-review round or approval is required for this explicit instruction.
+
+Date: 2026-09-10. Scope: mandatory dedicated-input candidate on browser-improvements, based on release/v0.1.1. User approved the direction and requested one grill round and early hands-on testing. No new requirements-confirmation gate.
 
 ## Outcomes and acceptance
 
@@ -10,7 +16,7 @@ Date: 2026-09-10. Scope: experimental A/B candidate on browser-improvements, bas
 | R2 — Fresh hover | Given reordered/lost hover packets, when a newer position or gesture transition has been accepted, then stale hover cannot move the pointer backwards or affect that gesture. | Sequence/barrier cases: duplicate, older, next, old/new gesture; movement during drag. |
 | R3 — Lifetime | Given input or signaling disconnect, focus loss, tab switch, resize or owner replacement, when old work arrives, then it cannot execute on the new page and no key/button remains stuck. Media-only recovery does not replace a healthy input peer, but unsafe-picture input remains blocked. | Deferred old-message and held-input cleanup tests; separate input/media close smoke. |
 | R4 — Authority | Given an expired, detached, unauthorized or mismatched viewer, when it negotiates or sends input, then commands are refused and pending resources close. | Existing auth/current-capture guards remain real; wrong viewer/capture/epoch/offer tests. |
-| R5 — Explicit A/B | Given a fresh attachment, when a test mode is selected, then exactly one input route is active; failure is visible with Retry and no uncertain action is resent through another transport. | Mode routing, unsupported backend, lost answer, timeout, retry, late-answer tests. |
+| R5 — Mandatory dedicated input | Given a fresh attachment using a normal or legacy-selector URL, all gestures use the dedicated connection; failure is visible with Retry and no uncertain action is resent through another transport. | Default/legacy URL routing, server refusal before negotiation, media-channel refusal, unsupported backend, lost answer, timeout, retry, late-answer tests. |
 | R6 — Early useful evidence | Given the same Mac and Amsterdam deployment, when both modes exercise the same immediate-response fixture and a real scrollable page, then report correctness, click feedback, scrolling catch-up and transport identity for each mode. | User trial plus short measured baseline/experiment; no site-load time credited to harness delay. |
 
 ## Concrete transport contract
@@ -24,7 +30,7 @@ Date: 2026-09-10. Scope: experimental A/B candidate on browser-improvements, bas
 - Preserve existing wheel unit conversion. Combine deltas only when modifiers, target identity and ordering boundaries match; flush before the next discrete action. No lossy scroll in this slice.
 - All routes converge on current operation authorization, original caller lifetime and frame gates. For tab/navigation/viewport/control intent, the frontend immediately pauses gesture admission and advances an attachment-scoped control epoch carried on the ordered WebSocket command. Every data-channel input carries the last acknowledged epoch. Server acceptance of that control command is the linearization point: retire/cancel prior-epoch pending and in-flight input contexts, release their held state, then apply the control change. An action completed before that point is not undone; queued old actions are canceled, not drained. Validate epoch again at execution; future/unacknowledged epochs are rejected. Acknowledge the new epoch only after old input retirement and control application; resume new gestures only after both that acknowledgment and authoritative matching frame readiness. Failed control remains paused with visible error/Retry. Do not allow the new control target to race an old in-flight dispatch. Tests exercise both arrival orders and control failure. Teardown cancels pending work and releases this viewer's held state.
 - Setup/recovery timeout is bounded using the existing browser negotiation budget, not a new longer wait. Input failure remains visible; media can remain visible. Never silently downgrade to WebSocket.
-- A/B selector is a development-only per-viewer URL/session option, fixed before attach, defaulting to current WebSocket mode. Document exact test links after implementation. No permanent settings redesign or persisted global configuration.
+- Dedicated input is unconditional. Normal URLs and legacy selectors use the same route; no persisted mode setting or WebSocket gesture path remains.
 
 ## Test scope and success
 
@@ -34,7 +40,7 @@ Preserve frame-generation, caller-budget, owned-release, socket-responsiveness a
 
 Early handoff gate: exact typed text, ten clicks, one complete drag, scroll distance check, tab/resize accuracy, forced input disconnect with no stuck key and working Retry, no uncaught viewer errors. Verify both modes actually use their stated routes. Hand the user links as soon as this passes, before extended testing.
 
-Final experiment evidence: repeated paired short runs from Mac to Amsterdam, alternating order, same runtime/viewport/fixture; retain distributions and p95, event correctness and scroll end/catch-up measurements. Existing controlled 200 ms p95 acceptance stays unchanged; remote comparison does not promise that geography permits it. A speed win must exceed observed repeat variation and introduce zero observed action-loss/order regressions. A neutral or worse result keeps WebSocket default. Early user feedback remains a separate qualitative result.
+Final experiment evidence: repeated paired short runs from Mac to Amsterdam, alternating order, same runtime/viewport/fixture; retain distributions and p95, event correctness and scroll end/catch-up measurements. Existing controlled 200 ms p95 acceptance stays unchanged; remote comparison does not promise that geography permits it. A speed win must exceed observed repeat variation and introduce zero observed action-loss/order regressions. A neutral or worse result requires further optimization; it does not restore WebSocket gestures. Early user feedback remains a separate qualitative result.
 
 ## Impact and limits
 

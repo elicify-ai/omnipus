@@ -28,16 +28,22 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
 import type { BrowserLiveWsCallbacks } from '@/lib/browserLiveWs'
+import type { BrowserInputFrame } from '@/lib/api/generated/asyncapi-types'
 
 const { mockSendControl, mockSendInput, mockSendViewport, callbacksRef } = vi.hoisted(() => ({
   mockSendControl: vi.fn(() => true),
-  mockSendInput: vi.fn((_input?: { kind: string; x: number; y: number }) => {
+  mockSendInput: vi.fn((_input: Omit<BrowserInputFrame, 'type'>) => {
     void _input // present only to give the mock the real call-argument type it's asserted against below
     return true
   }),
   mockSendViewport: vi.fn(() => true),
   callbacksRef: { current: null as BrowserLiveWsCallbacks | null },
 }))
+
+vi.mock('@/lib/browserInputWebRTC', async () => {
+  const { dedicatedInputSessionStub } = await import('./dedicatedInputTestUtils')
+  return { BrowserInputWebRTCSession: dedicatedInputSessionStub(mockSendInput) }
+})
 
 vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/browserLiveWs')>()
@@ -50,7 +56,7 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
           connect: vi.fn(),
           detach: vi.fn(),
           close: vi.fn(),
-          sendInput: mockSendInput,
+          sendInput: vi.fn(() => true),
           sendControl: mockSendControl,
           sendTabAction: vi.fn(() => true),
           // Adaptive viewport (2026-07-31): BrowserLiveView's ResizeObserver

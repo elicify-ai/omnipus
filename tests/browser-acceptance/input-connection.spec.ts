@@ -13,7 +13,7 @@ const provenance = JSON.parse(fs.readFileSync(process.env.BROWSER_INPUT_PROVENAN
 if (!/^[a-f0-9]{9,40}$/.test(provenance.source) || !/^[a-f0-9]{64}$/.test(provenance.binarySHA256)) throw Error('Verified source and binary SHA256 provenance is required');
 
 test.describe.configure({ retries: 0 });
-for (const mode of ['websocket', 'dedicated'] as const) {
+for (const mode of ['normal-url', 'legacy-websocket-selector'] as const) {
   test(`${mode}: remote input text, clicks, scroll, drag and recovery stay exact`, async ({ page }, info) => {
     const nonce = randomInt(1, 65536);
     let state: InputState = { nonce, clicks: 0, downs: 0, ups: 0, held: 0, scroll: 0, drags: 0, errors: 0, text: '' };
@@ -35,20 +35,20 @@ for (const mode of ['websocket', 'dedicated'] as const) {
       const panel = browserLivePanel(page);
       await expect(panel.getByRole('status').filter({ hasText: /Waiting for the current page|Pointer input is unavailable|Browser input is unavailable|Reconnecting video to restore browser input/ })).toHaveCount(0, { timeout: 15000 });
       await expect(panel.getByRole('alert')).toHaveCount(0);
-      if (mode === 'dedicated') await expect(page.locator('[data-input-mode="dedicated"]')).toHaveAttribute('data-input-state', 'ready');
+      await expect(page.locator('[data-input-mode="dedicated"]')).toHaveAttribute('data-input-state', 'ready');
     };
     const clickAt = async (x: number, y: number) => { await awaitInputReady(); const p = await point(page, x, y); await page.mouse.click(p.x, p.y); state = { ...state, downs: state.downs + 1, ups: state.ups + 1 }; };
     try {
       const served = await page.request.get(fixtureURL.href, { maxRedirects: 0 });
       expect(served.status()).toBe(200); expect(await served.text()).toBe(fixtureHTML);
-      await page.goto(`/workspaces/01M01TTSDZBFGM28NPHGTFZ17T/chat?browserInput=${mode}`);
+      await page.goto(`/workspaces/01M01TTSDZBFGM28NPHGTFZ17T/chat${mode === 'legacy-websocket-selector' ? '?browserInput=websocket' : ''}`);
       await selectAgent(page, 'Browser UAT Test');
       expect(new URL(page.url()).pathname).toBe('/workspaces/01M01TTSDZBFGM28NPHGTFZ17T/chat');
-      expect(new URL(page.url()).searchParams.get('browserInput')).toBe(mode);
+      expect(new URL(page.url()).searchParams.get('browserInput')).toBe(mode === 'legacy-websocket-selector' ? 'websocket' : null);
       await page.getByRole('button', { name: 'Open browser', exact: true }).click();
       await expect(browserLivePanel(page)).toBeVisible();
-      await expect(page.locator(`[data-input-mode="${mode}"]`)).toBeVisible();
-      if (mode === 'dedicated') await expect(page.locator('[data-input-mode="dedicated"]')).toHaveAttribute('data-input-state', 'ready');
+      await expect(page.locator('[data-input-mode="dedicated"]')).toBeVisible();
+      await expect(page.locator('[data-input-mode="dedicated"]')).toHaveAttribute('data-input-state', 'ready');
       await expect.poll(() => browserLiveVideo(page).evaluate(node => (node as HTMLVideoElement).readyState), { timeout: 45000 }).toBeGreaterThanOrEqual(2);
       const target = new URL(fixtureURL); target.searchParams.set('nonce', String(nonce));
       const address = page.getByRole('textbox', { name: 'Address bar' });
@@ -114,8 +114,8 @@ for (const mode of ['websocket', 'dedicated'] as const) {
       await browserLiveFrame(page).focus(); await page.keyboard.down('ArrowLeft');
       state = { ...state, held: 2 }; await checkpoint('key-held');
       const openedBefore = (await routeEvidence(page)).openedSockets;
-      await disconnect(page, mode);
-      if (mode === 'dedicated') {
+      await disconnect(page, 'dedicated');
+      {
         await expect(page.getByTestId('browser-input-error')).toBeVisible();
         state = { ...state, held: 0 }; await checkpoint('input-lost-released');
         await page.keyboard.up('ArrowLeft');
@@ -124,20 +124,17 @@ for (const mode of ['websocket', 'dedicated'] as const) {
         await retry.focus();
         await retry.press('Enter');
         await expect(page.locator('[data-input-mode="dedicated"]')).toHaveAttribute('data-input-state', 'ready');
-      } else {
-        await page.keyboard.up('ArrowLeft');
-        await expect.poll(async () => (await routeEvidence(page)).openedSockets, { timeout: 45000 }).toBe(openedBefore + 1);
-        await expect.poll(() => browserLiveVideo(page).evaluate(node => (node as HTMLVideoElement).readyState), { timeout: 45000 }).toBeGreaterThanOrEqual(2);
-        await installPixels(page); state = { ...state, held: 0 };
       }
+      expect((await routeEvidence(page)).openedSockets).toBe(openedBefore);
       await checkpoint('recovered');
       await clickAt(.73, .68); state = { ...state, clicks: state.clicks + 1 }; await checkpoint('post-recovery-click');
       const evidence = await routeEvidence(page);
       const actionRoutes = [...new Set(evidence.routes.map(event => event.route))];
-      if (mode === 'dedicated') {
+      {
         expect(actionRoutes).toContain('input-reliable'); expect(actionRoutes).not.toContain('websocket');
         expect(evidence.peers.filter(peer => peer.labels.includes('input-reliable') && peer.state !== 'closed')).toEqual([{ labels: ['input-reliable', 'input-hover'], transceivers: 0, state: 'connected' }]);
-      } else expect(actionRoutes).toEqual(['websocket']);
+        expect(actionRoutes.every(route => route === 'input-reliable' || route === 'input-hover')).toBe(true);
+      }
       expect(evidence.routes.filter(event => event.kind === 'mouse_down')).toHaveLength(state.downs);
       expect(evidence.routes.filter(event => event.kind === 'mouse_up')).toHaveLength(state.ups);
       expect(errors).toEqual([]);
@@ -148,7 +145,7 @@ for (const mode of ['websocket', 'dedicated'] as const) {
       try { await page.getByRole('button', { name: 'Close live browser panel', exact: true }).click({ timeout: 5000 }); }
       catch { cleanupError = 'Panel close failed; Playwright context teardown still follows'; }
       fs.mkdirSync(info.outputDir, { recursive: true });
-      fs.writeFileSync(info.outputPath('input-connection-evidence.json'), JSON.stringify({ mode, provenance, checkpoints, state, errors, cleanupError, clickFeedbackMs, scrollCatchUpMs, evidence, limits: ['click timings include runner/pixel sampling overhead; not 100-click latency acceptance', 'live audio track does not prove audible content', 'baseline signaling reconnect may replace media'] }, null, 2));
+      fs.writeFileSync(info.outputPath('input-connection-evidence.json'), JSON.stringify({ mode, provenance, checkpoints, state, errors, cleanupError, clickFeedbackMs, scrollCatchUpMs, evidence, limits: ['click timings include runner/pixel sampling overhead; not 100-click latency acceptance', 'live audio track does not prove audible content', 'both URL cases require dedicated gestures and input-only recovery'] }, null, 2));
     }
   });
 }

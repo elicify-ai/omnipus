@@ -447,10 +447,10 @@ func TestCaptureIngestConn_SendJSON_WriteDeadlineBoundsWedgedWrite(t *testing.T)
 // Fix 7: DC input schema-validation parity with the WS input path.
 // ---------------------------------------------------------------------------
 
-// An oversized text field is rejected before dispatch. The same navigation with a valid text length reaches the real URL refusal and publishes its error.
+// At the shared adapter boundary, oversized text is rejected before dispatch. Valid text reaches the real URL refusal; transport admission is tested separately.
 func TestWebrtcInputSink_ValidateInbound_RejectsOversizedTextField(t *testing.T) {
 	f := newHandlerContextFixture(t, false)
-	source, _ := admittedInputRoute(t, f, "viewer-oversized-text")
+	source := inputAdapterRoute(t, f, "viewer-oversized-text")
 	sink := newWebRTCContextInputSink(true)
 	oversized, err := json.Marshal(generated.BrowserInputFrame{Type: "browser_input", Kind: "navigate", Url: strPtr("javascript:alert(1)"), Text: strPtr(strings.Repeat("a", 8193))})
 	require.NoError(t, err)

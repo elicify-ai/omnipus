@@ -415,7 +415,7 @@ func newE2EFakeViewer(t *testing.T) *e2eFakeViewer {
 //	(b) A browser_webrtc_state frame with available:true (and active:true)
 //	    arrives.
 //	(c) Sending a BrowserInputFrame JSON on the viewer's "input" data channel
-//	    reaches the Live layer — observed at the deepest seam reachable
+//	    is refused before the Live layer — observed at the deepest seam reachable
 //	    without a real attached Chrome tab (see the sink wrapper below); the
 //	    frame→LiveInput conversion itself is already covered by
 //	    TestBrowserInputFrameToLiveInput_TableParity (browser_webrtc_test.go).
@@ -530,8 +530,12 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 
 	// This counter proves DC transport reaches the real contextual sink.
 	// It does not establish successful page input or decoded video/audio.
-	var dcFramesObserved atomic.Int32
-	realSink := newWebRTCContextInputSink(al.GetConfig().Gateway.ValidateInbound)
+	var dcFramesObserved, inputDispatches atomic.Int32
+	realSink := newWebRTCContextInputSinkWithDispatch(al.GetConfig().Gateway.ValidateInbound,
+		func(ctx context.Context, manager *browser.BrowserManager, panel, viewer string, input browser.LiveInput) error {
+			inputDispatches.Add(1)
+			return manager.Live().InputContext(ctx, panel, viewer, input)
+		})
 	sink := webrtc.ContextInputSink(func(source context.Context, viewerID string, raw []byte) {
 		realSink(source, viewerID, raw)
 		dcFramesObserved.Add(1)
@@ -655,7 +659,7 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 	require.True(t, stats.HasAudio, "relay Stats() must report HasAudio=true once the audio track has attached")
 	t.Logf("OBSERVED relay Stats(): %+v", stats)
 
-	// (c) DC -> sink -> dispatch plumbing fires.
+	// (c) Legacy media DC delivery completes, but its sink refuses dispatch.
 	select {
 	case <-viewer.dcOpen:
 	case <-time.After(e2eWait):
@@ -677,9 +681,11 @@ func TestWebRTCEndToEndInProcess(t *testing.T) {
 		return dcFramesObserved.Load() > 0
 	})
 	t.Logf(
-		"OBSERVED %d data-channel input frame(s) reach contextual input sink -> browserInputFrameToLiveInput -> mgr.Live().InputContext",
+		"OBSERVED %d media data-channel frame(s) reach the contextual sink and are refused before dispatch",
 		dcFramesObserved.Load(),
 	)
+
+	require.Zero(t, inputDispatches.Load(), "mandatory dedicated input must refuse legacy media DC gestures")
 
 	// (d) viewer detach decrements the capture session's refcount.
 	require.Equal(t, 1, cs.ViewerCount(), "exactly one WebRTC viewer must be attached before detach")

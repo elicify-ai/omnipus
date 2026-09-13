@@ -384,7 +384,6 @@ export function BrowserLiveView({
   // one instance per WS-connection effect lifecycle (see that effect further
   // down), mirroring wsRef's own per-mount lifetime.
   const webrtcRef = useRef<BrowserWebRTCSession | null>(null)
-  const [inputMode] = useState<'websocket' | 'dedicated'>(() => new URLSearchParams(window.location.search).get('browserInput') === 'dedicated' ? 'dedicated' : 'websocket')
   const inputRef = useRef<BrowserInputWebRTCSession | null>(null)
   const [inputState, setInputState] = useState<BrowserInputState>('idle')
   const [inputError, setInputError] = useState<string | null>(null)
@@ -950,7 +949,7 @@ export function BrowserLiveView({
     setConnected(false)
     setWebrtcStream(null)
     refreshFrameGate()
-    const inputMachine = inputMode === 'dedicated' ? new BrowserInputWebRTCSession({
+    const inputMachine = new BrowserInputWebRTCSession({
       sendOffer: (offer) => wsRef.current?.sendInputOffer(offer) ?? false,
       onFailure: () => wsRef.current?.sendControl('release') ?? false,
       onState: (state, reason) => {
@@ -961,7 +960,7 @@ export function BrowserLiveView({
           pendingMoveRef.current = pendingWheelRef.current = null
         }
       },
-    }) : null
+    })
     inputRef.current = inputMachine
     inputFrameRequirementRef.current = undefined
     const machine = new BrowserWebRTCSession()
@@ -1260,8 +1259,7 @@ export function BrowserLiveView({
         // drops the optimistic "you're driving" chip (UAT A8).
         setPendingTake(false)
       },
-    }, inputMachine ? {
-      mode: 'dedicated',
+    }, {
       beforeControl: () => {
         flushWheelBeforeActionRef.current()
         pendingMoveRef.current = pendingWheelRef.current = null
@@ -1269,7 +1267,7 @@ export function BrowserLiveView({
         const epoch = inputMachine.beginControl()
         return epoch === null ? null : inputMachine.controlIdentity
       },
-    } : undefined)
+    })
     wsRef.current = conn
     conn.connect()
     return () => {
@@ -1284,7 +1282,7 @@ export function BrowserLiveView({
       requestFreshViewerRef.current = () => {}
       if (framePresentationTimerRef.current !== null) clearTimeout(framePresentationTimerRef.current)
     }
-  }, [sessionId, agentId, connectionAttempt, acceptCapture, refreshFrameGate, inputMode])
+  }, [sessionId, agentId, connectionAttempt, acceptCapture, refreshFrameGate])
 
   // ── Bind the <video> sink's srcObject imperatively. React has no
   // `srcObject` JSX prop (it's a DOM property, not an attribute) — this is
@@ -1388,10 +1386,10 @@ export function BrowserLiveView({
     return true
   }, [])
   const canDispatchInput = useCallback(() => {
-    return canIssueCommands() && (inputMode === 'websocket' || (inputRef.current?.state === 'ready' && dedicatedFrameReady())) && captureRef.current.gate.read(performance.now()).status === 'ready'
-  }, [canIssueCommands, inputMode, dedicatedFrameReady])
+    return canIssueCommands() && (inputRef.current?.state === 'ready' && dedicatedFrameReady()) && captureRef.current.gate.read(performance.now()).status === 'ready'
+  }, [canIssueCommands, dedicatedFrameReady])
 
-  // Each attachment uses exactly one input route. A successful send is local
+  // Gestures use only the dedicated input peer; navigation stays on the socket. A successful send is local
   // admission, not execution proof; never replay uncertain actions elsewhere.
   const pressedInputsRef = useRef(new Map<string, Omit<BrowserInputFrame, 'type'>>())
   const releaseInputsRef = useRef<() => void>(() => {})
@@ -1401,12 +1399,12 @@ export function BrowserLiveView({
       const initiating = ['navigate', 'navigate_back', 'reload'].includes(input.kind)
       const current = captureRef.current
       const proof = current.gate.read(performance.now())
-      if (!initiating && !cleanup && (proof.status !== 'ready' || (inputMode === 'dedicated' && !dedicatedFrameReady()))) return false
-      if (inputMode === 'dedicated' && !cleanup && input.kind !== 'wheel' && input.kind !== 'mouse_move') flushWheelBeforeActionRef.current()
+      if (!initiating && !cleanup && (proof.status !== 'ready' || !dedicatedFrameReady())) return false
+      if (!cleanup && input.kind !== 'wheel' && input.kind !== 'mouse_move') flushWheelBeforeActionRef.current()
       const payload = !initiating && !cleanup && proof.status === 'ready' && current.id
         ? { ...input, capture_id: current.id, capture_generation: proof.generation }
         : input
-      const sent = inputMode === 'dedicated' && !initiating
+      const sent = !initiating
         ? inputRef.current?.sendInput(payload) ?? false
         : wsRef.current?.sendInput(payload) ?? false
       if (!sent) {
@@ -1427,7 +1425,7 @@ export function BrowserLiveView({
         }
       }
       return true
-    }, [inputMode, dedicatedFrameReady],
+    }, [dedicatedFrameReady],
   )
   const releasePressedInputs = useCallback(() => {
     pendingMoveRef.current = null
@@ -1808,25 +1806,6 @@ export function BrowserLiveView({
     }
   }, [])
 
-  // Record human activity without pausing chat or waiting for ownership.
-  const takeWheelIfNeeded = useCallback(() => {
-    // Shared input needs no ownership claim. An implicit take would pause and
-    // invalidate the very first dedicated gesture while awaiting its ack.
-    if (inputMode === 'dedicated') return
-    if (!connectedRef.current) return
-    if (controllingRef.current) return // already driving — nothing to acquire
-    if (pendingTakeRef.current) return // a take is already in flight — never double-fire
-    setPendingTake(true)
-    const sent = wsRef.current?.sendControl('take')
-    if (!sent) {
-      setPendingTake(false)
-      useUiStore.getState().addToast({
-        message: 'Could not confirm taking control — click Take over again if needed.',
-        variant: 'error',
-      })
-    }
-  }, [setPendingTake, inputMode])
-
   // ── Annotate mode (ADR-039 D-B1/B2) ─────────────────────────────────────
 
   const resetSelection = useCallback(() => {
@@ -1960,13 +1939,12 @@ export function BrowserLiveView({
       if (!canIssueCommands()) return
       setStatusMessage(null)
       setStatusIsError(false)
-      takeWheelIfNeeded()
       releasePressedInputs()
       if (!dispatchInput({ kind: 'navigate', url: resolved })) return
       setUrlInput(resolved)
       urlBarEditingRef.current = false
     },
-    [urlInput, takeWheelIfNeeded, canIssueCommands, dispatchInput, releasePressedInputs],
+    [urlInput, canIssueCommands, dispatchInput, releasePressedInputs],
   )
 
   const handleToolbarNav = useCallback(
@@ -1974,42 +1952,38 @@ export function BrowserLiveView({
       if (!canIssueCommands()) return
       setStatusMessage(null)
       setStatusIsError(false)
-      takeWheelIfNeeded()
       releasePressedInputs()
       dispatchInput({ kind })
     },
-    [takeWheelIfNeeded, canIssueCommands, dispatchInput, releasePressedInputs],
+    [canIssueCommands, dispatchInput, releasePressedInputs],
   )
 
   const handleTabSwitch = useCallback((index: number) => {
     if (!canIssueCommands()) return
     releasePressedInputs()
-    takeWheelIfNeeded()
     const sent = wsRef.current?.sendTabAction('switch', index)
     if (!sent) {
       useUiStore.getState().addToast({ message: 'Could not switch tabs — check your connection and try again.', variant: 'error' })
     }
-  }, [takeWheelIfNeeded, canIssueCommands, releasePressedInputs])
+  }, [canIssueCommands, releasePressedInputs])
 
   const handleTabClose = useCallback((index: number) => {
     if (!canIssueCommands()) return
     releasePressedInputs()
-    takeWheelIfNeeded()
     const sent = wsRef.current?.sendTabAction('close', index)
     if (!sent) {
       useUiStore.getState().addToast({ message: 'Could not close that tab — check your connection and try again.', variant: 'error' })
     }
-  }, [takeWheelIfNeeded, canIssueCommands, releasePressedInputs])
+  }, [canIssueCommands, releasePressedInputs])
 
   const handleTabOpen = useCallback(() => {
     if (!canIssueCommands()) return
     releasePressedInputs()
-    takeWheelIfNeeded()
     const sent = wsRef.current?.sendTabAction('open')
     if (!sent) {
       useUiStore.getState().addToast({ message: 'Could not open a new tab — check your connection and try again.', variant: 'error' })
     }
-  }, [takeWheelIfNeeded, canIssueCommands, releasePressedInputs])
+  }, [canIssueCommands, releasePressedInputs])
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (annotateMode) {
@@ -2074,7 +2048,6 @@ export function BrowserLiveView({
     const rect = containerRef.current.getBoundingClientRect()
     const device = mapPointerToDeviceCoords(e.clientX, e.clientY, rect)
     if (!device) return
-    if (driveModeRef.current !== 'you-driving') takeWheelIfNeeded()
     focusAndCapturePointer(e)
 
     // Drop any coalesced move still waiting to be sent (operator report,
@@ -2109,7 +2082,6 @@ export function BrowserLiveView({
     canDispatchInput,
     activeFrameDims,
     focusAndCapturePointer,
-    takeWheelIfNeeded,
     mapPointerToDeviceCoords,
     dispatchInput,
     cancelInputFlush,
@@ -2371,7 +2343,7 @@ export function BrowserLiveView({
   }
 
   return (
-    <div data-input-mode={inputMode} data-input-state={inputMode === 'dedicated' ? inputState : 'websocket'} className={cn('relative flex h-full min-h-0 flex-col bg-[var(--color-primary)]', className)}>
+    <div data-input-mode="dedicated" data-input-state={inputState} className={cn('relative flex h-full min-h-0 flex-col bg-[var(--color-primary)]', className)}>
       {inputError && <div role="alert" data-testid="browser-input-error" className="absolute bottom-2 left-2 right-2 z-30 rounded bg-[var(--color-primary)] p-2 text-sm">
         <span>{inputError}</span>{' '}
         <button type="button" tabIndex={0} onClick={() => {
@@ -2801,7 +2773,6 @@ export function BrowserLiveView({
               type="button"
               onClick={() => {
                 useChatStore.getState().cancelStream(sessionId)
-                takeWheelIfNeeded()
               }}
               // No longer disabled by controlledByOther (2026-08-03): another
               // attached viewer must never make this button dead, since taking

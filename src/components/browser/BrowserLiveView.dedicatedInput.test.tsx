@@ -67,7 +67,8 @@ async function connected() {
   return { socket, video, peer: Peer.instances[0], frame: screen.getByTestId('browser-live-frame') }
 }
 
-it('uses dedicated first-gesture input without implicit take or WebSocket fallback; Retry preserves media', async () => {
+it.each(['/', '/?browserInput=websocket', '/?browserInput=dedicated'])('requires dedicated input at %s without fallback; Retry preserves media', async (url) => {
+  window.history.replaceState({}, '', url)
   const s = await connected()
   const originalMedia = s.video.srcObject
   fireEvent.keyDown(s.frame, { key: 'a' })

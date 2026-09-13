@@ -9,11 +9,16 @@ const { callbacksRef, sendInput } = vi.hoisted(() => ({
   callbacksRef: { current: null as BrowserLiveWsCallbacks | null },
   sendInput: vi.fn(() => true),
 }))
+vi.mock('@/lib/browserInputWebRTC', async () => {
+  const { dedicatedInputSessionStub } = await import('./dedicatedInputTestUtils')
+  return { BrowserInputWebRTCSession: dedicatedInputSessionStub(sendInput) }
+})
+
 vi.mock('@/lib/browserLiveWs', async importOriginal => ({
   ...await importOriginal<typeof import('@/lib/browserLiveWs')>(),
   BrowserLiveWsConnection: vi.fn().mockImplementation(function (_session: string, _agent: string, callbacks: BrowserLiveWsCallbacks) {
     callbacksRef.current = callbacks
-    return { connect: vi.fn(), close: vi.fn(), detach: vi.fn(), sendInput, sendControl: vi.fn(() => true), sendTabAction: vi.fn(() => true), sendViewport: vi.fn(() => true), sendWebRTCOffer: vi.fn(() => true) }
+    return { connect: vi.fn(), close: vi.fn(), detach: vi.fn(), sendInput: vi.fn(() => true), sendControl: vi.fn(() => true), sendTabAction: vi.fn(() => true), sendViewport: vi.fn(() => true), sendWebRTCOffer: vi.fn(() => true) }
   }),
 }))
 import { BrowserLiveView } from './BrowserLiveView'

@@ -10,11 +10,12 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
 import type { BrowserLiveWsCallbacks } from '@/lib/browserLiveWs'
 
-const { mockSendTabAction, mockSendControl, mockSendInput, mockConnect, mockDetach, mockClose, callbacksRef } =
+const { mockSocketSendInput, mockSendTabAction, mockSendControl, mockDedicatedSendInput, mockConnect, mockDetach, mockClose, callbacksRef } =
   vi.hoisted(() => ({
     mockSendTabAction: vi.fn(() => true),
-    mockSendControl: vi.fn(() => true),
-    mockSendInput: vi.fn(),
+    mockSocketSendInput: vi.fn(() => true),
+  mockSendControl: vi.fn(() => true),
+    mockDedicatedSendInput: vi.fn(() => true),
     mockConnect: vi.fn(),
     mockDetach: vi.fn(),
     mockClose: vi.fn(),
@@ -35,7 +36,7 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
           connect: mockConnect,
           detach: mockDetach,
           close: mockClose,
-          sendInput: mockSendInput,
+          sendInput: mockSocketSendInput,
           sendControl: mockSendControl,
           sendTabAction: mockSendTabAction,
           // Adaptive viewport (2026-07-31): BrowserLiveView's ResizeObserver
@@ -46,6 +47,11 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
       },
     ),
   }
+})
+
+vi.mock('@/lib/browserInputWebRTC', async () => {
+  const { dedicatedInputSessionStub } = await import('./dedicatedInputTestUtils')
+  return { BrowserInputWebRTCSession: dedicatedInputSessionStub(mockDedicatedSendInput) }
 })
 
 import { BrowserLiveView } from './BrowserLiveView'
@@ -287,13 +293,8 @@ describe('BrowserLiveView — tab strip (ADR-041 D4)', () => {
   })
 })
 
-describe('BrowserLiveView — tab strip actions take the wheel (ADR-041 D4 / F1)', () => {
-  // Reviewer finding F1: the backend only honours `browser_tab_action` when
-  // this connection holds the control lock, or nobody controls (idle) — a
-  // merely-watching viewer's tab action would be rejected. Every tab-strip
-  // handler must call takeWheelIfNeeded() (send control:take) BEFORE
-  // sendTabAction, exactly like the omnibox does before navigating.
-  it('switching a tab while idle sends control:take before browser_tab_action', () => {
+describe('BrowserLiveView — tab strip actions use the control socket without implicit ownership', () => {
+  it('switching a tab while idle sends browser_tab_action without control:take', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [
@@ -303,14 +304,11 @@ describe('BrowserLiveView — tab strip actions take the wheel (ADR-041 D4 / F1)
 
     fireEvent.click(screen.getByTestId('browser-tab-1'))
 
-    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendControl).not.toHaveBeenCalledWith('take')
     expect(mockSendTabAction).toHaveBeenCalledWith('switch', 1)
-    const takeOrder = mockSendControl.mock.invocationCallOrder[0]
-    const switchOrder = mockSendTabAction.mock.invocationCallOrder[0]
-    expect(takeOrder).toBeLessThan(switchOrder)
   })
 
-  it('closing a tab sends control:take before browser_tab_action', () => {
+  it('closing a tab sends browser_tab_action without control:take', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [
@@ -320,25 +318,19 @@ describe('BrowserLiveView — tab strip actions take the wheel (ADR-041 D4 / F1)
 
     fireEvent.click(screen.getByTestId('browser-tab-close-1'))
 
-    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendControl).not.toHaveBeenCalledWith('take')
     expect(mockSendTabAction).toHaveBeenCalledWith('close', 1)
-    const takeOrder = mockSendControl.mock.invocationCallOrder[0]
-    const closeOrder = mockSendTabAction.mock.invocationCallOrder[0]
-    expect(takeOrder).toBeLessThan(closeOrder)
   })
 
-  it('opening a new tab sends control:take before browser_tab_action', () => {
+  it('opening a new tab sends browser_tab_action without control:take', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [{ index: 0, title: 'Only tab', active: true }])
 
     fireEvent.click(screen.getByTestId('browser-tab-new'))
 
-    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendControl).not.toHaveBeenCalledWith('take')
     expect(mockSendTabAction).toHaveBeenCalledWith('open')
-    const takeOrder = mockSendControl.mock.invocationCallOrder[0]
-    const openOrder = mockSendTabAction.mock.invocationCallOrder[0]
-    expect(takeOrder).toBeLessThan(openOrder)
   })
 
   // Reviewer finding F2: a failed sendTabAction (e.g. dead/reconnecting

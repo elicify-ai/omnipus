@@ -29,3 +29,15 @@ func admittedInputRoute(t *testing.T, f handlerContextFixture, viewer string) (c
 	}
 	return parent, route
 }
+
+// inputAdapterRoute exercises the shared input adapter and its real error
+// callback independently of transport admission. The admitted media source is
+// intentionally not used: media peers no longer authorize input. Dedicated
+// transport admission is covered by the dedicated peer tests.
+func inputAdapterRoute(t *testing.T, f handlerContextFixture, viewer string) context.Context {
+	t.Helper()
+	_, route := admittedInputRoute(t, f, viewer)
+	source, err := withWebRTCInputRoute(route.attachment, route.manager, route.panelSessionID, route.report)
+	require.NoError(t, err)
+	return source
+}

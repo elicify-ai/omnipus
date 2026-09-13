@@ -7,9 +7,10 @@ import type { BrowserLiveWsCallbacks } from '@/lib/browserLiveWs'
 import { useChatStore, type SessionChatState } from '@/store/chat'
 import { useUiStore } from '@/store/ui'
 
-const { mockSendControl, mockSendInput, mockSendTabAction, mockSendViewport, callbacksRef } = vi.hoisted(() => ({
+const { mockSocketSendInput, mockSendControl, mockDedicatedSendInput, mockSendTabAction, mockSendViewport, callbacksRef } = vi.hoisted(() => ({
+  mockSocketSendInput: vi.fn(() => true),
   mockSendControl: vi.fn(() => true),
-  mockSendInput: vi.fn<(input: Record<string, unknown>) => boolean>(() => true),
+  mockDedicatedSendInput: vi.fn<(input: Record<string, unknown>) => boolean>(() => true),
   mockSendTabAction: vi.fn(() => true),
   // Hoisted so the layout-stability suite can assert that a drive-state
   // change pushes NO viewport (the resize-flap regression).
@@ -31,7 +32,7 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
           connect: vi.fn(),
           detach: vi.fn(),
           close: vi.fn(),
-          sendInput: mockSendInput,
+          sendInput: mockSocketSendInput,
           sendControl: mockSendControl,
           sendTabAction: mockSendTabAction,
           // Adaptive viewport (2026-07-31): BrowserLiveView's ResizeObserver
@@ -42,6 +43,11 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
       },
     ),
   }
+})
+
+vi.mock('@/lib/browserInputWebRTC', async () => {
+  const { dedicatedInputSessionStub } = await import('./dedicatedInputTestUtils')
+  return { BrowserInputWebRTCSession: dedicatedInputSessionStub(mockDedicatedSendInput) }
 })
 
 import { BrowserLiveView } from './BrowserLiveView'
@@ -137,7 +143,7 @@ const initialChatState = useChatStore.getState()
 beforeEach(() => {
   vi.clearAllMocks()
   mockSendControl.mockReset().mockReturnValue(true)
-  mockSendInput.mockReset().mockReturnValue(true)
+  mockDedicatedSendInput.mockReset().mockReturnValue(true)
   callbacksRef.current = null
   // Reset the real chat store's per-session buckets between tests so a
   // prior test's isStreaming:true doesn't leak into the next one.
@@ -151,20 +157,15 @@ afterEach(() => {
 })
 
 describe('BrowserLiveView — click-to-drive (ADR-040 D2, agent idle)', () => {
-  it('acquires the lock then dispatches the same pointerdown as input', () => {
+  it('dispatches the first pointerdown through dedicated input without claiming ownership', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const container = stubFrameRect()
 
     fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
 
-    expect(mockSendControl).toHaveBeenCalledWith('take')
-    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down', x: 20, y: 20 }))
-    // control:take must have been sent before the input dispatch (same
-    // connection ordering is what makes this safe without waiting for ack).
-    const takeOrder = mockSendControl.mock.invocationCallOrder[0]
-    const inputOrder = mockSendInput.mock.invocationCallOrder[0]
-    expect(takeOrder).toBeLessThan(inputOrder)
+    expect(mockSendControl).not.toHaveBeenCalledWith('take')
+    expect(mockDedicatedSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down', x: 20, y: 20 }))
   })
 
   it('does not send a second control:take for pointermove/pointerup in the same gesture', () => {
@@ -177,7 +178,7 @@ describe('BrowserLiveView — click-to-drive (ADR-040 D2, agent idle)', () => {
     fireEvent.pointerUp(container, { clientX: 20, clientY: 20 })
 
     expect(mockSendControl).not.toHaveBeenCalled()
-    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_up' }))
+    expect(mockDedicatedSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_up' }))
   })
 
   it('does not double-fire control:take on a rapid second pointerdown before the ack lands', () => {
@@ -188,17 +189,17 @@ describe('BrowserLiveView — click-to-drive (ADR-040 D2, agent idle)', () => {
     fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
     fireEvent.pointerUp(container, { clientX: 20, clientY: 20 })
     mockSendControl.mockClear()
-    mockSendInput.mockClear()
+    mockDedicatedSendInput.mockClear()
     // No browser_status('controlling') ack has arrived yet — the mock ws
     // never emits one on its own — so this is exactly the in-flight window
     // pendingTakeRef guards against.
     fireEvent.pointerDown(container, { clientX: 25, clientY: 25 })
 
     expect(mockSendControl).not.toHaveBeenCalled()
-    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down', x: 25, y: 25 }))
+    expect(mockDedicatedSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down', x: 25, y: 25 }))
   })
 
-  it('sends control:take again for a NEW click after the previous take was acknowledged and released', () => {
+  it('sends a new dedicated click after controlling and released status without another take', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const container = stubFrameRect()
@@ -211,7 +212,7 @@ describe('BrowserLiveView — click-to-drive (ADR-040 D2, agent idle)', () => {
     mockSendControl.mockClear()
 
     fireEvent.pointerDown(container, { clientX: 30, clientY: 30 })
-    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendControl).not.toHaveBeenCalledWith('take')
   })
 
   it('shows a "pointer" cursor over the frame while idle (click-to-drive affordance)', () => {
@@ -227,7 +228,7 @@ describe('BrowserLiveView — watch-only while the agent is working (ADR-040 D2)
   // 'agent-working') return` in handlePointerDown) — the user had to already
   // know about the separate "Take over" button. It now takes the wheel in
   // ONE action, exactly like the omnibox/Take-over/tab-chip paths.
-  it('a frame click while the agent is working preserves the agent response, acquires the lock, and dispatches the SAME pointerdown as input (ONE click)', () => {
+  it('a frame click while the agent is working preserves the agent response, uses dedicated input and dispatches the SAME pointerdown as input (ONE click)', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
@@ -237,13 +238,10 @@ describe('BrowserLiveView — watch-only while the agent is working (ADR-040 D2)
     fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
 
     expect(cancelSpy).not.toHaveBeenCalled()
-    expect(mockSendControl).toHaveBeenCalledWith('take')
-    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down', x: 20, y: 20 }))
+    expect(mockSendControl).not.toHaveBeenCalledWith('take')
+    expect(mockDedicatedSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down', x: 20, y: 20 }))
     // control:take must still be sent before the input dispatch, exactly
     // like the idle click-to-drive path.
-    const takeOrder = mockSendControl.mock.invocationCallOrder[0]
-    const inputOrder = mockSendInput.mock.invocationCallOrder[0]
-    expect(takeOrder).toBeLessThan(inputOrder)
   })
 
   it('continues dispatching pointerup for the SAME gesture that took the wheel from agent-working', () => {
@@ -255,13 +253,13 @@ describe('BrowserLiveView — watch-only while the agent is working (ADR-040 D2)
 
     fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
     mockSendControl.mockClear()
-    mockSendInput.mockClear()
+    mockDedicatedSendInput.mockClear()
     fireEvent.pointerUp(container, { clientX: 25, clientY: 25 })
 
     // No second control:take for the tail of the SAME gesture (mirrors the
     // idle click-to-drive coverage above).
     expect(mockSendControl).not.toHaveBeenCalled()
-    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_up' }))
+    expect(mockDedicatedSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_up' }))
   })
 
   it('a plain keyboard press (no prior click/take) works during agent activity without acquiring a control lock', () => {
@@ -273,7 +271,7 @@ describe('BrowserLiveView — watch-only while the agent is working (ADR-040 D2)
     fireEvent.keyDown(container, { key: 'a' })
     fireEvent.keyUp(container, { key: 'a' })
 
-    expect(mockSendInput).toHaveBeenCalledExactlyOnceWith({ kind: 'text', text: 'a', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 })
+    expect(mockDedicatedSendInput).toHaveBeenCalledExactlyOnceWith({ kind: 'text', text: 'a', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 })
   })
 
   // Reviewer finding coverage: the wheel listener now consults the same
@@ -291,12 +289,12 @@ describe('BrowserLiveView — watch-only while the agent is working (ADR-040 D2)
         callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
       })
       setAgentWorking('s1', true)
-      mockSendInput.mockClear()
+      mockDedicatedSendInput.mockClear()
 
       fireEvent.wheel(container, { deltaX: 0, deltaY: 120 })
 
       await act(async () => { await vi.advanceTimersByTimeAsync(30) })
-      expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'wheel', delta_y: 120 }))
+      expect(mockDedicatedSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'wheel', delta_y: 120 }))
     } finally {
       vi.useRealTimers()
     }
@@ -335,7 +333,7 @@ describe('BrowserLiveView — watch-only while the agent is working (ADR-040 D2)
     expect(screen.queryByRole('button', { name: /take over/i })).not.toBeInTheDocument()
     const container = stubFrameRect()
     fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
-    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendControl).not.toHaveBeenCalledWith('take')
   })
 })
 
@@ -367,7 +365,7 @@ describe('BrowserLiveView — waiting-overlay click before the first frame decod
 
     expect(cancelSpy).not.toHaveBeenCalled()
     expect(mockSendControl).not.toHaveBeenCalledWith('take')
-    expect(mockSendInput).not.toHaveBeenCalled()
+    expect(mockDedicatedSendInput).not.toHaveBeenCalled()
   })
 
   it('does NOT implicitly acquire the lock for a click before the video has decoded a real frame (agent idle)', () => {
@@ -380,10 +378,10 @@ describe('BrowserLiveView — waiting-overlay click before the first frame decod
     fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
 
     expect(mockSendControl).not.toHaveBeenCalled()
-    expect(mockSendInput).not.toHaveBeenCalled()
+    expect(mockDedicatedSendInput).not.toHaveBeenCalled()
   })
 
-  it('still preserves the agent response, takes the lock, and dispatches input in ONE click once the frame HAS decoded (no regression)', () => {
+  it('still preserves the agent response and dispatches input in ONE click once the frame HAS decoded (no regression)', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
@@ -393,8 +391,8 @@ describe('BrowserLiveView — waiting-overlay click before the first frame decod
     fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
 
     expect(cancelSpy).not.toHaveBeenCalled()
-    expect(mockSendControl).toHaveBeenCalledWith('take')
-    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down', x: 20, y: 20 }))
+    expect(mockSendControl).not.toHaveBeenCalledWith('take')
+    expect(mockDedicatedSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down', x: 20, y: 20 }))
   })
 })
 
@@ -404,7 +402,7 @@ describe('BrowserLiveView — "Take over" (ADR-040 D2)', () => {
   // unscoped call would pause the wrong turn whenever this panel's pinned
   // session isn't the globally-active one. Take-over must always pass
   // THIS panel's own pinned sessionId ("s1" here), never rely on the default.
-  it('calls the chat store\'s cancelStream WITH this panel\'s pinned sessionId, then acquires the lock', () => {
+  it('calls the chat store\'s cancelStream WITH this panel\'s pinned sessionId, without claiming input ownership', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
@@ -414,12 +412,9 @@ describe('BrowserLiveView — "Take over" (ADR-040 D2)', () => {
 
     expect(cancelSpy).toHaveBeenCalledTimes(1)
     expect(cancelSpy).toHaveBeenCalledWith('s1')
-    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendControl).not.toHaveBeenCalledWith('take')
     // cancel before take — the agent must be paused before this connection
     // claims the lock.
-    const cancelOrder = cancelSpy.mock.invocationCallOrder[0]
-    const takeOrder = mockSendControl.mock.invocationCallOrder[0]
-    expect(cancelOrder).toBeLessThan(takeOrder)
   })
 
   // A DIFFERENT panel instance (different sessionId prop) must pass ITS OWN
@@ -464,7 +459,7 @@ describe('BrowserLiveView — "Take over" (ADR-040 D2)', () => {
 })
 
 describe('BrowserLiveView — UAT fix: one-click take-over while isStreaming is still stale-true (real cancelStream timing)', () => {
-  it('"Take over" shows the driving chip immediately in ONE click, without waiting for isStreaming to catch up', () => {
+  it('"Take over" does not claim ownership while cancellation is still pending', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
@@ -473,8 +468,8 @@ describe('BrowserLiveView — UAT fix: one-click take-over while isStreaming is 
     fireEvent.click(screen.getByRole('button', { name: /take over/i }))
 
     const chip = screen.getByTestId('browser-live-status-chip')
-    expect(chip).toHaveTextContent("You're driving")
-    expect(chip).not.toHaveTextContent('is browsing')
+    expect(chip).not.toHaveTextContent("You're driving")
+    expect(chip).toHaveTextContent('is browsing')
     expect(chip).not.toHaveTextContent('Click to drive')
   })
 
@@ -505,14 +500,14 @@ describe('BrowserLiveView — UAT fix: one-click take-over while isStreaming is 
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' })
     })
-    mockSendInput.mockClear()
+    mockDedicatedSendInput.mockClear()
 
     fireEvent.pointerDown(container, { clientX: 30, clientY: 30 })
 
-    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down', x: 30, y: 30 }))
+    expect(mockDedicatedSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down', x: 30, y: 30 }))
   })
 
-  it('a tab-chip click shows the driving chip and switches tabs in ONE click, without waiting for isStreaming to catch up', () => {
+  it('a tab-chip click switches tabs without claiming ownership or cancelling chat', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [
@@ -525,9 +520,9 @@ describe('BrowserLiveView — UAT fix: one-click take-over while isStreaming is 
     fireEvent.click(screen.getByTestId('browser-tab-1'))
 
     expect(cancelSpy).not.toHaveBeenCalled()
-    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendControl).not.toHaveBeenCalledWith('take')
     expect(mockSendTabAction).toHaveBeenCalledWith('switch', 1)
-    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent("You're driving")
+    expect(screen.getByTestId('browser-live-status-chip')).not.toHaveTextContent("You're driving")
   })
 
   it('does NOT auto-release a lock acquired via a tab-chip click while isStreaming is still stale-true', () => {
@@ -603,12 +598,7 @@ describe('BrowserLiveView — control state resilience during chat and send fail
     expect(useUiStore.getState().toasts.some((t) => /could not confirm pausing/i.test(t.message))).toBe(false)
   })
 
-  // Reviewer finding F3: takeWheelIfNeeded used to discard sendControl('take')'s
-  // boolean return — a failed send left pendingTakeRef stuck true forever,
-  // wedging the "take control" affordance permanently at "you're driving"
-  // while real control never transferred, and blocking every later take via
-  // the pendingTakeRef.current in-flight guard.
-  it('click-to-drive: clears the optimistic pendingTake and toasts if sendControl("take") fails', () => {
+  it('dedicated clicks do not depend on a successful ownership request', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const container = stubFrameRect()
@@ -619,10 +609,11 @@ describe('BrowserLiveView — control state resilience during chat and send fail
     // The optimistic "you're driving" chip must NOT stay stuck once the
     // send is known to have failed.
     expect(screen.getByTestId('browser-live-status-chip')).not.toHaveTextContent("You're driving")
-    expect(useUiStore.getState().toasts.some((t) => /could not confirm taking control/i.test(t.message))).toBe(true)
+    expect(useUiStore.getState().toasts.some((t) => /could not confirm taking control/i.test(t.message))).toBe(false)
+    expect(mockSendControl).not.toHaveBeenCalledWith('take')
   })
 
-  it('click-to-drive: a NEW gesture can retry control:take after a failed take was cleared', () => {
+  it('a new dedicated gesture remains available without an ownership request', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const container = stubFrameRect()
@@ -632,13 +623,11 @@ describe('BrowserLiveView — control state resilience during chat and send fail
     fireEvent.pointerUp(container, { clientX: 20, clientY: 20 })
     mockSendControl.mockClear()
 
-    // pendingTakeRef must have been cleared by the failed-send recovery —
-    // otherwise this second gesture would be silently swallowed forever.
     fireEvent.pointerDown(container, { clientX: 30, clientY: 30 })
-    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendControl).not.toHaveBeenCalledWith('take')
   })
 
-  it('"Take over": clears the optimistic pendingTake and toasts if sendControl("take") fails', () => {
+  it('"Take over" cancellation does not send an ownership request or a false failure toast', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
@@ -649,10 +638,11 @@ describe('BrowserLiveView — control state resilience during chat and send fail
     setAgentWorking('s1', false)
 
     expect(screen.getByTestId('browser-live-status-chip')).not.toHaveTextContent("You're driving")
-    expect(useUiStore.getState().toasts.some((t) => /could not confirm taking control/i.test(t.message))).toBe(true)
+    expect(useUiStore.getState().toasts.some((t) => /could not confirm taking control/i.test(t.message))).toBe(false)
+    expect(mockSendControl).not.toHaveBeenCalledWith('take')
   })
 
-  it('does not surface a take-failure toast when the take send succeeds', () => {
+  it('does not surface an ownership failure toast for a dedicated click', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const container = stubFrameRect()
@@ -675,12 +665,12 @@ describe('BrowserLiveView — annotate mid-gesture resets take/implicit refs (AD
 
     // Gesture starts, implicitly takes the wheel — ack not landed yet.
     fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
-    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendControl).not.toHaveBeenCalledWith('take')
 
     // Mid-gesture (before the ack, before pointerup), the user switches to
     // annotate mode.
     fireEvent.click(screen.getByRole('button', { name: /annotate a region/i }))
-    mockSendInput.mockClear()
+    mockDedicatedSendInput.mockClear()
 
     // The take ack arrives late, AFTER annotate mode is already active.
     act(() => {
@@ -695,7 +685,7 @@ describe('BrowserLiveView — annotate mid-gesture resets take/implicit refs (AD
     // draws a local annotate selection box instead, gated on
     // annotateDraggingRef which a stale gesture never set).
     fireEvent.pointerMove(container, { clientX: 40, clientY: 40 })
-    expect(mockSendInput).not.toHaveBeenCalled()
+    expect(mockDedicatedSendInput).not.toHaveBeenCalled()
   })
 })
 
@@ -804,57 +794,18 @@ describe('BrowserLiveView — D6 driving-state chip + glow border', () => {
   })
 })
 
-describe('BrowserLiveView — A8 optimistic driving chip (UAT polish)', () => {
-  // The bug: cancelStream (called first, inside takeWheelIfNeeded) often
-  // flips `agentWorking` to false well before the server's 'controlling'
-  // ack for the take lands — computeDriveMode used to have nothing to fall
-  // back on for that gap and dropped straight to 'idle' ("Click to drive"),
-  // even though the user just explicitly took the wheel.
-  it('shows the driving-state chip immediately after Take-over is clicked, once the agent stops working, before the take ack lands', () => {
+describe('BrowserLiveView — server-confirmed driving status with dedicated input', () => {
+  it('does not invent ownership on a click, then reflects server controlling and released status', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
-    setAgentWorking('s1', true)
-    vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
-
-    fireEvent.click(screen.getByRole('button', { name: /take over/i }))
-    // No browser_status('controlling') ack has arrived yet — simulate only
-    // the real-world side effect of cancelStream succeeding fast.
-    setAgentWorking('s1', false)
-
-    const chip = screen.getByTestId('browser-live-status-chip')
-    expect(chip).toHaveTextContent("You're driving")
-    expect(chip).not.toHaveTextContent('Click to drive')
-  })
-
-  it('also shows the driving-state chip immediately for click-to-drive (idle + first pointerdown), before the take ack lands', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
-    connectAndFrame()
-    const container = stubFrameRect()
-
-    fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
-
-    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent("You're driving")
-  })
-
-  it('falls back off the optimistic driving chip if the take is rejected/abandoned (any status frame clears it, isControlling never lands)', () => {
-    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
-    connectAndFrame()
-    setAgentWorking('s1', true)
-    vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
-
-    fireEvent.click(screen.getByRole('button', { name: /take over/i }))
-    setAgentWorking('s1', false)
-    expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent("You're driving")
-
-    // The server rejects/abandons the take (e.g. another viewer grabbed the
-    // lock first) — any status frame clears the in-flight guard per the
-    // onStatus handler; isControlling never becomes true.
-    act(() => {
-      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'idle' })
-    })
-
+    fireEvent.pointerDown(stubFrameRect(), { clientX: 20, clientY: 20 })
+    expect(mockDedicatedSendInput).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ kind: 'mouse_down', x: 20, y: 20 }))
+    expect(mockSendControl).not.toHaveBeenCalledWith('take')
     const chip = screen.getByTestId('browser-live-status-chip')
     expect(chip).not.toHaveTextContent("You're driving")
+    act(() => callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' }))
+    expect(chip).toHaveTextContent("You're driving")
+    act(() => callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'released' }))
     expect(chip).toHaveTextContent('Click to drive')
   })
 })
@@ -879,13 +830,13 @@ describe('BrowserLiveView — Escape releases the wheel (WCAG 2.1.2 No Keyboard 
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const container = driveIt(stubFrameRect())
-    mockSendInput.mockClear()
+    mockDedicatedSendInput.mockClear()
     mockSendControl.mockClear()
 
     fireEvent.keyDown(container, { key: 'Escape' })
 
     // Escape must NOT be forwarded as remote keyboard input (no key_down/text)...
-    expect(mockSendInput).not.toHaveBeenCalled()
+    expect(mockDedicatedSendInput).not.toHaveBeenCalled()
     // ...and MUST release the wheel — a genuine exit, not a local no-op.
     expect(mockSendControl).toHaveBeenCalledWith('release')
   })
@@ -918,11 +869,11 @@ describe('BrowserLiveView — Escape releases the wheel (WCAG 2.1.2 No Keyboard 
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const container = driveIt(stubFrameRect())
-    mockSendInput.mockClear()
+    mockDedicatedSendInput.mockClear()
 
     fireEvent.keyDown(container, { key: 'Tab' })
 
-    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'key_down', key: 'Tab' }))
+    expect(mockDedicatedSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'key_down', key: 'Tab' }))
     expect(mockSendControl).not.toHaveBeenCalledWith('release')
   })
 
@@ -930,11 +881,11 @@ describe('BrowserLiveView — Escape releases the wheel (WCAG 2.1.2 No Keyboard 
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const container = driveIt(stubFrameRect())
-    mockSendInput.mockClear()
+    mockDedicatedSendInput.mockClear()
 
     fireEvent.keyUp(container, { key: 'Escape' })
 
-    expect(mockSendInput).not.toHaveBeenCalled()
+    expect(mockDedicatedSendInput).not.toHaveBeenCalled()
   })
 })
 
@@ -1076,11 +1027,11 @@ describe('BrowserLiveView — shared human input reliability', () => {
     const frame = stubFrameRect()
     fireEvent.pointerDown(frame, { clientX: 20, clientY: 20 })
     fireEvent.pointerUp(frame, { clientX: 20, clientY: 20 })
-    mockSendInput.mockClear()
+    mockDedicatedSendInput.mockClear()
     fireEvent.pointerDown(frame, { clientX: 25, clientY: 25 })
     fireEvent.pointerUp(frame, { clientX: 25, clientY: 25 })
     fireEvent.keyDown(frame, { key: 'a', code: 'KeyA', keyCode: 65 })
-    expect(mockSendInput.mock.calls.map(([input]) => input.kind)).toEqual(['mouse_down', 'mouse_up', 'text'])
+    expect(mockDedicatedSendInput.mock.calls.map(([input]) => input.kind)).toEqual(['mouse_down', 'mouse_up', 'text'])
   })
 
   it('keeps human input available during chat without cancelling the response', () => {
@@ -1093,7 +1044,7 @@ describe('BrowserLiveView — shared human input reliability', () => {
     fireEvent.pointerUp(frame, { clientX: 20, clientY: 20 })
     fireEvent.keyDown(frame, { key: 'a', code: 'KeyA', keyCode: 65 })
     expect(cancel).not.toHaveBeenCalled()
-    expect(mockSendInput.mock.calls.map(([input]) => input.kind)).toEqual(['mouse_down', 'mouse_up', 'text'])
+    expect(mockDedicatedSendInput.mock.calls.map(([input]) => input.kind)).toEqual(['mouse_down', 'mouse_up', 'text'])
   })
 
   it('releases held keys when focus leaves the remote browser', () => {
@@ -1103,7 +1054,7 @@ describe('BrowserLiveView — shared human input reliability', () => {
     act(() => callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' }))
     fireEvent.keyDown(frame, { key: 'Shift', code: 'ShiftLeft', keyCode: 16, shiftKey: true })
     fireEvent.blur(frame)
-    expect(mockSendInput.mock.calls.map(([input]) => input)).toEqual([
+    expect(mockDedicatedSendInput.mock.calls.map(([input]) => input)).toEqual([
       { kind: 'key_down', key: 'Shift', code: 'ShiftLeft', key_code: 16, modifiers: 8, capture_id: 'capture-test', capture_generation: 1 },
       { kind: 'key_up', key: 'Shift', code: 'ShiftLeft', key_code: 16, modifiers: 0, capture_id: 'capture-test', capture_generation: 1 },
     ])
@@ -1114,7 +1065,7 @@ it('does not release a key this viewer never pressed', () => {
   render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
   connectAndFrame()
   fireEvent.keyUp(stubFrameRect(), { key: 'Shift', code: 'ShiftLeft', keyCode: 16 })
-  expect(mockSendInput.mock.calls).toEqual([])
+  expect(mockDedicatedSendInput.mock.calls).toEqual([])
 })
 
 it('releases a held mouse button once when pointer capture is lost', () => {
@@ -1123,16 +1074,17 @@ it('releases a held mouse button once when pointer capture is lost', () => {
   const frame = stubFrameRect()
   fireEvent.pointerDown(frame, { clientX: 20, clientY: 20, button: 0 })
   fireEvent.lostPointerCapture(frame)
-  expect(mockSendInput.mock.calls.map(([input]) => input.kind)).toEqual(['mouse_down', 'mouse_up'])
+  expect(mockDedicatedSendInput.mock.calls.map(([input]) => input.kind)).toEqual(['mouse_down', 'mouse_up'])
   fireEvent.blur(frame)
-  expect(mockSendInput.mock.calls.map(([input]) => input.kind)).toEqual(['mouse_down', 'mouse_up'])
+  expect(mockDedicatedSendInput.mock.calls.map(([input]) => input.kind)).toEqual(['mouse_down', 'mouse_up'])
 })
 
 it('reports failed input without trying another transport or replaying text', () => {
   render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
   connectAndFrame()
-  mockSendInput.mockReturnValueOnce(false)
+  mockDedicatedSendInput.mockReturnValueOnce(false)
   fireEvent.keyDown(stubFrameRect(), { key: 'x', code: 'KeyX' })
-  expect(mockSendInput.mock.calls.map(([input]) => input)).toEqual([{ kind: 'text', text: 'x', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 }])
+  expect(mockDedicatedSendInput.mock.calls.map(([input]) => input)).toEqual([{ kind: 'text', text: 'x', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 }])
   expect(useUiStore.getState().toasts.map(t => t.message)).toEqual(['Browser input was not sent. Check the connection and try again.'])
+  expect(mockSocketSendInput).not.toHaveBeenCalled()
 })

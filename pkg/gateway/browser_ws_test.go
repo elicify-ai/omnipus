@@ -546,11 +546,8 @@ func TestBrowserWS_Attach_NoBrowserManagerForAgent(t *testing.T) {
 // TestBrowserWS_ValidateInbound_RejectsMalformedInputFrame verifies that with
 // gateway.validate_inbound=true, a browser_input frame with modifiers outside
 // the schema's [0,15] bound is dropped and reported as browser_status(error)
-// naming the failing schema — and that the SAME malformed frame with
-// validate_inbound=false is silently dropped (no live view attached, so
-// handleInput's nil-mgr guard returns with no response at all), proving the
-// earlier error genuinely came from schema validation and not some other
-// check.
+// naming the failing schema. With validate_inbound=false, mandatory dedicated
+// transport admission still refuses the gesture explicitly.
 // BDD: Given validate_inbound=true,
 // When the client sends browser_input{kind:"mouse_move",modifiers:999},
 // Then the server responds browser_status{state:"error"} naming
@@ -588,7 +585,7 @@ func TestBrowserWS_ValidateInbound_RejectsMalformedInputFrame(t *testing.T) {
 	})
 
 	t.Run(
-		"validate_inbound=false lets the same frame through to handleInput, which silently no-ops",
+		"validate_inbound=false still rejects WebSocket gestures",
 		func(t *testing.T) {
 			handler, _ := newBrowserWSTestHandler(t, func(cfg *config.Config) {
 				cfg.Gateway.ValidateInbound = false
@@ -604,13 +601,14 @@ func TestBrowserWS_ValidateInbound_RejectsMalformedInputFrame(t *testing.T) {
 
 			require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
-			// No live view is attached (state.mgr is nil), so handleInput's
-			// nil-mgr guard returns without any response. If ANY frame arrives
-			// here, schema validation (not something else) must have produced
-			// the previous subtest's error.
-			conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
-			_, _, readErr := conn.ReadMessage()
-			assert.Error(t, readErr, "no frame should arrive when validate_inbound=false and no live view is attached")
+			var status generated.BrowserStatusFrame
+			require.NoError(t, conn.ReadJSON(&status))
+			require.Equal(t, "browser_status", status.Type)
+			require.Equal(t, "error", status.State)
+			require.NotNil(t, status.Message)
+			require.Equal(t, "This attachment accepts gestures only on its dedicated input connection.", *status.Message)
+			require.NotNil(t, status.OperationOnly)
+			require.True(t, *status.OperationOnly)
 		},
 	)
 }

@@ -518,10 +518,10 @@ func TestSurfaceWebRTCInputError_NoRegisteredViewer_IsNoop(t *testing.T) {
 	}
 }
 
-// A current, attached media viewer receives a real navigation refusal through the production contextual input sink.
+// The shared input adapter surfaces a real navigation refusal to its current attachment. Transport admission is tested separately.
 func TestWebrtcInputSink_NonBenignError_SurfacedToViewer(t *testing.T) {
 	f := newHandlerContextFixture(t, false)
-	source, _ := admittedInputRoute(t, f, "viewer-nonbenign")
+	source := inputAdapterRoute(t, f, "viewer-nonbenign")
 	raw, err := json.Marshal(generated.BrowserInputFrame{Type: "browser_input", Kind: "navigate", Url: strPtr("javascript:alert(1)")})
 	require.NoError(t, err)
 	newWebRTCContextInputSink(false)(source, "viewer-nonbenign", raw)
@@ -532,17 +532,17 @@ func TestWebrtcInputSink_NonBenignError_SurfacedToViewer(t *testing.T) {
 	require.Contains(t, *status.Message, "browser input failed")
 }
 
-// Both attached viewers reach the same real navigation refusal, even when only one holds the presentation control indicator.
+// At the shared adapter boundary, both attached viewers reach the same real navigation refusal, even when only one holds the presentation control indicator.
 func TestWebrtcInputSink_NonControllerViewerIsNotRejected(t *testing.T) {
 	f := newHandlerContextFixture(t, false)
-	sourceA, _ := admittedInputRoute(t, f, "viewerA")
+	sourceA := inputAdapterRoute(t, f, "viewerA")
 	other := f
 	other.state = &browserConnState{}
 	other.conn = newTestBrowserWSConn()
 	epoch := other.state.beginAttach()
 	require.True(t, other.state.bindAttachment(epoch, f.manager, "chat", "panel"))
 	t.Cleanup(func() { other.state.clearAttachment() })
-	sourceB, _ := admittedInputRoute(t, other, "viewerB")
+	sourceB := inputAdapterRoute(t, other, "viewerB")
 	require.True(t, f.manager.Live().TakeControl("panel", "viewerA"))
 	raw, err := json.Marshal(generated.BrowserInputFrame{Type: "browser_input", Kind: "navigate", Url: strPtr("javascript:alert(1)")})
 	require.NoError(t, err)

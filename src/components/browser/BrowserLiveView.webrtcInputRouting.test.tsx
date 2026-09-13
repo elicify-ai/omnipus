@@ -1,4 +1,4 @@
-// Signaling callbacks and the single ordered WebSocket input path.
+// Signaling callbacks and the independent dedicated input path.
 //
 // Mocks BOTH `@/lib/browserLiveWs` (same technique as
 // BrowserLiveView.webrtcSink.test.tsx / .takeTheWheel.test.tsx) AND
@@ -6,11 +6,11 @@
 // browserWebRTC.test.ts — here we only need a thin double that records calls
 // and lets the test fire its registered callbacks). This isolates exactly
 // what THIS component is responsible for: wiring browser_webrtc_state/answer
-// frames into the machine, and sending every input through the socket.
+// frames into the media machine, and routing gestures to the input peer.
 // BrowserLiveView.recovery.test.tsx composes the real media session as well.
 
 import { installBrowserFrameCallbacks, confirmBrowserFrame, emitBrowserFrame } from './browserFrameTestUtils'
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
 import type { BrowserPeerIdentity } from '@/lib/browserWebRTC'
@@ -19,6 +19,7 @@ import { useUiStore } from '@/store/ui'
 
 const {
   mockSendInput,
+  mockSocketSendInput,
   mockSendControl,
   mockSendTabAction,
   mockSendWebRTCOffer,
@@ -33,6 +34,7 @@ const {
   machineHasConnectedOnceRef,
   machineStateRef,
 } = vi.hoisted(() => ({
+  mockSocketSendInput: vi.fn<(input: Record<string, unknown>) => boolean>(() => true),
   mockSendInput: vi.fn<(input: Record<string, unknown>) => boolean>(() => true),
   mockSendControl: vi.fn(() => true),
   mockSendTabAction: vi.fn(() => true),
@@ -76,6 +78,11 @@ const {
 // D5: importOriginal so the real translateBrowserErrorMessage (now imported
 // by BrowserLiveView for the D5 fix) stays live under this mock — only
 // BrowserLiveWsConnection itself is replaced.
+vi.mock('@/lib/browserInputWebRTC', async () => {
+  const { dedicatedInputSessionStub } = await import('./dedicatedInputTestUtils')
+  return { BrowserInputWebRTCSession: dedicatedInputSessionStub(mockSendInput) }
+})
+
 vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/browserLiveWs')>()
   return {
@@ -87,7 +94,7 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
           connect: vi.fn(),
           detach: vi.fn(),
           close: vi.fn(),
-          sendInput: mockSendInput,
+          sendInput: mockSocketSendInput,
           sendControl: mockSendControl,
           sendTabAction: mockSendTabAction,
           // Adaptive viewport (2026-07-31): BrowserLiveView's ResizeObserver
@@ -188,6 +195,10 @@ beforeEach(() => {
   useUiStore.setState({ toasts: [] })
 })
 
+afterEach(() => {
+  expect(mockSocketSendInput.mock.calls.filter(([input]) => !['navigate', 'navigate_back', 'reload'].includes(String(input.kind)))).toEqual([])
+})
+
 /** Complete an initial gesture and control-status update, then record only
  * the subsequent gesture. Control status does not gate shared input. */
 function ackDriving(container: HTMLElement) {
@@ -199,7 +210,7 @@ function ackDriving(container: HTMLElement) {
   mockSendControl.mockClear()
 }
 
-describe('BrowserLiveView — input routing: one ordered socket during video connection changes', () => {
+describe('BrowserLiveView — input routing: dedicated input during media connection changes', () => {
   // US-1.4 and US-4.1: cleanup must survive media loss and navigation must
   // remain available without a presented frame. The component and gate are
   // real; only the socket and media boundary are controlled by this fixture.
@@ -207,7 +218,7 @@ describe('BrowserLiveView — input routing: one ordered socket during video con
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()
     fireEvent.click(screen.getByRole('button', { name: 'Go back' }))
-    expect(mockSendInput.mock.calls).toEqual([[{ kind: 'navigate_back' }]])
+    expect(mockSocketSendInput.mock.calls).toEqual([[{ kind: 'navigate_back' }]])
   })
 
   it.each([
@@ -234,7 +245,7 @@ describe('BrowserLiveView — input routing: one ordered socket during video con
     expect(mockSendInput).toHaveBeenCalledTimes(4)
   })
 
-  it('releases held keys and buttons over the surviving socket when video fails', () => {
+  it('releases held keys and buttons over the surviving input peer when video fails', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const container = stubFrameRect()
@@ -253,7 +264,7 @@ describe('BrowserLiveView — input routing: one ordered socket during video con
     expect(mockSendInput).toHaveBeenCalledTimes(2)
   })
 
-  it('pointer input uses the ordered socket before the data channel opens', () => {
+  it('pointer input uses the dedicated peer before the media data channel opens', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     // Never fire onInputChannelOpen — the DC never reports open.
@@ -267,7 +278,7 @@ describe('BrowserLiveView — input routing: one ordered socket during video con
     expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down' }))
   })
 
-  it('mouse input stays on the ordered socket after the data channel opens', () => {
+  it('mouse input stays on the dedicated peer after the media data channel opens', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => machineCallbacksRef.current.onInputChannelOpen?.())
@@ -283,7 +294,7 @@ describe('BrowserLiveView — input routing: one ordered socket during video con
     expect(payload).toEqual(expect.objectContaining({ kind: 'mouse_down', x: 10, y: 10 }))
   })
 
-  it('keyboard input stays on the ordered socket after the data channel opens', () => {
+  it('keyboard input stays on the dedicated peer after the media data channel opens', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => machineCallbacksRef.current.onInputChannelOpen?.())
@@ -300,7 +311,7 @@ describe('BrowserLiveView — input routing: one ordered socket during video con
     expect(payload).toEqual(expect.objectContaining({ kind: 'text', text: 'a' }))
   })
 
-  it('a failing unused data channel does not duplicate socket input', () => {
+  it('a failing unused media data channel does not duplicate dedicated input', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => machineCallbacksRef.current.onInputChannelOpen?.())
@@ -315,7 +326,7 @@ describe('BrowserLiveView — input routing: one ordered socket during video con
     expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down' }))
   })
 
-  it('closing the data channel does not change input transport', () => {
+  it('closing the media data channel does not change dedicated input transport', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => machineCallbacksRef.current.onInputChannelOpen?.())
@@ -330,22 +341,22 @@ describe('BrowserLiveView — input routing: one ordered socket during video con
     expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down' }))
   })
 
-  it('initial and later gestures share the same ordered socket as control', () => {
+  it('initial and later gestures stay on dedicated input without an implicit control change', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => machineCallbacksRef.current.onInputChannelOpen?.())
     const container = stubFrameRect()
     stubVideoDims()
 
-    // Gesture 1 — implicit take while idle. Everything rides WS, DC untouched.
+    // Gesture 1 uses the dedicated peer without taking control.
     fireEvent.pointerDown(container, { clientX: 10, clientY: 10 })
     fireEvent.pointerUp(container, { clientX: 12, clientY: 12 })
-    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendControl).not.toHaveBeenCalledWith('take')
     expect(mockMachineSendInput).not.toHaveBeenCalled()
     expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down' }))
     expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_up' }))
 
-    // Ack lands; gesture 2 is ordinary acked driving — still the same socket.
+    // A presentation status update does not change the gesture route.
     act(() => wsCallbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'controlling' }))
     mockMachineSendInput.mockClear()
     mockSendInput.mockClear()
@@ -371,7 +382,8 @@ describe('BrowserLiveView — control/navigate/tab-action always ride WS, even i
     fireEvent.submit(form!)
 
     expect(mockMachineSendInput).not.toHaveBeenCalled()
-    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'navigate', url: 'https://example.com' }))
+    expect(mockSocketSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'navigate', url: 'https://example.com' }))
+    expect(mockSendInput).not.toHaveBeenCalled()
   })
 
   it('Refresh uses the ordered socket', () => {
@@ -382,21 +394,21 @@ describe('BrowserLiveView — control/navigate/tab-action always ride WS, even i
     fireEvent.click(screen.getByRole('button', { name: /refresh page/i }))
 
     expect(mockMachineSendInput).not.toHaveBeenCalled()
-    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'reload' }))
+    expect(mockSocketSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'reload' }))
+    expect(mockSendInput).not.toHaveBeenCalled()
   })
 
-  it('the initial control hint and pointer press share the ordered socket', () => {
+  it('the initial pointer press uses dedicated input without an implicit control hint', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => machineCallbacksRef.current.onInputChannelOpen?.())
     const container = stubFrameRect()
     stubVideoDims()
 
-    // The ownership hint and input use the same socket; input does not wait
-    // for the server's control acknowledgement.
+    // The first press does not introduce a control barrier.
     fireEvent.pointerDown(container, { clientX: 10, clientY: 10 })
 
-    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendControl).not.toHaveBeenCalledWith('take')
     expect(mockMachineSendInput).not.toHaveBeenCalled()
     expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down' }))
   })

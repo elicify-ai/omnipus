@@ -301,8 +301,7 @@ export function describeVideoHealth(frame: BrowserVideoHealthFrame | null | unde
   }
 }
 
-interface BrowserInputOptions { // not-wire-format: attachment-local mode and control callback; only generated frames are serialized
-  mode: 'websocket' | 'dedicated'
+interface BrowserInputOptions { // not-wire-format: attachment-local control callback; only generated frames are serialized
   beforeControl: () => Pick<BrowserInputFrame, 'input_epoch' | 'control_epoch'> | null
 }
 
@@ -349,7 +348,7 @@ export class BrowserLiveWsConnection {
       // token any more.
       const attach: BrowserAttachFrame = {
         type: 'browser_attach',
-        ...(this.inputOptions?.mode === 'dedicated' ? { input_mode: 'dedicated' as const } : {}),
+        input_mode: 'dedicated',
         session_id: this.sessionId,
         agent_id: this.agentId,
       }
@@ -449,7 +448,7 @@ export class BrowserLiveWsConnection {
       return false
     }
     const intent = ['navigate', 'navigate_back', 'reload'].includes(input.kind)
-    if (this.inputOptions?.mode === 'dedicated' && !intent) return false
+    if (!intent) return false
     const control = intent ? this.prepareControl() : {}
     if (control === null) return false
     const frame: BrowserInputFrame = { ...control, type: 'browser_input', ...input }
@@ -470,7 +469,7 @@ export class BrowserLiveWsConnection {
   }
 
   private prepareControl(): Pick<BrowserInputFrame, 'input_epoch' | 'control_epoch'> | null {
-    if (this.inputOptions?.mode !== 'dedicated') return {}
+    if (!this.inputOptions) return {}
     if (!this.isConnected) return null
     return this.inputOptions.beforeControl()
   }
