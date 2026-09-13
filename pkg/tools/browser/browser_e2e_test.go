@@ -511,13 +511,61 @@ func spikeLaunchChrome(t *testing.T, label, execPath, extDir string) (*BrowserCo
 		TrustPathChrome: true, // requireBrowserOrFail already probed this binary
 	}
 
-	coord := NewBrowserCoordinator(home, cfg)
-	t.Cleanup(coord.Shutdown)
+	// LAUNCH, RETRYING ONCE ON A SLOW COLD START.
+	//
+	// The outer 120s budget below does NOT bound the step that actually fails:
+	// cdppipe's post-launch liveness probe takes its own
+	// context.WithTimeout(ctx, dialTimeout) with dialTimeout defaulting to 20s
+	// (cdppipe/allocator.go's defaultDialTimeout), so a Chrome that needs
+	// longer than 20s to answer Target.getTargets fails regardless of what we
+	// grant here.
+	//
+	// That is exactly how this gate failed on GitHub's #615 job:
+	//
+	//   browser: coordinator: failed to launch shared Chrome over the CDP pipe:
+	//   cdppipe: CDP liveness probe failed over pipe: context deadline exceeded
+	//   --- FAIL: TestSpike_CaptureAgainstSecondChrome (26.82s)
+	//
+	// This helper launches a SECOND real Chrome while the first is still
+	// running, on a shared 2-core runner. Cold-starting Chrome under that
+	// contention can exceed 20s; on an idle machine it is a couple of seconds.
+	//
+	// The production timeout is deliberately NOT raised to make this pass. 20s
+	// is a product decision about how long a user waits before being told the
+	// browser did not come up, and this test's premise is about
+	// chrome.tabCapture semantics, not launch latency. So the tolerance lives
+	// here, where the unusual load is: one retry with a fresh coordinator and
+	// a fresh profile. A genuinely broken launch still fails, twice, and the
+	// second failure is reported with its real error.
+	const launchAttempts = 2
 
-	launchCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
-	require.NoError(t, coord.ensureLaunched(launchCtx), "launch the %s Chrome process", label)
+	var (
+		coord     *BrowserCoordinator
+		launchErr error
+	)
+	for attempt := 1; attempt <= launchAttempts; attempt++ {
+		coord = NewBrowserCoordinator(home, cfg)
 
+		launchCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		launchErr = coord.ensureLaunched(launchCtx)
+		cancel()
+
+		if launchErr == nil {
+			t.Cleanup(coord.Shutdown)
+			return coord, profileDir
+		}
+
+		// Tear this attempt down before trying again, so the retry is not
+		// racing a half-launched Chrome holding the same profile dir.
+		coord.Shutdown()
+		if attempt < launchAttempts {
+			t.Logf("spikeLaunchChrome(%s): launch attempt %d/%d failed, retrying — a second "+
+				"real Chrome cold-starting under CI contention can exceed cdppipe's 20s "+
+				"liveness probe: %v", label, attempt, launchAttempts, launchErr)
+		}
+	}
+
+	require.NoError(t, launchErr, "launch the %s Chrome process (after %d attempts)", label, launchAttempts)
 	return coord, profileDir
 }
 
