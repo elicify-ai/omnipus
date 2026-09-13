@@ -420,6 +420,31 @@ type Store interface {
 	// reached from a knowledge_find-shaped query.
 	AllPaths(ctx context.Context, visit func(IndexedNote) error) error
 
+	// Reconcile runs fn as ONE whole-of-store reconcile: the index's write
+	// lock is held for the entire call, so neither another Reconcile nor any
+	// single-path direct write (UpsertNote/DeleteNote/RefreshNoteStat on any
+	// handle to the same index file) can commit while fn runs.
+	//
+	// WHY THE INTERFACE CARRIES THIS (Codex review 2026-09-14, finding 4).
+	// SQLite serializes statements, not operations — and a reconcile is an
+	// OPERATION spanning a disk scan, an AllPaths read and a deletion pass
+	// for everything the scan did not see. A direct write that commits
+	// between the scan and the AllPaths read is deleted by the deletion pass:
+	// the store says the row exists, the scan says the file does not, and the
+	// write is silently lost while its caller was already told success. Holding
+	// one lock across the whole run, with the single-write methods taking the
+	// same lock per statement, closes the window for every writer without any
+	// direct-write call site having to know the lock exists.
+	//
+	// WRITE THROUGH THE STORE fn RECEIVES. Its write methods skip the lock (fn
+	// holds it); writing through any other handle to the same index inside fn
+	// self-deadlocks, because the public write methods take the very lock fn
+	// is running under.
+	//
+	// A caller with no whole-store work to do never calls this: it exists for
+	// reconcile-shaped operations (vaultprops.Sync's scan-and-reconcile body).
+	Reconcile(fn func(Store) error) error
+
 	// Close releases the database.
 	Close() error
 }

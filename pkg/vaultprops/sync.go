@@ -379,6 +379,52 @@ func Sync(ctx context.Context, home, collectionRoot string, opts SyncOptions) (S
 		}
 	}()
 
+	// THE WHOLE RECONCILE RUNS UNDER THE INDEX'S RECONCILE LOCK (Codex review
+	// 2026-09-14, finding 4; propindex.Reconcile's own doc comment states the
+	// full window). SQLite serializes each statement, but this body is one
+	// OPERATION spanning a disk scan, an AllPaths read and a deletion pass:
+	// without the lock, a single-path direct write (pkg/knowledge author.go's
+	// instant refresh after a knowledge_edit write) could commit between the
+	// scan and the AllPaths read, and the deletion pass below would then
+	// delete that row — the scan never saw the file, the store suddenly does,
+	// and the write is silently lost while its caller was already told
+	// success. Every store write inside the closure goes through the store
+	// the closure RECEIVES (its write methods skip the lock the closure
+	// holds); writing through `store` itself would self-deadlock.
+	rerr := store.Reconcile(func(s propindex.Store) error {
+		return syncReconcileBody(ctx, s, root, fsys, &stats)
+	})
+	if rerr != nil {
+		return stats, rerr
+	}
+
+	// FR-032 is enforced at the TOP of this function and inside
+	// propindex.Open, not here. It used to be here, and being here was the
+	// defect: a chmod on the success path protects nothing on any of the paths
+	// that fail. Do not move it back.
+
+	return stats, nil
+}
+
+// syncAfterScanProbe is nil in every production build. It exists for ONE
+// deterministic interleaving test (sync_interleave_test.go): Sync calls it,
+// while HOLDING the reconcile lock, at the exact point that made the
+// uncoordinated reconcile dangerous — after the collection scan, before the
+// AllPaths read of what the store already holds. A test sets it to pause Sync
+// there and drive a concurrent direct write, proving the write queues behind
+// the reconcile instead of committing inside its scan-to-deletion window.
+var syncAfterScanProbe func()
+
+// syncReconcileBody is Sync's scan-and-reconcile, written to run INSIDE
+// store.Reconcile: `store` is the lock-skipping handle the reconcile hands
+// its function, and every write below must go through it.
+func syncReconcileBody(
+	ctx context.Context,
+	store propindex.Store,
+	root knowledge.CollectionRoot,
+	fsys knowledge.LinkFS,
+	stats *SyncStats,
+) error {
 	schemas, schemaReport, err := records.LoadSchemas(root.Path())
 	if err != nil {
 		// Not a per-file rejection (those are schemaReport.Rejections,
@@ -386,7 +432,7 @@ func Sync(ctx context.Context, home, collectionRoot string, opts SyncOptions) (S
 		// unreadable, which means "which notes are records" cannot be
 		// answered at all. Refusing loudly beats silently treating every
 		// note in the vault as an ordinary one.
-		return stats, fmt.Errorf("vaultprops: loading record schemas: %w", err)
+		return fmt.Errorf("vaultprops: loading record schemas: %w", err)
 	}
 	for _, rej := range schemaReport.Rejections {
 		relPath := rej.Type
@@ -400,13 +446,20 @@ func Sync(ctx context.Context, home, collectionRoot string, opts SyncOptions) (S
 
 	scan, err := knowledge.Scan(root.Path())
 	if err != nil {
-		return stats, fmt.Errorf("vaultprops: scanning the collection: %w", err)
+		return fmt.Errorf("vaultprops: scanning the collection: %w", err)
 	}
 	stats.Scanned = len(scan.Entries)
 	for _, p := range scan.Problems {
 		stats.Problems = append(stats.Problems, SyncProblem{
 			RelPath: p.RelPath, Reason: string(p.Reason), Detail: p.Detail,
 		})
+	}
+
+	// THE INTERLEAVING WINDOW THIS FILE'S LOCK EXISTS FOR lives between the
+	// scan above and the AllPaths read below (see Sync's Reconcile note). The
+	// probe lets a test stop the world exactly here.
+	if syncAfterScanProbe != nil {
+		syncAfterScanProbe()
 	}
 
 	// THE STORE IS THE MANIFEST. Read what it already holds BEFORE writing
@@ -423,14 +476,14 @@ func Sync(ctx context.Context, home, collectionRoot string, opts SyncOptions) (S
 		}
 		return nil
 	}); err != nil {
-		return stats, fmt.Errorf("vaultprops: listing the previously indexed paths: %w", err)
+		return fmt.Errorf("vaultprops: listing the previously indexed paths: %w", err)
 	}
 
 	seen := make(map[string]struct{}, stats.Scanned)
 
 	for _, entry := range scan.Entries {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return stats, ctxErr
+			return ctxErr
 		}
 		seen[entry.RelPath] = struct{}{}
 
@@ -449,7 +502,7 @@ func Sync(ctx context.Context, home, collectionRoot string, opts SyncOptions) (S
 				RelPath: entry.RelPath, Reason: "unreadable", Detail: resolveErr.Error(),
 			})
 			if removed, derr := removeIfPresent(ctx, store, previous, entry.RelPath); derr != nil {
-				return stats, derr
+				return derr
 			} else if removed {
 				stats.Removed++
 			}
@@ -470,8 +523,8 @@ func Sync(ctx context.Context, home, collectionRoot string, opts SyncOptions) (S
 			// nothing about FR-039a is relaxed.
 			if prev, had := previous[entry.RelPath]; had && prev.kind == propindex.KindAttachment {
 				stats.Unchanged++
-				if err := refreshStatIfDrifted(ctx, store, entry, &stats); err != nil {
-					return stats, err
+				if err := refreshStatIfDrifted(ctx, store, entry, stats); err != nil {
+					return err
 				}
 				continue
 			}
@@ -480,7 +533,7 @@ func Sync(ctx context.Context, home, collectionRoot string, opts SyncOptions) (S
 				Size: entry.Size, MtimeNanos: entry.ModTimeNanos,
 				CtimeNanos: entry.CtimeNanos, HasCtime: entry.HasCtime,
 			}); err != nil {
-				return stats, fmt.Errorf("vaultprops: indexing attachment %q: %w", entry.RelPath, err)
+				return fmt.Errorf("vaultprops: indexing attachment %q: %w", entry.RelPath, err)
 			}
 			stats.Indexed++
 			continue
@@ -502,7 +555,7 @@ func Sync(ctx context.Context, home, collectionRoot string, opts SyncOptions) (S
 			// (possibly stale) content with nothing on record explaining why
 			// it stopped moving.
 			if removed, derr := removeIfPresent(ctx, store, previous, entry.RelPath); derr != nil {
-				return stats, derr
+				return derr
 			} else if removed {
 				stats.Removed++
 			}
@@ -525,8 +578,8 @@ func Sync(ctx context.Context, home, collectionRoot string, opts SyncOptions) (S
 			// and before this refresh existed it was where file.mtime and
 			// file.size went to freeze.
 			stats.Unchanged++
-			if err := refreshStatIfDrifted(ctx, store, entry, &stats); err != nil {
-				return stats, err
+			if err := refreshStatIfDrifted(ctx, store, entry, stats); err != nil {
+				return err
 			}
 			continue
 		}
@@ -564,7 +617,7 @@ func Sync(ctx context.Context, home, collectionRoot string, opts SyncOptions) (S
 		rows.Size, rows.MtimeNanos = entry.Size, entry.ModTimeNanos
 		rows.CtimeNanos, rows.HasCtime = entry.CtimeNanos, entry.HasCtime
 		if err := store.UpsertNote(ctx, rows); err != nil {
-			return stats, fmt.Errorf("vaultprops: indexing %q: %w", entry.RelPath, err)
+			return fmt.Errorf("vaultprops: indexing %q: %w", entry.RelPath, err)
 		}
 		stats.Indexed++
 	}
@@ -582,17 +635,12 @@ func Sync(ctx context.Context, home, collectionRoot string, opts SyncOptions) (S
 	sort.Strings(toDelete)
 	for _, path := range toDelete {
 		if err := store.DeleteNote(ctx, path); err != nil {
-			return stats, fmt.Errorf("vaultprops: removing %q: %w", path, err)
+			return fmt.Errorf("vaultprops: removing %q: %w", path, err)
 		}
 		stats.Removed++
 	}
 
-	// FR-032 is enforced at the TOP of this function and inside
-	// propindex.Open, not here. It used to be here, and being here was the
-	// defect: a chmod on the success path protects nothing on any of the paths
-	// that fail. Do not move it back.
-
-	return stats, nil
+	return nil
 }
 
 // removeIfPresent deletes path from store only if this run's own snapshot of

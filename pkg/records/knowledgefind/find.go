@@ -287,6 +287,16 @@ type Deps struct {
 	// check_integrity" never re-opened anything). Empty when Store is set,
 	// or on a build with no properties index at all.
 	StoreUnavailableReason string
+	// StoreCoverageCaveat, when Store is non-nil but the writer that last
+	// established its coverage could not evaluate every file, names that fact
+	// — the store answers, every readable file is indexed, but the collection
+	// was not fully evaluated, and the named files cannot appear in any
+	// answer (Codex review 2026-09-14, finding 6). Find records it as a
+	// problem on EVERY evaluation drawn from such a store, so the verdict is
+	// complete:false with the reason, instead of a confident complete:true
+	// over a silently narrower corpus. Empty when coverage was established
+	// over the whole collection (the ordinary case).
+	StoreCoverageCaveat string
 	// RenderRows lifts the two bounds that exist for a LANGUAGE-MODEL reader,
 	// for an IN-PROCESS RENDERER that is not one. Zero — the default — changes
 	// nothing, and no tool path sets it.
@@ -870,6 +880,23 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 	cmp := records.Comparator{ResolveRelation: d.Resolve}
 	ev := &evaluation{q: q, cmp: cmp, words: wordPaths, near: nearSet, nearAnchorPath: nearAnchorPath, files: files,
 		plainNotesOnly: d.PlainNotesOnly}
+
+	// THE STORE'S COVERAGE CAVEAT, BEFORE ANY ROW IS EVALUATED (Codex review
+	// 2026-09-14, finding 6). A store whose recovery could not read every
+	// file is a USABLE store — this evaluation runs against it and returns
+	// its rows — but the answer is over "every file that could be read", not
+	// "the whole collection", and complete:true would present the first as
+	// the second. Recording the caveat as a problem makes finishVerdict
+	// derive complete:false with the reason, on every answer shape, exactly
+	// like the text index's freshness caveat below. It fires on EVERY
+	// evaluation, not only word-carrying ones, because a typed query is at
+	// least as able to miss a record in an unreadable file as a word search.
+	if cav := strings.TrimSpace(d.StoreCoverageCaveat); cav != "" {
+		ev.recordProblems([]generated.RecordProblem{problem(generated.IndexUnavailable,
+			cav,
+			"make the named files readable (check permissions or cloud-sync placeholders), then re-run; "+
+				"run knowledge_describe check_integrity to see the index state")})
+	}
 
 	// ONE evaluator for the whole scan, and `now` snapshotted ONCE (FR-146's
 	// last clause) so `now()`/`today()` give the same answer for every
