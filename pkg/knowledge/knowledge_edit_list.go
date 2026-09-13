@@ -434,6 +434,20 @@ func SetPropertyList(key string, values []string) NoteEdit {
 // See the file header for the two defined idempotent outcomes (absent key →
 // a fresh one-item list; value already present → src returned unchanged).
 func AddListValue(key, value string) NoteEdit {
+	return AddListValueUnless(key, value, func(existing string) bool { return existing == value })
+}
+
+// AddListValueUnless is AddListValue with the "already present" test
+// supplied by the caller: `present(existing)` answering true for ANY current
+// item makes the add the documented no-op, and src is returned unchanged.
+//
+// It exists for op "relation" (Codex review 2026-09-14 #8): two spellings of
+// a wikilink can name the same note — "[[People/Acme Ltd]]" written before
+// D-94's normalisation and "[[Acme Ltd]]" written after it — and an add
+// that compared bytes stored a second edge to a note already linked. The
+// caller decides what "the same value" means; this primitive only promises
+// that the bytes of every existing item are left exactly as they were.
+func AddListValueUnless(key, value string, present func(existing string) bool) NoteEdit {
 	return func(src []byte) ([]byte, error) {
 		if err := authorValidatePropertyKey(key); err != nil {
 			return nil, err
@@ -453,7 +467,7 @@ func AddListValue(key, value string) NoteEdit {
 			return nil, fmt.Errorf("%w: %q", ErrListShapeUnsupported, key)
 		}
 		for _, existing := range span.items {
-			if existing == value {
+			if present(existing) {
 				return src, nil // already present — defined no-op (Changed: false)
 			}
 		}
@@ -484,6 +498,15 @@ func AddListValue(key, value string) NoteEdit {
 // not answer, and deleting the key would silently turn "present and empty"
 // into "absent", a different validation finding).
 func RemoveListValue(key, value string) NoteEdit {
+	return RemoveListValueWhere(key, func(existing string) bool { return existing == value })
+}
+
+// RemoveListValueWhere is RemoveListValue with the item to remove chosen by
+// `match` rather than by byte equality: the FIRST item for which
+// match(existing) is true is removed, exactly as it is stored, and every
+// other item's bytes are untouched. No item matching → the documented
+// no-op. See AddListValueUnless for why op "relation" needs this.
+func RemoveListValueWhere(key string, match func(existing string) bool) NoteEdit {
 	return func(src []byte) ([]byte, error) {
 		if err := authorValidatePropertyKey(key); err != nil {
 			return nil, err
@@ -504,7 +527,7 @@ func RemoveListValue(key, value string) NoteEdit {
 		found := false
 		newItems := make([]string, 0, len(span.items))
 		for _, existing := range span.items {
-			if !found && existing == value {
+			if !found && match(existing) {
 				found = true
 				continue
 			}
