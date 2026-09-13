@@ -348,8 +348,18 @@ func streamReplay(
 			}
 		}
 
-		// FR-I-002: emit replay_message for non-empty content.
-		if entry.Content != "" {
+		// ADR-087 D2/Codex C8: a truncated assistant entry can have EMPTY
+		// content — D4a persists a zero-content entry stamped
+		// truncated/max_output_tokens when the answer was cut off before any
+		// text was produced. That entry must still replay (with no body) so
+		// the SPA can render the "(cut off at the output limit)" suffix on
+		// reattach/reload; a non-truncated empty entry is unaffected and
+		// continues to be skipped entirely below.
+		truncatedEmptyAssistant := entry.Content == "" && entry.Truncated && entry.Role == "assistant"
+
+		// FR-I-002: emit replay_message for non-empty content (or a
+		// truncated-empty assistant entry, per ADR-087 above).
+		if entry.Content != "" || truncatedEmptyAssistant {
 			// Phase 1B (FR-014): system-error entries (Type=system + Status="error")
 			// are emitted as ReplayErrorFrame so the SPA can render the typed
 			// rate-limit-denial or generic error component. Without this, the
@@ -392,6 +402,23 @@ func streamReplay(
 			if entry.Model != "" {
 				modelCopy := entry.Model
 				msgFrame.Model = &modelCopy
+			}
+			// ADR-087 D2: surface truncation on every replayed assistant
+			// entry that carries it — not only the empty-content case above.
+			// D4b (auto-continue exhausted/ineligible) stamps Truncated on
+			// an entry that DOES have content, and that must replay with the
+			// same "(cut off at the output limit)" suffix as a live turn.
+			// Absent reason on a truncated entry means "cancelled" (legacy —
+			// every entry written before TruncationReason existed was always
+			// a cancel; see TranscriptEntry.TruncationReason's doc comment).
+			if entry.Role == "assistant" && entry.Truncated {
+				truncatedCopy := true
+				msgFrame.Truncated = &truncatedCopy
+				reason := entry.TruncationReason
+				if reason == "" {
+					reason = "cancelled"
+				}
+				msgFrame.TruncationReason = &reason
 			}
 			if err2 := emitFrame(msgFrame); err2 != nil {
 				return framesEmitted, err2

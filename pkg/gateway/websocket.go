@@ -156,6 +156,11 @@ type replayFrameDecoder struct { // not-wire-format: decode-only test assertion 
 	// Wave 3 fix 5c: turn-correlation id on replay_message (assistant and
 	// turn_canceled entries).
 	TurnID string `json:"turn_id,omitempty"`
+	// ADR-087 D2: replay_message truncation fields. *bool so a test can tell
+	// "field absent" (nil) from "explicitly false" — mirrors the generated
+	// ReplayMessageFrame.Truncated's own *bool shape.
+	Truncated        *bool  `json:"truncated,omitempty"`
+	TruncationReason string `json:"truncation_reason,omitempty"`
 	// Phase 1B (FR-014): ReplayErrorFrame wire fields. Decoder-only — production
 	// code uses the generated type directly. The `Message` field above (the
 	// legacy ErrorFrame.message) doubles as the replay_error.message sink
@@ -5124,6 +5129,23 @@ type wsStreamer struct {
 	// there is no "(model not recorded)" placeholder rendered.
 	producedModel string
 
+	// continuationContent/hasContinuation carry the FULL accumulated answer
+	// across an ADR-087 D6 auto-continuation (turnState.continuationAccum),
+	// set by the agent loop via SetContinuationContent before Finalize.
+	// wsStreamer is per PROVIDER CALL, not per turn (ADR-087 §2.8): a
+	// continuation's own streamer only ever accumulated the LAST call's
+	// text (the suffix), never the full prefix+suffix the user actually
+	// read. When hasContinuation is true, Finalize persists
+	// continuationContent as the transcript entry's content INSTEAD OF its
+	// own `accumulated` buffer (and instead of the `finalContent`
+	// fallback), so the reconnect/replay snapshot matches what the live
+	// bubble showed. Tokens are never re-emitted here — the SPA already
+	// received them live; this only fixes what gets PERSISTED. Guarded by
+	// statsMu, like producedModel: SetContinuationContent (agent loop) and
+	// Finalize (turn end) may run on different goroutines.
+	continuationContent string
+	hasContinuation     bool
+
 	// Turn-level stats set by the agent loop via SetTurnStats before Finalize.
 	// Populates the "done" frame so the chat UI shows real token counts and
 	// cost instead of zeros (issue #12). Mutex-protected because SetTurnStats
@@ -5416,6 +5438,32 @@ func (s *wsStreamer) SetTurnFailed(failed bool) {
 	s.statsTurnFailed = failed
 }
 
+// SetContinuationContent stamps the FULL accumulated answer across an
+// ADR-087 D6 auto-continuation (turnState.continuationAccum) onto this
+// streamer, so Finalize persists the complete prefix+suffix text instead of
+// just the text this particular streamer itself accumulated — which, for a
+// continuation's own per-call streamer, is only the suffix (ADR-087 §2.8:
+// WSHandler.GetStreamer constructs a NEW wsStreamer on every provider call;
+// only the last one is finalized, and it never saw the earlier call's text).
+//
+// Called by the agent loop (via the inline streamerContinuationSetter
+// interface probed by turn.go's finalizeStreamer) immediately before
+// Finalize, only when the turn had at least one continuation. A no-op on an
+// empty string so a caller with nothing to stamp cannot blank out an
+// already-set value; a turn with no continuation simply never calls this,
+// leaving hasContinuation false and Finalize's existing
+// accumulated/finalContent behavior byte-identical to before this method
+// existed.
+func (s *wsStreamer) SetContinuationContent(full string) {
+	if full == "" {
+		return
+	}
+	s.statsMu.Lock()
+	s.continuationContent = full
+	s.hasContinuation = true
+	s.statsMu.Unlock()
+}
+
 func (s *wsStreamer) Update(_ context.Context, content string) error {
 	s.statsMu.Lock()
 	producerAgentID := s.agentID
@@ -5597,6 +5645,8 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	transcriptAlreadyPersisted := s.transcriptPersisted
 	producedModel := s.producedModel
 	turnFailed := s.statsTurnFailed
+	continuationContent := s.continuationContent
+	hasContinuation := s.hasContinuation
 	// FIX 5a/5c: read under statsMu — SetProducerAgentID/SetTurnID (called by
 	// the agent loop at streaming-call start) may run on a different
 	// goroutine than Finalize (called at turn end).
@@ -5752,12 +5802,20 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	// suppressed.
 	if s.agentStore != nil && s.sessionID != "" && !transcriptAlreadyPersisted {
 		content := s.accumulated.String()
-		// Fallback: when accumulated is empty (every Update() call silently
-		// failed because the client WS was already closed), use the
-		// finalContent the agent loop passed in. Without this fallback,
-		// disconnected mid-stream turns would leave no assistant entry in
-		// transcript.jsonl and the user sees nothing on reconnect/replay.
-		if content == "" && finalContent != "" {
+		if hasContinuation {
+			// ADR-087 D6.1/§2.8: this streamer is per PROVIDER CALL, not per
+			// turn — its own `accumulated` buffer (and finalContent, which
+			// for a continuation's per-call streamer would also just be the
+			// suffix) holds only the LAST call's text. continuationContent
+			// carries the full prefix+suffix answer the live bubble showed;
+			// persist THAT, not the buffer.
+			content = continuationContent
+		} else if content == "" && finalContent != "" {
+			// Fallback: when accumulated is empty (every Update() call silently
+			// failed because the client WS was already closed), use the
+			// finalContent the agent loop passed in. Without this fallback,
+			// disconnected mid-stream turns would leave no assistant entry in
+			// transcript.jsonl and the user sees nothing on reconnect/replay.
 			content = finalContent
 		}
 		if content != "" {
