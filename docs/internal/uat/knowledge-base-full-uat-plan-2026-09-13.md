@@ -367,3 +367,20 @@ The first cut missed the following. Each row was checked against the code before
 
 ### Runbook additions
 Section 1F runs after 1D; 1G after 1E; T-rows U-51…U-70 join their personas' queues; P-01…P-06 and R-01…R-03, C-01, C-02, API-01 are Operator work after Phase 2; N-01…N-05 are collected throughout.
+
+---
+
+## Pre-logged defects and roadmap (2026-09-13, founder-ruled)
+
+These were confirmed in code before the campaign starts. A tester hitting one records **CONFIRMED #nnn** (with evidence), not a new defect. Anything beyond the described symptom is new.
+
+| Issue | Defect | Plan rows it affects |
+|---|---|---|
+| #697 | `knowledge_edit op: embed` refuses `page`; agent cannot embed a PDF page | B-24 (expect refusal; Builder falls back to raw notation via `replace_body`) |
+| #698 | `knowledge_find` cannot address two knowledge bases in one workspace | B-43, U-65 (record what actually happens: silent single collection vs union without provenance) |
+| #699 | No "New note" in the Library UI | U-12 (expect `knowledge-create-note-unavailable`) |
+| #700 | Views edit only enum/date/text; integer/decimal/checkbox/list have no editor; relations have no picker | U-25, U-26, B-34 (B-34's runtime type list is attached to the issue) |
+| #701 | Library rename/move breaks inbound wikilinks; Library delete skips the vault trash (permanent) | U-16 now expects **broken links** after a UI rename (confirm and screenshot the reader), U-20 expects **no trash entry**; B-29/B-30 prove the agent door does both correctly |
+| #702 | Roadmap candidates, not defects: import as agent tool, attachment full-text search, whole-PDF inline embed, graph view, link autocomplete, autosave, board drag-and-drop, embedded filter/sort, properties panel, add-row, query-fence paging, tags browser, canvas preview | U-61, U-62 and any GAP row cite #702 |
+
+Founder rulings recorded 2026-09-13: Obsidian import via agent not expected yet; drag-and-drop not expected; PDF link-only embedding acceptable (nice to have); graph view and link autocomplete not expected; explicit save acceptable for now.
