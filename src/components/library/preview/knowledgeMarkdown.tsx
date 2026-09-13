@@ -515,7 +515,7 @@ export interface KbWikilinkOptions {
    * at all, e.g. outside a knowledge base — and every embed then renders the
    * visibly-marked reference treatment.
    */
-  resolveEmbedUrl?: (target: string, heading?: string, block?: string) => EmbedResolution
+  resolveEmbedUrl?: (target: string, heading?: string, block?: string, page?: number) => EmbedResolution
 }
 
 /** Default resolution when the caller offers no resolver at all (e.g. outside
@@ -569,7 +569,7 @@ export function remarkKbWikilinks(options: KbWikilinkOptions = {}) {
 
         const kind = classifyEmbedKind(parsed.target)
         const resolution =
-          options.resolveEmbedUrl?.(parsed.target, parsed.heading, parsed.block) ??
+          options.resolveEmbedUrl?.(parsed.target, parsed.heading, parsed.block, parsed.page) ??
           NO_RESOLVER_EMBED_RESOLUTION
 
         // `image` is the ONE kind decided right here, because it is the one
@@ -644,6 +644,14 @@ export function remarkKbWikilinks(options: KbWikilinkOptions = {}) {
               // decide whether THIS embed has a page to mount, distinct from
               // a whole-document pdf embed which never carries this.
               ...(parsed.page !== undefined ? { 'data-kb-embed-page': String(parsed.page) } : {}),
+              // UAT D-39: a pdf fragment spelled `page=` but not a number
+              // (`#page=abc`) used to be silently read as a heading and
+              // drawn as an ordinary link. It stays a link, but says why.
+              ...(kind === 'pdf' && parsed.heading !== undefined && /^page=/i.test(parsed.heading)
+                ? {
+                    'data-kb-embed-link-reason': `"#${parsed.heading}" is not a page number — write #page=N with N starting at 1`,
+                  }
+                : {}),
               'data-kb-embed': '',
               'data-kb-embed-kind': kind,
               'data-kb-embed-state': resolution.state,
@@ -806,61 +814,115 @@ function isBlankTextNode(node: MdNode): boolean {
   return node.type === 'text' && (node.value ?? '').trim() === ''
 }
 
+/** A soft line break (`text` "\n") or a hard one (`break`) — the whitespace
+ *  between two embeds written on consecutive lines. Neither is content. */
+function isLineSeparatorNode(node: MdNode): boolean {
+  return node.type === 'break' || isBlankTextNode(node)
+}
+
+/** Any node `remarkKbWikilinks` produced for a `![[…]]` — the link-shaped
+ *  fallback (tagged `data-kb-embed`) or the bare `image` node a resolved
+ *  picture becomes. A plain markdown `![alt](url)` picture also matches the
+ *  second clause; splitting a run of consecutive pictures into one block
+ *  each is harmless and is what Obsidian draws for the same lines. */
+function isEmbedNode(node: MdNode): boolean {
+  return node.type === 'image' || node.data?.hProperties?.['data-kb-embed'] !== undefined
+}
+
+/** Tags a promotable embed as standing on a line of its own — the only
+ *  shape a block-level renderer is safe to mount in (nesting a table inside
+ *  a <p> the note wrote around inline text would be invalid HTML). */
+function markStandalone(node: MdNode): MdNode {
+  node.data = {
+    ...node.data,
+    hProperties: {
+      ...(node.data?.hProperties ?? {}),
+      'data-kb-embed-standalone': '',
+    },
+  }
+  return node
+}
+
+/** A sized picture that stood on its own line: converted to the SAME
+ *  link-node shape a base/markdown embed uses, so it reaches `a` (the one
+ *  slot this composition is permitted to replace) and mounts
+ *  `KbImageEmbedMount` — `LibraryImagePreview`'s width prop, applied through
+ *  a `<div>`-rooted component, needs exactly this block-safe placement. */
+function sizedImageAsStandaloneLink(only: MdNode): MdNode {
+  const props = only.data?.hProperties ?? {}
+  return {
+    type: 'link',
+    url: '',
+    data: {
+      hProperties: {
+        'data-kb-wikilink': '',
+        'data-kb-embed': '',
+        'data-kb-embed-kind': 'image',
+        'data-kb-embed-state': 'resolved',
+        'data-kb-embed-standalone': '',
+        'data-kb-embed-width': props['data-kb-embed-width'],
+        'data-kb-embed-workspace-id': props['data-kb-embed-workspace-id'],
+        'data-kb-embed-workspace-path': props['data-kb-embed-workspace-path'],
+      },
+    },
+    children: [{ type: 'text', value: only.alt ?? '' }],
+  }
+}
+
+/** The one block each embed of an all-embed paragraph becomes: a promoted
+ *  block mount, a sized picture's block-safe link node, or — for an embed
+ *  with no block renderer (an unresolved target, a `.csv`, an unsized
+ *  picture) — its own one-node paragraph, exactly what the author would
+ *  have got by putting a blank line around it. */
+function embedAsOwnBlock(node: MdNode): MdNode {
+  if (isPromotableBlockEmbedNode(node)) return markStandalone(node)
+  if (isSizableImageEmbedNode(node)) return sizedImageAsStandaloneLink(node)
+  return { type: 'paragraph', children: [node] }
+}
+
+/** UAT D-12 (web half) — the reason a resolved, block-capable embed is
+ *  nevertheless drawn as a link, stated on the badge instead of withheld.
+ *  Read back by `EmbedFallback`'s `resolved` arm. */
+export const EMBED_INLINE_WITH_TEXT_REASON =
+  'it shares a line with other text — put the embed on a line of its own to show it here'
+
+function markInlineWithText(node: MdNode): void {
+  if (!isPromotableBlockEmbedNode(node)) return
+  node.data = {
+    ...node.data,
+    hProperties: {
+      ...(node.data?.hProperties ?? {}),
+      'data-kb-embed-link-reason': EMBED_INLINE_WITH_TEXT_REASON,
+    },
+  }
+}
+
+/**
+ * UAT D-12 / D-131 / D-13 (web halves): consecutive embed LINES are one
+ * markdown paragraph (`![[a]]\n![[b]]`), and the old rule promoted a
+ * paragraph only when it held exactly ONE embed — so a dashboard written
+ * the way Obsidian users, and `knowledge_edit op: embed`, actually write
+ * one (one embed per line, no blank lines) mounted nothing at all and
+ * badged every module "embed shown as a link" with no reason. A paragraph
+ * whose only content is embeds — any number of them, separated by nothing
+ * but line breaks — is now split into one block per embed, which is exactly
+ * what the author would have got by separating them with blank lines. A
+ * paragraph that mixes an embed with other words keeps the link treatment
+ * (a block renderer cannot sit inside a sentence), but the badge now says
+ * so (`markInlineWithText`).
+ */
 function promoteStandaloneEmbeds(parent: MdNode): void {
   if (!parent.children) return
-  parent.children = parent.children.map((child) => {
+  parent.children = parent.children.flatMap((child): MdNode[] => {
     if (child.type === 'paragraph' && child.children) {
-      const meaningful = child.children.filter((c) => !isBlankTextNode(c))
-      const only = meaningful.length === 1 ? (meaningful[0] as MdNode) : undefined
-
-      if (only && isPromotableBlockEmbedNode(only)) {
-        only.data = {
-          ...only.data,
-          hProperties: {
-            ...(only.data?.hProperties ?? {}),
-            // Marks that THIS occurrence stood alone in its own paragraph —
-            // the only shape a block-level renderer is safe to mount in
-            // (nesting a table inside a <p> the note wrote around inline
-            // text would be invalid HTML). An embed mixed inline with other
-            // words keeps today's link-fallback treatment untouched.
-            'data-kb-embed-standalone': '',
-          },
-        }
-        return only
+      const meaningful = child.children.filter((c) => !isLineSeparatorNode(c))
+      if (meaningful.length > 0 && meaningful.every(isEmbedNode)) {
+        return meaningful.map(embedAsOwnBlock)
       }
-
-      // A sized picture that stood ALONE: converted to the SAME link-node
-      // shape a base/markdown embed uses, so it reaches `a` (the one slot
-      // this composition is permitted to replace) and mounts
-      // `KbImageEmbedMount` — `LibraryImagePreview`'s width prop, applied
-      // through a `<div>`-rooted component, needs exactly this block-safe
-      // placement. A sized picture MIXED inline with other words is left
-      // completely untouched here — still a plain `image` node, rendering
-      // exactly as an unsized one would (EMB-030's width silently unused,
-      // never a "shown as a link" downgrade of the picture itself).
-      if (only && isSizableImageEmbedNode(only)) {
-        const props = only.data?.hProperties ?? {}
-        return {
-          type: 'link',
-          url: '',
-          data: {
-            hProperties: {
-              'data-kb-wikilink': '',
-              'data-kb-embed': '',
-              'data-kb-embed-kind': 'image',
-              'data-kb-embed-state': 'resolved',
-              'data-kb-embed-standalone': '',
-              'data-kb-embed-width': props['data-kb-embed-width'],
-              'data-kb-embed-workspace-id': props['data-kb-embed-workspace-id'],
-              'data-kb-embed-workspace-path': props['data-kb-embed-workspace-path'],
-            },
-          },
-          children: [{ type: 'text', value: only.alt ?? '' }],
-        }
-      }
+      for (const c of meaningful) markInlineWithText(c)
     }
     promoteStandaloneEmbeds(child)
-    return child
+    return [child]
   })
 }
 
@@ -1128,6 +1190,7 @@ function CollectionLink({
   target,
   verified,
   isEmbed,
+  embedReason,
   ambiguousDetail,
   children,
 }: {
@@ -1142,6 +1205,9 @@ function CollectionLink({
    *  unverified treatment — see UNVERIFIED_LINK_CLASS. */
   verified: boolean
   isEmbed?: boolean
+  /** Why a resolved embed is drawn as a link (UAT D-12, web half). Shown on
+   *  the badge; never set on a non-embed link. */
+  embedReason?: string
   /** Set when more than one graph edge matched (ADR-083 EMB-018): the first
    *  in response order is shown, and this names the alternatives instead of
    *  staying quiet about the tie-break. */
@@ -1172,7 +1238,7 @@ function CollectionLink({
         </span>
       ) : null}
       {ambiguousDetail ? <span className="sr-only"> ({ambiguousDetail})</span> : null}
-      {isEmbed ? <EmbedBadge /> : null}
+      {isEmbed ? <EmbedBadge {...(embedReason ? { reason: embedReason } : {})} /> : null}
     </>
   )
 
@@ -1217,11 +1283,25 @@ function CollectionLink({
 /** The badge marking a fallback rendering as standing in for an embed —
  *  shared by every embed treatment that still is, in some sense, a link
  *  (resolved-but-no-renderer-kind, indeterminate, confirmed missing). */
-function EmbedBadge() {
+function EmbedBadge({ reason }: { reason?: string }) {
   return (
-    <span className="ml-1 text-[10px] uppercase tracking-wide text-[var(--color-muted)]">
-      embed shown as a link
-    </span>
+    <>
+      <span className="ml-1 text-[10px] uppercase tracking-wide text-[var(--color-muted)]">
+        embed shown as a link
+      </span>
+      {reason ? (
+        // UAT D-12 (web half): the badge states WHY, not only the outcome.
+        // Its own element, so the fixed badge text stays matchable on its
+        // own; the reason also rides on `title` for the hover reader.
+        <span
+          data-testid="kb-embed-link-reason"
+          title={reason}
+          className="ml-1 text-[10px] tracking-wide text-[var(--color-muted)]"
+        >
+          ({reason})
+        </span>
+      ) : null}
+    </>
   )
 }
 
@@ -1317,6 +1397,37 @@ function ContainmentRefusedEmbed({ children }: { children?: ReactNode }) {
  * wrong edge when a plain `[[Note]]` and an embed `![[Note]]` of the same
  * target coexist in one document.
  */
+/** UAT D-12 (web half): why a RESOLVED embed is nevertheless drawn as a
+ *  link — one sentence per cause, never "no reason". `inlineReason` is what
+ *  `promoteStandaloneEmbeds` wrote for an embed sharing a line with text;
+ *  everything else is decided by the kind (and, for a pdf, whether a page
+ *  was asked for). Exported as a test seam only. */
+export function resolvedEmbedLinkReason(
+  kind: LibraryPreviewKind | undefined,
+  hasPage: boolean,
+  inlineReason: string | undefined,
+): string {
+  if (inlineReason) return inlineReason
+  if (kind === undefined) return 'this kind of file has no inline view'
+  switch (inlineEmbedTreatment(kind)) {
+    case 'block-mount-if-page':
+      return hasPage
+        ? 'it does not stand on a line of its own'
+        : 'a whole PDF is shown as a link — add #page=N to show one page here'
+    case 'link-only':
+      return kind === 'mermaid'
+        ? 'diagram files are shown as links, not drawn inline'
+        : 'this kind of file has no inline view'
+    case 'image-node':
+    case 'block-mount':
+      return 'it does not stand on a line of its own'
+    default: {
+      const unhandled: never = kind as never
+      return unhandled
+    }
+  }
+}
+
 function EmbedFallback({
   target,
   state,
@@ -1325,6 +1436,9 @@ function EmbedFallback({
   outsideRoot,
   ambiguous,
   candidates,
+  kind,
+  hasPage,
+  inlineReason,
   children,
 }: {
   target: string
@@ -1341,6 +1455,14 @@ function EmbedFallback({
   outsideRoot: boolean
   ambiguous: boolean
   candidates?: string
+  /** The embed's classified kind — drives the stated reason on the
+   *  `resolved` arm (UAT D-12, web half). */
+  kind?: LibraryPreviewKind
+  /** True when the notation carried a `#page=N` fragment. */
+  hasPage?: boolean
+  /** Reason written by `promoteStandaloneEmbeds` for an embed that shares
+   *  its line with other text. */
+  inlineReason?: string
   children?: ReactNode
 }) {
   switch (state) {
@@ -1372,6 +1494,7 @@ function EmbedFallback({
           target={target}
           verified
           isEmbed
+          embedReason={resolvedEmbedLinkReason(kind, hasPage === true, inlineReason)}
           ambiguousDetail={
             ambiguous
               ? `more than one file matched this embed's target; showing the first — also matches: ${candidates ?? 'no other candidates were reported'}`
@@ -1804,6 +1927,7 @@ function KnowledgeMarkdownLink(
     'data-kb-embed-workspace-path'?: string
     'data-kb-embed-width'?: string
     'data-kb-embed-page'?: string
+    'data-kb-embed-link-reason'?: string
   },
 ) {
   const { href, children } = props
@@ -1922,6 +2046,11 @@ function KnowledgeMarkdownLink(
           ambiguous={props['data-kb-embed-ambiguous'] !== undefined}
           {...(props['data-kb-embed-candidates'] !== undefined
             ? { candidates: props['data-kb-embed-candidates'] }
+            : {})}
+          {...(asPreviewKind(embedKind) !== undefined ? { kind: asPreviewKind(embedKind) } : {})}
+          hasPage={props['data-kb-embed-page'] !== undefined}
+          {...(props['data-kb-embed-link-reason'] !== undefined
+            ? { inlineReason: props['data-kb-embed-link-reason'] }
             : {})}
         >
           {children}

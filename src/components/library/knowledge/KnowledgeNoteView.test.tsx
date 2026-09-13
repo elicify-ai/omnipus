@@ -453,6 +453,55 @@ describe('KnowledgeNoteView — the embed resolver (ADR-083 EMB-011 through EMB-
     expect(img.getAttribute('src') ?? '').toContain('diagram.png')
   })
 
+  it('UAT D-39 — matches a `#page=N` pdf embed against the graph edge that records the fragment as heading "page=N"', async () => {
+    // DIES ON the old key match: the reader parses `page=2` OUT of the
+    // heading while the link graph keeps it IN, so no edge matched and the
+    // embed was drawn "could not be checked: no reason available" — on a
+    // healthy pdf with a valid page. A matched, resolved, standalone page
+    // embed mounts the page renderer (a block mount, not a `markdown-link`).
+    const loadGraph = vi.fn(async (req: { kind: string }) =>
+      req.kind === 'links'
+        ? graph({
+            kind: 'links',
+            nodes: [{ path: 'Assets/multipage.pdf', title: 'multipage', exists: true }],
+            edges: [
+              embedEdge({
+                to_path: 'Assets/multipage.pdf',
+                link_text: 'Assets/multipage.pdf',
+                heading: 'page=2',
+              }),
+            ],
+          })
+        : graph(),
+    ) as unknown as KnowledgeGraphLoader
+
+    renderEmbedNote({ content: '![[Assets/multipage.pdf#page=2]]', loadGraph })
+
+    await waitFor(() => expect(screen.getByTestId('lazy-embed-mount')).toBeInTheDocument())
+    expect(screen.queryByTestId('markdown-link')).not.toBeInTheDocument()
+    expect(bodyText()).not.toMatch(/no reason available/i)
+  })
+
+  it('UAT D-39 — a `#page=N` embed still does NOT match an edge for a different page', async () => {
+    const loadGraph = vi.fn(async (req: { kind: string }) =>
+      req.kind === 'links'
+        ? graph({
+            kind: 'links',
+            nodes: [{ path: 'Assets/multipage.pdf', title: 'multipage', exists: true }],
+            edges: [
+              embedEdge({ to_path: 'Assets/multipage.pdf', link_text: 'Assets/multipage.pdf', heading: 'page=3' }),
+            ],
+          })
+        : graph(),
+    ) as unknown as KnowledgeGraphLoader
+
+    renderEmbedNote({ content: '![[Assets/multipage.pdf#page=2]]', loadGraph })
+
+    await waitFor(() =>
+      expect(screen.getByTestId('markdown-link').getAttribute('data-kb-embed-state')).toBe('indeterminate'),
+    )
+  })
+
   it('reserves space with NO marker while the graph is loading (EMB-015)', async () => {
     // `findByTestId` alone would be satisfied by the FIRST paint's transient
     // `indeterminate` default (no resolveEmbedUrl until collectionId
