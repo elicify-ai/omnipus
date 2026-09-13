@@ -641,8 +641,14 @@ type joinBorrower struct {
 }
 
 type borrowedTarget struct {
-	cells   []generated.VaultFindCell
-	problem *generated.RecordProblem
+	cells []generated.VaultFindCell
+	// problems explains every cell that is bare or malformed: the one
+	// dangling_relation problem when nothing could be borrowed at all, or
+	// one type_mismatch per joined value the target's own schema does not
+	// accept (Codex review 2026-09-14, finding 7). Genuine absence — the
+	// target simply carries no value for a declared property — is not a
+	// problem and adds nothing here.
+	problems []generated.RecordProblem
 }
 
 func newJoinBorrower(ctx context.Context, d Deps, files *fileMetaSource) *joinBorrower {
@@ -662,9 +668,7 @@ func (b *joinBorrower) fill(row *generated.VaultFindRow) []generated.RecordProbl
 		if len(t.cells) > 0 {
 			row.Joins[i].Cells = append([]generated.VaultFindCell{}, t.cells...)
 		}
-		if t.problem != nil {
-			ps = append(ps, *t.problem)
-		}
+		ps = append(ps, t.problems...)
 	}
 	return ps
 }
@@ -686,7 +690,7 @@ func (b *joinBorrower) borrow(relation, target string) borrowedTarget {
 			"fix the relation target, or drop it from join")
 		r := relation
 		p.Property = &r
-		return borrowedTarget{problem: &p}
+		return borrowedTarget{problems: []generated.RecordProblem{p}}
 	}
 	if b.d.Store == nil || b.d.ResolveNear == nil {
 		return bare("the properties index is not open")
@@ -721,18 +725,62 @@ func (b *joinBorrower) borrow(relation, target string) borrowedTarget {
 	}
 	cand := newCandidate(*found, schema, b.files.meta(*found), nil)
 	cells := make([]generated.VaultFindCell, 0, len(schema.PropertyOrder))
+	var problems []generated.RecordProblem
 	for _, name := range schema.PropertyOrder {
 		prop, ok := schema.Property(name)
 		if !ok || prop.Type == records.TypeRelation || prop.Type == records.TypePerson {
 			continue
 		}
 		pv, err := cand.value(prop)
-		if err != nil || pv.State != records.StatePresent {
+		if err != nil {
+			// The stored row could not be decoded against the target's own
+			// schema (a stale enum value the schema no longer admits, a typed
+			// column with nothing in it). Before finding 7 this was a silent
+			// `continue`: the cell vanished and the verdict stayed complete.
+			p := problem(generated.TypeMismatch,
+				fmt.Sprintf("join %s: %s: property %s could not be read from the properties index (%v), so its value is not shown",
+					relation, path, prop.Name, err),
+				"run knowledge_describe check_integrity; if the index is stale it rebuilds on the next query")
+			n := prop.Name
+			p.Property = &n
+			p.Paths = &[]string{path}
+			problems = append(problems, p)
+			continue
+		}
+		switch pv.State {
+		case records.StateAbsent:
+			// Legitimate absence: the target carries no value for this
+			// declared property. Not a cell, not a problem.
+			continue
+		case records.StateNonConforming:
+			// Same treatment the main row gets in recordNoteHealth: the cell
+			// shows what the FILE says, and the problem list names the path,
+			// the property and why the value does not conform.
+			reason := "the stored value does not conform to the declaration"
+			if len(pv.Findings) > 0 && pv.Findings[0].Reason != "" {
+				reason = pv.Findings[0].Reason
+			} else if got, expected := cand.evidence(prop.Name); got != "" || expected != "" {
+				reason = fmt.Sprintf("holds %q where %s was expected", got, expected)
+			}
+			p := problem(generated.TypeMismatch,
+				fmt.Sprintf("join %s: %s: property %s — %s", relation, path, prop.Name, reason),
+				"correct the value in the joined note to the declared shape, or change the declaration with knowledge_configure")
+			n := prop.Name
+			p.Property = &n
+			p.Paths = &[]string{path}
+			problems = append(problems, p)
+			value := renderValue(pv)
+			if got, _ := cand.evidence(prop.Name); value == "(unreadable)" && got != "" {
+				value = got
+			}
+			cell := generated.VaultFindCell{Property: prop.Name, Value: value}
+			applyCellMetadata(&cell, prop)
+			cells = append(cells, cell)
 			continue
 		}
 		cell := generated.VaultFindCell{Property: prop.Name, Value: renderValue(pv)}
 		applyCellMetadata(&cell, prop)
 		cells = append(cells, cell)
 	}
-	return borrowedTarget{cells: cells}
+	return borrowedTarget{cells: cells, problems: problems}
 }
