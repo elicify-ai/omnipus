@@ -115,6 +115,9 @@ func (lv *LiveView) dispatchInputContext(caller context.Context, viewerID string
 		return realInputError("browser live: session is not attached")
 	}
 	ctx, cancel := context.WithTimeout(targetCtx, budget)
+	if in.Timing != nil && in.Timing.ObserveBudget != nil {
+		in.Timing.ObserveBudget("live_budget", inputRemaining(ctx))
+	}
 	stop := context.AfterFunc(caller, cancel)
 	if in.SourceContext != nil {
 		stopSource := context.AfterFunc(in.SourceContext, cancel)
@@ -282,6 +285,9 @@ func (lv *LiveView) dispatchTrackedInput(ctx, targetCtx context.Context, viewerI
 		a.Modifiers = input.Modifier(modifiers)
 	}
 	in.observeTiming("cdp_start")
+	if in.Timing != nil && in.Timing.ObserveBudget != nil {
+		in.Timing.ObserveBudget("cdp_start", inputRemaining(ctx))
+	}
 	err = lv.runCDP(ctx, inputRemaining(ctx), action)
 	in.observeTiming("cdp_done")
 	// Only an explicit protocol rejection proves a press was not accepted.

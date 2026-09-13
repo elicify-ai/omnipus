@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
@@ -38,15 +40,17 @@ func withWebRTCInputRoute(parent context.Context, mgr *browser.BrowserManager, p
 	return context.WithValue(parent, webRTCInputRouteKey{}, route), nil
 }
 
-func newWebRTCContextInputSink(validateInbound bool) webrtc.ContextInputSink {
+func newWebRTCContextInputSink(validateInbound bool, enqueued ...func() time.Time) webrtc.ContextInputSink {
 	return newWebRTCContextInputSinkWithDispatch(validateInbound, func(ctx context.Context, mgr *browser.BrowserManager, panel, viewer string, in browser.LiveInput) error {
 		return mgr.Live().InputContext(ctx, panel, viewer, in)
-	})
+	}, enqueued...)
 }
 
 // The dispatch function is the existing browser-input module boundary. Route,
 // validation and source ownership remain in this gateway adapter.
-func newWebRTCContextInputSinkWithDispatch(validateInbound bool, dispatch func(context.Context, *browser.BrowserManager, string, string, browser.LiveInput) error) webrtc.ContextInputSink {
+func newWebRTCContextInputSinkWithDispatch(validateInbound bool, dispatch func(context.Context, *browser.BrowserManager, string, string, browser.LiveInput) error, enqueued ...func() time.Time) webrtc.ContextInputSink {
+	timingEnabled := os.Getenv("OMNIPUS_BROWSER_INPUT_TIMING") == "1"
+	sampling := &browserInputTimingSampling{}
 	return func(ctx context.Context, viewerID string, raw []byte) {
 		if ctx == nil || ctx.Err() != nil {
 			return
@@ -69,9 +73,30 @@ func newWebRTCContextInputSinkWithDispatch(validateInbound bool, dispatch func(c
 			slog.Warn("browser-webrtc: dropping malformed input data-channel frame", "viewer_id", viewerID, "error", err)
 			return
 		}
+		var probe *browserInputTiming
+		if timingEnabled {
+			received := time.Now()
+			if len(enqueued) > 0 {
+				if queued := enqueued[0](); !queued.IsZero() {
+					received = queued
+				}
+			}
+			probe = sampling.begin(frame, received)
+			probe.mark("queue_started")
+			defer probe.finish()
+		}
 		in := browserInputFrameToLiveInput(frame)
+		if probe != nil {
+			in.Timing = &browser.LiveInputTimingObserver{Observe: probe.mark, ObserveBudget: probe.observeBudget}
+		}
 		in.SourceContext = ctx
 		err := dispatch(ctx, route.manager, route.panelSessionID, viewerID, in)
+		if probe != nil {
+			probe.outcome = browserTimingOutcome(err)
+			if browser.IsBenignLiveInputError(err) {
+				probe.benignReason = browserTimingBenignReason(err.Error())
+			}
+		}
 		if err == nil || ctx.Err() != nil || route.attachment.Err() != nil {
 			return
 		}

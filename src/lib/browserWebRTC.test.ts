@@ -1533,3 +1533,23 @@ describe('BrowserWebRTCSession — receiver liveness', () => {
     } finally { machine.stop(); vi.useRealTimers() }
   })
 })
+
+it('owns opt-in receiver diagnostics for exactly the media peer lifetime', async () => {
+  vi.useFakeTimers()
+  window.history.replaceState({}, '', '/?browserVideoDiagnostics=1')
+  const getStats = vi.fn(async () => new Map() as RTCStatsReport)
+  const pc = Object.assign(makeFakePc(), { getStats })
+  const machine = new BrowserWebRTCSession({ pcFactory: () => asRTCPeerConnection(pc) })
+  try {
+    machine.start(vi.fn(() => true))
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(getStats).toHaveBeenCalledTimes(1)
+    expect(window.__omnipusVideoDiagnostics?.samples).toHaveLength(1)
+    machine.stop()
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(getStats).toHaveBeenCalledTimes(1)
+  } finally {
+    machine.stop(); vi.useRealTimers(); window.history.replaceState({}, '', '/')
+    delete window.__omnipusVideoDiagnostics
+  }
+})

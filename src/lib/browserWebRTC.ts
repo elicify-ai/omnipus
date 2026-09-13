@@ -1,3 +1,4 @@
+import { startBrowserVideoDiagnostics } from './browserVideoDiagnostics'
 // browserWebRTC — the viewer-side WebRTC peer-connection state machine for the
 // live browser panel (ADR-047 "live-browser WebRTC", wave-plan.md W2-B).
 //
@@ -351,6 +352,7 @@ export class BrowserWebRTCSession {
   private iceGatheringTimer: ReturnType<typeof setTimeout> | null = null
   private receiverHealthTimer: ReturnType<typeof setInterval> | null = null
   private videoTrack: MediaStreamTrack | null = null
+  private stopDiagnostics: (() => void) | null = null
 
   private streamCb: ((stream: MediaStream, identity: BrowserPeerIdentity) => void) | null = null
   private inputOpenCb: (() => void) | null = null
@@ -720,6 +722,7 @@ export class BrowserWebRTCSession {
     }
     pc.onconnectionstatechange = checkReceiver
     this.receiverHealthTimer = setInterval(checkReceiver, 250)
+    this.stopDiagnostics = startBrowserVideoDiagnostics(pc, () => this.remoteStream)
     pc.ontrack = (event: RTCTrackEvent) => {
       if (this.pc !== pc || this.stopped) return
       // Remote-CONTROL latency fix (live report, macOS 2026-08-13: "scrolling
@@ -873,6 +876,8 @@ export class BrowserWebRTCSession {
   }
 
   private _cleanupPeer(): void {
+    this.stopDiagnostics?.()
+    this.stopDiagnostics = null
     if (this.receiverHealthTimer !== null) {
       clearInterval(this.receiverHealthTimer)
       this.receiverHealthTimer = null

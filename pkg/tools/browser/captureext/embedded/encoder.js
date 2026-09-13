@@ -909,7 +909,13 @@ async function readVideoSenderSample(pc, current = () => true) {
     }
   }
   if (fresh) previousSenderSamples.set(sender, { timestamp, sourceId: source && source.id, frames: source && source.frames });
+  // Local cumulative stage counters; no network identities or frame contents.
+  const timing = {};
+  for (const key of ['framesEncoded', 'totalEncodeTime', 'totalPacketSendDelay', 'packetsSent', 'bytesSent', 'retransmittedPacketsSent', 'retransmittedBytesSent']) {
+    if (typeof out[key] === 'number' && Number.isFinite(out[key]) && out[key] >= 0) timing[key] = out[key];
+  }
   return {
+    timing,
     sourceFramesPerSecond: sourceRate,
     sourceFrames: source && source.frames,
     encodedFrames: out.framesEncoded,
@@ -1045,6 +1051,9 @@ async function adaptTick(pcOverride, nowOverride) {
       pressureAgeMs: adaptState.lastPressureAt ? Date.now() - adaptState.lastPressureAt : null,
       cycle: adaptCycleCount,
       fps: sample.framesPerSecond,
+      sourceFps: sample.sourceFramesPerSecond,
+      sampleTimestampMs: sample.sampleTimestampMs,
+      timing: sample.timing,
       qualityLimitationReason: sample.qualityLimitationReason,
       frameWidth: sample.frameWidth,
       frameHeight: sample.frameHeight,

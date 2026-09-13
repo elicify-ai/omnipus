@@ -401,6 +401,8 @@ func TestSeed_AtomicNoPartialLeftovers(t *testing.T) {
 // embedded/manifest.json's "version" together, then ADD a new entry here —
 // never edit an existing entry, the history is the point.
 var versionContentHashes = map[string]string{
+	// 1.0.22: local numeric encoder and packet-send timing diagnostics.
+	"1.0.22": "b86eb9b8eb6ea1f8b4dfd79c301fd31d2a3ce999f3065059d2a0b8848599933c",
 	// 1.0.21: retired capture rejections preserve queued replacement commands.
 	"1.0.21": "6ad2a4d331957c962be3689b405dd7f4784d777674b2d4e65b22e0d289a1769b",
 	// 1.0.20: shutdown and adaptation asynchronous lifetime fences.

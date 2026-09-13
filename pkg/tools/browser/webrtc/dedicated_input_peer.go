@@ -100,6 +100,13 @@ func (p *DedicatedInputPeer) fail(reason string) {
 		p.state(reason)
 	}
 }
+
+// SetQueueTimingObserver observes admission time immediately before serial
+// dispatch without changing the input source context or the wire frame.
+func (p *DedicatedInputPeer) SetQueueTimingObserver(observer func(generated.BrowserInputFrame, time.Time)) {
+	p.queue.setTimingObserver(observer)
+}
+
 func (p *DedicatedInputPeer) PauseControl(next int) (context.Context, <-chan struct{}, error) {
 	return p.queue.pause(next)
 }

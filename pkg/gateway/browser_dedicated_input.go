@@ -140,7 +140,8 @@ func (h *BrowserWSHandler) dispatchDedicatedInputOffer(wc *browserWSConn, state 
 				return
 			}
 		}
-		sink := newWebRTCContextInputSink(true)
+		var enqueuedAt time.Time
+		sink := newWebRTCContextInputSink(true, func() time.Time { return enqueuedAt })
 		route, err := withWebRTCInputRoute(source, mgr, a.panelSessionID, func(origin context.Context, kind string, err error) {
 			wc.sendCriticalScopedGen(operationErrorStatus(a.sessionID, fmt.Sprintf("browser input failed: %s", err)), dropContext(a.sessionID, viewer, "dedicated-input-error"), origin, current)
 		})
@@ -174,6 +175,9 @@ func (h *BrowserWSHandler) dispatchDedicatedInputOffer(wc *browserWSConn, state 
 			sendState(err.Error())
 			cancel()
 			return
+		}
+		if h.inputTimingEnabled {
+			peer.SetQueueTimingObserver(func(_ generated.BrowserInputFrame, enqueued time.Time) { enqueuedAt = enqueued })
 		}
 		defer func() { peer.Close(); <-peer.Closed() }()
 		answer, err := peer.Answer(ctx, f.Sdp)

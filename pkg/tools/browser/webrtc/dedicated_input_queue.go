@@ -4,11 +4,20 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
 const maxInputSequence = 1<<53 - 1
+
+// Bound waiting work independently of the active browser operation deadline.
+const reliableInputMaxWait = time.Second
+
+type queuedDedicatedInput struct {
+	frame    generated.BrowserInputFrame
+	enqueued time.Time
+}
 
 // dedicatedInputQueue merges one reliable FIFO and one replaceable hover slot.
 // Only its worker dispatches browser operations. Epoch retirement cancels that
@@ -24,10 +33,12 @@ type dedicatedInputQueue struct {
 	cancel                           context.CancelFunc
 	done                             chan struct{}
 	wake                             chan struct{}
-	frames                           []generated.BrowserInputFrame
-	hover                            *generated.BrowserInputFrame
+	frames                           []queuedDedicatedInput
+	hover                            *queuedDedicatedInput
 	sink                             func(context.Context, generated.BrowserInputFrame)
 	fail                             func(string)
+	expiry                           *time.Timer
+	observeQueue                     func(generated.BrowserInputFrame, time.Time)
 }
 
 func newDedicatedInputQueue(parent context.Context, peer, control int, sink func(context.Context, generated.BrowserInputFrame), fail func(string)) *dedicatedInputQueue {
@@ -49,22 +60,37 @@ func (q *dedicatedInputQueue) run(ctx context.Context, done chan struct{}, wake 
 			q.mu.Unlock()
 			return
 		}
-		var frame generated.BrowserInputFrame
+		var queued queuedDedicatedInput
 		found := false
+		if len(q.frames) > 0 && time.Since(q.frames[0].enqueued) >= reliableInputMaxWait {
+			q.expireLocked()
+			q.mu.Unlock()
+			if q.fail != nil {
+				q.fail("reliable input queue expired")
+			}
+			return
+		}
 		if len(q.frames) > 0 {
-			frame = q.frames[0]
-			q.frames[0] = generated.BrowserInputFrame{}
+			queued = q.frames[0]
+			q.frames[0] = queuedDedicatedInput{}
 			q.frames = q.frames[1:]
+			q.armExpiryLocked()
 			found = true
 		} else if q.hover != nil {
-			frame = *q.hover
+			queued = *q.hover
 			q.hover = nil
 			found = true
 		}
+		observer := q.observeQueue
 		q.mu.Unlock()
 		if found {
 			if ctx.Err() == nil {
-				q.sink(ctx, frame)
+				if observer != nil {
+					observer(queued.frame, queued.enqueued)
+				}
+				if ctx.Err() == nil {
+					q.sink(ctx, queued.frame)
+				}
 			}
 			continue
 		}
@@ -74,6 +100,46 @@ func (q *dedicatedInputQueue) run(ctx context.Context, done chan struct{}, wake 
 		case <-wake:
 		}
 	}
+}
+
+// The timer can fail a backlog even while the serial sink is blocked. Its
+// source/oldest-entry checks fence callbacks already racing Stop or retirement.
+func (q *dedicatedInputQueue) armExpiryLocked() {
+	q.stopExpiryLocked()
+	if len(q.frames) == 0 {
+		return
+	}
+	source, oldest := q.ctx, q.frames[0].enqueued
+	q.expiry = time.AfterFunc(time.Until(oldest.Add(reliableInputMaxWait)), func() {
+		q.mu.Lock()
+		if q.closed || q.paused || q.ctx != source || source.Err() != nil || len(q.frames) == 0 || q.frames[0].enqueued != oldest {
+			q.mu.Unlock()
+			return
+		}
+		q.expireLocked()
+		q.mu.Unlock()
+		if q.fail != nil {
+			q.fail("reliable input queue expired")
+		}
+	})
+}
+func (q *dedicatedInputQueue) stopExpiryLocked() {
+	if q.expiry != nil {
+		q.expiry.Stop()
+		q.expiry = nil
+	}
+}
+func (q *dedicatedInputQueue) expireLocked() {
+	q.closed = true
+	q.cancel()
+	q.frames = nil
+	q.hover = nil
+	q.stopExpiryLocked()
+}
+func (q *dedicatedInputQueue) setTimingObserver(observer func(generated.BrowserInputFrame, time.Time)) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.observeQueue = observer
 }
 func validInputCounter(v *int, minimum int) bool {
 	return v != nil && *v >= minimum && *v <= maxInputSequence
@@ -88,6 +154,7 @@ func (q *dedicatedInputQueue) submit(hover bool, f generated.BrowserInputFrame) 
 		q.closed = true
 		q.cancel()
 		q.frames = nil
+		q.stopExpiryLocked()
 		q.hover = nil
 	}
 	q.mu.Unlock()
@@ -113,7 +180,7 @@ func (q *dedicatedInputQueue) enqueueLocked(hover bool, f generated.BrowserInput
 			return ""
 		}
 		q.hoverSequence = *f.HoverSeq
-		q.hover = &f
+		q.hover = &queuedDedicatedInput{frame: f, enqueued: time.Now()}
 	} else {
 		switch f.Kind {
 		case "mouse_move", "mouse_down", "mouse_up", "wheel", "key_down", "key_up", "text":
@@ -161,7 +228,10 @@ func (q *dedicatedInputQueue) enqueueLocked(hover bool, f generated.BrowserInput
 				delete(q.held, key)
 			}
 		}
-		q.frames = append(q.frames, f)
+		q.frames = append(q.frames, queuedDedicatedInput{frame: f, enqueued: time.Now()})
+		if len(q.frames) == 1 {
+			q.armExpiryLocked()
+		}
 	}
 	select {
 	case q.wake <- struct{}{}:
@@ -174,6 +244,7 @@ func (q *dedicatedInputQueue) close() {
 	q.closed = true
 	q.cancel()
 	q.frames = nil
+	q.stopExpiryLocked()
 	q.hover = nil
 	q.mu.Unlock()
 }
@@ -190,6 +261,7 @@ func (q *dedicatedInputQueue) pause(next int) (context.Context, <-chan struct{},
 	q.paused = true
 	q.cancel()
 	q.frames = nil
+	q.stopExpiryLocked()
 	q.hover = nil
 	q.held = make(map[string]bool)
 	return q.ctx, q.done, nil

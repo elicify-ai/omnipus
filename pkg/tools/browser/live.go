@@ -256,7 +256,8 @@ type LiveInput struct {
 // LiveInputTimingObserver is local diagnostic state, never serialized. A pointer
 // keeps LiveInput comparable and separates the observer from retained key state.
 type LiveInputTimingObserver struct { // not-wire-format: callback for local measurements only.
-	Observe func(stage string)
+	Observe       func(stage string)
+	ObserveBudget func(stage string, remaining time.Duration)
 }
 
 // StatusSink receives a live-view lifecycle notification for one attached

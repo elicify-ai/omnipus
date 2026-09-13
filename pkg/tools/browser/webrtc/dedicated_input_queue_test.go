@@ -3,6 +3,7 @@ package webrtc
 import (
 	"context"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -210,5 +211,157 @@ func TestDedicatedInputQueueControlOvertakesReliablePacket(t *testing.T) {
 		t.Fatalf("valid new epoch failed: %s", reason)
 	case <-time.After(time.Second):
 		t.Fatal("new epoch input missing")
+	}
+}
+
+// The clock and blocked browser boundary are controlled; queue admission,
+// ordering, cancellation and failure delivery remain the production paths.
+func TestDedicatedInputQueueReliableAgeBoundary(t *testing.T) {
+	for _, sample := range []struct {
+		name    string
+		age     time.Duration
+		expires bool
+	}{
+		{"before deadline", time.Second - time.Nanosecond, false},
+		{"at deadline", time.Second, true},
+		{"after deadline", time.Second + time.Nanosecond, true},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				entered, release := make(chan struct{}), make(chan struct{})
+				dispatched := make(chan int, 4)
+				failed := make(chan string, 2)
+				var active context.Context
+				q := newDedicatedInputQueue(context.Background(), 1, 0, func(ctx context.Context, frame generated.BrowserInputFrame) {
+					if *frame.ReliableSeq == 1 {
+						active = ctx
+						close(entered)
+						<-release
+					}
+					dispatched <- *frame.ReliableSeq
+				}, func(reason string) { failed <- reason })
+				defer q.close()
+				frame := func(kind string, sequence, barrier int) generated.BrowserInputFrame {
+					epoch, control, key := 1, 0, "ArrowLeft"
+					return generated.BrowserInputFrame{Kind: kind, InputEpoch: &epoch, ControlEpoch: &control, ReliableSeq: &sequence, GestureBarrier: &barrier, Key: &key}
+				}
+				q.submit(false, frame("key_down", 1, 1))
+				<-entered
+				q.submit(false, frame("key_up", 2, 2))
+				q.submit(false, frame("text", 3, 2))
+				time.Sleep(sample.age)
+				close(release)
+				synctest.Wait()
+				if sample.expires {
+					select {
+					case reason := <-failed:
+						if reason != "reliable input queue expired" {
+							t.Fatalf("failure=%q", reason)
+						}
+					default:
+						t.Fatal("expired reliable backlog did not explicitly fail")
+					}
+					if active.Err() != context.Canceled {
+						t.Fatal("expired peer source was not canceled for held-input cleanup")
+					}
+					if len(dispatched) != 1 {
+						t.Fatalf("expired actions reached browser: %d dispatches", len(dispatched))
+					}
+					if len(failed) != 0 {
+						t.Fatal("failure emitted more than once")
+					}
+				} else {
+					for _, want := range []int{1, 2, 3} {
+						select {
+						case got := <-dispatched:
+							if got != want {
+								t.Fatalf("dispatch=%d want=%d", got, want)
+							}
+						default:
+							t.Fatalf("missing ordered input %d", want)
+						}
+					}
+					if active.Err() != nil || len(failed) != 0 {
+						t.Fatal("fresh reliable input was canceled")
+					}
+				}
+			})
+		})
+	}
+}
+
+func TestDedicatedInputQueueExpiryCancelsBlockedSourceWithoutMoreArrivals(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		entered := make(chan struct{})
+		failed := make(chan string, 2)
+		dispatched := make(chan int, 2)
+		q := newDedicatedInputQueue(context.Background(), 1, 0, func(ctx context.Context, frame generated.BrowserInputFrame) {
+			dispatched <- *frame.ReliableSeq
+			close(entered)
+			<-ctx.Done()
+		}, func(reason string) { failed <- reason })
+		defer q.close()
+		epoch, control, barrier, first, second := 1, 0, 0, 1, 2
+		q.submit(false, generated.BrowserInputFrame{Kind: "text", InputEpoch: &epoch, ControlEpoch: &control, GestureBarrier: &barrier, ReliableSeq: &first})
+		<-entered
+		q.submit(false, generated.BrowserInputFrame{Kind: "text", InputEpoch: &epoch, ControlEpoch: &control, GestureBarrier: &barrier, ReliableSeq: &second})
+		time.Sleep(time.Second)
+		synctest.Wait()
+		select {
+		case reason := <-failed:
+			if reason != "reliable input queue expired" {
+				t.Fatalf("failure=%q", reason)
+			}
+		default:
+			t.Fatal("waiting backlog did not fail at its age bound without new arrivals")
+		}
+		select {
+		case <-q.done:
+		default:
+			t.Fatal("blocked source was not canceled and joined")
+		}
+		if len(dispatched) != 1 || len(failed) != 0 {
+			t.Fatal("expired action dispatched or failure duplicated")
+		}
+	})
+}
+
+func TestDedicatedInputQueueRetirementStopsExpiry(t *testing.T) {
+	for _, retirement := range []string{"pause", "close"} {
+		t.Run(retirement, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				entered := make(chan struct{}, 2)
+				failed := make(chan string, 2)
+				q := newDedicatedInputQueue(context.Background(), 1, 0, func(ctx context.Context, _ generated.BrowserInputFrame) {
+					entered <- struct{}{}
+					<-ctx.Done()
+				}, func(reason string) { failed <- reason })
+				defer q.close()
+				epoch, control, barrier, first, second := 1, 0, 0, 1, 2
+				q.submit(false, generated.BrowserInputFrame{Kind: "text", InputEpoch: &epoch, ControlEpoch: &control, GestureBarrier: &barrier, ReliableSeq: &first})
+				<-entered
+				q.submit(false, generated.BrowserInputFrame{Kind: "text", InputEpoch: &epoch, ControlEpoch: &control, GestureBarrier: &barrier, ReliableSeq: &second})
+				if retirement == "pause" {
+					_, done, err := q.pause(1)
+					if err != nil {
+						t.Fatal(err)
+					}
+					<-done
+					if err := q.resume(1); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					q.close()
+				}
+				time.Sleep(2 * time.Second)
+				synctest.Wait()
+				if len(failed) != 0 {
+					t.Fatal("retired backlog timer failed the closed or replacement source")
+				}
+				if len(entered) != 0 {
+					t.Fatal("retired queued input dispatched")
+				}
+			})
+		})
 	}
 }

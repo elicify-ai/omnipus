@@ -32,7 +32,11 @@ func TestLiveInputTimingStages(t *testing.T) {
 			})
 			picture := installInputTestPicture(t, lv)
 			stages := []string{}
-			in := inputWithTestPicture(picture, LiveInput{Kind: "text", Text: "private text", Timing: &LiveInputTimingObserver{Observe: func(stage string) { stages = append(stages, stage) }}})
+			budgets := map[string]time.Duration{}
+			in := inputWithTestPicture(picture, LiveInput{Kind: "text", Text: "private text", Timing: &LiveInputTimingObserver{
+				Observe:       func(stage string) { stages = append(stages, stage) },
+				ObserveBudget: func(stage string, remaining time.Duration) { budgets[stage] = remaining },
+			}})
 			err := lv.dispatchInputContext(context.Background(), "viewer", in)
 			if failCDP {
 				require.ErrorIs(t, err, expectedError)
@@ -40,6 +44,10 @@ func TestLiveInputTimingStages(t *testing.T) {
 				require.NoError(t, err)
 			}
 			require.Equal(t, 1, commands, "measurement must not add browser round trips")
+			require.Len(t, budgets, 2, "both initial and Chrome budgets must be observed even on failure")
+			require.Positive(t, budgets["cdp_start"])
+			require.LessOrEqual(t, budgets["cdp_start"], budgets["live_budget"])
+			require.LessOrEqual(t, budgets["live_budget"], interactiveInputTimeout)
 			require.Equal(t, []string{"live_entry", "tab_gate_wait", "tab_gate_acquired", "input_gate_wait", "input_gate_acquired", "admission_done", "cdp_start", "cdp_done"}, stages)
 		})
 	}

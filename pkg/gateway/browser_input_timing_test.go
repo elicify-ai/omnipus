@@ -17,7 +17,7 @@ import (
 func TestBrowserInputTimingIsOptInBoundedAndConcurrent(t *testing.T) {
 	frame := generated.BrowserInputFrame{Kind: "mouse_down"}
 	require.Nil(t, newBrowserInputTiming(false, nil, frame, time.Time{}), "disabled path must not access clock or counter")
-	require.Nil(t, newBrowserInputTiming(true, nil, generated.BrowserInputFrame{Kind: "text"}, time.Time{}), "text is never instrumented")
+	require.Nil(t, newBrowserInputTiming(true, nil, generated.BrowserInputFrame{Kind: "navigate"}, time.Time{}), "navigation is outside gesture instrumentation")
 	var seq atomic.Uint64
 	// The authorized diagnostic budget is 512 records, independent of the
 	// implementation constant. Buffer all attempts so an overrun fails, not hangs.
@@ -72,7 +72,7 @@ func TestBrowserInputTimingUsesLocalOffsetsAndRedactsPayload(t *testing.T) {
 	p.mark("cdp_done")
 	now = origin.Add(40 * time.Millisecond)
 	p.finish()
-	require.Equal(t, map[string]any{"input_ordinal": uint64(1), "kind": "mouse_up", "capture_id": "", "capture_generation": 0, "received_unix_ms": int64(100000), "stage_offsets_ms": map[string]float64{"queue_started": 10, "cdp_start": 25, "cdp_done": 37, "finished": 40}, "outcome": "not_dispatched"}, record)
+	require.Equal(t, map[string]any{"input_ordinal": uint64(1), "kind": "mouse_up", "input_epoch": 0, "control_epoch": 0, "reliable_seq": 0, "hover_seq": 0, "capture_id": "", "capture_generation": 0, "received_unix_ms": int64(100000), "stage_offsets_ms": map[string]float64{"queue_started": 10, "cdp_start": 25, "cdp_done": 37, "finished": 40}, "outcome": "not_dispatched"}, record)
 	raw, err := json.Marshal(record)
 	require.NoError(t, err)
 	require.NotContains(t, string(raw), sensitive)
