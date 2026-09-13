@@ -75,6 +75,7 @@ import {
   createWorkspaceMount,
   deleteWorkspaceMount,
   mountSkillsDisclosure,
+  isApiError,
 } from '@/lib/api'
 import type { LibraryEntry, LibraryTransferRequest, LibraryWorkspaceNode, MountSkillsDisclosure } from '@/lib/api'
 import { LibraryEntryRow } from './LibraryEntryRow'
@@ -279,6 +280,24 @@ export function LibraryExplorer({
   const [addMountOpen, setAddMountOpen] = useState(false)
   const [mountsOpen, setMountsOpen] = useState(false)
   const [addMountError, setAddMountError] = useState<string>()
+  // D-117 response half (2026-09-14 fix round): the mount create's OWN answer,
+  // rendered inside the Add-mount dialog instead of a toast.
+  //   - `addMountWarning`: the 201 body's `warning` (a broad grant the server
+  //     let through). Holding `addMountOpen` true while it is set is what
+  //     keeps the verdict on screen until acknowledged.
+  //   - `addMountRefusal`: the 403 body's reason (a grant the server refused
+  //     — e.g. the Omnipus data directory). Kept apart from `addMountError`
+  //     so a policy refusal never reads like a transport failure.
+  const [addMountWarning, setAddMountWarning] = useState<string>()
+  const [addMountRefusal, setAddMountRefusal] = useState<string>()
+  // The skills disclosure that a WARNED create also produced, held back until
+  // the operator acknowledges the warning — two stacked dialogs would let the
+  // disclosure cover the very warning it rides on. Carries the mount's name
+  // too, so the deferred success toast can name what was mounted.
+  const [pendingWarnedMount, setPendingWarnedMount] = useState<{
+    name: string
+    disclosure: (MountSkillsDisclosure & { mountName: string }) | null
+  } | null>(null)
   // ADR-072 D1.2/FR-074/FR-074a: what the just-created mount's recognised
   // skills directory grants — shown as its own dialog (not a toast, which
   // can be missed and auto-dismisses) so the operator explicitly
@@ -508,33 +527,65 @@ export function LibraryExplorer({
       if (!name) throw new Error('That path has no folder name to use.')
       return createWorkspaceMount(workspaceId, { host_path: hostPath, name })
     },
-    onMutate: () => setAddMountError(undefined),
+    onMutate: () => {
+      setAddMountError(undefined)
+      setAddMountRefusal(undefined)
+    },
     onSuccess: (res) => {
       if (workspaceId) invalidateEntries(workspaceId)
       invalidateWorkspaces()
-      setAddMountOpen(false)
-      // A broad grant is allowed but must never be silent — the backend
-      // computes the warning and this is the only place it can be seen.
-      addToast({
-        message: res.warning ?? `Mounted "${res.name}".`,
-        variant: res.warning ? 'warning' : 'success',
-      })
       // ADR-072 D1.2/FR-074a: the mount's first recognised skills directory
       // discloses what it grants, independent of the count threshold — a
       // 3-skill mount gets the same disclosure as a 500-skill one, just
       // without the extra ThresholdWarning line. See mountSkillsDisclosure's
       // doc comment: this is `null` today until the backend sends it.
       const disclosure = mountSkillsDisclosure(res)
+      // D-117 response half: a broad grant is allowed but must never be
+      // silent — the 201 body's `warning` renders in the Add-mount dialog
+      // (held open) rather than a toast, which auto-dismisses exactly when
+      // nobody is looking. Any skills disclosure from the same create waits
+      // for the warning's acknowledgement so it cannot cover it.
+      if (res.warning) {
+        setAddMountWarning(res.warning)
+        setPendingWarnedMount({
+          name: res.name,
+          disclosure: disclosure ? { ...disclosure, mountName: res.name } : null,
+        })
+        return
+      }
+      setAddMountOpen(false)
+      addToast({ message: `Mounted "${res.name}".`, variant: 'success' })
       if (disclosure) {
         setSkillsDisclosure({ ...disclosure, mountName: res.name })
       }
     },
     onError: (err) => {
+      // D-117 response half: the server's policy refusal (403) carries the
+      // reason it refused; branch on the status rather than making the
+      // operator guess whether "rejected" means policy or transport.
+      if (isApiError(err) && err.status === 403) {
+        setAddMountRefusal(err.userMessage)
+        return
+      }
       setAddMountError(
         err instanceof Error ? err.message : 'Could not mount that folder.',
       )
     },
   })
+
+  // The "Done" click on a warned create: retire the warning, close the
+  // dialog, and only then surface anything the same create has queued (the
+  // success toast, the skills disclosure).
+  function acknowledgeMountWarning() {
+    const outcome = pendingWarnedMount
+    setAddMountWarning(undefined)
+    setPendingWarnedMount(null)
+    setAddMountOpen(false)
+    if (outcome) {
+      addToast({ message: `Mounted "${outcome.name}".`, variant: 'success' })
+      if (outcome.disclosure) setSkillsDisclosure(outcome.disclosure)
+    }
+  }
 
   const unmountMutation = useMutation({
     mutationFn: (name: string) => {
@@ -1291,11 +1342,19 @@ export function LibraryExplorer({
         open={addMountOpen}
         onOpenChange={(open) => {
           setAddMountOpen(open)
-          if (!open) setAddMountError(undefined)
+          if (!open) {
+            setAddMountError(undefined)
+            setAddMountRefusal(undefined)
+            setAddMountWarning(undefined)
+            setPendingWarnedMount(null)
+          }
         }}
         onConfirm={(hostPath) => addMountMutation.mutate(hostPath)}
         isPending={addMountMutation.isPending}
         error={addMountError}
+        refusal={addMountRefusal}
+        createdWarning={addMountWarning}
+        onAcknowledgeWarning={acknowledgeMountWarning}
       />
 
       {/* ADR-072 D1.2/FR-074/FR-074a: the just-created mount's recognised

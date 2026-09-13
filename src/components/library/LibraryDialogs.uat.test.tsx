@@ -220,6 +220,69 @@ describe('D-127 / D-117 — Add a folder from your Mac', () => {
   })
 })
 
+// D-117, RESPONSE half (2026-09-14 fix round): the pre-submit banners above
+// cover what the folder LISTING knows. This block covers what the SERVER's
+// own answer says — the 201 body's `warning` (a broad grant the server let
+// through) and the 403 body's reason (a grant the server refused). Both must
+// render inside this dialog, not in a toast that auto-dismisses: the operator
+// just granted (or was refused) disk access and needs to read what happened.
+describe('D-117 — Add-mount renders the SERVER response (broad warning / 403 refusal)', () => {
+  it('a 201 whose body carries `warning` keeps the dialog open, shows it as the broad banner, and Done acknowledges it', () => {
+    const onAcknowledge = vi.fn()
+    render(
+      <LibraryAddMountDialog
+        open
+        onOpenChange={vi.fn()}
+        onConfirm={vi.fn()}
+        isPending={false}
+        createdWarning={'mounting "/Users/operator" makes every file under it writable by any agent on this workspace'}
+        onAcknowledgeWarning={onAcknowledge}
+      />,
+    )
+
+    const banner = screen.getByTestId('library-add-mount-dialog-broad')
+    expect(banner).toHaveTextContent('every file under it writable')
+    // The pre-submit verdict banner is a DIFFERENT surface — it must not fire
+    // for a server response (nothing was looked up in a listing).
+    expect(screen.queryByTestId('library-add-mount-broad')).not.toBeInTheDocument()
+
+    // The mount already happened; the only sane footer is the acknowledgement.
+    const confirm = screen.getByTestId('library-add-mount-confirm')
+    expect(confirm).toHaveTextContent('Done')
+    fireEvent.click(confirm)
+    expect(onAcknowledge).toHaveBeenCalledTimes(1)
+  })
+
+  it('a 403 refusal reason renders as the refused banner, not the generic error, and clears when the path is edited', async () => {
+    mockedHostFolders.mockResolvedValue({ path: '/', entries: [] })
+    function Host() {
+      const [refusal, setRefusal] = useState<string>()
+      return (
+        <LibraryAddMountDialog
+          open
+          onOpenChange={vi.fn()}
+          onConfirm={() => setRefusal('mounting "/Users/operator/.omnipus" is refused: it is this installation’s own data directory.')}
+          isPending={false}
+          {...(refusal !== undefined ? { refusal } : {})}
+        />
+      )
+    }
+    render(<Host />)
+
+    fireEvent.change(screen.getByTestId('library-add-mount-path'), { target: { value: '/Users/operator/.omnipus' } })
+    fireEvent.click(screen.getByTestId('library-add-mount-confirm'))
+    const banner = await screen.findByTestId('library-add-mount-dialog-refused')
+    expect(banner).toHaveTextContent('installation’s own data directory')
+    // A refusal is a policy verdict, not a generic transport error.
+    expect(screen.queryByTestId('library-add-mount-error')).not.toBeInTheDocument()
+
+    // Same D-127 scoping: the refusal is about the submitted path, so editing
+    // the path retires it.
+    fireEvent.change(screen.getByTestId('library-add-mount-path'), { target: { value: '/tmp' } })
+    await waitFor(() => expect(screen.queryByTestId('library-add-mount-dialog-refused')).not.toBeInTheDocument())
+  })
+})
+
 describe('D-104 — dialogs return focus to the Create menu trigger', () => {
   it('closing New folder with Escape focuses the Create menu trigger, not <body>', async () => {
     function Host() {
