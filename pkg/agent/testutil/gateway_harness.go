@@ -357,6 +357,21 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 	// integration tests do not run in parallel (no t.Parallel()).
 	t.Setenv("OMNIPUS_HOME", homeDir)
 
+	// Seed the OPENROUTER_API_KEY credential so the gateway's
+	// credentials.InjectFromConfig step succeeds at boot. The seeded provider
+	// entry in buildConfig references this name; without the credential, boot
+	// fails with "fatal: provider credential injection failed". The real key
+	// MUST be in env (OPENROUTER_API_KEY) — there is no scripted-scenario
+	// fallback (the test_harness override hook was removed 2026-05-10). Tests
+	// that exercise LLM behavior hit real OpenRouter.
+	//
+	// Done ONCE, before the bind-retry loop below: it writes credentials.json
+	// into homeDir and has nothing to do with which port we end up on, so
+	// re-running it per attempt would be pure waste.
+	if err := seedTestCredentials(homeDir); err != nil {
+		t.Fatalf("testutil.StartTestGateway: seed credentials: %v", err)
+	}
+
 	// BOOT, RETRYING WHEN THE PORT RACE IS LOST.
 	//
 	// The port comes from the listen/close/reuse idiom: bind :0, read the
