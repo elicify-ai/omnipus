@@ -30,10 +30,16 @@ import (
 // truncationScriptStep is one scripted provider response for
 // truncationScriptedProvider.
 type truncationScriptStep struct {
-	content      string
-	finishReason string
-	toolCalls    []providers.ToolCall
-	err          error
+	content string
+	// reasoningContent is the provider's separate chain-of-thought channel.
+	// loop.go substitutes it for an empty Content on the direct-answer path,
+	// which is exactly why ADR-087's success arm must NOT read the
+	// substituted value — see
+	// TestTruncationD4a_ReasoningOnlyTruncatedIsNotContinued.
+	reasoningContent string
+	finishReason     string
+	toolCalls        []providers.ToolCall
+	err              error
 	// onCall runs synchronously INSIDE Chat, before the step's response is
 	// returned — used to fire a mid-call Interrupt/InterruptSessionHard so
 	// the NEXT turnLoop round observes it (see TestTruncationD6_* below).
@@ -83,10 +89,22 @@ func (p *truncationScriptedProvider) Chat(
 		return nil, step.err
 	}
 	return &providers.LLMResponse{
-		Content:      step.content,
-		FinishReason: step.finishReason,
-		ToolCalls:    step.toolCalls,
+		Content:          step.content,
+		ReasoningContent: step.reasoningContent,
+		FinishReason:     step.finishReason,
+		ToolCalls:        step.toolCalls,
 	}, nil
+}
+
+// Requests returns a copy of every message slice the loop has sent, in call
+// order — the only way to assert what the CONTINUATION request actually
+// carried (D6.7's chain rebuild).
+func (p *truncationScriptedProvider) Requests() [][]providers.Message {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([][]providers.Message, len(p.requests))
+	copy(out, p.requests)
+	return out
 }
 
 func (p *truncationScriptedProvider) GetDefaultModel() string { return "scripted-model" }
