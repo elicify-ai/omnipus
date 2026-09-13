@@ -347,7 +347,33 @@ func resolveAuthMismatchLogger(level string) func(msg string, args ...any) {
 // from "cookie sent but didn't match any user" ( — replay attack
 // detection signal). r.Cookie returns http.ErrNoCookie when the named
 // cookie is absent; any other return path means a cookie WAS present.
+//
+// Unexported alias kept for this package's own call sites; HasSessionCookie
+// is the identical exported twin (see its doc for why it exists).
 func hasOmnipusSessionCookie(r *http.Request) bool {
+	return HasSessionCookie(r)
+}
+
+// HasSessionCookie reports whether the request carries the omnipus-session
+// cookie AT ALL, regardless of whether its value matches any account. It is
+// a pure predicate on the request — never an auth decision.
+//
+// Exported for the WebSocket auth path (gateway.WSHandler.authenticateWS and
+// gateway.BrowserWSHandler.authenticate), which must tell three genuinely
+// different failure states apart and report the right one to the operator
+// and the SPA:
+//
+//	cookie present + ResolveUserFromCookie failed → stale/expired session
+//	cookie absent, accounts configured            → never signed in
+//	cookie absent, nothing configured             → setup incomplete
+//
+// Before this existed, all three collapsed into one silent 10-second read
+// timeout on the WS handshake (see classifyWSAuthRefusal in
+// pkg/gateway/websocket.go). The gateway could re-derive this from
+// r.Cookie(SessionCookieName) itself, but cookie-presence semantics belong
+// with the cookie's other invariants, next to ResolveUserFromCookie, so the
+// two can never disagree about what "present" means.
+func HasSessionCookie(r *http.Request) bool {
 	if r == nil {
 		return false
 	}

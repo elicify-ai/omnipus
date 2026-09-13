@@ -19,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -872,7 +873,244 @@ const (
 	// wsAuthErrNoUsers — no account or token is configured at all yet (fresh
 	// install, onboarding not completed).
 	wsAuthErrNoUsers = "Setup isn't complete yet — finish onboarding, then reload the page."
+	// wsAuthErrNotSignedIn — accounts DO exist, but this handshake carried no
+	// omnipus-session cookie at all. Distinct from wsAuthErrInvalidToken
+	// ("expired") because the user action differs: there is nothing to
+	// refresh, they have to sign in. Previously this state produced no
+	// message whatsoever — the server just let the auth-frame read time out
+	// (see classifyWSAuthRefusal).
+	wsAuthErrNotSignedIn = "You're not signed in — reload the page to sign in and reconnect."
 )
+
+// ---------------------------------------------------------------------------
+// WebSocket auth refusal — fast, loud, diagnosable (see classifyWSAuthRefusal)
+// ---------------------------------------------------------------------------
+
+// wsAuthRefusal is a decided, terminal WebSocket authentication failure,
+// carrying the three different renderings the same fact needs:
+//
+//	userMessage — human copy for the ErrorFrame the SPA renders (the D5 fix's
+//	              constants above; never a raw protocol string).
+//	closeReason — short technical diagnostic on the WS close frame, visible in
+//	              browser devtools and to any programmatic client. Must stay
+//	              under wsCloseReasonMaxBytes.
+//	code        — stable, greppable machine reason for the server log. This is
+//	              what an operator triaging "why can't chat connect?" reads.
+type wsAuthRefusal struct { // not-wire-format: internal auth-decision value; only its userMessage field is ever serialized, via generated.ErrorFrame.
+	userMessage string
+	closeReason string
+	code        string
+}
+
+// wsAuthFrameDeadline bounds how long a handshake that could not authenticate
+// from the upgrade request alone waits for the legacy
+// {"type":"auth","token":...} first frame. Only programmatic clients ever
+// reach this wait now (browsers are decided before it — classifyWSAuthRefusal),
+// so the value is a courtesy to a slow CLI client, not a UX cost.
+//
+// A var, not a const, for exactly one reason: it is the only way to exercise
+// the read-failure branch in a test without sleeping 10 real seconds, and that
+// branch used to be the silent one. Both sockets read this single symbol so
+// the two can never drift apart. Never mutate it outside a test.
+var wsAuthFrameDeadline = 10 * time.Second
+
+// wsCloseReasonMaxBytes is the largest close-frame reason gorilla will accept.
+// A WebSocket control frame payload is capped at 125 bytes (RFC 6455 §5.5) and
+// a close payload spends 2 of them on the status code, leaving 123. Exceeding
+// it makes WriteMessage fail with ErrInvalidControlFrame — i.e. the close
+// frame silently never reaches the client and the refusal degrades right back
+// into the opaque disconnect this whole change exists to eliminate, so
+// truncateCloseReason enforces the bound rather than trusting call sites.
+const wsCloseReasonMaxBytes = 123
+
+// truncateCloseReason bounds reason to wsCloseReasonMaxBytes, cutting on a
+// UTF-8 rune boundary so a multi-byte character is never split into invalid
+// UTF-8 (close reasons are required to be valid UTF-8 by RFC 6455 §5.5.1).
+func truncateCloseReason(reason string) string {
+	if len(reason) <= wsCloseReasonMaxBytes {
+		return reason
+	}
+	cut := wsCloseReasonMaxBytes
+	for cut > 0 && !utf8.ValidString(reason[:cut]) {
+		cut--
+	}
+	return reason[:cut]
+}
+
+// wsHandshakeIsBrowser reports whether this upgrade request came from a web
+// browser, which determines whether waiting for an auth frame is worth doing.
+//
+// Rationale: a browser's WebSocket constructor is REQUIRED to send an Origin
+// header (WHATWG WebSocket spec / RFC 6455 §4.1), and non-browser clients
+// (gorilla's Dialer, omnipus run, the CLI readiness probe — all of which dial
+// with nil headers) do not send one unless they deliberately opt in. So an
+// Origin header means "this is the SPA", and the SPA provably cannot send an
+// auth frame: it holds no JS-visible token at all post-Wave-1 (src/lib/ws.ts
+// — "no client-sent {type:'auth', token} frame is needed or possible"). Its
+// only credential is the session cookie the upgrade request already carried,
+// and by the time this is consulted that cookie has already failed.
+//
+// SAFETY: this predicate can only ever cause a REFUSAL, never an admission.
+// A false positive costs a hypothetical non-browser client that sets Origin
+// its frame handshake; a false negative costs nothing but the pre-existing
+// 10-second wait. It therefore cannot widen any auth posture, which is why a
+// header heuristic is acceptable here and would not be acceptable on an
+// allow path.
+func wsHandshakeIsBrowser(r *http.Request) bool {
+	return r != nil && r.Header.Get("Origin") != ""
+}
+
+// classifyWSAuthRefusal diagnoses a WS handshake that has already failed
+// cookie authentication, and reports whether waiting on the legacy auth-frame
+// read is futile (futile=true → refuse NOW, do not block on the read).
+//
+// THE DEFECT THIS FIXES. Both WS auth paths blocked for 10 seconds on a first
+// frame that the SPA stopped sending at the Wave-1 cookie cutover, then
+// returned on `i/o timeout` having written nothing at all to the client — no
+// error frame, no close frame, no reason. Measured on a live gateway with
+// gateway.dev_mode_bypass=true and gateway.users=[]: 55 WS auth failures, 0
+// successes, against 2023 successful REST AUTH-BYPASS hits, one
+// "ws: auth read failed" log line every ~10s. The SPA loaded, the agent
+// picker populated, the screen said "Your agent is ready. Start a
+// conversation below." — and chat could never connect. That is the
+// "looks normal while silently degraded" class this project treats as a
+// serious bug (docs/internal/false-green-patterns.md).
+//
+// NOT FIXED HERE, DELIBERATELY (operator directive): dev_mode_bypass still
+// does not authenticate a browser's WebSocket. This function never returns
+// "allow" — it only ever decides how fast and how loudly a doomed handshake
+// dies. The bypass branch further down authenticateWS is left exactly as it
+// was; see its comment.
+//
+// futile is true for browser handshakes ONLY. A browser has already spent its
+// one credential (the cookie) on the upgrade request and cannot follow up with
+// a frame, so waiting is pure dead time. A programmatic client is left
+// completely untouched — same 10-second window, same branches, same outcome —
+// because it genuinely may be about to send a valid frame, and refusing it
+// early would break `omnipus run` and the CLI readiness probe, which both
+// authenticate exactly that way.
+func classifyWSAuthRefusal(r *http.Request, cfg *config.Config) (wsAuthRefusal, bool) {
+	cookiePresent := middleware.HasSessionCookie(r)
+	accounts := cfg != nil && bearerAccountsConfigured(cfg)
+	envToken := os.Getenv("OMNIPUS_BEARER_TOKEN") != ""
+	bypass := cfg != nil && cfg.Gateway.DevModeBypass
+
+	var refusal wsAuthRefusal
+	switch {
+	case !accounts && !envToken && !bypass:
+		// Fail-closed posture with nothing configured at all: no credential of
+		// any kind could match. Onboarding is genuinely incomplete.
+		refusal = wsAuthRefusal{
+			userMessage: wsAuthErrNoUsers,
+			closeReason: "no accounts configured: complete onboarding, then reload",
+			code:        "no_auth_configured",
+		}
+
+	case cookiePresent:
+		// A session cookie WAS sent and matched no account: expired, revoked,
+		// or replayed. Distinct from "never signed in" — the user had a
+		// session and it is gone.
+		refusal = wsAuthRefusal{
+			userMessage: wsAuthErrInvalidToken,
+			closeReason: "session expired: session cookie matched no account",
+			code:        "stale_session_cookie",
+		}
+
+	case bypass && !accounts && !envToken:
+		// The exact reported configuration: REST is wide open via
+		// dev_mode_bypass while the WebSocket cannot authenticate anyone. An
+		// operator must be able to read this one log line and understand that
+		// those two facts are not in conflict — the bypass has never covered
+		// the SPA's WebSocket, because the SPA sends no auth frame for the
+		// bypass branch to fire on.
+		refusal = wsAuthRefusal{
+			userMessage: wsAuthErrNoUsers,
+			closeReason: "dev_mode_bypass does not authenticate websockets; sign in first",
+			code:        "dev_bypass_not_on_websocket",
+		}
+
+	default:
+		// Accounts (or an env token) exist and no cookie was presented: this
+		// client has simply never signed in.
+		refusal = wsAuthRefusal{
+			userMessage: wsAuthErrNotSignedIn,
+			closeReason: "not signed in: no session cookie on the websocket handshake",
+			code:        "no_session_cookie",
+		}
+	}
+	return refusal, wsHandshakeIsBrowser(r)
+}
+
+// refuseWSAuth writes the terminal refusal to the client: the human-readable
+// error frame first (so the SPA has something to render), then a
+// policy-violation close carrying the technical reason. Both writes are
+// deadline-bounded, so an unresponsive client cannot pin this goroutine.
+//
+// It also emits the diagnostic server log. scope names the socket ("ws" or
+// "browser-ws") so the two handlers stay distinguishable in one log stream;
+// readErr is the underlying read failure when the refusal follows a failed
+// auth-frame read, and nil when the refusal was decided before the read.
+func refuseWSAuth(
+	scope string,
+	conn *websocket.Conn,
+	r *http.Request,
+	cfg *config.Config,
+	refusal wsAuthRefusal,
+	readErr error,
+) {
+	origin := ""
+	remote := ""
+	if r != nil {
+		origin = r.Header.Get("Origin")
+		remote = r.RemoteAddr
+	}
+	slog.Warn(scope+": websocket authentication refused",
+		"reason", refusal.code,
+		"detail", refusal.closeReason,
+		"remote_addr", remote,
+		"origin", origin,
+		"cookie_present", middleware.HasSessionCookie(r),
+		"accounts_configured", cfg != nil && bearerAccountsConfigured(cfg),
+		"env_token_set", os.Getenv("OMNIPUS_BEARER_TOKEN") != "",
+		"dev_mode_bypass", cfg != nil && cfg.Gateway.DevModeBypass,
+		"read_error", readErr,
+	)
+	sendGenWSFrame(conn, generated.ErrorFrame{
+		Type:    string(generated.WsFrameTypeError),
+		Message: refusal.userMessage,
+	})
+	writeCloseAuthFailedWithReason(conn, refusal.closeReason)
+}
+
+// refuseWSAuthAfterFailedRead handles the auth-frame read failing (the 10s
+// deadline expiring, or the peer vanishing). Before this existed the whole
+// branch was `slog.Warn("ws: auth read failed"); return false` — nothing was
+// written to the client, so the SPA saw an unexplained disconnect and
+// reconnected forever. Now the client is told why, in the same shape every
+// other auth refusal uses.
+func refuseWSAuthAfterFailedRead(scope string, conn *websocket.Conn, r *http.Request, cfg *config.Config, readErr error) {
+	refusal, _ := classifyWSAuthRefusal(r, cfg)
+	refusal.closeReason = "no auth frame received before the handshake deadline"
+	refusal.code = "auth_frame_timeout"
+	refuseWSAuth(scope, conn, r, cfg, refusal, readErr)
+}
+
+// writeCloseAuthFailedWithReason sends the policy-violation close frame that
+// terminates a rejected handshake, carrying reason as the close-frame text.
+// The write deadline is the same invariant writePump enforces: a close frame
+// to an unresponsive client must not block this goroutine forever.
+func writeCloseAuthFailedWithReason(conn *websocket.Conn, reason string) {
+	if err := conn.SetWriteDeadline(time.Now().Add(wsWriteWait)); err != nil {
+		slog.Debug("ws-auth: SetWriteDeadline failed for close frame", "error", err)
+		return
+	}
+	if err := conn.WriteMessage(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.ClosePolicyViolation, truncateCloseReason(reason)),
+	); err != nil {
+		slog.Debug("ws-auth: write close frame failed", "error", err)
+	}
+}
 
 // authenticateWS authenticates the WS handshake via EITHER the omnipus-session
 // cookie (checked first, synchronously, against the upgrade request r) OR the
@@ -883,6 +1121,12 @@ const (
 // cookie-only client would hang waiting for a frame that will never arrive.
 // Programmatic/CLI clients that don't carry the cookie still authenticate via
 // the frame path below, unaffected.
+//
+// When the cookie does NOT resolve, a browser is refused immediately rather
+// than waiting out the frame deadline in silence — see classifyWSAuthRefusal,
+// which documents the outage that motivated it. That gate has no allow
+// outcome, so it changes who can authenticate not at all; it changes only how
+// fast and how audibly a handshake that never could authenticate dies.
 //
 // The frame path loops every account in Gateway.Users first (bcrypt; the
 // single-user model normally holds exactly one, but a pre-single-user-model
@@ -908,10 +1152,20 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
 	// through to the frame-based auth path below is unchanged either way.
 	middleware.LogInvalidSessionCookiePresent(r, cfg)
 
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	// Cookie auth failed. Decide NOW whether the legacy auth-frame read can
+	// possibly help, instead of blocking 10 seconds on a frame that (for the
+	// SPA) provably never arrives and then returning in silence. This gate
+	// only ever refuses — it cannot admit anyone — so it widens nothing; see
+	// classifyWSAuthRefusal for the full rationale and the measured defect.
+	if refusal, futile := classifyWSAuthRefusal(r, cfg); futile {
+		refuseWSAuth("ws", conn, r, cfg, refusal, nil)
+		return false
+	}
+
+	conn.SetReadDeadline(time.Now().Add(wsAuthFrameDeadline))
 	_, data, err := conn.ReadMessage()
 	if err != nil {
-		slog.Warn("ws: auth read failed", "error", err)
+		refuseWSAuthAfterFailedRead("ws", conn, r, cfg, err)
 		return false
 	}
 
@@ -952,10 +1206,7 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
 			Type:    string(generated.WsFrameTypeError),
 			Message: wsAuthErrInvalidToken,
 		})
-		conn.WriteMessage(
-			websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "authentication failed"),
-		)
+		writeCloseAuthFailedWithReason(conn, "authentication failed")
 		return false
 	}
 
@@ -964,6 +1215,25 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
 	if required == "" {
 		if cfg.Gateway.DevModeBypass {
 			// Dev mode: allow without auth.
+			//
+			// UNREACHABLE FROM ANY BROWSER, and always has been — this is the
+			// branch the 55-failures/0-successes report bottomed out in. It
+			// fires only for a client that sent {"type":"auth","token":...},
+			// and the SPA has sent no such frame since the Wave-1 cookie
+			// cutover (src/lib/ws.ts: "no client-sent {type:'auth', token}
+			// frame is needed or possible"). So dev_mode_bypass has never
+			// authenticated the SPA's WebSocket even though it authenticates
+			// every REST call — it only ever authenticates programmatic
+			// clients (omnipus run, the CLI readiness probe, Go tests) that
+			// still perform the legacy frame handshake.
+			//
+			// Deliberately left AS IS by operator directive: browsers are now
+			// refused fast and loudly by classifyWSAuthRefusal above rather
+			// than being admitted here. Do not "fix" this by hoisting the
+			// DevModeBypass check ahead of the read — that would extend the
+			// bypass to the browser surface, which is the opposite of the
+			// decision taken. Removal of the branch entirely is the operator's
+			// call, not this code's.
 			conn.SetReadDeadline(time.Now().Add(wsPongWait))
 			return true
 		}
@@ -972,10 +1242,7 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
 			Type:    string(generated.WsFrameTypeError),
 			Message: wsAuthErrNoUsers,
 		})
-		conn.WriteMessage(
-			websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "authentication failed"),
-		)
+		writeCloseAuthFailedWithReason(conn, "authentication failed")
 		return false
 	}
 	if subtle.ConstantTimeCompare([]byte(rawToken), []byte(required)) != 1 {
@@ -983,10 +1250,7 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
 			Type:    string(generated.WsFrameTypeError),
 			Message: wsAuthErrInvalidToken,
 		})
-		conn.WriteMessage(
-			websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "authentication failed"),
-		)
+		writeCloseAuthFailedWithReason(conn, "authentication failed")
 		return false
 	}
 	conn.SetReadDeadline(time.Now().Add(wsPongWait))

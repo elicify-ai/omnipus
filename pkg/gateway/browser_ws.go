@@ -933,9 +933,12 @@ func (h *BrowserWSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // account in Gateway.Users first (via the shared resolveBearerIdentity
 // helper), then Gateway.CLIToken, then the legacy OMNIPUS_BEARER_TOKEN env
 // var, then dev_mode_bypass — so browser-live can never authenticate a
-// caller chat would have rejected, or vice versa. On failure this has
-// already written an error frame + close message; the caller must return
-// without proceeding.
+// caller chat would have rejected, or vice versa. That ordering is
+// unchanged: the fast-fail gate added between the cookie check and the frame
+// read (classifyWSAuthRefusal, websocket.go) only ever REFUSES, so it cannot
+// promote any caller past an identity check. On failure this has already
+// written an error frame + close message; the caller must return without
+// proceeding.
 //
 // Returns the resolved userID. Per the documented Entry.User contract
 // (pkg/audit/audit.go), the env-token and dev-bypass paths deliberately
@@ -955,10 +958,20 @@ func (h *BrowserWSHandler) authenticate(conn *websocket.Conn, r *http.Request) (
 	// through to the frame-based auth path below is unchanged either way.
 	middleware.LogInvalidSessionCookiePresent(r, cfg)
 
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	// Cookie auth failed. Refuse a browser handshake NOW instead of blocking
+	// 10 seconds on a frame the SPA cannot send and then returning in silence
+	// — identical gate and identical rationale as authenticateWS
+	// (websocket.go); see classifyWSAuthRefusal for the measured defect. Only
+	// ever refuses, never admits, so it widens no auth posture.
+	if refusal, futile := classifyWSAuthRefusal(r, cfg); futile {
+		refuseWSAuth("browser-ws", conn, r, cfg, refusal, nil)
+		return "", false
+	}
+
+	conn.SetReadDeadline(time.Now().Add(wsAuthFrameDeadline))
 	_, data, err := conn.ReadMessage()
 	if err != nil {
-		slog.Warn("browser-ws: auth read failed", "error", err)
+		refuseWSAuthAfterFailedRead("browser-ws", conn, r, cfg, err)
 		return "", false
 	}
 
@@ -994,6 +1007,13 @@ func (h *BrowserWSHandler) authenticate(conn *websocket.Conn, r *http.Request) (
 	required := os.Getenv("OMNIPUS_BEARER_TOKEN")
 	if required == "" {
 		if cfg.Gateway.DevModeBypass {
+			// UNREACHABLE FROM ANY BROWSER, and always has been — see the
+			// identical branch in authenticateWS (websocket.go) for the full
+			// explanation. It fires only for a client that sent an auth frame,
+			// which the SPA has not done since the Wave-1 cookie cutover.
+			// Left as is by operator directive: browsers are refused fast and
+			// loudly by classifyWSAuthRefusal above rather than admitted here.
+			// Do not hoist this check ahead of the read.
 			conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 			return "", true
 		}
@@ -1018,19 +1038,14 @@ func (h *BrowserWSHandler) authenticate(conn *websocket.Conn, r *http.Request) (
 
 // writeCloseAuthFailed sends the WS close control frame used by every
 // authentication failure branch, matching authenticateWS's behavior exactly.
+//
+// Now a thin alias over the shared writeCloseAuthFailedWithReason
+// (websocket.go) — the wire output is unchanged ("authentication failed"),
+// but the two sockets can no longer drift in how they close a rejected
+// handshake, and the reason-carrying refusals added for the fast-fail path
+// go out through the same deadline-bounded writer.
 func writeCloseAuthFailed(conn *websocket.Conn) {
-	// Same invariant as writePump above: a close frame to an unresponsive
-	// client must not block this goroutine forever.
-	if err := conn.SetWriteDeadline(time.Now().Add(wsWriteWait)); err != nil {
-		slog.Debug("browser-ws: SetWriteDeadline failed for close frame", "error", err)
-		return
-	}
-	if err := conn.WriteMessage(
-		websocket.CloseMessage,
-		websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "authentication failed"),
-	); err != nil {
-		slog.Debug("browser-ws: write close frame failed", "error", err)
-	}
+	writeCloseAuthFailedWithReason(conn, "authentication failed")
 }
 
 // writePump is the single goroutine that writes all frames to the
