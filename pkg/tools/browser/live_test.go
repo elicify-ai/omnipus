@@ -581,6 +581,88 @@ func TestLiveView_Detach_ImplicitReleaseBroadcastsToOtherViewers(t *testing.T) {
 	)
 }
 
+// TestReleaseStoodDown_BroadcastsTheFreedLockToOtherViewers is the guard for
+// the half of ADR-039 UAT BE-1 that ADR-085 Finding 7(b) silently dropped.
+//
+// The two tests above exercise releaseControl and detach, which both still
+// broadcast. Neither is reachable from a release any more: Finding 7(b)
+// repointed pkg/gateway/browser_ws.go::handleControl at ReleaseStoodDown
+// (correctly — releaseControl leaves the FR-026a latch standing), and
+// ReleaseStoodDown is now the ONLY production path that frees the lock short
+// of a disconnect. It notified the former holder and nobody else, so every
+// OTHER attached panel stayed on "Someone else is driving" with its own
+// Take-control affordance disabled — for as long as it stayed attached, over
+// a browser nobody was driving. The full round trip is covered at the gateway
+// by TestBrowserWS_Control_ControlledByOther_BroadcastsToSecondConnection,
+// but that test needs a real Chromium and therefore SKIPs on most machines;
+// this one is pure in-memory bookkeeping and always runs.
+func TestReleaseStoodDown_BroadcastsTheFreedLockToOtherViewers(t *testing.T) {
+	lv := &LiveView{
+		sessionID:    "s1",
+		viewers:      map[string]struct{}{"connA": {}, "connB": {}},
+		controlSinks: make(map[string]ControlSink),
+		releaseSinks: make(map[string]ReleaseNotifySink),
+	}
+	reg := &LiveViewRegistry{views: map[string]*LiveView{"s1": lv}}
+
+	gotA := make(chan bool, 4)
+	gotB := make(chan bool, 4)
+	lv.controlSinks["connA"] = func(controlledByOther bool) { gotA <- controlledByOther }
+	lv.controlSinks["connB"] = func(controlledByOther bool) { gotB <- controlledByOther }
+
+	notifiedA := make(chan struct{}, 4)
+	lv.releaseSinks["connA"] = func() { notifiedA <- struct{}{} }
+
+	require.True(t, lv.takeControl("connA"))
+	requireControlBroadcast(t, gotB, true, "conn B must first learn conn A took control")
+
+	formerHolder, cleared := reg.ReleaseStoodDown("s1")
+	require.Equal(t, "connA", formerHolder)
+	require.True(t, cleared)
+
+	requireControlBroadcast(t, gotB, false,
+		"conn B must be told the lock was freed — without this it stays wedged on 'someone else is driving'")
+
+	select {
+	case <-notifiedA:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the former holder must still get its FR-031b ReleaseNotifySink")
+	}
+	requireNoControlBroadcast(t, gotA,
+		"the former holder is served by its own `released` lifecycle frame, never a control_only broadcast "+
+			"(FR-031b: a control_only frame cannot clear the holder's own isControlling)")
+}
+
+// TestReleaseStoodDown_LatchOnlyStandDownDoesNotBroadcast pins the gate on the
+// fan-out above. `cleared` is also true for a latch-only (FR-026a) or
+// handover-only (FR-047) stand-down, but neither ever sets lv.controller, so
+// no viewer was ever sent controlled_by_other=true for them and there is
+// nothing to correct. Broadcasting anyway would be a status change the SPA
+// must not see.
+func TestReleaseStoodDown_LatchOnlyStandDownDoesNotBroadcast(t *testing.T) {
+	lv := &LiveView{
+		sessionID:    "s1",
+		viewers:      map[string]struct{}{"connB": {}},
+		controlSinks: make(map[string]ControlSink),
+		releaseSinks: make(map[string]ReleaseNotifySink),
+	}
+	reg := &LiveViewRegistry{views: map[string]*LiveView{"s1": lv}}
+
+	gotB := make(chan bool, 4)
+	lv.controlSinks["connB"] = func(controlledByOther bool) { gotB <- controlledByOther }
+
+	lv.mu.Lock()
+	lv.standDownUntilPrompt = true // a handover/latch stand-down: no interactive holder
+	lv.mu.Unlock()
+
+	formerHolder, cleared := reg.ReleaseStoodDown("s1")
+	require.Equal(t, "", formerHolder, "a latch-only stand-down has no interactive holder to report")
+	require.True(t, cleared, "the latch itself was still cleared")
+
+	requireNoControlBroadcast(t, gotB,
+		"nobody was ever told controlled_by_other=true for a latch-only stand-down, so nothing needs clearing")
+}
+
 // TestLiveView_Attach_ReturnsControlledByOtherForNewViewer covers the
 // "attaches while already controlled" half of ADR-039 UAT BE-1: a NEW
 // connection attaching to a session some other viewer already controls must

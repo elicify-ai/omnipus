@@ -3348,6 +3348,39 @@ func (r *LiveViewRegistry) SetReleaseNotifySink(sessionID, viewerID string, sink
 // exactly the one sessionID given. Returns the former holder's viewerID
 // ("" if nobody held it) and whether anything was actually cleared, so a
 // caller can skip auditing/notifying a genuine no-op.
+//
+// EVERY OTHER ATTACHED VIEWER IS TOLD THE LOCK IS FREE (ADR-039 UAT BE-1).
+// This is not an extra courtesy — it is the other half of the take fan-out,
+// and omitting it is what made a second panel wedge. takeControl broadcasts
+// controlledByOther=true to every viewer except the taker, so after a take
+// each of them renders "Someone else is driving" and disables its own
+// Take-control affordance. Only a matching controlledByOther=false broadcast
+// clears that; a viewer that never receives one is locked out of a browser
+// nobody is driving, for as long as it stays attached.
+//
+// The false half USED to ride on LiveView.releaseControl, which does its own
+// broadcastControl(otherSinks, false). ADR-085 Finding 7(b) then repointed
+// the gateway's release action (pkg/gateway/browser_ws.go::handleControl) at
+// ReleaseStoodDown — correctly, because releaseControl clears only
+// lv.controller and leaves the FR-026a latch standing — but the fan-out was
+// not carried across. That left releaseControl's broadcast reachable from
+// tests only, and left ReleaseStoodDown, which is now the ONLY production
+// path that clears the lock other than detach, silent. Every server-initiated
+// release routes through here (the FR-029 prompt release via
+// ReleaseAllStoodDown, the FR-031a idle expiry and FR-052 switch-off via the
+// sweeper, the operator's own release button via handleControl), so all four
+// went stale-by-default, not just the button.
+//
+// The former holder is EXCLUDED, exactly as releaseControl excludes the
+// releasing viewer: they are served by the dedicated ReleaseNotifySink above,
+// which sends a real `released` lifecycle frame. A control_only frame could
+// not clear their own isControlling anyway (FR-031b — see the sink's
+// registration comment in handleAttach).
+//
+// Broadcast only when an INTERACTIVE holder was actually cleared. `cleared`
+// is also true for a latch-only or handover-only stand-down, but neither of
+// those ever set lv.controller, so no viewer was ever told
+// controlled_by_other=true for them and there is nothing to correct.
 func (r *LiveViewRegistry) ReleaseStoodDown(sessionID string) (formerHolder string, cleared bool) {
 	sessionID = r.resolveSessionID(sessionID)
 	lv, ok := r.lookup(sessionID)
@@ -3357,16 +3390,20 @@ func (r *LiveViewRegistry) ReleaseStoodDown(sessionID string) (formerHolder stri
 	lv.mu.Lock()
 	formerHolder, cleared = lv.clearStandDownLocked()
 	var notify ReleaseNotifySink
+	var otherSinks []ControlSink
 	if formerHolder != "" {
 		if _, attached := lv.viewers[formerHolder]; attached {
 			notify = lv.releaseSinks[formerHolder]
 		}
+		otherSinks = lv.snapshotControlSinksExceptLocked(formerHolder)
 	}
 	lv.mu.Unlock()
 
 	if notify != nil {
 		go notify()
 	}
+	// No lock held, per broadcastControl's contract; a nil slice is a no-op.
+	broadcastControl(otherSinks, false)
 	return formerHolder, cleared
 }
 
