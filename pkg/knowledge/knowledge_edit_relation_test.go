@@ -277,7 +277,7 @@ func TestRelation_FR046_DerivedPropertyRefused(t *testing.T) {
 		"create":       knowledgeEditRelationAllowed,
 	} {
 		t.Run(name, func(t *testing.T) {
-			err := knowledgeEditValidatePropertyAgainstSchema(
+			_, err := knowledgeEditValidatePropertyAgainstSchema(
 				schema, "deal", "margin", []string{"42"}, false, posture)
 			require.Error(t, err, "FR-046: a derived property must not be writable")
 			require.ErrorIs(t, err, ErrDerivedProperty,

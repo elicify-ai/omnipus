@@ -149,9 +149,9 @@ var editArgNames = []string{
 	// embed's shared destination-section argument) because both of those
 	// already exist and mean the OPPOSITE thing: 'heading' names a heading
 	// on the note BEING WRITTEN; 'target_heading' names one on the note
-	// BEING EMBEDDED (EMB-101). 'page' is accepted but always refused today
-	// — reserved for the deferred PDF-page-fragment kind (US-12/EMB-105),
-	// never silently ignored in the meantime (see execEmbed).
+	// BEING EMBEDDED (EMB-101). 'page' is the PDF page fragment
+	// (US-12/EMB-105, delivered for UAT 2026-09-13 D-45 / #697): it writes
+	// the '#page=N' notation the reader already mounts.
 	"view", "target_heading", "target_block", "width", "page",
 	// relation (FR-045). 'relation_op' is named distinctly from 'list_op'
 	// (set_property's own add/remove sub-verb) because the two accept
@@ -283,7 +283,8 @@ func (t *EditTool) Parameters() map[string]any {
 			"value": map[string]any{
 				"description": "set_property: the property's new value — a single value, or a " +
 					"list for a many-valued property. With list_op set, the ONE value to add " +
-					"or remove. Cannot write a relation or person property — use op 'relation'.",
+					"or remove. Send null to REMOVE the property from the note entirely. " +
+					"Cannot write a relation or person property — use op 'relation'.",
 			},
 			"list_op": map[string]any{
 				"type": "string",
@@ -312,8 +313,11 @@ func (t *EditTool) Parameters() map[string]any {
 			"anchor": map[string]any{
 				"type": "string",
 				"description": "replace_body: exact text — copied from a knowledge_read response, " +
-					"never retyped from memory — to replace. Refused if it matches more than " +
-					"once or not at all. Give anchor or line_range, not both.",
+					"never retyped from memory — to replace. ONLY the anchor's own bytes are " +
+					"replaced by 'body'; text before or after it on the same line is kept. To " +
+					"replace a whole line or paragraph, make the anchor that whole line or " +
+					"paragraph (or use line_range). Refused if it matches more than once or not " +
+					"at all. Give anchor or line_range, not both.",
 			},
 			"line_range": map[string]any{
 				"type": "object",
@@ -329,8 +333,10 @@ func (t *EditTool) Parameters() map[string]any {
 			"target": map[string]any{
 				"type": "string",
 				"description": "link: the note to link to, by name or path. embed: the note, " +
-					"picture, PDF or data file to embed, by path relative to the collection " +
-					"root — checked to exist before anything is written.",
+					"picture, PDF, audio/video or data file to embed, by path relative to the " +
+					"collection root — checked to exist before anything is written. A " +
+					"'#fragment' suffix (a heading, '^block', a view label, or 'page=N') is " +
+					"read as the matching target_heading / target_block / view / page argument.",
 			},
 			"alias": map[string]any{
 				"type":        "string",
@@ -339,7 +345,8 @@ func (t *EditTool) Parameters() map[string]any {
 			"section": map[string]any{
 				"type": "string",
 				"description": "link: heading to put the wikilink under. embed: heading to " +
-					"put the embed under; created if absent.",
+					"put the embed under; created if absent. Optional for embed: leave unset to " +
+					"add the embed at the end of the note.",
 			},
 
 			// embed (US-11). At most one of view/target_heading/target_block.
@@ -372,8 +379,10 @@ func (t *EditTool) Parameters() map[string]any {
 			},
 			"page": map[string]any{
 				"type": "string",
-				"description": "embed: reserved for a future PDF page-fragment embed. NOT " +
-					"supported yet — refused if given, on every target kind.",
+				"description": "embed: for a PDF target, the 1-based page to show, as digits " +
+					"('2'). Writes the '#page=2' notation, which the reader mounts as that one " +
+					"page; a PDF embedded WITHOUT a page is shown as a link only. Refused on " +
+					"any other target kind.",
 			},
 
 			// relation (FR-045)
@@ -530,6 +539,13 @@ func (t *EditTool) execCreate(ctx context.Context, target mutationTarget, args m
 
 	var content []byte
 	if template != "" {
+		// UAT 2026-09-13 D-26: "meeting" resolves to "meeting.md" when that is
+		// the template on disk, and a miss names the templates that exist.
+		resolvedTemplate, terr := resolveTemplateName(target.collection, template)
+		if terr != nil {
+			return t.deps.refuse(AuthorOpCreate, target, []string{rel}, terr.Error())
+		}
+		template = resolvedTemplate
 		raw, terr := ReadTemplate(OSLinkFS(), target.collection, template)
 		if terr != nil {
 			return t.deps.refuse(AuthorOpCreate, target, []string{rel}, terr.Error())
@@ -584,9 +600,15 @@ func (t *EditTool) execCreate(ctx context.Context, target mutationTarget, args m
 	// written verbatim. Validate the FULLY ASSEMBLED content's frontmatter,
 	// every property present in it, through the exact same authority, before
 	// it ever reaches CreateNote.
-	gov, verr := knowledgeEditValidateAssembledFrontmatter(set, report, content)
+	content, gov, verr := knowledgeEditValidateAssembledFrontmatter(set, report, content)
 	if verr != nil {
 		return t.deps.refuse(AuthorOpCreate, target, []string{rel}, verr.Error())
+	}
+	// UAT 2026-09-13 D-95: a note ends with a newline, as every text tool
+	// expects a text file to — `cat -e` and `git diff` were showing ragged
+	// last lines on every agent-created note.
+	if len(content) > 0 && !authorEndsWithNewline(content) {
+		content = append(content, authorDominantEOL(content)...)
 	}
 
 	res, err := CreateNote(OSLinkFS(), target.collection, CreateNoteRequest{
@@ -608,9 +630,38 @@ func (t *EditTool) execCreate(ctx context.Context, target mutationTarget, args m
 	indexWarning := refreshIndexesForNote(ctx, t.deps.Home, target.col.Root, res.RelPath)
 	return tools.NewToolResult(RenderEdit(EditData{
 		Op: opCreate, Path: res.RelPath, Version: res.Version,
-		Changed: true, Bytes: res.Bytes, Template: template,
+		Changed: true, Bytes: res.Bytes, Template: template, RecordID: res.RecordID,
 		SchemaNote: gov.Note(), IndexWarning: indexWarning,
 	}))
+}
+
+// resolveTemplateName maps the name an agent sent to a template that exists
+// (UAT 2026-09-13 D-26): an exact match wins; otherwise the same name with
+// ".md" appended; otherwise a refusal that lists every available template,
+// so an agent one character from success is not left guessing.
+func resolveTemplateName(c *Collection, name string) (string, error) {
+	infos, err := ListTemplates(OSLinkFS(), c)
+	if err != nil {
+		return "", fmt.Errorf("knowledge: listing templates: %w", err)
+	}
+	names := make([]string, 0, len(infos))
+	for _, info := range infos {
+		names = append(names, info.Name)
+		if info.Name == name {
+			return name, nil
+		}
+	}
+	for _, n := range names {
+		if n == name+".md" {
+			return n, nil
+		}
+	}
+	if len(names) == 0 {
+		return "", fmt.Errorf("%w: %q — this knowledge base has no templates (put one in %s/%s/)",
+			ErrTemplateNotFound, name, MarkerDirName, c.Marker().templatesRel())
+	}
+	return "", fmt.Errorf("%w: %q — available templates: %s (give the name exactly as listed; \".md\" may be omitted)",
+		ErrTemplateNotFound, name, strings.Join(names, ", "))
 }
 
 // frontmatterPair is one create.frontmatter entry, decoded to the shape
@@ -682,8 +733,9 @@ func (t *EditTool) execSetProperty(ctx context.Context, target mutationTarget, a
 			fmt.Sprintf("'list_op' must be \"add\" or \"remove\" when given, not %q", listOp))
 	}
 	raw, present := args["value"]
-	if !present || raw == nil {
-		return t.deps.refuse(AuthorOpEdit, target, []string{rel}, "'value' is required")
+	if !present {
+		return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+			"'value' is required (send null explicitly to remove the property from the note)")
 	}
 	set, report, serr := t.loadSchemas(target)
 	if serr != nil {
@@ -696,17 +748,45 @@ func (t *EditTool) execSetProperty(ctx context.Context, target mutationTarget, a
 	// the write succeeded.
 	var gov knowledgeEditGovernance
 	var edit NoteEdit
-	if listOp != "" {
+	removing := raw == nil
+	// UAT 2026-09-13 D-28: setting `type` on a note that has no `id` yet
+	// PROMOTES it to a record, and a record without an identifier is
+	// invisible to every record door (record_identity.go's header). The
+	// identifier is minted here, BEFORE the note lock (lock ordering — see
+	// that file), against the note as it stands now; the closure re-checks
+	// that no id appeared meanwhile before splicing it.
+	var promoteID string
+	switch {
+	case removing && listOp != "":
+		return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+			"'value' must name the one item to add or remove when 'list_op' is set")
+	case removing:
+		if rerr := knowledgeEditRefuseReservedProperty(property); rerr != nil {
+			return t.deps.refuse(AuthorOpEdit, target, []string{rel}, rerr.Error())
+		}
+		if property == records.RecordTypeKey {
+			return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+				"'type' cannot be removed here: it is what makes the note a record. Use knowledge_configure delete_record_type to retire the type, or set_property with a different type")
+		}
+		edit = RemoveProperty(property)
+	case listOp != "":
 		value, ok := jsonScalarToString(raw)
 		if !ok {
 			return t.deps.refuse(AuthorOpEdit, target, []string{rel},
 				fmt.Sprintf("'value' must be a single text value when 'list_op' is set (got %T)", raw))
 		}
 		edit = knowledgeEditListOpEdit(set, report, property, value, listOp == "add", &gov)
-	} else {
+	default:
 		values, isList, verr := decodeValueArg(raw)
 		if verr != nil {
 			return t.deps.refuse(AuthorOpEdit, target, []string{rel}, verr.Error())
+		}
+		if property == records.RecordTypeKey && !isList {
+			if id, perr := t.mintPromotionID(target, rel, values[0], set); perr != nil {
+				return t.deps.refuse(AuthorOpEdit, target, []string{rel}, perr.Error())
+			} else {
+				promoteID = id
+			}
 		}
 		// knowledgeEditAutoSplitCommaList (Issue 6/F3) needs the note's OWN
 		// bytes to resolve its `type:` and schema, and — unlike execCreate,
@@ -719,7 +799,15 @@ func (t *EditTool) execSetProperty(ctx context.Context, target mutationTarget, a
 			// knowledgeEditRelationRefused: set_property is the door FR-045
 			// closes — a caller sending the value it wants the property to
 			// end up holding takes a relation list's other edges with it.
-			return knowledgeEditSetPropertyEdit(set, report, property, splitValues, splitIsList, knowledgeEditRelationRefused, &gov)(src)
+			out, eerr := knowledgeEditSetPropertyEdit(set, report, property, splitValues, splitIsList, knowledgeEditRelationRefused, &gov)(src)
+			if eerr != nil || promoteID == "" {
+				return out, eerr
+			}
+			if records.ParseRecord("", out).ID() != "" {
+				promoteID = "" // an id appeared between the pre-read and the lock; keep it
+				return out, nil
+			}
+			return SpliceRecordIdentity(out, promoteID)
 		}
 	}
 
@@ -739,9 +827,82 @@ func (t *EditTool) execSetProperty(ctx context.Context, target mutationTarget, a
 	}
 	return tools.NewToolResult(RenderEdit(EditData{
 		Op: opSetProperty, Path: res.RelPath, Version: res.Version,
-		Property: property, ListOp: listOp, Changed: res.Changed,
+		Property: property, ListOp: listOp, Changed: res.Changed, Removed: removing,
+		RecordID:   promoteID,
 		SchemaNote: gov.Note(), IndexWarning: indexWarning,
+		StaleKeys: knowledgeEditUndeclaredKeys(set, res.Content, property),
 	}))
+}
+
+// mintPromotionID mints the identifier a note will need if this set_property
+// of `type` turns it into a record (D-28). It returns "" — and no error — in
+// every case where no minting is due: the note cannot be read at all (the
+// write's own path will refuse it properly), it already carries an id, or
+// the type names no schema in this collection.
+func (t *EditTool) mintPromotionID(target mutationTarget, rel, typeName string, set *records.SchemaSet) (string, error) {
+	sc, ok := set.Get(strings.TrimSpace(typeName))
+	if !ok {
+		return "", nil
+	}
+	root, err := NewCollectionRoot(OSLinkFS(), target.collection.Root())
+	if err != nil {
+		return "", nil //nolint:nilerr // the write path refuses this itself
+	}
+	abs, err := root.ResolveContainedNoSymlink(OSLinkFS(), rel)
+	if err != nil {
+		return "", nil //nolint:nilerr // likewise
+	}
+	current, err := ReadNoteContent(OSLinkFS(), abs)
+	if err != nil {
+		return "", nil //nolint:nilerr // likewise
+	}
+	if records.ParseRecord("", current).ID() != "" {
+		return "", nil
+	}
+	ids, _, merr := MintRecordIDs(target.lock, target.collection.Root(), sc, 1)
+	if merr != nil {
+		return "", fmt.Errorf("minting an identifier for record type %q: %w", sc.Type, merr)
+	}
+	if len(ids) != 1 {
+		return "", fmt.Errorf("minting an identifier for record type %q produced %d, wanted 1", sc.Type, len(ids))
+	}
+	return ids[0], nil
+}
+
+// knowledgeEditUndeclaredKeys lists, after a write, the frontmatter keys the
+// note carries that its OWN record type does not declare (UAT 2026-09-13
+// D-93) — a renamed-away `priority:` sitting beside the `prio:` just
+// written. Nothing here evaluates such a key, so a caller must be told it
+// is there. Nil for an ordinary note, an unrecognised type, or a clean
+// record. `written` is excluded only in the sense that it is declared by
+// construction of a successful governed write.
+func knowledgeEditUndeclaredKeys(set *records.SchemaSet, content []byte, written string) []string {
+	if set == nil || len(content) == 0 {
+		return nil
+	}
+	fm, err := records.ParseFrontmatter(content)
+	if err != nil || !fm.Present {
+		return nil
+	}
+	typeName := (records.Record{Frontmatter: fm}).TypeName()
+	if typeName == "" {
+		return nil
+	}
+	sc, ok := set.Get(typeName)
+	if !ok {
+		return nil
+	}
+	var stale []string
+	for _, key := range fm.Keys {
+		switch key {
+		case records.RecordTypeKey, records.RecordIDKey, records.RecordIDKeyNamespaced, written:
+			continue
+		}
+		if _, declared := sc.Property(key); !declared {
+			stale = append(stale, key)
+		}
+	}
+	return stale
 }
 
 // ---------------------------------------------------------------------------
@@ -912,7 +1073,8 @@ func (t *EditTool) execReplaceBody(ctx context.Context, target mutationTarget, a
 		lr = &LineRange{Start: intArg(m["start"], 0), End: intArg(m["end"], 0)}
 	}
 
-	edit := ReplaceBody(rel, anchor, lr, body)
+	var report ReplaceBodyReport
+	edit := ReplaceBodyReporting(rel, anchor, lr, body, &report)
 	res, err := EditNote(OSLinkFS(), target.collection, EditNoteRequest{
 		RelPath: rel, Edits: []NoteEdit{edit}, ExpectVersion: expect,
 		Now: t.deps.now(), Audit: t.deps.Audit, Actor: target.actor(), Lock: target.lock,
@@ -928,7 +1090,8 @@ func (t *EditTool) execReplaceBody(ctx context.Context, target mutationTarget, a
 	}
 	return tools.NewToolResult(RenderEdit(EditData{
 		Op: opReplaceBody, Path: res.RelPath, Version: res.Version, Changed: res.Changed,
-		IndexWarning: indexWarning,
+		ReplaceReport: report.Describe(),
+		IndexWarning:  indexWarning,
 	}))
 }
 
@@ -1083,14 +1246,134 @@ func embedBlockRefusalText(embedPath, requested string, anchors []string) string
 }
 
 // embedInsertEdit returns an edit that inserts one embed notation line
-// under the named section, creating the section if absent (EMB-097) — the
-// write half of US-11, sharing insertUnderSection with AddWikilink rather
-// than a second insertion mechanism.
+// under the named section, creating the section if absent (EMB-097), or at
+// the end of the note when no section is named (UAT 2026-09-13 D-54) — the
+// write half of US-11.
+//
+// THE EMBED IS ALWAYS ITS OWN PARAGRAPH (UAT 2026-09-13 D-12). The reader's
+// documented rule skips a block mount when "the embed did not stand alone in
+// its paragraph", and insertUnderSection — written for AddWikilink's list
+// items, which are meant to sit on adjacent lines — appended a second embed
+// directly under the first, so two embeds in one section became one
+// paragraph and NEITHER mounted; on the UAT vault's dashboard 0 of 11
+// embeds mounted for exactly this reason. So this is deliberately NOT
+// insertUnderSection for the found-section case: a blank line is put
+// between the section's last non-blank line and the notation, and the
+// notation is followed by its own terminator, so whatever came after (a
+// blank line and the next heading, or EOF) still separates it.
 func embedInsertEdit(notation, section string) NoteEdit {
 	return func(src []byte) ([]byte, error) {
-		return insertUnderSection(src, notation, section, 2)
+		if section == "" {
+			// End of note, as its own paragraph — insertUnderSection's
+			// no-section branch already writes a blank line before the text.
+			return insertUnderSection(src, notation, "", 2)
+		}
+		_, end, found := sectionBounds(src, section)
+		if !found {
+			// A fresh section: heading, blank line, notation — AppendSectionAt's
+			// own layout, and the one embed in it stands alone by construction.
+			return AppendSectionAt(2, section, notation)(src)
+		}
+		eol := authorDominantEOL(src)
+		out := make([]byte, 0, len(src)+len(notation)+3*len(eol))
+		out = append(out, src[:end]...)
+		// end is the byte after the section's last non-blank content (or the
+		// heading line's own terminator when the section is empty). One
+		// terminator closes that line; a second opens the blank line — unless
+		// the section is empty and the byte before end is already a line
+		// break, in which case one blank line is all that is wanted.
+		if end > 0 && src[end-1] != '\n' {
+			out = append(out, eol...)
+		}
+		out = append(out, eol...)
+		out = append(out, notation...)
+		rest := src[end:]
+		// sectionBounds hands back, in rest, exactly the newlines it trimmed
+		// off the section's tail (the notation's own terminator plus whatever
+		// blank lines separated the section from the next heading), or "" at
+		// EOF. So the notation's terminator comes from rest when rest starts
+		// with one, and is written here only at EOF — writing it in both
+		// cases produced two blank lines per embed. When rest carries a bare
+		// terminator with the next heading directly after it, one blank line
+		// is added so the embed still stands alone.
+		switch {
+		case len(rest) == 0:
+			out = append(out, eol...)
+		case rest[0] == '\n' || rest[0] == '\r':
+			trimmed := strings.TrimLeft(string(rest), "\r\n")
+			if len(trimmed) > 0 && len(rest)-len(trimmed) <= len(eol) {
+				out = append(out, eol...)
+			}
+		default:
+			out = append(out, eol...)
+			out = append(out, eol...)
+		}
+		out = append(out, rest...)
+		return out, nil
 	}
 }
+
+// embedMountingExts are the non-picture, non-note target kinds the reader
+// mounts in place (src/components/library/preview/knowledgeMarkdown.tsx's
+// inlineEmbedTreatment: audio and video are block mounts; html/text/other
+// are link-only; a PDF is link-only unless a page is named; .mmd is refused
+// outright — see embedRefusedExts). Kept as the write path's own table
+// because a note-editing tool has only the extension to go on, exactly as
+// the reader's classifyEmbedKind does.
+var embedMountingExts = map[string]bool{
+	".mp4": true, ".webm": true, ".mov": true, ".mkv": true, ".avi": true, ".m4v": true, ".ogv": true,
+	".mp3": true, ".m4a": true, ".aac": true, ".ogg": true, ".opus": true, ".wav": true, ".flac": true,
+}
+
+// embedRefusedExts are targets op=embed refuses to write at all (UAT
+// 2026-09-13 D-20): ADR-083 §15 / founder ruling N8 makes an embedded
+// Mermaid FILE permanently link-only, so writing `![[chart.mmd]]` would be
+// writing an embed known to be broken forever — the exact outcome US-11
+// exists to prevent.
+var embedRefusedExts = map[string]string{
+	".mmd":     "a Mermaid diagram file is never rendered as an embed (ADR-083 §15, founder ruling N8) — link to it with op \"link\" instead, or embed a rendered picture of it",
+	".mermaid": "a Mermaid diagram file is never rendered as an embed (ADR-083 §15, founder ruling N8) — link to it with op \"link\" instead, or embed a rendered picture of it",
+}
+
+// embedRenderNote says, at WRITE time, whether the notation just written will
+// mount in place or be shown as a link, and why (UAT 2026-09-13 D-91). ""
+// means it mounts. knowledge_read's LINKS rendering asks the same function
+// (readEmbedRenderNote in tools.go) so the two doors never disagree about
+// which embeds a reader will actually see in place.
+func embedRenderNote(rel, fragment string) string {
+	ext := strings.ToLower(path.Ext(rel))
+	switch {
+	case isPictureTarget(rel), IsMarkdownPath(rel), isDataFileTarget(rel), embedMountingExts[ext]:
+		return ""
+	case ext == ".pdf":
+		if strings.HasPrefix(fragment, "page=") {
+			return ""
+		}
+		return "a whole-document PDF is shown as a link, not mounted — give page: N to mount one page"
+	case ext == ".mmd", ext == ".mermaid":
+		return "a Mermaid diagram file is shown as a link, never mounted (ADR-083 §15)"
+	case ext == ".html", ext == ".htm":
+		return "an HTML file is shown as a link, not mounted"
+	default:
+		return fmt.Sprintf("a %s file is shown as a link, not mounted (only pictures, notes, PDF pages, audio, video and data views mount in place)", nonEmpty(ext, "extensionless"))
+	}
+}
+
+// splitEmbedTargetFragment reads a "#fragment" suffix off an embed target
+// (UAT 2026-09-13 D-19): an agent naturally writes "Note.md#Decisions" the
+// way the notation itself is spelled, and used to be told the NOTE did not
+// exist. The fragment is returned separately so execEmbed can route it to
+// the matching named argument.
+func splitEmbedTargetFragment(target string) (base, fragment string) {
+	i := strings.LastIndex(target, "#")
+	if i < 0 {
+		return target, ""
+	}
+	return strings.TrimSpace(target[:i]), strings.TrimSpace(target[i+1:])
+}
+
+// embedPagePattern is the PDF page fragment grammar: a positive integer.
+var embedPagePattern = regexp.MustCompile(`^[1-9][0-9]*$`)
 
 // composeEmbedNotation writes the exact syntax an embed of target,
 // optionally fragmented by view/heading/block and optionally sized, is
@@ -1118,16 +1401,10 @@ func (t *EditTool) execEmbed(ctx context.Context, target mutationTarget, args ma
 	if embedTarget == "" {
 		return t.deps.refuse(AuthorOpEdit, target, []string{rel}, "'target' is required")
 	}
-	embedRel, cErr := cleanNoteArg(embedTarget)
-	if cErr != nil {
-		return t.deps.refuse(AuthorOpEdit, target, []string{rel},
-			fmt.Sprintf("embed: the target %q is not inside this collection", embedTarget))
-	}
 
+	// D-54: 'section' is optional — an embed with no destination heading
+	// goes at the end of the note, as its own paragraph.
 	section := strings.TrimSpace(stringArg(args["section"]))
-	if section == "" {
-		return t.deps.refuse(AuthorOpEdit, target, []string{rel}, "'section' is required")
-	}
 
 	view := strings.TrimSpace(stringArg(args["view"]))
 	targetHeading := strings.TrimSpace(stringArg(args["target_heading"]))
@@ -1135,23 +1412,46 @@ func (t *EditTool) execEmbed(ctx context.Context, target mutationTarget, args ma
 	width := strings.TrimSpace(stringArg(args["width"]))
 	page := strings.TrimSpace(stringArg(args["page"]))
 
-	// 'page' (a PDF page fragment, US-12/EMB-105) is a DEFERRED kind: no
-	// renderer or notation form exists for it yet. Refusing beats writing
-	// notation nothing can check and a reader would treat as a plain,
-	// unfragmented embed — silently different from what was asked for.
-	if page != "" {
-		return t.deps.refuse(AuthorOpEdit, target, []string{rel},
-			"embed: 'page' (a PDF page fragment) is not supported yet")
+	// D-19: a "#fragment" on the target itself is routed to the matching
+	// named argument, never mistaken for part of the file name.
+	if base, frag := splitEmbedTargetFragment(embedTarget); frag != "" {
+		if view != "" || targetHeading != "" || targetBlock != "" || page != "" {
+			return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+				fmt.Sprintf("embed: the target %q carries a '#%s' fragment AND a fragment argument was given — name the fragment once, in 'target_heading', 'target_block', 'view' or 'page'", embedTarget, frag))
+		}
+		switch {
+		case strings.HasPrefix(frag, "^"):
+			targetBlock = frag
+		case strings.HasPrefix(frag, "page="):
+			page = strings.TrimPrefix(frag, "page=")
+		case isDataFileTarget(base):
+			view = frag
+		default:
+			targetHeading = frag
+		}
+		embedTarget = base
 	}
+
+	embedRel, cErr := cleanNoteArg(embedTarget)
+	if cErr != nil {
+		return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+			fmt.Sprintf("embed: the target %q is not inside this collection", embedTarget))
+	}
+	// D-20: a kind the reader refuses forever is refused at write time too.
+	if why, refused := embedRefusedExts[strings.ToLower(path.Ext(embedRel))]; refused {
+		return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+			fmt.Sprintf("embed: %q cannot be embedded: %s", embedTarget, why))
+	}
+
 	fragmentArgs := 0
-	for _, v := range []string{view, targetHeading, targetBlock} {
+	for _, v := range []string{view, targetHeading, targetBlock, page} {
 		if v != "" {
 			fragmentArgs++
 		}
 	}
 	if fragmentArgs > 1 {
 		return t.deps.refuse(AuthorOpEdit, target, []string{rel},
-			"embed: give at most one of 'view', 'target_heading', 'target_block'")
+			"embed: give at most one of 'view', 'target_heading', 'target_block', 'page'")
 	}
 
 	// Contained AND EXISTS (EMB-098). A broken embed found later by a
@@ -1175,6 +1475,18 @@ func (t *EditTool) execEmbed(ctx context.Context, target mutationTarget, args ma
 	isPicture := isPictureTarget(embedRel)
 	isDataFile := isDataFileTarget(embedRel)
 	isNote := IsMarkdownPath(embedRel)
+	isPDF := strings.EqualFold(path.Ext(embedRel), ".pdf")
+
+	// D-45 / #697: the PDF page fragment. The reader mounts `#page=N` as that
+	// one page (KbPdfPageEmbedMount); a whole-document PDF is link-only.
+	if page != "" && !isPDF {
+		return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+			fmt.Sprintf("embed: 'page' only applies to a PDF; %q is not one", embedTarget))
+	}
+	if page != "" && !embedPagePattern.MatchString(page) {
+		return t.deps.refuse(AuthorOpEdit, target, []string{rel},
+			fmt.Sprintf("embed: 'page' must be a page number from 1 upwards, as digits ('2'), got %q", page))
+	}
 
 	if width != "" && !isPicture {
 		return t.deps.refuse(AuthorOpEdit, target, []string{rel},
@@ -1204,6 +1516,8 @@ func (t *EditTool) execEmbed(ctx context.Context, target mutationTarget, args ma
 
 	fragment := ""
 	switch {
+	case page != "":
+		fragment = "page=" + page
 	case view != "":
 		set, _, lerr := t.loadSchemas(target)
 		if lerr != nil {
@@ -1290,6 +1604,7 @@ func (t *EditTool) execEmbed(ctx context.Context, target mutationTarget, args ma
 	return tools.NewToolResult(RenderEdit(EditData{
 		Op: opEmbed, Path: res.RelPath, Version: res.Version,
 		Target: embedRel, Notation: notation, Section: section, Changed: res.Changed,
+		RenderNote:   embedRenderNote(embedRel, fragment),
 		IndexWarning: indexWarning,
 	}))
 }
@@ -1334,6 +1649,31 @@ type EditData struct {
 	// distinction one level down, on the embed TARGET rather than the
 	// destination).
 	Section string
+	// NormalisedTargets lists op=relation's "given -> stored" rewrites
+	// (D-94), so a caller sees that "People/X.md" landed as "[[X]]".
+	NormalisedTargets []string
+	// RecordID is the identifier op=create minted for a record note (UAT
+	// 2026-09-13 D-48 — the agent used to have to knowledge_read the note
+	// back to learn it), or the one op=set_property minted when `type`
+	// promoted an ordinary note to a record (D-28). Empty otherwise.
+	RecordID string
+	// Removed is op=set_property's `value: null` mode: the property was
+	// deleted from the note rather than set.
+	Removed bool
+	// StaleKeys are frontmatter keys the note carries that its record type
+	// does not declare, observed after the write (D-93). Rendered as a NOTE
+	// so a caller sees the `priority:` beside the `prio:` it just wrote.
+	StaleKeys []string
+	// ReplaceReport is op=replace_body's statement of exactly what span was
+	// replaced (D-18): for an anchor, that ONLY the anchor's own bytes went,
+	// and what was kept on the same line.
+	ReplaceReport string
+	// RenderNote is op=embed's write-time honesty line (UAT 2026-09-13
+	// D-91): "" when the notation will mount in place, otherwise why the
+	// reader shows it as a link (a whole-document PDF, an HTML file, ...).
+	// Rendered right after the EMBED line so an agent authoring a dashboard
+	// cannot read "(changed)" as "mounted".
+	RenderNote string
 	// SchemaNote is knowledgeEditGovernance.Note() (G3) — empty when a
 	// schema governed the write (nothing further to say) or the op never
 	// resolves one (append_section, replace_body, a body-only link); a
@@ -1362,16 +1702,29 @@ func RenderEdit(d EditData) string {
 		if d.Template != "" {
 			extra = fmt.Sprintf(" from template %q", d.Template)
 		}
-		fmt.Fprintf(&b, "CREATED%s (%d bytes)\n", extra, d.Bytes)
+		fmt.Fprintf(&b, "CREATED%s (%d bytes)", extra, d.Bytes)
+		if d.RecordID != "" {
+			fmt.Fprintf(&b, " id %s", d.RecordID)
+		}
+		b.WriteString("\n")
 	case opSetProperty:
 		verb := "SET"
-		switch d.ListOp {
-		case "add":
+		switch {
+		case d.Removed:
+			verb = "REMOVED"
+		case d.ListOp == "add":
 			verb = "ADDED TO"
-		case "remove":
+		case d.ListOp == "remove":
 			verb = "REMOVED FROM"
 		}
 		fmt.Fprintf(&b, "%s %s (%s)\n", verb, d.Property, changedWord(d.Changed))
+		if d.RecordID != "" {
+			fmt.Fprintf(&b, "PROMOTED to a record: id %s minted\n", d.RecordID)
+		}
+		if len(d.StaleKeys) > 0 {
+			fmt.Fprintf(&b, "NOTE: this note also carries %d key(s) its record type does not declare — %s — which no reader or query evaluates; remove each with set_property value: null, or declare it via knowledge_configure edit_record_type\n",
+				len(d.StaleKeys), strings.Join(d.StaleKeys, ", "))
+		}
 	case opAppendSection:
 		state := "appended"
 		if !d.Changed {
@@ -1385,9 +1738,20 @@ func RenderEdit(d EditData) string {
 		// `relation` refusal.
 		fmt.Fprintf(&b, "LINK -> %s (%s)\n", d.Target, changedWord(d.Changed))
 	case opReplaceBody:
-		fmt.Fprintf(&b, "REPLACE_BODY (%s)\n", changedWord(d.Changed))
+		fmt.Fprintf(&b, "REPLACE_BODY (%s)", changedWord(d.Changed))
+		if d.ReplaceReport != "" {
+			fmt.Fprintf(&b, " — %s", d.ReplaceReport)
+		}
+		b.WriteString("\n")
 	case opEmbed:
-		fmt.Fprintf(&b, "EMBED %s under %q (%s)\n", d.Notation, d.Section, changedWord(d.Changed))
+		where := fmt.Sprintf("under %q", d.Section)
+		if d.Section == "" {
+			where = "at the end of the note"
+		}
+		fmt.Fprintf(&b, "EMBED %s %s (%s)\n", d.Notation, where, changedWord(d.Changed))
+		if d.RenderNote != "" {
+			fmt.Fprintf(&b, "RENDERS AS A LINK: %s\n", d.RenderNote)
+		}
 	case opRelation:
 		// The verb is rendered in the caller's own vocabulary ("RELATION
 		// ADD") rather than translated to a past-tense English word, so the
@@ -1399,6 +1763,10 @@ func RenderEdit(d EditData) string {
 		}
 		fmt.Fprintf(&b, "RELATION %s %s -> %s (%s)\n",
 			strings.ToUpper(d.RelationOp), d.Property, targets, changedWord(d.Changed))
+		if len(d.NormalisedTargets) > 0 {
+			fmt.Fprintf(&b, "STORED AS: %s — a relation holds the note's bare name (the form this knowledge base uses), never a path with its extension\n",
+				strings.Join(d.NormalisedTargets, "; "))
+		}
 	}
 	if d.SchemaNote != "" {
 		fmt.Fprintf(&b, "%s\n", d.SchemaNote)

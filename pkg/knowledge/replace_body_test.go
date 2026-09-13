@@ -313,16 +313,52 @@ func TestReplaceBody_LineRange_InvalidBoundsRefused(t *testing.T) {
 }
 
 // TestReplaceBody_LineRange_TerminatorConsumption documents Deliverable 5's
-// stated rule precisely: replacing a non-last line consumes THAT line's own
-// terminator, so a body with no trailing newline glues onto whatever follows.
-// This is asserted, not merely described, so a change to the rule fails a
-// test rather than only a comment.
+// stated rule precisely, as amended for UAT 2026-09-13 D-05: replacing a
+// non-last line consumes THAT line's own terminator, and the terminator is
+// written back after a body that lacks one — a line range replaces whole
+// lines, so the replacement stays on whole lines. This is asserted, not
+// merely described, so a change to the rule fails a test rather than only a
+// comment.
 func TestReplaceBody_LineRange_TerminatorConsumption(t *testing.T) {
 	edit := ReplaceBodyByLineRange("x.md", 5, 5, "NoTrailingNewline")
 	out, err := edit([]byte(rbLineRangeFixture))
 	require.NoError(t, err)
-	assert.Equal(t, "---\ntitle: Deal\n---\n\nNoTrailingNewlineLine B\nLine C\n", string(out),
-		"the tool adds no newline on the caller's behalf")
+	assert.Equal(t, "---\ntitle: Deal\n---\n\nNoTrailingNewline\nLine B\nLine C\n", string(out),
+		"the replaced line's own terminator is restored so the next line is not welded on")
+}
+
+// TestReplaceBody_LineRange_D05_NoWeldOntoNextLine is the UAT 2026-09-13
+// D-05 repro verbatim: lines 11-12 of a six-line body replaced by a two-line
+// body with no trailing newline. Before the fix the file read "XXX\nYYYDDD4"
+// — two lines silently became one and the tool reported plain "(changed)".
+func TestReplaceBody_LineRange_D05_NoWeldOntoNextLine(t *testing.T) {
+	// 9 frontmatter+blank lines, then AAA1..FFF6 on lines 10-15.
+	src := "---\ntitle: T\na: 1\nb: 2\nc: 3\nd: 4\ne: 5\n---\n\n" +
+		"AAA1\nBBB2\nCCC3\nDDD4\nEEE5\nFFF6\n"
+	edit := ReplaceBodyByLineRange("x.md", 11, 12, "XXX\nYYY")
+	out, err := edit([]byte(src))
+	require.NoError(t, err)
+	assert.Equal(t,
+		"---\ntitle: T\na: 1\nb: 2\nc: 3\nd: 4\ne: 5\n---\n\n"+
+			"AAA1\nXXX\nYYY\nDDD4\nEEE5\nFFF6\n", string(out))
+
+	t.Run("CRLF file gets its own terminator back", func(t *testing.T) {
+		crlf := "---\r\ntitle: T\r\n---\r\n\r\nAAA1\r\nBBB2\r\nCCC3\r\n"
+		out, err := ReplaceBodyByLineRange("x.md", 6, 6, "XXX")([]byte(crlf))
+		require.NoError(t, err)
+		assert.Equal(t, "---\r\ntitle: T\r\n---\r\n\r\nAAA1\r\nXXX\r\nCCC3\r\n", string(out))
+	})
+	t.Run("body already ending in a newline gets no second one", func(t *testing.T) {
+		out, err := ReplaceBodyByLineRange("x.md", 11, 12, "XXX\nYYY\n")([]byte(src))
+		require.NoError(t, err)
+		assert.Contains(t, string(out), "AAA1\nXXX\nYYY\nDDD4\n")
+		assert.NotContains(t, string(out), "YYY\n\nDDD4")
+	})
+	t.Run("empty body deletes the whole lines, terminator included", func(t *testing.T) {
+		out, err := ReplaceBodyByLineRange("x.md", 11, 12, "")([]byte(src))
+		require.NoError(t, err)
+		assert.Contains(t, string(out), "AAA1\nDDD4\n")
+	})
 }
 
 // TestReplaceBody_LineRange_LastLineNoTrailingNewline covers the file-ends-

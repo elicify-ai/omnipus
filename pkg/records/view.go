@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -700,9 +701,13 @@ func parseCheckShape(
 	// load, mean nothing to the SPA and render as the default table: exactly
 	// the silently-flattened cards view FR-109 was written after.
 	if def.Layout != nil && !def.Layout.Valid() {
+		// UAT 2026-09-13 D-32: two vocabularies exist — write_view's legacy
+		// `layout` and create_view's `kind` — and a refusal that names only
+		// one leaves an agent unable to tell which word belongs where.
 		return reject(RejectViewInvalidLayout, def.Name,
-			"view %q asks for layout %q, which is not one of the declared layouts; permitted: %s",
-			def.Name, string(*def.Layout), strings.Join(viewLayoutNames(), ", "))
+			"view %q asks for layout %q, which is not one of the declared layouts; permitted: %s "+
+				"(`layout` is write_view's legacy rendering vocabulary; op=create_view speaks `kind` instead — %s — and writes the layout for you)",
+			def.Name, string(*def.Layout), strings.Join(viewLayoutNames(), ", "), strings.Join(viewKindNames(), ", "))
 	}
 
 	// `kind` and `parts` are the view-kinds addition (design §4), and both are
@@ -928,6 +933,11 @@ func measureViewFilterTree(n generated.VaultFilterNode, depth int) (leaves, maxD
 // file cannot turn a load into a crash on the way to saying so.
 const viewFilterWalkCeiling = 512
 
+// ViewLayoutNames is every legacy `layout` a view may declare, for a refusal
+// that needs to cross-reference write_view's vocabulary from the composer's
+// side (UAT 2026-09-13 D-32).
+func ViewLayoutNames() []string { return viewLayoutNames() }
+
 func viewLayoutNames() []string {
 	return []string{
 		string(generated.ViewDefLayoutTable),
@@ -983,10 +993,91 @@ func viewPartAggregateNames() []string {
 // operator is looking at. They are reading a YAML file; "json: unknown field"
 // sends them looking for JSON.
 func cleanJSONFieldError(err error) error {
+	// UAT 2026-09-13 D-31: a wrong-shaped field used to surface as
+	// "cannot unmarshal array into Go struct field ViewDef.formulas of type
+	// map[string]string" — a Go type name an agent cannot act on. Say which
+	// field, what shape it needs, and what shape was given.
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) {
+		field := typeErr.Field
+		if i := strings.LastIndex(field, "."); i >= 0 {
+			field = field[i+1:]
+		}
+		if field == "" {
+			field = "the view"
+		}
+		return fmt.Errorf("field `%s` must be %s, but the definition gives %s",
+			field, describeJSONTargetShape(field, typeErr.Type), describeJSONValueShape(typeErr.Value))
+	}
 	msg := err.Error()
 	msg = strings.ReplaceAll(msg, "json: unknown field ", "the view file declares a field this release does not know: ")
 	msg = strings.ReplaceAll(msg, "json: ", "")
 	return errors.New(msg)
+}
+
+// describeJSONTargetShape names, in plain words, the shape a ViewDef field
+// needs — by field name where the generic word would mislead (a `formulas`
+// mapping is name -> expression, not "a mapping"), by Go kind otherwise.
+func describeJSONTargetShape(field string, t reflect.Type) string {
+	switch field {
+	case "formulas":
+		return "a mapping of formula name to expression text"
+	case "grouping":
+		return "a list of {property, direction} objects"
+	case "sort":
+		return "a list of {property, direction} objects"
+	case "properties":
+		return "a list of property names"
+	case "parts":
+		return "a list of part objects"
+	case "filter":
+		return "one filter node object ({all|any|not} or {property, op, value})"
+	}
+	if t == nil {
+		return "a different shape"
+	}
+	// The binary floating-point kinds are matched by their printed name:
+	// this package's FR-013 guard (decimal_no_float_test.go) forbids the
+	// float identifiers themselves, and a ViewDef carries none anyway.
+	if strings.HasPrefix(t.Kind().String(), "float") {
+		return "a number"
+	}
+	switch t.Kind() {
+	case reflect.Map:
+		return "a mapping of name to value"
+	case reflect.Slice, reflect.Array:
+		return "a list"
+	case reflect.String:
+		return "text"
+	case reflect.Bool:
+		return "true or false"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "a number"
+	case reflect.Struct, reflect.Ptr:
+		return "an object"
+	}
+	return "a different shape"
+}
+
+// describeJSONValueShape turns encoding/json's value word ("array",
+// "object", "string", "number", "bool") into the same vocabulary.
+func describeJSONValueShape(v string) string {
+	switch v {
+	case "array":
+		return "a list"
+	case "object":
+		return "a mapping"
+	case "string":
+		return "text"
+	case "number":
+		return "a number"
+	case "bool":
+		return "true/false"
+	case "":
+		return "something else"
+	}
+	return v
 }
 
 // ---------------------------------------------------------------------------

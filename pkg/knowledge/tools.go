@@ -1682,9 +1682,24 @@ func (t *ReadTool) gather(
 		return nil, err
 	}
 	fi, statErr := fsys.Lstat(abs)
+	// UAT 2026-09-13 D-17: the extensionless path an agent or a human
+	// naturally writes ("Projects/Fleet Telemetry Rollout") resolves to the
+	// note when nothing sits at the bare path — the same default extension
+	// knowledge_edit's own path cleaning supplies.
+	if statErr != nil && !IsMarkdownPath(notePath) {
+		if withExt, aerr := retrievalPath(fsys, root, notePath+".md"); aerr == nil {
+			if afi, aserr := fsys.Lstat(withExt); aserr == nil {
+				abs, fi, statErr, notePath = withExt, afi, nil, notePath+".md"
+			}
+		}
+	}
 	switch {
 	case statErr != nil:
-		return nil, fmt.Errorf("no note at %s", notePath)
+		hint := ""
+		if !IsMarkdownPath(notePath) {
+			hint = " (nor at " + notePath + ".md)"
+		}
+		return nil, fmt.Errorf("no note at %s%s", notePath, hint)
 	case fi.IsDir():
 		return nil, fmt.Errorf("%s is a directory, not a note", notePath)
 	case !fi.Mode().IsRegular():
@@ -1735,13 +1750,16 @@ func (t *ReadTool) gather(
 	start, end := bodyStart, len(content)
 	if section != "" {
 		headings := ExtractHeadings(content)
-		hStart, hEnd, ok := findHeadingSpan(content, headings, section)
-		if !ok {
+		hStart, hEnd, matches := findHeadingSpanAll(content, headings, section)
+		if len(matches) == 0 {
 			return nil, &readSectionError{path: notePath, requested: section, headings: headings}
 		}
 		start, end = hStart, hEnd
 		data.Section = section
 		data.IsSection = true
+		if len(matches) > 1 {
+			data.SectionMatches = matches // D-59: never a silent first-match
+		}
 	}
 	fullBody := content[start:end]
 	data.BodyTotalBytes = len(fullBody)
@@ -1824,6 +1842,9 @@ func toReadLinks(in []ResolvedLink, skipped []SkippedEntry, backlinks bool) []Re
 			Candidates: l.Candidates,
 			Line:       l.Line,
 		}
+		if l.Embed && l.State == ResolveResolved {
+			rl.RenderNote = readEmbedRenderNote(l)
+		}
 		if l.State == ResolveUnresolved {
 			if entry, ok := findSkipForLinkTarget(skipped, unresolvedLinkTarget(l)); ok {
 				rl.SkipReason = describeSkippedEntry(entry)
@@ -1832,6 +1853,18 @@ func toReadLinks(in []ResolvedLink, skipped []SkippedEntry, backlinks bool) []Re
 		out = append(out, rl)
 	}
 	return out
+}
+
+// readEmbedRenderNote is D-91's read-side half: the same classification
+// op=embed reports at write time (embedRenderNote), applied to a resolved
+// embed edge. The fragment is the edge's own "#…" text — "page=2" on a PDF
+// is what turns a link-only embed into a mounted page.
+func readEmbedRenderNote(l ResolvedLink) string {
+	target := l.To
+	if strings.TrimSpace(target) == "" {
+		target = l.Target
+	}
+	return embedRenderNote(target, strings.TrimSpace(l.Heading))
 }
 
 // unresolvedLinkTarget is the text EMB-021a's cross-check matches against the

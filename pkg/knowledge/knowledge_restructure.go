@@ -46,7 +46,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -302,6 +304,19 @@ func (t *RestructureTool) execRenameMove(
 	if err != nil {
 		return t.deps.refuse(op, target, []string{from}, err.Error())
 	}
+	// UAT 2026-09-13 D-53: a move into a folder that does not exist yet
+	// creates the folder — `to` has already passed cleanNoteArg, so the
+	// folder is inside the collection by construction, and an empty
+	// directory is the one thing a "move" may bring into being besides the
+	// moved note itself.
+	folderCreated := ""
+	if isMove {
+		if created, mkErr := ensureMoveDestinationFolder(root, to); mkErr != nil {
+			return t.deps.refuse(op, target, []string{from}, mkErr.Error())
+		} else if created {
+			folderCreated = path.Dir(to)
+		}
+	}
 	renamer := &Renamer{
 		FS: OSLinkFS(), Root: root, AgentID: target.agentID,
 		Audit: restructureRenameAuditFunc(t.deps, target), Lock: target.lock,
@@ -333,8 +348,30 @@ func (t *RestructureTool) execRenameMove(
 		Op: restructureOpFor(isMove), From: res.From, To: res.To, NoOp: res.NoOp,
 		FilesRewritten: res.FilesRewritten, LinksRewritten: res.LinksRewritten,
 		Ambiguity: res.Ambiguity, Skipped: res.Skipped, Incomplete: res.Incomplete,
-		IndexWarning: indexWarning,
+		IndexWarning: indexWarning, FolderCreated: folderCreated,
 	}))
+}
+
+// ensureMoveDestinationFolder creates the parent folder of the move
+// destination `to` (collection-relative, already cleaned) when it is absent.
+// Returns whether it created one. A reserved location (the vault's own
+// control-plane directory) is refused by name, never created.
+func ensureMoveDestinationFolder(root CollectionRoot, to string) (bool, error) {
+	dir := path.Dir(to)
+	if dir == "." || dir == "" {
+		return false, nil
+	}
+	if rerr := authorRefuseReserved(dir + "/x.md"); rerr != nil {
+		return false, rerr
+	}
+	abs := filepath.Join(root.Path(), filepath.FromSlash(dir))
+	if _, statErr := OSLinkFS().Lstat(abs); statErr == nil {
+		return false, nil
+	}
+	if mkErr := os.MkdirAll(abs, noteDirPerm); mkErr != nil {
+		return false, fmt.Errorf("could not create the destination folder %q: %w", dir, mkErr)
+	}
+	return true, nil
 }
 
 func restructureOpFor(isMove bool) string {
@@ -484,6 +521,9 @@ type RestructureRenameData struct {
 	Ambiguity                      *AmbiguityReport
 	Skipped                        []SkippedEntry
 	Incomplete                     bool
+	// FolderCreated is the destination folder a move brought into being
+	// (D-53), "" when it already existed or this was a rename.
+	FolderCreated string
 	// IndexWarning is refreshIndexesForRename's return value — empty when
 	// both indexes were fully refreshed, a sentence otherwise. See author.go's
 	// "Index freshness" section.
@@ -502,6 +542,9 @@ func RenderRestructureRename(d RestructureRenameData) string {
 	fmt.Fprintf(&b, "%s -> %s\n", d.From, d.To)
 	fmt.Fprintf(&b, "CASCADE: %d notes rewritten (inbound wikilinks), 1 note %s (%d links rewritten)\n",
 		d.FilesRewritten, restructureMoveVerb(d.Op), d.LinksRewritten)
+	if d.FolderCreated != "" {
+		fmt.Fprintf(&b, "folder %s created (it did not exist yet)\n", d.FolderCreated)
+	}
 	if d.Ambiguity != nil {
 		fmt.Fprintf(&b, "AMBIGUITY: %q is now shared with %d note(s): %s\n",
 			d.Ambiguity.Basename, len(d.Ambiguity.Candidates), strings.Join(d.Ambiguity.Candidates, ", "))

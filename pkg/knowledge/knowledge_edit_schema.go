@@ -55,7 +55,39 @@ var (
 	// property is written through knowledge_edit's op "relation" and its
 	// three explicit verbs, never by sending a whole value.
 	ErrRelationProperty = errors.New("knowledge: relation properties are written through op \"relation\"")
+	// ErrReservedProperty is UAT 2026-09-13 D-51: a write to the record's
+	// identity (`id` / `omni_id`), to a `file.*` virtual property or to a
+	// `formula.*` derived column. All three used to fall through to the
+	// generic "record schema declares no such property" refusal, which for
+	// `id` is actively misleading — `id:` IS in the frontmatter and IS the
+	// identity. The protection held; only the classification was wrong.
+	ErrReservedProperty = errors.New("knowledge: property is reserved and cannot be written")
 )
+
+// knowledgeEditRefuseReservedProperty is D-51's classification, applied to
+// EVERY property write on the agent door whether or not a schema governs the
+// note — an ordinary note's `id:` is no more writable than a record's, and
+// `file.mtime` is virtual on every note.
+func knowledgeEditRefuseReservedProperty(property string) error {
+	switch {
+	case property == records.RecordIDKey || property == records.RecordIDKeyNamespaced:
+		return fmt.Errorf("%w: %q is the record's identity — minted by the knowledge base when the "+
+			"record is created (or when `type` is first set) and never written by a caller; it is "+
+			"what makes the record findable and unique within its type. Drop it from this write",
+			ErrReservedProperty, property)
+	case strings.HasPrefix(property, "file."):
+		return fmt.Errorf("%w: %q is a virtual property — computed from the file itself (its path, "+
+			"modification time, size, backlinks, ...) every time it is read, and never stored in the "+
+			"note. It can be filtered and sorted on in knowledge_find, not written",
+			ErrReservedProperty, property)
+	case strings.HasPrefix(property, "formula."):
+		return fmt.Errorf("%w: %q is a derived value — computed by a saved view's formula from the "+
+			"note's other properties, never stored in the note. Change the properties it derives "+
+			"from instead; knowledge_find reports the computed value",
+			ErrReservedProperty, property)
+	}
+	return nil
+}
 
 // knowledgeEditRelationPosture says whether FR-045 applies to ONE validation
 // call. It is a named type rather than a bool because the two answers are not
@@ -273,10 +305,23 @@ func knowledgeEditResolveSchema(set *records.SchemaSet, report *records.SchemaLo
 // arity mismatch for one would send a caller off to fix the wrong thing.
 // Both read the property's OWN declaration off the resolved schema, never a
 // claim the caller made about itself.
-func knowledgeEditValidatePropertyAgainstSchema(schema *records.Schema, typeName, property string, values []string, isList bool, posture knowledgeEditRelationPosture) error {
+//
+// It returns the values in their CANONICAL spelling (UAT 2026-09-13 D-04):
+// an enum member written in the wrong case (`Done` against a declared
+// `done`) is accepted by ResolveEnum's case-insensitive match, and used to
+// be written to disk verbatim — so `knowledge_read`, which renders the
+// DECLARED spelling, immediately disagreed with the file it had just
+// written, and every other reader (Obsidian, git, grep) saw the caller's
+// spelling. The write now lands the declared spelling; a checkbox lands as
+// the bare `true`/`false` it resolved to. Every other type is returned
+// exactly as sent.
+func knowledgeEditValidatePropertyAgainstSchema(schema *records.Schema, typeName, property string, values []string, isList bool, posture knowledgeEditRelationPosture) ([]string, error) {
+	if rerr := knowledgeEditRefuseReservedProperty(property); rerr != nil {
+		return nil, rerr
+	}
 	prop, ok := schema.Property(property)
 	if !ok {
-		return fmt.Errorf("%w: %s declares no property %q; declared properties are %s",
+		return nil, fmt.Errorf("%w: %s declares no property %q; declared properties are %s",
 			ErrUnknownProperty, typeName, property, strings.Join(schema.PropertyNames(), ", "))
 	}
 	// FR-046, shared with the web door through records.IsDerivedProperty.
@@ -290,7 +335,7 @@ func knowledgeEditValidatePropertyAgainstSchema(schema *records.Schema, typeName
 	// record_write_guard.go's CheckRecordPropertyWrites carries the same
 	// branch for the same reason; the two are now one predicate.
 	if records.IsDerivedProperty(prop) {
-		return fmt.Errorf("%w: %s.%s is a derived value, computed from other properties rather than "+
+		return nil, fmt.Errorf("%w: %s.%s is a derived value, computed from other properties rather than "+
 			"stored — no caller can write one, because a stored value goes stale the moment anything it "+
 			"derives from changes. Drop %q from this write; knowledge_read reports the computed value",
 			ErrDerivedProperty, typeName, property, property)
@@ -299,7 +344,7 @@ func knowledgeEditValidatePropertyAgainstSchema(schema *records.Schema, typeName
 	// See knowledgeEditRelationPosture for which callers pass which posture
 	// and the argument for each.
 	if posture == knowledgeEditRelationRefused && records.IsRelationProperty(prop) {
-		return fmt.Errorf("%w: %s.%s is a %s property, and set_property cannot write one — sending a value "+
+		return nil, fmt.Errorf("%w: %s.%s is a %s property, and set_property cannot write one — sending a value "+
 			"replaces the whole list, silently discarding edges another writer added (ADR-068 FR-045). "+
 			"Use op \"relation\" instead: same collection, path and expect_version as this call, plus "+
 			"property: %q, relation_op: \"add\", \"remove\" or \"replace\", and targets: a list of note "+
@@ -310,16 +355,18 @@ func knowledgeEditValidatePropertyAgainstSchema(schema *records.Schema, typeName
 	if isList != prop.Many {
 		schemaPath := records.VaultMarkerDirName + "/" + records.RecordsDirName + "/" + typeName + ".yaml"
 		if isList {
-			return fmt.Errorf("%w: %s.%s holds one value; got a list of %d — send a single value, "+
+			return nil, fmt.Errorf("%w: %s.%s holds one value; got a list of %d — send a single value, "+
 				"or declare many: true in %s",
 				ErrPropertyArity, typeName, property, len(values), schemaPath)
 		}
-		return fmt.Errorf("%w: %s.%s is declared as a list (many: true); got a single value — send a list",
+		return nil, fmt.Errorf("%w: %s.%s is declared as a list (many: true); got a single value — send a list",
 			ErrPropertyArity, typeName, property)
 	}
+	canonical := make([]string, len(values))
 	for i, v := range values {
 		node := records.Node{Kind: records.KindScalar, Text: v}
-		if _, verr := records.ParseValue(prop, node); verr != nil {
+		typed, verr := records.ParseValue(prop, node)
+		if verr != nil {
 			label := property
 			if isList {
 				label = fmt.Sprintf("%s[%d]", property, i)
@@ -328,10 +375,50 @@ func knowledgeEditValidatePropertyAgainstSchema(schema *records.Schema, typeName
 			if len(verr.Permitted) > 0 {
 				msg += "; permitted values are " + strings.Join(verr.Permitted, ", ")
 			}
-			return fmt.Errorf("%w: %s", ErrPropertyValue, msg)
+			return nil, fmt.Errorf("%w: %s", ErrPropertyValue, msg)
 		}
+		canonical[i] = knowledgeEditCanonicalText(prop, v, typed)
 	}
-	return nil
+	return canonical, nil
+}
+
+// knowledgeEditCanonicalText is the spelling a validated value is WRITTEN
+// in (D-04): the declared enum member for an enum, `true`/`false` for a
+// checkbox, the caller's own text for everything else.
+func knowledgeEditCanonicalText(prop *records.Property, sent string, typed records.TypedValue) string {
+	switch prop.Type {
+	case records.TypeEnum:
+		if typed.Enum.Name != "" {
+			return typed.Enum.Name
+		}
+	case records.TypeCheckbox:
+		if typed.Bool {
+			return "true"
+		}
+		return "false"
+	}
+	return sent
+}
+
+// knowledgeEditWritesPlain reports whether a validated scalar for prop may be
+// written BARE rather than double-quoted (UAT 2026-09-13 D-49): a declared
+// integer, decimal or checkbox whose text is exactly the number or boolean
+// the schema declares. author.go's SetProperty quotes anything that LOOKS
+// numeric or boolean, because on an ungoverned note it cannot know whether
+// "480000" is a number or the text "480000" — here the schema has just said
+// which, so `budget: 480000` is written the way every other YAML reader
+// expects a number to look.
+func knowledgeEditWritesPlain(prop *records.Property, value string) bool {
+	if prop == nil {
+		return false
+	}
+	switch prop.Type {
+	case records.TypeInteger, records.TypeDecimal:
+		return authorLooksNumeric(value)
+	case records.TypeCheckbox:
+		return value == "true" || value == "false"
+	}
+	return false
 }
 
 // knowledgeEditValidateValue validates an INCOMING write (values, isList) against
@@ -355,18 +442,46 @@ func knowledgeEditValidatePropertyAgainstSchema(schema *records.Schema, typeName
 // knowledgeEditRelationPosture. It is threaded rather than decided here
 // because this function cannot tell a set_property from an op "relation":
 // both arrive as "one property, some values, against this note's schema".
-func knowledgeEditValidateValue(set *records.SchemaSet, report *records.SchemaLoadReport, src []byte, property string, values []string, isList bool, posture knowledgeEditRelationPosture, gov *knowledgeEditGovernance) error {
+//
+// It returns the values to WRITE — canonicalised (D-04) when a schema
+// governed them, exactly as sent otherwise — and the declared property (nil
+// on an ungoverned note), so the caller can decide the bare-vs-quoted
+// question (D-49) without a second schema lookup.
+func knowledgeEditValidateValue(set *records.SchemaSet, report *records.SchemaLoadReport, src []byte, property string, values []string, isList bool, posture knowledgeEditRelationPosture, gov *knowledgeEditGovernance) ([]string, *records.Property, error) {
+	// D-51 applies whether or not a schema governs the note: an ordinary
+	// note's `id:` is no more a caller's to write than a record's.
+	if rerr := knowledgeEditRefuseReservedProperty(property); rerr != nil {
+		return nil, nil, rerr
+	}
+	// `type` is the record DISCRIMINATOR, not a declared property — no
+	// schema declares it as one of its own properties (the assembled-
+	// frontmatter check on create exempts it for the same reason), so it is
+	// written as sent: a scalar naming the type the note is (becoming).
+	if property == records.RecordTypeKey {
+		if isList {
+			return nil, nil, fmt.Errorf("%w: 'type' holds one record type name, not a list", ErrPropertyArity)
+		}
+		if gov != nil {
+			*gov = knowledgeEditGovernance{Reason: knowledgeEditGoverned, TypeName: strings.TrimSpace(values[0])}
+		}
+		return values, nil, nil
+	}
 	schema, typeName, reason, detail := knowledgeEditResolveSchema(set, report, src)
 	if reason != knowledgeEditGoverned {
 		if gov != nil {
 			*gov = knowledgeEditGovernance{Reason: reason, TypeName: typeName, RejectionReason: detail}
 		}
-		return nil
+		return values, nil, nil
 	}
 	if gov != nil {
 		*gov = knowledgeEditGovernance{Reason: knowledgeEditGoverned, TypeName: typeName}
 	}
-	return knowledgeEditValidatePropertyAgainstSchema(schema, typeName, property, values, isList, posture)
+	canonical, err := knowledgeEditValidatePropertyAgainstSchema(schema, typeName, property, values, isList, posture)
+	if err != nil {
+		return nil, nil, err
+	}
+	prop, _ := schema.Property(property)
+	return canonical, prop, nil
 }
 
 // knowledgeEditSetPropertyEdit composes schema validation with the low-level
@@ -388,13 +503,14 @@ func knowledgeEditValidateValue(set *records.SchemaSet, report *records.SchemaLo
 //     capability loss, not an enforcement win.
 func knowledgeEditSetPropertyEdit(set *records.SchemaSet, report *records.SchemaLoadReport, property string, values []string, isList bool, posture knowledgeEditRelationPosture, gov *knowledgeEditGovernance) NoteEdit {
 	return func(src []byte) ([]byte, error) {
-		if err := knowledgeEditValidateValue(set, report, src, property, values, isList, posture, gov); err != nil {
+		canonical, prop, err := knowledgeEditValidateValue(set, report, src, property, values, isList, posture, gov)
+		if err != nil {
 			return nil, err
 		}
 		if isList {
-			return SetPropertyList(property, values)(src)
+			return SetPropertyList(property, canonical)(src)
 		}
-		return SetPropertyScalarChecked(property, values[0])(src)
+		return setPropertyScalarCheckedWith(property, canonical[0], knowledgeEditWritesPlain(prop, canonical[0]))(src)
 	}
 }
 
@@ -413,13 +529,14 @@ func knowledgeEditSetPropertyEdit(set *records.SchemaSet, report *records.Schema
 // never discover the other. One way in, and the refusal names it.
 func knowledgeEditListOpEdit(set *records.SchemaSet, report *records.SchemaLoadReport, property, value string, add bool, gov *knowledgeEditGovernance) NoteEdit {
 	return func(src []byte) ([]byte, error) {
-		if err := knowledgeEditValidateValue(set, report, src, property, []string{value}, true, knowledgeEditRelationRefused, gov); err != nil {
+		canonical, _, err := knowledgeEditValidateValue(set, report, src, property, []string{value}, true, knowledgeEditRelationRefused, gov)
+		if err != nil {
 			return nil, err
 		}
 		if add {
-			return AddListValue(property, value)(src)
+			return AddListValue(property, canonical[0])(src)
 		}
-		return RemoveListValue(property, value)(src)
+		return RemoveListValue(property, canonical[0])(src)
 	}
 }
 
@@ -454,10 +571,16 @@ func knowledgeEditListOpEdit(set *records.SchemaSet, report *records.SchemaLoadR
 // An explicit null (`status:` with nothing after it) is FR-007 absence, not
 // a value — skipped, exactly as ParseValue's callers elsewhere never see a
 // null node either.
-func knowledgeEditValidateAssembledFrontmatter(set *records.SchemaSet, report *records.SchemaLoadReport, content []byte) (knowledgeEditGovernance, error) {
+//
+// It returns the content to WRITE: byte-identical to the input except where
+// a governed scalar or list value was accepted in a non-canonical spelling
+// (D-04, e.g. a template's `status: Done` against a declared `done`), which
+// is re-spliced in the declared spelling through the same SetProperty
+// primitives every other write uses.
+func knowledgeEditValidateAssembledFrontmatter(set *records.SchemaSet, report *records.SchemaLoadReport, content []byte) ([]byte, knowledgeEditGovernance, error) {
 	schema, typeName, reason, detail := knowledgeEditResolveSchema(set, report, content)
 	if reason != knowledgeEditGoverned {
-		return knowledgeEditGovernance{Reason: reason, TypeName: typeName, RejectionReason: detail}, nil
+		return content, knowledgeEditGovernance{Reason: reason, TypeName: typeName, RejectionReason: detail}, nil
 	}
 
 	// A second parse of the same bytes for a different question ("every
@@ -475,9 +598,10 @@ func knowledgeEditValidateAssembledFrontmatter(set *records.SchemaSet, report *r
 		// CreateNote call still writes the note as ordinary content when
 		// nothing else refuses it, which is correct: an unparsable
 		// frontmatter block is not this layer's problem to solve.
-		return knowledgeEditGovernance{Reason: knowledgeEditUnparsable}, nil //nolint:nilerr // reported via the governance reason, not an error
+		return content, knowledgeEditGovernance{Reason: knowledgeEditUnparsable}, nil //nolint:nilerr // reported via the governance reason, not an error
 	}
 
+	out := content
 	for _, key := range fm.Keys {
 		if key == records.RecordTypeKey || key == records.RecordIDKey || key == records.RecordIDKeyNamespaced {
 			continue
@@ -494,14 +618,14 @@ func knowledgeEditValidateAssembledFrontmatter(set *records.SchemaSet, report *r
 		case records.KindSequence:
 			for i, item := range node.Items {
 				if item.Kind != records.KindScalar {
-					return knowledgeEditGovernance{}, fmt.Errorf(
+					return nil, knowledgeEditGovernance{}, fmt.Errorf(
 						"frontmatter.%s: %w: element %d is %s, not a single value",
 						key, ErrPropertyValue, i, item.Kind)
 				}
 				values = append(values, item.Text)
 			}
 		default: // records.KindMapping — no property type accepts one
-			return knowledgeEditGovernance{}, fmt.Errorf(
+			return nil, knowledgeEditGovernance{}, fmt.Errorf(
 				"frontmatter.%s: %w: is a mapping, not a single value or a list",
 				key, ErrPropertyValue)
 		}
@@ -515,9 +639,36 @@ func knowledgeEditValidateAssembledFrontmatter(set *records.SchemaSet, report *r
 		// frontmatter — template and raw-body bytes included, not just the
 		// caller's own `frontmatter` argument. FR-046 above still applies:
 		// a derived value is wrong to store whether or not the note is new.
-		if err := knowledgeEditValidatePropertyAgainstSchema(schema, typeName, key, values, isList, knowledgeEditRelationAllowed); err != nil {
-			return knowledgeEditGovernance{}, fmt.Errorf("frontmatter.%s: %w", key, err)
+		canonical, err := knowledgeEditValidatePropertyAgainstSchema(schema, typeName, key, values, isList, knowledgeEditRelationAllowed)
+		if err != nil {
+			return nil, knowledgeEditGovernance{}, fmt.Errorf("frontmatter.%s: %w", key, err)
+		}
+		if !stringSlicesEqual(canonical, values) {
+			var splice NoteEdit
+			if isList {
+				splice = SetPropertyList(key, canonical)
+			} else {
+				prop, _ := schema.Property(key)
+				splice = setPropertyScalarCheckedWith(key, canonical[0], knowledgeEditWritesPlain(prop, canonical[0]))
+			}
+			next, serr := splice(out)
+			if serr != nil {
+				return nil, knowledgeEditGovernance{}, fmt.Errorf("frontmatter.%s: %w", key, serr)
+			}
+			out = next
 		}
 	}
-	return knowledgeEditGovernance{Reason: knowledgeEditGoverned, TypeName: typeName}, nil
+	return out, knowledgeEditGovernance{Reason: knowledgeEditGoverned, TypeName: typeName}, nil
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

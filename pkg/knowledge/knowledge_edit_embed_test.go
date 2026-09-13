@@ -615,11 +615,12 @@ func TestKnowledgeEditEmbedOp_MalformedTargetBlockRefused(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Supplementary coverage: at most one fragment modifier, and 'page' is
-// accepted by the argument envelope but always refused today (US-12 is
-// deferred) — paired with a plain, unfragmented embed succeeding.
+// refused on a NON-PDF target (it is the PDF page fragment — UAT 2026-09-13
+// D-45 / #697; see TestUAT_D45_EmbedPdfPageFragment for the accepted case)
+// — paired with a plain, unfragmented embed succeeding.
 // ---------------------------------------------------------------------------
 
-func TestKnowledgeEditEmbedOp_FragmentModifiersMutuallyExclusiveAndPageDeferred(t *testing.T) {
+func TestKnowledgeEditEmbedOp_FragmentModifiersMutuallyExclusiveAndPageOnNonPDF(t *testing.T) {
 	home, ws, root := a4Fixture(t, "kb")
 	deps, _ := a4Deps(home)
 	tool := veTool(deps)
@@ -643,7 +644,7 @@ func TestKnowledgeEditEmbedOp_FragmentModifiersMutuallyExclusiveAndPageDeferred(
 		"target": "Plan.md", "page": "3", "section": "This week", "expect_version": v2,
 	})
 	if !withPage.IsError {
-		t.Fatalf("'page' must be refused (US-12 is deferred), got success: %s", withPage.ForLLM)
+		t.Fatalf("'page' must be refused on a note target (it applies to a PDF only), got success: %s", withPage.ForLLM)
 	}
 	if !strings.Contains(withPage.ForLLM, "page") {
 		t.Fatalf("the refusal must name 'page', got: %s", withPage.ForLLM)

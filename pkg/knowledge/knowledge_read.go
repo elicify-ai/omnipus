@@ -144,6 +144,12 @@ type ReadLink struct {
 	Ambiguous  bool
 	Candidates []string
 	Line       int
+	// RenderNote is UAT 2026-09-13 D-91's agent-door honesty: for a RESOLVED
+	// embed, "" when the reader mounts it in place and otherwise why it is
+	// shown as a link (a whole-document PDF, a Mermaid file, ...). Filled by
+	// toReadLinks from the same embedRenderNote op=embed uses at write
+	// time, so the two doors can never disagree about which embeds mount.
+	RenderNote string
 }
 
 // ReadData is everything one knowledge_read response is rendered from — the
@@ -193,6 +199,13 @@ type ReadData struct {
 	// body window changes.
 	Section   string
 	IsSection bool
+	// SectionMatches lists the 1-based line of EVERY heading the section
+	// query matched, in document order, when more than one did (UAT
+	// 2026-09-13 D-59). The FIRST is what Body shows — the read is not
+	// refused, because reading the note is still the right answer — but the
+	// header says so instead of silently picking. Nil when exactly one
+	// heading matched.
+	SectionMatches []int
 	// Body is the (possibly truncated) content returned. BodyTotalBytes is
 	// the UNTRUNCATED length of what was selected — the whole note's body, or
 	// just the section — so a truncated response still states the true size.
@@ -254,7 +267,25 @@ func renderReadFrontmatter(b *strings.Builder, d ReadData) {
 		b.WriteString("FRONTMATTER: none — this note has no frontmatter block\n")
 		return
 	}
-	fmt.Fprintf(b, "FRONTMATTER (%d):\n", len(d.Properties))
+	// UAT 2026-09-13 D-89: on a RECORD whose type resolves to a schema, a key
+	// the schema does not declare is marked in place and counted in the
+	// header. After a property rename the old key is still in the file,
+	// and two agents read "priority  low" here, concluded the property was
+	// `priority`, and were refused on the write. The identity keys are the
+	// record's own, never "undeclared".
+	undeclared := 0
+	if d.TypeRecognised {
+		for _, p := range d.Properties {
+			if readKeyIsUndeclared(p) {
+				undeclared++
+			}
+		}
+	}
+	if undeclared > 0 {
+		fmt.Fprintf(b, "FRONTMATTER (%d, %d not declared by record type %q):\n", len(d.Properties), undeclared, d.TypeName)
+	} else {
+		fmt.Fprintf(b, "FRONTMATTER (%d):\n", len(d.Properties))
+	}
 	width := 0
 	for _, p := range d.Properties {
 		if len(p.Key) > width {
@@ -263,6 +294,9 @@ func renderReadFrontmatter(b *strings.Builder, d ReadData) {
 	}
 	for _, p := range d.Properties {
 		line := fmt.Sprintf("  %-*s  %s", width, p.Key, p.Value)
+		if d.TypeRecognised && readKeyIsUndeclared(p) {
+			line += fmt.Sprintf("  (NOT DECLARED by %s — no reader or query evaluates this key; it is not a property you can write)", d.TypeName)
+		}
 		b.WriteString(strings.TrimRight(line, " ") + "\n")
 		for _, f := range p.Findings {
 			fmt.Fprintf(b, "    INVALID: %s\n", f)
@@ -273,10 +307,32 @@ func renderReadFrontmatter(b *strings.Builder, d ReadData) {
 	}
 }
 
+// readKeyIsUndeclared reports whether p is a frontmatter key a recognised
+// record type does not declare — excluding the discriminator/identity keys,
+// which are the record's own and never "properties" a schema declares.
+func readKeyIsUndeclared(p ReadProperty) bool {
+	if p.Declared {
+		return false
+	}
+	switch p.Key {
+	case records.RecordTypeKey, records.RecordIDKey, records.RecordIDKeyNamespaced:
+		return false
+	}
+	return true
+}
+
 func renderReadBody(b *strings.Builder, d ReadData) {
 	label := "BODY"
 	if d.IsSection {
 		label = fmt.Sprintf("SECTION %q", d.Section)
+		if len(d.SectionMatches) > 1 {
+			lines := make([]string, len(d.SectionMatches))
+			for i, ln := range d.SectionMatches {
+				lines[i] = fmt.Sprintf("%d", ln)
+			}
+			label += fmt.Sprintf(" — AMBIGUOUS: this heading appears %d times (lines %s); showing the first — use line_range in replace_body, or rename one heading, to address the other",
+				len(d.SectionMatches), strings.Join(lines, ", "))
+		}
 	}
 	if d.BodyTruncated {
 		fmt.Fprintf(b, "%s (%s of %s bytes, TRUNCATED — read narrower with section=<heading> or raise max_bytes):\n",
@@ -352,6 +408,12 @@ func renderReadLinks(b *strings.Builder, label string, links []ReadLink, backlin
 			}
 		default:
 			if tag != "" {
+				if l.RenderNote != "" {
+					// D-91: an embed the reader shows as a LINK is labelled
+					// differently from one it mounts, so an agent cannot
+					// tell its user a whole-document PDF "renders inline".
+					tag += ", shown as a link: " + l.RenderNote
+				}
 				fmt.Fprintf(b, "  %s (%s) %s", arrow, tag, peer)
 			} else {
 				fmt.Fprintf(b, "  %s %s", arrow, peer)
@@ -404,16 +466,26 @@ func matchSectionQuery(raw string) string {
 // ok is false when no heading's Text matches query under
 // matchSectionQuery's normalisation; the caller is a refusal in that case.
 func findHeadingSpan(content []byte, headings []Heading, query string) (start, end int, ok bool) {
+	start, end, matches := findHeadingSpanAll(content, headings, query)
+	return start, end, len(matches) > 0
+}
+
+// findHeadingSpanAll is findHeadingSpan plus the 1-based line of EVERY
+// heading the query matched (UAT 2026-09-13 D-59) — the span returned is the
+// first match's, as before; matches is nil when nothing matched.
+func findHeadingSpanAll(content []byte, headings []Heading, query string) (start, end int, matches []int) {
 	want := matchSectionQuery(query)
 	idx := -1
 	for i, h := range headings {
 		if h.Text == want {
-			idx = i
-			break
+			if idx < 0 {
+				idx = i
+			}
+			matches = append(matches, h.Line)
 		}
 	}
 	if idx < 0 {
-		return 0, 0, false
+		return 0, 0, nil
 	}
 	target := headings[idx]
 	start = int(target.Offset)
@@ -424,7 +496,7 @@ func findHeadingSpan(content []byte, headings []Heading, query string) (start, e
 			break
 		}
 	}
-	return start, end, true
+	return start, end, matches
 }
 
 // readSectionRefusalText is spec §4.1.3's refusal wording: "no section '##

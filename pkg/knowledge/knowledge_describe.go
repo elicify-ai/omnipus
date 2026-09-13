@@ -339,6 +339,14 @@ func renderTypes(b *strings.Builder, d DescribeData, detail string) {
 	} else {
 		fmt.Fprintf(b, "TYPES (%d)\n", len(types))
 	}
+	// UAT 2026-09-13 D-24: the supported property types were only ever
+	// discoverable by triggering a refusal. Stated here, derived from the
+	// same list records.ParseSchema validates against, at every detail
+	// level — an agent that has not yet failed has nothing else to ask.
+	if d.OnlyType == "" {
+		fmt.Fprintf(b, "  property types: %s (add many: true for a list; enum takes values: [...]; relation and person take to: <type>)\n",
+			strings.Join(records.PropertyTypeNames(), ", "))
+	}
 	for _, name := range types {
 		sc, ok := d.Schemas.Get(name)
 		if !ok {

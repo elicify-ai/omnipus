@@ -63,6 +63,7 @@ package knowledge
 import (
 	"context"
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/records"
@@ -140,6 +141,12 @@ func (t *EditTool) execRelation(ctx context.Context, target mutationTarget, args
 		return t.deps.refuse(AuthorOpEdit, target, []string{rel}, serr.Error())
 	}
 
+	// UAT 2026-09-13 D-94: a target given as a path ("People/Tobias.md") is
+	// stored the way the vault's own relations are spelled — the bare note
+	// name when that name is unique in the collection, the path without its
+	// extension otherwise — and the reply says what was stored.
+	targets, normalised := normalizeRelationTargets(target, targets)
+
 	var gov knowledgeEditGovernance
 	edit := knowledgeEditRelationEdit(set, report, property, relationOp, targets, &gov)
 
@@ -160,7 +167,71 @@ func (t *EditTool) execRelation(ctx context.Context, target mutationTarget, args
 		Op: opRelation, Path: res.RelPath, Version: res.Version,
 		Property: property, RelationOp: relationOp, Targets: targets,
 		Changed: res.Changed, SchemaNote: gov.Note(), IndexWarning: indexWarning,
+		NormalisedTargets: normalised,
 	}))
+}
+
+// normalizeRelationTargets maps each caller-given relation target to the
+// form it is stored in (D-94). A target already spelled as a wikilink is
+// left exactly as sent (the caller copied it from a read). Otherwise:
+//
+//   - a trailing ".md" is dropped — a wikilink never carries it;
+//   - a directory prefix is dropped when the note's bare name occurs ONCE
+//     in the collection, because that is the form every hand-written and
+//     imported relation in a vault uses ("[[Daniel Okafor]]"), and mixing
+//     "[[People/X.md]]" beside "[[X]]" for the same person is two notations
+//     for one edge;
+//   - the path form (without extension) is kept when the bare name is
+//     ambiguous, or when the collection cannot be walked.
+//
+// The second return lists "given -> stored" for every target that changed,
+// so the reply can say so rather than echo the input as if it were stored.
+func normalizeRelationTargets(target mutationTarget, targets []string) ([]string, []string) {
+	var counts map[string]int
+	walked := false
+	countNames := func() map[string]int {
+		if walked {
+			return counts
+		}
+		walked = true
+		fsys := OSLinkFS()
+		root, err := NewCollectionRoot(fsys, target.collection.Root())
+		if err != nil {
+			return nil
+		}
+		wr, err := WalkContained(fsys, root)
+		if err != nil {
+			return nil
+		}
+		counts = make(map[string]int, len(wr.Files))
+		for _, rel := range wr.Files {
+			if IsMarkdownPath(rel) {
+				counts[records.FoldKey(trimMarkdownExt(path.Base(rel)))]++
+			}
+		}
+		return counts
+	}
+	out := make([]string, 0, len(targets))
+	var notes []string
+	for _, given := range targets {
+		t := strings.TrimSpace(given)
+		if len(t) >= 4 && strings.HasPrefix(t, "[[") && strings.HasSuffix(t, "]]") {
+			out = append(out, t)
+			continue
+		}
+		stored := trimMarkdownExt(strings.ReplaceAll(t, "\\", "/"))
+		if strings.Contains(stored, "/") {
+			base := path.Base(stored)
+			if names := countNames(); names != nil && names[records.FoldKey(base)] == 1 {
+				stored = base
+			}
+		}
+		if stored != t {
+			notes = append(notes, fmt.Sprintf("%s -> [[%s]]", given, stored))
+		}
+		out = append(out, stored)
+	}
+	return out, notes
 }
 
 // knowledgeEditDecodeTargets reads the `targets` argument.
@@ -299,7 +370,7 @@ func knowledgeEditRelationEdit(set *records.SchemaSet, report *records.SchemaLoa
 		// the edge most worth removing — would make the tool useless on the
 		// data that needs it most.
 		if governed && relationOp != relationOpRemove && len(wikilinks) > 0 {
-			if err := knowledgeEditValidatePropertyAgainstSchema(
+			if _, err := knowledgeEditValidatePropertyAgainstSchema(
 				schema, typeName, property, wikilinks, listShaped, knowledgeEditRelationAllowed); err != nil {
 				return nil, err
 			}
