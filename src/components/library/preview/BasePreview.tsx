@@ -942,8 +942,16 @@ export function BasePreview({
             // record editing — ViewPartsRenderer builds its edit context from it,
             // and without this line the editors exist but no view can reach them.
             // Which cells actually offer an editor is decided per-cell from the
-            // wire (a derived or relation cell never does), not here.
+            // wire (a derived cell never does; a relation cell gets the PICKER,
+            // GAP-02 / #700), not here.
             workspaceId={workspaceId}
+            // The picker's search is scoped by collection (the find endpoint
+            // requires exactly one), so the collection this base's views run
+            // over is part of the edit context. Guarded: collectionId is
+            // absent while the knowledge-base info query is still loading —
+            // relation cells render inert for that window and gain their
+            // picker once it lands.
+            {...(collectionId !== undefined ? { collectionId } : {})}
             // A successful write changes the stored record, so the rendered view
             // is now stale. Invalidate rather than patching in place: the server
             // owns derived columns, and a locally-patched row would show a stale

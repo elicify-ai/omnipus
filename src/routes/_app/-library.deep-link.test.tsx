@@ -19,7 +19,6 @@
 // there — it must not silently bounce into a workspace chat (which would be
 // indistinguishable, from the user's seat, from the reported defect).
 
-import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -102,7 +101,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
 })
 
 import { routeTree } from '@/routeTree.gen'
-import { hasStoredSession } from '@/store/auth'
 
 // hasStoredSession is the gate before any server round trip in beforeLoad —
 // seed it the way a real login would have. jsdom has no matchMedia

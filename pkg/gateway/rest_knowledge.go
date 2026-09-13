@@ -116,10 +116,10 @@ func (a *restAPI) HandleLibraryTree(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleKnowledge dispatches this workspace's knowledge sub-paths: detection
-// (the empty sub-path), find, graph, outline, view, base-views, record-schema
-// and records/{id}.
+// (the empty sub-path), find, graph, outline, view, base-views, record-schema,
+// records/{id} and records/{id}/relation.
 //
-// EIGHT, and the count is spelled out as a list rather than a number because
+// NINE, and the count is spelled out as a list rather than a number because
 // the number went stale twice — it said "four" while six cases existed, and
 // ADR-083 Step 5 then added the last two without touching it. A list cannot
 // drift silently in the same way: adding a case beside a comment that names
@@ -150,6 +150,12 @@ func (a *restAPI) handleKnowledge(w http.ResponseWriter, r *http.Request, worksp
 	// into silent successes that ignore the trailing segment.
 	case len(rest) == 2 && rest[0] == "records" && rest[1] != "":
 		sub, extra = rest[0], rest[1]
+	// GAP-02 / #700 (2026-09-14 fix round): "records/{id}/relation" is the
+	// one THREE-segment sub-path — the web door for RelationWriteRequest's
+	// verbs, handled in rest_knowledge_relation.go. Named as narrowly as the
+	// two-segment case above it, for the same reason.
+	case len(rest) == 3 && rest[0] == "records" && rest[1] != "" && rest[2] == "relation":
+		sub, extra = "records-relation", rest[1]
 	default:
 		http.NotFound(w, r)
 		return
@@ -207,6 +213,12 @@ func (a *restAPI) handleKnowledge(w http.ResponseWriter, r *http.Request, worksp
 		default:
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
+	case "records-relation":
+		if r.Method != http.MethodPost {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleKnowledgeRecordRelation(w, r, workspaceID, extra)
 	default:
 		http.NotFound(w, r)
 	}

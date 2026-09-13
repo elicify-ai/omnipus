@@ -558,6 +558,12 @@ type RecordWriteRequestUpdate = {
   version_token: string;
   properties: Array<RecordPropertyValue>;
 };
+type RelationWriteResponse = {
+  record: VaultRecord;
+  changed: boolean;
+  stored_targets: Array<string>;
+  warnings: Array<string>;
+};
 type ViewPart = {
   part:
     | "table"
@@ -5038,6 +5044,21 @@ export const KnowledgeConflictError = z.object({
   expected_version: z.string().optional(),
   actual_version: z.string().optional(),
 });
+export const RelationWriteRequest = z.object({
+  id: z.string().min(1),
+  version_token: z.string().min(1),
+  property: z.string().min(1),
+  op: z.enum(["add", "remove", "replace"]),
+  targets: z.array(z.string().min(1)),
+});
+export const RelationWriteResponse: z.ZodType<RelationWriteResponse> = z.object(
+  {
+    record: VaultRecord,
+    changed: z.boolean(),
+    stored_targets: z.array(z.string().min(1)),
+    warnings: z.array(z.string().min(1)),
+  }
+);
 export const WorkspaceDelegationEdge: z.ZodType<WorkspaceDelegationEdge> =
   z.object({
     from_agent: z.string().min(1),
@@ -5350,13 +5371,6 @@ export const RecordQueryResponse: z.ZodType<RecordQueryResponse> = z.object({
   limit_requested: z.number().int().gte(1).optional(),
   total_matched: z.number().int().gte(0).optional(),
   next_cursor: z.string().min(1).optional(),
-});
-export const RelationWriteRequest = z.object({
-  id: z.string().min(1),
-  version_token: z.string().min(1),
-  property: z.string().min(1),
-  op: z.enum(["add", "remove", "replace"]),
-  targets: z.array(z.string().min(1)),
 });
 export const VaultFilterNode: z.ZodType<VaultFilterNode> = z.lazy(() =>
   z
@@ -8508,6 +8522,76 @@ A record IS the note (ADR-068 D1); a note whose type matches no schema is simply
         status: 404,
         description: `Resource not found.`,
         schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/library/:workspace_id/knowledge/records/:id/relation",
+    alias: "writeVaultRecordRelation",
+    description: `GAP-02 / #700 (2026-09-14 fix round). Wires RelationWriteRequest — previously a contract component with no path, its verbs served only by the agent&#x27;s knowledge_edit tool — to the gateway/SPA boundary, so the web&#x27;s relation and person pickers have a door. It goes through the SAME write machinery an agent&#x27;s write uses: the same exported NoteEdit splice primitives (AddListValue / RemoveListValue / SetPropertyList / SetPropertyScalarChecked / RemoveProperty), the same locked compare-and-swap EditNote, and the same post-write index refresh — no parallel splice logic on the gateway side.
+
+FR-045&#x27;s semantics are preserved verbatim: add and remove touch one target each and leave every other edge alone; replace is a named, destructive verb (an empty targets list clears the property, and is the ONLY op that accepts one); a no-op add or remove is reported as &#x60;changed: false&#x60;, never an error, and rotates no version token.
+
+FR-035 is enforced for scalar (many: false) relations: adding a second target to a filled slot is refused with 400 naming op &quot;replace&quot; as the way to move a single-slot relation. A property that is not a relation/person, or that is derived, is refused with 400 naming the expected shape — the same refusals the agent door renders.
+
+A stale version_token is refused with 409 and the typed KnowledgeConflictError body, exactly like a record update.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: RelationWriteRequest,
+      },
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: RelationWriteResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `version_token no longer matches the record&#x27;s current version — it changed on disk since the caller last read it.
+`,
+        schema: KnowledgeConflictError,
       },
       {
         status: 429,

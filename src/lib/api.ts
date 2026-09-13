@@ -228,6 +228,8 @@ import {
   // record-field editor (contract-first #8):
   VaultRecord as VaultRecordSchema,
   RecordWriteRequest as RecordWriteRequestSchema,
+  RelationWriteRequest as RelationWriteRequestSchema,
+  RelationWriteResponse as RelationWriteResponseSchema,
   KnowledgeConflictError as KnowledgeConflictErrorSchema,
 } from '@/lib/api/generated/schemas'
 
@@ -551,6 +553,8 @@ import type {
   // record-field editor (step 5):
   VaultRecord,
   RecordWriteRequest,
+  RelationWriteRequest,
+  RelationWriteResponse,
   KnowledgeConflictError,
 } from '@/lib/api/generated/openapi-types'
 
@@ -4721,6 +4725,39 @@ export async function writeVaultRecord(
       `/library/${encodeURIComponent(workspaceId)}/knowledge/records`,
       { method: 'POST', body: JSON.stringify(RecordWriteRequestSchema.parse(body)) },
       VaultRecordSchema as ZodType<VaultRecord>,
+    )
+  } catch (err) {
+    throw knowledgeRecordConflictFromApiError(err)
+  }
+}
+
+/**
+ * Add, remove or replace one record's relation (or person) targets
+ * (POST .../knowledge/records/{id}/relation — GAP-02 / #700).
+ *
+ * FR-045's verbs, verbatim: `add` and `remove` touch only the named targets
+ * and leave every other edge alone (never a read-then-write splice through
+ * RecordWriteRequest, which the server refuses for relation properties
+ * anyway); `replace` is the named destructive verb and the only one that
+ * accepts an empty `targets` (clearing the property). A no-op add or remove
+ * resolves with `changed: false` — a defined outcome, never an error.
+ *
+ * Same conflict contract as writeVaultRecord: a stale `version_token`
+ * surfaces as KnowledgeRecordConflictError (409) so the caller can re-read
+ * and offer a Retry rather than reporting a generic failure. The response
+ * carries the record after the write (with its fresh token) and the exact
+ * stored spelling of every target, so a picker can reconcile its chips from
+ * the response alone.
+ */
+export async function writeVaultRecordRelation(
+  workspaceId: string,
+  body: RelationWriteRequest,
+): Promise<RelationWriteResponse> {
+  try {
+    return await request<RelationWriteResponse>(
+      `/library/${encodeURIComponent(workspaceId)}/knowledge/records/${encodeURIComponent(body.id)}/relation`,
+      { method: 'POST', body: JSON.stringify(RelationWriteRequestSchema.parse(body)) },
+      RelationWriteResponseSchema as ZodType<RelationWriteResponse>,
     )
   } catch (err) {
     throw knowledgeRecordConflictFromApiError(err)

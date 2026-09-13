@@ -3191,6 +3191,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/library/{workspace_id}/knowledge/records/{id}/relation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add, remove or replace one record's relation (or person) targets
+         * @description GAP-02 / #700 (2026-09-14 fix round). Wires RelationWriteRequest — previously a contract component with no path, its verbs served only by the agent's knowledge_edit tool — to the gateway/SPA boundary, so the web's relation and person pickers have a door. It goes through the SAME write machinery an agent's write uses: the same exported NoteEdit splice primitives (AddListValue / RemoveListValue / SetPropertyList / SetPropertyScalarChecked / RemoveProperty), the same locked compare-and-swap EditNote, and the same post-write index refresh — no parallel splice logic on the gateway side.
+         *
+         *     FR-045's semantics are preserved verbatim: add and remove touch one target each and leave every other edge alone; replace is a named, destructive verb (an empty targets list clears the property, and is the ONLY op that accepts one); a no-op add or remove is reported as `changed: false`, never an error, and rotates no version token.
+         *
+         *     FR-035 is enforced for scalar (many: false) relations: adding a second target to a filled slot is refused with 400 naming op "replace" as the way to move a single-slot relation. A property that is not a relation/person, or that is derived, is refused with 400 naming the expected shape — the same refusals the agent door renders.
+         *
+         *     A stale version_token is refused with 409 and the typed KnowledgeConflictError body, exactly like a record update.
+         */
+        post: operations["writeVaultRecordRelation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{id}/delegation": {
         parameters: {
             query?: never;
@@ -5994,6 +6020,21 @@ export interface components {
              *     ]
              */
             targets: string[];
+        };
+        /**
+         * RelationWriteResponse
+         * @description Response body for POST .../knowledge/records/{id}/relation (GAP-02 / #700, 2026-09-14 fix round). The record as it stands AFTER the write — carrying a fresh `version_token`, exactly like RecordWriteRequest's update response — plus the facts a picker needs to reconcile its chips without a second read: whether the verb changed anything at all, and the exact stored spelling of each target.
+         *     `changed: false` is a DEFINED outcome, not a soft failure: the agent door's contract makes an add of an already-present target and a remove of an absent one idempotent no-ops that say "(unchanged — already so)", and this response preserves that honesty for the web door. A no-op still rotates no token — the returned `record.version_token` describes the same bytes the caller read.
+         */
+        RelationWriteResponse: {
+            /** @description The record after the write, including its current version_token. */
+            record: components["schemas"]["VaultRecord"];
+            /** @description True when the write changed bytes on disk. False when the verb was a defined no-op (an add of a target already present, a remove of one absent, a replace that arrived at the same list) — never an error. */
+            changed: boolean;
+            /** @description Every target this property now carries, in stored order and stored spelling (the "[[name]]" wikilink form). Always present — an empty array, never null; empty means the property is now absent or cleared. */
+            stored_targets: string[];
+            /** @description Non-fatal problems the write surfaced (e.g. a search index that could not be refreshed after the change). Always present — an empty array, never null. The write itself is on disk regardless. */
+            warnings: string[];
         };
         /**
          * ViewGroupBy
@@ -21990,6 +22031,53 @@ export interface operations {
             500: components["responses"]["500InternalServerError"];
         };
     };
+    writeVaultRecordRelation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+                /**
+                 * @description The record whose relation property is being changed (RelationWriteRequest.id's target).
+                 * @example DE-0007
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RelationWriteRequest"];
+            };
+        };
+        responses: {
+            /** @description The verb ran. `changed` distinguishes a real write from a defined no-op; both are 200 — the agent door reports the same outcome as "(unchanged — already so)", never as a failure. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RelationWriteResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            /** @description version_token no longer matches the record's current version — it changed on disk since the caller last read it. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeConflictError"];
+                };
+            };
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
     getWorkspaceDelegation: {
         parameters: {
             query?: never;
@@ -22609,6 +22697,7 @@ export type RecordWriteRequest = components["schemas"]["RecordWriteRequest"];
 export type RecordWriteRequestCreate = components["schemas"]["RecordWriteRequestCreate"];
 export type RecordWriteRequestUpdate = components["schemas"]["RecordWriteRequestUpdate"];
 export type RelationWriteRequest = components["schemas"]["RelationWriteRequest"];
+export type RelationWriteResponse = components["schemas"]["RelationWriteResponse"];
 export type ViewGroupBy = components["schemas"]["ViewGroupBy"];
 export type ViewPropertyConfig = components["schemas"]["ViewPropertyConfig"];
 export type ViewPart = components["schemas"]["ViewPart"];

@@ -4,13 +4,16 @@
 // ONLY place in `viewparts/` that calls writeVaultRecord.
 //
 // WHAT GATES AN EDITOR AT ALL (§4.6, EMB-088) — see `viewResultData.ts`'s
-// `isEditableCell`, the single source of that decision:
-//   - `derived` true, or `relation` true → NO editor, ever. A derived value
-//     is never written into frontmatter (ADR-068 D9/FR-046) and a relation
-//     is modified through RelationWriteRequest's explicit verbs, never a
-//     read-then-write splice (FR-045) — RecordWriteRequest refuses both
+// `isEditableCell`, the single source of that decision for VALUE editors:
+//   - `derived` true → NO editor, ever. A derived value is never written
+//     into frontmatter (ADR-068 D9/FR-046) — RecordWriteRequest refuses it
 //     server-side regardless, but offering a control that will always fail
 //     is worse than offering none.
+//   - `relation` true → NOT a value editor: the PICKER (GAP-02 / #700,
+//     RelationCellEditor below). A relation is modified through
+//     RelationWriteRequest's explicit add/remove/replace verbs, never a
+//     read-then-write splice (FR-045); the picker needs the collection id
+//     in the edit context, and without it the cell reads as inert.
 //   - No declared `type` at all → NO editor. Absence is how "this cell
 //     doesn't correspond to a declared record property" is represented; an
 //     editor must never guess a type from the rendered `value`'s shape.
@@ -51,7 +54,7 @@
 // token: an anomaly that is stated, never a silent no-op.
 
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react'
-import { PencilSimple, SpinnerGap, WarningCircle } from '@phosphor-icons/react'
+import { PencilSimple, SpinnerGap, WarningCircle, X } from '@phosphor-icons/react'
 import type {
   RecordPropertyValue,
   RecordValue,
@@ -62,7 +65,9 @@ import {
   fetchVaultRecord,
   getErrorMessage,
   isKnowledgeRecordConflict,
+  searchVault,
   writeVaultRecord,
+  writeVaultRecordRelation,
 } from '@/lib/api'
 import { isEditableCell, recordPropertyText, type EditableCellType } from './viewResultData'
 
@@ -108,6 +113,14 @@ export interface RecordEditContext {
    *  FROM the record schema), so isEditableCell already answers false for
    *  every cell in it; this being undefined is inert, not a second gate. */
   recordType?: string | undefined
+  /** GAP-02 / #700: the collection the view's records live in
+   *  (KnowledgeBaseInfo.collection_id). REQUIRED by the relation/person
+   *  picker alone — its search goes through the find endpoint, which is
+   *  scoped by collection and cannot be guessed from the workspace. Absent
+   *  renders relation cells inert (the ordinary property editors do not
+   *  read it), which is why BasePreview always passes it when it knows the
+   *  collection. */
+  collectionId?: string | undefined
   onFieldWritten?: (result: RecordFieldWriteResult) => void
 }
 
@@ -144,6 +157,38 @@ function resolveEditTarget(
   }
 }
 
+/** A relation/person cell the PICKER can edit (GAP-02 / #700). Separate from
+ *  resolveEditTarget because the two doors have different requirements: the
+ *  relation verbs need no recordType (the record's own schema is the
+ *  authority) but DO need the collectionId the picker's search is scoped
+ *  by. A derived cell never qualifies — computed values stay read-only on
+ *  every door. */
+export interface RelationEditTarget {
+  workspaceId: string
+  collectionId: string
+  recordId: string
+  onFieldWritten?: ((result: RecordFieldWriteResult) => void) | undefined
+}
+
+function resolveRelationTarget(
+  context: RecordEditContext | undefined,
+  row: VaultFindRow,
+  cell: VaultFindCell,
+): RelationEditTarget | undefined {
+  if (context === undefined) return undefined
+  if (context.collectionId === undefined) return undefined
+  if (row.id === undefined) return undefined
+  if (row.version_token === undefined) return undefined
+  if (cell.derived === true) return undefined
+  if (cell.relation !== true && cell.type !== 'relation' && cell.type !== 'person') return undefined
+  return {
+    workspaceId: context.workspaceId,
+    collectionId: context.collectionId,
+    recordId: row.id,
+    onFieldWritten: context.onFieldWritten,
+  }
+}
+
 /** True when this row/cell pair would actually be offered an inline editor.
  *
  *  Exported so a PART can decide whether a cell is worth rendering at all
@@ -153,14 +198,20 @@ function resolveEditTarget(
  *  ONE-WAY DOOR (ADR-083 D3.2 treats an absent property as a legitimate edit
  *  target, and §4.2c's empty-`values` clear exists to reach it).
  *
- *  It delegates to resolveEditTarget rather than re-listing its conditions,
- *  so the part and the cell can never disagree about what is editable. */
+ *  Covers the relation/person picker too (GAP-02 / #700): an absent relation
+ *  is exactly the case the picker exists to fill, so hiding it would be the
+ *  same one-way door. It delegates to the two resolvers rather than
+ *  re-listing conditions, so the part and the cell can never disagree about
+ *  what is editable. */
 export function canEditCell(
   context: RecordEditContext | undefined,
   row: VaultFindRow,
   cell: VaultFindCell,
 ): boolean {
-  return resolveEditTarget(context, row, cell) !== undefined
+  return (
+    resolveEditTarget(context, row, cell) !== undefined ||
+    resolveRelationTarget(context, row, cell) !== undefined
+  )
 }
 
 /** One editable cell type's value, in the shape RecordWriteRequest accepts.
@@ -206,7 +257,10 @@ function stop(event: MouseEvent): void {
 export function inertCellReason(cell: VaultFindCell): string {
   if (cell.derived === true) return 'Computed value — it is derived from other properties and cannot be edited.'
   if (cell.relation === true || cell.type === 'relation' || cell.type === 'person') {
-    return 'Relation — change it through the agent; a picker is not available here yet.'
+    // Reached only when the edit context carries no collectionId (the
+    // picker's search cannot be scoped without it) — every base preview
+    // that knows its collection gets the picker instead.
+    return 'Relation — the picker needs this knowledge base’s collection; open the base preview to edit it.'
   }
   if (cell.many === true) return 'List value — change it through the agent; editing a list here is not supported.'
   return 'This value cannot be edited here.'
@@ -217,8 +271,35 @@ export function inertCellReason(cell: VaultFindCell): string {
  * cannot be edited at all — the SAME `renderValue` output either way, so a
  * relation's rendered wikilink (KB-8b) or a plain-text truncation never
  * differs between the editable and inert paths.
+ *
+ * A thin DISPATCHER only: a relation/person cell with a usable edit context
+ * renders the RelationCellEditor (GAP-02 / #700 — different verbs, different
+ * requirements, and returning before the value editor's hooks would break
+ * React's rules-of-hooks the moment a cell changed shape under an instance);
+ * everything else falls through to the plain value editor below.
  */
-export function EditableCell({
+export function EditableCell(props: {
+  context?: RecordEditContext | undefined
+  row: VaultFindRow
+  cell: VaultFindCell
+  /** Renders one value exactly as the surface would with no editor at all. */
+  renderValue: (value: string) => ReactNode
+}) {
+  const relationTarget = resolveRelationTarget(props.context, props.row, props.cell)
+  if (relationTarget !== undefined) {
+    return (
+      <RelationCellEditor
+        target={relationTarget}
+        cell={props.cell}
+        rowPath={props.row.path}
+        renderValue={props.renderValue}
+      />
+    )
+  }
+  return <EditableValueCell {...props} />
+}
+
+function EditableValueCell({
   context,
   row,
   cell,
@@ -584,6 +665,317 @@ export function EditableCell({
         className="min-w-0 max-w-full rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[12px] text-[var(--color-secondary)] disabled:opacity-60"
       />
       {saving && <SpinnerGap size={12} className="animate-spin text-[var(--color-muted)]" />}
+      {error !== undefined && (
+        <span role="alert" data-testid="viewpart-cell-error" className="text-[11px] text-[var(--color-warning)]">
+          {error}
+        </span>
+      )}
+    </span>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// RelationCellEditor — GAP-02 / #700 (2026-09-14 fix round)
+// ---------------------------------------------------------------------------
+
+/** The stored spelling of a target, minus the wikilink brackets — what a
+ * chip displays and what a remove sends is the STORED spelling (the server
+ * matches stored text), while an ADD sends the bare name and lets the server
+ * write the brackets. */
+function relationChipLabel(stored: string): string {
+  if (stored.startsWith('[[') && stored.endsWith(']]')) {
+    return stored.slice(2, -2)
+  }
+  return stored
+}
+
+/**
+ * The relation/person PICKER: current targets as removable chips, plus a
+ * search box over the collection's records (the existing find endpoint,
+ * scoped by collection — the same engine the search bar uses).
+ *
+ * Verbs (FR-045, through writeVaultRecordRelation):
+ *   - picking a result on a LIST property commits `add`;
+ *   - picking a result on a filled SCALAR slot commits `replace` (FR-035
+ *     forbids a second add — the picker names what it is doing rather than
+ *     sending a write the server must refuse);
+ *   - a chip's × commits `remove`, with the chip's STORED spelling.
+ *
+ * The current targets come from a fetchVaultRecord on open, not from the
+ * cell's rendered string: `value` is the list joined with ", ", which cannot
+ * be split back reliably, and the read also refreshes the version token the
+ * first write compares against. After each write the chips re-render from
+ * the RESPONSE's stored spelling — never from what was typed.
+ */
+function RelationCellEditor({
+  target,
+  cell,
+  rowPath,
+  renderValue,
+}: {
+  target: RelationEditTarget
+  cell: VaultFindCell
+  rowPath: string
+  renderValue: (value: string) => ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+  const [values, setValues] = useState<string[]>([])
+  const [versionToken, setVersionToken] = useState<string | undefined>(undefined)
+  const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [search, setSearch] = useState('')
+  const [results, setResults] = useState<{ title?: string; path: string }[]>([])
+  const [error, setError] = useState<string>()
+  const [conflictMessage, setConflictMessage] = useState<string>()
+
+  // The record read that seeds the chips. ONE source of truth for both the
+  // values and the token the first write sends; re-run on every conflict
+  // refresh so a Retry holds the FRESH token, never the refused one.
+  async function loadRecord(): Promise<void> {
+    setLoading(true)
+    setError(undefined)
+    try {
+      const rec = await fetchVaultRecord(target.workspaceId, target.recordId)
+      const prop = rec.properties.find((p) => p.property === cell.property)
+      const next: string[] = []
+      for (const v of prop?.values ?? []) {
+        const link = v.relation?.link ?? v.person?.link
+        if (link) next.push(link)
+      }
+      setValues(next)
+      setVersionToken(rec.version_token)
+    } catch (err) {
+      setError(getErrorMessage(err, 'Could not read this record’s relations.'))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function openPicker() {
+    setOpen(true)
+    void loadRecord()
+  }
+
+  async function runSearch(query: string): Promise<void> {
+    if (query.trim() === '') {
+      setResults([])
+      return
+    }
+    try {
+      const res = await searchVault(target.workspaceId, {
+        query: query.trim(),
+        collection_id: target.collectionId,
+        limit: 8,
+      })
+      setResults(res.records)
+    } catch {
+      // A failed search is not a failed EDIT — the chips stay usable.
+      setResults([])
+    }
+  }
+
+  async function commit(op: 'add' | 'remove' | 'replace', targets: string[]): Promise<void> {
+    if (versionToken === undefined) {
+      setError('Could not confirm this record’s current version — reopen it and try again.')
+      return
+    }
+    setSaving(true)
+    setError(undefined)
+    try {
+      const res = await writeVaultRecordRelation(target.workspaceId, {
+        id: target.recordId,
+        version_token: versionToken,
+        property: cell.property,
+        op,
+        targets,
+      })
+      setValues(res.stored_targets)
+      if (res.record.version_token !== undefined) {
+        setVersionToken(res.record.version_token)
+      }
+      setConflictMessage(undefined)
+      setSearch('')
+      setResults([])
+      target.onFieldWritten?.({
+        path: rowPath,
+        recordId: target.recordId,
+        property: cell.property,
+        value: res.stored_targets.map(relationChipLabel).join(', '),
+        versionToken: res.record.version_token,
+      })
+    } catch (err) {
+      if (isKnowledgeRecordConflict(err)) {
+        try {
+          const fresh = await fetchVaultRecord(target.workspaceId, target.recordId)
+          const prop = fresh.properties.find((p) => p.property === cell.property)
+          const next: string[] = []
+          for (const v of prop?.values ?? []) {
+            const link = v.relation?.link ?? v.person?.link
+            if (link) next.push(link)
+          }
+          setValues(next)
+          if (fresh.version_token !== undefined) setVersionToken(fresh.version_token)
+          setConflictMessage('This changed while you were editing.')
+        } catch (refreshErr) {
+          setConflictMessage(undefined)
+          setVersionToken(undefined)
+          setError(
+            `This changed on the server, and the current value could not be read — reopen the record. (${getErrorMessage(refreshErr, 'the read failed')})`,
+          )
+        }
+      } else {
+        setError(getErrorMessage(err, 'Could not save this relation.'))
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!open) {
+    return (
+      <span className="inline-flex max-w-full min-w-0 flex-wrap items-center gap-1.5">
+        <button
+          tabIndex={0}
+          type="button"
+          onMouseDown={stop}
+          onClick={(event) => {
+            stop(event)
+            openPicker()
+          }}
+          data-testid="viewpart-relation-trigger"
+          aria-label={`Edit ${cell.property}`}
+          className="group inline-flex max-w-full min-w-0 items-center gap-1 text-left"
+        >
+          <span className="min-w-0 truncate">{renderValue(cell.value)}</span>
+          <PencilSimple
+            size={11}
+            className="shrink-0 text-[var(--color-muted)] opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100"
+          />
+        </button>
+        {error !== undefined && (
+          <span role="alert" data-testid="viewpart-cell-error" className="text-[11px] text-[var(--color-warning)]">
+            {error}
+          </span>
+        )}
+      </span>
+    )
+  }
+
+  const scalarFilled = cell.many !== true && values.length > 0
+
+  return (
+    <span
+      className="inline-flex max-w-full min-w-0 flex-wrap items-center gap-1.5"
+      onMouseDown={stop}
+      onClick={stop}
+      data-testid="viewpart-relation-editor"
+    >
+      {loading && <SpinnerGap size={12} className="animate-spin text-[var(--color-muted)]" />}
+      {!loading &&
+        values.map((stored) => {
+          const label = relationChipLabel(stored)
+          return (
+            <span
+              key={stored}
+              data-testid={`viewpart-relation-chip-${label}`}
+              className="inline-flex items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[12px]"
+            >
+              {label}
+              <button
+                tabIndex={0}
+                type="button"
+                disabled={saving}
+                aria-label={`Remove ${label}`}
+                data-testid={`viewpart-relation-remove-${label}`}
+                onClick={() => void commit('remove', [stored])}
+                className="text-[var(--color-muted)] hover:text-[var(--color-error)] disabled:opacity-50"
+              >
+                <X size={10} weight="bold" />
+              </button>
+            </span>
+          )
+        })}
+      {!loading && values.length === 0 && (
+        <span className="text-[11px] text-[var(--color-muted)]">None yet.</span>
+      )}
+
+      <input
+        tabIndex={0}
+        type="text"
+        value={search}
+        disabled={saving || loading}
+        placeholder={`Search ${cell.type === 'person' ? 'people' : 'records'} to link…`}
+        onChange={(event) => {
+          setSearch(event.target.value)
+          void runSearch(event.target.value)
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            setOpen(false)
+          }
+        }}
+        data-testid="viewpart-relation-search"
+        aria-label={`Search targets for ${cell.property}`}
+        className="min-w-0 w-36 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[12px] text-[var(--color-secondary)] disabled:opacity-60"
+      />
+      {saving && <SpinnerGap size={12} className="animate-spin text-[var(--color-muted)]" />}
+
+      {results.length > 0 && (
+        <span
+          className="flex max-w-full flex-col gap-0.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1 py-1"
+          data-testid="viewpart-relation-results"
+        >
+          {results.slice(0, 8).map((hit) => {
+            const label = hit.title ?? hit.path
+            return (
+              <button
+                key={hit.path}
+                tabIndex={0}
+                type="button"
+                disabled={saving}
+                data-testid={`viewpart-relation-option-${label}`}
+                onClick={() => void commit(scalarFilled ? 'replace' : 'add', [label])}
+                className="text-left text-[12px] text-[var(--color-secondary)] hover:text-[var(--color-accent)] disabled:opacity-50"
+              >
+                {label}
+              </button>
+            )
+          })}
+        </span>
+      )}
+
+      <button
+        tabIndex={0}
+        type="button"
+        onClick={() => setOpen(false)}
+        data-testid="viewpart-relation-close"
+        className="text-[11px] font-medium text-[var(--color-accent)] underline underline-offset-2"
+      >
+        Done
+      </button>
+
+      {conflictMessage !== undefined && (
+        <span
+          className="inline-flex items-center gap-1 text-[11px] text-[var(--color-warning)]"
+          data-testid="viewpart-relation-conflict"
+        >
+          <WarningCircle size={12} weight="fill" />
+          {conflictMessage}
+          <button
+            tabIndex={0}
+            type="button"
+            onClick={() => {
+              setConflictMessage(undefined)
+              void loadRecord()
+            }}
+            data-testid="viewpart-relation-conflict-retry"
+            className="font-medium text-[var(--color-accent)] underline underline-offset-2"
+          >
+            Retry
+          </button>
+        </span>
+      )}
       {error !== undefined && (
         <span role="alert" data-testid="viewpart-cell-error" className="text-[11px] text-[var(--color-warning)]">
           {error}
