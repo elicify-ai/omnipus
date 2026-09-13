@@ -3099,6 +3099,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/library/{workspace_id}/knowledge/views": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every saved view a collection owns, file or no file
+         * @description Lists ALL of a collection's saved views — the `.omnipus-vault/views/` directory this collection owns, NOT the views of one `.base` file (UAT D-13, web half). A view authored with knowledge_configure's create_view/write_view writes a saved view file and no `.base` at all, so before this endpoint such a view answered correctly over the API while having no UI surface: the base-views listing is file-addressed and cannot see it.
+         *
+         *     Each entry carries the slug it is actually addressed by (pass it VERBATIM to GET .../knowledge/view), its display label, its kind, whether it can be served, and — for an imported view — the `.base` it came from. Base previews and dashboard embeds keep listing by source; this is the collection's own list.
+         *
+         *     A collection_id outside this workspace's scope returns the same empty-but-complete shape as an unknown collection (FR-052/FR-053) — never a 403 or 404, which would confirm the collection exists. View files the loader rejected are counted in unloadable_count and named in unloadable, never silently dropped.
+         */
+        get: operations["listKnowledgeViews"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/library/{workspace_id}/knowledge/view": {
         parameters: {
             query?: never;
@@ -5037,6 +5061,11 @@ export interface components {
              * @example the view is stored disabled because an expression in its filter could not be translated — write the filter directly to run it
              */
             unservable_reason?: string;
+            /**
+             * @description The vault-relative path of the `.base` file this view was imported from, when the saved view file records one (UAT D-13). Absent for a view authored in place (knowledge_configure create_view / write_view) — such a view belongs to the collection, not to any file, which is exactly why a views list addressed by collection exists at all.
+             * @example Projects.base
+             */
+            source?: string;
         };
         /**
          * KnowledgeBaseUnloadableView
@@ -5066,6 +5095,31 @@ export interface components {
              * @example view "projects--active-projects" names property "priority" in properties, which record type "project" does not declare; declared: budget, owner, start, status
              */
             reason: string;
+        };
+        /**
+         * KnowledgeCollectionViews
+         * @description Every saved view a collection owns, addressed by collection rather than by a `.base` file (UAT D-13, web half).
+         *
+         *     WHY THIS EXISTS. `knowledge_configure create_view` writes `<vault>/.omnipus-vault/views/<slug>.yaml` and produces NO `.base` file, so a collection without a `.base` still has saved views that answered correctly over the API while having no UI surface at all — the base-views endpoint (`GET .../knowledge/base-views?path=<.base>`) is file-addressed and cannot list them. This response is the collection-addressed list: every view file the loader accepts, each with the slug it is actually addressed by, its label, its kind, whether it can be served, and — for an imported view — the `.base` it came from.
+         *
+         *     Base previews and dashboard embeds keep listing by `source`; this is the list for the collection itself. Every `name` is read from the saved view file and must be passed VERBATIM to GET .../knowledge/view (the same no-rederivation rule KnowledgeBaseView states).
+         *     A collection outside the caller's workspace scope returns this same empty-but-complete shape (US-9 / FR-052 / FR-053) — never a 403, never a 404, which would confirm the collection exists.
+         */
+        KnowledgeCollectionViews: {
+            /**
+             * @description The collection whose saved views are listed, echoed from the request.
+             * @example kb_3d1c9a7e5b2f4806
+             */
+            collection_id: string;
+            /** @description The collection's servable and unservable-but-listable saved views, ordered by the loader's own stable order. Always an array, never null — an empty array is the positive statement that the collection authored no views. */
+            views: components["schemas"]["KnowledgeBaseView"][];
+            /**
+             * @description How many view FILES could not be loaded at all (rejected by the loader, e.g. a duplicate view name or an unloadable file) and are therefore not in `views`. Reported rather than hidden: silently showing fewer views than the vault declares is indistinguishable from a vault that never declared them.
+             * @example 0
+             */
+            unloadable_count: number;
+            /** @description Each rejected view file, with the loader's own code and reason (UAT D-70's naming rule: a count alone says nothing a reader can act on). Present whenever unloadable_count is greater than zero. */
+            unloadable?: components["schemas"]["KnowledgeBaseUnloadableView"][];
         };
         /**
          * KnowledgeOutline
@@ -21841,6 +21895,41 @@ export interface operations {
             500: components["responses"]["500InternalServerError"];
         };
     };
+    listKnowledgeViews: {
+        parameters: {
+            query: {
+                /**
+                 * @description The KnowledgeBaseInfo.collection_id whose saved views are listed.
+                 * @example kb_3d1c9a7e5b2f4806
+                 */
+                collection_id: string;
+            };
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The collection's saved views, servable or not. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KnowledgeCollectionViews"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
     getKnowledgeViewResult: {
         parameters: {
             query: {
@@ -22589,6 +22678,7 @@ export type KnowledgeGraphSkip = components["schemas"]["KnowledgeGraphSkip"];
 export type KnowledgeBaseViews = components["schemas"]["KnowledgeBaseViews"];
 export type KnowledgeBaseView = components["schemas"]["KnowledgeBaseView"];
 export type KnowledgeBaseUnloadableView = components["schemas"]["KnowledgeBaseUnloadableView"];
+export type KnowledgeCollectionViews = components["schemas"]["KnowledgeCollectionViews"];
 export type KnowledgeOutline = components["schemas"]["KnowledgeOutline"];
 export type KnowledgeOutlineHeading = components["schemas"]["KnowledgeOutlineHeading"];
 export type KnowledgeConflictError = components["schemas"]["KnowledgeConflictError"];

@@ -42,6 +42,7 @@ import (
 //	GET  /api/v1/library/{workspace_id}/knowledge/outline   heading outline
 //	GET  /api/v1/library/{workspace_id}/knowledge/view      saved-view result (rest_knowledge_view.go)
 //	GET  /api/v1/library/{workspace_id}/knowledge/base-views a .base file's imported views (rest_knowledge_base_views.go)
+//	GET  /api/v1/library/{workspace_id}/knowledge/views     EVERY saved view a collection owns, file or no file (UAT D-13, rest_knowledge_views.go)
 //	GET  /api/v1/library/{workspace_id}/knowledge/record-schema declared record types (ADR-083 CW-4, rest_knowledge_record.go)
 //	GET  /api/v1/library/{workspace_id}/knowledge/records/{id}  one typed record (CW-4, rest_knowledge_record.go)
 //	POST /api/v1/library/{workspace_id}/knowledge/records     create/update one record by splice (CW-7, rest_knowledge_record.go)
@@ -116,10 +117,10 @@ func (a *restAPI) HandleLibraryTree(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleKnowledge dispatches this workspace's knowledge sub-paths: detection
-// (the empty sub-path), find, graph, outline, view, base-views, record-schema
-// and records/{id}.
+// (the empty sub-path), find, graph, outline, view, base-views, views,
+// record-schema and records/{id}.
 //
-// EIGHT, and the count is spelled out as a list rather than a number because
+// NINE, and the count is spelled out as a list rather than a number because
 // the number went stale twice — it said "four" while six cases existed, and
 // ADR-083 Step 5 then added the last two without touching it. A list cannot
 // drift silently in the same way: adding a case beside a comment that names
@@ -192,6 +193,15 @@ func (a *restAPI) handleKnowledge(w http.ResponseWriter, r *http.Request, worksp
 			return
 		}
 		a.handleKnowledgeBaseViews(w, r, workspaceID)
+	case "views":
+		// UAT D-13 (web half): the collection-addressed saved-views list —
+		// distinct from "view" (evaluate one) and from "base-views" (one
+		// .base file's imported views).
+		if r.Method != http.MethodGet {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleKnowledgeViews(w, r, workspaceID)
 	case "record-schema":
 		if r.Method != http.MethodGet {
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")

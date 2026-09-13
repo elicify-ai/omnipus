@@ -28,7 +28,7 @@
 // are all real, so a break in any of them fails these tests.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import type { KnowledgeIndexProgressFrame } from '@/lib/api/generated/asyncapi-types'
@@ -540,3 +540,31 @@ describe('KnowledgePanel — composition (US-4: features on for the right folder
 // LibraryExplorer.test.tsx's "opens the note a search hit names, translated
 // to a workspace-relative path" (rewritten against the surviving bar in the
 // same change that retired this block).
+
+// ── UAT D-13 (web half): the panel carries the collection's Views list ──────
+
+describe('KnowledgePanel — the collection Views list mounts only where it belongs (UAT D-13)', () => {
+  it('renders the Views list inside a detected knowledge base with a collection id', async () => {
+    const loadViews = vi.fn().mockResolvedValue({
+      collection_id: COLLECTION_ID,
+      views: [{ name: 'authored--active', label: 'Active invoices' }],
+      unloadable_count: 0,
+    })
+    renderPanel({ loadViews })
+    // DIES ON the old panel: nothing listed a `.base`-less collection's
+    // views — the list did not exist.
+    const list = await screen.findByTestId('knowledge-views-list')
+    expect(within(list).getByText('Active invoices')).toBeInTheDocument()
+    expect(loadViews).toHaveBeenCalledWith('ws_7f3a', COLLECTION_ID, expect.anything())
+  })
+
+  it('asks nothing and renders no list when the folder is not a knowledge base', async () => {
+    const loadViews = vi.fn()
+    renderPanel({
+      loadInfo: vi.fn().mockResolvedValue(makeInfo({ is_knowledge_base: false, marker: 'none', collection_id: undefined })),
+      loadViews,
+    })
+    await waitFor(() => expect(screen.queryByTestId('knowledge-panel')).toBeNull())
+    expect(loadViews).not.toHaveBeenCalled()
+  })
+})
