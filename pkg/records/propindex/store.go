@@ -168,6 +168,12 @@ type Candidate struct {
 	// properties index is stale", because the comparison establishes
 	// disagreement, not which side is behind.
 	SourceHash string
+	// Kind is KindNote or KindAttachment — the row's own `kind` column
+	// (UAT 2026-09-13, D-29). An attachment's bytes are never opened by
+	// either index (FR-039a), so its freshness cannot be a content-hash
+	// comparison; a consumer needs to know it is one to judge it by
+	// presence instead of reporting every attachment as "unknown".
+	Kind string
 
 	// ParseError is the reason this note's frontmatter could not be read, or
 	// "" when it could (UAT 2026-09-13, D-06). A note whose frontmatter opens

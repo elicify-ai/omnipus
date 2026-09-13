@@ -321,6 +321,7 @@ func (e *evaluation) assemble(ctx context.Context, d Deps, echo string) generate
 		// the word path would leave the commonest query shape unchecked.
 		textHash := s.textHash
 		var hashErr error
+		textHolds := s.hasText
 		if !s.hasText {
 			h, ok, err := d.Text.SourceHash(ctx, s.cand.Path)
 			switch {
@@ -328,6 +329,7 @@ func (e *evaluation) assemble(ctx context.Context, d Deps, echo string) generate
 				hashErr = err
 			case ok:
 				textHash = h
+				textHolds = true
 			}
 		}
 		switch {
@@ -350,6 +352,27 @@ func (e *evaluation) assemble(ctx context.Context, d Deps, echo string) generate
 				identityOf(s.cand))
 			p.Paths = &[]string{s.cand.Path}
 			e.problems = append(e.problems, p)
+		case s.cand.Kind == propindex.KindAttachment:
+			// UAT 2026-09-13, D-29: an attachment is indexed by name and path
+			// on BOTH sides and its bytes are opened by neither (FR-039a), so
+			// there is no content hash to compare and "unknown freshness; one
+			// index holds no hash" was reported for 16 of 18 attachments on
+			// every query — honest about the mechanism, wrong about the
+			// state. The two indexes agree about an attachment when both
+			// hold its path; only an attachment the text index does not
+			// hold at all is flagged, and the reason says what was compared.
+			if textHolds {
+				agreeing++
+			} else {
+				t := true
+				row.Stale = &t
+				p := problem(generated.StaleRecord,
+					s.cand.Path+": the text index holds no entry for this attachment; the properties index does — it may have been added since the text index was built",
+					"re-run to confirm; run knowledge_describe check_integrity if it persists",
+					identityOf(s.cand))
+				p.Paths = &[]string{s.cand.Path}
+				e.problems = append(e.problems, p)
+			}
 		default:
 			fresh := propindex.CompareFreshness(s.cand.SourceHash, textHash)
 			if fresh == propindex.FreshnessAgree {

@@ -940,7 +940,7 @@ func (ix *Index) CountCandidates(ctx context.Context, sel Selector) (int, error)
 // second child in the join. That distinction is the whole of FR-131's assembly
 // rule — the tags and links, which ARE children, get their own statements
 // below.
-const candidateColumns = `n.note_id, n.path, n.record_type, n.record_id, n.source_hash, ` +
+const candidateColumns = `n.note_id, n.path, n.record_type, n.record_id, n.source_hash, n.kind, ` +
 	`n.mtime, n.ctime, n.size, n.parse_error, ` +
 	`p.prop, p.elem, p.state, p.vtype, p.v_text, p.v_num, p.v_time, p.v_link, p.v_raw, p.quoted`
 
@@ -1002,14 +1002,14 @@ func (ix *Index) streamCandidates(ctx context.Context, q string, args []any, vis
 		var (
 			id                              int64
 			path, recordType, sourceHash    string
-			parseError                      string
+			kind, parseError                string
 			recordID                        []byte
 			mtime, ctime, size              []byte
 			prop, vtype                     sql.NullString
 			elem, state, quoted             sql.NullInt64
 			vText, vNum, vTime, vLink, vRaw []byte
 		)
-		if err := rows.Scan(&id, &path, &recordType, &recordID, &sourceHash,
+		if err := rows.Scan(&id, &path, &recordType, &recordID, &sourceHash, &kind,
 			&mtime, &ctime, &size, &parseError,
 			&prop, &elem, &state, &vtype, &vText, &vNum, &vTime, &vLink, &vRaw, &quoted); err != nil {
 			return fmt.Errorf("propindex: reading a candidate row: %w", err)
@@ -1036,6 +1036,7 @@ func (ix *Index) streamCandidates(ctx context.Context, q string, args []any, vis
 				RecordType: recordType,
 				RecordID:   string(recordID),
 				SourceHash: sourceHash,
+				Kind:       kind,
 				ParseError: parseError,
 				File:       decodeFileMeta(mtime, ctime, size),
 				Props:      map[string]StoredProp{},

@@ -208,19 +208,61 @@ func (s *fileMetaSource) loadLinks(ctx context.Context, d Deps, sel propindex.Se
 // different question: "which DEALS link here", presented as "what references
 // this". A note's references do not depend on what the reader happened to be
 // filtering for.
+//
+// TWO EDGE SOURCES, NOT ONE (UAT 2026-09-13, D-30). `note_links` holds the
+// BODY's wikilinks only — ExtractLinks masks the frontmatter block — so a
+// record whose only inbound references are relation values (`owner:
+// "[[PRJ-0001]]"` in other notes' frontmatter) had no backlinks here while
+// knowledge_read, which walks both, showed two. The relation rows the store
+// already holds (`note_relations`) are streamed as edges too. And because a
+// relation or a body link may name a record by ID rather than by title or
+// path, each target is resolved to its note's path through Deps.Resolve when
+// one is wired, so the inverse map is keyed the way For() looks it up; a
+// target that does not resolve keeps its own spelling (a title still matches
+// by basename, as before).
 func (s *fileMetaSource) deriveBacklinks(ctx context.Context, d Deps) *RefusalError {
 	scope := records.BacklinkScope{PathPrefix: d.PathPrefix}
 	sel := propindex.Selector{PathPrefix: d.PathPrefix}
 
+	// Deps.ResolveNear is the wikilink -> note-path resolution (the same one
+	// `near` anchors on); Deps.Resolve yields a record IDENTITY, which is
+	// not what For() is keyed on. Resolved once per distinct target.
+	resolved := map[string]string{}
+	resolveTarget := func(target string) string {
+		if d.ResolveNear == nil || target == "" {
+			return target
+		}
+		if p, ok := resolved[target]; ok {
+			return p
+		}
+		out := target
+		if p, ok := d.ResolveNear(target); ok && p != "" {
+			out = p
+		}
+		resolved[target] = out
+		return out
+	}
+
 	ix, err := records.BuildBacklinkIndex(scope, func(visit func(records.FileLinkRow) error) error {
-		return d.Store.Links(ctx, sel, func(h propindex.LinkHit) error {
+		if err := d.Store.Links(ctx, sel, func(h propindex.LinkHit) error {
 			return visit(records.FileLinkRow{
 				NotePath: h.Path,
-				Target:   h.Link.Target,
+				Target:   resolveTarget(h.Link.Target),
 				Heading:  h.Link.Heading,
 				Display:  h.Link.Display,
 				Raw:      h.Link.Raw,
 				Embed:    h.Link.Embed,
+			})
+		}); err != nil {
+			return err
+		}
+		return d.Store.Relations(ctx, sel, func(h propindex.RelationHit) error {
+			return visit(records.FileLinkRow{
+				NotePath: h.Path,
+				Target:   resolveTarget(h.Relation.Target),
+				Heading:  h.Relation.Heading,
+				Display:  h.Relation.Display,
+				Raw:      h.Relation.Raw,
 			})
 		})
 	})
