@@ -9,6 +9,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -20,6 +21,25 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/records/propindex"
 	"github.com/elicify-ai/omnipus/pkg/vaultprops"
 )
+
+// requirePropertiesIndexSynced is the ONE verdict on a vaultprops.Sync
+// error in this file (Codex review 2026-09-14, finding 14). It skips ONLY
+// for the explicit unsupported-platform sentinel — a build where the
+// properties index is not compiled in (mipsle, netbsd, freebsd/arm) — and
+// fails on anything else. It used to be an inline `t.Skipf` on ANY error,
+// which turned a SQL regression, a corrupt index or a full disk into a green
+// "skipped" that never reached the refresh assertion.
+func requirePropertiesIndexSynced(t testing.TB, err error) {
+	t.Helper()
+	if err == nil {
+		return
+	}
+	if errors.Is(err, records.ErrPropertyIndexUnavailable) {
+		t.Skipf("properties index unavailable on this platform: %v", err)
+		return
+	}
+	t.Fatalf("vaultprops.Sync failed for a reason that is NOT the platform carve-out; this is a real defect, not a skip: %v", err)
+}
 
 // storedPropText reads one property's first stored text element for one path
 // straight out of the collection's properties index — the same store every
@@ -61,9 +81,8 @@ func storedPropText(t *testing.T, home, vault, relPath, prop string) (string, bo
 // as soon as the write returns.
 func TestKnowledgeRecordWrite_UpdateRefreshesPropertiesIndex(t *testing.T) {
 	api, ws, vault := buildRecordTestVault(t)
-	if _, err := vaultprops.Sync(context.Background(), api.homePath, vault, vaultprops.SyncOptions{}); err != nil {
-		t.Skipf("properties index unavailable on this platform: %v", err)
-	}
+	_, syncErr := vaultprops.Sync(context.Background(), api.homePath, vault, vaultprops.SyncOptions{})
+	requirePropertiesIndexSynced(t, syncErr)
 	before, ok := storedPropText(t, api.homePath, vault, "w1.md", "name")
 	require.True(t, ok, "fixture must be indexed before the write")
 	require.Equal(t, "Sprocket", before)
@@ -91,9 +110,8 @@ func TestKnowledgeRecordWrite_UpdateRefreshesPropertiesIndex(t *testing.T) {
 // only after the next full sync.
 func TestKnowledgeRecordWrite_CreateRefreshesPropertiesIndex(t *testing.T) {
 	api, ws, vault := buildRecordTestVault(t)
-	if _, err := vaultprops.Sync(context.Background(), api.homePath, vault, vaultprops.SyncOptions{}); err != nil {
-		t.Skipf("properties index unavailable on this platform: %v", err)
-	}
+	_, syncErr := vaultprops.Sync(context.Background(), api.homePath, vault, vaultprops.SyncOptions{})
+	requirePropertiesIndexSynced(t, syncErr)
 
 	body := map[string]any{
 		"mode": "create",

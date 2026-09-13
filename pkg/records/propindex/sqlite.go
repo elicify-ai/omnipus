@@ -553,13 +553,17 @@ func (ix *Index) upsertOne(ctx context.Context, tx *sql.Tx, rows NoteRows) error
 		if err := ix.deleteChildren(ctx, tx, id); err != nil {
 			return err
 		}
-		const q = `UPDATE notes SET kind = ?, record_type = ?, record_id = ?, source_hash = ?, indexed_at = ?, mtime = ?, ctime = ?, size = ?, declared_type = ?, schema_fp = ? WHERE note_id = ?`
+		// parse_error is written on EVERY upsert, not only on insert (Codex review
+		// 2026-09-14, finding 5): a note whose frontmatter is repaired must drop
+		// the old error, and a healthy note that breaks must gain one. Leaving
+		// the column out of this UPDATE froze the status at first sight.
+		const q = `UPDATE notes SET kind = ?, record_type = ?, record_id = ?, source_hash = ?, indexed_at = ?, mtime = ?, ctime = ?, size = ?, declared_type = ?, schema_fp = ?, parse_error = ? WHERE note_id = ?`
 		if _, err := ix.execTx(ctx, tx, PhaseWrite, q,
 			rows.Kind, rows.RecordType, []byte(rows.RecordID), rows.SourceHash, now,
 			nanoTimeColumn(rows.MtimeNanos),
 			ctimeColumn(rows.CtimeNanos, rows.HasCtime),
 			sizeColumn(rows.Size, rows.StatKnown()),
-			rows.DeclaredType, rows.SchemaFingerprint,
+			rows.DeclaredType, rows.SchemaFingerprint, rows.ParseError,
 			id); err != nil {
 			return fmt.Errorf("propindex: updating %q: %w", rows.Path, err)
 		}
