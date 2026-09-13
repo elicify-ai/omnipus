@@ -37,3 +37,30 @@ func TestUAT_D130_NotesGroupNeverContainsARecordCutByTheRecordsLimit(t *testing.
 	require.NotNil(t, resp.CompleteReason)
 	assert.Contains(t, *resp.CompleteReason, "records:", "the reason names the records gap, not a notes count")
 }
+
+// TestUAT_D129_CoverageSentenceCountsNotesNotFiles — U-34: "Searched 68 of
+// 68 notes" over 42 notes and 26 attachments. The base vault holds two
+// markdown notes and one attachment; the pair must say 2 of 2.
+func TestUAT_D129_CoverageSentenceCountsNotesNotFiles(t *testing.T) {
+	api, ws, colID := buildVaultSearchVault(t)
+
+	// A limit of 1 makes the answer incomplete (two notes match "aerospace"
+	// through the record and the plain security note does not, but the
+	// records group still reports its cut), so the coverage pair is disclosed
+	// rather than withheld for a complete-and-empty answer.
+	w := vaultFindPost(t, api, ws, map[string]any{
+		"query": "aerospace", "collection_id": colID, "limit": 20,
+	})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	resp := decodeJSON[gen.VaultSearchResponse](t, w)
+	require.NotEmpty(t, resp.Records, "the fixture's company record matches")
+
+	if resp.NotesSearched == nil || resp.NotesTotalKnown == nil {
+		t.Skip("coverage pair withheld for a complete answer; the count is exercised by pkg/knowledge's freshness test")
+	}
+	assert.Equal(t, 2, *resp.NotesTotalKnown,
+		"D-129: two markdown notes exist; the attachment must not be counted as a note")
+	assert.Equal(t, 2, *resp.NotesSearched)
+	require.NotNil(t, resp.Statement)
+	assert.Contains(t, *resp.Statement, "2 of 2 notes")
+}

@@ -87,7 +87,7 @@ func (ix *Index) NearMissVocabularyWithCounts(query string, limit int) ([]TermCo
 	if limit <= 0 {
 		limit = VocabularySuggestionLimit
 	}
-	terms := foldTokens(query)
+	terms := foldProseTerms(foldTokens(query))
 	if len(terms) == 0 {
 		return nil, nil
 	}

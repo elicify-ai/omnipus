@@ -728,7 +728,14 @@ func closeIndexQuietly(bidx bleve.Index, path string) {
 // an index written under version 2 holds documents whose body text still
 // contains the YAML and whose property fields do not exist at all. A field
 // query against one of those documents returns zero hits and no error.
-const indexFormatVersion = 3
+//
+// Version 4 is UAT 2026-09-13 D-129 / D-99: every prose field moved from the
+// stock "en" analyzer to "en_folded" (analyzer_folded.go — Unicode NFC, then
+// ASCII folding, before stop words and stemming). A version-3 dictionary holds
+// "café" and "café" as two terms and never "cafe"; under the new query
+// path a search for any of the three would miss two of them. G2 sees the
+// analyzer name change on every prose field too; G1 fires first.
+const indexFormatVersion = 4
 
 // indexFormat is the sidecar's content. It is deliberately one integer: a
 // record with more in it is a record with more ways to disagree with itself,
@@ -828,11 +835,19 @@ func mappingDrift(persisted bleveMapping.IndexMapping) string {
 	}
 	sort.Strings(declared)
 
+	// Absent fields first, across the whole declaration, THEN per-field
+	// settings: a field the persisted index does not hold at all is the more
+	// fundamental (and more actionable) drift, and reporting it must not
+	// depend on whether an alphabetically earlier field happens to differ in
+	// a setting — since D-129 changed every prose field's analyzer, "body"
+	// would otherwise always be reported ahead of a missing "title".
 	for _, name := range declared {
-		got := persisted.FieldMappingForPath(name)
-		if got.Type == "" {
+		if persisted.FieldMappingForPath(name).Type == "" {
 			return fmt.Sprintf("field %q is absent from the persisted mapping", name)
 		}
+	}
+	for _, name := range declared {
+		got := persisted.FieldMappingForPath(name)
 		if d := fieldMappingDrift(name, got, want.FieldMappingForPath(name)); d != "" {
 			return d
 		}
@@ -1035,16 +1050,24 @@ func enforceEntryPermissions(path string, d fs.DirEntry, walkErr error) error {
 func buildIndexMapping() *bleveMapping.IndexMappingImpl {
 	m := bleve.NewIndexMapping()
 	m.ScoringModel = bleveIndexAPI.BM25Scoring
+	// The custom prose analyzer is registered on the mapping itself, so the
+	// definition is persisted with the index (D-129, analyzer_folded.go). The
+	// only way this can fail is a programming error in the definition — a
+	// misspelt component name — which the package's own tests exercise on
+	// every build, so a panic here is a build-time fact, not a runtime one.
+	if err := registerProseAnalyzer(m); err != nil {
+		panic("knowledge: prose analyzer definition rejected: " + err.Error())
+	}
 
 	body := bleve.NewTextFieldMapping()
-	body.Analyzer = "en"
+	body.Analyzer = proseAnalyzerName
 	body.Store = false
 	body.IncludeTermVectors = false
 	body.IncludeInAll = false
 	body.DocValues = false
 
 	name := bleve.NewTextFieldMapping()
-	name.Analyzer = "en"
+	name.Analyzer = proseAnalyzerName
 	name.Store = false
 	name.IncludeTermVectors = false
 	name.IncludeInAll = false
@@ -1076,14 +1099,14 @@ func buildIndexMapping() *bleveMapping.IndexMappingImpl {
 	// length, because "index the property keys" reads like a request for a
 	// dynamic mapping and it is not one.
 	title := bleve.NewTextFieldMapping()
-	title.Analyzer = "en"
+	title.Analyzer = proseAnalyzerName
 	title.Store = false
 	title.IncludeTermVectors = false
 	title.IncludeInAll = false
 	title.DocValues = false
 
 	headings := bleve.NewTextFieldMapping()
-	headings.Analyzer = "en"
+	headings.Analyzer = proseAnalyzerName
 	headings.Store = false
 	headings.IncludeTermVectors = false
 	headings.IncludeInAll = false
@@ -1102,7 +1125,7 @@ func buildIndexMapping() *bleveMapping.IndexMappingImpl {
 	// Prose, because a property VALUE is read by a person: a search for
 	// "prospect" should find `status: prospecting`.
 	propValue := bleve.NewTextFieldMapping()
-	propValue.Analyzer = "en"
+	propValue.Analyzer = proseAnalyzerName
 	propValue.Store = false
 	propValue.IncludeTermVectors = false
 	propValue.IncludeInAll = false
@@ -1260,6 +1283,14 @@ type IndexFreshness struct {
 	// one.
 	Scanned int
 	Indexed int
+	// ScannedNotes / IndexedNotes are the SAME two counts restricted to
+	// markdown notes (ScanKindNote) — the files whose CONTENT the index
+	// holds. Attachments are indexed by name and path only (FR-039a), so a
+	// coverage sentence that says "notes" must not count them: "68 of 68
+	// notes" over a vault of 42 notes and 26 attachments promised full-text
+	// coverage of 26 files that were never opened (UAT 2026-09-13, D-129).
+	ScannedNotes int
+	IndexedNotes int
 	// New/Changed/Removed break down the pending reconcile: files on disk the
 	// index has never seen, files whose stat differs from the record, and files
 	// the index still holds that are gone from disk. Pending is their sum.
@@ -1406,6 +1437,11 @@ func (ix *Index) computeFreshness(ctx context.Context) (IndexFreshness, error) {
 		return IndexFreshness{}, err
 	}
 	f.Scanned = len(scan.Entries)
+	for _, entry := range scan.Entries {
+		if entry.Kind == ScanKindNote {
+			f.ScannedNotes++
+		}
+	}
 
 	// A never-built index has no manifest to diff against: every file on disk
 	// is pending, and Fresh stays false. LoadManifest would return an empty
@@ -1426,6 +1462,11 @@ func (ix *Index) computeFreshness(ctx context.Context) (IndexFreshness, error) {
 		return IndexFreshness{}, err
 	}
 	f.Indexed = manifest.Len()
+	for _, entry := range manifest.Entries {
+		if entry.Kind == ScanKindNote {
+			f.IndexedNotes++
+		}
+	}
 
 	// A snapshot of the unindexable set, taken once so the per-entry diff below
 	// does not touch freshMu in the loop.
@@ -2682,6 +2723,12 @@ var prefixSearchTokenizer = unicode.NewUnicodeTokenizer()
 // records.FoldKey (the name-ranking fold), which folds more aggressively
 // (ß→ss) than the dictionary was built and would therefore MISS a term rather
 // than over-match it. Stemming is deliberately skipped for the reason above.
+//
+// Since D-129 the dictionary is also NFC-normalised and ASCII-folded
+// (en_folded, analyzer_folded.go), so each token is passed through
+// foldProseTerm after lower-casing — the same two steps in the same order
+// the analyzer applied — or a prefix "caf" typed as "café" would never
+// reach the dictionary's "cafe".
 func prefixSearchTokens(query string) []string {
 	tokens := prefixSearchTokenizer.Tokenize([]byte(query))
 	if len(tokens) == 0 {
@@ -2689,7 +2736,7 @@ func prefixSearchTokens(query string) []string {
 	}
 	out := make([]string, 0, len(tokens))
 	for _, tok := range tokens {
-		if term := strings.ToLower(string(tok.Term)); term != "" {
+		if term := foldProseTerm(strings.ToLower(string(tok.Term))); term != "" {
 			out = append(out, term)
 		}
 	}

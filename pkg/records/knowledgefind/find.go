@@ -113,6 +113,12 @@ type TextIndexFreshness struct {
 	ScannedFiles int
 	IndexedFiles int
 	PendingFiles int
+	// ScannedNotes / IndexedNotes are ScannedFiles / IndexedFiles restricted
+	// to markdown notes — the files whose text the index actually holds. A
+	// caller that says "notes" to a reader must use these, not the file
+	// counts (UAT 2026-09-13, D-129).
+	ScannedNotes int
+	IndexedNotes int
 	// NewFiles / ChangedFiles / RemovedFiles break PendingFiles down, and the
 	// split is what lets the A2(d) coverage warning fire ONLY on genuine
 	// under-reporting (Finding 2):

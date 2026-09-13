@@ -69,7 +69,7 @@ const vocabularyPrefixMin = 3
 // Returns an empty slice when nothing is near. An empty list is a truthful
 // answer — the corpus holds no similar term — and it must not be padded.
 func (ix *Index) NearMissVocabulary(query string) (result []string, err error) {
-	terms := foldTokens(query)
+	terms := foldProseTerms(foldTokens(query))
 	if len(terms) == 0 {
 		return nil, nil
 	}

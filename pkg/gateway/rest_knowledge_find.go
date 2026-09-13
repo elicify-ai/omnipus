@@ -374,8 +374,15 @@ func buildVaultSearchResult(ctx context.Context, env vaultprops.FindEnv, collect
 			}
 		} else if fresh.ScannedFiles > 0 {
 			if hasHits := vaultSearchHasAnyHit(out); hasHits || !out.Complete {
-				searched := fresh.IndexedFiles
-				total := fresh.ScannedFiles
+				// D-129 (UAT 2026-09-13): the pair is NOTES, not files. The
+				// walk's trust threshold stays on ScannedFiles (a vault of
+				// attachments only is still a walked vault), but the numbers a
+				// reader is told to trust count the markdown notes whose text
+				// the index holds — attachments are indexed by name only
+				// (FR-039a) and were never "searched" in the sense the
+				// sentence makes.
+				searched := fresh.IndexedNotes
+				total := fresh.ScannedNotes
 				out.NotesSearched = &searched
 				out.NotesTotalKnown = &total
 			}

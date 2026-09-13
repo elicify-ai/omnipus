@@ -396,7 +396,7 @@ func w0MappingCases() []struct {
 			name: "an indexed field became unindexed",
 			mutate: func(m *bleveMapping.IndexMappingImpl) {
 				fm := bleve.NewTextFieldMapping()
-				fm.Analyzer = "en"
+				fm.Analyzer = proseAnalyzerName
 				fm.Index, fm.Store, fm.IncludeTermVectors, fm.IncludeInAll, fm.DocValues = false, false, false, false, false
 				m.DefaultMapping.Properties[fieldBody] = bleveMapping.NewDocumentMapping()
 				m.DefaultMapping.AddFieldMappingsAt(fieldBody, fm)
