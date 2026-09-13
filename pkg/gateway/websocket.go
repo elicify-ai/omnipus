@@ -5146,6 +5146,27 @@ type wsStreamer struct {
 	continuationContent string
 	hasContinuation     bool
 
+	// truncationReason carries ADR-087 D2's narrow reason enum
+	// ("max_output_tokens" — the only value pkg/agent writes) for this
+	// streamer's transcript entry, set by the agent loop via SetTruncation
+	// (finalizeStreamer's streamerTruncationSetter probe, pkg/agent/turn.go)
+	// immediately BEFORE Finalize is called. Finalize stamps Truncated/
+	// TruncationReason onto the SAME write that persists the assistant
+	// entry — including a ZERO-CONTENT entry when the turn produced no text
+	// at all (D4a) — instead of relying on a post-hoc
+	// MarkLastEntryTruncated backward-walk after the fact. That post-hoc
+	// walk was the bug this field replaces: on the streamed path it ran
+	// AFTER Finalize's own write, so for a zero-content D4a turn Finalize's
+	// old `if content != ""` gate skipped writing any entry at all — the
+	// backward-walk then found nothing (silent no-op) or, when an EARLIER
+	// same-turn narration entry existed (this round's own TurnID, written by
+	// appendIntermediateAssistantTranscript during an earlier tool-calling
+	// round), it walked back and mis-stamped THAT completed narration as
+	// truncated instead. Guarded by statsMu, like continuationContent:
+	// SetTruncation (agent loop) and Finalize (turn end) may run on
+	// different goroutines.
+	truncationReason string
+
 	// Turn-level stats set by the agent loop via SetTurnStats before Finalize.
 	// Populates the "done" frame so the chat UI shows real token counts and
 	// cost instead of zeros (issue #12). Mutex-protected because SetTurnStats
@@ -5438,6 +5459,24 @@ func (s *wsStreamer) SetTurnFailed(failed bool) {
 	s.statsTurnFailed = failed
 }
 
+// SetTruncation stamps ADR-087 D2's truncation reason onto this streamer so
+// Finalize can persist Truncated/TruncationReason on the transcript entry it
+// writes — the D4a zero-content case and the D4b "annotate the accumulated
+// answer" case both route through here. Implements the
+// streamerTruncationSetter interface from pkg/agent, called by
+// finalizeStreamer's probe (pkg/agent/turn.go) immediately BEFORE Finalize,
+// mirroring SetContinuationContent's calling convention exactly. A no-op on
+// an empty reason so a caller with nothing to stamp cannot blank out an
+// already-set value.
+func (s *wsStreamer) SetTruncation(reason string) {
+	if reason == "" {
+		return
+	}
+	s.statsMu.Lock()
+	s.truncationReason = reason
+	s.statsMu.Unlock()
+}
+
 // SetContinuationContent stamps the FULL accumulated answer across an
 // ADR-087 D6 auto-continuation (turnState.continuationAccum) onto this
 // streamer, so Finalize persists the complete prefix+suffix text instead of
@@ -5647,6 +5686,12 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	turnFailed := s.statsTurnFailed
 	continuationContent := s.continuationContent
 	hasContinuation := s.hasContinuation
+	// ADR-087 D2/D4a/D4b, WP C: read under statsMu, same pattern as
+	// continuationContent — SetTruncation (called by the agent loop's
+	// finalizeStreamer immediately before Finalize) and Finalize (turn end)
+	// may run on different goroutines in principle even though in practice
+	// they are sequenced back-to-back by finalizeStreamer itself.
+	truncationReason := s.truncationReason
 	// FIX 5a/5c: read under statsMu — SetProducerAgentID/SetTurnID (called by
 	// the agent loop at streaming-call start) may run on a different
 	// goroutine than Finalize (called at turn end).
@@ -5763,6 +5808,20 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 				tf := turnFailed
 				connStats.TurnFailed = &tf
 			}
+			// ADR-087 D2 (finding #10): mirror the truncation annotation onto
+			// the LIVE done frame too, not just the persisted transcript
+			// entry (above) and replay's ReplayMessageFrame (replay.go) — a
+			// turn cut off while the user is still watching should render
+			// the "(cut off at the output limit)" notice immediately,
+			// without waiting for a reload/reattach round-trip through
+			// replay. Populated from the SAME truncationReason this Finalize
+			// call stamped on the transcript entry.
+			if truncationReason != "" {
+				truncatedCopy := true
+				connStats.Truncated = &truncatedCopy
+				reasonCopy := truncationReason
+				connStats.TruncationReason = &reasonCopy
+			}
 			// ADR-082 review F10: Swap(0), not Load — droppedTokens is a
 			// per-CONNECTION counter that outlives any single turn, so a bare
 			// Load would keep re-reporting turn 1's drops on every later
@@ -5818,15 +5877,25 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 			// transcript.jsonl and the user sees nothing on reconnect/replay.
 			content = finalContent
 		}
-		if content != "" {
+		// ADR-087 D2/D4a/D4b: a truncated turn must still get an entry even
+		// when content is empty — D4a is the deliberate "cut off before any
+		// text was produced" outcome, not a fallthrough with nothing to
+		// write. Without the `|| truncationReason != ""` arm, a zero-content
+		// truncated turn wrote NO entry at all on the streamed path: replay
+		// showed no assistant message (the "(cut off at the output limit)"
+		// notice never appeared), and finalizeStreamer's old post-hoc
+		// MarkLastEntryTruncated call — removed now that this write does the
+		// stamping directly — either silently no-op'd (no entry to find) or,
+		// worse, walked back and mis-stamped an EARLIER same-turn narration
+		// entry as truncated. See truncationReason's own field doc comment.
+		if content != "" || truncationReason != "" {
 			entry := session.TranscriptEntry{
 				ID:      uuid.New().String(),
 				Role:    "assistant",
 				AgentID: producerAgentID,
 				// TurnID (FIX 5c/1): stamped via SetTurnID so a mid-stream
 				// cancel's turn_canceled entry can be correlated with THIS
-				// entry on replay, and so MarkLastEntryTruncated's
-				// turn-scoped backward-walk can find it.
+				// entry on replay.
 				TurnID:    turnID,
 				Content:   content,
 				Timestamp: time.Now().UTC(),
@@ -5849,6 +5918,17 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 				// session.TranscriptEntry.ParentSpawnCallID's doc comment.
 				// Empty (the common case) for a root turn.
 				ParentSpawnCallID: parentSpawnCallID,
+			}
+			// ADR-087 D2/D4a/D4b, WP C: stamp Truncated/TruncationReason in
+			// THIS SAME WRITE — whether content is empty (D4a) or non-empty
+			// (D4b, an auto-continue-exhausted/ineligible accumulated
+			// answer) — instead of a separate post-hoc
+			// MarkLastEntryTruncated call after Finalize returns. See
+			// truncationReason's own field doc comment for why the post-hoc
+			// call was the bug.
+			if truncationReason != "" {
+				entry.Truncated = true
+				entry.TruncationReason = truncationReason
 			}
 			// ADR-057 FR-001/FR-002 (W3): AppendTranscriptStrict refuses loudly
 			// (and creates nothing on disk) when s.sessionID does not resolve to

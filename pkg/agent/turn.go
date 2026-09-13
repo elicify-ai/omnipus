@@ -1600,6 +1600,27 @@ type streamerContinuationSetter interface {
 	SetContinuationContent(full string)
 }
 
+// streamerTruncationSetter is an optional interface a Streamer may implement
+// to receive ADR-087 D2's truncation reason before Finalize is called,
+// mirroring streamerContinuationSetter's calling convention exactly.
+//
+// This is the WP C fix for the streamed (webchat) path's D4a/D4b gap: a
+// streamer's own Finalize call is the choke point that actually persists the
+// assistant transcript entry, so it must stamp Truncated/TruncationReason
+// itself, on the SAME write, rather than have finalizeStreamer call
+// MarkLastEntryTruncated AFTER Finalize returns. That post-hoc call was
+// confirmed live-broken two ways: for a D4a zero-content turn, Finalize's own
+// `content != ""` gate wrote no entry at all, so the backward-walk found
+// nothing to flag (silent no-op — replay showed no assistant entry, and the
+// "(cut off at the output limit)" notice never appeared on reconnect); and
+// when an EARLIER same-turn assistant entry existed (this turn's own TurnID,
+// written by an earlier tool-calling round via
+// appendIntermediateAssistantTranscript), the backward-walk matched and
+// mis-stamped THAT completed narration as truncated instead.
+type streamerTruncationSetter interface {
+	SetTruncation(reason string)
+}
+
 // markTurnFailed records that this turn did NOT end in a real, successful model
 // response. It is called from four sites in loop.go: (1) empty-response-after-
 // retry, (2) tool-iteration limit, (3) generic empty-content exhaustion when the
@@ -1728,6 +1749,27 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) {
 		if cs, ok := s.(streamerContinuationSetter); ok && ts.hadContinuation() {
 			cs.SetContinuationContent(ts.continuationAccumulated())
 		}
+		// ADR-087 D2/D4a/D4b, WP C: stamp the truncation reason on the
+		// streamer BEFORE Finalize, mirroring the continuation-content probe
+		// immediately above, so Finalize can persist Truncated/
+		// TruncationReason on the SAME write that creates (or annotates) the
+		// assistant transcript entry — including the D4a zero-content case,
+		// which Finalize's own content-gate previously skipped writing an
+		// entry for at all. This REPLACES the old post-hoc
+		// MarkLastEntryTruncated call that used to run AFTER Finalize
+		// returned: on the streamed path that call either found no entry to
+		// flag (D4a: Finalize wrote nothing) or, worse, walked back and
+		// mis-stamped an EARLIER same-turn narration entry sharing this
+		// turn's TurnID (written by an earlier tool-calling round via
+		// appendIntermediateAssistantTranscript) as truncated. The
+		// non-streaming path (loop.go's own write choke point, gated on
+		// !hasActiveStreamer) still calls MarkLastEntryTruncated directly —
+		// this streamer probe only covers the streamed case.
+		if truncReason != "" {
+			if tset, ok := s.(streamerTruncationSetter); ok {
+				tset.SetTruncation(truncReason)
+			}
+		}
 		// Pass finalContent so the streamer can persist the assistant message
 		// even when its own accumulated-from-token buffer is empty — happens
 		// when the WS client disconnects mid-stream and every Update() call
@@ -1735,19 +1777,6 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) {
 		// without any tokens to record.
 		if err := s.Finalize(ctx, finalContent); err != nil {
 			logger.WarnCF("agent", "Turn-end streaming finalize error", map[string]any{"error": err.Error()})
-		}
-		// ADR-087 D4a/D4b/D6.8: the streaming write choke point is exactly
-		// here — Finalize (above) is what actually persists the assistant
-		// transcript entry for a streamed turn, so MarkLastEntryTruncated
-		// must run AFTER it, not before (an earlier call would find no
-		// entry yet and silently no-op). truncReason is set by
-		// evaluateTruncatedSuccess/preserveTruncatedAccumulator (loop.go)
-		// only when this turn's final content needs the annotation.
-		if truncReason != "" && ts.transcriptStore != nil && ts.transcriptSessionID != "" {
-			if markErr := ts.transcriptStore.MarkLastEntryTruncated(ts.transcriptSessionID, ts.turnID, truncReason); markErr != nil {
-				logger.WarnCF("agent", "failed to mark truncated transcript entry after streaming finalize",
-					map[string]any{"session_id": ts.transcriptSessionID, "turn_id": ts.turnID, "error": markErr.Error()})
-			}
 		}
 	}
 }
@@ -2084,11 +2113,15 @@ func (ts *turnState) appendAssistantTranscript(content string, producedModel ...
 // appendAssistantTranscriptAllowEmpty is appendAssistantTranscript's ADR-087
 // D4a variant: a turn truncated at the output-token limit with literally no
 // content produced still needs a persisted assistant entry — otherwise
-// MarkLastEntryTruncated (the write choke point in finalizeStreamer / the
-// non-streaming tail in loop.go) has no entry to find and the annotation is
-// silently lost. Every other no-content call site keeps going through
-// appendAssistantTranscript's ordinary empty-content no-op; this bypass is
-// scoped to that one caller.
+// MarkLastEntryTruncated (the non-streaming tail's write choke point in
+// loop.go) has no entry to find and the annotation is silently lost. Only
+// called from the non-streaming path (loop.go, gated on !hasActiveStreamer);
+// the streamed path's equivalent zero-content write is wsStreamer.Finalize
+// itself (WP C, pkg/gateway/websocket.go), stamped via the
+// streamerTruncationSetter probe in finalizeStreamer below rather than a
+// post-hoc MarkLastEntryTruncated call. Every other no-content call site
+// keeps going through appendAssistantTranscript's ordinary empty-content
+// no-op; this bypass is scoped to the non-streaming truncation caller.
 func (ts *turnState) appendAssistantTranscriptAllowEmpty(producedModel ...string) {
 	ts.appendAssistantTranscriptImpl("", true, producedModel...)
 }
