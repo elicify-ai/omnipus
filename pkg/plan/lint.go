@@ -51,6 +51,27 @@ const (
 	// being an authored join member (IsJoin + own criteria) (FR-156/FR-159,
 	// G-16 AS-2).
 	LintJoinless LintViolationKind = "join_less_convergence"
+	// LintEmptyPlan: the plan has no member tasks at all.
+	//
+	// This is an ARITY PRECONDITION rather than a pairwise invariant, and it
+	// lives here — inside Lint — rather than at either approve call site
+	// because Lint is the ONE choke point both of them already share (the
+	// create_plan tool's execute_plan, pkg/tools/plan.go, and the human/UI
+	// REST path, handlePlanApprove in pkg/gateway/rest_plans.go). A gate
+	// implemented at one call site and not the other is not a gate.
+	//
+	// Why it must reject rather than vacuously pass (UAT defect A): every
+	// other check in this file is a predicate over PAIRS of members, so on an
+	// empty member list all of them are trivially satisfied and the plan
+	// sailed through approve into `running`. A PlanSupervisor then populated
+	// the empty plan with auto-generated members via a correction — and
+	// corrections had no lint of their own — so the overlap and join-point
+	// invariants were never applied to those members at all. Approving empty
+	// was therefore a complete, one-step bypass of plan-lint, not merely a
+	// cosmetic gap. A plan with no members also cannot satisfy its own
+	// Definition of Done by construction, so there is no legitimate case in
+	// which approving one is the right outcome.
+	LintEmptyPlan LintViolationKind = "empty_plan"
 )
 
 // LintViolation is a single plan-lint finding. Field tags follow the same
@@ -121,8 +142,30 @@ func (e *LintError) Unwrap() error { return ErrValidation }
 // merge-time conflict (CorrectionKindMergeConflict, see NewMergeConflictEvent)
 // will emit once that consumer exists.
 func Lint(p *Plan, members []task.Task) *LintError {
-	if p == nil || len(members) == 0 {
+	// A nil plan stays a no-op: p is used only to label messages/events, so
+	// there is no plan identity to reject against and nothing meaningful to
+	// say. This is pure nil-safety for a programming error, NOT a statement
+	// that the member set is acceptable.
+	if p == nil {
 		return nil
+	}
+
+	// Arity precondition, checked before the pairwise invariants because it
+	// is the one condition under which all of them are vacuously true. See
+	// LintEmptyPlan's doc comment for why passing here was a total bypass of
+	// this entire file.
+	if len(members) == 0 {
+		v := LintViolation{
+			Kind: LintEmptyPlan,
+			Reason: fmt.Sprintf(
+				"plan %q has no member tasks; a plan must have at least one member task before it can be "+
+					"approved or corrected — an empty plan cannot satisfy its Definition of Done, and "+
+					"approving one would let members added later (e.g. by a supervision correction) skip "+
+					"the write-set and join-point checks entirely",
+				p.ID),
+		}
+		logCorrectionEvent(v.toCorrectionEvent(p.ID))
+		return &LintError{PlanID: p.ID, Violations: []LintViolation{v}}
 	}
 
 	idx := membersByID(members)
@@ -139,6 +182,101 @@ func Lint(p *Plan, members []task.Task) *LintError {
 		logCorrectionEvent(v.toCorrectionEvent(p.ID))
 	}
 	return &LintError{PlanID: p.ID, Violations: violations}
+}
+
+// LintCorrection applies Lint to the member set a correction WOULD produce if
+// committed — the plan's current members, plus req's tail members, with req's
+// tail edges applied as BlockedBy dependencies.
+//
+// WHY THIS EXISTS (UAT defect A, second half). Lint had exactly two call
+// sites, both at APPROVE. A PlanSupervisor correction (plan_correct) adds
+// brand-new member tasks and brand-new dependency edges to an ALREADY-RUNNING
+// plan, and nothing linted them — ever. So the write-set-overlap and
+// join-point invariants applied only to the members a plan was born with, and
+// any member added afterwards was exempt by construction. Observed live: a
+// supervisor-added member converging FOUR predecessors (two of them mutually
+// parallel) with is_join=false — a textbook join_less_convergence violation —
+// was committed without complaint, because no lint ran on that path.
+//
+// Two deliberate adjustments to the projected set, neither of which weakens
+// the checks for live work:
+//
+//  1. The SUPERSEDED member (supersede verb) is dropped entirely. Its outcome
+//     is by definition discounted and replaced by the tail members, and the
+//     engine already hides it from the Judge for the same reason
+//     (supersededMemberSet). Keeping it would make the canonical supersede
+//     pattern — replace member X with X' writing the same file — self-
+//     rejecting.
+//
+//  2. A member already in status `done` has its WriteSet cleared. The overlap
+//     check asks "can these two run CONCURRENTLY and clobber each other?", and
+//     a done member will not run again; without this, appending any member
+//     that touches a file an earlier, finished member wrote would be rejected
+//     as a parallel conflict that cannot actually occur. Clearing WriteSet
+//     (rather than removing the member) routes it through lintOverlaps' own
+//     pre-existing exploratory-member exemption while leaving the member —
+//     and therefore the DAG topology — fully intact for the join/ancestor
+//     analysis. That distinction is what still catches the live defect above,
+//     whose four predecessors were all done at correction time.
+//
+// `failed` members are deliberately NOT given the done treatment: the engine
+// auto-resets live-round failed members back to `next` right after a
+// correction commits (autoResetLiveRoundFailedMembers), so they DO run again
+// and their write-sets can still race.
+func LintCorrection(p *Plan, members []task.Task, req CorrectionRequest) *LintError {
+	return Lint(p, projectCorrectedMembers(members, req))
+}
+
+// projectCorrectedMembers builds LintCorrection's projected member set. It is
+// a pure function: neither members nor req is mutated, and every BlockedBy
+// slice it edits is cloned first (the inputs are the caller's live store
+// snapshot and request payload).
+func projectCorrectedMembers(members []task.Task, req CorrectionRequest) []task.Task {
+	projected := make([]task.Task, 0, len(members)+len(req.TailMembers))
+	for i := range members {
+		m := members[i]
+		if req.SupersededMemberID != "" && m.ID == req.SupersededMemberID {
+			continue // adjustment 1 — see LintCorrection's doc comment.
+		}
+		if m.Status == task.StatusDone {
+			m.WriteSet = nil // adjustment 2 — see LintCorrection's doc comment.
+		}
+		m.BlockedBy = append([]string(nil), m.BlockedBy...)
+		projected = append(projected, m)
+	}
+	for i := range req.TailMembers {
+		m := req.TailMembers[i]
+		m.BlockedBy = append([]string(nil), m.BlockedBy...)
+		projected = append(projected, m)
+	}
+
+	idx := make(map[string]int, len(projected))
+	for i := range projected {
+		idx[projected[i].ID] = i
+	}
+	// An IntentEdge {From, To} commits as AddDependency(To, From) — i.e. To
+	// becomes blocked by From (buildCorrectionApplyFunc). Mirror that exactly,
+	// so the lint sees the DAG the commit will actually build.
+	for _, e := range req.TailEdges {
+		i, ok := idx[e.ToTaskID]
+		if !ok {
+			continue // unknown/ dropped endpoint — validateCorrectionTailEdges rejects these first.
+		}
+		if _, known := idx[e.FromTaskID]; !known {
+			continue
+		}
+		already := false
+		for _, b := range projected[i].BlockedBy {
+			if b == e.FromTaskID {
+				already = true
+				break
+			}
+		}
+		if !already {
+			projected[i].BlockedBy = append(projected[i].BlockedBy, e.FromTaskID)
+		}
+	}
+	return projected
 }
 
 // lintOverlaps implements FR-156/G-16 AS-1: reject every PARALLEL pair of
@@ -399,6 +537,13 @@ const (
 	// (pkg/agent, pkg/gitevidence — out of this package's scope) emission
 	// point: see NewMergeConflictEvent.
 	CorrectionKindMergeConflict CorrectionEventKind = "merge_conflict"
+	// CorrectionKindEmptyPlan is raised by Lint when a plan carries no member
+	// tasks at all (static — detected at approve, and at every correction
+	// that adds work). Its own kind rather than a third meaning of
+	// write_set_overlap: toCorrectionEvent's pre-existing default branch
+	// would otherwise have labelled an empty plan a write-set overlap, which
+	// is both untrue and unactionable.
+	CorrectionKindEmptyPlan CorrectionEventKind = "empty_plan"
 )
 
 // CorrectionEvent is the typed signal a write-set problem raises so it is
@@ -466,9 +611,17 @@ func NewMergeConflictEvent(planID string, memberIDs, paths []string, reason stri
 // toCorrectionEvent converts a Lint-detected violation to its
 // CorrectionEvent form.
 func (v LintViolation) toCorrectionEvent(planID string) CorrectionEvent {
+	// An explicit switch, not an if-ladder over a default: a violation kind
+	// added later must not silently inherit "write_set_overlap" the way
+	// LintEmptyPlan would have.
 	kind := CorrectionKindWriteSetOverlap
-	if v.Kind == LintJoinless {
+	switch v.Kind {
+	case LintJoinless:
 		kind = CorrectionKindJoinlessConvergence
+	case LintEmptyPlan:
+		kind = CorrectionKindEmptyPlan
+	case LintOverlap:
+		kind = CorrectionKindWriteSetOverlap
 	}
 	return CorrectionEvent{
 		Kind:       kind,

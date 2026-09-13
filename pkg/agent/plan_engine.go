@@ -379,6 +379,26 @@ type PlanEngine struct {
 	// pattern as lastUnmetTerminalSignature above.
 	supervisionSuppressStreak map[string]int
 
+	// judgeUnavailableStreak counts CONSECUTIVE plan-level judge rounds
+	// abandoned as UNAVAILABLE for a given plan ID (UAT defect B). It is the
+	// counter that makes plan.MaxConsecutiveJudgeUnavailable enforceable: see
+	// that constant's doc comment for why an unbounded retry here produced a
+	// plan that oscillated dispatching -> judging -> dispatching forever at
+	// progress=1.0 while rendering as an ordinary "Running" chip.
+	//
+	// Reset to zero the moment a round produces a REAL verdict (met or
+	// unmet), and whenever the plan (re)enters running — so it always
+	// measures the current unbroken run of unavailability, never a stale
+	// count from an earlier, already-recovered episode.
+	//
+	// In-memory only, deliberately, matching supervisionSuppressStreak and
+	// unmetVerdictAt above. A process restart clearing it is correct rather
+	// than merely tolerable: a restart is a genuinely fresh attempt against a
+	// possibly-recovered provider, and the durable evidence that something
+	// went wrong is the PhaseStalled park and its handover text, which DO
+	// survive. Same lazy-init + mu pattern as the maps above.
+	judgeUnavailableStreak map[string]int
+
 	// planDecisionMu serializes every plan-mutating decision (dispatch,
 	// judge-round start, idle-expiry) process-wide. It is coarse (one lock
 	// for all plans, not per-plan) — a deliberate simplicity trade-off: the
@@ -670,6 +690,42 @@ func (pe *PlanEngine) clearSupervisionSuppressStreak(planID string) {
 	pe.mu.Lock()
 	defer pe.mu.Unlock()
 	delete(pe.supervisionSuppressStreak, planID)
+}
+
+// bumpJudgeUnavailableStreak increments and returns the CONSECUTIVE count of
+// judge rounds abandoned as unavailable for planID (see
+// judgeUnavailableStreak's doc comment). Lazily initializes the backing map,
+// same pattern as bumpSupervisionSuppressStreak above, so a bare
+// struct-literal test engine never nil-map-panics on write.
+func (pe *PlanEngine) bumpJudgeUnavailableStreak(planID string) int {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	if pe.judgeUnavailableStreak == nil {
+		pe.judgeUnavailableStreak = make(map[string]int)
+	}
+	pe.judgeUnavailableStreak[planID]++
+	return pe.judgeUnavailableStreak[planID]
+}
+
+// judgeUnavailableParked reports whether planID's CURRENT stall was raised by
+// the judge-unavailability backstop (its streak has reached the bound) rather
+// than by an ordinary blocked/inbox stall. It is what lets processPlan hold
+// back a judge round for the former without wedging the latter — see the
+// load-bearing note at its call site.
+func (pe *PlanEngine) judgeUnavailableParked(planID string) bool {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	return pe.judgeUnavailableStreak[planID] >= plan.MaxConsecutiveJudgeUnavailable
+}
+
+// clearJudgeUnavailableStreak drops planID's unavailability streak. Called
+// whenever a judge round produces a REAL verdict (met or unmet) and whenever
+// the plan (re)enters running, so the counter only ever measures the CURRENT
+// unbroken run of unavailability.
+func (pe *PlanEngine) clearJudgeUnavailableStreak(planID string) {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	delete(pe.judgeUnavailableStreak, planID)
 }
 
 // postUnmetMemberIDs returns the set of members whose artifacts were completed
@@ -1022,6 +1078,11 @@ func (pe *PlanEngine) tryStartApprovedPlan(ctx context.Context, planID string) {
 	// resume after a C1 park gets a genuinely fresh round even if the member
 	// outcomes end up identical again.
 	pe.clearUnmetTerminalSignature(planID)
+	// Same reasoning for the judge-unavailability streak (UAT defect B): a
+	// fresh admission or a restart/Play resume must not inherit a streak
+	// accumulated during a prior life of this plan ID, or it would park at
+	// stalled on its very first abandoned round.
+	pe.clearJudgeUnavailableStreak(planID)
 	clearSig := ""
 	if _, cerr := pe.planStore.Update(planID, plan.Patch{LastUnmetTerminalSignature: &clearSig}); cerr != nil {
 		logger.WarnCF("plan_engine", "could not clear durable unmet signature on start",
@@ -1172,6 +1233,39 @@ func (pe *PlanEngine) processPlan(ctx context.Context, planID string) {
 	}
 
 	if allMembersTerminal(tasks) {
+		// UAT defect B: a plan parked by the judge-unavailability backstop is
+		// waiting for an ADJUDICATOR, not for another judge round. Starting
+		// one here is the busy-loop the park exists to end —
+		// surfaceJudgeUnavailableStall parks precisely because repeated rounds
+		// produced no verdict, and falling through would immediately start
+		// round N+1 and undo the park on the very next tick.
+		//
+		// ⚠ THE STREAK CONDITION IS LOAD-BEARING — do not simplify this to
+		// `phase == PhaseStalled` alone. PhaseStalled is ALSO set by
+		// surfaceStallIfAny for an ordinary blocked/inbox stall, and although
+		// THAT stall can only be RAISED while the DAG is non-terminal, the
+		// phase persists after the condition clears: surfaceStallIfAny is the
+		// only code that clears it and it is only reached on the
+		// non-all-terminal path. So a plan that stalled on a blocked member
+		// and then had that member resolve arrives here all-terminal and
+		// still phased `stalled`, and it legitimately needs its judge round.
+		// Gating on the phase alone wedges exactly that plan forever — caught
+		// by TestSupervisionWake_NewConditionWakesAgainAfterFirstTurnCompletes,
+		// which is a regression anchor for this line.
+		//
+		// The unmet-verdict park (awaiting_supervision) is deliberately not
+		// covered here either: it has its own, already-working brake in
+		// beginPlanJudgeRound's F2 round-burn signature gate.
+		//
+		// Routed into the supervision deadline ladder rather than simply
+		// returning: that ladder is bounded and terminal (FR-021/FR-022 —
+		// re-wake, then failed(supervision_unavailable) once the attempt
+		// ceiling is spent), which is what turns an unbounded silent phase
+		// into a bounded, visible one.
+		if p.EffectivePlanPhase() == plan.PhaseStalled && pe.judgeUnavailableParked(planID) {
+			pe.evaluateSupervisionDeadlineLocked(p)
+			return
+		}
 		pe.beginPlanJudgeRound(p, tasks)
 		return
 	}
@@ -1581,6 +1675,108 @@ func (pe *PlanEngine) surfaceStallIfAny(p *plan.Plan, tasks []task.Task) {
 	pe.wakeSupervisor(p, buildStallWakeText(p, reason, tasks), "plan_stalled", newPark)
 }
 
+// surfaceJudgeUnavailableStall is the terminal-ward exit from the judge
+// unavailability retry loop (UAT defect B). It is called once
+// plan.MaxConsecutiveJudgeUnavailable consecutive rounds have been abandoned
+// without ever producing a verdict, INSTEAD of reverting to `dispatching` for
+// yet another attempt. Caller must hold planDecisionMu (applyJudgeRoundOutcome
+// holds it across this call) and must have bumped the streak already.
+//
+// It parks the plan at PhaseStalled and wakes PlanSupervisor, rather than
+// failing it outright, for three reasons:
+//
+//  1. It makes the condition VISIBLE. plan_phase=stalled is already on the
+//     wire (contracts/components/schemas/Plan.yaml's plan_phase enum) and
+//     already renders as its own chip, so the plan stops claiming "Running /
+//     Judging" and starts saying it is stuck — with HandoverText naming the
+//     real reason. The defect was never only that the plan did not finish; it
+//     was that nothing distinguished a wedged plan from a working one.
+//
+//  2. It makes the condition ACTIONABLE. PhaseStalled is a
+//     supervision-eligible phase, so plan_correct is ACCEPTED. In the live
+//     incident the oscillation kept flipping the plan into `judging`, and
+//     corrections were rejected outright ("plan is in phase \"judging\";
+//     corrections are accepted only while a plan is awaiting supervision or
+//     stalled") — so the one mechanism that could have rescued the plan was
+//     locked out by the bug itself.
+//
+//  3. It still TERMINATES. Parking is not a third silent state: a parked plan
+//     climbs the bounded supervision attempt ladder, and if no valid
+//     correction ever arrives that ladder ends the plan at
+//     failed(supervision_unavailable) (FR-022). An unbounded loop becomes a
+//     bounded one whose every step is visible.
+//
+// The streak is deliberately NOT reset here. A correction returns the plan to
+// `dispatching` and it will be judged again; if the judge is still down, the
+// very next abandoned round re-parks immediately rather than handing out a
+// fresh budget of silent retries. Only a REAL verdict — proof the judge is
+// reachable — clears it.
+//
+// The note carries stallHandoverNotePrefix so surfaceStallIfAny recognises it
+// as our own stall note and clears it once the plan is genuinely unstuck,
+// exactly as it does for the blocked/inbox stall it already owns.
+func (pe *PlanEngine) surfaceJudgeUnavailableStall(p *plan.Plan, streak int, judgeReason string) {
+	reason := fmt.Sprintf(
+		"The plan judge could not be reached on %d consecutive attempts, so this plan's Definition of "+
+			"Done cannot be adjudicated right now. Every member has finished, but without a judge "+
+			"verdict the plan cannot be declared done or unmet. Last judge failure: %s. No judge round "+
+			"was consumed by these attempts. A correction, or Stop, is needed — retrying on its own has "+
+			"already been tried %d times.",
+		streak, judgeUnavailableReasonText(judgeReason), streak)
+	note := stallHandoverNotePrefix + reason
+
+	stalled := plan.PhaseStalled
+	// Captured BEFORE the phase write, same rule as surfaceStallIfAny: a plan
+	// arriving here from `judging` opens a new park; one already parked keeps
+	// climbing its existing attempt ladder rather than re-arming attempt 1.
+	newPark := !plan.IsSupervisionEligiblePhase(p.EffectivePlanPhase())
+	if _, err := pe.planStore.Update(p.ID, plan.Patch{HandoverText: &note, PlanPhase: &stalled}); err != nil {
+		// Loud, and NOT swallowed into a silent retry: if the park cannot be
+		// persisted the plan stays at `judging` with no goroutine watching
+		// it, which is the wedged state this whole function exists to end.
+		logger.ErrorCF("plan_engine",
+			"could not park plan at stalled after repeated judge unavailability; plan may remain wedged at judging",
+			map[string]any{"plan_id": p.ID, "streak": streak, "error": err.Error()})
+		return
+	}
+	p.HandoverText = note
+	p.PlanPhase = stalled
+
+	logger.ErrorCF("plan_engine",
+		"plan parked at stalled: plan judge unavailable on consecutive rounds (retry bound reached)",
+		map[string]any{
+			"plan_id": p.ID, "streak": streak,
+			"bound": plan.MaxConsecutiveJudgeUnavailable, "reason": judgeReason,
+		})
+
+	pe.wakeSupervisor(p, buildJudgeUnavailableWakeText(p, streak, judgeReason), "plan_stalled", newPark)
+}
+
+// judgeUnavailableReasonText renders the judge's own failure reason for a
+// user-facing note, substituting a plain description when the judge reported
+// none (an empty Reason must not render as an empty sentence).
+func judgeUnavailableReasonText(reason string) string {
+	if strings.TrimSpace(reason) == "" {
+		return "no reason reported"
+	}
+	return reason
+}
+
+// buildJudgeUnavailableWakeText is the adjudicator-facing wake for the
+// judge-unavailability park. It states the fact, the bound that was reached,
+// and the two things PlanSupervisor can actually do about it — deliberately
+// NOT asking for a DoD verdict, which is precisely what could not be obtained.
+func buildJudgeUnavailableWakeText(p *plan.Plan, streak int, judgeReason string) string {
+	return fmt.Sprintf(
+		"Plan %q (%s) is stalled: its members have all finished, but the plan judge could not be "+
+			"reached on %d consecutive rounds (bound: %d), so the Definition of Done could not be "+
+			"adjudicated. Last judge failure: %s. No judge round was consumed. This is an adjudication "+
+			"failure, not a work failure — the members' results are intact. Diagnose and either issue a "+
+			"correction if the work genuinely needs changing, or abandon the plan if its Definition of "+
+			"Done cannot be reached.",
+		p.Title, p.ID, streak, plan.MaxConsecutiveJudgeUnavailable, judgeUnavailableReasonText(judgeReason))
+}
+
 // --- Plan-level judge round (SD-B8) ---------------------------------------
 
 // beginPlanJudgeRound starts (or, per the boot/crash-resume case above,
@@ -1816,6 +2012,15 @@ func (pe *PlanEngine) applyJudgeRoundOutcome(planID string, result JudgeCriteria
 		// "judging" with no goroutine watching it (only reached once ctx's
 		// OWN timeout fires — JudgeCriteria itself retries forever otherwise,
 		// respecting ctx).
+		//
+		// UAT defect B: that retry is now BOUNDED. Burning no round is still
+		// right — a provider timeout is not the user's fault — but "costs
+		// nothing" must not mean "forever". Past the bound the plan parks at
+		// PhaseStalled instead of spinning; see surfaceJudgeUnavailableStall.
+		if streak := pe.bumpJudgeUnavailableStreak(current.ID); streak >= plan.MaxConsecutiveJudgeUnavailable {
+			pe.surfaceJudgeUnavailableStall(current, streak, result.Reason)
+			return
+		}
 		dispatching := plan.PhaseDispatching
 		if _, uerr := pe.planStore.Update(current.ID, plan.Patch{PlanPhase: &dispatching}); uerr != nil {
 			logger.WarnCF("plan_engine", "judge round: could not revert plan_phase after unavailability",
@@ -1825,6 +2030,12 @@ func (pe *PlanEngine) applyJudgeRoundOutcome(planID string, result JudgeCriteria
 			map[string]any{"plan_id": current.ID, "reason": result.Reason})
 		return
 	}
+
+	// A real verdict arrived: whatever it says, the judge is reachable, so
+	// the unavailability streak is over. Cleared BEFORE the met/unmet split
+	// so both outcomes get it — an unmet verdict is a working judge just as
+	// much as a met one.
+	pe.clearJudgeUnavailableStreak(current.ID)
 
 	verdict := result.Verdict
 	// FR-178: JudgeRounds (plan/goal scope) and AttemptCount (per member/task)
@@ -4535,7 +4746,28 @@ func (pe *PlanEngine) validateCorrection(planID string, p *plan.Plan, req Correc
 	if err := pe.validateCorrectionTailMembers(members, req); err != nil {
 		return err
 	}
-	return validateCorrectionTailEdges(members, req)
+	if err := validateCorrectionTailEdges(members, req); err != nil {
+		return err
+	}
+	// UAT defect A (second half): plan-lint the member set this correction
+	// WOULD produce. Until now Lint ran at approve and nowhere else, so every
+	// member a supervision correction added — and every edge it wired — was
+	// exempt from the write-set-overlap and join-point invariants by
+	// construction. Observed live: a supervisor-added member converging four
+	// predecessors (two mutually parallel) with is_join=false committed
+	// cleanly, which is precisely what approve would have refused.
+	//
+	// Placed last in validateCorrection, after the cheap structural checks
+	// and after RequireAcyclic — the projection is only meaningful once the
+	// edges are known well-formed and acyclic, and a caller gets the most
+	// specific diagnosis first. Rejecting here leaves the plan exactly as the
+	// wake found it: validateCorrection runs BEFORE any intent is appended,
+	// so nothing is half-applied and the adjudicator can re-author the
+	// correction against the named violation.
+	if lerr := plan.LintCorrection(p, members, req); lerr != nil {
+		return fmt.Errorf("plan_engine: correction rejected by plan-lint: %w", lerr)
+	}
+	return nil
 }
 
 // validateCorrectionTailMembers checks that every tail member is actually
@@ -5085,6 +5317,10 @@ func (pe *PlanEngine) PlayPlan(ctx context.Context, planID string) (*PlayResult,
 
 	// Clear the durable unmet signature (fresh round on the new generation).
 	pe.clearUnmetTerminalSignature(planID)
+	// A new generation is a genuinely fresh attempt at adjudication too, so
+	// it must not inherit a prior generation's judge-unavailability streak
+	// (UAT defect B).
+	pe.clearJudgeUnavailableStreak(planID)
 	clearSig := ""
 	if _, err := pe.planStore.Update(planID, plan.Patch{LastUnmetTerminalSignature: &clearSig}); err != nil {
 		logger.WarnCF("plan_engine", "PlayPlan: could not clear unmet signature",

@@ -410,6 +410,12 @@ func TestPlanApprove_SoftTierEmptyDoDSucceeds_ThenNotDraftRejected(t *testing.T)
 	require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &p))
 	require.Empty(t, p.Dod)
 
+	// A plan needs >=1 member task to be approvable at all (plan-lint's
+	// LintEmptyPlan arity precondition). This test is about the SOFT-TIER
+	// EMPTY DoD, not about member arity, so give it a valid member and keep
+	// the DoD empty — which is the condition actually under test.
+	mustCreateTask(t, api, wsID, "soft tier member", p.Id)
+
 	wApprove := postPlanAction(t, api, p.Id, "approve")
 	require.Equal(t, http.StatusOK, wApprove.Code, "body=%s", wApprove.Body.String())
 	var approved gen.Plan
@@ -452,7 +458,11 @@ func TestPlanStop_RequiresRunning(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, wStopDraft.Code,
 		"draft stop body=%s", wStopDraft.Body.String())
 
-	// draft -> approved (soft tier, empty DoD, no members).
+	// draft -> approved (soft tier, empty DoD). A plan needs >=1 member task
+	// to be approvable at all (plan-lint's LintEmptyPlan arity precondition);
+	// this test is about the STOP endpoint's state gating, so the member is
+	// scaffolding rather than subject matter.
+	mustCreateTask(t, api, wsID, "stoppable member", p.Id)
 	wApprove := postPlanAction(t, api, p.Id, "approve")
 	require.Equal(t, http.StatusOK, wApprove.Code, "approve body=%s", wApprove.Body.String())
 
@@ -492,6 +502,11 @@ func TestPlanGet_WirePlanPhaseStalled(t *testing.T) {
 	require.Equal(t, http.StatusCreated, wCreate.Code)
 	var p gen.Plan
 	require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &p))
+
+	// >=1 member task is required for approval (plan-lint's LintEmptyPlan
+	// arity precondition). This test is about how plan_phase=stalled renders
+	// on the wire, so the member is scaffolding.
+	mustCreateTask(t, api, wsID, "stalled plan member", p.Id)
 
 	wApprove := postPlanAction(t, api, p.Id, "approve")
 	require.Equal(t, http.StatusOK, wApprove.Code, "body=%s", wApprove.Body.String())
@@ -812,7 +827,10 @@ func TestPlanPut_DoDAndOwnerFrozenOnceNotDraft(t *testing.T) {
 	wDraftOwnerBack := putPlan(t, api, p.Id, `{"owner_agent_id":"`+testPlansAgentID+`"}`)
 	require.Equal(t, http.StatusOK, wDraftOwnerBack.Code, "body=%s", wDraftOwnerBack.Body.String())
 
-	// draft -> approved.
+	// draft -> approved. >=1 member task is required for approval (plan-lint's
+	// LintEmptyPlan arity precondition); this test is about which PUT fields
+	// freeze once a plan leaves draft, so the member is scaffolding.
+	mustCreateTask(t, api, wsID, "frozen fields member", p.Id)
 	wApprove := postPlanAction(t, api, p.Id, "approve")
 	require.Equal(t, http.StatusOK, wApprove.Code, "body=%s", wApprove.Body.String())
 
@@ -963,6 +981,11 @@ func TestPlanStopREST_DispatchesARealOwnerWakeTurn(t *testing.T) {
 		require.Equal(t, http.StatusCreated, wCreate.Code, "body=%s", wCreate.Body.String())
 		var p gen.Plan
 		require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &p))
+
+		// >=1 member task is required for approval (plan-lint's LintEmptyPlan
+		// arity precondition). This test is about draining the owner wake turn
+		// POST /stop dispatches, so the member is scaffolding.
+		mustCreateTask(t, api, wsID, "wake drain member", p.Id)
 
 		require.Equal(t, http.StatusOK, postPlanAction(t, api, p.Id, "approve").Code)
 		// PUT can no longer set state (ADR-052 FR-007/A1) — drive
