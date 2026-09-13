@@ -170,7 +170,13 @@ func symlinkTargetEscapes(linkPath, target string, allowed []string) bool {
 	if _, ok := matchedAllowedRoot(abs, allowed); !ok {
 		return true
 	}
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+	// resolveRealpathUnderWorkDir (not a raw filepath.EvalSymlinks) is this
+	// package's sanctioned resolver — the same one ResolvePath routes
+	// through — per FR-034. It also resolves the nearest EXISTING ancestor
+	// when the target leaf does not exist yet, which strengthens this check:
+	// a link whose target path runs through a symlinked ancestor that leads
+	// out of the roots is caught even before anything creates the leaf.
+	if resolved, err := resolveRealpathUnderWorkDir(abs, ""); err == nil {
 		if _, ok := matchedAllowedRoot(resolved, allowed); !ok {
 			return true
 		}

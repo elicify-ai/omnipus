@@ -145,7 +145,7 @@ func TestExecTool_ReportsSymlinkAssembledAtRuntime(t *testing.T) {
 	require.NoError(t, logger.Close())
 	files, err := filepath.Glob(filepath.Join(auditDir, "*.jsonl"))
 	require.NoError(t, err)
-	var all []byte
+	var all []byte //nolint:prealloc // size depends on the audit logger's rotation, not on anything this test controls
 	for _, f := range files {
 		b, rerr := os.ReadFile(f)
 		require.NoError(t, rerr)

@@ -838,8 +838,13 @@ func (t *ExecTool) sweepAfterRun(ctx context.Context, command, cwd, baseDir stri
 	if result == nil || t.godMode || !t.restrictToWorkspace {
 		return result
 	}
+	// baseDir is resolved through this package's own sanctioned resolver
+	// (the one ResolvePath itself uses) rather than a locally glued
+	// filepath.EvalSymlinks — FR-034 routes every path resolution in
+	// pkg/tools through resolveRealpathUnderWorkDir (see grep.go's
+	// guardCarveOuts comment for the established pattern).
 	roots := []string{baseDir}
-	if resolved, err := filepath.EvalSymlinks(baseDir); err == nil {
+	if resolved, err := resolveRealpathUnderWorkDir(baseDir, ""); err == nil {
 		roots = []string{resolved}
 	}
 	if authored, err := ResolveTurnFSPolicy(ctx, t.workingDir, t.restrictToWorkspace); err == nil {
