@@ -72,6 +72,7 @@ import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderSubagentSpan, shouldRenderToolCall, shouldRenderJudgeVerdictInThread } from '@/lib/toolVisibility'
 import { isGoalRecordEmpty } from '@/lib/goalSetupState'
 import { messageSetsGoal } from '@/lib/goalCommandMessage'
+import { getMessageStatusSuffix, INTERRUPTED_SUFFIX_TEXT, CUT_OFF_SUFFIX_TEXT } from '@/lib/truncation'
 import { GoalCommandMarker } from '@/components/chat/GoalCommandMarker'
 import { GoalSetupFailureLine } from './tools/GoalSetupFailureLine'
 import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
@@ -964,12 +965,26 @@ function AssistantMessageAvatar({ agent }: { agent?: Agent }) {
 // The visible (interrupted) label rendered inside AssistantMessage handles
 // the correct visual positioning within the message bubble for human users.
 // This component is the reliable E2E-detectable fallback.
+//
+// ADR-087 D1 — extended to also render the "(cut off at the output limit)"
+// notice for a truncated (max_output_tokens) assistant message, in a second
+// pass over the same message list, still outside the scroll viewport for the
+// same Playwright-visibility reason. `getMessageStatusSuffix`
+// (src/lib/truncation.ts) is the single source of the precedence rule
+// (interrupted/cancelled always wins over a cutoff) — this component derives
+// which list a message lands in from its return value rather than
+// re-implementing the precedence check, so it can never disagree with the
+// in-bubble renderers below.
 function InterruptedMessageMarkers() {
   const messages = useChatStore((s) => s.messages)
-  const interrupted = messages.filter(
-    (m) => m.role === 'assistant' && m.status === 'interrupted'
-  )
-  if (interrupted.length === 0) return null
+  const interrupted: ChatMessage[] = []
+  const cutOff: ChatMessage[] = []
+  for (const m of messages) {
+    const suffix = getMessageStatusSuffix(m)
+    if (suffix === INTERRUPTED_SUFFIX_TEXT) interrupted.push(m)
+    else if (suffix === CUT_OFF_SUFFIX_TEXT) cutOff.push(m)
+  }
+  if (interrupted.length === 0 && cutOff.length === 0) return null
   return (
     <>
       {interrupted.map((m) => (
@@ -980,6 +995,16 @@ function InterruptedMessageMarkers() {
           className="text-[10px] text-[var(--color-muted)] italic text-center pb-1"
         >
           (interrupted)
+        </div>
+      ))}
+      {cutOff.map((m) => (
+        <div
+          key={m.id}
+          data-testid="truncated-marker"
+          data-message-id={m.id}
+          className="text-[10px] text-[var(--color-muted)] italic text-center pb-1"
+        >
+          (cut off at the output limit)
         </div>
       ))}
     </>
@@ -1211,7 +1236,10 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   const messageAgentId = message.agentId ?? activeAgentId
   const agent = agents.find((a) => a.id === messageAgentId)
   const agentDisplayName = agent?.name ?? (messageAgentId || null)
-  const isInterrupted = message.status === 'interrupted'
+  // ADR-087 D1 — the muted footer suffix: "(interrupted)" (FR-21, unchanged)
+  // or "(cut off at the output limit)" for a max_output_tokens truncation.
+  // getMessageStatusSuffix owns the precedence (interrupted/cancelled wins).
+  const statusSuffix = getMessageStatusSuffix(message)
 
   // Render media attachments.
   const mediaItems = message.media ?? []
@@ -1523,9 +1551,11 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
           </div>
         )}
 
-        {/* Interrupted label */}
-        {isInterrupted && (
-          <span className="text-[10px] text-[var(--color-muted)] italic px-1">(interrupted)</span>
+        {/* Status suffix — "(interrupted)" (FR-21) or ADR-087 D1's
+            "(cut off at the output limit)"; getMessageStatusSuffix decides
+            which (or neither), never both. */}
+        {statusSuffix && (
+          <span className="text-[10px] text-[var(--color-muted)] italic px-1">{statusSuffix}</span>
         )}
 
         {/* ADR-051 — verbose-only "Technical details" disclosure for typed
@@ -1840,8 +1870,9 @@ function AssistantMessage() {
   const agent = agents.find((a) => a.id === messageAgentId)
   // Fallback to the raw agentId string if the agent isn't in the list yet
   const agentDisplayName = agent?.name ?? (messageAgentId || null)
-  // FR-21: show (interrupted) suffix when the store marks this message interrupted.
-  const isInterrupted = storeMsg?.status === 'interrupted'
+  // FR-21 / ADR-087 D1: the muted footer suffix — "(interrupted)" or a
+  // max_output_tokens cutoff notice. getMessageStatusSuffix owns precedence.
+  const statusSuffix = getMessageStatusSuffix(storeMsg ?? {})
 
   // D-fix: the chat store's optimistic assistant placeholder starts as
   // content:'' / status:'streaming' the instant a message is sent (store/chat.ts
@@ -1952,9 +1983,11 @@ function AssistantMessage() {
             <AssistantMessageRetryButton />
           </ActionBarPrimitive.Root>
         )}
-        {/* FR-21: interrupted status label — shown when the turn was cancelled */}
-        {isInterrupted && (
-          <span className="text-[10px] text-[var(--color-muted)] italic px-1">(interrupted)</span>
+        {/* FR-21 / ADR-087 D1: status suffix — shown when the turn was
+            cancelled ("(interrupted)") or cut off at the provider's
+            output-token limit ("(cut off at the output limit)"). */}
+        {statusSuffix && (
+          <span className="text-[10px] text-[var(--color-muted)] italic px-1">{statusSuffix}</span>
         )}
       </div>
     </MessagePrimitive.Root>

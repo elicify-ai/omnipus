@@ -12,6 +12,7 @@ import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { fetchAgents } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { splitMessageParts } from '@/lib/messageParts'
+import { getMessageStatusSuffix } from '@/lib/truncation'
 
 // ADR-051 — cap on the verbose-only "Technical details" disclosure content.
 // Keeps a runaway provider error payload from blowing out the chat scroll.
@@ -165,6 +166,9 @@ export function MessageItem({ message }: MessageItemProps) {
   // splitMessageParts never emits an empty text part, so this is checked
   // independently of `messageParts` rather than by inspecting its output.
   const showThinking = !!message.isStreaming && message.content === ''
+  // FR-21 / ADR-087 D1: "(interrupted)" or a max_output_tokens cutoff
+  // notice — getMessageStatusSuffix owns the precedence.
+  const statusSuffix = getMessageStatusSuffix(message)
 
   return (
     <div
@@ -242,8 +246,8 @@ export function MessageItem({ message }: MessageItemProps) {
           <span className="text-[10px] text-[var(--color-muted)]">
             {formatTimestamp(message.timestamp)}
           </span>
-          {message.status === 'interrupted' && (
-            <span className="text-[10px] text-[var(--color-muted)] italic">(interrupted)</span>
+          {statusSuffix && (
+            <span className="text-[10px] text-[var(--color-muted)] italic">{statusSuffix}</span>
           )}
           {message.status === 'error' && (
             <span className="text-[10px] text-[var(--color-error)]">Error</span>

@@ -2812,3 +2812,128 @@ describe('fetchAuditLog: per-entry resilience', () => {
     await expect(fetchAuditLog()).rejects.toBeInstanceOf(ApiSchemaErrorCtor)
   })
 })
+
+// ── ADR-087 (Truncation is an outcome, not a silence) — WP F, §7.2 ─────────────
+//
+// Cold-load (REST) plumbing: layer 1 (generated zod schema, schemas.ts) must
+// not silently strip `truncated`/`truncation_reason`, and layer 3
+// (rawToMessage, exercised here only through the public `fetchSessionMessages`
+// surface — rawToMessage itself is not exported) must carry them onto the
+// SPA-internal `Message`, applying the ADR-087 D2 legacy-default rule
+// (absent reason on a truncated entry means 'cancelled').
+
+describe('ADR-087 D2 — Message.truncated/truncation_reason survive the generated zod schema (guards the silent-strip layer)', () => {
+  it('a Message payload WITH truncation_reason parses with both fields intact, unchanged', async () => {
+    const { Message: MessageSchema } = await import('./api/generated/schemas')
+    const payload = {
+      id: 'm-trunc-1',
+      role: 'assistant',
+      content: 'Cut off mid-',
+      timestamp: '2026-09-10T10:00:00Z',
+      agent_id: 'mia',
+      truncated: true,
+      truncation_reason: 'max_output_tokens',
+    }
+    const result = MessageSchema.parse(payload)
+    expect(result.truncated).toBe(true)
+    expect(result.truncation_reason).toBe('max_output_tokens')
+  })
+
+  it('a legacy Message payload with truncated:true and no reason parses with truncation_reason absent (schema does not invent a default)', async () => {
+    const { Message: MessageSchema } = await import('./api/generated/schemas')
+    const payload = {
+      id: 'm-trunc-legacy',
+      role: 'assistant',
+      content: 'Cancelled here',
+      timestamp: '2026-09-10T10:00:00Z',
+      agent_id: 'mia',
+      truncated: true,
+    }
+    const result = MessageSchema.parse(payload)
+    expect(result.truncated).toBe(true)
+    expect(result.truncation_reason).toBeUndefined()
+  })
+})
+
+describe('ADR-087 D2 — fetchSessionMessages (cold-load) plumbs truncated/truncationReason onto the SPA Message', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.resetModules()
+  })
+
+  it('carries truncated:true + truncationReason:"max_output_tokens" onto the assistant Message', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      makeOkResponse([
+        {
+          id: 'm-cutoff',
+          role: 'assistant',
+          content: 'The answer starts and then',
+          timestamp: '2026-09-10T10:00:00Z',
+          agent_id: 'mia',
+          truncated: true,
+          truncation_reason: 'max_output_tokens',
+        },
+      ]),
+    )
+
+    const { fetchSessionMessages } = await import('./api')
+    const messages = await fetchSessionMessages('sess-1')
+
+    expect(messages).toHaveLength(1)
+    const msg = messages[0] as { truncated?: boolean; truncationReason?: string }
+    expect(msg.truncated).toBe(true)
+    expect(msg.truncationReason).toBe('max_output_tokens')
+  })
+
+  it('legacy rule: truncated:true with no wire reason cold-loads as truncationReason:"cancelled"', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      makeOkResponse([
+        {
+          id: 'm-legacy-cancel',
+          role: 'assistant',
+          content: 'Cancelled partial',
+          timestamp: '2026-09-10T10:00:00Z',
+          agent_id: 'mia',
+          truncated: true,
+        },
+      ]),
+    )
+
+    const { fetchSessionMessages } = await import('./api')
+    const messages = await fetchSessionMessages('sess-1')
+
+    expect(messages).toHaveLength(1)
+    const msg = messages[0] as { truncated?: boolean; truncationReason?: string }
+    expect(msg.truncated).toBe(true)
+    expect(msg.truncationReason).toBe('cancelled')
+  })
+
+  it('a non-truncated assistant Message carries no truncated/truncationReason fields', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      makeOkResponse([
+        {
+          id: 'm-normal',
+          role: 'assistant',
+          content: 'A complete answer.',
+          timestamp: '2026-09-10T10:00:00Z',
+          agent_id: 'mia',
+        },
+      ]),
+    )
+
+    const { fetchSessionMessages } = await import('./api')
+    const messages = await fetchSessionMessages('sess-1')
+
+    expect(messages).toHaveLength(1)
+    const msg = messages[0] as { truncated?: boolean; truncationReason?: string }
+    expect(msg.truncated).toBeUndefined()
+    expect(msg.truncationReason).toBeUndefined()
+  })
+})

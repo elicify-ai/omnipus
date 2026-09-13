@@ -26,6 +26,7 @@ import { ApiError, isApiError as isApiErrorFn, getErrorMessage } from './api-err
 export { ApiError, isApiError, getErrorMessage } from './api-error'
 import { maybeDevToast } from './dev-toast'
 import { logError } from './telemetry'
+import { normalizeTruncationReason, type TruncationReason } from './truncation'
 
 import type { ZodType } from 'zod'
 import { z } from 'zod'
@@ -1245,6 +1246,27 @@ interface MessageBase { // not-wire-format
   type?: 'judge_verdict'
   /** The verdict payload when `type === 'judge_verdict'` (wire `Message.verdict`, same shape as the live `JudgeVerdictFrame` push minus the `type`/`session_id` discriminator fields). */
   verdict?: JudgeVerdict
+  /**
+   * ADR-087 D2 — set on the last assistant entry of an incomplete turn.
+   * Only populated for assistant messages (only role the backend ever
+   * stamps this on — `MarkLastEntryTruncated` writes the last assistant
+   * transcript entry). Placed on the shared base (rather than only
+   * `AssistantMessage`) matching the existing `model`/`verdict` pattern, so
+   * the discriminated `Message` union stays trivially narrowable without a
+   * role guard at every read site.
+   */
+  truncated?: boolean
+  /**
+   * ADR-087 D2/D1 — narrows why `truncated` is true. Drives the muted
+   * footer suffix (`getMessageStatusSuffix`, src/lib/truncation.ts):
+   * `'cancelled'` renders `(interrupted)`, `'max_output_tokens'` renders
+   * `(cut off at the output limit)`. Already legacy-defaulted to
+   * `'cancelled'` (ADR-087 D2) by the callers that set this field —
+   * `rawToMessage` (cold-load) and the WS replay reducer
+   * (`store/chat.ts`'s `case 'replay_message'`) — via
+   * `normalizeTruncationReason`.
+   */
+  truncationReason?: TruncationReason
 }
 
 export interface UserMessage extends MessageBase { // not-wire-format: SPA-internal user message. Status 'error' means the WS send failed; Retry button re-sends the content.
@@ -1390,6 +1412,20 @@ interface RawMessage { // not-wire-format: adapter alias over the generated Mess
    * placeholder text per spec §18 Q6).
    */
   model?: string
+  /**
+   * ADR-087 D2 — set on the last assistant entry when it is incomplete. See
+   * `truncation_reason` for why. Forwarded to AssistantMessage/ChatMessage
+   * so a cold-loaded transcript renders the same cut-off notice a live or
+   * replayed turn would (rawToMessage below applies the legacy-default rule
+   * via `normalizeTruncationReason`).
+   */
+  truncated?: boolean
+  /**
+   * ADR-087 D2 — narrows why `truncated` is true. Absent on a
+   * `truncated: true` entry means `'cancelled'` (every entry written before
+   * this field existed predates it and was always a cancel).
+   */
+  truncation_reason?: TruncationReason
 }
 
 function rawToToolCall(raw: RawToolCall): ToolCall {
@@ -1468,6 +1504,12 @@ function rawToMessage(raw: RawMessage): Message {
   // here so the renderer's `if (model) ` check covers both cases.
   const rawModel = raw.model?.trim()
   const modelField = rawModel && rawModel.length > 0 ? rawModel : undefined
+  // ADR-087 D2 — cold-load (REST) truncation plumbing, layer 3 of the SPA's
+  // six-layer path (§7.2). `normalizeTruncationReason` applies the legacy
+  // default (absent reason on a truncated entry means 'cancelled') so the
+  // cold-load and WS-replay paths (store/chat.ts's `case 'replay_message'`)
+  // derive the same value from the same rule.
+  const truncationReason = normalizeTruncationReason(raw.truncated, raw.truncation_reason)
   return {
     id: raw.id,
     session_id: undefined,
@@ -1484,6 +1526,7 @@ function rawToMessage(raw: RawMessage): Message {
     status: (baseStatus === 'done' || baseStatus === 'error' || baseStatus === 'interrupted') ? baseStatus : 'done',
     tool_calls: raw.tool_calls?.map(rawToToolCall),
     ...(modelField ? { model: modelField } : {}),
+    ...(raw.truncated ? { truncated: true as const, truncationReason } : {}),
   } satisfies AssistantMessage
 }
 

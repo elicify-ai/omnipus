@@ -32,6 +32,7 @@ import { useToolApprovalStore } from '@/store/toolApproval'
 import { reconcilePendingAsks } from '@/store/pendingAskReconcile'
 import { registerSyncChatForeground } from '@/store/session'
 import { logDiagnostic } from '@/lib/telemetry'
+import { normalizeTruncationReason } from '@/lib/truncation'
 import {
   getLLMErrorDisplay,
   readEntryIdFromFrame,
@@ -147,6 +148,16 @@ interface BufferedFrame {
 // discriminated union) with extra display-only fields so each role variant
 // still carries its role-specific status constraints. Using a type alias (not
 // interface extends) because TypeScript does not allow extending a union type.
+//
+// ADR-087 (Truncation is an outcome, not a silence) — `truncated`/
+// `truncationReason` are inherited here from `Message`'s shared
+// `MessageBase` (src/lib/api.ts), matching the existing `model`/`verdict`
+// pattern rather than being redeclared on this intersection. They are
+// populated by `rawToMessage` (cold-load/REST — layer 3, api.ts) and by the
+// `case 'replay_message'` reducer below (WS replay — layer 6) via the same
+// `normalizeTruncationReason` (src/lib/truncation.ts) legacy-default rule.
+// `getMessageStatusSuffix` (same module) is the single render-layer
+// consumer of both fields — see its D1 precedence doc comment.
 export type ChatMessage = Message & {
   isStreaming?: boolean
   media?: MediaAttachment[]
@@ -5458,6 +5469,15 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // find this exact message. Captured on the ChatMessage so it survives
           // for the lifetime of the bucket entry (until ring-buffer eviction).
           const replayTurnId = replayFrame.turn_id
+          // ADR-087 D2 — WS-replay truncation plumbing, layer 6 of the SPA's
+          // six-layer path (§7.2). Same legacy-default rule as the cold-load
+          // path (rawToMessage, src/lib/api.ts) via the same helper, so both
+          // paths derive the same value from the same wire shape.
+          const replayTruncated = replayFrame.truncated === true
+          const replayTruncationReason = normalizeTruncationReason(
+            replayFrame.truncated,
+            replayFrame.truncation_reason,
+          )
           withBucket(targetSid, (b) => {
             return produce(b, (draft) => {
               // Cursor advancement is handled centrally before the switch (I1);
@@ -5557,6 +5577,13 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   // Fix 5c: stamp the turn-correlation id so a later
                   // turn_canceled replay entry can find this exact message.
                   if (replayTurnId) m.turnId = replayTurnId
+                  // ADR-087 D2 — this frame is the entry that closes the
+                  // bubble (coalesced into the empty placeholder), so it's
+                  // the one MarkLastEntryTruncated would have stamped.
+                  if (replayTruncated) {
+                    m.truncated = true
+                    m.truncationReason = replayTruncationReason
+                  }
                   // Coalesce path: this empty placeholder was created by the
                   // turn's own tool_call_start frames, so any pending live tool
                   // calls belong to THIS assistant. Bake them in before the early
@@ -5671,6 +5698,17 @@ export const useChatStore = create<ChatStore>((set, get) => {
                     // replay equivalent, and avoids the tag flip-flopping
                     // across segments that may report different models.
                     if (!candidate.model && replayModel) candidate.model = replayModel
+                    // ADR-087 D2 — only the LAST transcript entry of an
+                    // incomplete turn carries truncated/truncation_reason
+                    // (MarkLastEntryTruncated stamps the final assistant
+                    // entry only), so this only ever fires on the segment
+                    // that closes the merged bubble — earlier segments in
+                    // the same merge chain arrive with replayTruncated false
+                    // and leave candidate.truncated untouched.
+                    if (replayTruncated) {
+                      candidate.truncated = true
+                      candidate.truncationReason = replayTruncationReason
+                    }
                     // Stamp agentId when previously unknown (mirrors the
                     // 'token' case). compatibleProducer already guarantees
                     // this never overwrites a genuinely different producer.
@@ -5754,6 +5792,17 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 // cancellation entries only) — lets a later turn_canceled
                 // replay entry find this exact message.
                 ...(replayTurnId && role === 'assistant' ? { turnId: replayTurnId } : {}),
+                // ADR-087 D2 — only meaningful on assistant messages (the
+                // backend only ever stamps this on the last assistant
+                // transcript entry of an incomplete turn). D4a: an entry
+                // with truncated:true and EMPTY content (`text === ''`)
+                // still reaches here and still gets stamped — nothing in
+                // this reducer conditions message creation on non-empty
+                // content, so the bubble renders with no body and just the
+                // D1 footer suffix, per spec.
+                ...(replayTruncated && role === 'assistant'
+                  ? { truncated: true as const, truncationReason: replayTruncationReason }
+                  : {}),
               }
               draft.messagesById[newMsg.id] = newMsg
               draft.messageOrder.push(newMsg.id)
