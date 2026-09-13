@@ -1,6 +1,6 @@
 # Browser input candidate — 2026-09-13
 
-The separate input connection is available for manual testing in Amsterdam. Current source `ef76f753607dc1410f353eef211bf055895d5a41` includes the startup/control correction, detection of definite media-receiver failure, and explicit held-input release over the healthy control socket when the input connection fails. All six alternating interaction runs passed on this deployment. An intermittent input-channel setup timeout remains unresolved; a passing rerun does not erase it. A general speed improvement is not established, and WebSocket remains the default.
+The separate input connection is available for manual testing in Amsterdam. Current source `eb3206c035eede6f6e4f90196a6dd7049336f63b` adds escaped diagnostic fields to the previously tested `ef76f7536` runtime, which includes the startup/control correction, detection of definite media-receiver failure, and explicit held-input release over the healthy control socket when the input connection fails. All six alternating interaction runs passed on that earlier deployment; the final follow-up dedicated interaction smoke also passed (54.1 seconds). An intermittent input-channel setup timeout remains unresolved; a passing rerun does not erase it. A general speed improvement is not established, and WebSocket remains the default.
 
 - New mode: https://uat-omnipus.fly.dev/workspaces/01M01TTSDZBFGM28NPHGTFZ17T/chat?browserInput=dedicated
 - Comparison: https://uat-omnipus.fly.dev/workspaces/01M01TTSDZBFGM28NPHGTFZ17T/chat?browserInput=websocket
@@ -8,7 +8,13 @@ The separate input connection is available for manual testing in Amsterdam. Curr
 
 The implementation uses one data-only WebRTC connection with reliable action and lossy latest-position hover channels, alongside the existing media connection with audio/video tracks. A local negotiation attempt does not become the control identity until its offer is sent. Server publication waits for admitted controls to finish; replacement cleanup does not cancel the new offer. Input failure now requests release through the existing control socket, waits for a request-specific acknowledgment, and preserves the failed state and explicit Retry. A generic transport failure is not treated as acknowledgment that held input was released.
 
-## Verification
+## Latest deployment
+
+Installed and running binary SHA256 both match `dd7dd4b048ab469f34acc31bcc906bf0fe3d94a679f628228b834b1979151ecf`. Machine configuration was preserved and health returned 200. Proof: `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-input-candidate/verified-provenance-eb3206c03.json`. Image: `registry.fly.io/uat-omnipus:browser-input-eb3206c03@sha256:fdda6e2c9c1c474f06064d3d32eda5c5ed4f3c56f3e841ec8906d5c4d50ec34d`.
+
+The follow-up dedicated live smoke passed exact text/click/scroll/drag, tab return, resize, held-key release after input loss, explicit Retry and post-recovery click (54.1 seconds). Fixture registration used the configured test agent after restart and exact served bytes were verified. Evidence: `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/validation/browser-input-connection/smoke-eb3206c03/`.
+
+## Verification on ef76f7536
 
 - Independent implementation review finding MAJ-001: corrected and rechecked, with no further concrete defect found in the bounded recheck.
 - Frontend: 170 focused transport/composition tests, TypeScript and production build passed.
@@ -22,7 +28,7 @@ The implementation uses one data-only WebRTC connection with reliable action and
 - Current alternating live comparison: six runs, each terminal exit 0, in WebSocket/dedicated, dedicated/WebSocket, WebSocket/dedicated order. All exact interaction and recovery checkpoints passed, including held-key release before Retry.
 
 Current comparison: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/.local/browser-input-final-validation/paired-runner/results-2026-09-13T11-48-57.940Z/summary.json`.
-Current deployment proof: `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-input-candidate/verified-provenance-ef76f7536.json`.
+Earlier deployment proof: `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-input-candidate/verified-provenance-ef76f7536.json`.
 
 ## Current live evidence and remaining limits
 
