@@ -500,16 +500,37 @@ func (ix *Index) Close() error {
 // ---------------------------------------------------------------------------
 
 // UpsertNote replaces everything the index holds for one path.
+//
+// It takes the index's reconcile lock for the duration of this one write
+// (reconcile.go): a direct single-path write must queue behind any
+// scan-and-reconcile in flight, so it can never commit inside the reconcile's
+// scan-to-deletion window and be deleted as "not on disk" by a scan that ran
+// before the file existed.
 func (ix *Index) UpsertNote(ctx context.Context, rows NoteRows) error {
-	return ix.UpsertNotes(ctx, []NoteRows{rows})
+	mu := reconcileMutexFor(ix.path)
+	mu.Lock()
+	defer mu.Unlock()
+	return ix.upsertNotesDirect(ctx, []NoteRows{rows})
 }
 
-// UpsertNotes writes a batch in ONE transaction.
+// UpsertNotes writes a batch in ONE transaction, under the same per-write
+// reconcile lock as UpsertNote.
 //
 // It exists because a rebuild is the batch case and one transaction per note
 // turns a rebuild into one commit per note. The single-note path routes through
 // here so there is one write path to reason about, not two.
-func (ix *Index) UpsertNotes(ctx context.Context, batch []NoteRows) (err error) {
+func (ix *Index) UpsertNotes(ctx context.Context, batch []NoteRows) error {
+	mu := reconcileMutexFor(ix.path)
+	mu.Lock()
+	defer mu.Unlock()
+	return ix.upsertNotesDirect(ctx, batch)
+}
+
+// upsertNotesDirect is the batch write with NO reconcile lock — the body both
+// public forms share, and the only form a Store.Reconcile scope may reach
+// (reconcileScope.UpsertNote/UpsertNotes), because a reconcile already holds
+// the lock the public forms take.
+func (ix *Index) upsertNotesDirect(ctx context.Context, batch []NoteRows) (err error) {
 	if len(batch) == 0 {
 		return nil
 	}
@@ -553,13 +574,17 @@ func (ix *Index) upsertOne(ctx context.Context, tx *sql.Tx, rows NoteRows) error
 		if err := ix.deleteChildren(ctx, tx, id); err != nil {
 			return err
 		}
-		const q = `UPDATE notes SET kind = ?, record_type = ?, record_id = ?, source_hash = ?, indexed_at = ?, mtime = ?, ctime = ?, size = ?, declared_type = ?, schema_fp = ? WHERE note_id = ?`
+		// parse_error is written on EVERY upsert, not only on insert (Codex review
+		// 2026-09-14, finding 5): a note whose frontmatter is repaired must drop
+		// the old error, and a healthy note that breaks must gain one. Leaving
+		// the column out of this UPDATE froze the status at first sight.
+		const q = `UPDATE notes SET kind = ?, record_type = ?, record_id = ?, source_hash = ?, indexed_at = ?, mtime = ?, ctime = ?, size = ?, declared_type = ?, schema_fp = ?, parse_error = ? WHERE note_id = ?`
 		if _, err := ix.execTx(ctx, tx, PhaseWrite, q,
 			rows.Kind, rows.RecordType, []byte(rows.RecordID), rows.SourceHash, now,
 			nanoTimeColumn(rows.MtimeNanos),
 			ctimeColumn(rows.CtimeNanos, rows.HasCtime),
 			sizeColumn(rows.Size, rows.StatKnown()),
-			rows.DeclaredType, rows.SchemaFingerprint,
+			rows.DeclaredType, rows.SchemaFingerprint, rows.ParseError,
 			id); err != nil {
 			return fmt.Errorf("propindex: updating %q: %w", rows.Path, err)
 		}
@@ -629,8 +654,18 @@ func (ix *Index) upsertOne(ctx context.Context, tx *sql.Tx, rows NoteRows) error
 	return nil
 }
 
-// DeleteNote removes a note and every child row it owns.
+// DeleteNote removes a note and every child row it owns, under the index's
+// per-write reconcile lock (reconcile.go) — same rule as UpsertNote.
 func (ix *Index) DeleteNote(ctx context.Context, path string) (err error) {
+	mu := reconcileMutexFor(ix.path)
+	mu.Lock()
+	defer mu.Unlock()
+	return ix.deleteNoteDirect(ctx, path)
+}
+
+// deleteNoteDirect is DeleteNote's lock-free body, the form a Reconcile scope
+// uses.
+func (ix *Index) deleteNoteDirect(ctx context.Context, path string) (err error) {
 	tx, err := ix.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("propindex: beginning a delete: %w", err)
@@ -689,6 +724,15 @@ func (ix *Index) DeleteNote(ctx context.Context, path string) (err error) {
 // birth-time support must not erase what a macOS pass over the same synced
 // vault already established.
 func (ix *Index) RefreshNoteStat(ctx context.Context, path string, size, mtimeNanos, ctimeNanos int64, hasCtime bool) (changed bool, err error) {
+	mu := reconcileMutexFor(ix.path)
+	mu.Lock()
+	defer mu.Unlock()
+	return ix.refreshNoteStatDirect(ctx, path, size, mtimeNanos, ctimeNanos, hasCtime)
+}
+
+// refreshNoteStatDirect is RefreshNoteStat's lock-free body, the form a
+// Reconcile scope uses.
+func (ix *Index) refreshNoteStatDirect(ctx context.Context, path string, size, mtimeNanos, ctimeNanos int64, hasCtime bool) (changed bool, err error) {
 	if path == "" {
 		return false, errors.New("propindex: RefreshNoteStat called with an empty path")
 	}

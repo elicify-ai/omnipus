@@ -64,6 +64,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	stdunicode "unicode"
 
 	"github.com/blevesearch/bleve/v2"
 	"github.com/blevesearch/bleve/v2/analysis/tokenizer/unicode"
@@ -2462,6 +2463,39 @@ func nameTokensFor(relPath string) string {
 // TestSearchFilteredReportsTruncationAtTheFetchCap). Production code never
 // assigns to it; the default below is what ships.
 var indexSearchMaxFetch = 2048
+
+// FoldSearchText applies to arbitrary text the SAME normalisation the
+// prose analyzer applies to every indexed token and every query term:
+// lower-casing, Unicode NFC, then ASCII folding (analyzer_folded.go's
+// foldProseTerm). It exists for a consumer that must locate a match in the
+// ORIGINAL bytes of a note — the gateway's search excerpt — and therefore
+// has to fold the note text exactly the way the matcher folded the query,
+// or a hit the index found by folding ("cafe" finding "Café") renders with
+// no excerpt at all.
+//
+// It is stateless and safe to call per rune: a caller that needs to map a
+// folded byte offset back to the original text folds one rune at a time and
+// sums the folded lengths. A combining mark that survives the fold on its own
+// (NFD text folded rune by rune never composes) is dropped here, so
+// "e" + U+0301 folds to "e" exactly as the composed "é" does.
+func FoldSearchText(text string) string {
+	if text == "" {
+		return ""
+	}
+	folded := foldProseTerm(strings.ToLower(text))
+	if folded == "" {
+		return ""
+	}
+	// Drop any combining mark the per-rune path could not compose away.
+	var b strings.Builder
+	for _, r := range folded {
+		if stdunicode.Is(stdunicode.Mn, r) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
 
 // Search runs a query and returns at most limit results, ONE PER FILE. Hits are
 // scored with BM25, which is in force because buildIndexMapping asks for it by

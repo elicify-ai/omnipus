@@ -209,6 +209,11 @@ func (s *verdictSpy) AllPaths(context.Context, func(propindex.IndexedNote) error
 // sweep returns per candidate (see the test below), and none of the three
 // participates in that; each is a mechanical interface-satisfaction stub and
 // nothing here should grow behaviour.
+//
+// Reconcile (the 2026-09-14 reconcile lock, reconcile.go) joins the same list
+// for the same reason: this spy never reconciles, and the pass-through below
+// runs nothing the sweep would observe.
+func (s *verdictSpy) Reconcile(fn func(propindex.Store) error) error { return fn(s) }
 func (s *verdictSpy) Tags(context.Context, propindex.Selector, func(propindex.TagHit) error) error {
 	return nil
 }

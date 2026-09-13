@@ -39,7 +39,7 @@ func TestVaultSearchQueryTermsKeepsNonASCII(t *testing.T) {
 	cases := map[string][]string{
 		"日本語":       {"日本語"},
 		"сборка":    {"сборка"},
-		"café thé":  {"café", "thé"}, // longest-first; both retained
+		"café thé":  {"cafe", "the"}, // both retained, folded the way the matcher folds them
 		"acme corp": {"acme", "corp"},
 	}
 	for query, want := range cases {
@@ -50,7 +50,7 @@ func TestVaultSearchQueryTermsKeepsNonASCII(t *testing.T) {
 		for _, w := range want {
 			found := false
 			for _, g := range got {
-				if g == strings.ToLower(w) {
+				if g == w {
 					found = true
 					break
 				}

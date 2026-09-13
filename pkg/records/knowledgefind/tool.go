@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -427,10 +428,93 @@ func decodeRequest(raw []byte) (generated.VaultFindRequest, *RefusalError) {
 
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return req, refuse(problem(generated.UnsupportedParameter,
-			fmt.Sprintf("the arguments did not match the expected shape: %v", err),
+			plainDecodeMessage(err),
 			"check the argument types; call knowledge_describe if you are unsure what a property holds"), err)
 	}
 	return req, nil
+}
+
+// plainDecodeMessage turns the standard decoder's error into a sentence that
+// names the argument, what it expects and what was received — in plain words
+// (UAT 2026-09-13, D-31).
+//
+// encoding/json's own text is written for a Go programmer: "cannot unmarshal
+// array into Go struct field VaultFilterNode.filter.all.value of type string".
+// Every part of that an agent could act on is also carried structurally on
+// *json.UnmarshalTypeError — the JSON path (Field), the JSON kind that arrived
+// (Value) and the Go type the field wanted (Type) — so the sentence is rebuilt
+// from those and the Go type name, struct name and the word "unmarshal" never
+// reach the caller.
+func plainDecodeMessage(err error) string {
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) {
+		field := typeErr.Field
+		if field == "" {
+			field = "the arguments"
+		} else {
+			field = fmt.Sprintf("argument %q", field)
+		}
+		return fmt.Sprintf("%s expects %s, but %s was sent",
+			field, plainExpectedType(typeErr.Type), plainReceivedKind(typeErr.Value))
+	}
+	var syntaxErr *json.SyntaxError
+	if errors.As(err, &syntaxErr) {
+		return fmt.Sprintf("the arguments are not well-formed JSON (at byte %d)", syntaxErr.Offset)
+	}
+	return "the arguments did not match the expected shape"
+}
+
+// plainExpectedType names a Go type the way a reader of the tool's own
+// parameter description would: text, a whole number, a list, an object.
+func plainExpectedType(t reflect.Type) string {
+	if t == nil {
+		return "a different shape"
+	}
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	switch t.Kind() {
+	case reflect.String:
+		return "text"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "a whole number"
+	case reflect.Float32, reflect.Float64:
+		return "a number"
+	case reflect.Bool:
+		return "true or false"
+	case reflect.Slice, reflect.Array:
+		return "a list"
+	case reflect.Struct, reflect.Map:
+		return "an object"
+	}
+	return "a different shape"
+}
+
+// plainReceivedKind names the JSON kind encoding/json reports in
+// UnmarshalTypeError.Value ("string", "number", "array", "object", "bool",
+// "null", or a value-specific spelling such as "number -3") in the same words
+// plainExpectedType uses, so the two halves of the sentence read alike.
+func plainReceivedKind(value string) string {
+	kind, _, _ := strings.Cut(value, " ")
+	switch kind {
+	case "string":
+		return "text"
+	case "number":
+		return "a number"
+	case "array":
+		return "a list"
+	case "object":
+		return "an object"
+	case "bool":
+		return "true/false"
+	case "null":
+		return "null"
+	}
+	if value == "" {
+		return "something else"
+	}
+	return value
 }
 
 // filterNodeKeys is the closed set of keys a filter node may carry, READ OFF

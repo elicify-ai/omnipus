@@ -132,7 +132,7 @@ func OpenFindEnv(ctx context.Context, home string, col knowledge.ScopedCollectio
 	// Store.UpsertNote directly rather than going through it. That is a real
 	// observation about IndexNote's reachability and nothing more; it does
 	// not mean the index goes unwritten.
-	store, closeStore, storeReason := openFindStore(ctx, home, col.Root)
+	store, closeStore, storeReason, storeCaveat := openFindStore(ctx, home, col.Root)
 	if closeStore != nil {
 		closers = append(closers, closeStore)
 	}
@@ -181,6 +181,13 @@ func OpenFindEnv(ctx context.Context, home string, col knowledge.ScopedCollectio
 			Epoch:       epoch,
 
 			StoreUnavailableReason: storeReason,
+			// StoreCoverageCaveat (Codex review 2026-09-14, finding 6): the
+			// store above is USABLE — queries run against it — but the
+			// recovery that produced it could not read every file, and an
+			// answer drawn from it must say so instead of reporting
+			// complete:true over a silently narrower corpus. Empty when the
+			// recovery evaluated everything.
+			StoreCoverageCaveat: storeCaveat,
 		},
 		Schemas:      schemas,
 		SchemaReport: schemaReport,
