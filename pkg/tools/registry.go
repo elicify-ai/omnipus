@@ -60,6 +60,21 @@ type memoryRateLimiterAware interface {
 	SetMemoryRateLimiter(limiter *MemoryRateLimiter)
 }
 
+// argsNormalizer is implemented by a tool that needs to correct a specific,
+// well-understood near-miss in its OWN arguments before the registry's
+// generic validateToolArgs runs against its declared schema — accepting and
+// normalising the mistake instead of hard-rejecting the whole call (fix-wave
+// GX-B evidence: AskUserQuestionTool lifting a misplaced option-level
+// `recommended` onto its question rather than failing a forced first move
+// and stalling the turn). NormalizeArgs runs first; its return value is what
+// BOTH validateToolArgs and Execute see. A tool that does not implement this
+// interface is validated and executed exactly as before — this is an
+// opt-in, per-tool seam, not a change to shared validation strictness.
+// Precedent: mediaStoreAware/auditLoggerAware/memoryRateLimiterAware above.
+type argsNormalizer interface {
+	NormalizeArgs(args map[string]any) map[string]any
+}
+
 func NewToolRegistry() *ToolRegistry {
 	return &ToolRegistry{
 		tools: make(map[string]*ToolEntry),
@@ -507,6 +522,13 @@ func (r *ToolRegistry) ExecuteWithContext(
 				"tool": name,
 			})
 		return ErrorResult(fmt.Sprintf("tool %q not found", name)).WithError(fmt.Errorf("tool not found"))
+	}
+
+	// Give the tool a chance to normalise a near-miss in its own arguments
+	// BEFORE schema validation runs (argsNormalizer, see its doc above) —
+	// opt-in per tool, no effect on any tool that does not implement it.
+	if normalizer, ok := tool.(argsNormalizer); ok {
+		args = normalizer.NormalizeArgs(args)
 	}
 
 	// Validate arguments against the tool's declared schema.

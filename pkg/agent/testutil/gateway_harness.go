@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -253,6 +255,32 @@ func pollUntilReady(cfg pollConfig) pollResult {
 	}
 }
 
+// allocateEphemeralPort returns a port the kernel just handed out on
+// 127.0.0.1 and then released (the listen/close/reuse idiom).
+//
+// The number is a HINT, not a reservation: nothing stops another process from
+// taking it before the caller binds. StartTestGateway's retry loop exists for
+// exactly that case — see its comment. Extracted so the loop can ask for a
+// fresh port per attempt.
+func allocateEphemeralPort(t *testing.T) int {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("testutil.StartTestGateway: allocate port: %v", err)
+	}
+	tcpAddr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok {
+		_ = ln.Close()
+		t.Fatalf("testutil.StartTestGateway: unexpected listener address type %T (want *net.TCPAddr)", ln.Addr())
+	}
+	port := tcpAddr.Port
+	if err = ln.Close(); err != nil {
+		t.Fatalf("testutil.StartTestGateway: close ephemeral listener: %v", err)
+	}
+	return port
+}
+
 // StartTestGateway boots a real gateway via the registered RunContextFunc on
 // an ephemeral port and returns a TestGateway once the /health endpoint
 // responds 200.
@@ -329,129 +357,161 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 	// integration tests do not run in parallel (no t.Parallel()).
 	t.Setenv("OMNIPUS_HOME", homeDir)
 
-	// Pick an ephemeral port by opening a listener, reading the port, then closing it.
-	// The OS will not reuse the port immediately, giving RunContext time to bind.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("testutil.StartTestGateway: allocate port: %v", err)
-	}
-	tcpAddr, ok := ln.Addr().(*net.TCPAddr)
-	if !ok {
-		t.Fatalf("testutil.StartTestGateway: unexpected listener address type %T (want *net.TCPAddr)", ln.Addr())
-	}
-	port := tcpAddr.Port
-	if err = ln.Close(); err != nil {
-		t.Fatalf("testutil.StartTestGateway: close ephemeral listener: %v", err)
-	}
-
-	cfg := buildConfig(hc, homeDir, port)
-
-	rawCfg, err := json.Marshal(cfg)
-	if err != nil {
-		t.Fatalf("testutil.StartTestGateway: marshal config: %v", err)
-	}
-	if err = os.WriteFile(configPath, rawCfg, 0o600); err != nil {
-		t.Fatalf("testutil.StartTestGateway: write config: %v", err)
-	}
-
-	// Seed the OPENROUTER_API_KEY credential so the gateway's
-	// credentials.InjectFromConfig step (gateway.go:209) succeeds. The seeded
-	// provider entry in buildConfig references this name; without the
-	// credential, boot fails with "fatal: provider credential injection failed".
-	// The real key MUST be in env (OPENROUTER_API_KEY) — there is no longer a
-	// scripted-scenario fallback (the test_harness override hook was removed
-	// 2026-05-10). Tests that exercise LLM behavior hit real OpenRouter.
-	if err = seedTestCredentials(homeDir); err != nil {
-		t.Fatalf("testutil.StartTestGateway: seed credentials: %v", err)
-	}
-
-	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	done := make(chan struct{})
-
-	gw := &TestGateway{
-		URL:        baseURL,
-		HTTPClient: &http.Client{Timeout: 10 * time.Second},
-		Provider:   hc.scenario,
-		homeDir:    homeDir,
-		configPath: configPath,
-		cancel:     cancel,
-		done:       done,
-		t:          t,
-	}
-
-	if hc.bearerAuth {
-		gw.bearerToken = testBearerToken
-	}
-
-	go func() {
-		defer close(done)
-		runErr := rcFn(ctx, false, homeDir, configPath, hc.allowEmpty)
-		if runErr != nil {
-			gw.bootErr.Store(&runErr)
-		}
-	}()
-
-	// Poll until /health returns 200. See the pollUntilReady doc comment
-	// above (near the getter methods) for the full rationale. Summary of the
-	// constants below:
+	// BOOT, RETRYING WHEN THE PORT RACE IS LOST.
 	//
-	//   - healthProbeInterval (50ms): unchanged from the previous design.
-	//   - healthConsecutiveFailThreshold (300): 300 * 50ms == 15s of
-	//     CONTINUOUSLY failing probes — the same real-time budget the old
-	//     wall-clock deadline granted, except it can now only be consumed by
-	//     actual failed attempts, never by a frozen/stalled host doing
-	//     nothing. Measured gateway boot cost is 0.22s p50 and 0.75s
-	//     worst-case even at 8x CPU oversubscription (≈15 failed attempts at
-	//     this interval); the previous deadline comment also recorded busy
-	//     GitHub-hosted runners taking up to 3-8s (≈60-160 attempts) under
-	//     load. 300 leaves roughly 2x margin over that documented worst case.
-	//   - healthHardBackstop (30s): an absolute ceiling, not the primary
-	//     signal — protects against a gateway that is genuinely wedged (e.g.
-	//     accepting TCP connections but hanging on every request), where
-	//     each failed probe could itself take seconds, making
-	//     healthConsecutiveFailThreshold consecutive fails take far longer
-	//     than is reasonable to wait.
-	//   - healthProbeTimeout (2s): bounds a single health GET so one hung
-	//     request cannot silently eat most of healthHardBackstop by itself.
-	const (
-		healthProbeInterval            = 50 * time.Millisecond
-		healthConsecutiveFailThreshold = 300
-		healthHardBackstop             = 30 * time.Second
-		healthProbeTimeout             = 2 * time.Second
+	// The port comes from the listen/close/reuse idiom: bind :0, read the
+	// port the kernel picked, close, hand the number to the gateway. The
+	// comment that used to sit here claimed "the OS will not reuse the port
+	// immediately, giving RunContext time to bind". That is an assumption,
+	// not a guarantee, and it is exactly the TOCTOU window it sounds like:
+	// between our close and the gateway's bind, any other process — or
+	// another test binary in the same `go test ./...` run — can be handed the
+	// same number.
+	//
+	// Losing that race produced a REAL RED that named an innocent test:
+	//
+	//   TestSwitchAgent_NamedTarget_EmitsAgentSwitchedFrameWithAgentIdSet
+	//   StartTestGateway: gateway at http://127.0.0.1:41301 failed to boot:
+	//   bind shared HTTP server at 127.0.0.1:41301: bind: address already in use
+	//
+	// It fails where the machine is busy and passes where it is not: on the
+	// same commit, GitHub's hosted runner failed it while the dedicated Fly
+	// worker ran tests/integration twice, green both times (38.8s and 61.4s).
+	// A test whose verdict tracks host load teaches people to re-run reds,
+	// which is how a genuine regression eventually gets waved through.
+	//
+	// So retry the WHOLE allocate -> configure -> boot -> probe cycle with a
+	// freshly allocated port. Deliberately narrow: only a boot error that is
+	// EADDRINUSE retries. Any other boot failure, and every readiness
+	// failure, still fails the test on the first attempt with its original
+	// message — this must not become a blanket "try again" that masks a real
+	// boot bug.
+	const maxBindAttempts = 5
+
+	var (
+		gw      *TestGateway
+		baseURL string
+		cancel  context.CancelFunc
+		done    chan struct{}
 	)
 
-	probeClient := &http.Client{Timeout: healthProbeTimeout}
-	result := pollUntilReady(pollConfig{
-		probe: func() probeOutcome {
-			resp, httpErr := probeClient.Get(baseURL + "/health")
-			if httpErr != nil {
-				return probeOutcome{err: httpErr}
-			}
-			defer func() { _ = resp.Body.Close() }()
-			if resp.StatusCode != http.StatusOK {
-				return probeOutcome{err: fmt.Errorf("health endpoint returned status %d", resp.StatusCode)}
-			}
-			return probeOutcome{}
-		},
-		bootErr: func() error {
-			if p := gw.bootErr.Load(); p != nil {
-				return *p
-			}
-			return nil
-		},
-		interval:                 healthProbeInterval,
-		consecutiveFailThreshold: healthConsecutiveFailThreshold,
-		hardBackstop:             healthHardBackstop,
-		now:                      time.Now,
-		sleep:                    time.Sleep,
-	})
+	for attempt := 1; ; attempt++ {
+		port := allocateEphemeralPort(t)
 
-	if result.kind != pollReady {
+		cfg := buildConfig(hc, homeDir, port)
+
+		rawCfg, marshalErr := json.Marshal(cfg)
+		if marshalErr != nil {
+			t.Fatalf("testutil.StartTestGateway: marshal config: %v", marshalErr)
+		}
+		if writeErr := os.WriteFile(configPath, rawCfg, 0o600); writeErr != nil {
+			t.Fatalf("testutil.StartTestGateway: write config: %v", writeErr)
+		}
+
+		baseURL = fmt.Sprintf("http://127.0.0.1:%d", port)
+
+		ctx, ctxCancel := context.WithCancel(context.Background())
+		cancel = ctxCancel
+		done = make(chan struct{})
+
+		gw = &TestGateway{
+			URL:        baseURL,
+			HTTPClient: &http.Client{Timeout: 10 * time.Second},
+			Provider:   hc.scenario,
+			homeDir:    homeDir,
+			configPath: configPath,
+			cancel:     cancel,
+			done:       done,
+			t:          t,
+		}
+
+		if hc.bearerAuth {
+			gw.bearerToken = testBearerToken
+		}
+
+		bootGW := gw
+		go func() {
+			defer close(done)
+			runErr := rcFn(ctx, false, homeDir, configPath, hc.allowEmpty)
+			if runErr != nil {
+				bootGW.bootErr.Store(&runErr)
+			}
+		}()
+
+		// Poll until /health returns 200. See the pollUntilReady doc comment
+		// above (near the getter methods) for the full rationale. Summary of
+		// the constants below:
+		//
+		//   - healthProbeInterval (50ms): unchanged from the previous design.
+		//   - healthConsecutiveFailThreshold (300): 300 * 50ms == 15s of
+		//     CONTINUOUSLY failing probes — the same real-time budget the old
+		//     wall-clock deadline granted, except it can now only be consumed
+		//     by actual failed attempts, never by a frozen/stalled host doing
+		//     nothing. Measured gateway boot cost is 0.22s p50 and 0.75s
+		//     worst-case even at 8x CPU oversubscription (~15 failed attempts
+		//     at this interval); the previous deadline comment also recorded
+		//     busy GitHub-hosted runners taking up to 3-8s (~60-160 attempts)
+		//     under load. 300 leaves roughly 2x margin over that documented
+		//     worst case.
+		//   - healthHardBackstop (30s): an absolute ceiling, not the primary
+		//     signal — protects against a gateway that is genuinely wedged
+		//     (e.g. accepting TCP connections but hanging on every request),
+		//     where each failed probe could itself take seconds, making
+		//     healthConsecutiveFailThreshold consecutive fails take far longer
+		//     than is reasonable to wait.
+		//   - healthProbeTimeout (2s): bounds a single health GET so one hung
+		//     request cannot silently eat most of healthHardBackstop by itself.
+		const (
+			healthProbeInterval            = 50 * time.Millisecond
+			healthConsecutiveFailThreshold = 300
+			healthHardBackstop             = 30 * time.Second
+			healthProbeTimeout             = 2 * time.Second
+		)
+
+		probeClient := &http.Client{Timeout: healthProbeTimeout}
+		result := pollUntilReady(pollConfig{
+			probe: func() probeOutcome {
+				resp, httpErr := probeClient.Get(baseURL + "/health")
+				if httpErr != nil {
+					return probeOutcome{err: httpErr}
+				}
+				defer func() { _ = resp.Body.Close() }()
+				if resp.StatusCode != http.StatusOK {
+					return probeOutcome{err: fmt.Errorf("health endpoint returned status %d", resp.StatusCode)}
+				}
+				return probeOutcome{}
+			},
+			bootErr: func() error {
+				if p := bootGW.bootErr.Load(); p != nil {
+					return *p
+				}
+				return nil
+			},
+			interval:                 healthProbeInterval,
+			consecutiveFailThreshold: healthConsecutiveFailThreshold,
+			hardBackstop:             healthHardBackstop,
+			now:                      time.Now,
+			sleep:                    time.Sleep,
+		})
+
+		if result.kind == pollReady {
+			break
+		}
+
 		cancel()
 		<-done
+
+		// The ONLY retryable shape: the gateway reported a boot error and
+		// that error is "address already in use". Everything else falls
+		// through to the original diagnostics below, on the first attempt.
+		if attempt < maxBindAttempts &&
+			result.kind == pollFatalBootError &&
+			errors.Is(result.bootErr, syscall.EADDRINUSE) {
+			t.Logf("testutil.StartTestGateway: port %d was taken between allocation and bind "+
+				"(attempt %d/%d) — retrying with a fresh port. This is the known listen/close/reuse "+
+				"race, not a gateway defect: %v", port, attempt, maxBindAttempts, result.bootErr)
+			continue
+		}
 
 		switch result.kind {
 		case pollFatalBootError:
@@ -542,6 +602,29 @@ func (g *TestGateway) Close() {
 	// shutdown drains, so writers never stopped at all).
 	waitForHomeQuiescent(g.homeDir, 150*time.Millisecond, 3*time.Second)
 
+	// THEN REMOVE THE TREE OURSELVES, WITH RETRIES.
+	//
+	// Quiescence alone was not enough, and could not be: it is a TOCTOU check.
+	// It proves the tree looked still a moment ago, not that every writer has
+	// stopped, so a straggler landing between the last scan and t.TempDir's
+	// RemoveAll still fails the test — and fails it with a message that names
+	// the TEST rather than the writer:
+	//
+	//   --- FAIL: TestCSRFCORSReflectionGate (0.34s)
+	//   TempDir RemoveAll cleanup: unlinkat /var/folders/.../001: directory not empty
+	//
+	// Observed on macos-latest/arm64 while every Linux runner passed the same
+	// commit, which is the signature of a timing race rather than a defect in
+	// the test that gets blamed.
+	//
+	// t.Cleanup is LIFO and t.TempDir registered its removal when homeDir was
+	// created — before StartTestGateway registered this Close — so Close runs
+	// FIRST. That ordering is what makes this work: remove the tree here, with
+	// retries, and t.TempDir's own RemoveAll afterwards finds nothing to race
+	// on (RemoveAll on a missing path is a no-op, not an error). A straggler
+	// write between attempts is simply deleted by the next one.
+	removeHomeWithRetry(g.t, g.homeDir)
+
 	// Surface any boot error that occurred after the gateway became ready.
 	if p := g.bootErr.Load(); p != nil && *p != nil {
 		if g.t != nil {
@@ -590,6 +673,58 @@ func waitForHomeQuiescent(homeDir string, settle, budget time.Duration) {
 			stableSince = time.Time{}
 		}
 		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+// removeHomeWithRetry deletes homeDir, retrying while a late writer keeps
+// re-creating entries under it.
+//
+// It exists because waitForHomeQuiescent cannot close the window it was built
+// to close (see Close's comment). Retrying is the honest response: if the tree
+// is genuinely quiet the first attempt succeeds and this costs nothing, and if
+// a straggler write lands between attempts the next attempt removes it too.
+//
+// If it still cannot clear the tree it reports the failure LOUDLY, naming the
+// paths that survived. The previous safety net gave up SILENTLY on budget
+// exhaustion, which is how this surfaced as an unexplained "directory not
+// empty" against an innocent test instead of "this writer never stopped".
+func removeHomeWithRetry(t *testing.T, homeDir string) {
+	if homeDir == "" {
+		return
+	}
+	if t != nil {
+		t.Helper()
+	}
+
+	const (
+		attempts = 10
+		pause    = 100 * time.Millisecond
+	)
+
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		if lastErr = os.RemoveAll(homeDir); lastErr == nil {
+			return
+		}
+		time.Sleep(pause)
+	}
+
+	// Still there. Name what survived — that is the writer worth chasing.
+	var survivors []string
+	_ = filepath.WalkDir(homeDir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil //nolint:nilerr // best-effort diagnostic scan
+		}
+		if !d.IsDir() && len(survivors) < 20 {
+			survivors = append(survivors, p)
+		}
+		return nil
+	})
+	if t != nil {
+		t.Errorf("testutil.TestGateway.Close: could not remove the test home after %d attempts "+
+			"(%s): %v\nA writer is still active after RunContext returned — this is a real "+
+			"shutdown leak, not a cleanup nuisance. Surviving files: %v",
+			attempts, time.Duration(attempts)*pause, lastErr, survivors)
 	}
 }
 

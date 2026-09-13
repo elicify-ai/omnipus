@@ -230,6 +230,42 @@ func TestAgentConstructor_CustomAgent_DenyByDefaultFullCoverage(t *testing.T) {
 		"custom agent policy map key set must exactly match allStaticToolNames — no gaps, no extras")
 }
 
+// TestNewCustomAgentToolsCfg_GoalClaimAndBrowserHandoverAreExplicit is
+// R-12's guard: NewCustomAgentToolsCfg is the SEVENTH per-agent policy map
+// (the other six are coreAgentSeed's core roster + IDWorker + the subagent
+// tier, and systemAgentSeed's Judge/PlanSupervisor) and every new tool name
+// this delivery adds MUST get an explicit, intended entry here too — an
+// absent key is not an unknown key, so validateOverrideKeys does not panic
+// and a fresh custom agent would silently resolve the tool to the
+// denyAllThenOverride floor (deny) with no test noticing, exactly the gap
+// R-12 found already caught by hand once (see the set_goal comment on this
+// function's overrides map).
+func TestNewCustomAgentToolsCfg_GoalClaimAndBrowserHandoverAreExplicit(t *testing.T) {
+	cfg := NewCustomAgentToolsCfg()
+	require.NotNil(t, cfg)
+
+	// goal_claim: allow. Its value (allow) differs from the
+	// denyAllThenOverride floor (deny), so a correct result here is only
+	// reachable through an explicit override entry — proving the entry
+	// exists, not merely that the key happens to be present.
+	p, ok := cfg.Builtin.Policies["goal_claim"]
+	require.True(t, ok, "customs' default allowlist must have an explicit policy for goal_claim")
+	assert.Equal(t, config.ToolPolicyAllow, p, "customs' default allowlist goal_claim must be allow")
+
+	// browser_handover: deny. This value equals the denyAllThenOverride
+	// floor by design (a fresh custom agent holds no browser action set to
+	// stand down from — see the conservative initial allow-list below,
+	// which grants no browser_* tool), so the runtime map cannot itself
+	// distinguish "explicit deny via override" from "floor deny via
+	// absence". The explicitness this test can prove is that the key is
+	// present with the intended value; the override literal itself
+	// (pkg/coreagent/core.go, this function's overrides map) is the
+	// source-level proof R-12 asked for.
+	p, ok = cfg.Builtin.Policies["browser_handover"]
+	require.True(t, ok, "customs' default allowlist must have an explicit policy for browser_handover")
+	assert.Equal(t, config.ToolPolicyDeny, p, "customs' default allowlist browser_handover must be deny")
+}
+
 // TestAgentConstructor_CoreAgent_SeedsRailPlusAllowances verifies that each core
 // agent's SeedConfig call produces the correct policy configuration.
 //

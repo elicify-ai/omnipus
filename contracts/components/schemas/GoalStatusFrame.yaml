@@ -54,9 +54,12 @@ properties:
       ADR-080 D-STATEMENT — the compiled SMART restatement of the goal
       (mirrors `Goal.definition`), one clear sentence staying close to
       the setter's own words, rendered BEFORE the criteria breakdown.
-      ADDITIVE-OPTIONAL: present on the `queued` (pending-confirm)
-      emission alongside `criteria`/`dod`; absent on round/lifecycle
-      pushes.
+      ADDITIVE-OPTIONAL: populated on the `active` emission that follows
+      a goal record register/update (ADR-081 `set_goal`) or marker
+      activation, alongside `criteria`/`dod`; MAY be absent on
+      marker-path records (deterministic marker-derived goals carry no
+      compiled SMART restatement); absent on other round/lifecycle
+      pushes carrying no record change.
     example: "All pkg/plan tests pass and golangci-lint reports zero issues."
   round:
     type: integer
@@ -104,13 +107,18 @@ properties:
       - done
       - failed
       - cleared
+      - judge_refused_god_mode
+      - judge_cas_loss
+      - blocked
+      - claim_overturned
+      - expired
     description: >
       ADR-053 §Contract Surface — "Pill-state enum"/R§8.10 crosswalk
       (originally 8 states, superseding the earlier 4-value
       active/paused_judge_unavailable/brake_fired/cleared set — no
-      back-compat at the time). `queued` admitted to the global cap, not
-      yet dispatched (lifecycle). `active` iterating normally (lifecycle
-      default overlay). `waiting_on_user` a typed `GOAL_STATUS:
+      back-compat at the time). `queued` retained for wire compatibility;
+      never emitted since ADR-081 (work-first goal flow). `active`
+      iterating normally (lifecycle default overlay). `waiting_on_user` a typed `GOAL_STATUS:
       waiting_on_user` pause, OR `needs_input`/`paused` for any other
       reason — cancel-soft grace, etc. (lifecycle). `judge_unavailable`
       the Judge is rate-limited/down; no round increment while this holds
@@ -131,6 +139,32 @@ properties:
       "failed/cancelled/timed_out → failed" rule for the specific case of
       a human choosing to stop; the frontend does not disambiguate via
       `latest_reason`, so the wire state itself must carry the distinction.
+      **Five values ADDED by this delivery (joint ADR-084/ADR-086/ADR-085
+      plan, C-39):** `judge_refused_god_mode` (JUDGE-FR-057a) — the Judge's
+      adjudication was refused because `cfg.GodMode` is true, a distinct
+      operator-actionable state, NOT `judge_unavailable` (which the
+      operator cannot fix by waiting). `judge_cas_loss` (JUDGE-FR-083,
+      named here; the underlying machine-readable reason string stays
+      `cas_loss`) — a `verifier_registry` compare-and-swap loss, a real
+      concurrency event distinguishable from a provider outage, NOT
+      `judge_unavailable`. `blocked` (JUDGE-FR-093) — the agent called
+      `goal_claim` with `status: blocked`: the goal is parked WITHOUT an
+      adjudication and WITHOUT consuming a round, distinct from
+      `waiting_on_user` (`blocked` says "I cannot proceed and it is not a
+      question you can answer", not "I need an answer") — NOT a terminal
+      state, the goal can still receive another frame (OQ-17). Ephemeral,
+      like `waiting_on_user` — cleared by the same operator-message path.
+      `claim_overturned` (JUDGE-FR-102) — a background adjudication
+      disagreed with an earlier claim the operator already saw answered; a
+      state, not an alert, distinct from an ordinary unmet round — NOT
+      terminal (OQ-17): the goal keeps iterating and the steer arrives as
+      an ordinary async turn. `expired` (ADR-086 GOAL-FR-028, OQ-1/OQ-6) —
+      one of the four distinguishable terminal endings a goal record now
+      carries (met/exhausted/expired/cleared, mirroring `Goal.state`): the
+      7-day idle-expiry sweep (D-A) ended this goal with no claim ever
+      made. IS terminal — joins `done`/`failed`/`cleared` as the fourth
+      member of the display-side terminal set (`blocked` and
+      `claim_overturned` deliberately do NOT join it — C-17, OQ-17).
     example: "active"
   producing_session_id:
     type: string
@@ -154,8 +188,10 @@ properties:
       (`state: queued`) pill already reaches GoalThreadTailCards through
       this frame and the breakdown is the same lifecycle datum; items $ref
       the canonical AcceptanceCriterion (never a third criteria shape).
-      Present on the `queued` (pending-confirm) emission; absent on
-      round/lifecycle pushes, whose consumers only track accounting.
+      Present on the `active` emission that follows a goal record
+      register/update (ADR-081 `set_goal`) or marker activation; absent
+      on other round/lifecycle pushes, whose consumers only track
+      accounting.
       NOTE the asyncapi.yaml inline canonical copy cannot cross-file-$ref:
       it carries a hand-synced INLINE duplicate of the AcceptanceCriterion
       shape (the JudgeVerdictFrame/CriterionVerdict precedent) — any field
@@ -169,7 +205,8 @@ properties:
       from `criteria` (mirrors `Goal.dod`), itemized per-item so the
       confirmation surface can flag `provenance == inferred` items as
       "inferred — confirm or drop". ADDITIVE-OPTIONAL: present on the
-      `queued` (pending-confirm) emission alongside `criteria`/
-      `definition`; absent on round/lifecycle pushes. Same hand-sync
-      obligation as `criteria` above — the asyncapi.yaml inline copy must
-      be kept in sync by hand.
+      `active` emission that follows a goal record register/update
+      (ADR-081 `set_goal`) or marker activation, alongside `criteria`/
+      `definition`; absent on other round/lifecycle pushes. Same
+      hand-sync obligation as `criteria` above — the asyncapi.yaml inline
+      copy must be kept in sync by hand.

@@ -132,6 +132,29 @@ export function shouldRenderToolCall(
       // outcome still forces visibility, same as ToolSearch.
       return isError
 
+    case 'set_goal':
+      // ADR-081 D5/A-3 (work-first goal flow), re-anchored by ADR-082 D9:
+      // `set_goal` is the working agent's write-path for the goal record
+      // (register/update). The record-rendering surface for a reader is the
+      // typed record card (GoalEchoCard), rendered directly from THIS
+      // call's own result by its dedicated tool UI (SetGoalToolUI, live;
+      // the parts-loop `set_goal` branch, replay) — never the raw tool
+      // call, same rationale as `delegate`'s hide (a dedicated, purpose-
+      // built surface already exists, so the call chip adds no
+      // reader-facing meaning). This `false` governs only the RAW call
+      // chip's own visibility (GenericToolCall/the Fallback, which a
+      // registered dedicated tool UI bypasses entirely) — it does not hide
+      // the card itself. No error exception HERE: unlike ToolSearch/Skill,
+      // a failed/rejected `set_goal` submission does not bring the RAW call
+      // chip back — but it is not invisible either (ADR-082 D9 review S4):
+      // the dedicated UI renders a one-line quiet "Goal registration
+      // failed" trace (detail on expand) for a failed call when verbose
+      // chat is off, and falls through to GenericToolCall — this `true`
+      // branch above — when it is on. See SetGoalToolUI.tsx's
+      // classifySetGoalCall, the single decision table both the renderer
+      // and ChatScreen's wouldToolCallBeVisible consult.
+      return false
+
     case 'delegate': {
       // action defaults to "run" (pkg/tools/delegate.go execute()).
       const action = paramString(params, 'action') ?? 'run'

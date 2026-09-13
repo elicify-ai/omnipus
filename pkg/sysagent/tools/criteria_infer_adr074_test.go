@@ -51,6 +51,11 @@ func TestCreateTaskInWorkspace_Gate_FiresOnInferredKind(t *testing.T) {
 			"workspace_id": testWorkspaceID,
 			"agent_id":     "assignee",
 			"criteria":     criteria,
+			// D-C ("criteria + definition-of-done are mandatory at CREATION
+			// **and** EDIT") makes dod a precondition of reaching the
+			// D2-rule-5 gate under test — a prose item, so the all-check
+			// property being exercised stays a property of "criteria" alone.
+			"dod": workspaceDoDArg(),
 		}
 	}
 	ctx := tools.WithAgentID(context.Background(), "caller-agent")
@@ -120,6 +125,9 @@ func TestBehavior_EndToEnd_CreateTaskInWorkspace(t *testing.T) {
 				"max_count": float64(0),
 			},
 		}},
+		// Mandatory since D-C; prose, so the inferred-kind assertions below
+		// remain assertions about "criteria".
+		"dod": workspaceDoDArg(),
 	})
 	require.False(t, res.IsError, "create with kind-omitted behavior criterion failed: %s", res.ForLLM)
 

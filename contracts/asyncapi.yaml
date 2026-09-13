@@ -121,6 +121,8 @@ channels:
         $ref: '#/components/messages/AskUserQuestionFrame'
       AskUserAnswerFrame:
         $ref: '#/components/messages/AskUserAnswerFrame'
+      BrowserHandoverNoticeFrame:
+        $ref: '#/components/messages/BrowserHandoverNoticeFrame'
   browser:
     address: /api/v1/browser/ws
     description: 'Live interactive browser channel (ADR-038). A dedicated WebSocket, separate from the chat channel, carrying
@@ -577,6 +579,21 @@ operations:
       run completion, state change, and stop. Session-scoped.
     messages:
       - $ref: '#/channels/chat/messages/LoopStatusFrame'
+
+  receiveBrowserHandoverNotice:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      ADR-085 BROWSER-FR-041/FR-042 — the visible waiting surface. Emitted
+      live when a human takes the browser wheel, when the agent calls
+      `browser_handover`, or by the FR-031a idle sweeper, through the one
+      shared `WaitingSurfaceEmitter` seam. Session-scoped. Exactly one
+      notice per unbroken held period (FR-044); the same line is also
+      persisted as a transcript entry and re-emitted as this same frame
+      type on replay (FR-043a).
+    messages:
+      - $ref: '#/channels/chat/messages/BrowserHandoverNoticeFrame'
 
   receivePlanStatus:
     action: receive
@@ -1071,6 +1088,15 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/LoopStatusFrame'
+    BrowserHandoverNoticeFrame:
+      name: BrowserHandoverNoticeFrame
+      title: browser_handover_notice
+      summary: >
+        ADR-085 BROWSER-FR-041/FR-042 visible waiting surface (server →
+        client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/BrowserHandoverNoticeFrame'
     PlanStatusFrame:
       name: PlanStatusFrame
       title: plan_status
@@ -1269,6 +1295,7 @@ components:
       - judge_verdict
       - ask_user_question
       - ask_user_answer
+      - browser_handover_notice
     AuthFrame:
       title: AuthFrame
       description: Client → server authentication frame.
@@ -3400,6 +3427,26 @@ components:
           type: integer
           minimum: 0
           maximum: 86400000
+    SessionStateActiveTurn:
+      title: SessionStateActiveTurn
+      description: >
+        ADR-082 D4 — the in-flight foreground turn of the session a
+        connection has just bound to. Keep in sync by hand with
+        components/schemas/SessionStateActiveTurn.yaml.
+      type: object
+      required:
+        - turn_id
+        - agent_id
+        - started_at
+      additionalProperties: false
+      properties:
+        turn_id:
+          type: string
+        agent_id:
+          type: string
+        started_at:
+          type: string
+          format: date-time
     SessionStateFrame:
       title: SessionStateFrame
       description: 'Server → client reconnect approval snapshot (FR-052, FR-073, FR-081). pending_approvals MUST be an array
@@ -3435,6 +3482,18 @@ components:
             PENDING AskUserQuestion card (global registry cap 64) so a
             reconnecting SPA re-hydrates its card + composer lock. Optional
             (older gateways omit it); absent/empty means no pending sets.
+        session_id:
+          type: string
+          description: >
+            ADR-082 (review CR3) — the transcript session this snapshot
+            describes; absent on the connection-open emit. Keep in sync by
+            hand with components/schemas/SessionStateFrame.yaml.
+        active_turn:
+          $ref: '#/components/schemas/SessionStateActiveTurn'
+          description: >
+            ADR-082 D4 — present only when the attached session has a
+            foreground turn in flight at emit time. Absent when idle. Keep in
+            sync by hand with components/schemas/SessionStateFrame.yaml.
         emitted_at:
           type: string
           format: date-time
@@ -4429,8 +4488,10 @@ components:
           type: string
           description: >
             ADR-080 D-STATEMENT — the compiled SMART restatement, rendered
-            before the criteria breakdown. Present on the `queued`
-            (pending-confirm) emission; keep in sync by hand with
+            before the criteria breakdown. Populated on the `active`
+            emission that follows a goal record register/update (ADR-081
+            `set_goal`) or marker activation; MAY be absent on marker-path
+            records; keep in sync by hand with
             components/schemas/GoalStatusFrame.yaml.
         round:
           type: integer
@@ -4461,13 +4522,23 @@ components:
             - done
             - failed
             - cleared
+            - judge_refused_god_mode
+            - judge_cas_loss
+            - blocked
+            - claim_overturned
+            - expired
           description: >
             ADR-053 §Contract Surface — "Pill-state enum"/R§8.10 crosswalk
             (originally 8 states, superseding the earlier 4-value
             active/paused_judge_unavailable/brake_fired/cleared set — no
             back-compat at the time; `cleared` re-added as a 9th value by
             the UAT S3 fix so a user-initiated `/goal clear` no longer
-            collapses into `failed`). See
+            collapses into `failed`). Five values ADDED by the joint
+            ADR-084/ADR-085/ADR-086 delivery (C-39): `judge_refused_god_mode`
+            (JUDGE-FR-057a), `judge_cas_loss` (JUDGE-FR-083, reason string
+            stays `cas_loss`), `blocked` (JUDGE-FR-093, not terminal),
+            `claim_overturned` (JUDGE-FR-102, not terminal), `expired`
+            (ADR-086 GOAL-FR-028, terminal). See
             components/schemas/GoalStatusFrame.yaml for the full
             per-state crosswalk description.
         producing_session_id:
@@ -4480,12 +4551,13 @@ components:
           type: array
           description: >
             ADR-074 D5.2 / judgment-first FR-011 — compiled criteria
-            breakdown for the `queued` (pending-confirm) emission. Items
-            are a hand-synced INLINE duplicate of the canonical
-            components/schemas/AcceptanceCriterion.yaml shape (AsyncAPI
-            does not resolve cross-file $ref for its own codegen — the
-            JudgeVerdictFrame/CriterionVerdict precedent); keep both in
-            sync by hand, never a third criteria shape.
+            breakdown for the `active` emission that follows a goal
+            record register/update (ADR-081 `set_goal`) or marker
+            activation. Items are a hand-synced INLINE duplicate of the
+            canonical components/schemas/AcceptanceCriterion.yaml shape
+            (AsyncAPI does not resolve cross-file $ref for its own
+            codegen — the JudgeVerdictFrame/CriterionVerdict precedent);
+            keep both in sync by hand, never a third criteria shape.
           items:
             type: object
             required:
@@ -4585,14 +4657,22 @@ components:
                   - pending
                   - met
                   - unmet
+              clause_count:
+                type: integer
+                minimum: 1
+                description: >
+                  JUDGE-FR-006b. Keep in sync by hand with
+                  components/schemas/AcceptanceCriterion.yaml.
         dod:
           type: array
           description: >
             ADR-080 D-DOD — the goal's Definition of Done breakdown,
-            DISTINCT from `criteria`, for the `queued` (pending-confirm)
-            emission. Items are a hand-synced INLINE duplicate of the
-            canonical components/schemas/AcceptanceCriterion.yaml shape,
-            same as `criteria` above — keep both in sync by hand with
+            DISTINCT from `criteria`, for the `active` emission that
+            follows a goal record register/update (ADR-081 `set_goal`)
+            or marker activation. Items are a hand-synced INLINE
+            duplicate of the canonical
+            components/schemas/AcceptanceCriterion.yaml shape, same as
+            `criteria` above — keep both in sync by hand with
             components/schemas/GoalStatusFrame.yaml.
           items:
             type: object
@@ -4686,6 +4766,12 @@ components:
                   - pending
                   - met
                   - unmet
+              clause_count:
+                type: integer
+                minimum: 1
+                description: >
+                  JUDGE-FR-006b. Keep in sync by hand with
+                  components/schemas/AcceptanceCriterion.yaml.
 
     LoopStatusFrame:
       title: LoopStatusFrame
@@ -4851,6 +4937,79 @@ components:
               evidence_quote:
                 type: string
                 maxLength: 500
+              evidence_source:
+                type: string
+                enum:
+                  - diff
+                  - transcript
+                  - machine_check
+                  - file_read
+                  - session_read
+                description: >
+                  JUDGE-FR-065/FR-066. OPTIONAL REPORTING field only
+                  (D-B) — never a proof gate. Keep in sync by hand with
+                  components/schemas/CriterionVerdict.yaml (copies table
+                  row 3, the copy openapi-zod-client reads).
+              evidence_target:
+                type: string
+                description: >
+                  JUDGE-FR-065. OPTIONAL REPORTING field only (D-B). Keep
+                  in sync with components/schemas/CriterionVerdict.yaml.
+              provenance:
+                type: string
+                enum:
+                  - judge_read
+                  - deterministic_check
+                  - diff
+                  - transcript
+                  - session_read
+                  - none
+                description: >
+                  JUDGE-FR-065. OPTIONAL REPORTING field only (D-B) —
+                  never conditions the Judge's authority to rule `met`.
+                  Keep in sync with components/schemas/CriterionVerdict.yaml.
+              evidence:
+                type: array
+                maxItems: 50
+                description: >
+                  JUDGE-FR-006 — one entry per clause, `{part, source,
+                  target, quote}`. NEW, OPTIONAL sibling field alongside
+                  `evidence_quote` (C2 unchanged). REPORTING obligation
+                  only (D-B) — never turns a `met` into an `unmet`. Keep
+                  in sync by hand with components/schemas/CriterionVerdict.yaml
+                  (copies table row 3).
+                items:
+                  type: object
+                  required:
+                    - part
+                    - quote
+                  additionalProperties: false
+                  properties:
+                    part:
+                      type: string
+                      maxLength: 1000
+                    source:
+                      type: string
+                      description: >
+                        Plain string, deliberately NOT a closed enum —
+                        hand-synced with CriterionVerdict.yaml and
+                        JudgeVerdictFrame.yaml, both of which state the same
+                        (FR-073a copies-table rows 1-3). A closed enum here
+                        would make the generated zod schema reject — and the
+                        SPA silently DROP — every judge-verdict frame whose
+                        per-clause evidence source is anything the enum does
+                        not list, while `make verify-contracts` stayed green.
+                        This per-entry value is a REPORTING detail (D-B),
+                        never compared against by code the way the
+                        verdict-level `evidence_source` is (FR-066).
+                    target:
+                      type: string
+                    quote:
+                      type: string
+                      maxLength: 500
+                      description: >
+                        UNTRUSTED CONTENT. MAY be empty (reported gap,
+                        D-B).
         model:
           type: string
         judged_at:
@@ -4858,6 +5017,46 @@ components:
           format: date-time
         judge_agent_id:
           type: string
+
+    BrowserHandoverNoticeFrame:
+      title: BrowserHandoverNoticeFrame
+      description: >
+        Server → client. ADR-085 BROWSER-FR-041/FR-042 visible waiting
+        surface. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES).
+        THIS is the GENERATING copy (C-69: a WebSocket frame's generating
+        copy is the inline schema here, not
+        components/schemas/BrowserHandoverNoticeFrame.yaml, which exists
+        only for the Constraint #8 5-step process and the
+        pkg/gateway/inboundschemas/ sync) — keep both in sync by hand.
+      type: object
+      required:
+        - type
+        - session_id
+        - message_id
+        - text
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: browser_handover_notice
+        session_id:
+          type: string
+          minLength: 1
+        message_id:
+          type: string
+          minLength: 1
+          description: >
+            BROWSER-FR-044 — deterministic id from (sessionID,
+            holdStartedAtUnixNano), reused verbatim for every emission
+            within one unbroken hold; the SAME id is stamped onto the
+            persisted transcript entry.
+        text:
+          type: string
+          maxLength: 2000
+          description: >
+            BROWSER-FR-041/FR-048a. Includes the browser_handover tool's
+            reason (plain text, truncated to 200 runes) when that is the
+            producer.
 
     ErrorPayload:
       title: ErrorPayload

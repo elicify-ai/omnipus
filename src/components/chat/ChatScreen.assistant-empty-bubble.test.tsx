@@ -252,9 +252,17 @@ describe('Fix 3 (2026-07-16): ghost bubble when the only live content is a hidde
 
     const bubble = screen.getByTestId('assistant-message')
     expect(within(bubble).queryByLabelText('Copy message')).toBeNull()
+    // The call is a STILL-RUNNING, hidden delegate('run') — the thinking
+    // indicator's context-aware override (InlineThinkingIndicator /
+    // deriveHiddenRunningToolLabel, ChatScreen.tsx) renders a stable
+    // "Delegating…" label for it instead of a generic rotating phrase
+    // (this file's mocked `fetchAgents` doesn't include the fixture's
+    // `target_agent_id: 'ray'`, and the real arg name is `agent_id` — no
+    // name resolves, so the label stays the bare fallback, never inventing
+    // a name).
     expect(
       within(bubble).getByText(
-        /Thinking…|Composing response…|Processing your request…|Analyzing…|Generating…/,
+        /Thinking…|Working on it…|Composing a response…|Processing your request…|Analyzing…|Considering the details…|Piecing it together…|Reasoning it through…|Working through this…|Gathering my thoughts…|Figuring out the approach…|Reviewing the context…|Drafting a response…|Making sense of it…|Weighing the options…|Delegating…|Delegating to /,
       ),
     ).toBeInTheDocument()
   })
@@ -272,9 +280,12 @@ describe('Fix 3 (2026-07-16): ghost bubble when the only live content is a hidde
 
     const bubble = screen.getByTestId('assistant-message')
     expect(within(bubble).queryByLabelText('Copy message')).toBeNull()
+    // The call has already finished (status:'success', not 'running'), so
+    // the context-aware override does not apply — the generic rotating
+    // pool renders, and the first shown phrase is always 'Thinking…'.
     expect(
       within(bubble).getByText(
-        /Thinking…|Composing response…|Processing your request…|Analyzing…|Generating…/,
+        /Thinking…|Working on it…|Composing a response…|Processing your request…|Analyzing…|Considering the details…|Piecing it together…|Reasoning it through…|Working through this…|Gathering my thoughts…|Figuring out the approach…|Reviewing the context…|Drafting a response…|Making sense of it…|Weighing the options…/,
       ),
     ).toBeInTheDocument()
   })
@@ -299,7 +310,7 @@ describe('D: empty streaming assistant bubble (live AssistantMessage render)', (
     // The thinking indicator (rotating status text) is shown instead.
     expect(
       within(bubble).getByText(
-        /Thinking…|Composing response…|Processing your request…|Analyzing…|Generating…/,
+        /Thinking…|Working on it…|Composing a response…|Processing your request…|Analyzing…|Considering the details…|Piecing it together…|Reasoning it through…|Working through this…|Gathering my thoughts…|Figuring out the approach…|Reviewing the context…|Drafting a response…|Making sense of it…|Weighing the options…/,
       ),
     ).toBeInTheDocument()
   })

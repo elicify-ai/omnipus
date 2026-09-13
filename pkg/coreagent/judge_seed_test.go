@@ -79,8 +79,6 @@ func TestSeed_JudgeSystemAgent(t *testing.T) {
 	require.NotNil(t, j.Tools, "Judge must carry an explicit tools policy")
 	pol := j.Tools.Builtin.Policies
 	catalog := coreagent.AllStaticToolNames()
-	require.Len(t, pol, len(catalog),
-		"Judge policy must be exactly the static builtin catalog, one literal entry each")
 	for _, name := range catalog {
 		p, ok := pol[name]
 		require.Truef(t, ok, "Judge policy must enumerate tool %q (Constraint #6, no default fallback)", name)
@@ -89,6 +87,44 @@ func TestSeed_JudgeSystemAgent(t *testing.T) {
 		} else {
 			assert.Equalf(t, config.ToolPolicyDeny, p, "Judge policy for %q must be deny", name)
 		}
+	}
+	// JUDGE-FR-058 (T4, ADR-084/085/086 joint delivery plan §3): the Judge's
+	// policy map is the static catalog PLUS exactly one extra, non-catalog
+	// key — "mcp_*" — stamped directly onto the map (not a member of
+	// AllStaticToolNames(), since it is a wildcard and Constraint #6's
+	// no-wildcard rule applies only to the static builtin catalog). This
+	// replaces the old exact "len(pol) == len(catalog)" assertion, which
+	// left no room for that key at all and would have gone red the moment
+	// systemAgentSeed(IDJudge) started stamping it (see that function's own
+	// comment on why the stamp is deliberately not landed yet). Asserting
+	// "at most one extra key, and if present it must be exactly mcp_*:deny"
+	// keeps Constraint #6's no-stray-key discipline intact while making
+	// room for the one documented exception.
+	assertJudgePolicyHasOnlyCatalogPlusMCPWildcard(t, pol, catalog)
+}
+
+// assertJudgePolicyHasOnlyCatalogPlusMCPWildcard asserts pol contains no key
+// beyond catalog except, optionally, "mcp_*" — and if "mcp_*" is present, it
+// must be deny (JUDGE-FR-058). Shared by TestSeed_JudgeSystemAgent and
+// TestSeed_JudgeExactSetReEnforced so both stay in lockstep with each other
+// as this wave's forward-compatible shape.
+func assertJudgePolicyHasOnlyCatalogPlusMCPWildcard(t *testing.T, pol map[string]config.ToolPolicy, catalog []string) {
+	t.Helper()
+	known := make(map[string]bool, len(catalog))
+	for _, name := range catalog {
+		known[name] = true
+	}
+	var stray []string
+	for name := range pol {
+		if known[name] || name == "mcp_*" {
+			continue
+		}
+		stray = append(stray, name)
+	}
+	assert.Emptyf(t, stray,
+		"Judge policy must carry no key outside the static catalog other than the FR-058 mcp_* wildcard, got stray key(s): %v", stray)
+	if mcpPolicy, ok := pol["mcp_*"]; ok {
+		assert.Equalf(t, config.ToolPolicyDeny, mcpPolicy, "JUDGE-FR-058: the mcp_* wildcard, when present, must be deny")
 	}
 }
 
@@ -124,7 +160,8 @@ func TestSeed_JudgeExactSetReEnforced(t *testing.T) {
 	}
 	require.NotNil(t, j)
 	pol := j.Tools.Builtin.Policies
-	for _, name := range coreagent.AllStaticToolNames() {
+	catalog := coreagent.AllStaticToolNames()
+	for _, name := range catalog {
 		if judgeAllowedTools[name] {
 			assert.Equalf(t, config.ToolPolicyAllow, pol[name],
 				"tampered verifier-set tool %q must be re-enforced back to allow", name)
@@ -133,6 +170,51 @@ func TestSeed_JudgeExactSetReEnforced(t *testing.T) {
 				"tampered non-verifier tool %q must be re-enforced back to deny (no stray grant survives)", name)
 		}
 	}
+	// JUDGE-FR-058 (T4): re-enforcement must not leave any OTHER stray key
+	// behind either — see assertJudgePolicyHasOnlyCatalogPlusMCPWildcard's
+	// own doc comment for why "mcp_*" alone is the one tolerated exception.
+	assertJudgePolicyHasOnlyCatalogPlusMCPWildcard(t, pol, catalog)
+}
+
+// TestJudgeSeed_MCPWildcardDenied is the Test Matrix's named oracle for
+// JUDGE-FR-058 (judge-active-reviewer-spec.md's
+// "TestJudgeSeed_MCPWildcardDenied", extended here per the ADR-084/085/086
+// joint delivery plan §3 T4 row): systemAgentSeed(IDJudge) MUST include an
+// explicit "mcp_*": deny wildcard, stamped directly onto the map
+// denyAllThenOverride returns (C5) — "mcp_*" is a wildcard key and must NOT
+// be a member of AllStaticToolNames(), so it cannot be expressed through
+// denyAllThenOverride's normal "one literal entry per catalog name"
+// mechanism.
+//
+// BLOCKED (reported, not silently narrowed): as of this wave, core.go's own
+// comment on systemAgentSeed's IDJudge case states the stamp is
+// "deliberately NOT implemented here" — production code has not landed it.
+// This test is written to the CORRECT, spec-derived oracle and is expected
+// to FAIL until a backend wave lands the stamp; see this wave's final
+// report for the full explanation of why that landing could not happen in
+// THIS wave (Must-NOT-touch: all production code) and which wave in the
+// joint delivery plan's graph is missing it.
+func TestJudgeSeed_MCPWildcardDenied(t *testing.T) {
+	cfg := &config.Config{}
+	require.True(t, coreagent.SeedConfig(cfg))
+
+	var j *config.AgentConfig
+	for i := range cfg.Agents.List {
+		if cfg.Agents.List[i].ID == "judge" {
+			j = &cfg.Agents.List[i]
+		}
+	}
+	require.NotNil(t, j, "Judge must be seeded")
+	require.NotNil(t, j.Tools, "Judge must carry an explicit tools policy")
+	pol := j.Tools.Builtin.Policies
+
+	mcpPolicy, ok := pol["mcp_*"]
+	require.True(t, ok,
+		"JUDGE-FR-058: systemAgentSeed(IDJudge) must stamp an explicit \"mcp_*\": deny wildcard onto the "+
+			"Judge's policy map. Without this literal key, resolveEffectivePolicyWith's wildcard matcher "+
+			"has nothing to match on, and any MCP-namespaced tool falls through to the global ceiling "+
+			"alone with no Judge-side opinion at all — exactly the gap FR-058 exists to close.")
+	assert.Equal(t, config.ToolPolicyDeny, mcpPolicy, "JUDGE-FR-058: the mcp_* wildcard must resolve deny")
 }
 
 // TestSystemAgent_Constraint6_BootCoverage verifies US-4 Acceptance Scenario 2:

@@ -45,6 +45,22 @@ properties:
       re-hydrates its card + composer lock. Optional (older gateways omit
       it); absent/empty means no pending sets. Keep in sync by hand with
       contracts/asyncapi.yaml's inline SessionStateFrame.
+  session_id:
+    type: string
+    description: >
+      ADR-082 (review CR3) — the transcript session this snapshot describes,
+      set when the frame is emitted for a bound/attached session; absent on
+      the connection-open emit (no session yet). The SPA routes active_turn
+      by this id instead of the globally active session. Keep in sync by
+      hand with contracts/asyncapi.yaml's inline SessionStateFrame.
+  active_turn:
+    $ref: SessionStateActiveTurn.yaml
+    description: >
+      ADR-082 D4 — present only when the attached session has a foreground
+      turn in flight at emit time, so a reconnecting SPA opens the streaming
+      bubble and the Stop control exactly as if it had started the turn.
+      Absent when no turn is running. Keep in sync by hand with
+      contracts/asyncapi.yaml's inline SessionStateFrame.
   emitted_at:
     type: string
     format: date-time

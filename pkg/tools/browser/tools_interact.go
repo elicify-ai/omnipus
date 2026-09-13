@@ -82,12 +82,17 @@ func locatorParamSchema(includeText bool, textDesc string) map[string]any {
 	return props
 }
 
-// deferredIsNotAnError is the shared tail of every action tool's Description:
-// the {"deferred": true} shape is a NON-error result and an agent that treats
-// it as a failure retries the wrong thing.
+// deferredIsNotAnError is the shared tail of every control-gated tool's
+// Description (ADR-085 FR-033a — the three capture tools carry it now too,
+// not only the action verbs): the {"deferred": true} shape is a NON-error
+// result and an agent that treats it as a failure retries the wrong thing.
+// Do NOT retry — a control deferral is 100% reproducible until a human acts,
+// so a retry cannot succeed (ADR-085 FR-014's justification for the N=3
+// bound this wording sets up).
 const deferredIsNotAnError = " If a human is currently controlling the browser via the live view, this call " +
-	"defers instead of acting — the result is {\"deferred\": true, \"reason\": ...}, which is not an " +
-	"error; wait for them to release control and retry."
+	"defers instead of acting — the result is {\"deferred\": true, \"gate\": \"browser_control\", " +
+	"\"reason\": ...}, which is not an error. Do not retry any browser action until control returns; " +
+	"the operator resumes your driving by sending a new message."
 
 // ---------------------------------------------------------------------------
 // browser_select_option (FR-009)
@@ -260,7 +265,7 @@ func (t *SelectOptionTool) Execute(ctx context.Context, args map[string]any) *to
 	// read-only. The defer is what makes a panicking or cancelled call
 	// release; a leaked count is a browser that can never be reclaimed.
 	defer mgr.EnterCall()()
-	if result := controlledResult(mgr, key, owner, t.Name()); result != nil {
+	if result := controlledResult(ctx, mgr, key, owner, t.Name(), &t.browserAudit); result != nil {
 		return result
 	}
 	deferred, release := leaseWrite(ctx, mgr, key, owner, tools.ToolAgentID(ctx), t.Name())
@@ -487,7 +492,7 @@ func (t *PressKeyTool) Execute(ctx context.Context, args map[string]any) *tools.
 	// read-only. The defer is what makes a panicking or cancelled call
 	// release; a leaked count is a browser that can never be reclaimed.
 	defer mgr.EnterCall()()
-	if result := controlledResult(mgr, key, owner, t.Name()); result != nil {
+	if result := controlledResult(ctx, mgr, key, owner, t.Name(), &t.browserAudit); result != nil {
 		return result
 	}
 	// The no-locator call takes the lease exactly like the located one. Only
@@ -613,7 +618,7 @@ func (t *HoverTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 	// read-only. The defer is what makes a panicking or cancelled call
 	// release; a leaked count is a browser that can never be reclaimed.
 	defer mgr.EnterCall()()
-	if result := controlledResult(mgr, key, owner, t.Name()); result != nil {
+	if result := controlledResult(ctx, mgr, key, owner, t.Name(), &t.browserAudit); result != nil {
 		return result
 	}
 	deferred, release := leaseWrite(ctx, mgr, key, owner, tools.ToolAgentID(ctx), t.Name())
@@ -760,7 +765,7 @@ func (t *UploadFileTool) Execute(ctx context.Context, args map[string]any) *tool
 	// read-only. The defer is what makes a panicking or cancelled call
 	// release; a leaked count is a browser that can never be reclaimed.
 	defer mgr.EnterCall()()
-	if result := controlledResult(mgr, key, owner, t.Name()); result != nil {
+	if result := controlledResult(ctx, mgr, key, owner, t.Name(), &t.browserAudit); result != nil {
 		return result
 	}
 	deferred, release := leaseWrite(ctx, mgr, key, owner, tools.ToolAgentID(ctx), t.Name())

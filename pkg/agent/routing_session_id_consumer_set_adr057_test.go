@@ -108,6 +108,18 @@
 //     "COULD NOT DETERMINE" rather than silently guessing.
 //
 // K = 9 + 3 + 4 + 1 = 17.
+//
+// ADR-082 amendment (D1, greenfield deletion of the ADR-045
+// orphan-foreground-turn watchdog): two of the nine role-B reads named above
+// — steering.go's hasLiveCriticalDelegate and turn.go's
+// getActiveRootTurnStateForSession — existed solely to answer "is there
+// still a genuine foreground turn to reap" for that watchdog (their own doc
+// comments said so explicitly), and orphan_watch.go was their sole caller.
+// Both are deleted along with the watchdog, dropping the role-B bucket to 7
+// reads and the scan file list (below) to eight files. See the assertions'
+// own comments for the current, authoritative counts — this paragraph is
+// historical context for the original K=17 derivation above, not re-derived
+// in place, matching this file's own "Post-merge addition" precedent.
 package agent
 
 import (
@@ -197,23 +209,34 @@ func u19FindRoutingSessionIDReads(t *testing.T, fset *token.FileSet, filePath st
 //
 //	grep -rl "routingSessionID" --include="*.go" pkg/ | grep -v _test.go
 //
-// which returns exactly these nine files — all under pkg/agent (the field is
-// unexported and never crosses a package boundary). Four of the nine
-// (orphan_watch.go, cancel.go, events.go, session_messaging_wire.go) are
-// verified below to contribute ZERO actual reads — they only mention the
-// identifier in prose — which is itself part of the closure proof: scanning
-// them and finding nothing is what rules out a read hiding in a file this
-// spec's own "Eight sites"/"Three reads" sections never named.
+// which returns exactly these eight files (ADR-082 D1 deleted orphan_watch.go
+// — the sole caller of the steering.go/turn.go role-B predicates that read
+// this field for the now-retired orphan-foreground-turn watchdog — so it no
+// longer appears in this list) — all under pkg/agent (the field is
+// unexported and never crosses a package boundary). Three of the eight
+// (cancel.go, events.go, session_messaging_wire.go) are verified below to
+// contribute ZERO actual reads — they only mention the identifier in prose —
+// which is itself part of the closure proof: scanning them and finding
+// nothing is what rules out a read hiding in a file this spec's own "Eight
+// sites"/"Three reads" sections never named.
+// browser_deferral.go was ADDED to this list by wave B123 (ADR-085
+// BROWSER-FR-022): its browserRootChatSessionID function reads
+// ts.routingSessionID exactly once, to supply the FR-020/FR-021 root-chat
+// scope key pkg/tools/browser/tools.go::controlledResult's control-gate
+// coverage check needs — a role-B (routing/scope) read, never a persistence
+// or addressing identity, classified into its own bucket (u19BucketBrowserGate)
+// below rather than folded into an existing one, per FR-022's explicit
+// four-part amendment requirement.
 var u19RoutingSessionIDScanFiles = []string{
 	"steering.go",
 	"turn.go",
 	"cancel_prearm.go",
 	"subturn.go",
 	"loop.go",
-	"orphan_watch.go",
 	"cancel.go",
 	"events.go",
 	"session_messaging_wire.go",
+	"browser_deferral.go",
 }
 
 // u19RoutingSessionIDBucket classifies one read into its FR-014 (or, for the
@@ -225,6 +248,16 @@ const (
 	u19BucketPreArm      u19RoutingSessionIDBucket = "pre-arm key"
 	u19BucketWSStamping  u19RoutingSessionIDBucket = "WS payload stamping"
 	u19BucketInheritance u19RoutingSessionIDBucket = "FR-011 inheritance copy"
+	// u19BucketBrowserGate is B123's fifth bucket (ADR-085 BROWSER-FR-022):
+	// browser_deferral.go's browserRootChatSessionID reads routingSessionID
+	// to supply a SCOPE KEY for the control-gate's FR-020 coverage decision
+	// — the same role-B (routing/scope) role the existing role-B predicates
+	// play, and never a persistence or addressing identity. Kept as its own
+	// bucket rather than folded into u19BucketRoleB because it is a
+	// DIFFERENT consumer (the browser control gate, not turn
+	// cancellation/reachability) reading for a DIFFERENT purpose, and a
+	// reviewer diffing this file wants that distinction visible.
+	u19BucketBrowserGate u19RoutingSessionIDBucket = "browser control-gate root-chat key"
 )
 
 // u19ClassifyRoutingSessionIDRead assigns r to its bucket by (file,
@@ -237,12 +270,12 @@ func u19ClassifyRoutingSessionIDRead(t *testing.T, r u19RoutingSessionIDRead) u1
 	switch r.file {
 	case "steering.go":
 		switch r.funcName {
-		case "collectDescendantTurnIDs", "resolveInterruptAnchors", "sessionTurnsStillAlive", "hasLiveCriticalDelegate":
+		case "collectDescendantTurnIDs", "resolveInterruptAnchors", "sessionTurnsStillAlive":
 			return u19BucketRoleB
 		}
 	case "turn.go":
 		switch r.funcName {
-		case "GetActiveTurnHookForSession", "resolveSessionIDByChannelChat", "getActiveRootTurnStateForSession":
+		case "GetActiveTurnHookForSession", "resolveSessionIDByChannelChat":
 			return u19BucketRoleB
 		case "claimAnyTurnForSession":
 			// Added 2026-08 (commit 7f4eab0b): RequestCancel's descendant-
@@ -268,6 +301,16 @@ func u19ClassifyRoutingSessionIDRead(t *testing.T, r u19RoutingSessionIDRead) u1
 		// construction — there is no pre-arm/role-B site in this file — so
 		// no funcName disambiguation is needed.
 		return u19BucketWSStamping
+	case "browser_deferral.go":
+		// ADR-085 BROWSER-FR-022 (B123): browserRootChatSessionID is
+		// browser_deferral.go's ONLY routingSessionID read, and it exists
+		// for exactly one purpose — supplying the FR-020/FR-021 root-chat
+		// scope key the browser control gate's cross-tab-set coverage
+		// check needs. No funcName disambiguation is needed (there is
+		// exactly one candidate function in this file).
+		if r.funcName == "browserRootChatSessionID" {
+			return u19BucketBrowserGate
+		}
 	case "subturn.go":
 		switch r.funcName {
 		case "spawnSubTurn":
@@ -416,11 +459,14 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 
 	// --- Per-bucket exact counts, each independently a positive lower bound
 	// (and here also an upper bound, since the set is closed). ---
-	if got := counts[u19BucketRoleB]; got != 9 {
-		t.Errorf("role-B predicate reads = %d, want 9 (steering.go's 4 post-W13 predicates + "+
-			"turn.go's 4 predicates, one of which — resolveSessionIDByChannelChat — contains 2 reads, "+
-			"not 1; plus claimAnyTurnForSession, added 2026-08 per commit 7f4eab0b's cancel-fallback "+
-			"rebase; see this file's header comment for the verified discrepancy against the spec's "+
+	if got := counts[u19BucketRoleB]; got != 7 {
+		t.Errorf("role-B predicate reads = %d, want 7 (steering.go's 3 remaining post-ADR-082 "+
+			"predicates + turn.go's 3 remaining predicates, one of which — resolveSessionIDByChannelChat "+
+			"— contains 2 reads, not 1; plus claimAnyTurnForSession, added 2026-08 per commit "+
+			"7f4eab0b's cancel-fallback rebase. ADR-082 D1 deleted the two role-B predicates that "+
+			"existed solely for the now-retired orphan-foreground-turn watchdog — dropping this "+
+			"bucket by 2 reads from its prior count of 9; see this file's header comment for the "+
+			"deleted predicates' names and the original verified discrepancy against the spec's "+
 			"pre-verification worked total of 7)", got)
 	}
 	if got := counts[u19BucketPreArm]; got != 3 {
@@ -448,14 +494,23 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 		t.Errorf("FR-011 inheritance-copy reads = %d, want 1 (subturn.go's spawnSubTurn, the "+
 			"childTS.routingSessionID = parentTS.routingSessionID assignment)", got)
 	}
+	if got := counts[u19BucketBrowserGate]; got != 1 {
+		t.Errorf("browser control-gate root-chat key reads = %d, want 1 (browser_deferral.go's "+
+			"browserRootChatSessionID — ADR-085 BROWSER-FR-022, added by wave B123)", got)
+	}
 
-	// 9 role-B + 3 pre-arm + 19 WS-stamping + 1 inheritance. Was 17 before the
-	// 2026-08 UAT remediation widened the WS-stamping bucket (see above), 28
-	// before ADR-066 D7's typedTurnExit stamp, 29 before ADR-066 D3's
-	// context_window_unknown refusal stamp (T066-09), 30 before ADR-067
-	// FR-016's needs_provider refusal stamp (T067-09), and 31 before ADR-068
-	// FR-015's model_unassigned refusal stamp (T068-12).
-	const wantTotal = 32
+	// 7 role-B + 3 pre-arm + 19 WS-stamping + 1 inheritance + 1 browser
+	// control-gate = 31. Was 30 before wave B123 (ADR-085 BROWSER-FR-022)
+	// added the fifth bucket. Before that: 9 role-B (32 total) before
+	// ADR-082 D1 deleted the two role-B predicates (hasLiveCriticalDelegate,
+	// getActiveRootTurnStateForSession) that existed solely for the
+	// now-retired orphan-foreground-turn watchdog. Before that: 17 before
+	// the 2026-08 UAT remediation widened the WS-stamping bucket (see
+	// above), 28 before ADR-066 D7's typedTurnExit stamp, 29 before ADR-066
+	// D3's context_window_unknown refusal stamp (T066-09), 30 before
+	// ADR-067 FR-016's needs_provider refusal stamp (T067-09), and 31
+	// before ADR-068 FR-015's model_unassigned refusal stamp (T068-12).
+	const wantTotal = 31
 	if len(all) != wantTotal {
 		t.Fatalf("total routingSessionID reads = %d, want exactly %d (the closed consumer set) — "+
 			"either a new read was added outside the four named buckets, or one of the buckets "+

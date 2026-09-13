@@ -138,11 +138,34 @@ type JudgeCriteriaInput struct {
 	// user-message content ahead of the evidence (e.g. a plan's goal/DoD
 	// framing for Wave 2-B's plan-level round). Empty for a plain task.
 	ExtraContext string
-	// GoalSessionID is the chat session carrying a /goal condition when
-	// Scope == task.VerdictScopeGoal (ADR-052 FR-032/FR-037): it keys the
-	// verifier-session registry ("goal:<id>") so /goal clear can cancel an
-	// in-flight goal verifier, and sources the transcript window the goal
-	// verifier is fed. Empty for task/plan scopes.
+	// GoalID (ADR-086, JUDGE C-08) is the goal RECORD's own scope-correlating
+	// id for Scope == task.VerdictScopeGoal — the identity verifierUnitID's
+	// goal arm keys on and validate() requires. Split out from the session
+	// id below because a goal is no longer three different identities
+	// wearing one field (C-08): a task-owned goal's adjudication legitimately
+	// carries BOTH TaskID and GoalID at once (ADR-086 — a running task's own
+	// goal), which the OLD single-field/single-scope-id design could not
+	// express at all.
+	//
+	// Deliberately ADDITIVE rather than a hard rename of GoalSessionID
+	// below: the only production writer of this struct for goal scope today
+	// (pkg/agent/goal_triggers.go's runGoalAdjudication, a LATER wave's
+	// file — E8, not E9) sets only GoalSessionID. validate()/verifierUnitID
+	// therefore accept GoalID when present and fall back to GoalSessionID
+	// otherwise, so this wave's split does not silently break that
+	// not-yet-updated caller. E8 is expected to start setting GoalID too;
+	// until then GoalSessionID alone continues to satisfy the goal arm
+	// exactly as it does today.
+	GoalID string
+	// GoalSessionID (ADR-052 FR-032/FR-037, narrowed by ADR-086 C-08 to the
+	// role of "GoalActiveSessionID") is the chat session carrying a /goal
+	// condition when Scope == task.VerdictScopeGoal: it sources the
+	// transcript-window feed and is the root of the descendant-session walk
+	// (D1a, FR-010/FR-014) inspect_session's scope is resolved from. It is
+	// NOT the scope-correlating id used for validation/registry keying once
+	// GoalID (above) is set — see that field's doc comment for why the two
+	// were split, and why this field keeps its established name instead of
+	// being mechanically renamed. Empty for task/plan scopes.
 	GoalSessionID string
 	// WorkspaceID is the WORK-UNDER-REVIEW's own workspace id — task.go's
 	// WorkspaceID for a task-scope adjudication, plan.go's WorkspaceID for a
@@ -176,39 +199,64 @@ type JudgeCriteriaInput struct {
 }
 
 // validate enforces JudgeCriteriaInput's scope invariant (7-reviewer gate
-// item 9): exactly one of TaskID/PlanID/GoalSessionID must be set, and it
-// MUST be the one matching in.Scope. A caller that mismatches Scope against
-// its own correlating id (or supplies more than one) is a programming
-// error — JudgeCriteria must never silently adjudicate against the wrong
-// record, or silently accept an ambiguous input. Returns "" when in is
-// valid, or a human-readable violation reason otherwise.
+// item 9, narrowed by ADR-086 C-08): the scope-correlating id matching
+// in.Scope must be set — TaskID for task scope, PlanID for plan scope, and
+// for goal scope EITHER GoalID or (until every caller carries GoalID,
+// C-08's compatibility bridge) GoalSessionID. A caller that mismatches
+// Scope against its own correlating id (or supplies more than one
+// scope's worth) is a programming error — JudgeCriteria must never
+// silently adjudicate against the wrong record, or silently accept an
+// ambiguous input. Returns "" when in is valid, or a human-readable
+// violation reason otherwise.
+//
+// Goal scope's mutual-exclusion rule is intentionally NOT symmetric with
+// task/plan scope's: ADR-086 makes TaskID+GoalID a legitimate combination
+// (a running task's own goal is adjudicated with both set at once — C-08),
+// so goal scope permits TaskID alongside its own correlating id. It still
+// rejects PlanID, which has no such combination in ADR-086.
 func (in JudgeCriteriaInput) validate() string {
 	switch in.Scope {
 	case task.VerdictScopeTask:
 		if in.TaskID == "" {
 			return fmt.Sprintf("scope %q requires TaskID to be set", in.Scope)
 		}
-		if in.PlanID != "" || in.GoalSessionID != "" {
-			return fmt.Sprintf("scope %q must not also carry PlanID/GoalSessionID", in.Scope)
+		if in.PlanID != "" || in.GoalID != "" || in.GoalSessionID != "" {
+			return fmt.Sprintf("scope %q must not also carry PlanID/GoalID/GoalSessionID", in.Scope)
 		}
 	case task.VerdictScopePlan:
 		if in.PlanID == "" {
 			return fmt.Sprintf("scope %q requires PlanID to be set", in.Scope)
 		}
-		if in.TaskID != "" || in.GoalSessionID != "" {
-			return fmt.Sprintf("scope %q must not also carry TaskID/GoalSessionID", in.Scope)
+		if in.TaskID != "" || in.GoalID != "" || in.GoalSessionID != "" {
+			return fmt.Sprintf("scope %q must not also carry TaskID/GoalID/GoalSessionID", in.Scope)
 		}
 	case task.VerdictScopeGoal:
-		if in.GoalSessionID == "" {
-			return fmt.Sprintf("scope %q requires GoalSessionID to be set", in.Scope)
+		if in.GoalID == "" && in.GoalSessionID == "" {
+			return fmt.Sprintf("scope %q requires GoalID (or, from a not-yet-migrated caller, GoalSessionID) to be set", in.Scope)
 		}
-		if in.TaskID != "" || in.PlanID != "" {
-			return fmt.Sprintf("scope %q must not also carry TaskID/PlanID", in.Scope)
+		// C-08: a task-owned goal legitimately carries TaskID alongside its
+		// GoalID (ADR-086) — the old, symmetric "must not carry TaskID"
+		// rule is removed for goal scope only. PlanID has no such
+		// combination and stays rejected.
+		if in.PlanID != "" {
+			return fmt.Sprintf("scope %q must not also carry PlanID", in.Scope)
 		}
 	default:
 		return fmt.Sprintf("unknown scope %q", in.Scope)
 	}
 	return ""
+}
+
+// goalScopeCorrelatingID resolves the id verifierUnitID's goal arm and any
+// other scope-correlation keying MUST use: GoalID when the caller has been
+// migrated to set it, falling back to GoalSessionID for the not-yet-updated
+// production caller (goal_triggers.go, E8). See JudgeCriteriaInput.GoalID's
+// doc comment for why this bridge exists instead of a hard rename.
+func (in JudgeCriteriaInput) goalScopeCorrelatingID() string {
+	if in.GoalID != "" {
+		return in.GoalID
+	}
+	return in.GoalSessionID
 }
 
 // JudgeCriteriaResult is the outcome of one JudgeCriteria call.
@@ -265,7 +313,7 @@ func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) J
 		logger.ErrorCF("agent", "judge: JudgeCriteriaInput failed validation (fail-closed)",
 			map[string]any{"reason": violation, "scope": in.Scope})
 		return al.finalizeVerdict(
-			in, failClosedProseVerdicts(in.Criteria, "invalid JudgeCriteriaInput: "+violation), "", "",
+			in, failClosedProseVerdicts(in.Criteria, "invalid JudgeCriteriaInput: "+violation), nil, "", "",
 		)
 	}
 
@@ -337,12 +385,24 @@ func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) J
 			escalationKey = unitKey + ":" + fp
 		}
 	}
-	noteNonVerdict := func(criterionID string, class NonVerdictClass) (withheld bool) {
+	// couldNotVerifyIDs (JUDGE-FR-022, adapted for ADR-084 revision 9's
+	// retirement of the three-state Outcome, D-B/C-02): the ids of every
+	// criterion that reaches perCriterion via a NON-judgment path — a
+	// deterministic rung's persistently-blocked (K+1th) unable_to_verify
+	// scoring, or a prose criterion the verifier ran on but formed no
+	// judgment for (criterion_unjudgeable). These are NEVER "the Judge
+	// looked and said no" — summarizeVerdict partitions on this set so the
+	// string the worker/operator sees distinguishes "could not verify" from
+	// "not done" WITHOUT resurrecting a retired outcome field: the
+	// partition is real engine-tracked state, not a text-sniff of Reason.
+	var couldNotVerifyIDs []string
+
+	noteNonVerdict := func(criterionID string, class NonVerdictClass) (withheld, couldNotVerify bool) {
 		key := unitKey + "/" + criterionID
 		switch class {
 		case NonVerdictNone:
 			tracker.Reset(key)
-			return false
+			return false, false
 		case NonVerdictCriterionUnjudgeable:
 			// Ran but formed no judgment → unmet for this adjudication (the
 			// unmet verdict was already added by the producer) + escalate-to-
@@ -352,7 +412,7 @@ func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) J
 			if gate.ShouldEscalate(escalationKey) {
 				unjudgeableEscalateFn(unitKey, criterionID)
 			}
-			return false
+			return false, true
 		default: // NonVerdictUnableToVerify
 			if tracker.NoteUnableToVerify(key) {
 				// K consecutive → persistently-blocked (m-4): the unmet verdict
@@ -360,9 +420,9 @@ func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) J
 				// honest failure); the escalation stays loud on every
 				// subsequent occurrence (mirrors verifier-unavailability).
 				unableToVerifyEscalateFn(unitKey, criterionID, tracker.Consecutive(key))
-				return false
+				return false, true
 			}
-			return true // withheld — never scored as absent evidence
+			return true, false // withheld — never scored as absent evidence
 		}
 	}
 
@@ -372,18 +432,37 @@ func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) J
 		if ev != nil {
 			evidence = append(evidence, *ev)
 		}
-		if noteNonVerdict(c.ID, nv) {
+		wh, cnv := noteNonVerdict(c.ID, nv)
+		if wh {
 			withheld = true
 			continue
+		}
+		if cnv {
+			couldNotVerifyIDs = append(couldNotVerifyIDs, c.ID)
 		}
 		perCriterion = append(perCriterion, v)
 	}
 
 	for _, c := range behaviorCriteria {
 		v, nv := al.runBehaviorScan(in, c)
-		if noteNonVerdict(c.ID, nv) {
+		// JUDGE-FR-108 case 2 (D14, wave E10): a mechanically-decidable
+		// tier-1 contradiction — every recorded call of the criterion's
+		// declared tool errored — vetoes a rung-2 Met the count alone would
+		// have passed (the MinCount==0 "optional call, but every attempt
+		// failed" gap; case 1, the count violation itself, is already rung
+		// 2's own verdict above and needs nothing added). behavior_scan.go
+		// itself is untouched (FR-107); this reads a second, independent
+		// copy of the same session.
+		if nv == NonVerdictNone {
+			v = applyBehaviorContradictionVeto(al.resolveBehaviorScanEntries(in), c, v)
+		}
+		wh, cnv := noteNonVerdict(c.ID, nv)
+		if wh {
 			withheld = true
 			continue
+		}
+		if cnv {
+			couldNotVerifyIDs = append(couldNotVerifyIDs, c.ID)
 		}
 		perCriterion = append(perCriterion, v)
 	}
@@ -400,10 +479,12 @@ func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) J
 
 	var judgeModel, judgeAgentID string
 	if len(proseCriteria) > 0 {
-		// G-3/G-15 (FR-144): feed the REAL write-set-scoped workspace diff from
-		// the Phase-1 git evidence layer into the prose Judge's context, so it
-		// sees the actual file changes — not a transcript window alone.
-		diffText := al.resolveVerifierDiffText(in)
+		// G-3/G-15 (FR-144); fix GX-E-3: feed the REAL, CUMULATIVE
+		// write-set-scoped workspace diff (spanning the whole round, not just
+		// the latest commit) from the Phase-1 git evidence layer into the
+		// prose Judge's context, so it sees the actual file changes — not a
+		// transcript window alone.
+		diffText, diffHead := al.resolveVerifierDiffText(in)
 		proseVerdicts, model, jaID, unavailable, reason, unjudgeableIDs := al.runVerifierAdjudication(
 			ctx, in, proseCriteria, evidence, diffText,
 		)
@@ -411,9 +492,17 @@ func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) J
 			// The verifier turn MECHANISM could not run (provider/SEC-26/ctx).
 			// Round not consumed, re-run next turn (unchanged D7 contract; the
 			// persistent-Judge-down case is escalated by the separate
-			// verifierUnavailabilityStreak, sign-off finding 1).
+			// verifierUnavailabilityStreak, sign-off finding 1). Deliberately
+			// do NOT advance the diff boundary here — see
+			// resolveVerifierDiffText's own doc comment for why a retried
+			// call must still see the same cumulative diff, not a
+			// spuriously-empty one.
 			return JudgeCriteriaResult{Unavailable: true, Reason: reason}
 		}
+		// Fix GX-E-3: the round genuinely completed — advance THIS unit's
+		// cumulative-diff boundary to the HEAD this call resolved, so the
+		// NEXT round's diff starts from here rather than from scratch.
+		advanceVerifierDiffBoundary(verifierUnitID(in), diffHead)
 		perCriterion = append(perCriterion, proseVerdicts...)
 		// FR-138: classify each prose criterion. A criterion the verifier RAN
 		// on but formed no judgment for (empty content / parse failure / the
@@ -427,6 +516,7 @@ func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) J
 		for _, c := range proseCriteria {
 			if unjudgeableSet[c.ID] {
 				noteNonVerdict(c.ID, NonVerdictCriterionUnjudgeable)
+				couldNotVerifyIDs = append(couldNotVerifyIDs, c.ID)
 			} else {
 				noteNonVerdict(c.ID, NonVerdictNone)
 			}
@@ -434,16 +524,22 @@ func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) J
 		judgeModel, judgeAgentID = model, jaID
 	}
 
-	return al.finalizeVerdict(in, perCriterion, judgeModel, judgeAgentID)
+	return al.finalizeVerdict(in, perCriterion, couldNotVerifyIDs, judgeModel, judgeAgentID)
 }
 
 // finalizeVerdict computes the overall PASS/FAIL from perCriterion
 // (fail-closed: an empty perCriterion — no criteria adjudicated at all —
 // never defaults to met, NFR-2) and builds the persisted/transcript
-// JudgeVerdict.
+// JudgeVerdict. couldNotVerifyIDs (JUDGE-FR-022) is JudgeCriteria's
+// engine-tracked set of criteria that reached perCriterion via a
+// non-judgment path (persistently-blocked unable_to_verify, or
+// criterion_unjudgeable) — passed straight to summarizeVerdict so the
+// worker-facing Reason string can distinguish "could not verify" from
+// "not done" without an Outcome field (D-B, C-02: there isn't one).
 func (al *AgentLoop) finalizeVerdict(
 	in JudgeCriteriaInput,
 	perCriterion []task.CriterionVerdict,
+	couldNotVerifyIDs []string,
 	judgeModel, judgeAgentID string,
 ) JudgeCriteriaResult {
 	met := len(perCriterion) > 0
@@ -466,23 +562,53 @@ func (al *AgentLoop) finalizeVerdict(
 		JudgedAt:      time.Now().UTC().Format(time.RFC3339),
 		JudgeAgentID:  judgeAgentID,
 	}
-	return JudgeCriteriaResult{Verdict: v, Reason: summarizeVerdict(v)}
+	return JudgeCriteriaResult{Verdict: v, Reason: summarizeVerdict(v, couldNotVerifyIDs)}
 }
 
-func summarizeVerdict(v *task.JudgeVerdict) string {
+// summarizeVerdict produces JudgeCriteriaResult.Reason — the string the
+// worker/operator actually receives (JUDGE-FR-022). It partitions the
+// unmet criteria into two clauses: genuinely "unmet" (the Judge looked and
+// judged it not done) and "could not verify" (couldNotVerifyIDs — the
+// verification MECHANISM itself did not complete: a persistently-blocked
+// deterministic check, or a prose criterion the verifier never formed a
+// judgment for). Reason MUST NEVER label a could-not-verify criterion
+// "unmet" — conflating the two mislabels an infrastructure gap as a real
+// failure and, fed back as steering context, tells the worker to redo
+// already-finished work. Either clause is omitted when its set is empty.
+//
+// This is FR-022's requirement adapted to ADR-084 revision 9 (D-B, C-02):
+// the split is real ENGINE state threaded in from JudgeCriteria, never a
+// text-sniff of Reason and never a resurrected Outcome field.
+func summarizeVerdict(v *task.JudgeVerdict, couldNotVerifyIDs []string) string {
 	if v.Met {
 		return "all criteria met"
 	}
-	var unmet []string
+	cnv := make(map[string]bool, len(couldNotVerifyIDs))
+	for _, id := range couldNotVerifyIDs {
+		cnv[id] = true
+	}
+	var unmet, couldNotVerify []string
 	for _, c := range v.PerCriterion {
-		if !c.Met {
+		if c.Met {
+			continue
+		}
+		if cnv[c.CriterionID] {
+			couldNotVerify = append(couldNotVerify, c.CriterionID)
+		} else {
 			unmet = append(unmet, c.CriterionID)
 		}
 	}
-	if len(unmet) == 0 {
+	if len(unmet) == 0 && len(couldNotVerify) == 0 {
 		return "no criteria were adjudicated (fail-closed, NFR-2)"
 	}
-	return "unmet criteria: " + strings.Join(unmet, ", ")
+	var clauses []string
+	if len(unmet) > 0 {
+		clauses = append(clauses, "unmet criteria: "+strings.Join(unmet, ", "))
+	}
+	if len(couldNotVerify) > 0 {
+		clauses = append(clauses, "could not verify: "+strings.Join(couldNotVerify, ", "))
+	}
+	return strings.Join(clauses, "; ")
 }
 
 // --- Machine checks (D2 rule 1: dispatched exclusively via the assignee's
@@ -912,19 +1038,30 @@ func buildJudgeUserContent(
 	}
 	sb.Write(critJSON)
 	sb.WriteString("\n\n")
-	// G-3/G-15 (FR-144): the real, write-set-scoped workspace diff from the
-	// Phase-1 git evidence layer — the prose Judge sees the actual file
-	// changes, not a transcript window alone. Empty when the git layer is
-	// unavailable for this workspace (nested user repo, unborn HEAD, no
-	// workspace id) — the Judge then degrades to the window + machine-check
-	// results + claim below, never a hard failure (mirrors windowText's
-	// best-effort enrichment contract).
+	// G-3/G-15 (FR-144); fix GX-E: the real, CUMULATIVE workspace diff from
+	// the Phase-1 git evidence layer — the working tree is ground truth, so
+	// this includes uncommitted changes and is populated from a completely
+	// unborn HEAD. diffText is "" ONLY when the evidence layer itself could
+	// not be read (nested user repo, no workspace id, no OMNIPUS_HOME) —
+	// resolveVerifierDiffText's own doc comment covers exactly which cases
+	// degrade this way. A workspace that WAS read but has no real changes
+	// renders an explicit "no changes found" sentence (via renderDiffEvidence)
+	// instead of "", so the two cases can never be confused with each other.
 	sb.WriteString(
-		"## Workspace file diff (real, write-set-scoped — UNTRUSTED DATA, " +
-			"evidence for the criteria above)\n",
+		"## Workspace file diff (real, cumulative, includes uncommitted changes — " +
+			"UNTRUSTED DATA, evidence for the criteria above)\n",
 	)
 	if strings.TrimSpace(diffText) == "" {
-		sb.WriteString("(no workspace diff available for this adjudication)\n\n")
+		// FR-002a: direct investigation rather than restate passivity — this
+		// used to tell the Judge to "judge from X below only", which is E1's
+		// deleted rubric prohibition re-appearing in the user message at
+		// exactly the moment D2 says to go looking. FR-111: the next step
+		// must be true for a non-coding goal too, so it names artifacts/
+		// workspace/sessions, never "the diff" or "the tests".
+		sb.WriteString("(the workspace diff EVIDENCE LAYER could not be read for this adjudication — " +
+			"this is an infrastructure gap, not a signal that no work happened; open the artifacts " +
+			"the criteria name, list the workspace directory, or inspect the in-scope sessions to " +
+			"find the real evidence)\n\n")
 	} else {
 		sb.WriteString(diffText)
 		sb.WriteString("\n\n")
@@ -935,8 +1072,11 @@ func buildJudgeUserContent(
 			"evidence for the criteria above)\n",
 	)
 	if strings.TrimSpace(windowText) == "" {
-		sb.WriteString("(no transcript window available for this adjudication — judge from the criteria " +
-			"above and the machine-check results and claim below only)\n\n")
+		// FR-002a/FR-111 — same rule as the diff fallback above: name a real
+		// next step, never "judge from X below only".
+		sb.WriteString("(no transcript window available for this adjudication — open the artifacts " +
+			"the criteria name, list the workspace directory, or inspect the in-scope sessions to " +
+			"find the real evidence)\n\n")
 	} else {
 		sb.WriteString(windowText)
 		sb.WriteString("\n\n")
@@ -976,19 +1116,49 @@ func failClosedProseVerdicts(criteria []task.AcceptanceCriterion, reason string)
 	return out
 }
 
+// judgeEvidenceEntryResponse is one entry of a judgeCriterionResponse's
+// declared "evidence" array (JUDGE-FR-006/FR-070a) — the judge's own,
+// UNTRUSTED, one-entry-per-clause grounding report. Mirrors
+// task.CriterionEvidenceEntry's shape; kept as a separate parse-time type
+// (rather than parsing straight into the task package's type) so this
+// package can freely reject/normalize a malformed entry before it ever
+// reaches a persisted CriterionVerdict.
+type judgeEvidenceEntryResponse struct {
+	Part   string `json:"part"`
+	Source string `json:"source"`
+	Target string `json:"target"`
+	Quote  string `json:"quote"`
+}
+
 // judgeCriterionResponse is one entry of the judge's declared JSON contract
-// (coreagent.JudgeDefaultRubric): {"id","evidence_quote","met","reason"}.
-// EvidenceQuote (ADR-074 D7) is the rubric's quote-before-verdict excerpt —
-// verbatim UNTRUSTED content, truncated rune-safe to
-// maxEvidenceQuoteRunes code points by parseJudgeResponse; empty when the
-// judge had nothing to quote (which the rubric pairs with met:false), and
-// absent entirely from pre-D7 souls (parse-compatible: the field simply
-// stays "").
+// (coreagent.JudgeDefaultRubric): {"id","met","reason","evidence_quote",
+// "evidence_source","evidence_target","evidence"}. EvidenceQuote (ADR-074
+// D7) is the rubric's quote-before-verdict excerpt — verbatim UNTRUSTED
+// content, truncated rune-safe to maxEvidenceQuoteRunes code points by
+// parseJudgeResponse; empty when the judge had nothing to quote, and absent
+// entirely from pre-D7/pre-ADR-084 souls (parse-compatible: the field
+// simply stays "").
+//
+// EvidenceSource/EvidenceTarget/Evidence (JUDGE-FR-070a, C-02) are the
+// judge's own SELF-REPORTED grounding discriminators — UNTRUSTED model
+// output, exactly like EvidenceQuote. This wave (E9) validates them against
+// their known enums/shape and carries them onto the persisted
+// task.CriterionVerdict in the mapping loop (verifier_adjudication.go);
+// deriving them from ACTUAL captured tool-call evidence (rather than
+// trusting the model's self-report) is E10's grounding/tier work — see
+// deriveVerdictProvenance's own doc comment for the exact call-site split.
+// ALL FOUR fields are optional REPORTING-only data (D-B, ADR-084 revision
+// 9 §10): absent, malformed, or non-verifying, they NEVER gate a verdict —
+// there is deliberately no Outcome field anywhere in this contract (C-02,
+// D-H — do not reintroduce one).
 type judgeCriterionResponse struct {
-	ID            string `json:"id"`
-	Met           bool   `json:"met"`
-	Reason        string `json:"reason"`
-	EvidenceQuote string `json:"evidence_quote"`
+	ID             string                       `json:"id"`
+	Met            bool                         `json:"met"`
+	Reason         string                       `json:"reason"`
+	EvidenceQuote  string                       `json:"evidence_quote"`
+	EvidenceSource string                       `json:"evidence_source"`
+	EvidenceTarget string                       `json:"evidence_target"`
+	Evidence       []judgeEvidenceEntryResponse `json:"evidence"`
 }
 
 // judgeLLMResponse is the judge's full declared JSON contract:
@@ -997,6 +1167,14 @@ type judgeLLMResponse struct {
 	Met      bool                     `json:"met"`
 	Criteria []judgeCriterionResponse `json:"criteria"`
 	Summary  string                   `json:"summary"`
+	// WeakEvidenceCriterionIDs is NOT part of the wire contract (json:"-") —
+	// it is parseJudgeResponse's own derived report (JUDGE-FR-024/FR-026/
+	// FR-027, D-B): the ids of every `met` criterion whose evidence_quote
+	// was missing/empty/whitespace-only, evaluated on the RAW pre-
+	// truncation value (FR-026). Reporting only: nothing in this package
+	// ever uses this slice to change a Met value or a Reason string — see
+	// the doc comment at parseJudgeResponse's detection loop.
+	WeakEvidenceCriterionIDs []string `json:"-"`
 }
 
 // judgeCodeFenceRe strips an optional Markdown code-fence wrapper some LLMs
@@ -1072,6 +1250,16 @@ func truncateEvidenceQuote(s string, limit int) string {
 	return s
 }
 
+// evidenceQuoteIsWeak reports whether raw (the UN-truncated evidence_quote
+// straight off the parsed JSON) is missing, empty, or whitespace-only
+// (JUDGE-FR-024/FR-026). Deliberately a free function, not inlined into
+// parseJudgeResponse's loop, so a test can assert it is invoked BEFORE
+// truncateEvidenceQuote mutates the field (FR-026's ordering requirement)
+// without needing to fabricate a >500-rune quote to observe the difference.
+func evidenceQuoteIsWeak(raw string) bool {
+	return strings.TrimSpace(raw) == ""
+}
+
 func parseJudgeResponse(raw string) (judgeLLMResponse, error) {
 	jsonStr, err := extractJudgeJSON(raw)
 	if err != nil {
@@ -1081,9 +1269,28 @@ func parseJudgeResponse(raw string) (judgeLLMResponse, error) {
 	if err := json.Unmarshal([]byte(jsonStr), &out); err != nil {
 		return judgeLLMResponse{}, fmt.Errorf("unmarshal judge JSON: %w", err)
 	}
-	// ADR-074 D7 (a): bound every evidence quote at the parser, rune-safe.
 	for i := range out.Criteria {
-		out.Criteria[i].EvidenceQuote = truncateEvidenceQuote(out.Criteria[i].EvidenceQuote, maxEvidenceQuoteRunes)
+		c := &out.Criteria[i]
+		// D-B / JUDGE-FR-024, FR-026, FR-027 (ADR-084 revision 9): the D2b
+		// REWRITE is CANCELLED — a `met` whose evidence_quote is missing,
+		// empty or whitespace-only is DETECTED and REPORTED (counted +
+		// logged at WARN with the criterion id), and NOTHING ELSE. Met and
+		// Reason are never touched here; the Judge has the authority, and a
+		// weak quote does not flip a verdict. FR-026: evaluated on the RAW
+		// quote, strictly BEFORE the truncation below.
+		if c.Met && evidenceQuoteIsWeak(c.EvidenceQuote) {
+			out.WeakEvidenceCriterionIDs = append(out.WeakEvidenceCriterionIDs, c.ID)
+			logger.WarnCF("agent",
+				"judge: met verdict carries a missing/empty/whitespace-only evidence_quote — reported, "+
+					"not rewritten (D-B, ADR-084 revision 9: the Judge's authority is not conditioned on "+
+					"grounding evidence being present)",
+				map[string]any{"criterion_id": c.ID})
+		}
+		// ADR-074 D7 (a): bound every evidence quote at the parser, rune-safe.
+		c.EvidenceQuote = truncateEvidenceQuote(c.EvidenceQuote, maxEvidenceQuoteRunes)
+		for j := range c.Evidence {
+			c.Evidence[j].Quote = truncateEvidenceQuote(c.Evidence[j].Quote, maxEvidenceQuoteRunes)
+		}
 	}
 	return out, nil
 }

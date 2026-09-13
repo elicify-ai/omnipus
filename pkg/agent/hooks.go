@@ -142,7 +142,10 @@ func (r *LLMHookRequest) Clone() *LLMHookRequest {
 	cloned := *r
 	cloned.Messages = cloneProviderMessages(r.Messages)
 	cloned.Tools = cloneToolDefinitions(r.Tools)
-	cloned.Options = cloneStringAnyMap(r.Options)
+	// cloneOptionsMap (not cloneStringAnyMap): Options carries typed Go
+	// scalars/small value structs (see cloneOptionsMap's own doc comment for
+	// why a JSON round-trip here would silently type-erase them).
+	cloned.Options = cloneOptionsMap(r.Options)
 	return &cloned
 }
 
@@ -860,6 +863,38 @@ func cloneStringAnyMap(src map[string]any) map[string]any {
 	var cloned map[string]any
 	if err := json.Unmarshal(b, &cloned); err != nil {
 		return nil
+	}
+	return cloned
+}
+
+// cloneOptionsMap performs a SHALLOW copy of an LLM options map (top-level
+// keys only) — unlike cloneStringAnyMap (used for genuinely JSON-shaped tool
+// call arguments/parameters, which really do arrive as arbitrary nested
+// JSON), an LLM options map's values are typed Go scalars and small value
+// structs (max_tokens int, temperature float64, thinking_level string, and
+// any future typed option value) that a JSON marshal/unmarshal round-trip
+// silently type-erases into a generic map[string]any — a struct value such
+// as T{Mode:"required"} comes back as map[string]any{"Mode":"required"},
+// which every typed consumer then rejects as a "wrong Go type" caller bug.
+// The danger is that this clone helper fires on EVERY turn, independent of
+// whether any hook plugin is even registered — BeforeLLM/AfterLLM (below)
+// unconditionally clone the request before checking for registered
+// interceptors — so a type-erasing clone would corrupt options fleet-wide
+// with nothing louder than a per-request WARN to notice it by. (Discovered
+// while ADR-081 D3 briefly threaded a typed tool-choice value through here;
+// that feature was later removed by the D3 amendment, but the hazard is
+// generic to any typed option and the shallow copy is the right shape
+// regardless.) A
+// shallow copy provides the SAME mutation-isolation guarantee a deep copy
+// would for every value actually placed in an options map today: nothing in
+// this codebase ever stores a reference-typed (slice/map) value there.
+func cloneOptionsMap(src map[string]any) map[string]any {
+	if len(src) == 0 {
+		return nil
+	}
+	cloned := make(map[string]any, len(src))
+	for k, v := range src {
+		cloned[k] = v
 	}
 	return cloned
 }

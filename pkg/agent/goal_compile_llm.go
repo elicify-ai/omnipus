@@ -73,6 +73,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/askuser"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -94,72 +95,6 @@ var goalCompileCallTimeout = 2 * time.Minute //nolint:gochecknoglobals
 // each increment carries the running total under the
 // "goal_compile_fallbacks_total" structured field — no new metrics endpoint.
 var goalCompileFallbacks atomic.Uint64 //nolint:gochecknoglobals
-
-// goalCompileFallbacksTotal exposes the counter (tests, future status surfaces).
-func goalCompileFallbacksTotal() uint64 { return goalCompileFallbacks.Load() }
-
-// goalClarificationQuestionEcho is one clarifying question's header+text,
-// echoed into the clarification record (ADR-079 D3) so the resumed compile
-// can recover the question text for an answer whose own QuestionText echo
-// (askuser.Answer, o-R2-1) is somehow empty. Deliberately narrower than
-// askuser.Question — the record does not need to re-carry options/
-// recommended/multi_select, only the header/text pairing the spec names.
-type goalClarificationQuestionEcho struct {
-	Header   string `json:"header"`
-	Question string `json:"question"`
-}
-
-// goalClarificationRecord is the pending-clarification record persisted as
-// session.MetaPatch.GoalClarificationJSON (US-3 S7): the original intent plus
-// the compiler's clarifying question(s). The user's next ordinary chat
-// message (channel path) or matching AskUserQuestion card answer (web path,
-// ADR-079 D3) answers it, feeding ONE resumed compile; `/goal clear` or a
-// fresh `/goal <intent>` discards it. Max one question round per episode.
-//
-// CardID and Questions are ADR-079 D3's additive, absent-safe extension:
-// present ONLY on the web-card path (CardID correlates the record to a live
-// AskUserQuestionRegistry pending set); empty on the pre-ADR-079 / channel
-// plain-chat path, which keeps using Question exactly as before. Do NOT
-// repurpose Question into a slice — that would break both old records and
-// the channel single-question path (ADR-079 grill M1).
-type goalClarificationRecord struct {
-	Intent    string                          `json:"intent"`
-	Question  string                          `json:"question"`
-	AskedAt   string                          `json:"asked_at,omitempty"`
-	CardID    string                          `json:"card_id,omitempty"`
-	Questions []goalClarificationQuestionEcho `json:"questions,omitempty"`
-}
-
-// marshalGoalClarification serializes a clarification record for session meta.
-func marshalGoalClarification(r *goalClarificationRecord) (string, error) {
-	if r == nil {
-		return "", nil
-	}
-	data, err := json.Marshal(r)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
-}
-
-// loadGoalClarification deserializes GoalClarificationJSON. Returns nil for
-// an empty value; logs loud (mirroring loadCompiledGoal's corrupt-vs-absent
-// distinction) for a non-empty value that fails to parse.
-func loadGoalClarification(raw string) *goalClarificationRecord {
-	if strings.TrimSpace(raw) == "" {
-		return nil
-	}
-	var r goalClarificationRecord
-	if err := json.Unmarshal([]byte(raw), &r); err != nil {
-		logger.WarnCF("agent", "goal: GoalClarificationJSON is non-empty but failed to parse (discarding)",
-			map[string]any{"error": err.Error()})
-		return nil
-	}
-	if strings.TrimSpace(r.Intent) == "" {
-		return nil
-	}
-	return &r
-}
 
 // goalCompileCriterionParsed is one parsed "clear"-branch criterion entry
 // (ADR-080 D-TYPES): prose text plus its required judgment tag. This is the
@@ -534,51 +469,87 @@ func (al *AgentLoop) goalCompileWindowText(goalSessionID, agentID string) string
 	return al.sessionWindowText(store, goalSessionID, budget, nil)
 }
 
-// buildGoalCompileMessages assembles the compile call's fresh context: a
-// system message carrying the compile contract (+ the define-goal quality
-// bar when seeded, + ADR-080 D-CONTEXT2's AUTHORITATIVE workspace/project
-// instructions when resolvable), and one user message carrying ADR-079 D1's
-// UNTRUSTED session-transcript window (when non-empty) followed by the
-// intent's prose remainder (plus, on a resumed compile, the clarifying
-// question and the user's answer; plus, on a repair call, the feasibility-
-// gate rejection to repair around). sessionWindow and workspaceInstructions
-// are both "" on a byte-identical no-context call (no session / no
-// resolvable workspace) — every heading is conditionally emitted so a
-// missing feed never changes the prompt shape.
-func buildGoalCompileMessages(prose, question, answer, repairReason, sessionWindow, workspaceInstructions string) []providers.Message {
+// buildGoalRubricNote returns the compile contract's rubric text: the
+// clarity gate, the checklist-authoring guidance (judgment types, the
+// 4-layer DoD derivation ladder), and the seeded define-goal skill content
+// when present — WITHOUT ADR-079 D1's session-transcript window and WITHOUT
+// ADR-080 D-CONTEXT2's workspace/project instructions (ADR-081 D4, spec
+// FR-011). This is a single reusable builder so buildGoalCompileMessages
+// (below, D7's fallback-only compile) and loop.go's D3/D4 turn-scoped
+// rubric injection (the WORKING agent's own first-move guidance) can never
+// drift apart on what the quality bar says. The window and
+// workspace-instructions feeds are deliberately excluded: loop.go's
+// injection call site already carries the session's own native message
+// history and already injects the turn's own workspace instructions
+// (injectWorkspaceInstructions) on every turn — re-including either here
+// would double-inject.
+//
+// forTool selects the delivery-mechanism framing that opens the note — the
+// two callers describe the SAME fields through two different surfaces, and
+// conflating them would leave a tool-calling turn holding an instruction to
+// emit raw JSON instead of calling a tool (D3 AMENDMENT, 2026-09-07: the
+// tool-calling path used to inherit the raw-JSON framing verbatim, since
+// provider tool-choice forcing carried the actual guarantee and the prompt
+// text's exact wording didn't matter as much; now that the immediate
+// post-turn correction is the enforcement point, the request itself must
+// say the right thing):
+//   - false — D7's compileGoalIntentLLM/goalCompileLLMCall, a raw no-tools
+//     LLM call with no set_goal/AskUserQuestion available at all. Keeps the
+//     original "respond with ONLY a JSON object" contract unchanged.
+//   - true — loop.go's D3/D4 turn-scoped injection, where set_goal and
+//     (webchat origin, budget permitting) AskUserQuestion are REAL callable
+//     tools. Opens with an explicit first-move instruction instead: call
+//     set_goal now, or ask once when genuinely unclear, then keep working in
+//     the same turn.
+//
+// The shared substance below (criterion/DoD authoring guidance, the skill
+// content) never differs — only how the model is told to deliver it.
+func buildGoalRubricNote(forTool bool) string {
 	var sys strings.Builder
+	if forTool {
+		sys.WriteString(
+			"Your FIRST action this turn must be a tool call, not prose. When you are confident, against " +
+				"the quality bar below, about the goal's restated statement, acceptance criteria, and " +
+				"Definition of Done, call set_goal now (mode: \"register\") with those fields, then continue " +
+				"straight into the work in this SAME turn — there is no confirmation step to wait for. When " +
+				"the goal is genuinely unclear, ask once instead: call AskUserQuestion where it is offered, " +
+				"or ask conversationally in your own reply where it is not, then call set_goal immediately " +
+				"once the answer arrives, before doing anything else.\n\n")
+	} else {
+		sys.WriteString(
+			"You compile a user's goal into a restated statement, judgment-typed acceptance criteria, and a\n" +
+				"Definition of Done (DoD) that a reviewer (the Judge) will later evaluate the work against.\n" +
+				"Respond with ONLY a JSON object, no prose around it, in exactly one of these two shapes:\n\n" +
+				"Clear:\n" +
+				"  {\"assessment\":{\"clarity\":\"clear\"},\n" +
+				"   \"definition\":\"<one clear sentence restating the goal>\",\n" +
+				"   \"criteria\":[{\"text\":\"...\",\"judgment\":\"boolean\"|\"quantitative\"|\"artifact\"}, ...],\n" +
+				"   \"dod\":[{\"text\":\"...\",\"judgment\":\"boolean\"|\"quantitative\"|\"artifact\"," +
+				"\"provenance\":\"stated\"|\"workspace\"|\"floor\"|\"inferred\"}, ...]}\n\n" +
+				"Ambiguous:\n" +
+				"  {\"assessment\":{\"clarity\":\"ambiguous\"},\n" +
+				"   \"clarifying_questions\":[\n" +
+				"     {\"header\":\"<short unique tab label>\",\"question\":\"<the question text>\",\n" +
+				"      \"options\":[{\"label\":\"...\",\"description\":\"...\"}, ... concrete answer options],\n" +
+				"      \"multi_select\":true|false (optional, default false),\n" +
+				"      \"recommended\":\"<one option's exact label, optional>\"},\n" +
+				"     ... up to 10 questions in one round\n" +
+				"   ]}\n\n" +
+				fmt.Sprintf(
+					"Every clarifying question needs a short unique header (max %d chars) and %d-%d concrete "+
+						"answer options — real, specific candidate answers, never filler — even when the true "+
+						"answer is open-ended: the user can always answer in free text instead, so the options are "+
+						"a helpful starting menu, not an exhaustive list. Never set a \"default_safe\" field on a "+
+						"clarifying question — these must always wait for the user's own answer.\n\n",
+					askuser.MaxHeaderChars, askuser.MinOptions, askuser.MaxOptions,
+				))
+	}
 	sys.WriteString(
-		"You compile a user's goal into a restated statement, judgment-typed acceptance criteria, and a\n" +
-			"Definition of Done (DoD) that a reviewer (the Judge) will later evaluate the work against.\n" +
-			"Respond with ONLY a JSON object, no prose around it, in exactly one of these two shapes:\n\n" +
-			"Clear:\n" +
-			"  {\"assessment\":{\"clarity\":\"clear\"},\n" +
-			"   \"definition\":\"<one clear sentence restating the goal>\",\n" +
-			"   \"criteria\":[{\"text\":\"...\",\"judgment\":\"boolean\"|\"quantitative\"|\"artifact\"}, ...],\n" +
-			"   \"dod\":[{\"text\":\"...\",\"judgment\":\"boolean\"|\"quantitative\"|\"artifact\"," +
-			"\"provenance\":\"stated\"|\"workspace\"|\"floor\"|\"inferred\"}, ...]}\n\n" +
-			"Ambiguous:\n" +
-			"  {\"assessment\":{\"clarity\":\"ambiguous\"},\n" +
-			"   \"clarifying_questions\":[\n" +
-			"     {\"header\":\"<short unique tab label>\",\"question\":\"<the question text>\",\n" +
-			"      \"options\":[{\"label\":\"...\",\"description\":\"...\"}, ... concrete answer options],\n" +
-			"      \"multi_select\":true|false (optional, default false),\n" +
-			"      \"recommended\":\"<one option's exact label, optional>\"},\n" +
-			"     ... up to 10 questions in one round\n" +
-			"   ]}\n\n" +
-			fmt.Sprintf(
-				"Every clarifying question needs a short unique header (max %d chars) and %d-%d concrete "+
-					"answer options — real, specific candidate answers, never filler — even when the true "+
-					"answer is open-ended: the user can always answer in free text instead, so the options are "+
-					"a helpful starting menu, not an exhaustive list. Never set a \"default_safe\" field on a "+
-					"clarifying question — these must always wait for the user's own answer.\n\n",
-				askuser.MaxHeaderChars, askuser.MinOptions, askuser.MaxOptions,
-			) +
-			"Choose \"clear\" ONLY when you are confident, against the quality bar below, that every " +
+		"Choose \"clear\" ONLY when you are confident, against the quality bar below, that every " +
 			"criterion is unambiguous and no reasonable reader would disagree about what \"done\" means. " +
 			"If scope, acceptance, or the user's meaning is genuinely ambiguous — including a goal that " +
-			"only makes sense against earlier conversation you were not given enough of — answer " +
-			"\"ambiguous\" and ask, instead of guessing.\n\n" +
+			"only makes sense against earlier conversation you were not given enough of — treat it as " +
+			"ambiguous and ask, instead of guessing.\n\n" +
 			"Definition: one clear sentence restating the goal, staying close to the setter's own words. " +
 			"Shape: \"Produce <outcome> for <who/what it serves>, so that <the one observable end-state> " +
 			"— <optional: by when / within a budget or attempt limit>.\" One primary outcome only (extra " +
@@ -614,6 +585,67 @@ func buildGoalCompileMessages(prose, question, answer, repairReason, sessionWind
 		sys.WriteString(bar)
 		sys.WriteString("\n")
 	}
+	return sys.String()
+}
+
+// goalRubricChannelAddendum extends buildGoalRubricNote's text on a
+// non-webchat origin (ADR-081 D3 [G-B2] / D4): AskUserQuestion is
+// permanently web-only (pkg/tools/ask_user_question.go), so a channel-origin
+// goal turn gets the SAME rubric plus this one line telling it to ask
+// conversationally instead of reaching for a card that would refuse.
+const goalRubricChannelAddendum = "\n\nAskUserQuestion is unavailable on this channel (it is permanently " +
+	"web-app only) — if you are not confident enough to register the record now, ask your clarifying " +
+	"question conversationally, in plain language, as your normal reply, and register the record once " +
+	"the operator answers.\n"
+
+// buildGoalRubricInjectionNote returns the ADR-081 D4 turn-scoped system
+// note loop.go injects on a goal turn: "" when holds is false (the D3 base
+// predicate — active goal AND an empty compiled record — does not hold this
+// request), buildGoalRubricNote(true) otherwise (the tool-calling framing —
+// this is always the WORKING agent's own turn, never the D7 raw-JSON
+// fallback compile), with goalRubricChannelAddendum appended when the turn
+// did not originate on the web (isWebchat false).
+func buildGoalRubricInjectionNote(holds, isWebchat bool) string {
+	if !holds {
+		return ""
+	}
+	note := buildGoalRubricNote(true)
+	if !isWebchat {
+		note += goalRubricChannelAddendum
+	}
+	return note
+}
+
+// injectGoalRubricNote inserts note as a "system" role message at index 1 of
+// msgs — mirrors injectWebRenderingNote/injectWorkspaceInstructions exactly;
+// its position relative to the other ephemeral system notes is not
+// behaviorally significant. Returns msgs unchanged when note == "" or
+// len(msgs) == 0.
+func injectGoalRubricNote(msgs []providers.Message, note string) []providers.Message {
+	if note == "" || len(msgs) == 0 {
+		return msgs
+	}
+	out := make([]providers.Message, 0, len(msgs)+1)
+	out = append(out, msgs[0])
+	out = append(out, providers.Message{Role: "system", Content: note})
+	out = append(out, msgs[1:]...)
+	return out
+}
+
+// buildGoalCompileMessages assembles the compile call's fresh context: a
+// system message carrying the compile contract (buildGoalRubricNote) plus
+// ADR-080 D-CONTEXT2's AUTHORITATIVE workspace/project instructions when
+// resolvable, and one user message carrying ADR-079 D1's UNTRUSTED
+// session-transcript window (when non-empty) followed by the intent's prose
+// remainder (plus, on a resumed compile, the clarifying question and the
+// user's answer; plus, on a repair call, the feasibility-gate rejection to
+// repair around). sessionWindow and workspaceInstructions are both "" on a
+// byte-identical no-context call (no session / no resolvable workspace) —
+// every heading is conditionally emitted so a missing feed never changes the
+// prompt shape.
+func buildGoalCompileMessages(prose, question, answer, repairReason, sessionWindow, workspaceInstructions string) []providers.Message {
+	var sys strings.Builder
+	sys.WriteString(buildGoalRubricNote(false))
 	if workspaceInstructions != "" {
 		// ADR-080 D-CONTEXT2: AUTHORITATIVE trusted context (the operator's own
 		// workspace/project instructions) — distinct from the UNTRUSTED session
@@ -662,21 +694,41 @@ func buildGoalCompileMessages(prose, question, answer, repairReason, sessionWind
 	}
 }
 
-// goalCompileLLMCall runs one bounded compile call on the goal-bearing
-// agent's OWN provider/model (read together under the instance mutex so a
-// concurrent model switch is never observed torn — the ADR-032 model-quad
-// rule). Cost lands on the agent's own provider credentials; cancellation
-// follows the turn ctx.
-func goalCompileLLMCall(ctx context.Context, agentInst *AgentInstance, messages []providers.Message) (string, error) {
+// goalCompileLLMCall runs one bounded compile call (ADR-081 D7, spec
+// FR-018). After the front-path compile's deletion this function is
+// reachable ONLY from the D6c nudge-ladder engine fallback
+// (goal_loop.go, outside this file's scope) via compileGoalIntentLLM below,
+// so it resolves its provider/model from the JUDGE SYSTEM AGENT — the SAME
+// resolution runVerifierAdjudication uses (verifier_adjudication.go,
+// al.GetRegistry().GetAgent(string(coreagent.IDJudge))) — rather than the
+// goal-bearing (chat) agent it used to read Provider/Model from directly.
+// Judge-profile work (structured extraction, no creativity, bounded output)
+// belongs on a fast model; one knob (the Judge agent's own model setting)
+// now governs every remaining engine-invoked goal LLM call. agentInst still
+// identifies the calling (goal-bearing) agent for the nil-instance guard its
+// caller relies on (compileGoalIntentLLM's own EC-4 fallback branch) — it is
+// no longer the provider/model source. A nil/unresolvable Judge instance or
+// provider degrades to compileGoalIntentLLM's existing deterministic-parser
+// fallback (via this function's returned error) and logs a WARN naming the
+// degradation, never a silent fall-through.
+func (al *AgentLoop) goalCompileLLMCall(ctx context.Context, agentInst *AgentInstance, messages []providers.Message) (string, error) {
 	if agentInst == nil {
 		return "", errors.New("no agent instance for goal compile")
 	}
-	agentInst.mu.RLock()
-	provider := agentInst.Provider
-	model := agentInst.Model
-	agentInst.mu.RUnlock()
+	judgeInst, ok := al.GetRegistry().GetAgent(string(coreagent.IDJudge))
+	if !ok || judgeInst == nil {
+		logger.WarnCF("agent", "goal fallback compile degraded: judge agent has no provider",
+			map[string]any{"component": "goal", "reason": "judge_not_configured"})
+		return "", errors.New("judge system agent is not registered — goal fallback compile degraded")
+	}
+	judgeInst.mu.RLock()
+	provider := judgeInst.Provider
+	model := judgeInst.Model
+	judgeInst.mu.RUnlock()
 	if provider == nil {
-		return "", errors.New("goal-bearing agent has no provider")
+		logger.WarnCF("agent", "goal fallback compile degraded: judge agent has no provider",
+			map[string]any{"component": "goal", "reason": "judge_no_provider"})
+		return "", errors.New("judge system agent has no provider — goal fallback compile degraded")
 	}
 	callCtx, cancel := context.WithTimeout(ctx, goalCompileCallTimeout)
 	defer cancel()
@@ -851,7 +903,7 @@ func (al *AgentLoop) compileGoalIntentLLM(
 	// One compile call, then (on a feasibility veto) exactly one repair call.
 	repairReason := ""
 	for call := 0; call < 2; call++ {
-		content, err := goalCompileLLMCall(ctx, agentInst,
+		content, err := al.goalCompileLLMCall(ctx, agentInst,
 			buildGoalCompileMessages(prose, question, answer, repairReason, sessionWindow, workspaceInstructions))
 		if err != nil {
 			return fallback("compile call failed: " + err.Error())

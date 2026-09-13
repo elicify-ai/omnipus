@@ -263,3 +263,82 @@ func TestBounds_PerEntityOverridesGlobal(t *testing.T) {
 		}
 	})
 }
+
+// TestGoalDefaultBudgetIsTwentyForBothOwners is GOAL-FR-024's oracle (goal
+// spec test matrix row 24, S-33): "There MUST be one budget for both owner
+// kinds, defaulting to 20." Operator decisions D-D/D-E (2026-09-11) retired
+// the per-goal override GOAL-FR-025 originally asked for
+// (EffectiveGoalMaxRoundsWithOverride is NEVER created — NQ-2/R-21
+// amended) — EffectiveGoalMaxRounds keeps the exact signature it has today:
+// zero arguments, no owner-kind parameter of any kind. That absence of an
+// owner-kind parameter IS the "one budget for both owner kinds" guarantee:
+// there is no code path by which a task-owned goal's session and a
+// session-owned (chat) goal's session could ever resolve two different
+// numbers from the same PlanningConfig — both read the identical global
+// value the operator sets once, under Settings -> Performance
+// (GOAL-FR-045).
+func TestGoalDefaultBudgetIsTwentyForBothOwners(t *testing.T) {
+	t.Run("unconfigured: both owner kinds resolve the documented default of 20", func(t *testing.T) {
+		if DefaultGoalMaxRounds != 20 {
+			t.Fatalf("DefaultGoalMaxRounds = %d, want 20 (GOAL-FR-024)", DefaultGoalMaxRounds)
+		}
+		var unconfigured PlanningConfig
+		// "Both owner kinds" is not two different call sites with two
+		// different arguments — it is the SAME zero-argument call, made
+		// once for a chat-owned goal's resolution and once for a
+		// task-owned goal's, from identical global config. There is no
+		// owner-kind input this function could even branch on.
+		chatGoalBudget := unconfigured.EffectiveGoalMaxRounds()
+		taskGoalBudget := unconfigured.EffectiveGoalMaxRounds()
+		if chatGoalBudget != 20 {
+			t.Fatalf("EffectiveGoalMaxRounds() for a chat-owned goal = %d, want default 20", chatGoalBudget)
+		}
+		if taskGoalBudget != 20 {
+			t.Fatalf("EffectiveGoalMaxRounds() for a task-owned goal = %d, want default 20", taskGoalBudget)
+		}
+		if chatGoalBudget != taskGoalBudget {
+			t.Fatalf("chat-owned budget (%d) != task-owned budget (%d); GOAL-FR-024 requires ONE budget for both owner kinds",
+				chatGoalBudget, taskGoalBudget)
+		}
+	})
+
+	t.Run("operator-configured: both owner kinds see the same changed value identically", func(t *testing.T) {
+		// D-D: "GOALS MUST BEHAVE IDENTICALLY for tasks and chat. Any
+		// budget surface that exists for one MUST exist for the other."
+		// An operator raising the one global setting (e.g. via PUT
+		// /api/v1/performance's goal_max_rounds, pkg/gateway/rest_performance.go)
+		// must change the resolved budget for BOTH owner kinds together,
+		// in lockstep — never one without the other.
+		configured := PlanningConfig{GoalMaxRounds: 45}
+		if got := configured.EffectiveGoalMaxRounds(); got != 45 {
+			t.Fatalf("EffectiveGoalMaxRounds() with GoalMaxRounds=45 = %d, want 45 (an operator-set global value must be honoured for a chat-owned goal)", got)
+		}
+		// Re-reading through the identical zero-argument accessor a second
+		// time (standing in for the task-owned read site) must return the
+		// exact same 45 — there is no separate task-side field to drift.
+		if got := configured.EffectiveGoalMaxRounds(); got != 45 {
+			t.Fatalf("EffectiveGoalMaxRounds() second read (task-owned) = %d, want 45 to match the chat-owned read", got)
+		}
+	})
+
+	t.Run("a value below 1 is rejected at the boot-config boundary for the one shared field", func(t *testing.T) {
+		// GOAL-FR-025's override argument is retired (D-E), but the budget
+		// itself is still a real round count: PlanningConfig.GoalMaxRounds
+		// below 1 must still fail validateBootConfig, since it is the one
+		// field both owner kinds resolve through.
+		cfg := minimalValidConfig()
+		cfg.Planning = PlanningConfig{
+			TaskMaxAttempts:      DefaultTaskMaxAttempts,
+			GoalMaxRounds:        -1,
+			PlanJudgeMaxRounds:   DefaultPlanJudgeMaxRounds,
+			LoopMaxRuns:          DefaultLoopMaxRuns,
+			IdleExpiryDays:       DefaultIdleExpiryDays,
+			GlobalActiveLoopCap:  DefaultGlobalActiveLoopCap,
+			CheckTimeoutSeconds:  DefaultCheckTimeoutSeconds,
+			VerifierWindowTokens: DefaultVerifierWindowTokens,
+		}
+		if err := validateBootConfig(cfg); err == nil {
+			t.Fatal("expected error for GoalMaxRounds=-1 (GOAL-FR-025's below-1 rejection applies to the one shared field even with the per-goal override retired)")
+		}
+	})
+}

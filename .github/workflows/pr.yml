@@ -801,20 +801,19 @@ jobs:
 
   tool-error-status-lint:
     name: Tool-Error-From-Status Lint
-    # Regression guard for issue #617: an SPA tool-call component must never
-    # derive its ERROR state from AssistantUI's `status.type === 'incomplete'`
-    # — a finished tool call always carries a truthy result, so that status
-    # can never be true for a real failure (see this job's script for the
-    # full mechanism). This exact anti-pattern was independently introduced
-    # across several component families before being fixed; this job stops a
-    # third recurrence rather than relying on review alone.
-    #
-    # Developer note: this check has no opt-out comment (unlike the wire-
-    # types lint) — the two legitimate exceptions (isCancelledStatus's own
-    # reason-qualified check, and GenericToolCall's `|| !!error`-disjuncted
-    # form) are structurally excluded by the script itself, not via a
-    # per-line annotation. If this fires, read the real outcome instead — see
-    # the script's header comment for the correct pattern.
+    # This job now runs the whole discovery-based guard suite via
+    # scripts/guards.sh (ADR-084/085/086 delivery, wave G1, C-19/C-44/C-45/
+    # C-92/C-93) — it discovers every scripts/check-*.sh guard, resolves and
+    # runs each one's proof-of-failure companion first, runs every guard
+    # regardless of an earlier one's outcome, and fails if any guard or
+    # companion failed, if zero guards were discovered, or if a non-exempt
+    # guard has no companion. The job name and needs/if gating are unchanged
+    # so `ci-required`'s hand-maintained `needs:` array and branch protection
+    # are untouched. Adding a guard from here on is adding a
+    # scripts/check-*.sh file plus its companion — this job requires NO
+    # further edit; see scripts/guards.sh's header for the full mechanism,
+    # and scripts/guards.test.sh for the mutation proof that the runner
+    # itself can go red.
     runs-on: ubuntu-latest
     needs: [changes]
     if: success() && needs.changes.outputs.code == 'true'
@@ -822,68 +821,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Run tool-error-from-status lint
-        # python3-based (not `grep -P`) so it behaves identically on
-        # contributors' local macOS/BSD-grep machines and on this
-        # ubuntu-latest runner — see the script's header comment.
-        run: bash scripts/check-no-tool-error-from-status.sh
-
-      - name: Run JPEG-screencast removal guard
-        # ADR-061: the JPEG live-browser fallback is deleted and WebRTC is the
-        # only live-video path. Long-lived branches cut before the removal
-        # still contain the whole pipeline, so a merge re-adds it as an
-        # ordinary, conflict-free addition. This is the mechanical half of
-        # CLAUDE.md's "Retired surfaces — do NOT reintroduce" rule.
-        run: bash scripts/check-no-jpeg-screencast.sh
-
-      - name: Run fail-closed tool-policy backfill removal guard
-        # ADR-077: the fail-closed per-agent tool-policy deny backfill
-        # (RepairIncompleteToolPolicyCoverage / ValidateAgentOwnToolPolicyCoverage)
-        # is deleted — tool policy is exactly two layers, the reconciled
-        # global ceiling IS the default. Long-lived branches cut before the
-        # removal still contain both functions and their wiring, so a merge
-        # re-adds them as an ordinary, conflict-free addition. This is the
-        # mechanical half of CLAUDE.md's "Retired surfaces — do NOT
-        # reintroduce" rule.
-        run: bash scripts/check-no-fail-closed-backfill.sh
-
-      - name: Run E2E auth cross-talk guard
-        # POST /api/v1/auth/login re-mints the SINGLE-SLOT session_token_hash,
-        # invalidating the shared storageState cookie for every spec that runs
-        # after the caller. dev_mode_bypass masks that on every route except
-        # GET /api/v1/providers, so the failure surfaces far from its cause.
-        # Self-test first — a guard that cannot fail is no guard
-        # (docs/internal/false-green-patterns.md).
-        run: |
-          bash scripts/check-e2e-login-crosstalk.sh --self-test
-          bash scripts/check-e2e-login-crosstalk.sh
-
-      - name: Run removed-providers guard self-check
-        # Proves the guard below can still go red (ADR-068 spec SC-001) before
-        # its verdict is trusted — see docs/internal/false-green-patterns.md.
-        run: bash scripts/check-no-removed-providers-selfcheck.sh
-
-      - name: Run removed-providers guard
-        # ADR-068 §2.4: antigravity, claude-cli and the OpenAI device-code flow
-        # are deleted greenfield with no trace outside the historical records in
-        # scripts/no-removed-providers.allow. Branches cut before the deletion
-        # re-add them on merge as an ordinary addition — keep the deletion.
-        run: bash scripts/check-no-removed-providers.sh
-
-      - name: Run ADR-067 greenfield guard self-test
-        # Proves the guard below can still go red (11 planted violations, one
-        # per rule) before its verdict is trusted — see
-        # docs/internal/false-green-patterns.md.
-        run: bash scripts/check-greenfield-providers.sh --self-test
-
-      - name: Run ADR-067 greenfield guard
-        # ADR-067 SC-008 / SC-009 / US-11.AC2: pkg/providers/capabilities is
-        # folded into pkg/providers/catalog, the prefix-stripping resolver is
-        # gone, neither pkg/providers nor pkg/config carries alias / migration
-        # / deprecation machinery, and the SPA's bundled catalog is deleted.
-        # A branch cut before ADR-067 re-adds the alias path on merge as an
-        # ordinary addition — KEEP THE DELETION.
-        run: bash scripts/check-greenfield-providers.sh
+      - name: Run every discovered guard (scripts/guards.sh)
+        run: bash scripts/guards.sh
 
   verify-contracts:
     name: Verify Contracts
@@ -2082,21 +2021,13 @@ jobs:
         # --allow-empty permits gateway boot without a fully configured provider,
         # which is needed in case the credential seed step is extended in future.
         #
-        # OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 (ADR-045): the orphan-
-        # foreground-turn watchdog only arms when the LAST WebSocket watcher on
-        # a session disconnects, so a short 20s grace here reaps a genuinely
-        # leaked (finished-tab) live turn quickly without ever touching an
-        # open-tab turn or a transcript-seeded replay test (those have no live
-        # turn to begin with). This is the fix for the "Group-A variance"
-        # family of load-dependent failures: a Playwright test that navigates
-        # away mid-turn without clicking Stop used to leave a real agent loop
-        # running indefinitely, queuing against the shared OpenRouter
-        # rate-limit window and starving later tests' tool calls. Production
-        # default (300s) is untouched — this override applies only to the e2e
-        # gateway process.
+        # ADR-082 D1 deleted the ADR-045 orphan-foreground-turn watchdog in
+        # full (the old OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 override
+        # that used to reap a leaked, navigated-away-from turn quickly no
+        # longer exists — a turn now runs to completion regardless of whether
+        # any UI connection is watching it, by design).
         run: |
           OMNIPUS_MASTER_KEY=${{ secrets.OMNIPUS_MASTER_KEY_CI }} \
-            OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 \
             ./omnipus start --allow-empty > /tmp/omnipus.log 2>&1 &
           GATEWAY_PID=$!
           echo "${GATEWAY_PID}" > /tmp/omnipus.pid

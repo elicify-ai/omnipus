@@ -229,11 +229,35 @@ properties:
     items:
       $ref: ./AcceptanceCriterion.yaml
     description: >
-      Acceptance criteria (Definition of Done) for this task (ADR-049
-      D2/D5/FR-3). Agent-created tasks require at least one; UI/human
-      creation is soft (falls back to judging title+description when
-      empty). Immutable once a recurring Trigger run has started (per-run
-      snapshot).
+      Acceptance criteria for this task (ADR-049 D2/D5/FR-3). GOAL-FR-021/
+      D-C (2026-09-11, operator-ratified): creating OR editing a task
+      through the API or the interface now requires at least one
+      criterion AND at least one `dod` item (see `dod` below) — the prior
+      "UI/human creation is soft, falls back to judging title+description"
+      behaviour is RETIRED for every NEW creation/edit going forward
+      (GOAL-FR-047, enforced at the API with a 400, not schema-only).
+      GOAL-FR-023: a task created before this rule with no criteria
+      continues to run and continues to be judged by the ephemeral
+      soft-tier criterion — the rule binds at creation and at edit only,
+      never retroactively. Immutable once a recurring Trigger run has
+      started (per-run snapshot). ADR-086 D5: this list itself now
+      REFERENCES the task's goal record rather than being a second
+      persisted list (GOAL-FR-029) — an implementation detail this wire
+      shape is unaffected by.
+  dod:
+    type: array
+    items:
+      $ref: ./AcceptanceCriterion.yaml
+    description: >
+      GOAL-FR-003/FR-048 — this task's Definition of Done, DISTINCT from
+      `criteria` (mirrors `Goal.dod`/`Plan.dod`): generic standing quality
+      gates vs. outcome-specific checks, judged identically but never
+      mixed into `criteria`. NEW field (ADR-086): `pkg/task/task.go` had
+      no DoD field before this delivery — the list lives on the task's
+      goal record. GOAL-FR-021/D-C: mandatory (>= 1 item) at creation and
+      at edit, enforced with a 400 at the API, same as `criteria`.
+      GOAL-FR-048: opening a pre-existing task with no `dod` MUST NOT
+      block reading it; saving an edit enforces the rule.
   attempt_count:
     type: integer
     minimum: 0
@@ -251,7 +275,7 @@ properties:
     description: >
       Per-task override of the attempt ceiling before the goal loop wakes
       the owner (ADR-049 D7/FR-9). Null/absent inherits the global
-      `PlanningConfig.task_max_attempts` default (3).
+      `PlanningConfig.task_max_attempts` default (20).
     example: 5
   trigger:
     $ref: ./TaskTrigger.yaml

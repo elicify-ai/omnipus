@@ -103,31 +103,22 @@ type MetaPatch struct {
 	// this via SetMeta is a fully-indexed operation, not just a field write.
 	ParentSessionID *string
 
-	// Goal loop fields (ADR-049 D6/D7, /goal). Only non-nil fields are
-	// written; callers that want to CLEAR a goal must pass an empty-string
-	// GoalCondition explicitly (matching the TaskID clear convention).
-	// GoalID is the stable per-generation goal identifier (see SessionMeta.GoalID's
-	// doc comment); pass an empty string to CLEAR it on /goal clear.
-	GoalID             *string
-	GoalCondition      *string
-	GoalRoundsUsed     *int
-	GoalMaxRounds      *int
-	GoalLatestReason   *string
-	GoalStartedAt      *string
-	GoalLastActivityAt *string
-	// GoalCriteriaJSON is the ADR-053 Phase-2 compiled criteria ladder
-	// (FR-110/FR-113). Pass an empty string to CLEAR it (paired with clearing
-	// GoalCondition on /goal clear, FR-114).
-	GoalCriteriaJSON *string
-	// GoalPendingJSON is the proposed CompiledGoal during a re-statement
-	// amendment (N-6/D11). Pass an empty string to CLEAR it (on confirm/clear).
-	GoalPendingJSON *string
+	// ADR-086 GOAL-FR-005 (wave S6, "the deletion half"): every Goal*
+	// field that used to live here (GoalID, GoalCondition, GoalRoundsUsed,
+	// GoalMaxRounds, GoalLatestReason, GoalStartedAt, GoalLastActivityAt,
+	// GoalCriteriaJSON, GoalQuestionRoundsUsed, GoalZeroOutputPushes, and
+	// the four GoalRoute* fields) is RETIRED — the goal is its own stored
+	// entity now (pkg/goal.Store), not a patch you apply to a session.
+	//
 	// PendingAskJSON is the AskUserQuestion durable pending set (see
 	// SessionMeta.PendingAskJSON). Pass an empty string to CLEAR it.
+	// ADR-086 GOAL-FR-005 (wave S2): despite once sitting among the Goal*
+	// fields above in this struct's declaration order, this field was never
+	// goal state — it is session-scoped interaction state, and persists to
+	// its own pending_ask.json group (pendingAskTouched/
+	// u5WritePendingAskLocked, unified.go/pending_ask.go), unaffected by
+	// this wave's deletion.
 	PendingAskJSON *string
-	// GoalClarificationJSON is the ADR-074 D4a pending-clarification record
-	// (US-3 S7). Pass an empty string to CLEAR it (on answer/clear/restate).
-	GoalClarificationJSON *string
 
 	// Loop fields (ADR-049 D6/D7, /loop). Only non-nil fields are written;
 	// callers that want to CLEAR a loop must pass an empty-string LoopMode
@@ -239,14 +230,15 @@ type UnifiedStore struct {
 	// existence check and GetMeta's fast path — avoiding the O(N) os.ReadDir +
 	// per-session disk read that ListSessions previously did under the single
 	// store-wide lock on every call. Populated via four paths: once at
-	// construction (loadMetaCacheLocked); on every successful mutation via one
-	// of the four ADR-057 W23 targeted field-group writers
-	// (u5WriteIdentityLocked/u5WriteStatsLocked/u5WriteGoalLocked/
-	// u5WriteLoopLocked, unified_meta_files.go) — NOT a single funnel anymore
-	// (FR-059/FR-084): each writer updates ONLY its own field group on the
-	// cached entry and never replaces it wholesale, so a loop tick no longer
-	// touches this entry's Stats/Goal fields and a transcript append no
-	// longer touches its Goal/Loop fields; via readMetaLocked self-healing
+	// construction (loadMetaCacheLocked); on every successful mutation via
+	// one of the ADR-057 W23 targeted field-group writers
+	// (u5WriteIdentityLocked/u5WriteStatsLocked/u5WriteLoopLocked,
+	// unified_meta_files.go; u5WritePendingAskLocked, pending_ask.go) — NOT
+	// a single funnel anymore (FR-059/FR-084): each writer updates ONLY its
+	// own field group on the cached entry and never replaces it wholesale,
+	// so a loop tick no longer touches this entry's Stats field and a
+	// transcript append no longer touches its Loop fields; via
+	// readMetaLocked self-healing
 	// the cache on a cache-miss disk read (SetMeta, SwitchAgent,
 	// AppendTranscript, GetOrCreateScheduledSession, and GetMeta's cache-miss
 	// path all reach the cache this way, composing across all four on-disk
@@ -357,9 +349,10 @@ func (us *UnifiedStore) BaseDir() string {
 // os.RemoveAll/os.ReadDir calls.
 var removeAllFn = os.RemoveAll
 
-// writeFileAtomicFn is a package-level test seam for the four ADR-057 W23
-// targeted meta-group writers' (u5WriteIdentityLocked/u5WriteStatsLocked/
-// u5WriteGoalLocked/u5WriteLoopLocked, unified_meta_files.go) disk write
+// writeFileAtomicFn is a package-level test seam for the ADR-057 W23 /
+// ADR-086 GOAL-FR-005 targeted meta-group writers' (u5WriteIdentityLocked/
+// u5WriteStatsLocked/u5WriteLoopLocked, unified_meta_files.go;
+// u5WritePendingAskLocked, pending_ask.go) disk write
 // step. It defaults to fileutil.WriteFileAtomic; tests override it to force
 // a deterministic write failure (the MB-1 cache/disk-divergence regression
 // guard) without depending on OS permission enforcement — same rationale as
@@ -369,14 +362,15 @@ var writeFileAtomicFn = fileutil.WriteFileAtomic
 
 // readFileFn is the ADR-057 FR-103 read-side mirror of writeFileAtomicFn: a
 // package-level seam every meta-group file read (u5ReadIdentityFile/
-// u5ReadStatsFile/u5ReadGoalFile/u5ReadLoopFile, unified_meta_files.go) goes
-// through, defaulting to os.ReadFile. `[grill2 M2-6]` Before this file split,
-// the store had an injectable WRITE seam but no injectable READ seam, so
-// neither test #103's "a cache hit performs zero disk reads" assertion nor
-// FR-092's bounded-cost clause (c) — which reuses the same counter — was
-// constructible: there was nothing to instrument. A test installs a counting
-// wrapper here to prove GetMeta/ListSessions never touch this function on a
-// warm cacheMu hit.
+// u5ReadStatsFile/u5ReadLoopFile, unified_meta_files.go;
+// u5ReadPendingAskFile, pending_ask.go) goes through, defaulting to
+// os.ReadFile. `[grill2 M2-6]` Before this file split, the store had an
+// injectable WRITE seam but no injectable READ seam, so neither test #103's
+// "a cache hit performs zero disk reads" assertion nor FR-092's
+// bounded-cost clause (c) — which reuses the same counter — was
+// constructible: there was nothing to instrument. A test installs a
+// counting wrapper here to prove GetMeta/ListSessions never touch this
+// function on a warm cacheMu hit.
 var readFileFn = os.ReadFile
 
 // validateSessionID rejects IDs that could escape the base directory.
@@ -657,11 +651,11 @@ func (us *UnifiedStore) createSessionLocked(
 	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
 		return nil, fmt.Errorf("unified_store: create session dir: %w", err)
 	}
-	// ADR-057 W23 (FR-053/FR-054): a brand-new session has no goal/loop/stats
+	// ADR-057 W23 (FR-053/FR-054): a brand-new session has no loop/stats
 	// activity yet, so only the identity group (meta.json) is written here —
-	// stats.json/goal.json/loop.json are created lazily by their own
-	// targeted writers the first time something actually touches that group
-	// (dataset row 2, "a session that never ran a goal": meta.json only).
+	// stats.json/loop.json are created lazily by their own targeted writers
+	// the first time something actually touches that group (dataset row 2:
+	// meta.json only).
 	if err := us.u5WriteIdentityLocked(sessionID, meta); err != nil {
 		return nil, err
 	}
@@ -836,7 +830,7 @@ func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 		return err
 	}
 
-	var identityTouched, goalTouched, loopTouched bool
+	var identityTouched, loopTouched, pendingAskTouched bool
 
 	if patch.Title != nil {
 		meta.Title = *patch.Title
@@ -865,49 +859,13 @@ func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 		meta.ParentSessionID = *patch.ParentSessionID
 		identityTouched = true
 	}
-	if patch.GoalID != nil {
-		meta.GoalID = *patch.GoalID
-		goalTouched = true
-	}
-	if patch.GoalCondition != nil {
-		meta.GoalCondition = *patch.GoalCondition
-		goalTouched = true
-	}
-	if patch.GoalRoundsUsed != nil {
-		meta.GoalRoundsUsed = *patch.GoalRoundsUsed
-		goalTouched = true
-	}
-	if patch.GoalMaxRounds != nil {
-		meta.GoalMaxRounds = *patch.GoalMaxRounds
-		goalTouched = true
-	}
-	if patch.GoalLatestReason != nil {
-		meta.GoalLatestReason = *patch.GoalLatestReason
-		goalTouched = true
-	}
-	if patch.GoalStartedAt != nil {
-		meta.GoalStartedAt = *patch.GoalStartedAt
-		goalTouched = true
-	}
-	if patch.GoalLastActivityAt != nil {
-		meta.GoalLastActivityAt = *patch.GoalLastActivityAt
-		goalTouched = true
-	}
-	if patch.GoalCriteriaJSON != nil {
-		meta.GoalCriteriaJSON = *patch.GoalCriteriaJSON
-		goalTouched = true
-	}
-	if patch.GoalPendingJSON != nil {
-		meta.GoalPendingJSON = *patch.GoalPendingJSON
-		goalTouched = true
-	}
 	if patch.PendingAskJSON != nil {
+		// ADR-086 GOAL-FR-005 (wave S2): PendingAskJSON persists to its own
+		// pending_ask.json group (u5WritePendingAskLocked, pending_ask.go).
+		// It is session-scoped interaction state, never goal state. Pass an
+		// empty string to CLEAR it.
 		meta.PendingAskJSON = *patch.PendingAskJSON
-		goalTouched = true
-	}
-	if patch.GoalClarificationJSON != nil {
-		meta.GoalClarificationJSON = *patch.GoalClarificationJSON
-		goalTouched = true
+		pendingAskTouched = true
 	}
 	if patch.LoopMode != nil {
 		meta.LoopMode = *patch.LoopMode
@@ -968,8 +926,8 @@ func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 				"session_id", sessionID, "error", err)
 		}
 	}
-	if goalTouched {
-		if err := us.u5WriteGoalLocked(sessionID, meta); err != nil {
+	if pendingAskTouched {
+		if err := us.u5WritePendingAskLocked(sessionID, meta); err != nil {
 			return err
 		}
 	}
@@ -1058,7 +1016,7 @@ func (us *UnifiedStore) SwitchAgent(sessionID, newAgentID string) error {
 // never leak a live cache pointer to those external-facing call sites).
 //
 // On a cache miss, composes the session's meta from disk via readUnifiedMeta
-// (ADR-057 W23: meta.json plus stats.json/goal.json/loop.json, each
+// (ADR-057 W23: meta.json plus stats.json/loop.json, each
 // optional except meta.json — see readUnifiedMeta's doc comment), populates
 // the cache with the freshly-composed (necessarily unaliased) object, and
 // returns a clone of it.
@@ -1095,15 +1053,15 @@ func (us *UnifiedStore) readMetaLocked(sessionID string) (*UnifiedMeta, error) {
 }
 
 // writeMetaLocked is RETAINED, post-W23, as a backward-compatible DISPATCHER
-// over the four FR-054 targeted field-group writers
-// (u5WriteIdentityLocked/u5WriteStatsLocked/u5WriteGoalLocked/
-// u5WriteLoopLocked, unified_meta_files.go) — it is no longer "the single
-// invalidation/update point for every mutation path" (that whole-document
-// funnel is exactly what FR-084/Alternative-F forbids; see the doc comments
-// above metaCache and readMetaLocked). This file's OWN five mutation paths
-// (createSessionLocked, SetMeta, SwitchAgent, AppendTranscript,
-// NewChannelSession) call the four targeted writers DIRECTLY and never reach
-// this function.
+// over the FR-054/GOAL-FR-005 targeted field-group writers
+// (u5WriteIdentityLocked/u5WriteStatsLocked/u5WriteLoopLocked,
+// unified_meta_files.go; u5WritePendingAskLocked,
+// pending_ask.go) — it is no longer "the single invalidation/update point
+// for every mutation path" (that whole-document funnel is exactly what
+// FR-084/Alternative-F forbids; see the doc comments above metaCache and
+// readMetaLocked). This file's OWN five mutation paths (createSessionLocked,
+// SetMeta, SwitchAgent, AppendTranscript, NewChannelSession) call the
+// targeted writers DIRECTLY and never reach this function.
 //
 // It survives only for pkg/session/unified_api.go's two call sites
 // (AppendTranscriptStrict's stats-only mutation, CreateSessionWithID's
@@ -1113,16 +1071,16 @@ func (us *UnifiedStore) readMetaLocked(sessionID string) (*UnifiedMeta, error) {
 // Rule 1/2 forbids this unit from editing unified_api.go to convert those
 // two call sites itself, so this function closes the gap from this side of
 // the boundary: it diffs the supplied meta against the meta CURRENTLY
-// cached/persisted for sessionID to determine exactly which of the four
-// field groups actually changed (identity's own UpdatedAt is excluded from
-// that comparison — a Stats-only touch, e.g. AppendTranscriptStrict, always
+// cached/persisted for sessionID to determine exactly which of the field
+// groups actually changed (identity's own UpdatedAt is excluded from that
+// comparison — a Stats-only touch, e.g. AppendTranscriptStrict, always
 // changes the single in-memory UpdatedAt field, and that must not be
 // misread as an identity change), and calls ONLY the targeted writer(s)
 // for the group(s) that differ. This keeps FR-084's "update only its own
 // field group, never a wholesale cache replace" true for these two call
 // sites as well, and preserves W23's lazy-file-creation property (a
 // delegated child that only ever calls AppendTranscriptStrict never gains
-// an empty goal.json/loop.json it never touched).
+// an empty loop.json/pending_ask.json it never touched).
 //
 // Caller must hold sessionID's shard (see lockSession) — was: caller must
 // hold us.mu. (writeUnifiedMetaDirect, used only by migrateLegacy before the
@@ -1132,7 +1090,7 @@ func (us *UnifiedStore) readMetaLocked(sessionID string) (*UnifiedMeta, error) {
 func (us *UnifiedStore) writeMetaLocked(sessionID string, meta *UnifiedMeta) error {
 	prev, prevErr := us.readMetaLocked(sessionID)
 
-	writeIdentity, writeStats, writeGoal, writeLoop := true, true, true, true
+	writeIdentity, writeStats, writeLoop, writePendingAsk := true, true, true, true
 	if prevErr == nil {
 		prevIdentity, curIdentity := u5IdentityFromMeta(prev), u5IdentityFromMeta(meta)
 		// UpdatedAt is the single in-memory field shared by BOTH the identity
@@ -1142,8 +1100,8 @@ func (us *UnifiedStore) writeMetaLocked(sessionID string, meta *UnifiedMeta) err
 		prevIdentity.UpdatedAt, curIdentity.UpdatedAt = time.Time{}, time.Time{}
 		writeIdentity = !u5SameJSON(prevIdentity, curIdentity)
 		writeStats = !u5SameJSON(u5StatsFromMeta(prev), u5StatsFromMeta(meta))
-		writeGoal = !u5SameJSON(u5GoalFromMeta(prev), u5GoalFromMeta(meta))
 		writeLoop = !u5SameJSON(u5LoopFromMeta(prev), u5LoopFromMeta(meta))
+		writePendingAsk = !u5SameJSON(u5PendingAskFromMeta(prev), u5PendingAskFromMeta(meta))
 	}
 
 	if writeIdentity {
@@ -1156,8 +1114,8 @@ func (us *UnifiedStore) writeMetaLocked(sessionID string, meta *UnifiedMeta) err
 			return err
 		}
 	}
-	if writeGoal {
-		if err := us.u5WriteGoalLocked(sessionID, meta); err != nil {
+	if writePendingAsk {
+		if err := us.u5WritePendingAskLocked(sessionID, meta); err != nil {
 			return err
 		}
 	}
@@ -1218,7 +1176,7 @@ func (us *UnifiedStore) AppendTranscript(sessionID string, entry TranscriptEntry
 	}
 
 	// Update stats and UpdatedAt — targeted stats-group write only (FR-084);
-	// a transcript append never touches meta.json/goal.json/loop.json. See
+	// a transcript append never touches meta.json/loop.json. See
 	// accumulateEntryStats (entry_stats.go) for the full token-accounting
 	// convention shared with PartitionStore.AppendMessage and
 	// UnifiedStore.AppendTranscriptStrict.
@@ -2339,27 +2297,33 @@ func (us *UnifiedStore) ChildCount(sessionID string) int {
 }
 
 // readUnifiedMeta reads sessionDir's meta and composes the ADR-057 W23
-// four-file split (FR-053) back into one *UnifiedMeta: meta.json (identity),
-// stats.json, goal.json, loop.json.
+// file split (FR-053), plus ADR-086 GOAL-FR-005's pending-ask file (wave
+// S2), back into one *UnifiedMeta: meta.json (identity), stats.json,
+// loop.json, pending_ask.json. There is no goal.json in this composition —
+// wave S6 retired the whole group; a goal.json left on disk by a
+// pre-deletion session is never opened by this function (D-F: no
+// migration, no legacy read).
 //
 // FR-055: meta.json is REQUIRED — its absence or parse failure is always an
 // error (unchanged from the pre-split contract: this is the "does this
 // session exist at all" predicate every strict caller, including
-// AppendTranscript/AppendTranscriptStrict, keys on). stats.json/goal.json/
-// loop.json are each OPTIONAL: absent composes as that group's ZERO value
-// (a session that never ran a goal, never started a loop, or never had a
-// stats-touching write yet is not an error — dataset rows 2/3/8). FR-056: a
-// file that IS present but fails to parse surfaces an error for THAT group
-// specifically, never silently substituted with a zero value — "corrupt"
-// and "absent" are deliberately different outcomes (BDD-62).
+// AppendTranscript/AppendTranscriptStrict, keys on). stats.json/loop.json/
+// pending_ask.json are each OPTIONAL: absent composes as that group's ZERO
+// value (a session that never started a loop, never had a stats-touching
+// write, or never parked a question yet is not an error — dataset rows
+// 2/3/8). FR-056: a file that IS present but fails to parse surfaces an
+// error for THAT group specifically, never silently substituted with a
+// zero value — "corrupt" and "absent" are deliberately different outcomes
+// (BDD-62).
 //
-// FR-060: this is the ONLY reader for the four-file split. It does NOT (and
+// FR-060: this is the ONLY reader for the file split. It does NOT (and
 // must not) also accept a pre-split fused meta.json carrying embedded
 // Stats/Goal*/Loop* fields — greenfield permits this (ADR-057 v4 operator
-// decision 1: no migration, no back-compat) and migrateLegacy's own freshly
-// migrated sessions carry zero-valued Stats/Goal/Loop anyway, so composing
-// them from four files (three of which don't exist yet) yields the
-// identical zero result a fused reader would have.
+// decision 1: no migration, no back-compat; ADR-086 D-F restates it for
+// this addition) and migrateLegacy's own freshly migrated sessions carry
+// zero-valued Stats/Loop/PendingAsk anyway, so composing them from the
+// files that exist yields the identical zero result a fused reader would
+// have.
 func readUnifiedMeta(sessionDir string) (*UnifiedMeta, error) {
 	identity, err := u5ReadIdentityFile(sessionDir)
 	if err != nil {
@@ -2369,16 +2333,16 @@ func readUnifiedMeta(sessionDir string) (*UnifiedMeta, error) {
 	if err != nil {
 		return nil, fmt.Errorf("unified_store: read stats.json in %q: %w", sessionDir, err)
 	}
-	goal, err := u5ReadGoalFile(sessionDir)
-	if err != nil {
-		return nil, fmt.Errorf("unified_store: read goal.json in %q: %w", sessionDir, err)
-	}
 	loop, err := u5ReadLoopFile(sessionDir)
 	if err != nil {
 		return nil, fmt.Errorf("unified_store: read loop.json in %q: %w", sessionDir, err)
 	}
+	pendingAsk, err := u5ReadPendingAskFile(sessionDir)
+	if err != nil {
+		return nil, fmt.Errorf("unified_store: read pending_ask.json in %q: %w", sessionDir, err)
+	}
 
-	meta := u5ComposeUnifiedMeta(identity, stats, goal, loop)
+	meta := u5ComposeUnifiedMeta(identity, stats, loop, pendingAsk)
 	// If Type is not set (legacy PartitionStore session), default to chat.
 	if meta.Type == "" {
 		meta.Type = SessionTypeChat

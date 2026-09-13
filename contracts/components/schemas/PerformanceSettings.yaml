@@ -60,3 +60,19 @@ properties:
       every message with no loading step (more tokens per message). Maps to
       tools.manifest.compressed. Always present in responses.
     example: true
+  goal_max_rounds:
+    type: integer
+    minimum: 1
+    description: >
+      GOAL-FR-024/FR-045, MV-1, D-D/D-E (2026-09-11, operator-ratified) —
+      the SINGLE, GLOBAL adjudication-round ceiling for EVERY goal, task
+      and chat identically. Default 20. THERE IS NO PER-GOAL OVERRIDE
+      anywhere in this delivery — GOAL-FR-046 ("a human-editable budget
+      control for a goal's per-goal override") and GOAL-US-8 ("an operator
+      can give a goal more room") are RETIRED in full. This is the ONE
+      control: `Goal.max_rounds` on every goal record resolves from this
+      value alone (`pkg/config/planning.go::EffectiveGoalMaxRounds`,
+      unmodified signature — NQ-2). Lives under Settings → Performance
+      (`src/components/settings/PerformanceSection.tsx`, GOAL-FR-045) — no
+      new settings tab. Always present in responses.
+    example: 20

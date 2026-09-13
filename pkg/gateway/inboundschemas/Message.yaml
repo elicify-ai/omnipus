@@ -145,3 +145,22 @@ properties:
     example: "z-ai/glm-5.2"
   verdict:
     $ref: './JudgeVerdict.yaml'
+  system_subtype:
+    type: string
+    enum:
+      - browser_handover_notice
+    description: >
+      BROWSER-FR-043a (C-83) — a second, orthogonal axis on a
+      `type: system` entry, discriminating WHICH kind of system entry this
+      is without prefix-matching `content` (the `"Handoff:"` prefix match
+      this pattern deliberately avoids repeating). Do NOT add a value here
+      to the `type` enum above — the entry's `type` stays `system`; this
+      field only narrows it further. OPTIONAL and ADDITIVE: absent on
+      every system entry that predates this delivery and on every system
+      entry that is not a browser-handover notice. Enum of exactly one
+      value today so a future subtype is a deliberate contract edit rather
+      than a free-text field silently widening. `pkg/gateway/replay.go`
+      discriminates on this stamped field (never on `content`) to emit the
+      same `BrowserHandoverNoticeFrame` type on replay as was emitted
+      live (BROWSER-FR-043a).
+    example: "browser_handover_notice"

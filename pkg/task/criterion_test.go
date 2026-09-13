@@ -478,3 +478,76 @@ func TestValidateCriterion_KindJudgmentCorrelation(t *testing.T) {
 		require.NoError(t, validateCriterion(&c, 0))
 	})
 }
+
+// TestNoFourthCriterionStatusValue locks GOAL-FR-037 (ADR-086) / the joint
+// delivery plan's C-01 resolution: AcceptanceCriterion.status has exactly
+// three values — pending, met, unmet — and no fourth is ever added, on the
+// wire, in the store, or in the interface. ADR-084 revision 9 §10 withdrew
+// the `unable_to_verify` third outcome the in-tree judge spec still
+// describes throughout (judge-active-reviewer-spec.md §D, FR-076); this
+// test is the guard against that withdrawn value (or any other) being
+// reintroduced here.
+//
+// Asserted BEHAVIOURALLY, over a candidate table run through the real
+// IsValidCriterionStatus predicate — never by grepping criterion.go's
+// source text for a symbol (delivery plan §6 rule 14). A candidate list of
+// (value, expected) pairs, table-driven, so a future edit that accepts a
+// fourth value fails this test regardless of which value it is.
+//
+// Traces to: docs/internal/specs/goal-entity-spec.md GOAL-FR-037 (line 459);
+// docs/internal/specs/adr-084-086-joint-delivery-plan.md C-01 (line 231),
+// wave T1 (line 371).
+func TestNoFourthCriterionStatusValue(t *testing.T) {
+	cases := []struct {
+		name  string
+		value CriterionStatus
+		valid bool
+	}{
+		{"pending is valid", CritPending, true},
+		{"met is valid", CritMet, true},
+		{"unmet is valid", CritUnmet, true},
+		{"pending literal is valid", CriterionStatus("pending"), true},
+		{"met literal is valid", CriterionStatus("met"), true},
+		{"unmet literal is valid", CriterionStatus("unmet"), true},
+		// The withdrawn ADR-084 revision 7 third outcome (D2a). Rev 9 §10
+		// withdrew it in full; C-01 forbids it appearing anywhere.
+		{"unable_to_verify is NOT valid (withdrawn ADR-084 D2a outcome)", CriterionStatus("unable_to_verify"), false},
+		// Other plausible-looking but never-defined fourth values, so this
+		// guard does not accidentally special-case unable_to_verify alone.
+		{"unknown is NOT valid", CriterionStatus("unknown"), false},
+		{"failed is NOT valid", CriterionStatus("failed"), false},
+		{"in_progress is NOT valid", CriterionStatus("in_progress"), false},
+		{"empty string is NOT valid", CriterionStatus(""), false},
+		{"case-sensitive: MET is NOT valid", CriterionStatus("MET"), false},
+		{"case-sensitive: Pending is NOT valid", CriterionStatus("Pending"), false},
+		{"whitespace-padded ' met' is NOT valid", CriterionStatus(" met"), false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.valid, IsValidCriterionStatus(tc.value),
+				"IsValidCriterionStatus(%q) = %v, want %v", tc.value, !tc.valid, tc.valid)
+		})
+	}
+
+	// Differentiation: prove the three real values are pairwise distinct
+	// under the predicate's caller (validateCriterion), not just that the
+	// predicate itself returns true for each — a stub that always returned
+	// true for any non-empty string would still pass the table above's
+	// "valid" rows alone.
+	t.Run("exactly three distinct valid values, no more", func(t *testing.T) {
+		valid := map[CriterionStatus]bool{}
+		for _, candidate := range []CriterionStatus{
+			CritPending, CritMet, CritUnmet,
+			"unable_to_verify", "unknown", "", "queued", "active", "done",
+		} {
+			if IsValidCriterionStatus(candidate) {
+				valid[candidate] = true
+			}
+		}
+		require.Len(t, valid, 3, "exactly three CriterionStatus values must validate; got %v", valid)
+		assert.True(t, valid[CritPending])
+		assert.True(t, valid[CritMet])
+		assert.True(t, valid[CritUnmet])
+	})
+}

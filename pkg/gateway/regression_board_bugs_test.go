@@ -148,7 +148,7 @@ func TestRegression_RESTPatch_PreservesAllFields(t *testing.T) {
 	const wantPrompt = "Run the full integration suite"
 	wantPriority := 2
 	createBody := fmt.Sprintf(
-		`{"title":"OriginalTitle","action":"llm","workspace_id":%q,"tags":["release-1"],"prompt":%q,"priority":%d}`,
+		`{"title":"OriginalTitle","action":"llm","workspace_id":%q,"tags":["release-1"],"prompt":%q,"priority":%d,`+minimalCriteriaDodJSON+`}`,
 		projID, wantPrompt, wantPriority,
 	)
 	wPost := httptest.NewRecorder()
@@ -273,7 +273,7 @@ func TestRegression_RestartPersistence(t *testing.T) {
 
 	// Create a task with extended fields.
 	createBody := fmt.Sprintf(
-		`{"title":"PersistenceTask","action":"llm","workspace_id":%q,"prompt":"Run checks","priority":1}`,
+		`{"title":"PersistenceTask","action":"llm","workspace_id":%q,"prompt":"Run checks","priority":1,`+minimalCriteriaDodJSON+`}`,
 		projID,
 	)
 	wPost := httptest.NewRecorder()
@@ -326,7 +326,7 @@ func TestRegression_RestartPersistence(t *testing.T) {
 
 	// Differentiation: a second task created by bob must be distinct and readable.
 	createBody2 := fmt.Sprintf(
-		`{"title":"BobTask","action":"llm","workspace_id":%q}`,
+		`{"title":"BobTask","action":"llm","workspace_id":%q,`+minimalCriteriaDodJSON+`}`,
 		projID,
 	)
 	wPost2 := httptest.NewRecorder()
@@ -439,7 +439,7 @@ func TestRegression_Task_OwnershipScoping_PATCHAndDELETE(t *testing.T) {
 	wsID := ensureTestWorkspace(t, api)
 
 	// Alice creates a task.
-	body := fmt.Sprintf(`{"title":"AliceWriteTask","action":"llm","workspace_id":%q,"prompt":"do something"}`, wsID)
+	body := fmt.Sprintf(`{"title":"AliceWriteTask","action":"llm","workspace_id":%q,"prompt":"do something",`+minimalCriteriaDodJSON+`}`, wsID)
 	wPost := httptest.NewRecorder()
 	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
 	rPost.Header.Set("Content-Type", "application/json")

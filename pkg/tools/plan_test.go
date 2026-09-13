@@ -749,6 +749,7 @@ func TestTaskCreate_PlanLinkage_Happy(t *testing.T) {
 	res := tool.Execute(ctx, map[string]any{
 		"title": "member task", "prompt": "do it", "agent_id": "worker",
 		"plan_id": p.ID, "criteria": validCriteriaArg(),
+		"dod": validDoDArg(),
 	})
 	if res.IsError {
 		t.Fatalf("create_task with plan_id: %s", res.ForLLM)
@@ -788,6 +789,7 @@ func TestTaskCreate_PlanLinkage_CrossWorkspaceRejected(t *testing.T) {
 	res := tool.Execute(ctx, map[string]any{
 		"title": "member task", "prompt": "do it", "agent_id": "worker",
 		"plan_id": p.ID, "criteria": validCriteriaArg(),
+		"dod": validDoDArg(),
 	})
 	if !res.IsError {
 		t.Fatal("expected rejection for cross-workspace plan_id")
@@ -830,6 +832,7 @@ func TestTaskCreate_PlanLinkage_TerminalPlanRejected(t *testing.T) {
 	res := tool.Execute(ctx, map[string]any{
 		"title": "member task", "prompt": "do it", "agent_id": "worker",
 		"plan_id": p.ID, "criteria": validCriteriaArg(),
+		"dod": validDoDArg(),
 	})
 	if !res.IsError {
 		t.Fatal("expected rejection for a terminal plan")
@@ -850,6 +853,7 @@ func TestTaskCreate_PlanLinkage_UnwiredStore_FailsClosed(t *testing.T) {
 	res := tool.Execute(ctx, map[string]any{
 		"title": "member task", "prompt": "do it", "agent_id": "worker",
 		"plan_id": "some-plan", "criteria": validCriteriaArg(),
+		"dod": validDoDArg(),
 	})
 	if !res.IsError {
 		t.Fatal("expected fail-closed rejection when plan store is unwired")
@@ -870,6 +874,7 @@ func TestTaskCreate_NoPlanID_Unaffected(t *testing.T) {
 	res := tool.Execute(ctx, map[string]any{
 		"title": "no plan", "prompt": "do it", "agent_id": "worker",
 		"criteria": validCriteriaArg(),
+		"dod":      validDoDArg(),
 	})
 	if res.IsError {
 		t.Fatalf("plan-less create_task must be unaffected by an unwired plan store: %s", res.ForLLM)

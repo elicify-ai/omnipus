@@ -30,6 +30,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/commands"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/constants"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/memory"
@@ -133,13 +134,6 @@ type AgentLoop struct {
 	// GetLastSwitchToDefault (LoadAndDelete — one-shot per switch).
 	// key: "session:"+sessionID (string), value: bool.
 	lastSwitchToDefault sync.Map
-
-	// orphanWatches holds the orphan-foreground-turn watchdog's pending grace
-	// timer per session (ADR-045): key sessionID (string), value *orphanWatch.
-	// Populated by ArmOrphanForegroundTurnWatch, removed by
-	// DisarmOrphanForegroundTurnWatch or once the grace timer fires. See
-	// pkg/agent/orphan_watch.go.
-	orphanWatches sync.Map
 
 	// Turn tracking
 	turnSeq        atomic.Uint64
@@ -1908,6 +1902,15 @@ func registerSharedTools(
 			return al.getAskUserRegistry()
 		}))
 
+		// set_goal (ADR-081 D2, work-first-goal-flow-spec FR-004..FR-006):
+		// the validated write-path over this session's goal record.
+		// wireGoalToolsForAgent (goal_record_wiring.go) resolves the
+		// session-store-backed access/diff/feasibility seams LIVE per call —
+		// no external gateway wiring needed, unlike AskUserQuestion's
+		// registry, since goal state lives in the SAME session store this
+		// package already owns.
+		wireGoalToolsForAgent(al, agent)
+
 		// Handoff tools — always registered (ScopeCore).
 		getRegistryReader := func() tools.AgentRegistryReader {
 			return al.GetRegistry()
@@ -2431,6 +2434,14 @@ func registerSharedTools(
 				// pkg/tools/browser/pool_ttl_config_reachability_test.go.
 				browserCfg.IdleCloseTTL = cfg.Tools.Browser.EffectiveIdleCloseTTL()
 				browserCfg.CacheTrimInterval = cfg.Tools.Browser.EffectiveCacheTrimInterval()
+				// ADR-085 BROWSER-FR-031a/FR-052: the LiveViewRegistry
+				// idle-release sweeper's window and the take-control
+				// enablement flag it reads on every tick — see
+				// browser.BrowserConfig's doc comments on both fields.
+				browserCfg.ControlIdleRelease = time.Duration(
+					cfg.Tools.Browser.EffectiveControlIdleReleaseSec(),
+				) * time.Second
+				browserCfg.TakeControlEnabled = cfg.Tools.Browser.TakeControlEnabled
 				// Start page: an operator override wins; otherwise default to
 				// the gateway's own served start page so a fresh tab lands
 				// somewhere branded and legible instead of about:blank (a blank
@@ -4337,18 +4348,6 @@ func (al *AgentLoop) Close() {
 		return true
 	})
 
-	// ADR-045: stop every pending orphan-foreground-turn watchdog timer so
-	// none of them fire against a torn-down AgentLoop after Close() returns
-	// (tests in particular construct/close many AgentLoops in quick
-	// succession; a leaked timer firing later would touch a stale al).
-	al.orphanWatches.Range(func(k, v any) bool {
-		if ow, ok := v.(*orphanWatch); ok {
-			ow.cancel()
-		}
-		al.orphanWatches.Delete(k)
-		return true
-	})
-
 	// FR-048: On graceful shutdown, write turn_canceled_restart synthetic entries
 	// to any sessions that have active turns paused awaiting approval. This makes
 	// the restart visible to the session on next load, preventing the user from
@@ -5224,6 +5223,25 @@ func (al *AgentLoop) rewireBrowserManagerForKey(
 		pool.Release(key, prior)
 	}
 	if prior != nil {
+		// KEEP THIS SHUTDOWN. coordinator.go's doc calls Release "a full
+		// substitute for the old prior.Shutdown() reload call", and that
+		// sentence is true only when the pool instance HAS a coordinator:
+		// BrowserPool.Release does no teardown of its own — it deletes mgr
+		// from inst.mgrs and then calls inst.coord.Release, and only that
+		// reaches dropConnection -> m.Shutdown(). With inst.coord nil (no
+		// shared Chrome stood up yet) nothing is torn down at all, and the
+		// prior manager's Chromium allocator leaks on every hot reload.
+		// TestRegisterSharedTools_HotReload_ShutsDownReplacedBrowserManager
+		// pins exactly that case and caught this being deleted.
+		//
+		// The double-Shutdown that used to panic the gateway with "close of
+		// closed channel" on a Settings save was never this call's fault —
+		// it was LiveViewRegistry.Shutdown not being idempotent, which is
+		// fixed at the source (see its comment in pkg/tools/browser/live.go).
+		// Every other step of BrowserManager.Shutdown was already idempotent
+		// and its doc comment says so, so with the registry fixed the
+		// coordinator-present path's second call is a safe no-op and the
+		// coordinator-absent path is no longer a leak.
 		prior.Shutdown()
 		prior.InvalidateExecPathCache()
 	}
@@ -7714,6 +7732,16 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		Metadata: msg.Metadata,
 	}
 
+	// ADR-085 BROWSER-FR-029: release a held browser wheel BEFORE this turn
+	// begins, if and only if msg.OperatorPrompt is true (set ONLY at the
+	// three operator-originated publish sites: websocket.go, sse.go,
+	// channels/base.go::HandleMessage — never here, never by the bus, never
+	// by the async notifier or a goal-loop follow-up). A nil hook (no
+	// gateway wired — headless/test builds) is a silent no-op. See
+	// browser_deferral.go for the hook's registration and the fail-closed
+	// contract on OperatorPrompt itself.
+	invokeBrowserWheelReleaseHookIfOperatorPrompt(ctx, msg, transcriptSessionID)
+
 	// FR-025: reset idle ticker on every user turn, using transcript session ID
 	// when available (web-chat sessions). This starts the ticker on the first
 	// turn and resets it on every subsequent turn.
@@ -7778,18 +7806,12 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		return response, agent, nil
 	}
 
-	// ADR-074 D4a reply routing (judgment-first spec US-3 S9): when this
-	// session carries a pending goal state (compiled-awaiting-confirmation or
-	// awaiting a clarification answer), a BARE chat message may be the confirm
-	// token or the clarification answer. The hook answers synchronously
-	// (handled=true), rewrites the turn into round 1 on a fresh-goal confirm
-	// (handled=false + opts.UserMessage), or passes an ordinary message
-	// through untouched — a routine chat message never silently mutates goal
-	// state.
-	if goalHandled, goalReply := al.applyGoalPendingReply(ctx, msg, agent, &opts); goalHandled {
-		return goalReply, agent, nil
-	}
-
+	// ADR-081 D1/D9: the ADR-074 D4a pending-goal reply-routing hook
+	// (applyGoalPendingReply) is retired — goals activate instantly now, so
+	// there is no more pending/clarification state for a bare chat message to
+	// resolve against (FR-022: bare "confirm" is ordinary chat, no
+	// interception exists). Nothing stands between handleCommand above and
+	// runAgentLoop below anymore.
 	resp, err := al.runAgentLoop(ctx, agent, opts)
 	return resp, agent, err
 }
@@ -8226,9 +8248,22 @@ func (al *AgentLoop) processSystemMessage(
 	}
 
 	return al.runAgentLoop(ctx, agent, processOptions{
-		SessionKey:          sessionKey,
-		Channel:             originChannel,
-		ChatID:              originChatID,
+		SessionKey: sessionKey,
+		Channel:    originChannel,
+		ChatID:     originChatID,
+		// ADR-081 D6b: mirrors processMessage's own SenderID threading
+		// (msg.Sender.CanonicalID, above in this file) — without it, EVERY
+		// system-channel-dispatched turn (not just the goal loop's) reaches
+		// checkGoalLoopAfterTurn's origin gate with opts.SenderID always
+		// empty, regardless of what Sender.CanonicalID the producer stamped
+		// on the bus message. This is what let the goal-loop's idle-steer/
+		// nudge/continue-push turns (pkg/agent/goal_triggers.go's
+		// dispatchGoalAsyncFollowUp, which stamps
+		// AsyncNotifyEvent.SenderCanonicalID = goalLoopFollowUpSenderID) be
+		// silently dropped at the gate even after that stamping fix —
+		// discovered while regression-testing D6b (goal_keeper_repairs_test.go's
+		// TestKeeper_SenderGateUnwedged_TwoFullIdleCycles).
+		SenderID:            msg.Sender.CanonicalID,
 		UserMessage:         fmt.Sprintf("[System: %s] %s", msg.Sender.CanonicalID, msg.Content),
 		DefaultResponse:     "Background task completed.",
 		SendResponse:        true,
@@ -8298,10 +8333,13 @@ func (al *AgentLoop) runAgentLoop(
 		return "", nil
 	}
 
-	// ADR-049 D6/D7 (US-8): judge-gated /goal round advance. Fast no-op
-	// unless opts.TranscriptSessionID's session carries an active goal; may
-	// append a steering follow-up to result.followUps, published by the loop
-	// immediately below exactly like any other follow-up.
+	// ADR-049 D6/D7 (US-8) / ADR-084 revision 9 D13 (JUDGE-FR-098, this
+	// wave): judge-gated /goal round advance. Fast no-op unless
+	// opts.TranscriptSessionID's session carries an active goal; may append
+	// a steering follow-up to result.followUps (published by the loop
+	// immediately below exactly like any other follow-up), and — on a
+	// resolved `met` claim — records a DEFERRED adjudication on
+	// result.goalDeferredAdjudication instead of running the Judge itself.
 	al.checkGoalLoopAfterTurn(ctx, agent, opts, &result)
 
 	for _, followUp := range result.followUps {
@@ -8315,14 +8353,33 @@ func (al *AgentLoop) runAgentLoop(
 	}
 
 	if opts.SendResponse && result.finalContent != "" {
+		// ADR-082 D6/FR-011: carry the transcript session id so
+		// webchatChannel.Send (pkg/gateway/webchat_channel.go) can resolve
+		// delivery targets by session id first, chat id second — the fix for
+		// E5 (keeper-originated turns carrying a stale ChatID whose only
+		// live connection may have moved to a different chatID via
+		// reconnect/second-tab attach, while the session id stays valid).
 		if err := al.bus.PublishOutbound(ctx, bus.OutboundMessage{
-			Channel: opts.Channel,
-			ChatID:  opts.ChatID,
-			Content: result.finalContent,
+			Channel:   opts.Channel,
+			ChatID:    opts.ChatID,
+			Content:   result.finalContent,
+			SessionID: opts.TranscriptSessionID,
 		}); err != nil {
 			logger.ErrorCF("agent", "Failed to publish outbound response after turn",
 				map[string]any{"channel": opts.Channel, "chat_id": opts.ChatID, "error": err.Error()})
 		}
+	}
+
+	// JUDGE-FR-098 (D13, this wave): dispatch a claim-triggered adjudication
+	// ONLY here — strictly after the operator's answer has been published
+	// above — and in its own goroutine, so this turn returns to its caller
+	// without waiting for the Judge. This is the whole of FR-098's
+	// reordering mechanism; the dispatch itself (context.Background()-
+	// derived timeout, async-notifier steer delivery) lives in
+	// dispatchDeferredGoalAdjudication (goal_loop.go).
+	if result.goalDeferredAdjudication != nil {
+		work := result.goalDeferredAdjudication
+		go al.dispatchDeferredGoalAdjudication(work)
 	}
 
 	if result.finalContent != "" {
@@ -8414,6 +8471,336 @@ func isMessagingChannel(channel string) bool {
 	return false
 }
 
+// goalForcingWebChannel is the SPA session origin (ADR-081 D3 [G-B2]) —
+// mirrors pkg/tools' own unexported webChannelName const
+// (ask_user_question.go), which pkg/agent cannot reach without a
+// cross-package coupling for one literal. AskUserQuestion's own web-only
+// refusal (ToolChannel(ctx) != webChannelName) is the authority this
+// predicate must agree with, so both sides carry the identical value.
+const goalForcingWebChannel = "webchat"
+
+// goalTurnRecordState reads the turn session's current goal state from
+// pkg/goal — the single read both evaluateGoalForcing (every
+// iteration since the D3 amendment, 2026-09-08 — no longer iteration==1
+// only) and the mid-turn rubric-note budget estimate (goalRubricNoteForBudget,
+// every iteration) share, so the two can never disagree about what "the
+// record is still empty" means. holds is
+// ADR-081 D3's base predicate: an active goal whose compiled record is still
+// empty — the transient window between instant activation (D1) and the
+// working agent's own set_goal authorship. rec is nil whenever holds is
+// false.
+//
+// DD-6 (round-6 production blocker, ADR-086, fixed by wave E13): "the
+// compiled record is still empty" used to be read straight off session
+// meta's GoalCriteriaJSON — but a set_goal TOOL call's WriteRecord
+// (goal_record_wiring.go, wave E4) was re-pointed onto pkg/goal.Store and
+// writes NO session meta at all (GOAL-FR-004/FR-005), so a real working
+// agent that registered its record via the tool left this session-meta
+// field permanently empty: the narrowed first-move door never lifted for
+// the rest of the goal. Fixed by reading the SAME pkg/goal-backed accessor
+// set_goal itself uses (agentLoopGoalRecordAccess.ReadGoalState,
+// goal_record_wiring.go) — recordJSON is "" exactly when the session's
+// ACTIVE goal record's own criteria list is still empty, whether that
+// record was activated via the /goal command (goal_loop.go) or a task run
+// (task_executor.go::activateTaskGoal). The REJECTED alternative — making
+// WriteRecord mirror the criteria back onto session meta — would reinstate
+// precisely the dual-write ADR-086 exists to delete; not implemented here.
+//
+// ADR-086 (S6) completes that re-point: the "is this a goal turn at all"
+// half used to read session meta's GoalCondition, which no longer exists.
+// Both halves now come from ONE lookup of the ACTIVE goal record bound to
+// this session (activeGoalForSession, goal_record_wiring.go) — its
+// existence answers the first question and its own criteria list answers
+// the second, so the two can no longer disagree even in principle, and the
+// predicate covers a task-owned goal as well as a chat-owned one.
+func goalTurnRecordState(al *AgentLoop, ts *turnState) (holds bool, rec *goal.Goal) {
+	if al == nil || ts == nil || ts.opts.TranscriptStore == nil || ts.opts.TranscriptSessionID == "" {
+		return false, nil
+	}
+	g := activeGoalForSession(ts.opts.TranscriptSessionID)
+	if g == nil {
+		return false, nil
+	}
+	if len(g.Criteria) > 0 {
+		return false, nil
+	}
+	return true, g
+}
+
+// goalForcingNarrowTools returns the ADR-081 D3 Layer 1 narrowed tool pair:
+// set_goal (always, when present in policyFiltered) plus AskUserQuestion
+// when includeAsk is true and it too is present. Never any other tool —
+// C-3's "1 or 2 definitions, never any other tool".
+func goalForcingNarrowTools(policyFiltered []tools.Tool, includeAsk bool) []tools.Tool {
+	out := make([]tools.Tool, 0, 2)
+	for _, t := range policyFiltered {
+		switch t.Name() {
+		case tools.SetGoalToolName:
+			out = append(out, t)
+		case tools.AskUserQuestionToolName:
+			if includeAsk {
+				out = append(out, t)
+			}
+		}
+	}
+	return out
+}
+
+// goalForcingDecision is ADR-081 D3/D4's per-request verdict, evaluated once
+// at the top of each LLM request inside runTurn's round loop (spec
+// FR-007/009/010/011, test 8) and consumed by that SAME iteration:
+// providerToolDefs assembly, the rubric-note injection, and — after the
+// tool-execution loop processes the model's response — the FR-010
+// question-round budget bump when the ask door was genuinely taken.
+//
+// D3 AMENDMENT (2026-09-07, ADR-081): provider tool-choice forcing is
+// DELETED — a goal turn on z-ai/glm-5v-turbo failed with `status=400 "Tool
+// choice must be auto" (Z.AI)`, and Z.AI/GLM is the operator's primary
+// provider family. Determinism no longer comes from the request shape
+// (narrow-and-force); it comes from the ENGINE noticing a skipped first
+// move and correcting it on the very next turn (checkGoalLoopAfterTurn's
+// immediate post-turn nudge, goal_loop.go). layer1 here now means ONLY
+// "the tool surface was narrowed to {set_goal[, AskUserQuestion]}" — never
+// "and the model was forced to call one of them". Narrowing is provider-
+// agnostic (it is just the tools array offered), so the old CLI-bridged-
+// provider exclusion (isCLIBridgedProvider/ToolChoiceForcingCapable) is
+// gone too — narrowing applies identically on every provider now.
+type goalForcingDecision struct {
+	// layer1 is true when the request's tool surface was narrowed to
+	// {set_goal[, AskUserQuestion]}: the base predicate holds and set_goal
+	// itself is not policy-denied. No tool-choice is ever forced (D3
+	// amendment) — a model offered the narrowed pair remains free to answer
+	// in plain text; the immediate post-turn correction (goal_loop.go) is
+	// what catches that case, not this request's shape.
+	layer1 bool
+	// rubric is true whenever D3's base predicate holds at all (active goal
+	// AND an empty compiled record, this turn's first LLM request) —
+	// independent of channel/provider/policy. D4's rubric note injects
+	// under this alone; layer1 implies rubric, never the reverse.
+	rubric bool
+	// askOffered is true when this request's narrowed pair still includes
+	// AskUserQuestion (layer1 && webchat origin && the question budget is
+	// unspent && policy allows it) — read after the tool-execution loop to
+	// know the ask door was actually reachable this request.
+	askOffered bool
+	// isWebchat records ts.channel == goalForcingWebChannel once so the
+	// rubric-note builder and downstream logging need not re-derive it.
+	// AskUserQuestion is permanently web-only [G-B2] — isWebchat gates
+	// whether it is INCLUDED in the narrowed pair, never whether narrowing
+	// itself applies (narrowing now applies on every origin).
+	isWebchat bool
+	sessionID string
+	goalID    string
+	// questionRoundsUsed is the persisted budget counter AS READ this
+	// evaluation — bumpGoalQuestionRoundsUsed increments from this value,
+	// never a re-read, so a concurrent unrelated write between evaluation
+	// and the bump cannot silently double-count (the single-flight goal
+	// session assumption every other goal-state writer in this package
+	// already makes).
+	questionRoundsUsed int
+	// narrowed is the actual {set_goal[, AskUserQuestion]} slice offered
+	// this request when layer1 is true — nil otherwise. providerToolDefs is
+	// built directly from this slice (never re-derived), so what the model
+	// is offered and what askOffered/layer1 describe can never disagree.
+	narrowed []tools.Tool
+}
+
+// goalForcingMaxNarrowAttempts bounds ADR-081 D3's narrowed first-move door
+// (the D3 amendment, 2026-09-08): once a turn has offered the narrowed
+// {set_goal[, AskUserQuestion]} pair this many CONSECUTIVE times without
+// either a successful set_goal write or a genuinely parked AskUserQuestion
+// card, evaluateGoalForcing releases the door (full tool surface, WARN
+// logged) instead of narrowing again — see goalNarrowEscaped's doc comment
+// on turnState (turn.go) for the exact counting rule and the real-world
+// defect (11:54:48Z→12:12:26Z, a 17-minute wedged turn) this escape exists
+// to prevent. N=3: enough for a model to recover from one transient
+// schema-validation slip (the observed defect) or two, without letting a
+// persistently broken/uncooperative model consume the whole MaxIterations
+// budget stuck in the narrowed pair — the post-turn nudge ladder
+// (checkGoalLoopAfterTurn, goal_loop.go D6c) is the backstop once this fires.
+const goalForcingMaxNarrowAttempts = 3
+
+// evaluateGoalForcing computes goalForcingDecision for the CURRENT LLM
+// request (ADR-081 D3 as amended 2026-09-07, further amended 2026-09-08 —
+// see goalForcingMaxNarrowAttempts; spec FR-007/009/010; C-3's negative
+// rows, grill M1): the predicate deliberately consults ONLY iteration
+// (logging only — see below), persisted session state, and this turn's own
+// narrow-attempt/escape counters — never opts.UserInitiated or sender
+// identity, since a card-resume turn (human-answered or auto-submitted) and
+// a keeper nudge turn are goal turns exactly like a fresh activation turn.
+//
+// D3 AMENDMENT (2026-09-08): narrowing used to apply to the turn's FIRST LLM
+// request ONLY (iteration==1), on the theory that the narrowed pair's own
+// two outcomes (register or park) never leave a second request with the
+// predicate still true in the same turn. That theory missed a third
+// outcome: a narrowed call that FAILS (tool-arg validation error, policy
+// denial at execution, or an error result) neither registers nor parks, so
+// the predicate is STILL true on iteration 2 — and used to get the FULL
+// unnarrowed tool surface back while the goal record stayed empty. Real
+// evidence: a /goal set at 11:54:48Z narrowed iteration 1; the model's
+// AskUserQuestion call failed schema validation ("unexpected property
+// \"recommended\"" inside an option); iteration 2 onward ran unnarrowed —
+// ToolSearch, write_file×5, bash, serve_web, browser_navigate — for ~17
+// minutes before the agent finally called set_goal at 12:12:26Z, because the
+// turn never ended for the post-turn correction to catch it. The door now
+// stays narrowed for EVERY request while the predicate holds — iteration is
+// no longer a gate, only a log field — bounded by goalForcingMaxNarrowAttempts
+// so a persistently-failing model cannot wedge the turn instead.
+func (al *AgentLoop) evaluateGoalForcing(
+	ts *turnState, iteration int, policyFiltered []tools.Tool,
+) goalForcingDecision {
+	var d goalForcingDecision
+	holds, rec := goalTurnRecordState(al, ts)
+	if !holds {
+		// Covers both "not a goal turn at all" and "a PRIOR request's
+		// set_goal already wrote the record" — goalTurnRecordState reads
+		// persisted state fresh on every call, so a successful write between
+		// iteration N and N+1 is what naturally releases the door here; no
+		// escape-counter bookkeeping is needed for this branch.
+		return d
+	}
+	if ts.goalNarrowIsEscaped() {
+		// The bounded escape already fired earlier this turn (see
+		// goalForcingMaxNarrowAttempts) — stay released for the rest of the
+		// turn even though the base predicate still holds. Do not re-arm:
+		// the rubric note (D4) keeps nudging, but the tool surface is not
+		// narrowed again.
+		d.rubric = true
+		d.sessionID = ts.opts.TranscriptSessionID
+		d.goalID = rec.GoalID
+		d.questionRoundsUsed = rec.QuestionRoundsUsed
+		d.isWebchat = ts.channel == goalForcingWebChannel
+		return d
+	}
+	d.rubric = true
+	d.sessionID = ts.opts.TranscriptSessionID
+	d.goalID = rec.GoalID
+	d.questionRoundsUsed = rec.QuestionRoundsUsed
+	d.isWebchat = ts.channel == goalForcingWebChannel
+
+	setGoalAllowed, askAllowed := false, false
+	for _, t := range policyFiltered {
+		switch t.Name() {
+		case tools.SetGoalToolName:
+			setGoalAllowed = true
+		case tools.AskUserQuestionToolName:
+			askAllowed = true
+		}
+	}
+	if !setGoalAllowed {
+		// D3: "if set_goal itself is policy-denied, do NO narrowing and log
+		// WARN" — checked specifically for set_goal, independent of whether
+		// AskUserQuestion alone would have made the intersection non-empty.
+		// This request is NOT counted as a narrowed attempt (it was never
+		// narrowed) and does not advance goalNarrowMisses.
+		logger.WarnCF("agent", "goal: narrowing skipped — set_goal is policy-denied for this agent",
+			map[string]any{"component": "goal", "session_id": d.sessionID, "goal_id": d.goalID, "agent_id": ts.agent.ID, "iteration": iteration})
+		return d
+	}
+
+	// [G-B2]: AskUserQuestion is permanently web-only — included in the
+	// narrowed pair ONLY on a webchat origin with the question budget
+	// unspent. On a channel or keeper (Channel:"system") origin the pair
+	// degrades to {set_goal} alone (never the empty set): narrowing itself
+	// is provider/channel-agnostic since the D3 amendment deleted tool-
+	// choice forcing, so there is no reason to skip it off-web anymore —
+	// only the ask door is origin-gated.
+	includeAsk := d.isWebchat && askAllowed && d.questionRoundsUsed < 1
+	narrowed := goalForcingNarrowTools(policyFiltered, includeAsk)
+
+	// Bounded escape (goalForcingMaxNarrowAttempts): this request is about
+	// to become another CONSECUTIVE narrowed offering. Count it BEFORE
+	// deciding whether to actually narrow — a request that instead exits
+	// above (record already written, or the escape already armed) never
+	// reaches this bump, so the counter only ever measures genuine
+	// narrowed-but-unresolved attempts. Once the count exceeds the bound,
+	// this (and every later) request in the turn gets the FULL surface
+	// instead.
+	attempt := ts.noteGoalNarrowAttempt()
+	if attempt > goalForcingMaxNarrowAttempts {
+		ts.armGoalNarrowEscape()
+		logger.WarnCF("agent", "goal: bounded escape — releasing the narrowed first-move door after repeated unresolved narrowed requests",
+			map[string]any{
+				"component": "goal", "session_id": d.sessionID, "goal_id": d.goalID,
+				"attempts": attempt - 1, "max_attempts": goalForcingMaxNarrowAttempts, "iteration": iteration,
+			})
+		return d
+	}
+
+	d.narrowed = narrowed
+	d.layer1 = true
+	// askOffered is recomputed from the ACTUAL narrowed slice rather than
+	// trusted from includeAsk alone, so it can never disagree with what
+	// providerToolDefs (built from this same slice) actually offers.
+	for _, t := range d.narrowed {
+		if t.Name() == tools.AskUserQuestionToolName {
+			d.askOffered = true
+		}
+	}
+
+	logger.InfoCF("agent", "goal: first-move door narrowed",
+		map[string]any{
+			"component": "goal", "session_id": d.sessionID, "goal_id": d.goalID,
+			"ask_offered": d.askOffered, "channel": ts.channel, "is_webchat": d.isWebchat,
+			"iteration": iteration, "attempt": attempt,
+		})
+	return d
+}
+
+// bumpGoalQuestionRoundsUsed persists FR-010's spent question-round budget
+// (per GoalID — a restate never re-mints the GoalID, so it correctly
+// inherits an already-spent budget). Best-effort: a persistence failure is
+// WARN-logged, never turn-fatal — the card has already parked the turn by
+// the time this runs.
+func (al *AgentLoop) bumpGoalQuestionRoundsUsed(d goalForcingDecision) {
+	if d.sessionID == "" {
+		return
+	}
+	// ADR-086 (GOAL-FR-004): the question-round budget is the goal record's
+	// own QuestionRoundsUsed counter, relocated off the retired session-meta
+	// GoalQuestionRoundsUsed field — which is also what keeps it attached to
+	// the GOAL generation (a restate never re-mints the record) rather than
+	// to the session.
+	if d.goalID == "" {
+		logger.WarnCF("agent", "goal: could not persist the spent question-round budget — no goal id on the forcing decision",
+			map[string]any{"component": "goal", "session_id": d.sessionID})
+		return
+	}
+	newCount := d.questionRoundsUsed + 1
+	if _, err := resolveGoalRecordStore().Update(d.goalID, func(cur *goal.Goal) error {
+		cur.QuestionRoundsUsed = newCount
+		return nil
+	}); err != nil {
+		logger.WarnCF("agent", "goal: could not persist the spent question-round budget",
+			map[string]any{"component": "goal", "session_id": d.sessionID, "goal_id": d.goalID, "error": err.Error()})
+		return
+	}
+	logger.InfoCF("agent", "goal: question door taken; budget spent",
+		map[string]any{"component": "goal", "session_id": d.sessionID, "goal_id": d.goalID, "rounds_used": newCount})
+}
+
+// goalRubricNoteForBudget re-derives buildGoalRubricInjectionNote's input
+// from persisted session state (ADR-081 D4, midturn_budget.go's
+// ephemeralSystemNoteTokens). Before the 2026-09-08 D3 amendment,
+// evaluateGoalForcing's own rubric flag was gated to the turn's first
+// request only (iteration==1), while mid-turn budget checks run AFTER that
+// first request is already assembled and sent — so this function
+// deliberately ignored that gate and re-evaluated the base predicate
+// unconditionally, a conservative OVER-estimate on iteration ≥ 2 (never an
+// under-estimate). Since the amendment, evaluateGoalForcing's rubric flag is
+// no longer iteration-gated either (it tracks goalTurnRecordState across the
+// whole turn, exactly like this function) — so the two now normally AGREE
+// rather than this one merely over-estimating. This function is kept
+// re-deriving independently rather than threading evaluateGoalForcing's
+// per-request decision through the mid-turn call chain (matching how every
+// OTHER ephemeral note in that enumeration is measured), and remains safe
+// either way: it can only ever match or over-estimate, never under-count.
+func (al *AgentLoop) goalRubricNoteForBudget(ts *turnState) string {
+	holds, _ := goalTurnRecordState(al, ts)
+	isWebchat := ts != nil && ts.channel == goalForcingWebChannel
+	return buildGoalRubricInjectionNote(holds, isWebchat)
+}
+
 func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, error) {
 	// H1: guard against an already-canceled or timed-out context before doing any work.
 	if ctx.Err() != nil {
@@ -8464,6 +8851,16 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// The session key is a routing key; the transcript session ID is the
 	// real session directory (e.g., "session_01KP30THP63YFESKGECYYHYQWY").
 	turnCtx = tools.WithTranscriptSessionID(turnCtx, ts.opts.TranscriptSessionID)
+	// ADR-085 BROWSER-FR-021: stamp the ROOT chat session id (ADR-057
+	// routingSessionID, inherited verbatim through a whole delegation
+	// subtree) so pkg/tools/browser/tools.go::controlledResult can evaluate
+	// its FR-020 second coverage check — the tab set the live panel would
+	// hold the lock on for the chat this turn (or its delegated ancestor)
+	// belongs to — even for a delegated child driving its OWN tab set
+	// (FR-023). A turn with no root chat (cron/heartbeat/task) stamps "",
+	// which controlledResult's own doc comment documents as "skip that
+	// check entirely" (fails open, never closed).
+	turnCtx = withBrowserRootChatSessionID(turnCtx, ts)
 	// Inject the session owner so sysagent tools (system.workspace.create,
 	// system.task.create) can stamp the owner on newly created entities
 	// (Rule-2 of the sysagent ownership rule, SEC-2/#406).
@@ -9208,6 +9605,14 @@ turnLoop:
 		policyFilteredTools = ensureInfraToolsExecutable(
 			ts.agent.Tools, policyFilteredTools, filterTimePolicyMap)
 
+		// ADR-081 D3/D4 (spec FR-007/009/010/011): evaluated ONCE per request,
+		// right after the policy filter settles, so both the tool-surface
+		// narrowing below and the rubric-note injection further down (and the
+		// FR-010 question-budget bump after this iteration's tool-execution
+		// loop) read the exact same verdict. See evaluateGoalForcing's own doc
+		// comment for the full predicate.
+		goalForce := al.evaluateGoalForcing(ts, iteration, policyFilteredTools)
+
 		// FR-066: dedup invariant — tools[] must be name-unique after filter+assembly.
 		// If a duplicate is detected, emit HIGH audit and return an error turn result
 		// so the loop does not feed a malformed tool list to the LLM.
@@ -9251,9 +9656,17 @@ turnLoop:
 		}
 
 		var providerToolDefs []providers.ToolDefinition
-		if cfg.Tools.Manifest.Compressed {
+		switch {
+		case goalForce.layer1:
+			// ADR-081 D3 Layer 1 (spec test 8's compressed-mode-suspension
+			// row): "exactly the pair" is exact — bypass
+			// buildCompressedToolDefs/stripInfraToolDefs entirely for this one
+			// narrowed request, including the compressed-mode ToolSearch
+			// force-through those helpers would otherwise apply.
+			providerToolDefs = tools.ToolsToProviderDefs(goalForce.narrowed)
+		case cfg.Tools.Manifest.Compressed:
 			providerToolDefs = al.buildCompressedToolDefs(ts, policyFilteredTools)
-		} else {
+		default:
 			// Non-compressed defs path: strip manifest infra tools (ToolSearch)
 			// before surfacing defs to the model. ToolSearch resolves through the
 			// same global×agent merge as every other static builtin tool and is
@@ -9317,38 +9730,46 @@ turnLoop:
 				injected = append(injected, callMessages[1:]...)
 				callMessages = injected
 			}
-			// Inject the ADR-078 D2 pending-goal note as an ephemeral system
-			// message: while a goal is compiled and awaiting the user's
-			// confirmation (fresh pending only — see buildGoalPendingNote's
-			// gating), the model must not proceed context-blind about it. Like
-			// the scratchpad note above, this is rebuilt every turn from session
-			// meta and never persisted to history.
-			callMessages = injectGoalPendingNote(callMessages, buildGoalPendingNote(ts.opts.TranscriptStore, ts.opts.TranscriptSessionID))
 			// Inject per-turn workspace instructions (AGENT.md) as an ephemeral
 			// system message immediately after the system prompt. Empty/absent
 			// instructions are a no-op — zero behavioral change.
 			//
-			// Ordering note (finding 10c, context-audit 2026-08, extended by
-			// ADR-078 D2's goal-pending note — this comment previously claimed
-			// "workspace instructions land at [2]", which stopped being true once
-			// the web-rendering note was added between this call and
-			// injectManifestNote below): all of these injectors
-			// (injectGoalPendingNote above, this one, injectWebRenderingNote,
+			// Ordering note (finding 10c, context-audit 2026-08 — ADR-081 D9
+			// retires the ADR-078 D2 goal-pending note that used to sit between
+			// this call and injectManifestNote below; buildGoalPendingNote/
+			// injectGoalPendingNote, pkg/agent/goal_pending_note.go, are deleted
+			// in full — instant activation leaves no pending state for a note to
+			// describe): the remaining injectors (this one, injectWebRenderingNote,
 			// injectManifestNote) insert at index 1 of the message array, so call
 			// order alone determines final position — the LAST call ends up
 			// CLOSEST to the system message. With every note present this turn,
 			// final order is: [0] system prompt · [1] manifest note · [2]
-			// web-rendering note · [3] workspace instructions · [4] goal-pending
-			// note (spliced above, before this call) · [5] scratchpad (spliced
-			// above, before that) · [6+] history. See injectWorkspaceInstructions'
-			// own doc comment (workspace_instructions.go) for the authoritative,
-			// single-sourced version of this contract.
+			// web-rendering note · [3] workspace instructions · [4] scratchpad
+			// (spliced above, before this call) · [5+] history. See
+			// injectWorkspaceInstructions' own doc comment
+			// (workspace_instructions.go) for the authoritative, single-sourced
+			// version of this contract.
 			callMessages = injectWorkspaceInstructions(callMessages, buildWorkspaceInstructionsNote(ts.opts.WorkspaceID))
 			// Web-only: encourage Mermaid diagrams when the turn comes from the web
 			// chat (the sole surface that renders them). Per-turn + surface-gated on
 			// ts.channel — deliberately NOT in the cached system prompt, since one
 			// agent serves multiple channels (see web_rendering_note.go).
 			callMessages = injectWebRenderingNote(callMessages, buildWebRenderingNote(ts.channel))
+			// ADR-081 D4 (spec FR-011, D3 amendment 2026-09-07): the goal
+			// rubric + first-move instruction + define-goal skill quality
+			// bar, injected exactly when the D3 base predicate holds
+			// (goalForce.rubric — active goal AND an empty compiled record,
+			// this turn's first LLM request) on EITHER origin — webchat gets
+			// it alongside the narrowed two-tool surface below; a channel
+			// origin gets the SAME note (with its conversational-ask
+			// addendum) narrowed to {set_goal} alone (AskUserQuestion stays
+			// permanently web-only). Neither origin forces a tool choice —
+			// the note ASSISTS; the immediate post-turn correction
+			// (checkGoalLoopAfterTurn, goal_loop.go) carries the guarantee.
+			// buildGoalRubricInjectionNote returns "" when the predicate
+			// does not hold, making this call a no-op on every non-goal turn.
+			callMessages = injectGoalRubricNote(callMessages,
+				buildGoalRubricInjectionNote(goalForce.rubric, goalForce.isWebchat))
 			// Re-inject the compressed manifest of unloaded lazy tools as an ephemeral
 			// system message. Like the scratchpad, it is rebuilt every turn (never
 			// persisted) so it is never stale and not double-counted in the cached
@@ -9364,12 +9785,28 @@ turnLoop:
 			ts.markGracefulTerminalUsed()
 		}
 
+		// ADR-081 D3 Layer 1 narrowing is active for THIS request exactly
+		// when goalForce.layer1 holds and gracefulTerminal hasn't nilled the
+		// tool surface. review-round-1 finding #6 (kept under the D3
+		// amendment, 2026-09-07): native_search must never ride alongside
+		// the narrowed pair — it would silently add a THIRD callable "tool"
+		// (the provider's own built-in search) outside {set_goal[,
+		// AskUserQuestion]}, undermining the narrowed surface's "exactly the
+		// pair" promise even though nothing forces the model to touch it
+		// anymore (provider tool-choice forcing is deleted — determinism now
+		// comes from the immediate post-turn correction, goal_loop.go, not
+		// the request shape). Suppress native search for this one request
+		// while narrowing is active; the client-side search_web tool is not
+		// offered here either (it's excluded from goalForce.narrowed, same
+		// as every other non-goal tool). No tool-choice option is ever set —
+		// see evaluateGoalForcing's doc comment for why.
+		narrowingActive := goalForce.layer1 && !gracefulTerminal
 		llmOpts := map[string]any{
 			"max_tokens":       ts.agent.MaxTokens,
 			"temperature":      ts.agent.Temperature,
 			"prompt_cache_key": ts.agent.ID,
 		}
-		if useNativeSearch {
+		if useNativeSearch && !narrowingActive {
 			llmOpts["native_search"] = true
 		}
 		ts.agent.mu.RLock()
@@ -10554,6 +10991,61 @@ turnLoop:
 			toolName := ts.agent.Tools.UnsanitizeToolName(tc.Name)
 			toolArgs := cloneStringAnyMap(tc.Arguments)
 
+			// pkg/agent/verifier_budget.go::VerifierBudget (JUDGE-FR-051/
+			// FR-052): once a verifier adjudication's tool-call or byte cap
+			// has been reached by every call already admitted this turn,
+			// refuse EVERY further tool call here — before the quarantine
+			// gate, before any hook, before dispatch — with a tool-result
+			// message telling the Judge the cap was reached and to conclude
+			// with the evidence already gathered. The turn is NEVER killed
+			// (FR-052): this is an ordinary refused tool-result, the same
+			// shape as the serialised-tool-argument-bound refusal further
+			// below, and the loop continues so the Judge's next assistant
+			// message can still emit its verdict.
+			// verifierBudgetForTurn returns nil for every non-verifier turn
+			// (the overwhelming majority — an ordinary chat turn's turnID
+			// was never registered), and CheckCap on a nil *VerifierBudget
+			// is a no-op, so this costs one map lookup on the hot path and
+			// nothing more.
+			if vb := verifierBudgetForTurn(ts.turnID); vb != nil {
+				if refusal, capped := vb.CheckCap(); capped {
+					logger.WarnCF("agent", "verifier tool call refused: adjudication budget cap reached (JUDGE-FR-051/FR-052)",
+						map[string]any{
+							"agent_id": ts.agent.ID,
+							"tool":     toolName,
+						})
+					// ADR-066 D4: refused results enter through the choke
+					// point on the builtin-failure surface (FR-009).
+					// SkipVerifierBudgetAccounting is set because this
+					// result exists ONLY because the cap was already
+					// reached — it must not itself count toward that same
+					// cap.
+					refusedMsg := al.admitToolResult(ts, toolResultAdmission{
+						Tool: tc.Name, ToolCallID: tc.ID, Content: refusal, IsError: true, ParallelN: len(normalizedToolCalls),
+						SkipVerifierBudgetAccounting: true,
+					}).Message
+					messages = append(messages, refusedMsg)
+					// ADR-066 D6 (T066-13): the window check runs after EVERY
+					// admitted result — empty-only mid-turn, Skip never
+					// moves; a thrash-guard fire ends the turn typed with no
+					// further provider call (FR-032).
+					if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+						res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+						turnStatus = status
+						return res, exitErr
+					}
+					al.emitEvent(
+						EventKindToolExecSkipped,
+						ts.eventMeta("runTurn", "turn.tool.skipped"),
+						ToolExecSkippedPayload{
+							Tool:   toolName,
+							Reason: refusal,
+						},
+					)
+					continue
+				}
+			}
+
 			// ADR-058 fix: ledgerToolName is the PRE-HOOK tool name, captured
 			// before hooks.BeforeTool below gets a chance to run. Every
 			// recordToolDenial/recordQuarantineReplay call for THIS call must
@@ -10619,6 +11111,38 @@ turnLoop:
 				if used, exhausted := ts.recordQuarantineReplay(ledgerToolName); exhausted {
 					turnStatus = TurnEndStatusAborted
 					return al.abortTurnForToolDenialBudget(ts, ledgerToolName, qReason, used)
+				}
+				continue
+			}
+
+			// ADR-085 BROWSER-FR-016/FR-016a: once this turn's control-gate
+			// deferral bound (BROWSER-FR-014, N=3) has been reached, every
+			// LATER control-gated browser tool call short-circuits HERE —
+			// before hooks.BeforeTool, before dispatch, before any CDP
+			// contact, no lease acquisition, no audit action row, no entry
+			// into pkg/tools/browser at all. This is a SEPARATE ledger and
+			// refusal from the quarantine gate immediately above: it shares
+			// this tool-dispatch point and nothing else (see loop.go's
+			// shared-file-chain doc). Never mixes with turnDenialBudget.
+			if isBrowserControlGatedTool(ledgerToolName) && ts.browserControlGateExhausted() {
+				al.emitEvent(
+					EventKindToolExecSkipped,
+					ts.eventMeta("runTurn", "turn.tool.skipped"),
+					ToolExecSkippedPayload{
+						Tool:   toolName,
+						Reason: "browser_control_gate_exhausted",
+					},
+				)
+				exhaustedMsg := browserControlGateExhaustedMessage(toolName)
+				settleAskToolCallTranscript(ts, session.ToolCallID(tc.ID), toolName, toolArgs, exhaustedMsg)
+				admittedMsg := al.admitToolResult(ts, toolResultAdmission{
+					Tool: tc.Name, ToolCallID: tc.ID, Content: exhaustedMsg, IsError: false, ParallelN: len(normalizedToolCalls),
+				}).Message
+				messages = append(messages, admittedMsg)
+				if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+					res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+					turnStatus = status
+					return res, exitErr
 				}
 				continue
 			}
@@ -11372,6 +11896,19 @@ turnLoop:
 				toolResult = tools.ErrorResult("hook returned nil tool result")
 			}
 
+			// ADR-085 BROWSER-FR-012a/FR-013/FR-015: a REAL dispatch (not the
+			// FR-016 short-circuit above, which never reaches here) came back
+			// deferred by the browser control gate. Record it on this turn's
+			// ledger via the STRUCTURAL Deferred field alone — never by
+			// parsing ForLLM's prose — and, on exactly the call that reaches
+			// BROWSER-FR-014's bound (the third), append FR-015's terminal
+			// instruction to this one result's own ForLLM.
+			if toolResult.Deferred != nil && toolResult.Deferred.Gate == browserControlDeferralGate {
+				if _, justReachedBound := ts.recordBrowserControlDeferral(); justReachedBound {
+					toolResult.ForLLM += browserControlGateBoundReachedNote
+				}
+			}
+
 			// UAT fix (fix/uat-defects-2026-08-22, Defect 1): update this
 			// exact call's consecutive-failure streak. A success (or a hook
 			// that turned a failure into one) clears the streak outright; a
@@ -11797,6 +12334,21 @@ turnLoop:
 			// FIRST (highest priority) because a park must win over an
 			// in-flight steering message or graceful interrupt too.
 			parked := toolResult.ParksTurn
+
+			// ADR-081 FR-010: the question door was genuinely taken on a
+			// narrowed goal turn — bump the persisted per-generation
+			// question-round budget. Scoped tightly: only THIS exact tool
+			// (never any other ParksTurn tool, e.g. a nested delegate's
+			// parked child), only when the narrowed pair actually offered
+			// the ask door THIS request (goalForce.layer1 &&
+			// goalForce.askOffered — a stray AskUserQuestion call on some
+			// unrelated turn must never consume a goal's budget it has no
+			// relation to), and only on the genuine success path
+			// (parked==true — a refused/errored ask attempt asked nothing
+			// and must not spend the round, spec S-14/E6).
+			if parked && goalForce.layer1 && goalForce.askOffered && toolName == tools.AskUserQuestionToolName {
+				al.bumpGoalQuestionRoundsUsed(goalForce)
+			}
 
 			skipReason := ""
 			skipMessage := ""

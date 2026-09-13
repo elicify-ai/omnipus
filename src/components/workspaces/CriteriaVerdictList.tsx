@@ -3,7 +3,10 @@ import { Check, X, CircleDashed, CaretDown, CaretRight } from '@phosphor-icons/r
 import type { AcceptanceCriterion, JudgeVerdict, EvidenceRecord } from '@/lib/api'
 import { EvidenceViewer } from './EvidenceViewer'
 
-export const DEFAULT_TASK_MAX_ATTEMPTS = 3
+// MUST track pkg/config/planning.go's `DefaultTaskMaxAttempts` (see the
+// same constant's comment in TaskCard.tsx) — it is the denominator of the
+// "attempt N/M" counter whenever `Task.max_attempts` is absent.
+export const DEFAULT_TASK_MAX_ATTEMPTS = 20
 
 interface CriteriaVerdictListProps {
   criteria: AcceptanceCriterion[]
@@ -23,7 +26,7 @@ interface CriteriaVerdictListProps {
   evidence?: EvidenceRecord[]
   /** `Task.attempt_count` (contract C17) — the current run's attempt index. */
   attemptCount?: number
-  /** `Task.max_attempts`, or the inherited PlanningConfig default (3) when absent. */
+  /** `Task.max_attempts`, or the inherited PlanningConfig default (20) when absent. */
   maxAttempts?: number | null
 }
 

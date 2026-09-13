@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -337,6 +338,112 @@ type AcceptanceCriterion struct {
 	Author CriterionAuthor `json:"author"`
 	// Status is the per-run judgement status; defaults to CritPending.
 	Status CriterionStatus `json:"status"`
+	// ClauseCount is JUDGE-FR-006b's persisted clause count: the number of
+	// distinct clauses SplitCriterionClauses finds in Text, computed by
+	// normalizeCriteria every time a criterion is created or updated and
+	// NEVER recomputed at adjudication time — the adjudicator reads this
+	// persisted value only. A count frozen before judging cannot be tuned in
+	// response to a failing verdict the way a count derived at judging time
+	// could (A-17): under ADR-081 the working agent authors the goal record
+	// via set_goal, and mode:update replaces the outgoing criteria set, so a
+	// judging-time count would let the judged party shrink a failing
+	// multi-clause criterion into fewer clauses to cut its own evidence bar.
+	// Always >= 1. A criterion loaded before this field existed is
+	// backfilled from its own Text the next time it passes through
+	// normalizeCriteria — the same precedent as Status's CritPending
+	// backfill above; because the value is a pure function of Text,
+	// recomputing it on every normalizeCriteria call is idempotent and
+	// requires no separate "already set" guard.
+	ClauseCount int `json:"clause_count,omitempty"`
+}
+
+// clauseSplitDelimiter and clauseSplitAnd are JUDGE-FR-006b's clause
+// splitter delimiters, applied in that order within each newline segment.
+const (
+	clauseSplitDelimiter = "; "
+	clauseSplitAnd       = " and "
+	// maxClauseCount is FR-006b's cap: a criterion's persisted clause count
+	// never exceeds this, however many delimiters its text contains.
+	maxClauseCount = 5
+)
+
+// clauseBulletMarkers are the newline-bullet markers JUDGE-FR-006b's
+// splitter recognizes at the start of a trimmed line, longest (with a
+// trailing space) checked first so a bare marker character does not shadow
+// its own "marker + space" form.
+var clauseBulletMarkers = []string{"- ", "* ", "• ", "-", "*", "•"}
+
+// SplitCriterionClauses is JUDGE-FR-006b's deterministic clause splitter: a
+// heuristic over natural-language criterion text (A-14), never a parser and
+// never itself a source of verdict authority — a false split can only ever
+// raise the Judge's evidence bar (E-15), it can never turn a genuine Met
+// into Met=false. Its sole purpose is computing
+// AcceptanceCriterion.ClauseCount at create/update time.
+//
+// Splitting order: text is first split into newline-bulleted segments (each
+// non-empty line starting, after trimming, with "-", "*" or "•" becomes its
+// own segment with the marker stripped); a text with no bullet lines is
+// treated as a single whitespace-collapsed segment. Each segment is then
+// split on "; " and, within each of those parts, on " and ". The result is
+// floored at 1 (a criterion always has at least one clause: itself) and
+// capped at 5 (FR-006b).
+func SplitCriterionClauses(text string) []string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return []string{""}
+	}
+
+	var segments []string
+	hasBullets := false
+	for _, line := range strings.Split(trimmed, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if stripped, ok := stripClauseBulletMarker(line); ok {
+			hasBullets = true
+			if stripped != "" {
+				segments = append(segments, stripped)
+			}
+			continue
+		}
+		segments = append(segments, line)
+	}
+	if !hasBullets {
+		segments = []string{strings.Join(strings.Fields(trimmed), " ")}
+	}
+
+	var clauses []string
+	for _, seg := range segments {
+		for _, part := range strings.Split(seg, clauseSplitDelimiter) {
+			for _, sub := range strings.Split(part, clauseSplitAnd) {
+				sub = strings.TrimSpace(sub)
+				if sub != "" {
+					clauses = append(clauses, sub)
+				}
+			}
+		}
+	}
+
+	if len(clauses) == 0 {
+		clauses = []string{trimmed}
+	}
+	if len(clauses) > maxClauseCount {
+		clauses = clauses[:maxClauseCount]
+	}
+	return clauses
+}
+
+// stripClauseBulletMarker reports whether line begins with one of
+// clauseBulletMarkers and, if so, returns the line with that marker and any
+// following whitespace removed.
+func stripClauseBulletMarker(line string) (string, bool) {
+	for _, marker := range clauseBulletMarkers {
+		if strings.HasPrefix(line, marker) {
+			return strings.TrimSpace(strings.TrimPrefix(line, marker)), true
+		}
+	}
+	return line, false
 }
 
 // normalizeCriteria server-sets a missing ID, defaults an empty Status to
@@ -392,6 +499,14 @@ func normalizeCriteria(criteria []AcceptanceCriterion) ([]AcceptanceCriterion, e
 		if c.Status == "" {
 			c.Status = CritPending
 		}
+		// JUDGE-FR-006b: computed on the same load-time-backfill precedent
+		// as the Status default just above — every normalizeCriteria call is
+		// a create or an update, so this recomputes on both, and it is
+		// NEVER recomputed anywhere else (the adjudicator reads the
+		// persisted value only). Because it is a pure function of Text,
+		// recomputing it here on every call is idempotent for unchanged
+		// text and correctly reflects a genuinely edited Text.
+		c.ClauseCount = len(SplitCriterionClauses(c.Text))
 		// ADR-074 D2: an authoring payload may omit kind — infer it from the
 		// payload shape BEFORE validation, so every persisted criterion
 		// carries an explicit, valid kind (the IsValidCriterionKind

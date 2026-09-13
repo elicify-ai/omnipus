@@ -15,6 +15,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -22,11 +23,68 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
+
+// judgeAgentConfigForTaskTests is the Judge System Agent entry every task
+// dispatch harness in this package must register.
+//
+// GOAL-FR-022/FR-023 (plan row R-27) deleted the last trust-the-claim branch
+// from TaskExecutor.adjudicateClaim: when the SOFT tier applied (a task with
+// no explicit Criteria, judged against judge.go::SoftTierCriterion) and the
+// Judge agent was absent from the registry, the task used to be completed on
+// the worker's own say-so. It is now EC-6's judge-unavailable shape instead —
+// non-terminal, no attempt and no round consumed, one operator-visible WARN.
+//
+// Every harness in this file creates criteria-less tasks, so every one of
+// them took that soft tier. They were green ONLY because of the deleted
+// branch: the claim was never judged at all. Registering a real Judge is what
+// makes them prove what they say they prove — a task completes BECAUSE a
+// verdict came back met.
+func judgeAgentConfigForTaskTests(t *testing.T) config.AgentConfig {
+	t.Helper()
+	return config.AgentConfig{
+		ID:   string(coreagent.IDJudge),
+		Name: "Judge",
+		Type: config.AgentTypeSystem,
+		Home: t.TempDir(),
+	}
+}
+
+// bindMetSoftTierJudge binds a canned MET-verdict provider to al's Judge
+// agent and returns it (so a caller can assert it was really dispatched).
+//
+// Registering the Judge agent alone is NECESSARY BUT NOT SUFFICIENT: an
+// AgentInstance built from config inherits the loop's shared worker provider,
+// which in these harnesses is a scriptedProvider replaying the WORKER's task
+// text. Fed to the verifier that parses as no judgment at all, every
+// criterion comes back unjudgeable/unmet, and the task lands on `next` via
+// consumeAttemptOrExhaust instead of `done` — the same red, for a different
+// reason. The Judge needs its own provider that actually answers a verdict.
+//
+// The canned verdict answers for softTierCriterionID ("soft-tier-implicit",
+// judge.go), the id SoftTierCriterion synthesises — a verdict that omitted it
+// would be classified criterion_unjudgeable (JUDGE-FR-138) and resolve unmet.
+func bindMetSoftTierJudge(t *testing.T, al *AgentLoop) *fakeJudgeProvider {
+	t.Helper()
+	judgeInst, ok := al.GetRegistry().GetAgent(string(coreagent.IDJudge))
+	if !ok {
+		t.Fatalf("the Judge System Agent (%s) is not registered — adjudicateClaim would take the "+
+			"EC-6 judge-unavailable pause (GOAL-FR-022/R-27) and this task could never complete",
+			coreagent.IDJudge)
+	}
+	fake := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+		return &providers.LLMResponse{Content: fmt.Sprintf(
+			`{"met": true, "criteria": [{"id":%q,"met":true,"reason":"the claim's evidence satisfies the criterion"}]}`,
+			softTierCriterionID)}, nil
+	}}
+	judgeInst.Provider = fake
+	return fake
+}
 
 // newNativeTaskCompletionTestLoop builds a real AgentLoop with a single
 // native (non-external-CLI) worker agent registered, backed by provider, so a
@@ -50,10 +108,16 @@ func newNativeTaskCompletionTestLoop(t *testing.T, provider providers.LLMProvide
 					Type: config.AgentTypeWorker,
 					Home: workspace,
 				},
+				// GOAL-FR-022/R-27: a success claim from this worker is a
+				// REQUEST to be judged, never a completion — without a
+				// registered Judge the claim can no longer complete anything.
+				// See judgeAgentConfigForTaskTests' doc comment.
+				judgeAgentConfigForTaskTests(t),
 			},
 		},
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
+	bindMetSoftTierJudge(t, al)
 	// al.Close() drains session workers/recaps before t.TempDir()'s own
 	// cleanup runs, so a real tool-call test (e.g. one that exercises
 	// update_task's session-worker writes) can't race an async write against
@@ -66,8 +130,21 @@ func newNativeTaskCompletionTestLoop(t *testing.T, provider providers.LLMProvide
 // newCompletionContractTask creates and stores a dispatchable `next` task for
 // agentID via al's own task store, mirroring what the REST/board layer does
 // before calling TaskExecutor.ExecuteTask.
+// The task pins max_attempts=3 explicitly. ADR-086 GOAL-FR-024/FR-026 (plan
+// row R-03, operator decision D10) raised config.DefaultTaskMaxAttempts from
+// 3 to 20 so one budget number governs both owner kinds. That is a deliberate
+// PRODUCT change, but it silently rewrote the runtime of every fail-closed
+// test built on this fixture: an unmet/no-signal outcome re-dispatches once
+// per attempt, so exhaustion went from ~3 dispatches (~2s) to ~20 (~12s) and
+// blew the 5s polling deadline in waitForCompletionContractTerminal. Pinning
+// the old number keeps these tests exercising the exhaustion path they are
+// about — the ceiling's VALUE is pkg/config's own concern (its
+// planning_test.go covers it), not this contract's. Same technique, same
+// reason as TestTaskCompletionContract_External_NoMarker_FailsClosed_
+// NotAutoDone's own explicit max_attempts pin, which still overrides this.
 func newCompletionContractTask(t *testing.T, al *AgentLoop, agentID, title string) *task.Task {
 	t.Helper()
+	maxAttempts := 3
 	tk := &task.Task{
 		Title:       title,
 		Prompt:      "do the task",
@@ -76,6 +153,7 @@ func newCompletionContractTask(t *testing.T, al *AgentLoop, agentID, title strin
 		Priority:    3,
 		WorkspaceID: "default",
 		Status:      task.StatusNext,
+		MaxAttempts: &maxAttempts,
 	}
 	if err := al.taskStore.Create(tk); err != nil {
 		t.Fatalf("create task: %v", err)
@@ -142,6 +220,14 @@ func TestTaskCompletionContract_Native_SuccessMarker_DoneWithSummary(t *testing.
 			"TASK_SUMMARY: Added the new export endpoint and its tests.",
 	}
 	al := newNativeTaskCompletionTestLoop(t, provider)
+	// Re-binding returns the harness's own canned Judge provider so this test
+	// can prove HOW the task completed, not just that it did. GOAL-FR-022/R-27
+	// deleted the branch that completed a task on the worker's say-so, so a
+	// Done here must be the product of a real met verdict — if the verifier
+	// were never dispatched, this task could not legitimately reach Done at
+	// all, and a future change that made it do so again would slip past a
+	// status-only assertion.
+	judge := bindMetSoftTierJudge(t, al)
 	tk := newCompletionContractTask(t, al, "native-agent", "native success marker")
 
 	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
@@ -151,6 +237,10 @@ func TestTaskCompletionContract_Native_SuccessMarker_DoneWithSummary(t *testing.
 	final := waitForCompletionContractTerminal(t, al, tk.ID)
 	if final.Status != task.StatusDone {
 		t.Fatalf("status = %q, want %q (result: %s)", final.Status, task.StatusDone, final.Result)
+	}
+	if judge.callCount() == 0 {
+		t.Error("the verifier was never dispatched — this task reached done without being judged, " +
+			"which is exactly the trust-the-claim shape GOAL-FR-022 deleted")
 	}
 	want := "Added the new export endpoint and its tests."
 	if final.Result != want {

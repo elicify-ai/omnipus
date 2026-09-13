@@ -322,19 +322,28 @@ func TestHandleTaskPatch_InProgress_WithKnownAgent(t *testing.T) {
 
 	// Teardown race guard: StartTaskNow launched a background goroutine that
 	// writes session + task files into the test's TempDir. Register a cleanup
-	// (LIFO → runs before al.Close and before TempDir removal) that polls until
-	// the task reaches a terminal state, guaranteeing all goroutine writes are
-	// complete before the temp directory is removed.
+	// (LIFO → runs before al.Close and before TempDir removal) that waits for
+	// every in-flight dispatch goroutine to finish, guaranteeing all of their
+	// writes have landed before the temp directory is removed.
 	//
-	// The mock LLM returns immediately so the goroutine finishes in well under
-	// a second on any machine; the 10 s bound is a generous safety margin.
-	taskID := tsk.Id
+	// This USED to poll until the task reached done/failed. ADR-084 retired
+	// that premise: adjudication is now triggered by the agent CLAIMING
+	// completion, and this test's mock LLM returns an empty response with no
+	// TASK_STATUS signal — i.e. it never claims. An unclaimed task is
+	// deliberately NOT terminal; the goal loop keeps it alive and the 7-day
+	// idle-expiry sweep is its only terminator (D-A). The old poll therefore
+	// waited 10 s for a state that correctly never arrives and then failed the
+	// test, on a guard that asserts nothing about this endpoint's contract.
+	//
+	// TaskExecutor.Drain is what the guard actually wanted all along: it
+	// closes dispatch intake and blocks on the executor's own WaitGroup, so it
+	// is deterministic rather than a poll, and it observes goroutine
+	// COMPLETION directly rather than inferring it from a task status. Nothing
+	// asserted about the PATCH itself changed — the 200 and the in_progress
+	// status above are untouched.
 	t.Cleanup(func() {
-		require.Eventually(t, func() bool {
-			s := getTaskStatus(t, api, taskID)
-			return s == gen.TaskStatusDone || s == gen.TaskStatusFailed
-		}, 10*time.Second, 20*time.Millisecond,
-			"task goroutine must reach a terminal state before test teardown")
+		require.NotNil(t, api.taskExecutor, "aligned-store harness must wire a task executor")
+		api.taskExecutor.Drain(10 * time.Second)
 	})
 }
 
@@ -354,7 +363,7 @@ func TestTransition_DoneRepeatingTaskRunNow(t *testing.T) {
 		setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 
 		body := fmt.Sprintf(
-			`{"title":"RerunMe","action":"llm","workspace_id":%q,"agent_id":"mia","trigger":{"type":"every","config":{"every_ms":60000}}}`,
+			`{"title":"RerunMe","action":"llm","workspace_id":%q,"agent_id":"mia","trigger":{"type":"every","config":{"every_ms":60000}},`+singleAttemptJSON+`,`+minimalCriteriaDodJSON+`}`,
 			wsID,
 		)
 		w := httptest.NewRecorder()
@@ -438,7 +447,7 @@ func TestHandleTaskPatch_RepeatingRunNow_RejectedLeavesDataUnchanged(t *testing.
 	setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 
 	body := fmt.Sprintf(
-		`{"title":"RerunFailPreserve","action":"llm","workspace_id":%q,"agent_id":"mia","trigger":{"type":"every","config":{"every_ms":60000}}}`,
+		`{"title":"RerunFailPreserve","action":"llm","workspace_id":%q,"agent_id":"mia","trigger":{"type":"every","config":{"every_ms":60000}},`+singleAttemptJSON+`,`+minimalCriteriaDodJSON+`}`,
 		wsID,
 	)
 	w := httptest.NewRecorder()
@@ -595,7 +604,17 @@ func newTestRestAPIAlignedStores(t *testing.T) *restAPI {
 // parameterized on the LLM provider, so a caller that needs the agent's
 // response content to be genuine and meaningful (not the bare no-op
 // restMockProvider) can supply its own scripted providers.LLMProvider.
-func newTestRestAPIAlignedStoresWithProvider(t *testing.T, provider providers.LLMProvider) *restAPI {
+// extraAgents are appended to the harness config's agent list verbatim. It
+// exists for one reason: ADR-084/GOAL-FR-022 (plan row R-27) deleted the last
+// trust-the-claim branch from TaskExecutor.adjudicateClaim, so a worker's
+// completion claim now reaches `done` ONLY through a real met verdict from
+// the seeded Judge System Agent. A test that drives a task all the way to a
+// genuine Done must therefore register a Judge (and bind it a provider that
+// answers a verdict — see rest_task_runs_test.go's bindMetVerdictJudge).
+// Callers that pass nothing keep the judge-less registry they had.
+func newTestRestAPIAlignedStoresWithProvider(
+	t *testing.T, provider providers.LLMProvider, extraAgents ...config.AgentConfig,
+) *restAPI {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	tmpDir := t.TempDir()
@@ -621,7 +640,7 @@ func newTestRestAPIAlignedStoresWithProvider(t *testing.T, provider providers.LL
 			// fallback); that sentinel is gone with no back-compat, so this
 			// harness must seed a real agent explicitly instead — see
 			// TestHandleTaskPatch_InProgress_WithKnownAgent and friends below.
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: append([]config.AgentConfig{{ID: "mia"}}, extraAgents...),
 		},
 	}
 	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[{"id":"mia"}]},"providers":[]}`)

@@ -22,9 +22,10 @@ import {
   taskEvidenceQueryKeys,
   taskVerdictsQueryKeys,
 } from '@/lib/api'
-import type { Task, TaskUpdateRequest } from '@/lib/api'
+import type { Task, TaskUpdateRequest, AcceptanceCriterion } from '@/lib/api'
 import { TagInput } from '@/components/workspaces/TagInput'
 import { AcceptanceCriteriaEditor } from '@/components/workspaces/AcceptanceCriteriaEditor'
+import { DefinitionOfDoneEditor } from '@/components/workspaces/DefinitionOfDoneEditor'
 import { CriteriaVerdictList } from '@/components/workspaces/CriteriaVerdictList'
 import { useAuthStore } from '@/store/auth'
 import {
@@ -34,6 +35,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { SmartSelect } from '@/components/ui/smart-select'
+import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { DateTimePicker } from '@/components/ui/date-time-picker'
 import { Button } from '@/components/ui/button'
@@ -76,8 +78,6 @@ import {
 } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import {
-  type TriggerKind,
-  buildTrigger,
   datetimeLocalToIso,
   datetimeLocalToDate,
   dateToDatetimeLocal,
@@ -117,6 +117,18 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
 
   const [editingPrompt, setEditingPrompt] = useState(false)
   const [promptDraft, setPromptDraft] = useState('')
+  // GOAL-FR-058 — the title becomes editable in the panel, following the
+  // same click-to-edit/autosave pattern the Prompt field already uses.
+  const [editingTitle, setEditingTitle] = useState(false)
+  const [titleDraft, setTitleDraft] = useState('')
+  const [titleError, setTitleError] = useState('')
+  // D-C — the uniform edit gate: an edit that would leave the task with no
+  // acceptance criteria, or no definition-of-done item, is refused here
+  // (blocked autosave + a stated reason), matching FR-047's HTTP 400 on the
+  // update path. There is no Save button on this panel, so the refusal is
+  // simply "the autosave never fires."
+  const [criteriaError, setCriteriaError] = useState('')
+  const [dodError, setDodError] = useState('')
   const [confirmDelete, setConfirmDelete] = useState(false)
   // Inline field errors — surfaced instead of silently discarding invalid input.
   // (No inline trigger-time error here: operator ruling 2026-08-07 made
@@ -146,12 +158,22 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   useEffect(() => {
     setPromptDraft(task?.prompt ?? '')
     setEditingPrompt(false)
+    // Title resyncs on the same identity/self-write schedule as Prompt (see
+    // above) — a title autosave PATCH invalidates the tasks query and hands
+    // this component a new `task` object with the SAME id but the NEW
+    // title, which re-fires this effect and safely closes the in-progress
+    // editor exactly like a successful Prompt save does.
+    setTitleDraft(task?.title ?? '')
+    setEditingTitle(false)
+    setTitleError('')
     setDueError('')
     setStatusError('')
+    setCriteriaError('')
+    setDodError('')
     setSaveStatus('idle')
     setSaveError(undefined)
     setConfirmDelete(false)
-  }, [task?.id, task?.prompt, task?.workspace_id])
+  }, [task?.id, task?.prompt, task?.title, task?.workspace_id])
 
   // Resync ONLY the due draft when the task's due date changes — including
   // the same-identity resync described above (a due PATCH's own success
@@ -383,6 +405,45 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     setEditingPrompt(false)
   }
 
+  // GOAL-FR-058 — title is required (a task cannot be renamed to blank);
+  // mirrors handleSavePrompt's no-op-if-unchanged guard.
+  function handleSaveTitle() {
+    const trimmed = titleDraft.trim()
+    if (!trimmed) {
+      setTitleError('Title is required')
+      return
+    }
+    setTitleError('')
+    if (trimmed !== (task?.title ?? '')) {
+      doUpdate({ title: trimmed })
+    }
+    setEditingTitle(false)
+  }
+
+  // D-C uniform edit gate — refuse an edit that would leave the task with
+  // zero acceptance criteria: block the autosave, state why, and leave the
+  // editor showing the still-non-empty list (task.criteria is unchanged
+  // because doUpdate never fires, so AcceptanceCriteriaEditor's controlled
+  // `criteria` prop reverts the attempted removal on the next render).
+  function handleCriteriaChange(next: AcceptanceCriterion[]) {
+    if (next.length === 0) {
+      setCriteriaError('A task must keep at least one acceptance criterion. Add one before removing the last.')
+      return
+    }
+    setCriteriaError('')
+    doUpdate({ criteria: next })
+  }
+
+  // Same gate, for the definition-of-done list (GOAL-FR-048/FR-054).
+  function handleDodChange(next: AcceptanceCriterion[]) {
+    if (next.length === 0) {
+      setDodError('A task must keep at least one definition-of-done item. Add one before removing the last.')
+      return
+    }
+    setDodError('')
+    doUpdate({ dod: next })
+  }
+
   function handleToggleDep(id: string) {
     if (!task) return
     const current = task.blocked_by ?? []
@@ -390,27 +451,6 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       ? current.filter((x) => x !== id)
       : [...current, id]
     doSetDeps(next)
-  }
-
-  // FR-011/D3/FR-005, updated by operator ruling 2026-08-07: the generic
-  // detail panel only ever offers switching the trigger *kind* between
-  // "None (manual)" and "Once (at a time)" — it no longer owns setting the
-  // actual once-trigger time. Picking "Once" here hands the task a default
-  // at_ms (now + 1h) via buildTrigger and immediately PATCHes; the task then
-  // round-trips as a schedule-bearing task and the Trigger field below
-  // switches to its read-only calendar-redirect rendering — the same
-  // treatment every/recurring already got, and where the actual time is set.
-  // (This handler is unreachable for every/recurring/once tasks already at
-  // rest: the Trigger field renders the calendar-redirect guard for those,
-  // never this SmartSelect.)
-  function handleTriggerKindChange(kind: TriggerKind) {
-    if (!task) return
-    if (kind === 'once') {
-      const cfg = task.trigger?.config ?? {}
-      doUpdate({ trigger: buildTrigger('once', { at_ms: typeof cfg.at_ms === 'number' ? cfg.at_ms : Date.now() + 3_600_000 }) })
-    } else {
-      doUpdate({ trigger: buildTrigger('manual', {}) })
-    }
   }
 
   function handleDueChange(value: string) {
@@ -476,7 +516,6 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   const isFailed = task.status === 'failed'
   const isRunning = task.status === 'in_progress'
   const blockedBy = task.blocked_by ?? []
-  const triggerKind: TriggerKind = task.trigger?.type ?? 'manual'
 
   return (
     <div className="space-y-5">
@@ -485,13 +524,60 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         <AutoSaveIndicator status={saveStatus} error={saveError} />
       </div>
 
-      {/* Title */}
+      {/* Title (GOAL-FR-058 — now editable, same click-to-edit/autosave
+          pattern as the Goal field below). */}
       <Field label="Title">
-        <p className="text-sm font-medium text-[var(--color-secondary)]">{task.title}</p>
+        {editingTitle ? (
+          <div className="space-y-1.5">
+            <Input
+              value={titleDraft}
+              onChange={(e) => { setTitleDraft(e.target.value); setTitleError('') }}
+              className="text-sm font-medium h-8"
+              autoFocus
+              maxLength={200}
+              aria-label="Title"
+              aria-invalid={!!titleError}
+              aria-describedby={titleError ? 'task-title-error' : undefined}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { e.preventDefault(); handleSaveTitle() }
+                if (e.key === 'Escape') { e.preventDefault(); setTitleDraft(task.title); setTitleError(''); setEditingTitle(false) }
+              }}
+            />
+            {titleError && (
+              <p id="task-title-error" className="text-xs text-[var(--color-error)]">{titleError}</p>
+            )}
+            <div className="flex gap-1.5">
+              <Button size="sm" className="h-6 px-2 text-[10px] gap-1" onClick={handleSaveTitle}>
+                <Check size={10} weight="bold" /> Save
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-[10px] gap-1"
+                onClick={() => { setTitleDraft(task.title); setTitleError(''); setEditingTitle(false) }}
+              >
+                <X size={10} /> Cancel
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="relative group">
+            <p className="text-sm font-medium text-[var(--color-secondary)] pr-6">{task.title}</p>
+            <button tabIndex={0}
+              type="button"
+              onClick={() => { setTitleDraft(task.title); setEditingTitle(true) }}
+              className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-1)]"
+              aria-label="Edit title"
+            >
+              <PencilSimple size={12} />
+            </button>
+          </div>
+        )}
       </Field>
 
-      {/* Prompt */}
-      <Field label="Prompt / Instructions">
+      {/* Goal (GOAL-FR-056 — was "Prompt / Instructions"; this becomes the
+          goal record once the task starts its own session). */}
+      <Field label="Goal">
         {editingPrompt ? (
           <div className="space-y-1.5">
             <Textarea
@@ -633,23 +719,52 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         />
       </Field>
 
-      {/* Acceptance criteria + per-attempt verdicts (ADR-049 FR-087/088) */}
-      <Field label="Acceptance criteria">
+      {/* Acceptance criteria + per-attempt verdicts (ADR-049 FR-087/088).
+          GOAL-FR-053: required — the D5 soft-tier empty hint is retired,
+          with no replacement text needed on the panel (C-63/C-80: only the
+          `emptyHint` ATTRIBUTE at this call site is removed, never the
+          prop itself, which survives on AcceptanceCriteriaEditor for its
+          other callers). D-C: removing the last criterion is refused —
+          see handleCriteriaChange. */}
+      <Field label={<>Acceptance criteria <span className="text-[var(--color-error)]">*</span></>}>
         <AcceptanceCriteriaEditor
           criteria={task.criteria ?? []}
-          onChange={(criteria) => doUpdate({ criteria })}
+          onChange={handleCriteriaChange}
           currentAuthor={{ kind: 'user', id: username ?? 'operator' }}
-          emptyHint="No criteria — this task will be judged against its title and description (D5)."
         />
+        {criteriaError && (
+          <p className="text-xs text-[var(--color-error)]">{criteriaError}</p>
+        )}
         <div className="mt-2">
+          {/* GOAL-FR-054/FR-055 (C-81/C-42): `dod` is now passed to the
+              EXISTING CriteriaVerdictList, which already accepts the prop
+              and already renders a distinctly-labelled "Definition of
+              Done" verdict group below the acceptance-criteria verdicts —
+              zero new rendering code added here or inside that component. */}
           <CriteriaVerdictList
             criteria={task.criteria ?? []}
+            dod={task.dod ?? []}
             verdicts={taskVerdicts}
             evidence={taskEvidence}
             attemptCount={task.attempt_count}
             maxAttempts={task.max_attempts}
           />
         </div>
+      </Field>
+
+      {/* Definition of Done (GOAL-FR-003/FR-048/FR-054, D-C's uniform edit
+          gate; joint delivery plan C-81) — the EDIT half, mirroring the
+          Acceptance criteria field above. `DefinitionOfDoneEditor` (U1) is
+          a thin wrapper supplying its own label/asterisk/helper text. */}
+      <Field label="Definition of Done">
+        <DefinitionOfDoneEditor
+          dod={task.dod ?? []}
+          onChange={handleDodChange}
+          currentAuthor={{ kind: 'user', id: username ?? 'operator' }}
+        />
+        {dodError && (
+          <p className="text-xs text-[var(--color-error)]">{dodError}</p>
+        )}
       </Field>
 
       {/* Clear/Stop — a task actively running its own goal loop (US-11 AS-5) */}
@@ -719,28 +834,23 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         ) : null}
       </Field>
 
-      {/* Trigger — operator ruling 2026-08-07 (supersedes the 364d00b2-era
-          judgment that kept `once` inline-editable here): editing a
-          schedule-bearing task's TIME is calendar-only for every kind —
-          once/every/recurring alike — not just repeating ones. Gate on the
-          broader isScheduledTrigger, not the narrower isRecurringTrigger.
-          Board/List already exclude every schedule-bearing task
-          (BoardView/ListView's isScheduledTrigger filter), so this panel
-          should rarely receive one in practice — reachable via a dependency
-          chip, subtask row, search result, stale cache, or a race. When it
-          does, render a READ-ONLY plain-English summary + a link to the
-          workspace calendar instead of an editable picker — never a raw
-          cron/rule string, never trigger-time editing here. Schedule editing
-          exists only in the calendar editor (FR-005, CalendarEventSlideOver).
-          Otherwise (manual, the normal case), the picker below offers
-          "None (manual)" and "Once (at a time)" as trigger KINDS — the same
-          trim as the generic create form (FR-011/D3). Picking "Once" hands
-          the task a default at_ms and PATCHes immediately; once the task
-          round-trips as schedule-bearing, this field switches to the
-          read-only redirect above — the actual date/time is then set in the
-          calendar, same as every/recurring. */}
-      <Field label="Trigger">
-        {isScheduledTrigger(task.trigger) ? (
+      {/* Trigger — GOAL-FR-060: the manual-kind CONTROL (the SmartSelect
+          offering "None (manual)" / "Once (at a time)") is REMOVED outright.
+          A normal task has no timer — it starts by a human pressing Start,
+          an agent starting it, or a plan reaching it, none of which is a
+          schedule; time-based starts are the calendar's own job now
+          (CalendarEventSlideOver). Scope limit: only the CONTROL is gone —
+          the `trigger` model field, wire type, isScheduledTrigger/
+          scheduledTriggerSummary helpers and the calendar's own editor all
+          stay. The READ-ONLY branch below MUST also stay: Board/List
+          already exclude every schedule-bearing task, so this panel should
+          rarely receive one in practice — reachable via a dependency chip,
+          subtask row, search result, stale cache, or a race — and when it
+          does, it needs a plain-English summary + a link to the workspace
+          calendar, never a raw cron/rule string and never trigger-time
+          editing here. */}
+      {isScheduledTrigger(task.trigger) && (
+        <Field label="Trigger">
           <div className="space-y-1.5">
             <p className="text-xs text-[var(--color-secondary)]">
               {scheduledTriggerSummary(task.trigger)}
@@ -757,19 +867,8 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
               </Link>
             )}
           </div>
-        ) : (
-          <SmartSelect
-            value={triggerKind}
-            onValueChange={(val) => handleTriggerKindChange(val as TriggerKind)}
-            triggerClassName="h-8 text-xs"
-            ariaLabel="Trigger"
-            items={[
-              { value: 'manual', label: 'None (manual)', className: 'text-xs' },
-              { value: 'once', label: 'Once (at a time)', className: 'text-xs' },
-            ]}
-          />
-        )}
-      </Field>
+        </Field>
+      )}
 
       {/* Depends on (blocked_by, editable) */}
       <Field label="Depends on">
@@ -1040,7 +1139,7 @@ export function WorkflowTaskDetailPanel({
 
 // ── Field ──────────────────────────────────────────────────────────────────────
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="space-y-1.5">
       <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">{label}</p>

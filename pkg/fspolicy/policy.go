@@ -81,6 +81,47 @@ type FSPolicy struct {
 	// take no AllowedRoots parameter, so mounting even $HOME yields "write to
 	// $HOME minus the secret set" (asserted in mount_secret_independence_test.go).
 	AllowedRoots []string
+
+	// ReadConfined extends WorkDir confinement to the three operations that
+	// ADR-063 FR-2.2 deliberately left open outside the secret set —
+	// FSOpRead, FSOpList and FSOpSend (ADR-084 JUDGE-FR-060).
+	//
+	// Threat model. ADR-063 made reads open because a read is not a
+	// modification and the secret set (master.key, credentials.json,
+	// agents/, workspaces/) already covered what mattered. The Judge breaks
+	// that assumption: $OMNIPUS_HOME/sessions/, tasks/, plans/ and memory/
+	// are in NEITHER SecretEntriesAlways nor SecretEntriesPerTurn, so an
+	// unconfined verifier turn can read every transcript in the install —
+	// which makes the verifier's own target-session lock
+	// (tools.VerifierSessionScopeAllows) bypassable by opening the transcript
+	// file directly instead of calling inspect_session.
+	//
+	// It governs ALL THREE operations in that branch on purpose. Narrowing it
+	// to FSOpRead was considered and rejected: the Judge is granted
+	// list_directory, so a read-only flag would leave
+	// `list_directory $OMNIPUS_HOME/sessions/` wide open and close only half
+	// the hole. FSOpSend is the third because send_file resolves through the
+	// same branch.
+	//
+	// A posture flag, not an enumeration. The rejected alternative was a
+	// carve-out list naming sessions/, tasks/, plans/, memory/,
+	// tasks_evidence/ and logs/. An enumeration of what to hide drifts the
+	// first time a new state directory is added; a posture does not.
+	//
+	// POLARITY, stated so it cannot be inverted by accident: the zero value
+	// means NOT confined. Every policy built without an explicit
+	// readConfined=true is byte-identical to the pre-ADR-084 policy, so every
+	// non-System agent's FSOpRead/FSOpList/FSOpSend reach is exactly as
+	// ADR-063 FR-2.2 left it — open outside the secret set, independent of
+	// Scope. That is asserted by
+	// TestEffectiveFSPolicy_ReadConfinedOnlyForSystemAgents.
+	//
+	// It is orthogonal to Scope. Scope still governs FSOpWrite/FSOpServe/
+	// FSOpExec exactly as before; ReadConfined adds nothing to, and removes
+	// nothing from, those three. It is also strictly additive to the
+	// carve-out check, which runs unconditionally and earlier — a confined
+	// policy can never make a previously-denied path reachable.
+	ReadConfined bool
 }
 
 // Validate asserts the structural invariants ResolvePath depends on before
@@ -173,11 +214,50 @@ func (p FSPolicy) Validate() error {
 // omnipusHome or the effective working directory cannot be resolved to an
 // absolute, realpath'd location, so a caller can never fall through to a
 // half-computed policy.
+//
+// ReadConfined is always false on the policy this returns. A caller that
+// needs the ADR-084 JUDGE-FR-060 read-confined posture calls
+// EffectiveFSPolicyWithReadConfined instead and passes the flag explicitly —
+// see that function's doc comment for why the flag is a parameter rather
+// than something read off ctx.
 func EffectiveFSPolicy(
 	ctx context.Context,
 	agentHome, turnWorkDir string,
 	restrict bool,
 	omnipusHome, agentID, workspaceID string,
+) (FSPolicy, error) {
+	return EffectiveFSPolicyWithReadConfined(
+		ctx, agentHome, turnWorkDir, restrict, omnipusHome, agentID, workspaceID, false,
+	)
+}
+
+// EffectiveFSPolicyWithReadConfined is EffectiveFSPolicy plus the ADR-084
+// JUDGE-FR-060 read-confinement posture, supplied as an EXPLICIT parameter.
+//
+// Why a parameter and not ctx. This function already accepts a ctx and
+// already throws it away (see below). Reading the posture off that ctx would
+// make a security-relevant decision depend on a value this package cannot
+// see being set, cannot type-check, and cannot fail loudly about when it is
+// missing — the exact "silently unconfined" failure JUDGE-FR-060b forbids.
+// An explicit bool forces the decision to be made, in code, at the call
+// site: tools.ResolveTurnFSPolicy reads the engine-set turn fact
+// (tools.ReadConfined) and hands the answer down.
+//
+// Why a second function rather than an eighth parameter on EffectiveFSPolicy.
+// JUDGE-FR-060b asks for a signature change so every existing call site is
+// forced to consider the flag. Every one of those call sites lives in a file
+// owned by another wave of this delivery (pkg/tools/shell.go and eight test
+// files), which this wave may not touch. The polarity requirement — unset
+// means NOT confined — makes the delegating wrapper above exactly equivalent
+// for them, and this file states, in one place, that a caller which does not
+// name the posture does not get it. Recorded as a deliberate deviation in
+// this wave's report.
+func EffectiveFSPolicyWithReadConfined(
+	ctx context.Context,
+	agentHome, turnWorkDir string,
+	restrict bool,
+	omnipusHome, agentID, workspaceID string,
+	readConfined bool,
 ) (FSPolicy, error) {
 	// P2 seam: agentID/workspaceID will drive per-agent/per-workspace
 	// filesystem_scope resolution once that lands. Referenced here only to
@@ -220,6 +300,7 @@ func EffectiveFSPolicy(
 		Scope:        scope,
 		CarveOuts:    buildCarveOuts(resolvedHome),
 		AllowedRoots: nil,
+		ReadConfined: readConfined,
 	}, nil
 }
 

@@ -20,9 +20,11 @@ package agent
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -37,6 +39,66 @@ func alwaysUnmetJudgeProvider() *fakeJudgeProvider {
 			Content: `{"met": false, "criteria": [{"id":"c1","met":false,"reason":"still missing evidence"}]}`,
 		}, nil
 	}}
+}
+
+// t3WaitForTerminal is waitForCompletionContractTerminal
+// (task_completion_contract_test.go) with ONE difference: a deadline that
+// scales with the number of worker dispatches the case expects, instead of
+// a flat five seconds.
+//
+// Why it exists (wave T3, 2026-09-11). The shared helper waits 5s total.
+// Every attempt in this file costs a full worker turn PLUS a full Judge
+// turn, and those turns are real runTurn executions — only the LLM call
+// itself is canned. On an unloaded machine each pair costs ~0.5s and even
+// the four-attempt case fits; under the parallel-agent load this delivery
+// runs at, a single canned-provider turn was measured at 2.7s, so the
+// two-attempt case alone overran the flat deadline. The result is a red
+// that reports nothing about the code: `TestTaskExecutor_AttemptBoundaries`
+// max_2/max_3/max_4 and this file's own GOAL-FR-023 case all failed with
+// "task did not reach a terminal status within the deadline" at load
+// average 6.6 and all passed, unchanged, at load average 1.
+//
+// The assertions are untouched — this only stops the clock from deciding
+// them. The wait CONDITION is copied verbatim from the shared helper
+// (terminal status AND the session archive write landed), because returning
+// on terminal status alone races finishTaskRun's trailing writes; see that
+// helper's own doc comment.
+//
+// The shared helper itself is NOT edited: task_completion_contract_test.go
+// is a protected regression file this delivery's plan bars every wave from
+// touching. Only this file's call sites move.
+func t3WaitForTerminal(t *testing.T, al *AgentLoop, taskID string, expectedDispatches int) *task.Task {
+	t.Helper()
+	if expectedDispatches < 1 {
+		expectedDispatches = 1
+	}
+	// 10s of fixed headroom for harness/session setup, plus 15s per
+	// worker+Judge turn pair — roughly five times the worst per-pair cost
+	// measured under load, so the deadline stops being a variable.
+	deadline := time.Now().Add(10*time.Second + time.Duration(expectedDispatches)*15*time.Second)
+	for time.Now().Before(deadline) {
+		got, err := al.taskStore.Get(taskID)
+		if err != nil {
+			t.Fatalf("get task: %v", err)
+		}
+		if task.IsTerminal(got.Status) {
+			if got.SessionID == "" {
+				return got
+			}
+			sessStore := al.GetAgentStore(got.AgentID)
+			if sessStore == nil {
+				return got
+			}
+			if meta, merr := sessStore.GetMeta(got.SessionID); merr == nil && meta.Status == session.StatusArchived {
+				return got
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("task did not reach a terminal status within the deadline "+
+		"(%d expected dispatch(es)); this is a WAIT timeout, not an assertion failure — "+
+		"re-read it as inconclusive under machine load before treating it as a finding", expectedDispatches)
+	return nil
 }
 
 func TestTaskExecutor_AttemptBoundaries(t *testing.T) {
@@ -74,7 +136,7 @@ func TestTaskExecutor_AttemptBoundaries(t *testing.T) {
 				t.Fatalf("ExecuteTask: %v", err)
 			}
 
-			final := waitForCompletionContractTerminal(t, al, tk.ID)
+			final := t3WaitForTerminal(t, al, tk.ID, tc.wantDispatches)
 			if final.Status != task.StatusFailed {
 				t.Fatalf("status = %q, want %q — an always-unmet judge must never yield done "+
 					"(result: %s)", final.Status, task.StatusFailed, final.Result)
@@ -122,7 +184,7 @@ func TestTaskExecutor_AttemptHardCeiling_StopsUnconditionally(t *testing.T) {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
-	final := waitForCompletionContractTerminal(t, al, tk.ID)
+	final := t3WaitForTerminal(t, al, tk.ID, 1)
 	if final.Status != task.StatusFailed {
 		t.Fatalf("status = %q, want %q", final.Status, task.StatusFailed)
 	}
@@ -157,7 +219,7 @@ func TestTaskExecutor_ScratchpadExemptFromGoalLoop(t *testing.T) {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
-	final := waitForCompletionContractTerminal(t, al, tk.ID)
+	final := t3WaitForTerminal(t, al, tk.ID, 1)
 	if final.Status != task.StatusFailed {
 		t.Fatalf("status = %q, want %q (immediate fail-closed, no retry)", final.Status, task.StatusFailed)
 	}
@@ -201,7 +263,7 @@ func TestTaskExecutor_JudgeMetVerdict_CompletesTaskDone(t *testing.T) {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
-	final := waitForCompletionContractTerminal(t, al, tk.ID)
+	final := t3WaitForTerminal(t, al, tk.ID, 1)
 	if final.Status != task.StatusDone {
 		t.Fatalf("status = %q, want %q (result: %s)", final.Status, task.StatusDone, final.Result)
 	}
@@ -289,7 +351,7 @@ func TestGoalLoop_ExplicitUpdateTaskDone_StillJudged(t *testing.T) {
 		t.Fatalf("ExecuteTask: %v", err)
 	}
 
-	final := waitForCompletionContractTerminal(t, al, tk.ID)
+	final := t3WaitForTerminal(t, al, tk.ID, 1)
 	if final.Status == task.StatusDone {
 		t.Fatalf("status = %q — an explicit update_task(done) claim on a task WITH acceptance criteria "+
 			"must be judged, not trusted outright (this is the C1 bypass review r1 closes)", final.Status)
@@ -323,5 +385,135 @@ func TestGoalLoop_ExplicitUpdateTaskDone_StillJudged(t *testing.T) {
 		t.Errorf("dependent status = %q, want %q — AdvanceBlockedDependents must not fire "+
 			"synchronously at the update_task(done) tool-call boundary for a judged (unmet) claim",
 			finalDependent.Status, task.StatusBlocked)
+	}
+}
+
+// ===========================================================================
+// ADR-086 / GOAL-FR-023 — wave T3: attempt accounting for a legacy
+// criteria-less task, end to end through real ExecuteTask dispatches.
+//
+// FR-023: "A task created before FR-021 with no criteria MUST continue to run
+// and MUST continue to be judged by pkg/agent/judge.go::SoftTierCriterion.
+// FR-021 binds at creation and at edit only."
+//
+// TestLegacyCriterialessTaskStillRuns_GOALFR023
+// (task_executor_adjudicate_claim_test.go) proves WHICH criteria such a task
+// is judged against, at the adjudicateClaim seam. This one proves the other
+// half of "MUST continue to run": that the attempt ladder around it behaves
+// exactly as it does for a task with explicit criteria — same dispatch count,
+// same AttemptCount, same terminal state — so FR-021's new creation-time
+// requirement cannot quietly strand the tasks that predate it, in either
+// direction (neither looping forever nor failing out early).
+//
+// The explicit-criteria rows are the differentiation control: identical
+// fixtures except for the criteria list, identical expectations. If the
+// criteria-less path ever diverges — an extra free re-dispatch, a skipped
+// attempt, an early exhaustion — the two halves of each table row disagree
+// and the test goes red.
+// ===========================================================================
+
+func TestLegacyCriterialessTask_AttemptAccountingUnchanged_GOALFR023(t *testing.T) {
+	cases := []struct {
+		name     string
+		criteria []task.AcceptanceCriterion
+		judgeMet bool
+
+		wantStatus       task.Status
+		wantAttemptCount int
+		wantDispatches   int
+		wantJudgeCalls   int
+	}{
+		{
+			name:     "criteria_less_unmet_walks_the_full_attempt_budget",
+			criteria: nil,
+			judgeMet: false,
+			// Budget 2 below: two dispatches, two judged attempts, then the
+			// attempts brake ends it. Exactly what an explicit-criteria task
+			// does.
+			wantStatus:       task.StatusFailed,
+			wantAttemptCount: 2,
+			wantDispatches:   2,
+			wantJudgeCalls:   2,
+		},
+		{
+			name:             "explicit_criteria_unmet_walks_the_same_budget",
+			criteria:         []task.AcceptanceCriterion{proseCriterion("c1", "the widget is green")},
+			judgeMet:         false,
+			wantStatus:       task.StatusFailed,
+			wantAttemptCount: 2,
+			wantDispatches:   2,
+			wantJudgeCalls:   2,
+		},
+		{
+			name:     "criteria_less_met_completes_on_the_first_attempt",
+			criteria: nil,
+			judgeMet: true,
+			// A met verdict on the first attempt consumes nothing — the
+			// attempts counter is only written by the unmet path.
+			wantStatus:       task.StatusDone,
+			wantAttemptCount: 0,
+			wantDispatches:   1,
+			wantJudgeCalls:   1,
+		},
+		{
+			name:             "explicit_criteria_met_completes_the_same_way",
+			criteria:         []task.AcceptanceCriterion{proseCriterion("c1", "the widget is green")},
+			judgeMet:         true,
+			wantStatus:       task.StatusDone,
+			wantAttemptCount: 0,
+			wantDispatches:   1,
+			wantJudgeCalls:   1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			worker := &scriptedProvider{
+				responseBody: "did the work\n[goal:evidence] the widget is now green\n" +
+					"TASK_STATUS: success\nTASK_SUMMARY: I painted it green.",
+			}
+			al, judgeInst := newGoalLoopTestLoop(t, worker, nil)
+			// The id-echoing Judge fixture (task_executor_adjudicate_claim_test.go)
+			// answers for WHATEVER criterion ids the prompt carries, so the
+			// criteria-less row is judged on its soft-tier id and the
+			// explicit row on "c1" without either needing its own fixture —
+			// which is what makes the two rows genuinely comparable.
+			judge := &goalFR022JudgeProvider{met: tc.judgeMet}
+			judgeInst.Provider = judge
+
+			budget := 2
+			tk := &task.Task{
+				Title: "paint the widget", Prompt: "the widget must end up green",
+				Action: task.ActionLLM, AgentID: "native-agent", Priority: 3,
+				WorkspaceID: "default", Status: task.StatusNext,
+				MaxAttempts: &budget, Criteria: tc.criteria,
+			}
+			if err := al.taskStore.Create(tk); err != nil {
+				t.Fatalf("create task: %v", err)
+			}
+
+			if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
+				t.Fatalf("ExecuteTask: %v", err)
+			}
+
+			final := t3WaitForTerminal(t, al, tk.ID, tc.wantDispatches)
+			if final.Status != tc.wantStatus {
+				t.Fatalf("status = %q, want %q (result: %s)", final.Status, tc.wantStatus, final.Result)
+			}
+			if final.AttemptCount != tc.wantAttemptCount {
+				t.Errorf("attempt_count = %d, want %d", final.AttemptCount, tc.wantAttemptCount)
+			}
+			worker.mu.Lock()
+			gotDispatches := worker.callCount
+			worker.mu.Unlock()
+			if gotDispatches != tc.wantDispatches {
+				t.Errorf("worker dispatched %d time(s), want %d", gotDispatches, tc.wantDispatches)
+			}
+			if got := judge.callCount(); got != tc.wantJudgeCalls {
+				t.Errorf("Judge dispatched %d time(s), want %d — a criteria-less legacy task must be "+
+					"JUDGED on every attempt, never trusted and never skipped (GOAL-FR-022/FR-023)",
+					got, tc.wantJudgeCalls)
+			}
+		})
 	}
 }

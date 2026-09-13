@@ -1,6 +1,6 @@
 /**
  * CriteriaBreakdown — shared presentational criteria list (ADR-074 D5.4;
- * judgment badge + inferred-provenance flag per ADR-080 D-TYPES/D-DOD).
+ * judgment icon + inferred-provenance flag per ADR-080 D-TYPES/D-DOD).
  *
  * Renders an itemized Definition-of-Done breakdown: plain-language text
  * first, with a mono "verifies via:" chip beneath any criterion that carries
@@ -11,8 +11,11 @@
  * everywhere it is shown.
  *
  * ADR-080 D-TYPES: when a criterion carries a `judgment` (boolean /
- * quantitative / artifact — "what SHAPE of claim is this"), a small badge
- * renders alongside the text. ADR-080 D-DOD: when a criterion carries
+ * quantitative / artifact — "what SHAPE of claim is this"), a small, muted
+ * Phosphor icon renders alongside the text (operator report, 2026-09-07: the
+ * prior uppercase text badge added visual weight without adding information
+ * once every row also carries one — the icon is quieter and still legible
+ * via `title`/`aria-label`). ADR-080 D-DOD: when a criterion carries
  * `provenance === 'inferred'` (a DoD item the compiler proposed rather than
  * one the setter/workspace stated), a second flag reads "inferred — confirm
  * or drop" — the minimal structured surface for "SHOWN, never silently
@@ -26,6 +29,24 @@
  * consumer's types. No `[kind]` classification label is user-facing
  * (judgment-first spec §4 prohibition).
  */
+
+import { CheckCircle, FileText, Gauge } from '@phosphor-icons/react'
+import type { Icon as PhosphorIcon } from '@phosphor-icons/react'
+
+/**
+ * Judgment -> {icon, label} map. Exported (additive, not a breaking change
+ * to the component's props) so any other renderer needing the exact same
+ * icon/label pairing — e.g. a future task/plan editor pass — can reuse it
+ * instead of re-deriving its own mapping.
+ */
+export const JUDGMENT_ICON: Record<
+  NonNullable<CriteriaBreakdownItem['judgment']>,
+  { Icon: PhosphorIcon; label: string }
+> = {
+  boolean: { Icon: CheckCircle, label: 'Pass/fail' },
+  quantitative: { Icon: Gauge, label: 'Measured' },
+  artifact: { Icon: FileText, label: 'Artifact' },
+}
 
 /** Structural subset of `AcceptanceCriterion` this component reads. */
 export interface CriteriaBreakdownItem {
@@ -89,14 +110,25 @@ export function CriteriaBreakdown({ criteria, emptyText }: CriteriaBreakdownProp
             className="px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-xs space-y-0.5"
           >
             <div className="flex items-start gap-1.5">
-              {c.judgment && (
-                <span
-                  data-testid="criterion-judgment-badge"
-                  className="mt-[1px] shrink-0 rounded border border-[var(--color-border)] px-1 py-[1px] text-[9px] uppercase tracking-wide text-[var(--color-muted)]"
-                >
-                  {c.judgment}
-                </span>
-              )}
+              {c.judgment &&
+                (() => {
+                  const { Icon, label } = JUDGMENT_ICON[c.judgment]
+                  // `title` (native hover tooltip) is an HTML attribute, not
+                  // an SVG one — React's Icon prop types don't accept it on
+                  // the svg root, so both `title` and `aria-label` live on a
+                  // wrapping <span> (aria-hidden Icon inside) rather than on
+                  // the icon itself.
+                  return (
+                    <span
+                      data-testid="criterion-judgment-badge"
+                      title={label}
+                      aria-label={label}
+                      className="mt-[2px] inline-flex shrink-0 text-[var(--color-muted)]"
+                    >
+                      <Icon size={11} weight="bold" aria-hidden="true" />
+                    </span>
+                  )
+                })()}
               <p className="text-[var(--color-secondary)] flex-1 min-w-0">{c.text}</p>
             </div>
             {verifiesVia && (

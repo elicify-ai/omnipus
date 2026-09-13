@@ -28,6 +28,7 @@ import { BrowserNavigateUI, BrowserNavigateUnderscoreUI } from "./tools/BrowserN
 import { WebServeUI } from "./tools/WebServeUI";
 import { ServeWorkspaceUI } from "./tools/ServeWorkspaceUI";
 import { RunInWorkspaceUI } from "./tools/RunInWorkspaceUI";
+import { SetGoalToolUI } from "./tools/SetGoalToolUI";
 import {
   BrowserClickUI, BrowserClickUnderscoreUI,
   BrowserTypeUI, BrowserTypeUnderscoreUI,
@@ -301,6 +302,7 @@ export function OmnipusRuntimeProvider({ children }: { children: React.ReactNode
        *   browser.wait      → BrowserWaitUnderscoreUI   (legacy dot alias)
        *   browser_evaluate  → BrowserEvaluateUI         (canonical)
        *   browser.evaluate  → BrowserEvaluateUnderscoreUI (legacy dot alias)
+       *   set_goal          → SetGoalToolUI             (ADR-082 D9: goal record card, anchored at the call)
        */}
       <BashOutputUI />
       <ExecLegacyUI />
@@ -336,6 +338,7 @@ export function OmnipusRuntimeProvider({ children }: { children: React.ReactNode
       <BrowserWaitUnderscoreUI />
       <BrowserEvaluateUI />
       <BrowserEvaluateUnderscoreUI />
+      <SetGoalToolUI />
       <MemoryObserverLifecycle />
       <WsLifecycle />
       {children}

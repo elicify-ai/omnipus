@@ -72,8 +72,9 @@ func (h *WSHandler) broadcastToolApprovalRequired(entry *approvalEntry) {
 		"approval_id", entry.ApprovalID)
 }
 
-// emitSessionState sends the session_state one-shot frame to a single WS connection
-// immediately after authentication (FR-052, FR-073, FR-081).
+// emitSessionState sends a session_state frame to a single WS connection —
+// once, immediately after authentication (FR-052, FR-073, FR-081), and again
+// by handleAttachSession once a session id is known (ADR-082 D4).
 //
 // Wire format: generated.SessionStateFrame (contract-first, pkg/api/generated).
 // Nil-safety: pending_approvals MUST be an array (never null). The SPA calls
@@ -84,7 +85,14 @@ func (h *WSHandler) broadcastToolApprovalRequired(entry *approvalEntry) {
 //
 // Note: When approvalRegV2 is nil (pre-registry harness), the payload has an empty
 // pending_approvals array — the SPA receives a valid frame and clears any stale UI.
-func (h *WSHandler) emitSessionState(wc *wsConn) {
+//
+// sessionID (ADR-082 D4/FR-008): when non-empty, populates ActiveTurn from
+// AgentLoop.ActiveForegroundTurnInfo — present only while a foreground turn
+// is in flight for that session, absent otherwise. Pass "" at raw
+// connection-open (before any session is known); handleAttachSession's
+// post-bind call passes the real attachID so a reconnecting SPA immediately
+// knows whether to render the streaming bubble + Stop control.
+func (h *WSHandler) emitSessionState(wc *wsConn, sessionID string) {
 	if wc == nil {
 		return
 	}
@@ -114,6 +122,32 @@ func (h *WSHandler) emitSessionState(wc *wsConn) {
 		UserId:           wc.userID,
 		PendingApprovals: pendingApprovals,
 		EmittedAt:        time.Now().UTC().Format(time.RFC3339),
+	}
+
+	// ADR-082 review CR3: stamp the session this snapshot describes so a
+	// client juggling several attached sessions (or a re-attach mid-flight)
+	// can tell which session_state a frame belongs to instead of guessing
+	// from arrival order. Absent (nil) at the raw connection-open emit, where
+	// sessionID is "" because no session has been bound yet.
+	if sessionID != "" {
+		sid := sessionID
+		frame.SessionId = &sid
+	}
+
+	// ADR-082 D4/FR-008: announce the in-flight foreground turn (if any) for
+	// the session this connection is bound to, so a reconnecting SPA
+	// immediately knows to render the streaming bubble + Stop control
+	// instead of a deceptively idle composer. Absent when sessionID is
+	// unknown (the raw connection-open call, before any attach/message) or
+	// the session has no foreground turn in flight.
+	if sessionID != "" && h.agentLoop != nil {
+		if turnID, agentID, startedAt, ok := h.agentLoop.ActiveForegroundTurnInfo(sessionID); ok {
+			frame.ActiveTurn = &generated.SessionStateActiveTurn{
+				TurnId:    turnID,
+				AgentId:   agentID,
+				StartedAt: startedAt.UTC().Format(time.RFC3339),
+			}
+		}
 	}
 
 	// askuserquestion-tool-spec v3 US-6 S1/FR-9: snapshot every PENDING

@@ -1,4 +1,6 @@
-// GoalEchoCard.test.tsx — ADR-053 FE-8 / US-3 / D11; criteria breakdown per
+// GoalEchoCard.test.tsx — ADR-081 D5/D9 (work-first goal flow, test 24):
+// the card is now a registered-record view rendered from the ACTIVE frame,
+// no buttons, no confirm/amend/cancel wiring. Criteria breakdown per
 // ADR-074 D5.2 / judgment-first FR-011 (US-6, test 19 component half).
 
 import { describe, it, expect, vi } from 'vitest'
@@ -18,7 +20,7 @@ function makeGoal(overrides: Partial<GoalStatusFrame> = {}): GoalStatusFrame {
     latest_reason: '',
     active_loops: 0,
     cap: 16,
-    state: 'queued',
+    state: 'active',
     ...overrides,
   }
 }
@@ -43,11 +45,14 @@ describe('GoalEchoCard', () => {
     expect(screen.getByTestId('goal-echo-round')).toHaveTextContent('16 concurrent loops')
   })
 
-  // US-6 S1: pending goal with 2 prose + 1 marker check → 3 rows, text
+  // US-6 S1: an active goal with 2 prose + 1 marker check → 3 rows, text
   // first, verbatim command chip on the check row only. Rendered by the
   // SHARED CriteriaBreakdown (D5.4) — the chip format asserted here is the
-  // shared formatVerifiesVia contract, identical on every surface.
-  it('itemizes the criteria breakdown plain-language-first with a verifies-via chip on technical rows', () => {
+  // shared formatVerifiesVia contract, identical on every surface. The
+  // criteria list lives behind a collapsed-by-default accordion (redesign,
+  // operator report 2026-09-07) — expand it via its trigger before asserting
+  // row content.
+  it('itemizes the criteria breakdown plain-language-first with a verifies-via chip on technical rows, once expanded', () => {
     const frame = makeGoal({
       criteria: [
         makeCriterion({ text: 'the release notes are written' }),
@@ -61,8 +66,16 @@ describe('GoalEchoCard', () => {
     })
     render(<GoalEchoCard frame={frame} />)
 
-    // The shared criteria list mounts inside the goal-echo criteria section.
+    // The accordion section mounts, collapsed, with a count in its header —
+    // no row content until expanded.
     expect(screen.getByTestId('goal-echo-criteria')).toBeInTheDocument()
+    expect(screen.getByTestId('goal-echo-criteria-trigger')).toHaveTextContent('Done when · 3 criteria')
+    expect(screen.getByTestId('goal-echo-criteria-trigger')).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('listitem')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('goal-echo-criteria-trigger'))
+
+    expect(screen.getByTestId('goal-echo-criteria-trigger')).toHaveAttribute('aria-expanded', 'true')
     const rows = screen.getAllByRole('listitem')
     expect(rows).toHaveLength(3)
     expect(rows[0]).toHaveTextContent('the release notes are written')
@@ -75,7 +88,7 @@ describe('GoalEchoCard', () => {
     expect(screen.getByText('go test ./... -> exit 0')).toBeInTheDocument()
   })
 
-  it('renders a behavior payload as a verifies-via chip (tool + counts, shared format)', () => {
+  it('renders a behavior payload as a verifies-via chip (tool + counts, shared format), once expanded', () => {
     const frame = makeGoal({
       criteria: [
         makeCriterion({
@@ -86,12 +99,13 @@ describe('GoalEchoCard', () => {
       ],
     })
     render(<GoalEchoCard frame={frame} />)
+    fireEvent.click(screen.getByTestId('goal-echo-criteria-trigger'))
     expect(screen.getByText('verifies via:')).toBeInTheDocument()
     expect(screen.getByText('search_web x3+')).toBeInTheDocument()
   })
 
   // US-6 S4 (negative): `[kind]` classification tokens are not user-facing.
-  it('renders NO [kind] tokens anywhere on the card', () => {
+  it('renders NO [kind] tokens anywhere on the card, collapsed or expanded', () => {
     const frame = makeGoal({
       criteria: [
         makeCriterion(),
@@ -103,6 +117,8 @@ describe('GoalEchoCard', () => {
       ],
     })
     const { container } = render(<GoalEchoCard frame={frame} />)
+    expect(container.textContent).not.toMatch(/\[(check|prose|behavior)\]/)
+    fireEvent.click(screen.getByTestId('goal-echo-criteria-trigger'))
     expect(container.textContent).not.toMatch(/\[(check|prose|behavior)\]/)
   })
 
@@ -124,13 +140,18 @@ describe('GoalEchoCard', () => {
     expect(screen.getByTestId('goal-echo-condition')).toHaveTextContent('goal_marker_a1b2')
   })
 
-  it('renders no statement line when the frame carries no definition (legacy/ambiguous frames)', () => {
+  // ADR-081 round-2 B-3 / test 24: `definition` is legitimately ABSENT on a
+  // marker-path record (the existing Prompt/Intent fallback) — the card
+  // renders gracefully with no statement block, not a placeholder.
+  it('renders no statement line when the frame carries no definition (marker-path/legacy frames)', () => {
     render(<GoalEchoCard frame={makeGoal()} />)
     expect(screen.queryByTestId('goal-echo-statement')).not.toBeInTheDocument()
   })
 
-  // ADR-080 D-TYPES: every criterion row carries a small judgment badge.
-  it('renders a judgment badge (boolean/quantitative/artifact) on every criterion row', () => {
+  // ADR-080 D-TYPES: every criterion row carries a small judgment icon
+  // (redesign, operator report 2026-09-07 — an icon + accessible name/
+  // tooltip replaces the old uppercase text badge).
+  it('renders a judgment icon (not text) on every criterion row, once expanded', () => {
     const frame = makeGoal({
       criteria: [
         makeCriterion({ text: 'the release notes are written', judgment: 'boolean' }),
@@ -139,18 +160,26 @@ describe('GoalEchoCard', () => {
       ],
     })
     render(<GoalEchoCard frame={frame} />)
+    fireEvent.click(screen.getByTestId('goal-echo-criteria-trigger'))
     const badges = screen.getAllByTestId('criterion-judgment-badge')
     expect(badges).toHaveLength(3)
-    expect(badges[0]).toHaveTextContent('boolean')
-    expect(badges[1]).toHaveTextContent('quantitative')
-    expect(badges[2]).toHaveTextContent('artifact')
+    // No raw judgment word as VISIBLE text content — it's an icon now,
+    // legible only via its accessible name / tooltip.
+    expect(badges[0].textContent).toBe('')
+    expect(badges[1].textContent).toBe('')
+    expect(badges[2].textContent).toBe('')
+    expect(badges[0]).toHaveAttribute('aria-label', 'Pass/fail')
+    expect(badges[1]).toHaveAttribute('aria-label', 'Measured')
+    expect(badges[2]).toHaveAttribute('aria-label', 'Artifact')
   })
 
-  // ADR-080 D-DOD: a distinct "Definition of Done" block, separate from the
-  // criteria's "Done when" section, with inferred items flagged for
-  // approve/drop.
+  // ADR-080 D-DOD: a distinct "Definition of Done" accordion, separate from
+  // the criteria's "Done when" section, collapsed by default with an
+  // "N inferred — review" hint on the header itself so an inferred item is
+  // never hidden from the reader's attention (even collapsed) — only
+  // expanding and reading it makes it visible.
   describe('Definition of Done (ADR-080 D-DOD)', () => {
-    it('renders a distinct DoD block, grouped separately from the criteria', () => {
+    it('renders a distinct, collapsed-by-default DoD accordion, grouped separately from the criteria', () => {
       const frame = makeGoal({
         criteria: [makeCriterion({ text: 'the release notes are written' })],
         dod: [
@@ -167,11 +196,14 @@ describe('GoalEchoCard', () => {
       render(<GoalEchoCard frame={frame} />)
       expect(screen.getByTestId('goal-echo-criteria')).toBeInTheDocument()
       const dodBlock = screen.getByTestId('goal-echo-dod')
-      expect(dodBlock).toHaveTextContent('Definition of Done')
+      expect(dodBlock).toHaveTextContent('Definition of Done · 1 item')
+      expect(dodBlock).not.toHaveTextContent('no secrets or credentials appear in the output')
+
+      fireEvent.click(screen.getByTestId('goal-echo-dod-trigger'))
       expect(dodBlock).toHaveTextContent('no secrets or credentials appear in the output')
     })
 
-    it('flags a provenance:inferred DoD item as "inferred — confirm or drop"', () => {
+    it('flags a provenance:inferred DoD item on the COLLAPSED header, and again per-row once expanded', () => {
       const frame = makeGoal({
         dod: [
           {
@@ -185,10 +217,15 @@ describe('GoalEchoCard', () => {
         ],
       })
       render(<GoalEchoCard frame={frame} />)
+      // Visible while collapsed — never silently hidden.
+      expect(screen.getByTestId('goal-echo-dod-trigger')).toHaveTextContent('1 inferred — review')
+      expect(screen.queryByTestId('goal-echo-dod-content')).not.toBeInTheDocument()
+
+      fireEvent.click(screen.getByTestId('goal-echo-dod-trigger'))
       expect(screen.getByTestId('goal-echo-dod')).toHaveTextContent('inferred — confirm or drop')
     })
 
-    it('does NOT flag a stated/workspace/floor DoD item as inferred', () => {
+    it('does NOT show an inferred hint when no DoD item is inferred', () => {
       const frame = makeGoal({
         dod: [
           {
@@ -202,65 +239,85 @@ describe('GoalEchoCard', () => {
         ],
       })
       render(<GoalEchoCard frame={frame} />)
+      expect(screen.getByTestId('goal-echo-dod-trigger')).not.toHaveTextContent('inferred')
+      fireEvent.click(screen.getByTestId('goal-echo-dod-trigger'))
       expect(screen.getByTestId('goal-echo-dod')).not.toHaveTextContent('inferred — confirm or drop')
     })
 
-    it('hides the DoD block entirely when the frame carries none', () => {
+    it('hides the DoD section entirely when the frame carries none', () => {
       render(<GoalEchoCard frame={makeGoal()} />)
       expect(screen.queryByTestId('goal-echo-dod')).not.toBeInTheDocument()
     })
   })
 
-  // ADR-078 D1: the card now also offers click-to-confirm buttons. The prose
-  // hint stays as a secondary line below them (a channel user with no card
-  // can still confirm by typing).
-  it('shows the conversational confirmation prompt AND the Confirm/Cancel/Amend buttons in the queued state', () => {
-    render(<GoalEchoCard frame={makeGoal()} />)
-    expect(screen.getByText(/Reply to confirm/)).toBeInTheDocument()
-    expect(screen.getByTestId('goal-echo-actions')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /confirm/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /cancel/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /amend/i })).toBeInTheDocument()
-  })
-
-  // ADR-078 D1: Confirm sends the bare confirm token, Cancel sends
-  // `/goal clear`, Amend pre-fills the composer and sends nothing — each
-  // button fires exactly its own callback.
-  it('fires onConfirm/onCancel/onAmend on click, and only the clicked one', () => {
-    const onConfirm = vi.fn()
-    const onCancel = vi.fn()
-    const onAmend = vi.fn()
-    render(<GoalEchoCard frame={makeGoal()} onConfirm={onConfirm} onCancel={onCancel} onAmend={onAmend} />)
-
-    fireEvent.click(screen.getByTestId('goal-echo-confirm'))
-    expect(onConfirm).toHaveBeenCalledTimes(1)
-    expect(onCancel).not.toHaveBeenCalled()
-    expect(onAmend).not.toHaveBeenCalled()
-
-    fireEvent.click(screen.getByTestId('goal-echo-cancel'))
-    expect(onCancel).toHaveBeenCalledTimes(1)
-    expect(onConfirm).toHaveBeenCalledTimes(1)
-    expect(onAmend).not.toHaveBeenCalled()
-
-    fireEvent.click(screen.getByTestId('goal-echo-amend'))
-    expect(onAmend).toHaveBeenCalledTimes(1)
-    expect(onConfirm).toHaveBeenCalledTimes(1)
-    expect(onCancel).toHaveBeenCalledTimes(1)
-  })
-
-  // ADR-078 D1 / G-5 negative: the buttons render ONLY while the card is
-  // pending confirmation (`queued`) — a card left mounted for any other
-  // status (e.g. an active goal) shows no buttons.
-  it('does NOT render the action buttons when the frame is not in the queued state', () => {
-    render(<GoalEchoCard frame={makeGoal({ state: 'active' })} />)
-    expect(screen.queryByTestId('goal-echo-actions')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button')).not.toBeInTheDocument()
-    // Prose hint still shown regardless of state (existing behavior).
-    expect(screen.getByText(/Reply to confirm/)).toBeInTheDocument()
-  })
-
   it('shows singular "loop" when cap is 1', () => {
     render(<GoalEchoCard frame={makeGoal({ cap: 1 })} />)
     expect(screen.getByTestId('goal-echo-round')).toHaveTextContent('1 concurrent loop')
+  })
+
+  // ADR-081 D5/D9 (test 24): the confirm-gate button row is deleted in
+  // full — no Confirm/Amend/Cancel control exists anywhere on the card,
+  // for ANY state, including one that (pre-ADR-081) would have been
+  // pending confirmation.
+  describe('ADR-081 D5/D9 — no confirm/amend/cancel controls', () => {
+    it('renders no buttons at all on an active record with criteria and DoD', () => {
+      const frame = makeGoal({
+        criteria: [makeCriterion()],
+        dod: [
+          {
+            kind: 'prose',
+            judgment: 'boolean',
+            provenance: 'stated',
+            text: 'the setter explicitly asked for this',
+            author: { kind: 'agent', id: 'mia' },
+            status: 'pending',
+          },
+        ],
+      })
+      render(<GoalEchoCard frame={frame} />)
+      expect(screen.queryByRole('button', { name: /confirm/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /cancel/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /amend/i })).not.toBeInTheDocument()
+      expect(screen.queryByTestId('goal-echo-actions')).not.toBeInTheDocument()
+      // The accordion triggers ARE buttons — assert no OTHER buttons exist
+      // beyond the two accordion triggers.
+      const buttons = screen.getAllByRole('button')
+      for (const btn of buttons) {
+        expect(btn.dataset.testid).toMatch(/-trigger$/)
+      }
+    })
+
+    it('renders no buttons regardless of frame.state (no confirm-only gate survives)', () => {
+      for (const state of ['active', 'judging', 'done', 'failed', 'cleared'] as const) {
+        const { unmount } = render(<GoalEchoCard frame={makeGoal({ state })} />)
+        expect(screen.queryByTestId('goal-echo-actions')).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /confirm/i })).not.toBeInTheDocument()
+        unmount()
+      }
+    })
+
+    it('accepts no onConfirm/onCancel/onAmend props (component surface no longer has them)', () => {
+      // TypeScript itself enforces this at the call site (GoalEchoCardProps
+      // has no callback fields); this runtime assertion just confirms
+      // clicking anywhere on the card fires nothing chat-related — there is
+      // no click handler left to fire besides the accordion triggers.
+      const clickSpy = vi.fn()
+      // No `jsx-a11y` plugin is registered in this repo's eslint.config.mjs
+      // (baseline scope: @eslint/js + typescript-eslint only — see that
+      // file's header comment), so a `jsx-a11y/*` disable-directive here
+      // hard-errors ESLint's directive validation with "Definition for rule
+      // ... was not found" rather than suppressing anything real. A plain
+      // `onClick` on a test-only wrapper `<div>` isn't flagged by any rule
+      // this config actually enables.
+      render(
+        <div onClick={clickSpy}>
+          <GoalEchoCard frame={makeGoal({ criteria: [makeCriterion()] })} />
+        </div>,
+      )
+      fireEvent.click(screen.getByTestId('goal-echo-card'))
+      expect(clickSpy).toHaveBeenCalledTimes(1)
+      // Nothing beyond bubbling occurred — no accidental confirm/cancel side
+      // effect wired to the card body itself.
+    })
   })
 })

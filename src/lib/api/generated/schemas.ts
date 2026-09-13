@@ -142,6 +142,7 @@ type Message = {
   descendants_canceled?: Array<string> | undefined;
   model?: string | undefined;
   verdict?: JudgeVerdict | undefined;
+  system_subtype?: "browser_handover_notice" | undefined;
 };
 type Attachment = {
   type: "image" | "audio" | "video" | "file";
@@ -185,6 +186,28 @@ type CriterionVerdict = {
   met: boolean;
   reason: string;
   evidence_quote?: string | undefined;
+  evidence_source?:
+    | ("diff" | "transcript" | "machine_check" | "file_read" | "session_read")
+    | undefined;
+  evidence_target?: string | undefined;
+  provenance?:
+    | (
+        | "judge_read"
+        | "deterministic_check"
+        | "diff"
+        | "transcript"
+        | "session_read"
+        | "none"
+      )
+    | undefined;
+  evidence?:
+    | Array<{
+        part: string;
+        source?: string | undefined;
+        target?: string | undefined;
+        quote: string;
+      }>
+    | undefined;
 };
 type SessionPage = {
   sessions: Array<Session>;
@@ -671,6 +694,7 @@ type Task = {
   is_join?: boolean | undefined;
   judge_rounds?: number | undefined;
   criteria?: Array<AcceptanceCriterion> | undefined;
+  dod?: Array<AcceptanceCriterion> | undefined;
   attempt_count?: number | undefined;
   max_attempts?: (number | null) | undefined;
   trigger?: TaskTrigger | undefined;
@@ -730,6 +754,7 @@ type AcceptanceCriterion = {
     id: string;
   };
   status: "pending" | "met" | "unmet";
+  clause_count?: number | undefined;
 };
 type TaskTrigger = {
   type: "manual" | "once" | "every" | "recurring";
@@ -859,6 +884,7 @@ type TaskCreateRequest = {
   stream?: string | undefined;
   is_join?: boolean | undefined;
   criteria?: Array<AcceptanceCriterionInput> | undefined;
+  dod?: Array<AcceptanceCriterionInput> | undefined;
   max_attempts?: (number | null) | undefined;
   due?: string | undefined;
   surface?: ("user" | "heartbeat") | undefined;
@@ -890,6 +916,7 @@ type AcceptanceCriterionInput = {
     id: string;
   };
   status: "pending" | "met" | "unmet";
+  clause_count?: number | undefined;
 };
 type TaskUpdateRequest = Partial<{
   title: string;
@@ -909,6 +936,7 @@ type TaskUpdateRequest = Partial<{
   stream: string;
   is_join: boolean;
   criteria: Array<AcceptanceCriterionInput>;
+  dod: Array<AcceptanceCriterionInput>;
   max_attempts: number | null;
   surface: "user" | "heartbeat";
   result: string;
@@ -1445,18 +1473,52 @@ type SessionMessageRespond = {
 };
 type Goal = {
   goal_id: string;
-  binding_kind: "session" | "task" | "plan";
-  binding_id: string;
+  owner_kind: "session" | "task";
+  owner_id: string;
   source: "chat_compiled" | "task_explicit" | "plan_dod";
   prompt: string;
   definition?: string | undefined;
   criteria: Array<AcceptanceCriterion>;
   dod: Array<AcceptanceCriterion>;
-  attempts_max: number;
-  judge_rounds_max: number;
+  max_rounds: number;
   round: number;
-  state: "active" | "done" | "failed" | "cleared";
+  attempts_used: number;
+  state: "defining" | "active" | "met" | "exhausted" | "expired" | "cleared";
   created_at: string;
+  started_at?: string | undefined;
+  last_activity_at: string;
+  active_session_id?: string | undefined;
+  latest_reason?: string | undefined;
+  terminal_reason?: string | undefined;
+  latest_claim?:
+    | {
+        status: "met" | "blocked" | "waiting_on_user";
+        evidence?: string | undefined;
+        claimed_at: string;
+      }
+    | undefined;
+  latest_verdict?: JudgeVerdict | undefined;
+  superseded_criteria?:
+    | Array<{
+        superseded_at: string;
+        criteria: Array<AcceptanceCriterion>;
+        dod: Array<AcceptanceCriterion>;
+      }>
+    | undefined;
+  terminal_history?:
+    | Array<{
+        state: "met" | "exhausted" | "expired" | "cleared";
+        terminal_reason?: string | undefined;
+        verdict?: JudgeVerdict | undefined;
+        ended_at: string;
+        attempts_used?: number | undefined;
+        round?: number | undefined;
+      }>
+    | undefined;
+  zero_output_pushes: number;
+  question_rounds_used: number;
+  route_channel?: string | undefined;
+  route_chat_id?: string | undefined;
 };
 type PlanRestartResponse = {
   plan: Plan;
@@ -1901,6 +1963,31 @@ export const CriterionVerdict: z.ZodType<CriterionVerdict> = z.object({
   met: z.boolean(),
   reason: z.string(),
   evidence_quote: z.string().max(500).optional(),
+  evidence_source: z
+    .enum(["diff", "transcript", "machine_check", "file_read", "session_read"])
+    .optional(),
+  evidence_target: z.string().optional(),
+  provenance: z
+    .enum([
+      "judge_read",
+      "deterministic_check",
+      "diff",
+      "transcript",
+      "session_read",
+      "none",
+    ])
+    .optional(),
+  evidence: z
+    .array(
+      z.object({
+        part: z.string().max(1000),
+        source: z.string().optional(),
+        target: z.string().optional(),
+        quote: z.string().max(500),
+      })
+    )
+    .max(50)
+    .optional(),
 });
 export const JudgeVerdict: z.ZodType<JudgeVerdict> = z.object({
   id: z.string(),
@@ -1945,6 +2032,7 @@ export const Message: z.ZodType<Message> = z.object({
   descendants_canceled: z.array(z.string()).optional(),
   model: z.string().optional(),
   verdict: JudgeVerdict.optional(),
+  system_subtype: z.literal("browser_handover_notice").optional(),
 });
 export const SessionDetail: z.ZodType<SessionDetail> = z.object({
   session: Session,
@@ -2573,12 +2661,14 @@ export const PerformanceSettings = z
     effective_max_parallel_agents: z.number().int().gte(1),
     max_parallel_agents_configured: z.boolean(),
     tools_on_demand: z.boolean(),
+    goal_max_rounds: z.number().int().gte(1),
   })
   .partial();
 export const PerformanceSettingsUpdate = z
   .object({
     max_parallel_agents: z.number().int().gte(0),
     tools_on_demand: z.boolean(),
+    goal_max_rounds: z.number().int().gte(1),
   })
   .partial();
 export const MemorySettings: z.ZodType<MemorySettings> = z
@@ -3087,6 +3177,7 @@ export const AcceptanceCriterion: z.ZodType<AcceptanceCriterion> = z.object({
     .optional(),
   author: z.object({ kind: z.enum(["agent", "user"]), id: z.string().min(1) }),
   status: z.enum(["pending", "met", "unmet"]),
+  clause_count: z.number().int().gte(1).optional(),
 });
 export const TaskTrigger: z.ZodType<TaskTrigger> = z.object({
   type: z.enum(["manual", "once", "every", "recurring"]),
@@ -3132,6 +3223,7 @@ export const Task: z.ZodType<Task> = z
     is_join: z.boolean().optional(),
     judge_rounds: z.number().int().gte(0).optional(),
     criteria: z.array(AcceptanceCriterion).optional(),
+    dod: z.array(AcceptanceCriterion).optional(),
     attempt_count: z.number().int().gte(0).optional(),
     max_attempts: z.number().int().gte(1).nullish(),
     trigger: TaskTrigger.optional(),
@@ -3195,6 +3287,7 @@ export const AcceptanceCriterionInput: z.ZodType<AcceptanceCriterionInput> =
       id: z.string().min(1),
     }),
     status: z.enum(["pending", "met", "unmet"]),
+    clause_count: z.number().int().gte(1).optional(),
   });
 export const TaskCreateRequest: z.ZodType<TaskCreateRequest> = z.object({
   title: z.string().min(1).max(200),
@@ -3214,6 +3307,7 @@ export const TaskCreateRequest: z.ZodType<TaskCreateRequest> = z.object({
   stream: z.string().optional(),
   is_join: z.boolean().optional(),
   criteria: z.array(AcceptanceCriterionInput).optional(),
+  dod: z.array(AcceptanceCriterionInput).optional(),
   max_attempts: z.number().int().gte(1).nullish(),
   due: z.string().datetime({ offset: true }).optional(),
   surface: z.enum(["user", "heartbeat"]).optional().default("user"),
@@ -3279,6 +3373,7 @@ export const TaskUpdateRequest: z.ZodType<TaskUpdateRequest> = z
     stream: z.string(),
     is_join: z.boolean(),
     criteria: z.array(AcceptanceCriterionInput),
+    dod: z.array(AcceptanceCriterionInput),
     max_attempts: z.number().int().gte(1).nullable(),
     surface: z.enum(["user", "heartbeat"]),
     result: z.string().max(50000),
@@ -4107,18 +4202,63 @@ export const SessionLifecycleRecord: z.ZodType<SessionLifecycleRecord> =
   });
 export const Goal: z.ZodType<Goal> = z.object({
   goal_id: z.string().min(1),
-  binding_kind: z.enum(["session", "task", "plan"]),
-  binding_id: z.string().min(1),
+  owner_kind: z.enum(["session", "task"]),
+  owner_id: z.string().min(1),
   source: z.enum(["chat_compiled", "task_explicit", "plan_dod"]),
   prompt: z.string().min(1).max(4000),
   definition: z.string().max(4000).optional(),
   criteria: z.array(AcceptanceCriterion),
   dod: z.array(AcceptanceCriterion).min(1),
-  attempts_max: z.number().int().gte(1),
-  judge_rounds_max: z.number().int().gte(1),
+  max_rounds: z.number().int().gte(1),
   round: z.number().int().gte(0),
-  state: z.enum(["active", "done", "failed", "cleared"]),
+  attempts_used: z.number().int().gte(0),
+  state: z.enum([
+    "defining",
+    "active",
+    "met",
+    "exhausted",
+    "expired",
+    "cleared",
+  ]),
   created_at: z.string().datetime({ offset: true }),
+  started_at: z.string().datetime({ offset: true }).optional(),
+  last_activity_at: z.string().datetime({ offset: true }),
+  active_session_id: z.string().min(1).optional(),
+  latest_reason: z.string().optional(),
+  terminal_reason: z.string().optional(),
+  latest_claim: z
+    .object({
+      status: z.enum(["met", "blocked", "waiting_on_user"]),
+      evidence: z.string().max(4000).optional(),
+      claimed_at: z.string().datetime({ offset: true }),
+    })
+    .optional(),
+  latest_verdict: JudgeVerdict.optional(),
+  superseded_criteria: z
+    .array(
+      z.object({
+        superseded_at: z.string().datetime({ offset: true }),
+        criteria: z.array(AcceptanceCriterion),
+        dod: z.array(AcceptanceCriterion),
+      })
+    )
+    .optional(),
+  terminal_history: z
+    .array(
+      z.object({
+        state: z.enum(["met", "exhausted", "expired", "cleared"]),
+        terminal_reason: z.string().optional(),
+        verdict: JudgeVerdict.optional(),
+        ended_at: z.string().datetime({ offset: true }),
+        attempts_used: z.number().int().gte(0).optional(),
+        round: z.number().int().gte(0).optional(),
+      })
+    )
+    .optional(),
+  zero_output_pushes: z.number().int().gte(0),
+  question_rounds_used: z.number().int().gte(0),
+  route_channel: z.string().optional(),
+  route_chat_id: z.string().optional(),
 });
 export const TokenBudgetStatus = z.object({
   budget: z.number().int().gte(0),
@@ -10656,7 +10796,7 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_handover_notice"]);
 
 export const AuthFrame = z
   .object({
@@ -11170,12 +11310,22 @@ export const SessionStatePendingApproval = z
   })
   .strict();
 
+export const SessionStateActiveTurn = z
+  .object({
+    turn_id: z.string(),
+    agent_id: z.string(),
+    started_at: z.string(),
+  })
+  .strict();
+
 export const SessionStateFrame = z
   .object({
     type: z.literal("session_state"),
     user_id: z.string(),
     pending_approvals: z.array(SessionStatePendingApproval).max(1000),
     pending_asks: z.array(AskUserQuestionCard).max(64).optional(),
+    session_id: z.string().optional(),
+    active_turn: SessionStateActiveTurn.optional(),
     emitted_at: z.string(),
   })
   .strict();
@@ -11458,7 +11608,7 @@ export const GoalStatusFrame = z
     latest_reason: z.string(),
     active_loops: z.number().int().min(0),
     cap: z.number().int().min(1),
-    state: z.enum(["queued", "active", "waiting_on_user", "judge_unavailable", "re-planning", "judging", "done", "failed", "cleared"]),
+    state: z.enum(["queued", "active", "waiting_on_user", "judge_unavailable", "re-planning", "judging", "done", "failed", "cleared", "judge_refused_god_mode", "judge_cas_loss", "blocked", "claim_overturned", "expired"]),
     producing_session_id: z.string().min(1).optional(),
     criteria: z.array(z
     .object({
@@ -11488,6 +11638,7 @@ export const GoalStatusFrame = z
       })
       .strict(),
       status: z.enum(["pending", "met", "unmet"]),
+      clause_count: z.number().int().min(1).optional(),
     })
     .strict()).optional(),
     dod: z.array(z
@@ -11518,6 +11669,7 @@ export const GoalStatusFrame = z
       })
       .strict(),
       status: z.enum(["pending", "met", "unmet"]),
+      clause_count: z.number().int().min(1).optional(),
     })
     .strict()).optional(),
   })
@@ -11562,11 +11714,31 @@ export const JudgeVerdictFrame = z
       met: z.boolean(),
       reason: z.string(),
       evidence_quote: z.string().max(500).optional(),
+      evidence_source: z.enum(["diff", "transcript", "machine_check", "file_read", "session_read"]).optional(),
+      evidence_target: z.string().optional(),
+      provenance: z.enum(["judge_read", "deterministic_check", "diff", "transcript", "session_read", "none"]).optional(),
+      evidence: z.array(z
+      .object({
+        part: z.string().max(1000),
+        source: z.string().optional(),
+        target: z.string().optional(),
+        quote: z.string().max(500),
+      })
+      .strict()).max(50).optional(),
     })
     .strict()),
     model: z.string(),
     judged_at: z.string(),
     judge_agent_id: z.string(),
+  })
+  .strict();
+
+export const BrowserHandoverNoticeFrame = z
+  .object({
+    type: z.literal("browser_handover_notice"),
+    session_id: z.string().min(1),
+    message_id: z.string().min(1),
+    text: z.string().max(2000),
   })
   .strict();
 
@@ -11643,6 +11815,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   LoopStatusFrame,
   PlanStatusFrame,
   JudgeVerdictFrame,
+  BrowserHandoverNoticeFrame,
 ]);
 
 export type WsFrameType = z.infer<typeof WsFrameType>;

@@ -58,6 +58,7 @@ func TestCreateTask_AgentPathStamps_RESTPathDoesNot(t *testing.T) {
 		"prompt":   "do the work",
 		"agent_id": "jim",
 		"criteria": validCriteriaArg(),
+		"dod":      validDoDArg(),
 	})
 	if res.IsError {
 		t.Fatalf("create_task failed: %s", res.ForLLM)
@@ -109,6 +110,7 @@ func TestCreateTask_NoPrincipal_RefusesAndPersistsNothing(t *testing.T) {
 		"prompt":   "do the work",
 		"agent_id": "jim",
 		"criteria": validCriteriaArg(),
+		"dod":      validDoDArg(),
 	})
 	if !res.IsError {
 		t.Fatalf("expected an error when the calling agent cannot be resolved, got: %s", res.ForLLM)

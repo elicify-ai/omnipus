@@ -1,0 +1,558 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Task Form — Proposed Edits</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  :root{
+    --color-primary:#0A0A0B; --color-secondary:#E2E8F0; --color-accent:#D4AF37;
+    --color-surface-0:#0A0A0B; --color-surface-1:#111113; --color-surface-2:#141416;
+    --color-surface-3:#222228; --color-muted:#9CA3AF; --color-border:#2D3748;
+    --color-error:#F87171;
+    --font-display:'Outfit',system-ui,sans-serif;
+    --font-body:'Inter',system-ui,sans-serif;
+    --font-mono:'JetBrains Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--color-surface-0);color:var(--color-secondary);
+    font-family:var(--font-body);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1180px;margin:0 auto;padding:36px 20px 88px}
+
+  .pagehead{border-bottom:1px solid var(--color-border);padding-bottom:18px;margin-bottom:16px}
+  .eyebrow{font-family:var(--font-mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--color-muted);margin:0 0 8px}
+  h1{font-family:var(--font-display);font-weight:600;font-size:24px;letter-spacing:-.01em;margin:0 0 8px}
+  .sub{color:var(--color-muted);max-width:70ch;margin:0}
+
+  .legend{display:flex;flex-wrap:wrap;gap:18px;margin:0 0 28px;font-size:12px;color:var(--color-muted)}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
+  .swatch{width:11px;height:11px;border-radius:2px;flex-shrink:0}
+  .swatch--new{background:rgba(212,175,55,.22);border:1px solid var(--color-accent)}
+  .swatch--chg{background:transparent;border:1px dashed var(--color-accent)}
+  .swatch--del{background:transparent;border:1px solid var(--color-error)}
+
+  .panels{display:grid;gap:22px;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));align-items:start}
+
+  /* Sheet — mirrors the shipped slide-over */
+  .sheet{background:var(--color-surface-1);border:1px solid var(--color-border);border-radius:6px;overflow:hidden}
+  .sheet__head{padding:16px 18px 12px;border-bottom:1px solid var(--color-border)}
+  .sheet__title{font-family:var(--font-display);font-weight:500;font-size:16px;margin:0}
+  .sheet__meta{font-family:var(--font-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--color-muted);margin:5px 0 0}
+  .sheet__body{padding:16px 18px;display:flex;flex-direction:column;gap:15px}
+  .sheet__foot{display:flex;gap:9px;padding:14px 18px;border-top:1px solid var(--color-border)}
+  .sheet__foot .btn{flex:1}
+
+  .f{display:flex;flex-direction:column;gap:6px}
+  .f > label,.lbl{font-size:13px;color:var(--color-secondary)}
+  .star{color:var(--color-error)}
+  .in{background:var(--color-surface-0);border:1px solid var(--color-border);border-radius:6px;
+    color:var(--color-secondary);font:inherit;font-size:13px;padding:7px 10px;width:100%}
+  .in::placeholder{color:#5b6472}
+  .in:focus-visible,button:focus-visible,select:focus-visible{outline:2px solid var(--color-accent);outline-offset:1px}
+  textarea.in{min-height:58px;resize:vertical}
+  select.in{appearance:none;
+    background-image:linear-gradient(45deg,transparent 50%,var(--color-muted) 50%),linear-gradient(135deg,var(--color-muted) 50%,transparent 50%);
+    background-position:calc(100% - 15px) 51%,calc(100% - 10px) 51%;background-size:5px 5px;background-repeat:no-repeat;padding-right:30px}
+  .mono{font-family:var(--font-mono)}
+  .row2{display:flex;gap:10px}
+  .row2 > *{flex:1}
+
+  .btn{font:inherit;font-size:13px;border-radius:6px;padding:7px 12px;cursor:pointer;border:1px solid transparent}
+  .btn--ghost{background:transparent;color:var(--color-secondary)}
+  .btn--outline{background:transparent;border-color:var(--color-border);color:var(--color-secondary)}
+  .btn--accent{background:var(--color-accent);color:var(--color-primary)}
+  .btn--accent[disabled]{opacity:.45;cursor:not-allowed}
+
+  /* criteria list — mirrors AcceptanceCriteriaEditor */
+  .clist{display:flex;flex-direction:column;gap:6px}
+  .crit{display:flex;gap:8px;align-items:flex-start;background:var(--color-surface-2);
+    border:1px solid var(--color-border);border-radius:6px;padding:8px 9px}
+  .crit__b{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+  .crit__t{font-size:12px;margin:0}
+  .meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .chip{font-size:10px;color:var(--color-muted);border:1px solid var(--color-border);border-radius:3px;padding:1px 5px}
+  .vv{display:inline-flex;max-width:100%;align-items:baseline;gap:4px;border-radius:3px;
+    background:var(--color-surface-1);padding:2px 6px;font-family:var(--font-mono);font-size:10px;color:var(--color-muted)}
+  .vv span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .x{background:none;border:0;color:var(--color-muted);cursor:pointer;font-size:14px;line-height:1;padding:1px 3px}
+  .x:hover{color:var(--color-error)}
+  .why{font-size:10px;color:var(--color-muted);margin:0}
+  .why em{font-style:normal;color:var(--color-error)}
+
+  .draft{display:flex;flex-direction:column;gap:6px;border:1px dashed var(--color-border);border-radius:6px;padding:8px;margin-top:6px}
+  .draft__row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .link{background:none;border:0;padding:0;font:inherit;font-size:11px;color:var(--color-muted);cursor:pointer}
+  .link:hover{color:var(--color-secondary)}
+  .jud{display:flex;align-items:center;gap:7px;margin-left:auto}
+  .jud .t{font-size:11px;color:var(--color-muted)}
+  .jud select{width:auto;min-width:160px;font-size:12px;padding:4px 28px 4px 8px}
+  .checkrow{display:flex;gap:7px;flex-wrap:wrap}
+  .checkrow .in{flex:1;min-width:140px}
+  .w-exit{flex:0 0 84px !important;min-width:0 !important}
+  .hint{font-size:11px;color:var(--color-muted);margin:0}
+  .hint--del{color:var(--color-error);text-decoration:line-through;text-decoration-color:rgba(248,113,113,.45)}
+
+  /* verdict ticks */
+  .tk{width:14px;height:14px;border-radius:50%;flex-shrink:0;margin-top:2px;display:grid;place-items:center;
+    font-family:var(--font-mono);font-size:9px;line-height:1}
+  .tk--p{border:1px dashed var(--color-border)}
+  .tk--m{background:var(--color-accent);color:var(--color-primary);font-weight:600}
+  .tk--u{border:1px solid var(--color-error);color:var(--color-error)}
+
+  /* diff marking */
+  .mark{position:relative;border-radius:6px}
+  .mark--new{outline:1px solid var(--color-accent);outline-offset:5px;background:rgba(212,175,55,.05)}
+  .mark--chg{outline:1px dashed var(--color-accent);outline-offset:5px}
+  .mark--del{outline:1px solid var(--color-error);outline-offset:5px;opacity:.5}
+  .mark--del .tag{color:var(--color-error)}
+  .mark--del .lbl,.mark--del label{text-decoration:line-through;text-decoration-color:rgba(248,113,113,.5)}
+  .tag{position:absolute;top:-8px;right:0;font-family:var(--font-mono);font-size:9px;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--color-accent);background:var(--color-surface-1);padding:0 5px}
+
+  .notes{margin-top:40px;border-top:1px solid var(--color-border);padding-top:22px}
+  .notes h2{font-family:var(--font-display);font-weight:500;font-size:15px;margin:0 0 12px}
+  .notes ol{margin:0;padding-left:19px;display:flex;flex-direction:column;gap:8px;max-width:78ch}
+  .notes li{color:var(--color-muted);font-size:13px}
+  .notes b{color:var(--color-secondary);font-weight:500}
+  .unch{margin-top:16px;font-size:12px;color:var(--color-muted)}
+
+
+  /* edit panel — mirrors TaskDetailPanel */
+  .save{font-size:11px;color:var(--color-muted);text-align:right;margin:0}
+  .val{font-size:12px;color:var(--color-muted);margin:0}
+  .val--strong{font-size:13px;font-weight:500;color:var(--color-secondary)}
+  .pre{font-family:var(--font-mono);font-size:11px;color:var(--color-secondary);
+    background:var(--color-surface-2);border-radius:6px;padding:10px;margin:0;
+    white-space:pre-wrap;line-height:1.55;overflow-x:auto}
+  .tags{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .tagchip{display:inline-flex;align-items:center;gap:3px;font-size:11px;color:var(--color-secondary);
+    background:var(--color-surface-3);border-radius:3px;padding:2px 4px 2px 7px}
+  .att{font-size:11px;color:var(--color-muted);margin:8px 0 0}
+  .vlist{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
+  .vrow{display:flex;gap:8px;align-items:flex-start;background:var(--color-surface-2);border-radius:6px;padding:8px 9px}
+  .vtext{font-size:12px;color:var(--color-secondary);margin:0}
+  .vreason{font-size:12px;color:var(--color-muted);margin:2px 0 0}
+  .dodgrp{margin-top:12px;display:flex;flex-direction:column;gap:2px}
+  .dodlbl{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-muted);margin:0}
+  .todos{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px}
+  .todos li{display:flex;align-items:center;gap:8px;font-size:12px}
+  .todos li span{flex:1}
+  .done{color:var(--color-muted);text-decoration:line-through}
+  .box{width:13px;height:13px;border-radius:3px;border:1px solid var(--color-border);flex-shrink:0;
+    display:grid;place-items:center;font-size:9px;font-family:var(--font-mono)}
+  .box--on{background:var(--color-accent);border-color:var(--color-accent);color:var(--color-primary);font-weight:600}
+  .wide{width:100%}
+  .btn--danger{background:transparent;border-color:rgba(248,113,113,.4);color:var(--color-error)}
+  .sep{border-top:1px solid var(--color-border);padding-top:13px}
+  .run{display:flex;align-items:center;gap:9px;background:var(--color-surface-2);border-radius:6px;padding:7px 9px}
+  .runwhen{flex:1;font-size:11px;color:var(--color-muted)}
+  .badge{font-size:10px;border-radius:3px;padding:1px 6px}
+  .badge--warn{color:#FBBF24;border:1px solid rgba(251,191,36,.4)}
+  .badge--err{color:var(--color-error);border:1px solid rgba(248,113,113,.4)}
+  .art{display:flex;align-items:center;gap:8px;background:var(--color-surface-2);border-radius:6px;padding:6px 9px}
+  .artpath{flex:1;font-size:11px;color:var(--color-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .metagrid{margin:4px 0 0;display:flex;flex-direction:column;gap:4px}
+  .metagrid > div{display:flex;justify-content:space-between;gap:12px;font-size:11px}
+  .metagrid dt{color:var(--color-muted)}
+  .metagrid dd{margin:0;color:var(--color-secondary)}
+
+  @media (max-width:880px){.wrap{padding:22px 13px 60px}.panels{grid-template-columns:1fr}}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<div class="wrap">
+  <header class="pagehead">
+    <p class="eyebrow">Proposed edits — task form</p>
+    <h1>The existing task form, with eight changes</h1>
+    <p class="sub">This is the shipped slide-over reproduced field for field. Everything unmarked stays exactly
+      as it is today. Only the outlined parts change.</p>
+  </header>
+
+  <p class="legend">
+    <span><i class="swatch swatch--new"></i> New</span>
+    <span><i class="swatch swatch--chg"></i> Changed</span>
+    <span><i class="swatch swatch--del"></i> Removed</span>
+  </p>
+
+  <div class="panels">
+
+    <!-- ═══════════ CREATE ═══════════ -->
+    <section class="sheet" aria-label="New task">
+      <div class="sheet__head"><h2 class="sheet__title">New task</h2></div>
+
+      <div class="sheet__body">
+        <div class="f">
+          <label for="ct-title">Title <span class="star">*</span></label>
+          <input id="ct-title" class="in" placeholder="Task title" value="Draft the Q3 partner update">
+        </div>
+
+        <div class="f mark mark--chg">
+          <span class="tag">Changed</span>
+          <label for="ct-prompt">Goal <span class="star">*</span></label>
+          <textarea id="ct-prompt" class="in" placeholder="What should this task achieve?"></textarea>
+        </div>
+
+        <div class="f">
+          <label for="ct-priority">Priority</label>
+          <select id="ct-priority" class="in">
+            <option>P1 — Critical</option><option>P2 — High</option>
+            <option selected>P3 — Medium</option><option>P4 — Low</option><option>P5 — Minimal</option>
+          </select>
+        </div>
+
+        <div class="f mark mark--new">
+          <span class="tag">New</span>
+          <span class="lbl">Plan</span>
+          <select class="in"><option selected>No plan</option><option>Q3 comms</option></select>
+        </div>
+
+        <div class="f">
+          <span class="lbl">Tags</span>
+          <div class="tags">
+            <span class="tagchip">comms<button class="x" aria-label="Remove tag">&times;</button></span>
+            <button class="link">+ Add tag</button>
+          </div>
+        </div>
+
+        <!-- CHANGED: now required; the empty hint is replaced -->
+        <div class="f mark mark--chg">
+          <span class="tag">Changed</span>
+          <span class="lbl">Acceptance criteria <span class="star">*</span></span>
+          <div class="clist">
+            <div class="crit">
+              <div class="crit__b">
+                <p class="crit__t">The update names the three partners we onboarded and what each can now do.</p>
+                              </div>
+              <button class="x" aria-label="Remove criterion">&times;</button>
+            </div>
+          </div>
+          <div class="draft">
+            <input class="in" placeholder="What must be true when this is done?" aria-label="What must be true when this is done?">
+            <div class="draft__row">
+              <button class="link">+ Add technical check</button>
+              <button class="link">+ Add action-count check</button>
+            </div>
+          </div>
+          <p class="hint hint--del">No criteria added — this task will be judged against its title and description (D5).</p>
+          <p class="hint">Add at least one.</p>
+        </div>
+
+        <!-- NEW section -->
+        <div class="f mark mark--new">
+          <span class="tag">New</span>
+          <span class="lbl">Definition of Done <span class="star">*</span></span>
+          <div class="clist">
+            <div class="crit">
+              <div class="crit__b">
+                <p class="crit__t">Nothing goes out with a placeholder still in it.</p>
+                              </div>
+              <button class="x" aria-label="Remove item">&times;</button>
+            </div>
+          </div>
+          <div class="draft">
+            <input class="in" placeholder="What must be true when this is done?" aria-label="Definition of Done item">
+            <div class="draft__row">
+              <button class="link">+ Add technical check</button>
+              <button class="link">+ Add action-count check</button>
+            </div>
+          </div>
+          <p class="hint">Standing gates, judged on every attempt. Add at least one.</p>
+        </div>
+
+        <div class="f">
+          <span class="lbl">Agent</span>
+          <select class="in"><option>Unassigned</option><option>Jim — Orchestrator</option></select>
+        </div>
+
+        <div class="f mark mark--del">
+          <span class="tag">Removed</span>
+          <label for="ct-trigger">Trigger</label>
+          <select id="ct-trigger" class="in" disabled><option>None (manual)</option><option>Once (at a time)</option></select>
+        </div>
+
+        <div class="f">
+          <span class="lbl">Depends on</span>
+          <button class="btn btn--outline" style="text-align:left">Add dependency</button>
+        </div>
+
+        <div class="f">
+          <label for="ct-due">Due date</label>
+          <input id="ct-due" class="in" placeholder="dd.mm.yyyy">
+        </div>
+
+        <div class="f mark mark--chg">
+          <span class="tag">Changed</span>
+          <span class="lbl">Todos</span>
+          <input class="in" placeholder="Add a todo…">
+        </div>
+      </div>
+
+      <div class="sheet__foot">
+        <button class="btn btn--ghost">Cancel</button>
+        <button class="btn btn--outline">Create</button>
+        <button class="btn btn--accent">Create &amp; Run</button>
+      </div>
+    </section>
+
+
+    <!-- ═══════════ EDIT ═══════════ -->
+    <section class="sheet" aria-label="Task detail">
+      <div class="sheet__head">
+        <h2 class="sheet__title">Task detail</h2>
+        <p class="sheet__meta">Board &rarr; task &rarr; slide-over</p>
+      </div>
+
+      <div class="sheet__body">
+        <p class="save">All changes saved</p>
+
+        <div class="f mark mark--chg">
+          <span class="tag">Changed</span>
+          <span class="lbl">Title</span>
+          <input class="in" value="Draft the Q3 partner update">
+        </div>
+
+        <div class="f mark mark--chg">
+          <span class="tag">Changed</span>
+          <span class="lbl">Goal</span>
+          <pre class="pre">Write the Q3 update for our partner list. Cover the three
+partners onboarded this quarter and what each can now do.</pre>
+        </div>
+
+        <div class="f">
+          <span class="lbl">Priority</span>
+          <select class="in">
+            <option>P1 — Critical</option><option>P2 — High</option>
+            <option selected>P3 — Medium</option><option>P4 — Low</option><option>P5 — Minimal</option>
+          </select>
+        </div>
+
+        <div class="f">
+          <span class="lbl">Status</span>
+          <select class="in">
+            <option>Inbox</option><option>Next</option>
+            <option selected>In Progress</option><option>Done</option><option>Failed</option>
+          </select>
+        </div>
+
+        <div class="f">
+          <span class="lbl">Workspace</span>
+          <p class="val">Partner relations</p>
+        </div>
+
+        <div class="f">
+          <span class="lbl">Plan</span>
+          <select class="in"><option selected>No plan</option><option>Q3 comms</option></select>
+        </div>
+
+        <div class="f">
+          <span class="lbl">Tags</span>
+          <div class="tags">
+            <span class="tagchip">comms<button class="x" aria-label="Remove tag">&times;</button></span>
+            <button class="link">+ Add tag</button>
+          </div>
+        </div>
+
+        <!-- CHANGED: required, hint removed, verdicts now real -->
+        <div class="f mark mark--chg">
+          <span class="tag">Changed</span>
+          <span class="lbl">Acceptance criteria <span class="star">*</span></span>
+
+          <div class="clist">
+            <div class="crit">
+              <div class="crit__b">
+                <p class="crit__t">The update names the three partners we onboarded and what each can now do.</p>
+                <div class="meta"><span class="chip">stated</span></div>
+              </div>
+              <button class="x" aria-label="Remove criterion">&times;</button>
+            </div>
+            <div class="crit">
+              <div class="crit__b">
+                <p class="crit__t">Every figure quoted appears in the Q3 revenue sheet.</p>
+                <div class="meta">
+                  <span class="chip">stated</span>
+                  <span class="vv"><span>verifies via:</span><span>revenue-q3.csv</span></span>
+                </div>
+              </div>
+              <button class="x" aria-label="Remove criterion">&times;</button>
+            </div>
+          </div>
+
+          <div class="draft">
+            <input class="in" placeholder="What must be true when this is done?" aria-label="What must be true when this is done?">
+            <div class="draft__row">
+              <button class="link">+ Add technical check</button>
+              <button class="link">+ Add action-count check</button>
+            </div>
+          </div>
+
+          <p class="hint hint--del">No criteria — this task will be judged against its title and description (D5).</p>
+
+          <!-- verdict list, below the editor, exactly where it sits today -->
+          <p class="att">attempt 2/3</p>
+          <ul class="vlist">
+            <li class="vrow">
+              <i class="tk tk--m">&#10003;</i>
+              <div>
+                <p class="vtext">The update names the three partners we onboarded and what each can now do.</p>
+                <p class="vreason">All three are named in the second paragraph, each with the capability it unlocks.</p>
+              </div>
+            </li>
+            <li class="vrow">
+              <i class="tk tk--u">&times;</i>
+              <div>
+                <p class="vtext">Every figure quoted appears in the Q3 revenue sheet.</p>
+                <p class="vreason">The 41% retention figure is not in the sheet. Two others match.</p>
+                <button class="link">Show evidence</button>
+              </div>
+            </li>
+          </ul>
+
+          <!-- NEW: the DoD group the verdict list can already render -->
+          <div class="dodgrp mark mark--new">
+            <span class="tag">New</span>
+            <p class="dodlbl">Definition of Done</p>
+            <ul class="vlist">
+              <li class="vrow">
+                <i class="tk tk--p"></i>
+                <div><p class="vtext">Nothing goes out with a placeholder still in it.</p></div>
+              </li>
+            </ul>
+            <div class="draft">
+              <input class="in" placeholder="What must be true when this is done?" aria-label="Definition of Done item">
+              <div class="draft__row">
+                <button class="link">+ Add technical check</button>
+                <button class="link">+ Add action-count check</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="f">
+          <span class="lbl">Agent</span>
+          <select class="in"><option>Unassigned</option><option selected>Jim — Orchestrator</option></select>
+        </div>
+
+        <div class="f mark mark--del">
+          <span class="tag">Removed</span>
+          <span class="lbl">Trigger</span>
+          <select class="in" disabled><option>None (manual)</option><option>Once (at a time)</option></select>
+        </div>
+
+        <div class="f">
+          <span class="lbl">Depends on</span>
+          <p class="val">No dependencies</p>
+        </div>
+
+        <div class="f">
+          <span class="lbl">Due date</span>
+          <input class="in" value="30.09.2026">
+        </div>
+
+        <div class="f mark mark--chg">
+          <span class="tag">Changed</span>
+          <span class="lbl">Todos</span>
+          <ul class="todos">
+            <li><i class="box box--on">&#10003;</i><span class="done">Pull the onboarding list</span><button class="x" aria-label="Remove item">&times;</button></li>
+            <li><i class="box"></i><span>Check the revenue figures</span><button class="x" aria-label="Remove item">&times;</button></li>
+          </ul>
+          <input class="in" placeholder="Add a todo…">
+        </div>
+
+        <button class="btn btn--outline wide">Stop</button>
+        <button class="btn btn--outline wide">Open in Chat</button>
+
+        <div class="f sep">
+          <span class="lbl">Result</span>
+          <pre class="pre">Draft written to partner-update-q3.md. One figure still
+needs a source.</pre>
+        </div>
+
+        <div class="f sep">
+          <span class="lbl">Runs</span>
+          <div class="run">
+            <span class="badge badge--warn">In Progress</span>
+            <span class="runwhen">10 Sep, 09:14</span>
+            <button class="link">Open in Chat</button>
+          </div>
+          <div class="run">
+            <span class="badge badge--err">Failed</span>
+            <span class="runwhen">09 Sep, 17:02</span>
+            <button class="link">Open in Chat</button>
+          </div>
+        </div>
+
+        <div class="f">
+          <span class="lbl">Artifacts</span>
+          <div class="art"><span class="mono artpath">workspace/partner-update-q3.md</span><button class="x" aria-label="Copy path">&#8862;</button></div>
+        </div>
+
+        <dl class="metagrid">
+          <div><dt>Created by</dt><dd>daniel</dd></div>
+          <div><dt>Created</dt><dd>08 Sep 2026, 11:20</dd></div>
+          <div><dt>Updated</dt><dd>10 Sep 2026, 09:31</dd></div>
+          <div><dt>Started</dt><dd>10 Sep 2026, 09:14</dd></div>
+          <div><dt>Completed</dt><dd>&mdash;</dd></div>
+        </dl>
+
+        <button class="btn btn--danger wide">Delete task</button>
+      </div>
+    </section>
+  </div>
+
+  <section class="notes">
+    <h2>The eight edits</h2>
+    <ol>
+      <li><b>Acceptance criteria becomes required</b>, using the same red asterisk the Title field already uses.
+        The empty hint that says the task will be judged against its title and description is removed from both
+        forms, because it teaches the fallback being closed. The create form gets a plain instruction instead.</li>
+      <li><b>Definition of Done is added.</b> In the create form it is a second list with the same editor. In the
+        detail panel it appears as its own group under the criteria — that group already exists in the shipped
+        verdict list and renders under the heading "Definition of Done"; the panel simply never passes it
+        anything today.</li>
+      <li><b>Verdicts render on each criterion</b> — met, not met, or not judged yet, with the Judge's own words
+        underneath. The rows, the ticks, the reason line and the evidence expander all ship today. What is missing
+        is the data: every criterion is written as pending and nothing ever writes met or unmet, so the panel
+        currently shows a column of empty circles no matter what was decided.</li>
+      <li><b>Prompt is renamed Goal.</b> It is called Prompt on the create form and Prompt / Instructions on the
+        detail panel; both become Goal. This is the field that becomes the goal record once the task starts its
+        own session, so the form should say so rather than describing the plumbing. It also stops reading as free
+        instructions sitting next to the criteria that judge them.</li>
+      <li><b>The checklist is relabelled Todos</b> in both forms, and its placeholder with it. The field is
+        called todos everywhere below the surface — the data, the API and the component's own notes all say
+        todos — so the label was the only place the other word survived.</li>
+      <li><b>Title becomes editable in the detail panel.</b> It renders as plain text today with no edit control
+        anywhere in the product, so a task can be named once and never renamed. The API has always accepted a
+        title change — the update request carries a title field and the handler applies it — so this is a missing
+        control, not a missing capability.</li>
+      <li><b>Plan is added to the create form.</b> The detail panel has a Plan picker; the create form has none and
+        silently inherits whichever plan the board is filtered by. Create from an unfiltered board and the task
+        lands with no plan, and the only way to give it one is to save it and reopen it.</li>
+      <li><b>Trigger is removed from both forms.</b> A normal task has no timer. It starts one of three ways —
+        someone presses Start, an agent starts it, or a plan reaches it — and none of those is a schedule.
+        Time-based starts are the calendar's job, and the board and list already exclude every task that has one.
+        So the field could only ever do harm here: on the detail panel, picking "Once" writes a default time you
+        never chose, at which point the task counts as scheduled, drops off the board and list, and the field turns
+        into a read-only link to the calendar. The choice ejected the task from the surface you were standing on.
+        The field goes; the calendar keeps the capability.</li>
+    </ol>
+    <p class="unch"><b>Moved out:</b> the attempt limit is not set here. It is one global goal setting under
+      Settings &rarr; Performance. The panel keeps its read-only "attempt 2/3" line, which it already shows.
+      Verified in code: a task's attempt count is "the current run's attempt index within its goal loop", and its
+      ceiling is "the attempt ceiling before the goal loop gives up" — so the task retry and the goal retry are the
+      same counter, not two.</p>
+    <p class="unch"><b>Removed:</b> the Judgment selector (boolean / quantitative / artifact). The server already
+      forces it for both check kinds — a technical check is always boolean, an action-count check always
+      quantitative — so it was never a real choice there. On a prose criterion its only functional use routes to an
+      inferred file check, which the "never synthesise a check from wording" decision retires. The Judge classifies
+      what kind of claim a criterion makes from its wording. Whether the field also leaves the data model is a
+      separate decision, flagged not taken.</p>
+    <p class="unch"><b>Unchanged in the create form:</b> Priority, Tags, Agent, Depends on, Due date and the three footer buttons.</p>
+    <p class="unch"><b>Unchanged in the detail panel:</b> the autosave line, Priority,
+      Status, Workspace, Plan, Tags, Agent, Depends on, Due date, Stop, Open in Chat, Result,
+      Runs, Artifacts, the five metadata rows and Delete. The panel autosaves every field; it has no footer buttons.
+      The criteria editor itself is unchanged too, including the optional technical check and action-count check,
+      which keep their existing wording and stay attached to a criterion rather than standing on their own.</p>
+  </section>
+</div>

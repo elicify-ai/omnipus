@@ -6,15 +6,114 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
+
+// goalStoreForTasks returns a goal.Store rooted at the SAME $OMNIPUS_HOME the
+// given task.Store is rooted at (task.Store.Dir() is always "<home>/tasks",
+// by this codebase's universal convention — see task.New's own doc comment).
+//
+// This is deliberately NOT a constructor-injected dependency: pkg/goal
+// already imports pkg/task (for the shared AcceptanceCriterion type), so
+// pkg/task cannot import pkg/goal back, and pkg/agent/loop.go (which
+// constructs every tool in this file) is a highest-risk shared file this
+// wave's write-set does not include — see this wave's report for the full
+// rationale. Deriving the goal store from the already-injected task.Store
+// avoids needing any new wiring at the construction call sites. Constructing
+// a fresh goal.Store per call is safe and cheap: pkg/entity's cross-call
+// locking (pkg/entity/lock.go's package-level `fileLock`, keyed on the full
+// data-file path) is process-wide and shared by every Store[T] instance
+// regardless of how many are constructed, and goal.NewStore's directory
+// pre-create is idempotent.
+func goalStoreForTasks(store *task.Store) *goal.Store {
+	return goal.NewStore(filepath.Dir(store.Dir()))
+}
+
+// syncTaskGoalRecord creates or updates the goal record paired with task t
+// (ADR-086 D2/D5, GOAL-FR-003/FR-012/FR-021/FR-029). A task's goal stays in
+// the "defining" phase until the task itself starts and mints a session
+// (GOAL-FR-012) — this function only ever creates or updates the record, it
+// never activates it.
+//
+// Exactly one of the three outcomes happens:
+//   - Neither criteria nor dod changed: no-op, returns nil.
+//   - A goal record already exists for this task: whichever of
+//     criteria/dod changed is replaced on it (Goal.SetCriteria/SetDoD);
+//     the other list is left untouched.
+//   - No goal record exists yet (a legacy, pre-D-C task, GOAL-FR-023/
+//     FR-048): one is created, which requires BOTH lists to be supplied and
+//     non-empty together — a goal record cannot exist with an empty DoD
+//     (goal.Goal.Validate), and "saving an edit" (GOAL-FR-048) submits both
+//     lists as one unit, so a caller providing only one of the two on a task
+//     with no existing Definition of Done is rejected with a clear reason
+//     rather than silently leaving the other list empty.
+func syncTaskGoalRecord(
+	store *task.Store,
+	t *task.Task,
+	criteria []task.AcceptanceCriterion, criteriaProvided bool,
+	dod []task.AcceptanceCriterion, dodProvided bool,
+	goalMaxRoundsFn func() int,
+) error {
+	if !criteriaProvided && !dodProvided {
+		return nil
+	}
+	gs := goalStoreForTasks(store)
+	now := time.Now().UTC()
+	existing, err := gs.GetByOwner(generated.GoalOwnerKindTask, t.ID)
+	if err != nil {
+		if !errors.Is(err, goal.ErrOwnerNotFound) {
+			return fmt.Errorf("load paired goal record: %w", err)
+		}
+		if !criteriaProvided || !dodProvided {
+			return fmt.Errorf(
+				"this task has no existing Definition of Done — saving criteria or dod for the " +
+					"first time requires supplying BOTH together (GOAL-FR-048)")
+		}
+		maxRounds := config.DefaultGoalMaxRounds
+		if goalMaxRoundsFn != nil {
+			maxRounds = goalMaxRoundsFn()
+		}
+		// goal.New requires a non-empty Prompt; fall back to Title (always
+		// present) when the task carries no Prompt.
+		goalPrompt := t.Prompt
+		if goalPrompt == "" {
+			goalPrompt = t.Title
+		}
+		g, nErr := goal.New(
+			generated.GoalOwnerKindTask, t.ID, generated.TaskExplicit,
+			goalPrompt, "", criteria, dod, maxRounds, now,
+		)
+		if nErr != nil {
+			return fmt.Errorf("build goal record: %w", nErr)
+		}
+		return gs.Create(g)
+	}
+	_, err = gs.Update(existing.GoalID, func(g *goal.Goal) error {
+		if criteriaProvided {
+			if sErr := g.SetCriteria(criteria, now); sErr != nil {
+				return sErr
+			}
+		}
+		if dodProvided {
+			if sErr := g.SetDoD(dod, now); sErr != nil {
+				return sErr
+			}
+		}
+		return nil
+	})
+	return err
+}
 
 // TaskListTool lists tasks for the calling agent.
 type TaskListTool struct {
@@ -272,6 +371,14 @@ type TaskCreateTool struct {
 	// terminal plan (validateTaskPlanLinkage, plan.go). A nil planStore with
 	// a non-empty plan_id arg fails closed (see SetPlanStore).
 	planStore *plan.Store
+	// goalMaxRoundsFn, when set, resolves the live single global goal-round
+	// ceiling (Settings -> Performance, D-D/D-E — one setting governs task
+	// goals and chat goals identically; there is no per-goal override) for
+	// the paired goal record this tool creates. Unwired (nil) falls back to
+	// config.DefaultGoalMaxRounds — see SetGoalMaxRoundsFn's doc comment for
+	// why an unwired accessor is a documented wiring gap, not a silent
+	// default meant to be relied on.
+	goalMaxRoundsFn func() int
 }
 
 func NewTaskCreateTool(store *task.Store) *TaskCreateTool {
@@ -327,6 +434,27 @@ func (t *TaskCreateTool) SetBashPolicyChecker(fn func(assigneeAgentID string) (p
 // are entirely unaffected by whether this is wired.
 func (t *TaskCreateTool) SetPlanStore(store *plan.Store) {
 	t.planStore = store
+}
+
+// SetGoalMaxRoundsFn installs the live accessor for the single global
+// Settings -> Performance goal-round ceiling (D-D/D-E), applied to the goal
+// record this tool creates alongside every task. Unwired (the zero value,
+// nil), create_task falls back to config.DefaultGoalMaxRounds — the SAME
+// shipped default the config system itself falls back to
+// (PlanningConfig.EffectiveGoalMaxRounds) — rather than failing the create
+// outright, because the alternative (refusing every task creation on an
+// unwired accessor) would be a much larger regression than a task-owned
+// goal temporarily riding the shipped default until this setter is wired.
+// KNOWN GAP, reported rather than silently worked around: this wave's
+// write-set does not include pkg/agent/loop.go, which is where every other
+// Set* method on this tool (SetHome, SetPlanStore, SetBashPolicyChecker...)
+// is actually called in production — so as of this wave, nothing calls this
+// setter yet, and every task-owned goal is created with the shipped default
+// until a future wave wires `SetGoalMaxRoundsFn(func() int { return
+// al.GetConfig().Planning.EffectiveGoalMaxRounds() })` alongside the
+// existing SetHome call.
+func (t *TaskCreateTool) SetGoalMaxRoundsFn(fn func() int) {
+	t.goalMaxRoundsFn = fn
 }
 
 // parseCriteriaArgs converts the create_task tool's raw "criteria" argument
@@ -427,9 +555,11 @@ func (t *TaskCreateTool) Description() string {
 	return "Create a task and assign it to an agent for execution.\n" +
 		"This is a DELEGATION: it passes the same delegation-policy gate (trust set + modes + depth) as " +
 		"any other delegation, and is refused if you are not authorized to delegate to the assignee. " +
-		"criteria is REQUIRED: at least one acceptance criterion (Definition of Done) — a task created " +
-		"with none is rejected. Before authoring acceptance criteria, load the define-goal skill " +
-		"(via the Skill tool) and follow its quality bar. " +
+		"criteria AND dod are BOTH REQUIRED: at least one acceptance criterion and at least one " +
+		"definition-of-done item — a task created with either missing is rejected (GOAL-FR-021). " +
+		"criteria are the outcome-specific checks for THIS task; dod are the generic standing quality " +
+		"gates (mirrors Goal.dod) — the two are judged identically but never mixed together. Before " +
+		"authoring either, load the define-goal skill (via the Skill tool) and follow its quality bar. " +
 		"If every criterion is kind=check, the assignee's effective bash policy " +
 		"must be allow, or the create is rejected as structurally unsatisfiable (a machine check that can " +
 		"never run can never adjudicate MET). The task lands as a visible card on the workspace board in " +
@@ -519,11 +649,47 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 					},
 					"required": []string{"text"},
 				},
-				"description": "Acceptance criteria (Definition of Done) for this task. REQUIRED: at least " +
-					"one criterion — an agent-created task with zero criteria is rejected.",
+				"description": "Acceptance criteria for this task — the outcome-specific checks. " +
+					"REQUIRED: at least one criterion — an agent-created task with zero criteria is rejected.",
+			},
+			"dod": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"kind": map[string]any{
+							"type": "string",
+							"enum": []string{"check", "prose", "behavior"},
+							"description": "check: a shell command verified via the assignee's own bash tool; " +
+								"prose: a free-text statement judged by the Judge System Agent; " +
+								"behavior: a deterministic count of successful calls of a named tool in the " +
+								"session's tool-call log. Optional (ADR-074 D2) — when omitted, inferred " +
+								"from the payload: check payload => check, behavior payload => behavior, " +
+								"no payload => prose. An explicit kind mismatching its payload is rejected.",
+						},
+						"text": map[string]any{
+							"type":        "string",
+							"description": "The definition-of-done statement (1-1000 characters)",
+						},
+						"check": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"command":            map[string]any{"type": "string", "description": "Shell command to run"},
+								"expected_exit_code": map[string]any{"type": "integer", "minimum": 0, "maximum": 255},
+							},
+							"description": "Required when kind is \"check\"; must be omitted for other kinds",
+						},
+						"behavior": task.BehaviorCriterionParamSchema(),
+					},
+					"required": []string{"text"},
+				},
+				"description": "Definition of Done for this task (GOAL-FR-003/FR-021/FR-048) — generic " +
+					"standing quality gates, DISTINCT from criteria and never mixed into it, judged " +
+					"identically. REQUIRED: at least one item — an agent-created task with zero dod " +
+					"items is rejected.",
 			},
 		},
-		"required": []string{"title", "prompt", "agent_id", "criteria"},
+		"required": []string{"title", "prompt", "agent_id", "criteria", "dod"},
 	}
 }
 
@@ -764,6 +930,31 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		due = d
 	}
 
+	// GOAL-FR-021/D-C: dod is mandatory alongside criteria, uniformly, on
+	// every task-creation surface — this tool included (R-25). Distinct
+	// list, same author-stamping and parse rules as criteria above.
+	//
+	// ORDER MATTERS — do NOT hoist this back above the per-field checks.
+	// It sits deliberately AFTER title/prompt/agent_id, the delegation gate,
+	// criteria, the D2-rule-5 bash gate, the depth bound, priority and due,
+	// because a gate placed first PRE-EMPTS every one of them: a caller who
+	// sends priority=6 and no dod must hear "priority must be between 1 and
+	// 5", not a dod complaint that hides the real defect in their call. The
+	// gate itself is unconditional (D-C) either way; only which message the
+	// caller sees first changes. Regression oracle:
+	// TestTaskCreate_DoDGateDoesNotPreemptFieldValidation.
+	rawDoD, _ := args["dod"].([]any)
+	if len(rawDoD) == 0 {
+		return ErrorResult(
+			"dod is required: an agent-created task must supply at least one definition-of-done " +
+				"item, distinct from its acceptance criteria (GOAL-FR-021/D-C)",
+		)
+	}
+	dod, dErr := parseCriteriaArgs(rawDoD, callerID)
+	if dErr != nil {
+		return ErrorResult(fmt.Sprintf("task_create failed: dod: %v", dErr))
+	}
+
 	parentTaskID, _ := args["parent_task_id"].(string)
 
 	wsID, err := t.resolveWorkspaceID(ctx)
@@ -857,6 +1048,21 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		return ErrorResult(fmt.Sprintf("task_create failed: %v", err))
 	}
 
+	// ADR-086 D2/D5, GOAL-FR-003/FR-012/FR-021/FR-029: a task's Definition of
+	// Done is authored ahead of time onto its own paired goal record, which
+	// stays in the "defining" phase until the task itself starts (GOAL-FR-012
+	// — nothing here activates it). The task record itself was created above
+	// with entity.Criteria already populated (dual-write, for the consumers
+	// not yet re-pointed to read the goal record this round — see this
+	// wave's report); this call is what actually persists dod anywhere.
+	if gErr := syncTaskGoalRecord(t.store, entity, criteria, true, dod, true, t.goalMaxRoundsFn); gErr != nil {
+		slog.Error("create_task: failed to create paired goal record",
+			"task_id", entity.ID, "error", gErr)
+		return ErrorResult(fmt.Sprintf(
+			"task_create failed: task %q was created but its Definition of Done could not be "+
+				"persisted: %v", entity.ID, gErr))
+	}
+
 	if t.onCreate != nil {
 		t.onCreate(entity)
 	}
@@ -876,10 +1082,23 @@ type TaskUpdateTool struct {
 	// SAME gate task_create uses.
 	delegationDeny func(ctx context.Context, targetAgentID string) *DelegationDenial
 	onComplete     func(*task.Task)
+	// goalMaxRoundsFn mirrors TaskCreateTool.goalMaxRoundsFn — see
+	// TaskCreateTool.SetGoalMaxRoundsFn's doc comment for the same known
+	// wiring gap. It is consulted only when update_task must CREATE a goal
+	// record that did not exist before (a legacy task getting criteria/dod
+	// for the first time via an edit); updating an existing record never
+	// touches the budget.
+	goalMaxRoundsFn func() int
 }
 
 func NewTaskUpdateTool(store *task.Store) *TaskUpdateTool {
 	return &TaskUpdateTool{store: store}
+}
+
+// SetGoalMaxRoundsFn installs the live Settings -> Performance goal-round
+// ceiling accessor — see TaskCreateTool.SetGoalMaxRoundsFn.
+func (t *TaskUpdateTool) SetGoalMaxRoundsFn(fn func() int) {
+	t.goalMaxRoundsFn = fn
 }
 
 // SetOnComplete sets the callback invoked when a task reaches a terminal status.
@@ -914,8 +1133,79 @@ func (t *TaskUpdateTool) SetDelegationDenyChecker(
 //   - A Scratchpad task (FR-048, set_todos-created checklist tracking) is
 //     exempt from the goal loop entirely, mirroring finishTaskRun's own
 //     Scratchpad exemption — trusted immediately regardless of criteria.
+//
+// ADR-086 D5/GOAL-FR-029/FR-030 names this function as a Task.Criteria
+// consumer to re-point onto the task's paired goal record. No change was
+// needed: t.Criteria continues to be dual-written by this wave's create/
+// update paths (see Task.Criteria's own doc comment, pkg/task/task.go), so
+// this pre-existing check keeps working unchanged.
 func deferDoneClaimToJudge(t *task.Task, newStatus task.Status) bool {
 	return newStatus == task.StatusDone && !t.Scratchpad && len(t.Criteria) > 0
+}
+
+// frozenUpdateTaskDefinitionFields is the update_task half of the
+// running-task field freeze (operator decision, 2026-09-12). It is the exact
+// counterpart of pkg/gateway/rest_tasks.go's frozenTaskDefinitionFields —
+// read that function's doc comment for the full rule, the four frozen parts of
+// the judged contract, and the reasoning for what deliberately stays mutable.
+//
+// The two entry points enforce the same rule over different field sets simply
+// because they expose different fields. update_task's schema carries NO
+// `prompt` and no `description` argument at all, so the only frozen-set fields
+// reachable from here are `criteria` and `dod`. Nothing is enumerated for the
+// fields this tool cannot touch: a guard for an argument that does not exist
+// would be dead code, and adding a frozen argument to the schema later must
+// carry adding it here in the same change.
+//
+// Presence is decided with the SAME type assertion the apply path below uses
+// (`args[k].([]any)`), so the gate refuses exactly what would otherwise be
+// written — never more. A `criteria` argument of the wrong JSON shape changes
+// nothing downstream, so it is not something to refuse.
+//
+// `status` and every other progress field are untouched by this: an agent
+// working the task must be able to advance its own status, its todos (a
+// separate tool), its result and its artifacts while it runs.
+func frozenUpdateTaskDefinitionFields(args map[string]any) []string {
+	var frozen []string
+	if _, ok := args["criteria"].([]any); ok {
+		frozen = append(frozen, "criteria")
+	}
+	if _, ok := args["dod"].([]any); ok {
+		frozen = append(frozen, "dod")
+	}
+	return frozen
+}
+
+// runningTaskFrozenFieldToolMessage is the tool-side refusal, deliberately
+// word-for-word the REST handler's
+// (pkg/gateway/rest_tasks.go::runningTaskFrozenFieldMessage) so an operator
+// reading a 409 body and an agent reading a tool error are told the same
+// thing. It states the HTTP status the REST surface answers with, because a
+// tool result has no status line of its own and an agent that cannot tell a
+// state conflict from a malformed argument will retry the same edit forever.
+//
+// pkg/tools cannot import pkg/gateway (the dependency runs the other way), so
+// the sentence is duplicated rather than shared. Keeping the two copies
+// identical is the point; if one is reworded, reword both.
+func runningTaskFrozenFieldToolMessage(frozen []string) string {
+	quoted := make([]string, 0, len(frozen))
+	for _, n := range frozen {
+		quoted = append(quoted, strconv.Quote(n))
+	}
+	var list string
+	if len(quoted) == 1 {
+		list = quoted[0]
+	} else {
+		list = strings.Join(quoted[:len(quoted)-1], ", ") + " and " + quoted[len(quoted)-1]
+	}
+	return fmt.Sprintf(
+		"409 Conflict: cannot change %s while the task is running: the goal definition, the "+
+			"acceptance criteria, the definition of done and the prompt are frozen for the duration "+
+			"of a run, because the Judge measures the finished work against exactly those — changing "+
+			"one mid-run means neither a pass nor a fail would mean anything. Stop the task first, "+
+			"then edit it. Progress fields (status, todos, result, artifacts) stay editable while it runs.",
+		list,
+	)
 }
 
 func (t *TaskUpdateTool) Name() string           { return "update_task" }
@@ -990,6 +1280,70 @@ func (t *TaskUpdateTool) Parameters() map[string]any {
 				"type":        "boolean",
 				"description": "Set/clear whether this plan member is an authored join/assemble member.",
 			},
+			"criteria": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"kind": map[string]any{
+							"type":        "string",
+							"enum":        []string{"check", "prose", "behavior"},
+							"description": "See create_task's criteria.kind — same inference rules.",
+						},
+						"text": map[string]any{
+							"type":        "string",
+							"description": "The criterion statement (1-1000 characters)",
+						},
+						"check": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"command":            map[string]any{"type": "string", "description": "Shell command to run"},
+								"expected_exit_code": map[string]any{"type": "integer", "minimum": 0, "maximum": 255},
+							},
+							"description": "Required when kind is \"check\"; must be omitted for other kinds",
+						},
+						"behavior": task.BehaviorCriterionParamSchema(),
+					},
+					"required": []string{"text"},
+				},
+				"description": "Replacement acceptance-criteria set (replaces the current set atomically). " +
+					"Pass at least one item — GOAL-FR-021/D-C binds at edit too: an update supplying an " +
+					"empty criteria array is rejected. Omit to leave criteria unchanged. " +
+					"FROZEN WHILE THE TASK IS RUNNING: once the task is in_progress this field cannot be " +
+					"changed (the Judge scores the finished work against it), and supplying it is refused. " +
+					"Your status, todos, result and artifacts stay editable throughout.",
+			},
+			"dod": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"kind": map[string]any{
+							"type":        "string",
+							"enum":        []string{"check", "prose", "behavior"},
+							"description": "See create_task's dod.kind — same inference rules.",
+						},
+						"text": map[string]any{
+							"type":        "string",
+							"description": "The definition-of-done statement (1-1000 characters)",
+						},
+						"check": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"command":            map[string]any{"type": "string", "description": "Shell command to run"},
+								"expected_exit_code": map[string]any{"type": "integer", "minimum": 0, "maximum": 255},
+							},
+							"description": "Required when kind is \"check\"; must be omitted for other kinds",
+						},
+						"behavior": task.BehaviorCriterionParamSchema(),
+					},
+					"required": []string{"text"},
+				},
+				"description": "Replacement Definition-of-Done set (replaces the current set atomically). " +
+					"Pass at least one item — GOAL-FR-021/D-C binds at edit too: an update supplying an " +
+					"empty dod array is rejected. Omit to leave dod unchanged. " +
+					"FROZEN WHILE THE TASK IS RUNNING: same rule as criteria above.",
+			},
 		},
 		"required": []string{"task_id"},
 	}
@@ -1028,6 +1382,17 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	// through the separate delegationDeny gate below.
 	if existing.AgentID != callerID && !existing.CreatedByAgent(callerID) {
 		return ErrorResult("you can only update tasks you own or are assigned")
+	}
+
+	// Operator decision, 2026-09-12: the judged contract freezes for the
+	// duration of a run — the SAME rule the REST PATCH handler enforces, with
+	// the SAME 409-Conflict semantics and the same wording (see
+	// frozenUpdateTaskDefinitionFields for the field mapping and for why the
+	// refusal is whole-request). Checked here, before a single field is copied
+	// into the patch, so a call mixing frozen and mutable fields applies none
+	// of it rather than half of it.
+	if frozen := frozenUpdateTaskDefinitionFields(args); len(frozen) > 0 && existing.Status == task.StatusInProgress {
+		return ErrorResult(runningTaskFrozenFieldToolMessage(frozen))
 	}
 
 	patch := task.Patch{}
@@ -1215,6 +1580,45 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		updatedFields = append(updatedFields, "is_join")
 	}
 
+	// criteria / dod (GOAL-FR-021/FR-029/FR-030/D-C): the mandatory-count
+	// gate binds at edit too, uniformly with create_task — an update
+	// supplying either list must not reduce it below one item. Persisted to
+	// the paired goal record (syncTaskGoalRecord, below, after the store
+	// write succeeds); entity.Criteria is ALSO dual-written onto the task
+	// record itself via patch.Criteria for the consumers not yet re-pointed
+	// to read the goal record this round.
+	var newCriteria, newDoD []task.AcceptanceCriterion
+	criteriaProvided, dodProvided := false, false
+	if rawCriteria, ok := args["criteria"].([]any); ok {
+		criteriaProvided = true
+		if len(rawCriteria) == 0 {
+			return ErrorResult(
+				"criteria must not be empty: an update that supplies criteria must include at " +
+					"least one acceptance criterion (GOAL-FR-021/D-C)")
+		}
+		parsed, cErr := parseCriteriaArgs(rawCriteria, callerID)
+		if cErr != nil {
+			return ErrorResult(fmt.Sprintf("task_update failed: criteria: %v", cErr))
+		}
+		newCriteria = parsed
+		patch.Criteria = &parsed
+		updatedFields = append(updatedFields, "criteria")
+	}
+	if rawDoD, ok := args["dod"].([]any); ok {
+		dodProvided = true
+		if len(rawDoD) == 0 {
+			return ErrorResult(
+				"dod must not be empty: an update that supplies dod must include at least one " +
+					"definition-of-done item (GOAL-FR-021/D-C)")
+		}
+		parsed, dErr := parseCriteriaArgs(rawDoD, callerID)
+		if dErr != nil {
+			return ErrorResult(fmt.Sprintf("task_update failed: dod: %v", dErr))
+		}
+		newDoD = parsed
+		updatedFields = append(updatedFields, "dod")
+	}
+
 	if len(updatedFields) == 0 {
 		return ErrorResult(
 			"no updatable fields provided (supply at least one of status, result, artifacts, title, priority, due, agent_id, blocked_by, write_set, stream, is_join)",
@@ -1239,6 +1643,19 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	updated, err := t.store.Update(taskID, patch)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("task_update failed: %v", err))
+	}
+
+	// GOAL-FR-029/FR-030: the task record's write already landed above
+	// (dual-write); this is what actually persists the change onto the
+	// task's paired goal record — creating one if this is a legacy task's
+	// first-ever criteria/dod (see syncTaskGoalRecord's doc comment).
+	var goalSyncWarning string
+	if criteriaProvided || dodProvided {
+		if gErr := syncTaskGoalRecord(t.store, updated, newCriteria, criteriaProvided, newDoD, dodProvided, t.goalMaxRoundsFn); gErr != nil {
+			slog.Error("update_task: failed to sync paired goal record",
+				"task_id", taskID, "error", gErr)
+			goalSyncWarning = gErr.Error()
+		}
 	}
 
 	// FR-6.5: when the task newly reaches "done", advance dependents (mirror
@@ -1274,30 +1691,41 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 
 	// Marshal cannot fail on a []string (updatedFields is always a concrete
 	// slice of strings), so the error is impossible in practice — discard it.
-	updatedFieldsJSON, _ := json.Marshal(updatedFields)
-	result := fmt.Sprintf(`{"task_id":%q,"status":%q,"updated_fields":%s}`,
-		updated.ID, updated.Status, string(updatedFieldsJSON))
+	resultPayload := map[string]any{
+		"task_id":        updated.ID,
+		"status":         updated.Status,
+		"updated_fields": updatedFields,
+	}
 	if deferToJudge {
 		// FR-041/SD-B2 (review r1 C1): tell the calling agent its done claim
 		// was received but is NOT yet final — this task has explicit
 		// acceptance criteria, so the evidence-ladder judge must adjudicate
 		// the claim (task_executor.go adjudicateClaim) before the task can
-		// actually reach `done`. Built with json.Marshal for safe escaping.
-		const pendingNote = "completion claim recorded — this task has acceptance criteria, so it is " +
-			"NOT yet done; the evidence-ladder judge will adjudicate your claim against the criteria " +
-			"before the task can reach a terminal status"
-		noteJSON, _ := json.Marshal(pendingNote)
-		result = fmt.Sprintf(`{"task_id":%q,"status":%q,"updated_fields":%s,"pending_judge_note":%s}`,
-			updated.ID, updated.Status, string(updatedFieldsJSON), string(noteJSON))
-	} else if advanceWarning != "" {
-		// Append the warning as an escaped string field so the LLM/user can see
-		// the dependents were not advanced. Built with json.Marshal so the error
-		// message is properly escaped into a JSON string literal.
-		warnJSON, _ := json.Marshal(advanceWarning)
-		result = fmt.Sprintf(`{"task_id":%q,"status":%q,"updated_fields":%s,"advance_warning":%s}`,
-			updated.ID, updated.Status, string(updatedFieldsJSON), string(warnJSON))
+		// actually reach `done`.
+		resultPayload["pending_judge_note"] = "completion claim recorded — this task has acceptance " +
+			"criteria, so it is NOT yet done; the evidence-ladder judge will adjudicate your claim " +
+			"against the criteria before the task can reach a terminal status"
 	}
-	return NewToolResult(result)
+	if advanceWarning != "" {
+		resultPayload["advance_warning"] = advanceWarning
+	}
+	if goalSyncWarning != "" {
+		// GOAL-FR-029/FR-030: the task record itself already carries the new
+		// criteria (dual-write, via patch.Criteria above), so this is never a
+		// silent data loss — but the paired goal record (the authoritative
+		// store per ADR-086 D5) failed to pick up the change, so the caller
+		// must see that explicitly rather than assume both landed together.
+		resultPayload["goal_sync_warning"] = "criteria/dod saved on the task, but the paired goal " +
+			"record could not be updated: " + goalSyncWarning
+	}
+	encoded, mErr := json.Marshal(resultPayload)
+	if mErr != nil {
+		// Every field above is a concrete string/slice — Marshal cannot
+		// fail on this shape in practice; fall back to the minimal payload
+		// rather than dropping a successful update's response entirely.
+		return NewToolResult(fmt.Sprintf(`{"task_id":%q,"status":%q}`, updated.ID, updated.Status))
+	}
+	return NewToolResult(string(encoded))
 }
 
 // --- TaskDeleteTool ---

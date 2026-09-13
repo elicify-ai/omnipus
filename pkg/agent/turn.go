@@ -109,6 +109,15 @@ type turnResult struct {
 	// whether the turn ended via the engine's error/limit fallback without holding
 	// a reference to the turnState.  Populated by runTurn before it returns.
 	turnFailed bool
+	// goalDeferredAdjudication is JUDGE-FR-098's deferred-dispatch payload
+	// (ADR-084 revision 9 D13, wave E13): checkGoalLoopAfterTurn
+	// (goal_loop.go) populates this instead of calling runGoalAdjudication
+	// synchronously when a turn resolves a `met` claim. nil means no
+	// claim-triggered adjudication is pending. runAgentLoop (loop.go)
+	// dispatches it, in a goroutine, strictly AFTER bus.PublishOutbound of
+	// this turn's own finalContent — see goalDeferredAdjudicationWork's own
+	// doc comment (goal_loop.go) for the full contract.
+	goalDeferredAdjudication *goalDeferredAdjudicationWork
 }
 
 type turnState struct {
@@ -308,6 +317,41 @@ type turnState struct {
 	// CLI/automation clients can detect failure without parsing message content.
 	turnFailed bool
 
+	// goalNarrowMisses is ADR-081 D3's bounded-escape counter (the D3
+	// amendment, 2026-09-08): the number of CONSECUTIVE LLM requests this
+	// turn for which evaluateGoalForcing (loop.go) has offered the narrowed
+	// {set_goal[, AskUserQuestion]} first-move door while the base predicate
+	// (goalTurnRecordState) still held. It is bumped once per narrowed
+	// offering, BEFORE that request's outcome is known — a request that
+	// instead finds the record already written (a prior request's set_goal
+	// succeeded) or that parks the turn (a genuine AskUserQuestion card)
+	// never reaches the bump, because goalTurnRecordState/the turn-ending
+	// park short-circuit evaluateGoalForcing first. Once the counter exceeds
+	// goalForcingMaxNarrowAttempts, evaluateGoalForcing arms
+	// goalNarrowEscaped instead of narrowing that (and every later) request.
+	// Zero value is correct: each turnState is fresh per turn generation, so
+	// there is nothing to reset between turns.
+	goalNarrowMisses int
+	// goalNarrowEscaped is true once ADR-081 D3's bounded escape has fired
+	// for this turn — evaluateGoalForcing then offers the FULL tool surface
+	// for the remainder of the turn even though the base predicate may still
+	// hold (a persistently empty record against a model that keeps failing
+	// or ignoring the narrowed pair). This is the fix for the real-world
+	// defect reproduced 2026-09-08: a /goal set at 11:54:48Z narrowed
+	// iteration 1 to {set_goal, AskUserQuestion}; the model's AskUserQuestion
+	// call FAILED schema validation ("unexpected property \"recommended\""
+	// inside an option); because narrowing used to apply to iteration 1
+	// ONLY, iteration 2 got the full tool surface back with the record still
+	// empty, and the agent ran ToolSearch/write_file×5/bash/serve_web/
+	// browser_navigate for ~17 minutes before finally calling set_goal at
+	// 12:12:26Z — the post-turn correction (checkGoalLoopAfterTurn,
+	// goal_loop.go) never got a chance to run because the turn never ended.
+	// Narrowing now persists across iterations while the predicate holds;
+	// this flag is the escape valve so a persistently-failing model cannot
+	// wedge the turn in the narrowed pair for its whole MaxIterations
+	// budget instead. Never cleared once set.
+	goalNarrowEscaped bool
+
 	// Back-reference to the owning AgentLoop (set for SubTurns only, used for hard abort cascade)
 	al *AgentLoop
 
@@ -349,13 +393,14 @@ type turnState struct {
 	// store key, transcript write target, ownership predicate, approval-grant
 	// key, uploads-directory key, tool-manifest bucket, lifecycle-record
 	// field, or audit session_id (those all keep using transcriptSessionID
-	// above). Within this file the reads are the three role-B predicates
-	// FR-015 names — GetActiveTurnHookForSession,
-	// resolveSessionIDByChannelChat and getActiveRootTurnStateForSession —
+	// above). Within this file the reads are the role-B predicates FR-015
+	// names — GetActiveTurnHookForSession and resolveSessionIDByChannelChat —
 	// plus claimAnyTurnForSession, the cancel descendant fallback added
 	// post-merge in the same role-B class (see the FR-014 allowlist test,
 	// routing_session_id_consumer_set_adr057_test.go, the authority on the
-	// exact reader census).
+	// exact reader census). ADR-082 D1 deleted this file's third role-B
+	// predicate, getActiveRootTurnStateForSession — it existed solely for
+	// the now-retired orphan-foreground-turn watchdog.
 	// The remaining closed-set readers have all LANDED (U7/U8/U9/U15, this
 	// same branch) — do not go looking for unfinished work here: the
 	// steering.go role-B predicates (U8), the pre-arm latch keys in
@@ -402,6 +447,22 @@ type turnState struct {
 	// denied nothing yet, so no counter or quarantine entry ever survives
 	// into a new turn or crosses into another session's turnState.
 	denialLedger turnDenialLedger
+
+	// browserDeferralLedger is ADR-085's per-turn control-gate deferral
+	// state (BROWSER-FR-013/FR-014/FR-017): a plain aggregate count of how
+	// many control-gated browser tool calls this turn has been deferred on
+	// (BROWSER-FR-013), modelled on denialLedger immediately above but
+	// deliberately a SEPARATE counter — the two refusals share this file's
+	// tool-dispatch point and nothing else (see pkg/agent/loop.go's
+	// shared-file-chain doc: E2's cap counts verifier tool-call denials and
+	// refuses at its own ceiling; this counts control-gate deferrals per
+	// turn and refuses at three). Its type and every method that reads/
+	// mutates it are defined in browser_deferral.go. Guarded by mu above,
+	// same discipline as denialLedger. Zero value (used 0) is correct — a
+	// fresh turnState (one per turn) has deferred nothing yet, and a
+	// delegated child turn gets its OWN turnState and therefore its own
+	// independent count (FR-017).
+	browserDeferralLedger turnBrowserDeferralLedger
 
 	// mediaRetryDone is the per-turn guard for the RD2 media-downgrade retry
 	// (ADR-051 §RD2 / FR-007 / FR-008). When true, the loop's classifier-gated
@@ -767,8 +828,8 @@ func (al *AgentLoop) clearActiveTurn(ts *turnState) {
 	// runs unchecked until its own MaxIterations ceiling. CompareAndDelete
 	// only removes the entry if it is STILL this exact ts, so a
 	// since-registered newer turn sharing the same key is left untouched —
-	// mirrors the identical guard orphan_watch.go already uses for
-	// al.orphanWatches (fireOrphanForegroundTurnWatch's CompareAndDelete).
+	// the same compare-and-delete-by-identity pattern used everywhere else in
+	// this file a map entry can race a concurrent replace.
 	al.activeTurnStates.CompareAndDelete(ts.sessionKey, ts)
 	// Design-flaw fix (cancel_prearm.go, turnImminentForIdentity): record
 	// that a turn JUST cleared for this identity so a still-true
@@ -800,9 +861,7 @@ func (al *AgentLoop) clearActiveTurn(ts *turnState) {
 // parent's own ts.sessionKey plus the cancelPreArm bookkeeping that only
 // applies to a finished whole turn — use THIS helper when you only need the
 // bare map-entry guard (a deferred child cleanup) and clearActiveTurn when you
-// are retiring a turn that ran to completion. Mirrors the identical guard
-// orphan_watch.go uses for al.orphanWatches (fireOrphanForegroundTurnWatch's
-// CompareAndDelete).
+// are retiring a turn that ran to completion.
 func (al *AgentLoop) clearActiveTurnStateEntry(sessionKey string, ts *turnState) {
 	al.activeTurnStates.CompareAndDelete(sessionKey, ts)
 }
@@ -1168,55 +1227,6 @@ func (al *AgentLoop) claimAnyTurnForSession(sessionID string) TurnCancelHook {
 	return claimed
 }
 
-// getActiveRootTurnStateForSession returns the ROOT turnState (depth==0 /
-// parentTurnID=="") matching sessionID's ROUTING session ID, or nil when no
-// root turn is currently active for the session — INCLUDING when the only
-// resolvable match is a non-root descendant. Unlike
-// GetActiveTurnHookForSession (which falls back to ANY match, root-preferring
-// but not root-EXCLUSIVE, as a defensive last resort for other callers), this
-// NEVER returns a delegate sub-turn.
-//
-// ADR-057 FR-015 (role-B predicate, one of the seven): rebased from
-// transcriptSessionID onto routingSessionID for the same reason as
-// GetActiveTurnHookForSession's identical rebase — see that function's doc
-// comment. The depth==0/parentTurnID=="" filter below already excludes every
-// descendant regardless of which id field feeds it, so for THIS function the
-// rebase changes no currently-observable input/output pair; it exists so
-// this predicate stays keyed on the same closed-set field as its six
-// siblings (FR-014) rather than reintroducing a transcriptSessionID
-// comparison that would silently diverge the moment any of them depends on
-// this one matching a genuinely-distinct-id descendant in the future.
-//
-// Used exclusively by the orphan-foreground-turn watchdog (ADR-045,
-// pkg/agent/orphan_watch.go) to answer "is there still a genuine foreground
-// turn to reap" without ever mistaking a surviving Critical/background
-// delegate — whose parent root has already finished and been cleared from
-// activeTurnStates via clearActiveTurn (loop.go) — for one. Reusing
-// GetActiveTurnHookForSession's anyMatch fallback for that decision was the
-// root cause of MA-1: it would resolve the delegate as "the turn to reap",
-// and handing that to RequestCancel would trigger RequestCancel's
-// session-wide escalation against the exact turn ADR-045 exists to protect.
-func (al *AgentLoop) getActiveRootTurnStateForSession(sessionID string) *turnState {
-	var root *turnState
-	al.activeTurnStates.Range(func(_, value any) bool {
-		ts, ok := value.(*turnState)
-		if !ok {
-			logger.ErrorCF("agent", "activeTurnStates: invariant violated — unexpected value type, skipping entry",
-				map[string]any{"got_type": fmt.Sprintf("%T", value)})
-			return true
-		}
-		if string(ts.routingSessionID) != sessionID {
-			return true
-		}
-		if ts.depth == 0 || ts.parentTurnID == "" {
-			root = ts
-			return false
-		}
-		return true
-	})
-	return root
-}
-
 func (al *AgentLoop) GetActiveTurnBySession(sessionKey string) *ActiveTurnInfo {
 	ts := al.getActiveTurnState(sessionKey)
 	if ts == nil {
@@ -1455,6 +1465,34 @@ func (ts *turnState) markTurnFailed() {
 	ts.mu.Lock()
 	ts.turnFailed = true
 	ts.mu.Unlock()
+}
+
+// noteGoalNarrowAttempt bumps ADR-081 D3's bounded-escape counter
+// (goalNarrowMisses, see its doc comment) for one more narrowed first-move
+// offering this turn and returns the running total, so the caller
+// (evaluateGoalForcing, loop.go) can compare it against
+// goalForcingMaxNarrowAttempts.
+func (ts *turnState) noteGoalNarrowAttempt() int {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.goalNarrowMisses++
+	return ts.goalNarrowMisses
+}
+
+// armGoalNarrowEscape permanently releases ADR-081 D3's narrowed first-move
+// door for the rest of this turn (see goalNarrowEscaped's doc comment).
+func (ts *turnState) armGoalNarrowEscape() {
+	ts.mu.Lock()
+	ts.goalNarrowEscaped = true
+	ts.mu.Unlock()
+}
+
+// goalNarrowIsEscaped reports whether armGoalNarrowEscape has already fired
+// this turn.
+func (ts *turnState) goalNarrowIsEscaped() bool {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.goalNarrowEscaped
 }
 
 // SetFinalContent records the final assistant response on the turnState so

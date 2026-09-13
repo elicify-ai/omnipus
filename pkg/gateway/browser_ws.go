@@ -25,6 +25,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser/webrtc"
 )
@@ -772,6 +773,28 @@ type BrowserWSHandler struct {
 	// readLoop. Keyed by viewerID; zero value (unstored sync.Map) is ready
 	// to use.
 	viewerConns sync.Map
+
+	// tabSetChats maps a RESOLVED tab-set key (mgr.PanelTabSetID's return,
+	// what every live-view call on this connection uses) to the CHAT session
+	// id the panel that resolved it is watching. Written at attach, read by
+	// onStandDownNotice.
+	//
+	// It exists because the two ids genuinely differ and only the gateway
+	// ever sees both. A stand-down notice is raised deep inside
+	// pkg/tools/browser, which holds only the tab-set key; for the operator's
+	// WORKSPACE-owned set ("ws:<id>/operator") that key names no chat at all,
+	// so without this the one notice an operator most needs — "a person took
+	// the wheel", raised on the very set the panel is attached to — would
+	// have nowhere to land. StandDownNotice.OwnerSessionID is the fallback
+	// for a session-owned set nobody has a panel on (the agent-initiated
+	// handover case). An entry is overwritten by the next attach on the same
+	// tab set and deliberately NOT deleted on detach: a second viewer may
+	// still be attached, and a stale entry can only name a chat that no longer
+	// has a panel open — which is the right place for the notice anyway, since
+	// the transcript entry is what that chat shows on reload. Bounded by the
+	// number of distinct tab sets a panel has ever attached to in this
+	// process, which is bounded by the workspace's own tab sets.
+	tabSetChats sync.Map
 }
 
 // newBrowserWSHandler constructs a BrowserWSHandler. allowedOrigin is the
@@ -779,7 +802,7 @@ type BrowserWSHandler struct {
 // CanonicalGatewayOrigin) — passed in rather than recomputed so the two
 // sockets can never disagree on CORS/origin policy.
 func newBrowserWSHandler(agentLoop *agent.AgentLoop, allowedOrigin string) *BrowserWSHandler {
-	return &BrowserWSHandler{
+	h := &BrowserWSHandler{
 		agentLoop:     agentLoop,
 		allowedOrigin: allowedOrigin,
 		upgrader: websocket.Upgrader{
@@ -787,6 +810,41 @@ func newBrowserWSHandler(agentLoop *agent.AgentLoop, allowedOrigin string) *Brow
 		},
 		captures: newCaptureRegistry(),
 	}
+
+	// --- ADR-085 wiring. Everything below was BUILT and never CONNECTED ---
+	//
+	// This constructor is the ADR-085 spec's own nominated registration point
+	// ("registered on the loop inside pkg/gateway/browser_ws.go::
+	// newBrowserWSHandler, which is already handed the *agent.AgentLoop — no
+	// pkg/gateway/gateway.go edit is required", spec FR-029's action
+	// paragraph). Until these three calls existed, every seam they fill had
+	// ZERO production call sites and the features they carry were unreachable:
+	//
+	//  1. FR-029's release hook. pkg/agent/loop.go::processMessage already
+	//     invokes it on every operator-originated prompt; nothing registered
+	//     it, so the "the operator resumes your driving by sending a new
+	//     message" promise the agent is told in three separate tool messages
+	//     was connected to nothing. With tools.browser.control_idle_release
+	//     set to 0 (documented as "expiry disabled") that locked the agent out
+	//     of the browser for the rest of the process's life.
+	//  2. FR-031a/FR-052's sweeper observer, so a server-initiated release
+	//     leaves an audit record instead of the trail showing deferrals and
+	//     handovers but never a release.
+	//  3. FR-041/FR-042's waiting surface, so a browser_handover the agent
+	//     performs for a sign-in is something the operator can actually SEE.
+	//
+	// agentLoop is nil in a couple of narrow test constructions; each call
+	// below is nil-safe either here or at the seam.
+	if agentLoop != nil {
+		agentLoop.SetBrowserWheelReleaseHook(h.ReleaseBrowserWheelForPrompt)
+	}
+	browser.SetGlobalControlReleaseHooks(browser.ControlIdleReleaseHooks{
+		OnIdleRelease:     h.onSweeperIdleRelease,
+		OnDisabledRelease: h.onSweeperDisabledRelease,
+	})
+	browser.SetStandDownNoticeSink(h.onStandDownNotice)
+
+	return h
 }
 
 // Wait blocks until all active ServeHTTP goroutines have fully exited.
@@ -1450,6 +1508,33 @@ func (h *BrowserWSHandler) handleAttach(
 		return
 	}
 
+	// ADR-085 FR-031b/FR-057: register the unsolicited-release notifier for
+	// THIS viewer on THIS tab set. Every server-initiated release (the FR-029
+	// prompt release, the FR-031a idle expiry, the FR-052 switch-off, an
+	// FR-047 handover clear) goes through LiveViewRegistry.ReleaseStoodDown,
+	// which invokes this sink addressed to the former holder alone. Without it
+	// the panel keeps `isControlling === true` forever after such a release —
+	// it only clears on a server `released` status, and `takeWheelIfNeeded`'s
+	// first guard returns early while that flag is set, so the operator could
+	// never re-take a wheel the server had already given back.
+	//
+	// ControlOnly is deliberately NOT set: the SPA's `if (f.control_only)`
+	// branch applies only the control-ownership axis and returns, so a
+	// control_only frame cannot clear the holder's OWN isControlling — it
+	// would look delivered and change nothing (spec FR-031b).
+	mgr.Live().SetReleaseNotifySink(panelSessionID, viewerID, func() {
+		wc.sendCriticalGen(generated.BrowserStatusFrame{
+			Type:      string(generated.WsFrameTypeBrowserStatus),
+			State:     "released",
+			SessionId: &chatSessionID,
+		}, dropContext(chatSessionID, viewerID, "control-released-unsolicited"))
+	})
+
+	// Remember which chat this tab set is being watched from, so an ADR-085
+	// stand-down notice raised inside pkg/tools/browser — which holds only the
+	// tab-set key — can be placed in the right thread. See tabSetChats.
+	h.tabSetChats.Store(panelSessionID, chatSessionID)
+
 	cbo := controlledByOther
 	wc.sendCriticalGen(generated.BrowserStatusFrame{
 		Type:              string(generated.WsFrameTypeBrowserStatus),
@@ -1685,7 +1770,27 @@ func (h *BrowserWSHandler) handleControl(
 			Controller: &controller,
 		}, dropContext(chatSessionID, viewerID, "control-take-ok"))
 	case "release":
-		mgr.Live().ReleaseControl(panelSessionID, viewerID)
+		// FINDING 7(b). This used to call Live().ReleaseControl, which clears
+		// ONLY lv.controller. The ADR-085 FR-026a stand-down latch and the
+		// FR-047 handover-pending flag survived it, so isStoodDownLocked()
+		// stayed true and every browser tool kept deferring — the operator had
+		// given the wheel back and the agent could not tell. ReleaseStoodDown
+		// is the server-initiated release that clears all three together, and
+		// it notifies the former holder per FR-031b.
+		//
+		// The controller check is new and deliberate: ReleaseStoodDown clears
+		// unconditionally, so without it a second, merely-attached viewer could
+		// release somebody else's hold. Mirrors handleTabAction's F3 gate —
+		// yours to release, or nobody's (a latch/handover-only stand-down has
+		// no interactive holder at all, and releasing that is exactly what this
+		// button is for).
+		if controller := mgr.Live().Controller(panelSessionID); controller != "" && controller != viewerID {
+			wc.sendCriticalGen(
+				sessionErrorStatus(chatSessionID, "another viewer is driving — only they can release control"),
+				dropContext(chatSessionID, viewerID, "control-release-not-controller"))
+			return
+		}
+		mgr.Live().ReleaseStoodDown(panelSessionID)
 		h.auditRelease(userID, chatSessionID, viewerID)
 		wc.sendCriticalGen(generated.BrowserStatusFrame{
 			Type:      string(generated.WsFrameTypeBrowserStatus),
@@ -1891,6 +1996,267 @@ func (h *BrowserWSHandler) auditRelease(userID, sessionID, viewerID string) {
 		"user":       userID,
 		"viewer_id":  viewerID,
 	})
+}
+
+// --- ADR-085: the release, the audit trail and the waiting surface ------
+
+// ReleaseBrowserWheelForPrompt is BROWSER-FR-029's release ACTION: the agent
+// loop calls it (through the hook registered in newBrowserWSHandler) exactly
+// once per operator-originated prompt, BEFORE the turn begins. sessionID is
+// the chat the prompt landed on; actor carries FR-030's attribution.
+//
+// This is the ONLY thing that ends a hold the operator took deliberately. The
+// FR-026a latch is cleared by exactly two things (spec §FR-026a): this, and
+// the FR-031a idle timer — and an operator who sets
+// tools.browser.control_idle_release to 0 has turned the second one off, as
+// the setting's own documentation invites them to.
+//
+// Reachability (FR-050): the release must cover "every tab set reachable from
+// the root chat session". The gateway cannot enumerate that set — a delegated
+// child's tab set is keyed by the CHILD's transcript session id, which never
+// reaches here — so the release runs across every manager whose workspace is
+// the one this chat belongs to, via LiveViewRegistry.ReleaseAllStoodDown (see
+// that method's doc comment for why a whole registry is the right bound). A
+// chat whose workspace cannot be resolved falls back to releasing across every
+// live manager: that is the fail-OPEN direction on purpose, because the state
+// being cleared only ever BLOCKS the agent, and a prompt the operator just
+// typed is unambiguous consent to hand the browser back.
+func (h *BrowserWSHandler) ReleaseBrowserWheelForPrompt(
+	ctx context.Context, sessionID string, actor agent.ReleaseActor,
+) {
+	if h == nil || h.agentLoop == nil {
+		return
+	}
+	workspaceID := h.sessionWorkspaceID(sessionID)
+	for _, mgr := range h.agentLoop.BrowserManagers() {
+		if mgr == nil {
+			continue
+		}
+		if workspaceID != "" && mgr.BrowsingKey().WorkspaceID() != workspaceID {
+			continue
+		}
+		for _, rel := range mgr.Live().ReleaseAllStoodDown() {
+			h.auditServerRelease(ctx, audit.EventBrowserLiveControlReleased, rel.SessionID, rel.FormerHolder,
+				map[string]any{
+					"reason":               "operator_prompt",
+					"root_chat_session_id": sessionID,
+					"user":                 actor.GatewayUserID,
+					"acting_user":          releaseActorID(actor),
+				})
+		}
+	}
+}
+
+// releaseActorID renders FR-030's actor: the WS-authenticated gateway
+// principal when there is one, otherwise the platform sender id for a
+// channel-originated prompt. A platform handle is NEVER stamped as a gateway
+// user, which is why the caller writes GatewayUserID into the record's `user`
+// field separately and leaves it empty on every channel path.
+func releaseActorID(actor agent.ReleaseActor) string {
+	if actor.GatewayUserID != "" {
+		return actor.GatewayUserID
+	}
+	return actor.SenderCanonicalID
+}
+
+// onSweeperIdleRelease audits an FR-031a idle-expiry release. Registered
+// process-wide in newBrowserWSHandler; before that registration existed the
+// sweeper released holds and left no record at all, so the audit trail showed
+// deferrals and handovers but never a release and read as though the wheel was
+// never given back (SF-3).
+func (h *BrowserWSHandler) onSweeperIdleRelease(tabSetID, formerHolder string) {
+	h.auditServerRelease(context.Background(), audit.EventBrowserControlIdleRelease, tabSetID, formerHolder, nil)
+}
+
+// onSweeperDisabledRelease audits an FR-052 release forced by
+// tools.browser.take_control_enabled being switched off mid-hold. A separately
+// named outcome from the idle one on purpose — conflating them loses the
+// ability to tell "nobody was watching" from "an operator disabled the
+// feature" (see EventBrowserControlDisabledRelease's doc comment).
+func (h *BrowserWSHandler) onSweeperDisabledRelease(tabSetID, formerHolder string) {
+	h.auditServerRelease(context.Background(), audit.EventBrowserControlDisabledRelease, tabSetID, formerHolder, nil)
+}
+
+// auditServerRelease writes one server-initiated-release audit record. extra
+// is merged over the two fields every such record carries; an empty value in
+// extra is dropped rather than written, so a channel-originated prompt does
+// not stamp an empty `user`.
+func (h *BrowserWSHandler) auditServerRelease(
+	ctx context.Context, event, tabSetID, formerHolder string, extra map[string]any,
+) {
+	if h == nil || h.agentLoop == nil {
+		return
+	}
+	al := h.agentLoop.AuditLogger()
+	if al == nil {
+		return
+	}
+	details := map[string]any{
+		"session_id":    tabSetID,
+		"former_holder": formerHolder,
+	}
+	for k, v := range extra {
+		if s, isStr := v.(string); isStr && s == "" {
+			continue
+		}
+		details[k] = v
+	}
+	audit.Emit(ctx, al, event, audit.SeverityInfo, details)
+}
+
+// onStandDownNotice is BROWSER-FR-041/FR-042/FR-043's waiting surface: the
+// ONE operator-visible signal that the agent has stopped driving the browser
+// and that sending a message returns it. Registered process-wide in
+// newBrowserWSHandler; until it was, nothing in the module wrote a
+// `browser_handover_notice` transcript entry or emitted a
+// BrowserHandoverNoticeFrame, so an agent that handed the browser over for a
+// sign-in left the operator looking at a chat where nothing had happened
+// (SF-2). pkg/gateway/replay.go has been reading that subtype since this
+// delivery landed — it had nothing to read.
+//
+// Both halves are delivered, live and persisted, from the same call and with
+// the SAME message id (FR-044), so a reload renders the identical line in the
+// identical place rather than a second one that merely reads alike.
+func (h *BrowserWSHandler) onStandDownNotice(n browser.StandDownNotice) {
+	if h == nil || h.agentLoop == nil {
+		return
+	}
+	chatSessionID := h.chatSessionForTabSet(n)
+	if chatSessionID == "" {
+		// Nothing to place the line against: a workspace-owned tab set that
+		// no panel has ever attached to. Not an error — the wheel state is
+		// still correct, there is simply no thread that owns this browser.
+		slog.Debug("browser-ws: stand-down notice has no chat session to land in",
+			"tab_set", n.TabSetID, "producer", string(n.Producer))
+		return
+	}
+	messageID := standDownNoticeID(chatSessionID, n.HoldStartedAtUnixNano)
+	text := standDownNoticeText(n)
+
+	// FR-043 + its missing-session rule: persist, but never create a session
+	// directory for a chat that has been deleted — ResolveSessionStore
+	// returning nil IS that case, and the live frame below still goes out.
+	if store := h.agentLoop.ResolveSessionStore(chatSessionID); store != nil {
+		if err := store.AppendTranscriptStrict(chatSessionID, session.TranscriptEntry{
+			ID:            messageID,
+			Type:          session.EntryTypeSystem,
+			SystemSubtype: "browser_handover_notice",
+			Role:          "system",
+			Content:       text,
+			Timestamp:     time.Now().UTC(),
+		}); err != nil {
+			slog.Warn("browser-ws: browser handover notice transcript write failed",
+				"session_id", chatSessionID, "error", err)
+		}
+	} else {
+		slog.Debug("browser-ws: no session store for browser handover notice — live frame only",
+			"session_id", chatSessionID)
+	}
+
+	h.broadcastStandDownNotice(generated.BrowserHandoverNoticeFrame{
+		Type:      string(generated.WsFrameTypeBrowserHandoverNotice),
+		SessionId: chatSessionID,
+		MessageId: messageID,
+		Text:      text,
+	})
+}
+
+// chatSessionForTabSet resolves the chat thread a stand-down notice belongs
+// in: the chat a panel attached this tab set from, if one ever did, else the
+// transcript session the tab set itself belongs to (a session-owned set — the
+// agent-initiated handover case, where there may be no panel at all).
+func (h *BrowserWSHandler) chatSessionForTabSet(n browser.StandDownNotice) string {
+	if v, ok := h.tabSetChats.Load(n.TabSetID); ok {
+		if s, isStr := v.(string); isStr && s != "" {
+			return s
+		}
+	}
+	return n.OwnerSessionID
+}
+
+// standDownNoticeID derives BROWSER-FR-044's deterministic notice id from
+// (chat session, hold-start nanosecond). Deterministic — not a counter — so it
+// survives a gateway restart without colliding with the next hold's line, and
+// so the live frame and the persisted transcript entry carry the same id and
+// converge on ONE message in the SPA (whose reducer drops a notice whose id it
+// already holds).
+func standDownNoticeID(chatSessionID string, holdStartedAtUnixNano int64) string {
+	return fmt.Sprintf("browser-handover-%s-%d", chatSessionID, holdStartedAtUnixNano)
+}
+
+// standDownNoticeText renders BROWSER-FR-041's body. Plain text, always —
+// FR-048a's reason is model-authored and reaches an operator-facing surface,
+// so it is never treated as markup. An empty or whitespace-only reason
+// produces no empty parenthetical; the body falls back to the agent-neutral
+// copy (FR-048a's own rule).
+func standDownNoticeText(n browser.StandDownNotice) string {
+	if n.Producer == browser.StandDownByHandover {
+		if reason := strings.TrimSpace(n.Reason); reason != "" {
+			return "The agent handed the browser over to you (" + reason +
+				"). It has stopped driving — send a message when you are done and it will pick it back up."
+		}
+		return "The agent handed the browser over to you. It has stopped driving — " +
+			"send a message when you are done and it will pick it back up."
+	}
+	return "A person has taken control of the browser. The agent has stopped driving it — " +
+		"send a message to give it back."
+}
+
+// broadcastStandDownNotice pushes the FR-042 frame to every connected CHAT WS
+// client (single-user model — the same fan-out broadcastAskUserCard and
+// broadcastToolApprovalRequired use; the SPA routes by the frame's own
+// session_id, which is required and min-length-1 on this type).
+//
+// WHY IT REACHES THE CHAT HANDLER THIS WAY. The frame is session-scoped on the
+// CHAT socket (src/store/chat.ts's SESSION_SCOPED_FRAME_TYPES), not this one,
+// and BrowserWSHandler is constructed with only an *agent.AgentLoop. The
+// ADR-085 spec's own note says "BrowserWSHandler ... must gain the handler
+// reference", which would be a change to newBrowserWSHandler's signature and
+// therefore to pkg/gateway/gateway.go. Resolving it lazily through the
+// registered webchat channel — which holds exactly that reference, and is
+// registered at the same wiring moment — gets the same handler with no
+// constructor change. If gateway.go is ever opened for another reason, passing
+// the WSHandler in directly is the tidier shape and this helper should be
+// replaced by a field.
+func (h *BrowserWSHandler) broadcastStandDownNotice(frame generated.BrowserHandoverNoticeFrame) {
+	ws := h.chatWSHandler()
+	if ws == nil {
+		slog.Debug("browser-ws: no chat WS handler for browser handover notice — persisted only",
+			"session_id", frame.SessionId)
+		return
+	}
+	raw, err := json.Marshal(frame)
+	if err != nil {
+		slog.Error("browser-ws: marshal browser_handover_notice", "error", err)
+		return
+	}
+	ws.broadcastRaw(raw, "browser-ws: browser_handover_notice dropped — send buffer full",
+		"session_id", frame.SessionId)
+}
+
+// chatWSHandler resolves the chat WebSocket handler through the registered
+// webchat channel. Returns nil whenever any link in that chain is absent — a
+// headless build, a test handler with no channel manager, or a boot ordering
+// in which the webchat channel is not registered yet — in which case the
+// notice is persisted but not pushed live, which is the degraded state
+// FR-042a already anticipates.
+func (h *BrowserWSHandler) chatWSHandler() *WSHandler {
+	if h == nil || h.agentLoop == nil {
+		return nil
+	}
+	mgr := h.agentLoop.GetChannelManager()
+	if mgr == nil {
+		return nil
+	}
+	ch, ok := mgr.GetChannel("webchat")
+	if !ok {
+		return nil
+	}
+	wch, ok := ch.(*webchatChannel)
+	if !ok || wch == nil {
+		return nil
+	}
+	return wch.wsHandler
 }
 
 // errorStatus builds a session-less browser_status(error) frame.

@@ -364,12 +364,13 @@ func toWirePlanDoD(cs []task.AcceptanceCriterion) *[]struct {
 		Command          string `json:"command"`
 		ExpectedExitCode int    `json:"expected_exit_code"`
 	} `json:"check,omitempty"`
-	Id         *string                `json:"id,omitempty"`
-	Judgment   gen.PlanDodJudgment    `json:"judgment"`
-	Kind       gen.PlanDodKind        `json:"kind"`
-	Provenance *gen.PlanDodProvenance `json:"provenance,omitempty"`
-	Status     gen.PlanDodStatus      `json:"status"`
-	Text       string                 `json:"text"`
+	ClauseCount *int                   `json:"clause_count,omitempty"`
+	Id          *string                `json:"id,omitempty"`
+	Judgment    gen.PlanDodJudgment    `json:"judgment"`
+	Kind        gen.PlanDodKind        `json:"kind"`
+	Provenance  *gen.PlanDodProvenance `json:"provenance,omitempty"`
+	Status      gen.PlanDodStatus      `json:"status"`
+	Text        string                 `json:"text"`
 } {
 	out := make([]struct {
 		Author struct {
@@ -386,12 +387,13 @@ func toWirePlanDoD(cs []task.AcceptanceCriterion) *[]struct {
 			Command          string `json:"command"`
 			ExpectedExitCode int    `json:"expected_exit_code"`
 		} `json:"check,omitempty"`
-		Id         *string                `json:"id,omitempty"`
-		Judgment   gen.PlanDodJudgment    `json:"judgment"`
-		Kind       gen.PlanDodKind        `json:"kind"`
-		Provenance *gen.PlanDodProvenance `json:"provenance,omitempty"`
-		Status     gen.PlanDodStatus      `json:"status"`
-		Text       string                 `json:"text"`
+		ClauseCount *int                   `json:"clause_count,omitempty"`
+		Id          *string                `json:"id,omitempty"`
+		Judgment    gen.PlanDodJudgment    `json:"judgment"`
+		Kind        gen.PlanDodKind        `json:"kind"`
+		Provenance  *gen.PlanDodProvenance `json:"provenance,omitempty"`
+		Status      gen.PlanDodStatus      `json:"status"`
+		Text        string                 `json:"text"`
 	}, 0, len(cs))
 	for _, c := range cs {
 		item := struct { // not-wire-format: intermediate value built to match gen.Plan.Dod's oapi-codegen anonymous element type, not a parallel wire type
@@ -409,12 +411,13 @@ func toWirePlanDoD(cs []task.AcceptanceCriterion) *[]struct {
 				Command          string `json:"command"`
 				ExpectedExitCode int    `json:"expected_exit_code"`
 			} `json:"check,omitempty"`
-			Id         *string                `json:"id,omitempty"`
-			Judgment   gen.PlanDodJudgment    `json:"judgment"`
-			Kind       gen.PlanDodKind        `json:"kind"`
-			Provenance *gen.PlanDodProvenance `json:"provenance,omitempty"`
-			Status     gen.PlanDodStatus      `json:"status"`
-			Text       string                 `json:"text"`
+			ClauseCount *int                   `json:"clause_count,omitempty"`
+			Id          *string                `json:"id,omitempty"`
+			Judgment    gen.PlanDodJudgment    `json:"judgment"`
+			Kind        gen.PlanDodKind        `json:"kind"`
+			Provenance  *gen.PlanDodProvenance `json:"provenance,omitempty"`
+			Status      gen.PlanDodStatus      `json:"status"`
+			Text        string                 `json:"text"`
 		}{
 			Kind:     gen.PlanDodKind(c.Kind),
 			Judgment: gen.PlanDodJudgment(wireCriterionJudgment(c)),
@@ -424,6 +427,15 @@ func toWirePlanDoD(cs []task.AcceptanceCriterion) *[]struct {
 		if c.Provenance != "" {
 			p := gen.PlanDodProvenance(c.Provenance)
 			item.Provenance = &p
+		}
+		// C-58/JUDGE-FR-006b: mirrors rest_tasks.go's toWireCriteria fix —
+		// this field was declared in the anonymous wire shape but never
+		// populated. ClauseCount is minimum:1 on the schema, so a zero
+		// (never-normalized) value is left absent rather than emitted as an
+		// invalid 0.
+		if c.ClauseCount > 0 {
+			cc := c.ClauseCount
+			item.ClauseCount = &cc
 		}
 		item.Author.Id = c.Author.ID
 		item.Author.Kind = gen.PlanDodAuthorKind(c.Author.Kind)
@@ -484,12 +496,13 @@ func planDoDFromCreateWire(items []struct {
 		Command          string `json:"command"`
 		ExpectedExitCode int    `json:"expected_exit_code"`
 	} `json:"check,omitempty"`
-	Id         *string                             `json:"id,omitempty"`
-	Judgment   *gen.PlanCreateRequestDodJudgment   `json:"judgment,omitempty"`
-	Kind       *gen.PlanCreateRequestDodKind       `json:"kind,omitempty"`
-	Provenance *gen.PlanCreateRequestDodProvenance `json:"provenance,omitempty"`
-	Status     gen.PlanCreateRequestDodStatus      `json:"status"`
-	Text       string                              `json:"text"`
+	ClauseCount *int                                `json:"clause_count,omitempty"`
+	Id          *string                             `json:"id,omitempty"`
+	Judgment    *gen.PlanCreateRequestDodJudgment   `json:"judgment,omitempty"`
+	Kind        *gen.PlanCreateRequestDodKind       `json:"kind,omitempty"`
+	Provenance  *gen.PlanCreateRequestDodProvenance `json:"provenance,omitempty"`
+	Status      gen.PlanCreateRequestDodStatus      `json:"status"`
+	Text        string                              `json:"text"`
 }) []task.AcceptanceCriterion {
 	out := make([]task.AcceptanceCriterion, 0, len(items))
 	for _, it := range items {
@@ -542,12 +555,13 @@ func planDoDFromUpdateWire(items []struct {
 		Command          string `json:"command"`
 		ExpectedExitCode int    `json:"expected_exit_code"`
 	} `json:"check,omitempty"`
-	Id         *string                             `json:"id,omitempty"`
-	Judgment   *gen.PlanUpdateRequestDodJudgment   `json:"judgment,omitempty"`
-	Kind       *gen.PlanUpdateRequestDodKind       `json:"kind,omitempty"`
-	Provenance *gen.PlanUpdateRequestDodProvenance `json:"provenance,omitempty"`
-	Status     gen.PlanUpdateRequestDodStatus      `json:"status"`
-	Text       string                              `json:"text"`
+	ClauseCount *int                                `json:"clause_count,omitempty"`
+	Id          *string                             `json:"id,omitempty"`
+	Judgment    *gen.PlanUpdateRequestDodJudgment   `json:"judgment,omitempty"`
+	Kind        *gen.PlanUpdateRequestDodKind       `json:"kind,omitempty"`
+	Provenance  *gen.PlanUpdateRequestDodProvenance `json:"provenance,omitempty"`
+	Status      gen.PlanUpdateRequestDodStatus      `json:"status"`
+	Text        string                              `json:"text"`
 }) []task.AcceptanceCriterion {
 	out := make([]task.AcceptanceCriterion, 0, len(items))
 	for _, it := range items {

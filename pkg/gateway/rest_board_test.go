@@ -39,12 +39,21 @@ import (
 
 // createTaskViaAPI posts a minimal task (title + action + workspace_id) and
 // returns the wire struct. workspace_id defaults to a synthetic fixture if empty.
+//
+// criteria and dod are ALWAYS supplied: operator decision D-C makes both
+// mandatory at creation, so "minimal" now means both lists present with one
+// item each. Every caller of this helper is testing something else entirely
+// (board transitions, reconcilers, tenancy, dependency edges) — without the
+// two lists they would all fail on the create gate and prove nothing about
+// their own subject. The gate itself is asserted, deliberately and directly,
+// in rest_tasks_criteria_test.go.
 func createTaskViaAPI(t *testing.T, api *restAPI, title, workspaceID string) gen.Task {
 	t.Helper()
 	if workspaceID == "" {
 		workspaceID = ensureTestWorkspace(t, api)
 	}
-	body := fmt.Sprintf(`{"title":%q,"action":"llm","workspace_id":%q}`, title, workspaceID)
+	body := fmt.Sprintf(`{"title":%q,"action":"llm","workspace_id":%q,"criteria":%s,"dod":%s}`,
+		title, workspaceID, validCriteriaJSON, validDoDJSON)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -383,7 +392,7 @@ func TestHandleTasks_Create_TitleRequired(t *testing.T) {
 	wsID := ensureTestWorkspace(t, api)
 
 	w := httptest.NewRecorder()
-	body := fmt.Sprintf(`{"action":"llm","workspace_id":%q}`, wsID)
+	body := fmt.Sprintf(`{"action":"llm","workspace_id":%q,`+minimalCriteriaDodJSON+`}`, wsID)
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r.URL.Path = "/api/v1/tasks"
@@ -423,7 +432,7 @@ func TestHandleTasks_Boundaries(t *testing.T) {
 
 	// POST with title > 200 chars → 400.
 	longTitle := strings.Repeat("x", 201)
-	longTitleBody := fmt.Sprintf(`{"title":%q,"action":"llm","workspace_id":%q}`, longTitle, wsID)
+	longTitleBody := fmt.Sprintf(`{"title":%q,"action":"llm","workspace_id":%q,`+minimalCriteriaDodJSON+`}`, longTitle, wsID)
 	wLong := httptest.NewRecorder()
 	rLong := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(longTitleBody))
 	rLong.Header.Set("Content-Type", "application/json")
@@ -434,7 +443,7 @@ func TestHandleTasks_Boundaries(t *testing.T) {
 
 	// POST with title exactly 200 chars → 201 (at the limit is accepted).
 	exactTitle := strings.Repeat("y", 200)
-	exactTitleBody := fmt.Sprintf(`{"title":%q,"action":"llm","workspace_id":%q}`, exactTitle, wsID)
+	exactTitleBody := fmt.Sprintf(`{"title":%q,"action":"llm","workspace_id":%q,`+minimalCriteriaDodJSON+`}`, exactTitle, wsID)
 	wExact := httptest.NewRecorder()
 	rExact := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(exactTitleBody))
 	rExact.Header.Set("Content-Type", "application/json")
@@ -444,7 +453,7 @@ func TestHandleTasks_Boundaries(t *testing.T) {
 		"POST /tasks with title exactly 200 chars must return 201; body=%s", wExact.Body.String())
 
 	// POST with description > 2000 chars → 400.
-	longDesc := fmt.Sprintf(`{"title":"ok","action":"llm","workspace_id":%q,"description":%q}`,
+	longDesc := fmt.Sprintf(`{"title":"ok","action":"llm","workspace_id":%q,"description":%q,`+minimalCriteriaDodJSON+`}`,
 		wsID, strings.Repeat("d", 2001))
 	wLongDesc := httptest.NewRecorder()
 	rLongDesc := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(longDesc))
@@ -541,7 +550,7 @@ func TestHandleTasks_ExtendedFields(t *testing.T) {
 	// POST task with extended fields.
 	priority := 2
 	body := fmt.Sprintf(
-		`{"title":"Extended Task","action":"llm","workspace_id":%q,"tags":["release-1"],"prompt":"Do this","priority":%d}`,
+		`{"title":"Extended Task","action":"llm","workspace_id":%q,"tags":["release-1"],"prompt":"Do this","priority":%d,`+minimalCriteriaDodJSON+`}`,
 		projID, priority,
 	)
 	wPost := httptest.NewRecorder()
@@ -589,7 +598,7 @@ func TestHandleTasks_Priority_DefaultsToThree(t *testing.T) {
 	wsID := ensureTestWorkspace(t, api)
 
 	wPost := httptest.NewRecorder()
-	body := fmt.Sprintf(`{"title":"NoPriorityTask","action":"llm","workspace_id":%q}`, wsID)
+	body := fmt.Sprintf(`{"title":"NoPriorityTask","action":"llm","workspace_id":%q,`+minimalCriteriaDodJSON+`}`, wsID)
 	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
 	rPost.Header.Set("Content-Type", "application/json")
 	rPost.URL.Path = "/api/v1/tasks"
@@ -656,7 +665,7 @@ func TestHandleTasks_Priority_Validation(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			body := fmt.Sprintf(`{"title":"PrioTask %s","action":"llm","workspace_id":%q,"priority":%d}`,
+			body := fmt.Sprintf(`{"title":"PrioTask %s","action":"llm","workspace_id":%q,"priority":%d,`+minimalCriteriaDodJSON+`}`,
 				tc.name, wsID, tc.priority)
 			w := httptest.NewRecorder()
 			r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
@@ -824,7 +833,7 @@ func TestHandleTasks_OwnershipScoping(t *testing.T) {
 	wsID := ensureTestWorkspace(t, api)
 
 	// Alice creates a task.
-	body := fmt.Sprintf(`{"title":"AliceTask","action":"llm","workspace_id":%q,"prompt":"do something"}`, wsID)
+	body := fmt.Sprintf(`{"title":"AliceTask","action":"llm","workspace_id":%q,"prompt":"do something",`+minimalCriteriaDodJSON+`}`, wsID)
 	wPost := httptest.NewRecorder()
 	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
 	rPost.Header.Set("Content-Type", "application/json")

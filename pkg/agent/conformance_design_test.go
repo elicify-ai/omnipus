@@ -34,6 +34,8 @@ import (
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -591,24 +593,39 @@ func TestConformance_t0_ChatGoal_Design(t *testing.T) {
 	coll, collDone := newEventCollector(t, al)
 	defer collDone()
 
-	// (1) /goal set compiles a SMART ladder (GoalCriteriaJSON non-empty after
-	// confirm) and emits the confirm-in-chat surface. ADR-074 D4a: a PROSE
-	// intent parks as a pending goal (pill=queued) and activates on the
-	// explicit confirm (pill=active).
+	// (1) ADR-081 D1 (work-first): a PROSE /goal activates INSTANTLY — the
+	// condition persists, the record (GoalCriteriaJSON) is a LEGAL, expected
+	// transient empty (the D3 forcing predicate), and NO confirm surface
+	// exists anymore. The record is then authored by the working agent via
+	// set_goal; here the t0 node simulates that registration directly
+	// (the set_goal drive itself is covered by goal_flow_integration_test.go).
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal land the contract-first layer", UserInitiated: true},
 		agentInst, &opts)
 	activatePendingGoal(t, al, agentInst, &opts)
-	meta, _ := store.GetMeta(sid)
-	if meta.GoalCondition == "" {
+	meta := goalRecordForSession(t, sid)
+	if meta.Prompt == "" {
 		t.Fatal("(1) /goal set must persist the goal condition")
 	}
-	if meta.GoalCriteriaJSON == "" {
-		t.Fatal("(1) /goal set must run the SMART compile (GoalCriteriaJSON non-empty) — t0 SMART-compile node")
+	if got := goalRecordCompiledJSON(meta); got != "" {
+		t.Fatalf("(1) ADR-081: instant activation must NOT compile — the record starts empty (got %q)", got)
 	}
-	compiled := loadCompiledGoal(meta.GoalCriteriaJSON)
+	// ADR-086: the registration the working agent's set_goal would perform
+	// lands on the goal's OWN record (GOAL-FR-003, typed lists), not on the
+	// retired GoalCriteriaJSON session-meta string.
+	if _, uerr := goal.NewStore(config.OmnipusHomeDir()).Update(meta.GoalID, func(cur *goal.Goal) error {
+		return cur.SetCriteria([]task.AcceptanceCriterion{{
+			ID: "c1", Kind: task.KindProse, Judgment: task.JudgmentBoolean,
+			Text:   "the contract-first layer is landed",
+			Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: agentInst.ID},
+		}}, time.Now().UTC())
+	}); uerr != nil {
+		t.Fatal(uerr)
+	}
+	meta = goalRecordForSession(t, sid)
+	compiled := compiledGoalFromRecord(meta)
 	if compiled == nil || len(compiled.Criteria) == 0 {
-		t.Fatalf("(1) SMART compile must produce a criteria ladder, got GoalCriteriaJSON=%q", meta.GoalCriteriaJSON)
+		t.Fatalf("(1) the registered record must load as a criteria ladder, got record=%q", goalRecordCompiledJSON(meta))
 	}
 	// The Judge is swapped AFTER compile so its verdict echoes the REAL
 	// compiled criterion IDs (not the legacy "goal-condition" back-compat).
@@ -625,11 +642,17 @@ func TestConformance_t0_ChatGoal_Design(t *testing.T) {
 	if fakeJudge2.callCount() != 0 {
 		t.Fatal("(2) a waiting_on_user turn must NOT invoke the Judge (G-5: no verdict)")
 	}
-	after2, _ := store.GetMeta(sid)
-	if after2.GoalRoundsUsed != 0 {
-		t.Fatalf("(2) a waiting_on_user turn consumed a round (%d), want 0 (G-5)", after2.GoalRoundsUsed)
+	after2 := goalRecordForSession(t, sid)
+	if after2.Round != 0 {
+		t.Fatalf("(2) a waiting_on_user turn consumed a round (%d), want 0 (G-5)", after2.Round)
 	}
-	if !al.goalIsWaitingOnUser(sid) {
+	// wave R7C (Group 3, latent key bug): goalIsWaitingOnUser has been
+	// GOAL-id keyed since E12's FR-052 map re-keying (production call sites
+	// — goal_loop.go, goal_triggers.go — pass the goal record's own GoalID,
+	// never a session id). The old `sid` lookup was vacuous: it failed for
+	// the wrong reason (session-keyed lookup into a goal-id-keyed map) and
+	// would have passed for the wrong reason too.
+	if !al.goalIsWaitingOnUser(meta.GoalID) {
 		t.Fatal("(2) goal must be paused in waiting_on_user after the question turn (G-5)")
 	}
 
@@ -637,14 +660,18 @@ func TestConformance_t0_ChatGoal_Design(t *testing.T) {
 	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, &turnResult{
 		finalContent: "Target openapi v1 — go ahead.",
 	})
-	if al.goalIsWaitingOnUser(sid) {
+	if al.goalIsWaitingOnUser(meta.GoalID) {
 		t.Fatal("(3) user reply must clear the waiting_on_user pause (G-5 resume)")
 	}
 
 	// (4) A claim WITH evidence invokes the Judge EXACTLY once and clears the goal.
-	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, &turnResult{
+	result4 := &turnResult{
 		finalContent: "[goal:evidence] generated types + lint green\nGOAL_STATUS: met",
-	})
+	}
+	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, result4)
+	// wave R7C (Group 2): JUDGE-FR-098's deferred dispatch — see
+	// TestTerminalGoalRetainsRecord_Met's identical comment.
+	al.dispatchDeferredGoalAdjudication(result4.goalDeferredAdjudication)
 	fakeJudge4, ok := judgeInst.Provider.(*fakeJudgeProvider)
 	if !ok {
 		t.Fatalf("unexpected type %T for judgeInst.Provider, want *fakeJudgeProvider", judgeInst.Provider)
@@ -652,9 +679,8 @@ func TestConformance_t0_ChatGoal_Design(t *testing.T) {
 	if got := fakeJudge4.callCount(); got != 1 {
 		t.Fatalf("(4) the claim must invoke the Judge exactly once (G-1), got %d", got)
 	}
-	after4, _ := store.GetMeta(sid)
-	if after4.GoalCondition != "" {
-		t.Fatalf("(4) a met verdict must clear the goal (done), still: %q", after4.GoalCondition)
+	if after4 := goalRecordForSessionOrNil(sid); after4 != nil {
+		t.Fatalf("(4) a met verdict must clear the goal (done), still ACTIVE: %q", after4.Prompt)
 	}
 
 	// (5) The pill walk is active → waiting_on_user → judging → done.
@@ -678,11 +704,12 @@ func TestConformance_t0_ChatGoal_Design(t *testing.T) {
 			walk = append(walk, p)
 		}
 	}
-	// ADR-074 D4a prepends the pending step: queued (compiled, awaiting the
-	// user's confirmation) precedes active.
-	wantWalk := []string{goalPillQueued, goalPillActive, goalPillWaitingOnUser, goalPillActive, goalPillJudging, goalPillDone}
+	// ADR-081 D1 (instant activation): there is no pending/confirm step
+	// anymore, so the walk starts at active — never queued (goalPillQueued
+	// is no longer emitted anywhere in the activation path).
+	wantWalk := []string{goalPillActive, goalPillWaitingOnUser, goalPillActive, goalPillJudging, goalPillDone}
 	if !equalStringSlices(walk, wantWalk) {
-		t.Fatalf("(5) pill walk = %v, want %v (queued→active→waiting_on_user→active(resume)→judging→done)", walk, wantWalk)
+		t.Fatalf("(5) pill walk = %v, want %v (active→waiting_on_user→active(resume)→judging→done)", walk, wantWalk)
 	}
 
 	// (6) /goal clear cancels an in-flight verifier session registered for this
@@ -700,9 +727,8 @@ func TestConformance_t0_ChatGoal_Design(t *testing.T) {
 	if _, ok := pe.VerifierRegistry().Lookup(verifierUnit); ok {
 		t.Fatal("(6) /goal clear must cancel + unregister the in-flight verifier session (FR-037)")
 	}
-	after6, _ := store.GetMeta(sid)
-	if after6.GoalCondition != "" {
-		t.Fatalf("(6) /goal clear must clear the goal, still: %q", after6.GoalCondition)
+	if after6 := goalRecordForSessionOrNil(sid); after6 != nil {
+		t.Fatalf("(6) /goal clear must clear the goal, still ACTIVE: %q", after6.Prompt)
 	}
 }
 

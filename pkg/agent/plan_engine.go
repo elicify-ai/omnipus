@@ -1837,6 +1837,29 @@ func (pe *PlanEngine) applyJudgeRoundOutcome(planID string, result JudgeCriteria
 	newRounds := current.JudgeRounds + 1
 	pe.touchActivity(current.ID)
 
+	// GOAL-FR-036/FR-040: project the verdict's per-criterion outcomes onto
+	// current.DoD's Status field — the third of the projection's three
+	// write paths (verdict_projection.go), plan.DoD being a single list (no
+	// de-union needed, unlike the goal path's criteria/dod split). Runs on
+	// BOTH met and unmet outcomes; a soft-tier adjudication (the DoD passed
+	// to JudgeCriteria at the dispatch site was the ephemeral synthesized
+	// fallback, current.DoD itself empty) naturally resolves as the
+	// GOAL-FR-031 logged no-op the projection already implements. Persisted
+	// separately, BEFORE the outcome-specific write below, so a persist
+	// failure here is independently logged and never blocks the plan's own
+	// met/unmet transition (this store write and the transition write are
+	// two different fields of the same record; a projection failure must
+	// not silently drop or corrupt the round's actual outcome).
+	if projectedDoD, pstats := projectVerdictOntoCriteria(current.DoD, verdict); pstats.Applied > 0 {
+		if _, perr := pe.planStore.Update(current.ID, plan.Patch{DoD: &projectedDoD}); perr != nil {
+			logger.WarnCF("plan_engine",
+				"judge round: could not persist the verdict projection onto plan DoD (GOAL-FR-036)",
+				map[string]any{"plan_id": current.ID, "error": perr.Error()})
+		} else {
+			current.DoD = projectedDoD
+		}
+	}
+
 	if verdict.Met {
 		pe.synthesizeAndComplete(current, newRounds)
 		return

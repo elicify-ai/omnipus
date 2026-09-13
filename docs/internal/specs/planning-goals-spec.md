@@ -1,5 +1,8 @@
 # Feature Specification: Planning & Goals
 
+> **SUPERSEDED (flow parts) — ADR-081 / work-first-goal-flow-spec.md (2026-09-07).** The `/goal` compile→clarify→confirm FLOW described in this document is deleted (instant activation, agent-authored record via `set_goal`, steering instead of confirmation). The RECORD shape (statement / judgment-typed criteria / DoD) remains authoritative where this document defines it. Do not implement flow behavior from this file.
+
+
 **Created**: 2026-07-19
 **Status**: Draft
 **Input**: ADR-049 (`docs/internal/architecture/ADR-049-planning-goals-system-agents.md`, grill-PASSED r3) — ratified operator decisions D1–D8. This spec resolves ADR §3 gaps 1–8 as spec decisions and covers the §6 contract-surface table (Constraint #8).

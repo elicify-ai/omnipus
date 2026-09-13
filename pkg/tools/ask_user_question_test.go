@@ -326,3 +326,256 @@ func askQuestionItemProps(t *testing.T, params map[string]any) map[string]any {
 	}
 	return qProps
 }
+
+// --- NormalizeArgs (fix-wave GX-B, DEFECT 1) ---
+//
+// The operator's reproduction: the model emitted an option object carrying
+// a `recommended` property. The registry's shared validateToolArgs rejected
+// the WHOLE call with `unexpected property "recommended"` — and this was
+// the FORCED first move of a goal turn, so the failure cascaded into 17
+// minutes of ungoverned building. NormalizeArgs (pkg/tools/registry.go's
+// argsNormalizer seam) now lifts a truthy option-level `recommended` onto
+// the question instead of failing the call, while leaving every other
+// unexpected property exactly as strict as before.
+
+// askArgsWithOptionRecommended builds a single-question, two-option args
+// map whose FIRST option carries `recommended: recVal` — the exact shape
+// the operator's model emitted (misplaced on the option, not the question).
+func askArgsWithOptionRecommended(recVal any) map[string]any {
+	return map[string]any{
+		"questions": []any{
+			map[string]any{
+				"header":   "Scope",
+				"question": "Which scope should this cover?",
+				"options": []any{
+					map[string]any{"label": "Backend only", "recommended": recVal},
+					map[string]any{"label": "Full stack", "description": "SPA + backend"},
+				},
+			},
+		},
+	}
+}
+
+// firstAskQuestion navigates NormalizeArgs' returned args down to
+// questions[0], asserting the shape holds along the way.
+func firstAskQuestion(t *testing.T, args map[string]any) map[string]any {
+	t.Helper()
+	qs, ok := args["questions"].([]any)
+	if !ok || len(qs) == 0 {
+		t.Fatalf("questions missing or empty after NormalizeArgs: %#v", args["questions"])
+	}
+	q, ok := qs[0].(map[string]any)
+	if !ok {
+		t.Fatalf("questions[0] is not an object: %#v", qs[0])
+	}
+	return q
+}
+
+func askQuestionOption(t *testing.T, q map[string]any, idx int) map[string]any {
+	t.Helper()
+	opts, ok := q["options"].([]any)
+	if !ok || idx >= len(opts) {
+		t.Fatalf("options missing or too short: %#v", q["options"])
+	}
+	o, ok := opts[idx].(map[string]any)
+	if !ok {
+		t.Fatalf("options[%d] is not an object: %#v", idx, opts[idx])
+	}
+	return o
+}
+
+// TestAskUserQuestionNormalizeArgs_LiftsOptionRecommended covers every
+// truthy near-miss form the fix wave enumerates: bool true, and the strings
+// "true"/"yes"/<the option's own label>.
+func TestAskUserQuestionNormalizeArgs_LiftsOptionRecommended(t *testing.T) {
+	cases := []struct {
+		name   string
+		recVal any
+	}{
+		{"bool_true", true},
+		{"string_true", "true"},
+		{"string_yes", "yes"},
+		{"string_yes_uppercase", "YES"},
+		{"string_matches_own_label", "Backend only"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tool := NewAskUserQuestionTool(nil)
+			args := askArgsWithOptionRecommended(tc.recVal)
+
+			out := tool.NormalizeArgs(args)
+
+			q := firstAskQuestion(t, out)
+			if got, _ := q["recommended"].(string); got != "Backend only" {
+				t.Fatalf("question recommended = %v, want lifted label %q", q["recommended"], "Backend only")
+			}
+			opt0 := askQuestionOption(t, q, 0)
+			if _, present := opt0["recommended"]; present {
+				t.Fatal("option-level recommended must be dropped after being lifted")
+			}
+		})
+	}
+}
+
+// TestAskUserQuestionNormalizeArgs_FalsyOptionRecommendedDropped covers the
+// falsy forms (bool false, "", "no") plus an unrecognized string — none are
+// lifted; all are silently dropped from the option, with no error.
+func TestAskUserQuestionNormalizeArgs_FalsyOptionRecommendedDropped(t *testing.T) {
+	cases := []struct {
+		name   string
+		recVal any
+	}{
+		{"bool_false", false},
+		{"empty_string", ""},
+		{"string_no", "no"},
+		{"string_no_uppercase", "NO"},
+		{"unrecognized_string", "maybe"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			recVal := tc.recVal
+			tool := NewAskUserQuestionTool(nil)
+			args := askArgsWithOptionRecommended(recVal)
+
+			out := tool.NormalizeArgs(args)
+
+			q := firstAskQuestion(t, out)
+			if got, ok := q["recommended"]; ok && got != "" {
+				t.Fatalf("recommended must not be lifted from falsy value %v; got %v", recVal, got)
+			}
+			opt0 := askQuestionOption(t, q, 0)
+			if _, present := opt0["recommended"]; present {
+				t.Fatalf("option-level recommended must still be dropped for falsy value %v", recVal)
+			}
+		})
+	}
+}
+
+// TestAskUserQuestionNormalizeArgs_QuestionLevelRecommendedWins: a question
+// that already carries its OWN `recommended` keeps it — the option-level
+// marker is dropped silently, never overriding the question's explicit
+// choice.
+func TestAskUserQuestionNormalizeArgs_QuestionLevelRecommendedWins(t *testing.T) {
+	tool := NewAskUserQuestionTool(nil)
+	args := map[string]any{
+		"questions": []any{
+			map[string]any{
+				"header":      "Scope",
+				"question":    "Which scope?",
+				"recommended": "Full stack",
+				"options": []any{
+					map[string]any{"label": "Backend only", "recommended": true},
+					map[string]any{"label": "Full stack"},
+				},
+			},
+		},
+	}
+
+	out := tool.NormalizeArgs(args)
+
+	q := firstAskQuestion(t, out)
+	if got, _ := q["recommended"].(string); got != "Full stack" {
+		t.Fatalf("question-level recommended must win, got %q", got)
+	}
+	opt0 := askQuestionOption(t, q, 0)
+	if _, present := opt0["recommended"]; present {
+		t.Fatal("option-level recommended must still be dropped even when the question already has one")
+	}
+}
+
+// TestAskUserQuestionNormalizeArgs_MultipleOptionsFirstTruthyWins: when more
+// than one option in the same question carries a truthy marker, the FIRST
+// is lifted and every later one is dropped (deterministic).
+func TestAskUserQuestionNormalizeArgs_MultipleOptionsFirstTruthyWins(t *testing.T) {
+	tool := NewAskUserQuestionTool(nil)
+	args := map[string]any{
+		"questions": []any{
+			map[string]any{
+				"header":   "Scope",
+				"question": "Which scope?",
+				"options": []any{
+					map[string]any{"label": "Backend only", "recommended": true},
+					map[string]any{"label": "Full stack", "recommended": true},
+				},
+			},
+		},
+	}
+
+	out := tool.NormalizeArgs(args)
+
+	q := firstAskQuestion(t, out)
+	if got, _ := q["recommended"].(string); got != "Backend only" {
+		t.Fatalf("the FIRST truthy option must win, got %q", got)
+	}
+	for i := 0; i < 2; i++ {
+		o := askQuestionOption(t, q, i)
+		if _, present := o["recommended"]; present {
+			t.Fatalf("options[%d].recommended must be dropped", i)
+		}
+	}
+}
+
+// TestAskUserQuestion_RegistryAcceptsMisplacedOptionRecommended is the
+// end-to-end reproduction of the operator's exact failure, through the real
+// dispatch path (ToolRegistry.ExecuteWithContext): NormalizeArgs runs
+// before validateToolArgs, so the call that used to be hard-rejected now
+// succeeds and parks the turn with the recommendation correctly attached to
+// the question.
+func TestAskUserQuestion_RegistryAcceptsMisplacedOptionRecommended(t *testing.T) {
+	reg := &fakeAskRegistry{}
+	r := NewToolRegistry()
+	r.Register(NewAskUserQuestionTool(func() AskUserQuestionRegistry { return reg }))
+
+	args := askArgsWithOptionRecommended(true)
+	res := r.ExecuteWithContext(webCtx(), AskUserQuestionToolName, args, "webchat", "chat-1", nil)
+
+	if res.IsError {
+		t.Fatalf("a misplaced option-level recommended must be auto-corrected, not rejected: %s", res.ForLLM)
+	}
+	if !res.ParksTurn {
+		t.Fatal("ParksTurn must be set on the success path")
+	}
+	if len(reg.created) != 1 {
+		t.Fatalf("expected exactly one pending set created, got %d", len(reg.created))
+	}
+	if len(reg.created[0].Questions) == 0 {
+		t.Fatal("pending set has no questions")
+	}
+	if got := reg.created[0].Questions[0].Recommended; got != "Backend only" {
+		t.Fatalf("persisted question.Recommended = %q, want %q", got, "Backend only")
+	}
+}
+
+// TestAskUserQuestion_RegistryStillRejectsUnrelatedUnexpectedProperty proves
+// the leniency is narrowly scoped to the literal `recommended` key: any
+// OTHER unexpected property on an option is rejected exactly as before,
+// through the same real dispatch path.
+func TestAskUserQuestion_RegistryStillRejectsUnrelatedUnexpectedProperty(t *testing.T) {
+	reg := &fakeAskRegistry{}
+	r := NewToolRegistry()
+	r.Register(NewAskUserQuestionTool(func() AskUserQuestionRegistry { return reg }))
+
+	args := map[string]any{
+		"questions": []any{
+			map[string]any{
+				"header":   "Scope",
+				"question": "Which scope?",
+				"options": []any{
+					map[string]any{"label": "Backend only", "not_a_real_field": "x"},
+					map[string]any{"label": "Full stack"},
+				},
+			},
+		},
+	}
+	res := r.ExecuteWithContext(webCtx(), AskUserQuestionToolName, args, "webchat", "chat-1", nil)
+
+	if !res.IsError {
+		t.Fatal("an unrelated unexpected property must still be rejected")
+	}
+	if !strings.Contains(res.ForLLM, `unexpected property "not_a_real_field"`) {
+		t.Fatalf("want an unexpected-property error naming the field, got %q", res.ForLLM)
+	}
+	if len(reg.created) != 0 {
+		t.Fatal("registry must not be touched when validation fails")
+	}
+}

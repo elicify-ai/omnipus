@@ -54,6 +54,7 @@ func TestCreateTaskInWorkspace_AgentPathStampsProvenance(t *testing.T) {
 		"workspace_id": testWorkspaceID,
 		"agent_id":     "worker-agent",
 		"criteria":     workspaceCriteriaArg(),
+		"dod":          workspaceDoDArg(),
 	})
 
 	assert.Equal(t, "jim", got.CreatedByAgentID,

@@ -186,7 +186,8 @@ import { ChatScreen } from './ChatScreen'
 
 const SID = 'test-session-f4-ghost-thinking-indicator'
 
-const THINKING_TEXT_RE = /Thinking…|Composing response…|Processing your request…|Analyzing…|Generating…/
+const THINKING_TEXT_RE =
+  /Thinking…|Working on it…|Composing a response…|Processing your request…|Analyzing…|Considering the details…|Piecing it together…|Reasoning it through…|Working through this…|Gathering my thoughts…|Figuring out the approach…|Reviewing the context…|Drafting a response…|Making sense of it…|Weighing the options…/
 
 function seedBucket(messages: ChatMessage[]): void {
   const bucket = makeBucketMessages(messages)

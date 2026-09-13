@@ -17,6 +17,7 @@
         "tests/e2e/subagent.spec.ts",
         "tests/e2e/handoff.spec.ts",
         "tests/e2e/cancel-cross-channel.spec.ts",
+        "tests/e2e/reconnect-mid-turn.spec.ts",
         "tests/e2e/delegation-hidden.spec.ts",
         "tests/e2e/recap-continuity.spec.ts"
       ]
@@ -49,6 +50,15 @@
       "port": 6066,
       "specs": [
         "tests/e2e/verifier-eval.spec.ts"
+      ]
+    },
+    {
+      "group": "llm-goal-work-first",
+      "key_slot": "a",
+      "port": 6072,
+      "specs": [
+        "tests/e2e/goal-work-first.spec.ts",
+        "tests/e2e/goal-card-position.spec.ts"
       ]
     },
     {
@@ -115,6 +125,7 @@
       "port": 6065,
       "solo": true,
       "specs": [
+        "tests/e2e/browser-control-handover.spec.ts",
         "tests/e2e/browser-live-video.spec.ts",
         "tests/e2e/idle-no-reconnect.spec.ts",
         "tests/e2e/multi-turn-render.spec.ts",

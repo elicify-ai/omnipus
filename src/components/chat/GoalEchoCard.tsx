@@ -1,87 +1,165 @@
-// GoalEchoCard — ADR-053 FE-8 / US-3 / design §1 (D11); criteria breakdown
-// per ADR-074 D5.2 / judgment-first FR-011 (US-6). Confirm/Cancel/Amend
-// buttons per ADR-078 D1. Restated statement + judgment badges + Definition
-// of Done block per ADR-080 D-STATEMENT/D-TYPES/D-DOD.
+// GoalEchoCard — ADR-081 D5/D9 (work-first goal flow): re-keyed from
+// "pending confirmation" to a REGISTERED RECORD VIEW. Criteria breakdown
+// per ADR-074 D5.2 / judgment-first FR-011 (US-6). Restated statement +
+// judgment icons + Definition of Done accordion per ADR-080
+// D-STATEMENT/D-TYPES/D-DOD.
 //
-// Renders the compiled-goal ECHO in the chat thread: when the engine compiles
-// user intent into the goal definition + acceptance-criteria ladder (including
-// literal machine-check commands), the agent echoes it back IN CHAT (no
-// form/modal) and the user confirms. ADR-078 adds a click-to-confirm
-// affordance alongside the original reply-to-confirm path (a bare chat
-// message is still recognized by the backend's `IsGoalConfirm`), because a
-// natural-language reply like "yeah let's do it" is not — the buttons remove
-// the need to guess the exact confirm token.
+// Renders the goal's structured record IN CHAT (no form/modal, no
+// approval controls): once the working agent registers or updates the
+// record via `set_goal` (or a marker-path activation/restate), the engine
+// emits the `goal_status` frame in state `active` with `criteria`/`dod`/
+// `definition` populated (ADR-081 D5 — the SAME optional fields the old
+// `queued`-state pending-confirm emission once populated; this component
+// keeps its name and its rendering, only its keying and its footer change).
+// The listing is presented as the agent's WORKING ASSUMPTIONS, not a
+// proposal awaiting approval — steering (an ordinary chat message that
+// changes direction) is the only control; there is no confirm/amend/cancel
+// ritual anywhere (ADR-081 D9 deletes it in full, greenfield, no dormant
+// branches).
 //
-// ADR-080 D-STATEMENT: the `queued` frame carries an additive-optional
-// `definition` — the request restated as ONE clear sentence, distinct from
-// `condition` (the compiled marker/condition text) — rendered as a lead line
-// above the condition, when present (absent on legacy/ambiguous frames).
+// `definition` (the restated one-sentence statement) may be ABSENT: a
+// marker-only goal legitimately stores an empty statement (the existing
+// Prompt/Intent fallback, ADR-081 round-2 B-3) — the card renders
+// gracefully without the statement block in that case, exactly as it
+// already did for "legacy/ambiguous" frames pre-ADR-081.
 //
 // The criteria breakdown arrives on the goal_status frame's optional
-// `criteria` field (present on the `queued` pending-confirm emission,
-// ADR-074 D5.2). Rendering is plain-language-FIRST: each row leads with the
-// criterion text; a technical payload (machine-check command verbatim, or a
-// behavior count) renders as a quiet per-row "verifies via:" chip. Row and
-// chip rendering — including the chip's formatting and the ADR-080 judgment
-// badge — is delegated entirely to the shared CriteriaBreakdown component
-// (D5.4), so the same criterion reads identically here and in the Create
-// Task / Create Plan flows. `[kind]` classification tokens are NOT
-// user-facing content and never render.
+// `criteria` field (ADR-074 D5.2). Rendering is plain-language-FIRST: each
+// row leads with the criterion text; a technical payload (machine-check
+// command verbatim, or a behavior count) renders as a quiet per-row
+// "verifies via:" chip. Row and chip rendering — including the chip's
+// formatting and the ADR-080 judgment icon — is delegated entirely to the
+// shared CriteriaBreakdown component (D5.4), so the same criterion reads
+// identically here and in the Create Task / Create Plan flows. `[kind]`
+// classification tokens are NOT user-facing content and never render.
 //
-// ADR-080 D-DOD: the `queued` frame's optional `dod` array is the goal's
-// Definition of Done — generic standing quality gates, DISTINCT from the
-// outcome-specific `criteria` — rendered as its own labeled block below the
-// criteria. Every DoD item is judgment-tagged like a criterion; an item whose
-// `provenance === 'inferred'` (the compiler's bounded layer-4 guess, never
-// silently activated) is flagged "inferred — confirm or drop" by the shared
-// CriteriaBreakdown renderer so the setter can approve or drop it before
-// confirming.
+// ADR-080 D-DOD: the frame's optional `dod` array is the goal's Definition
+// of Done — generic standing quality gates, DISTINCT from the
+// outcome-specific `criteria` — rendered as its own labeled accordion below
+// the criteria one. Every DoD item is judgment-tagged like a criterion; an
+// item whose `provenance === 'inferred'` (the compiler's bounded layer-4
+// guess, never silently activated) is flagged both on the collapsed DoD
+// header (so the reader knows to expand) and, once expanded, per-row by the
+// shared CriteriaBreakdown renderer — inferred items are always visible to
+// the reader, not silently accepted.
+//
+// Redesign preserved verbatim from the pre-ADR-081 branch (operator report
+// 2026-09-07: a live goal with 16 criteria + 4 DoD items overflowed the
+// viewport): the card uses AskUserQuestionCard's flat, hairline-delimited
+// zone style (no boxy rounded/bordered/tinted wrapper), and both the
+// criteria ("Done when") and Definition of Done lists render behind a
+// collapsed-by-default accordion (see `GoalAccordionSection` below) instead
+// of always-expanded, so card height no longer scales with criteria count.
 //
 // Purely presentational — driven by props. Literal commands are shown
-// verbatim so the user can vet them before confirming — they run under the
-// goal-bearing agent's own tool policy, never a bypass. The three action
-// callbacks (`onConfirm`/`onCancel`/`onAmend`) are optional so the card still
-// renders standalone (e.g. in tests) without a wired container; the button
-// row itself only ever shows while `frame.state === 'queued'` (ADR-078 D1 —
-// a stale card past that point renders no buttons at all, which subsumes the
-// ADR's "disable once no longer queued" risk note).
+// verbatim so the reader can see exactly what will run — it runs under the
+// goal-bearing agent's own tool policy, never a bypass. There is no button
+// row and no action callbacks: the card renders standalone (e.g. in tests)
+// with no wired container, same as before, but now unconditionally — there
+// is no pending/active distinction left to gate on.
 
-import { Target, ArrowBendUpRight, Check, PencilSimple, X } from '@phosphor-icons/react'
+import { useState } from 'react'
+import { Target, CaretRight, CaretDown } from '@phosphor-icons/react'
 import type { GoalStatusFrame } from '@/lib/api/generated/asyncapi-types'
-import { CriteriaBreakdown } from '@/components/shared/CriteriaBreakdown'
+import { CriteriaBreakdown, type CriteriaBreakdownItem } from '@/components/shared/CriteriaBreakdown'
 
 export interface GoalEchoCardProps {
-  /** The goal_status frame describing the compiled goal (condition + accounting + criteria breakdown). */
+  /** The goal_status frame describing the active goal's record (condition + accounting + criteria breakdown). */
   frame: GoalStatusFrame
-  /** Activates the pending goal — sends the bare chat message `confirm`. */
-  onConfirm?: () => void
-  /** Clears the pending goal — sends `/goal clear`. */
-  onCancel?: () => void
-  /** Pre-fills the composer with `/goal ` so the user restates the goal. Sends nothing. */
-  onAmend?: () => void
+  /**
+   * Whether the frame's progress/accounting fields (`max_rounds`, `cap`)
+   * are real and may be shown. Defaults to `true` (a genuine goal_status
+   * frame). ADR-082 D9 review S3: a card built from a `set_goal` call's own
+   * result BEFORE any goal_status frame has landed for its goal_id carries
+   * no accounting at all — rendering "0 rounds · 0 concurrent loops" there
+   * would be a false claim, so SetGoalToolUI passes `false` until a pill
+   * provides the numbers.
+   */
+  showProgress?: boolean
 }
 
-export function GoalEchoCard({ frame, onConfirm, onCancel, onAmend }: GoalEchoCardProps) {
+/**
+ * A single collapsed-by-default accordion section — the header is always a
+ * one-line, keyboard-accessible `<button>` (`aria-expanded`, native focus/
+ * Enter/Space activation, no custom key handling needed); the list only
+ * mounts once expanded, so a 16-criteria goal costs the same collapsed
+ * height as a 1-criterion one. No open/close transition is applied to the
+ * content itself (instant show/hide) — only the chevron glyph swaps, so
+ * there is no motion to gate behind `prefers-reduced-motion` for the content
+ * itself; the swap is an instant icon substitution, not an animation.
+ */
+function GoalAccordionSection({
+  testId,
+  label,
+  hint,
+  children,
+}: {
+  testId: string
+  label: string
+  /** Short trailing hint rendered in the accent color, e.g. "2 inferred — review". */
+  hint?: string
+  children: React.ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="mt-2.5" data-testid={testId}>
+      <button
+        type="button"
+        tabIndex={0}
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        data-testid={`${testId}-trigger`}
+        className="flex w-full items-center gap-1.5 text-left text-[10px] uppercase tracking-wide text-[var(--color-muted)] transition-colors hover:text-[var(--color-secondary)]"
+      >
+        {open ? (
+          <CaretDown size={10} className="shrink-0" aria-hidden="true" />
+        ) : (
+          <CaretRight size={10} className="shrink-0" aria-hidden="true" />
+        )}
+        <span>{label}</span>
+        {hint && (
+          <span
+            className="normal-case tracking-normal text-[var(--color-accent)]"
+            data-testid={`${testId}-hint`}
+          >
+            — {hint}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="mt-1.5" data-testid={`${testId}-content`}>
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function GoalEchoCard({ frame, showProgress = true }: GoalEchoCardProps) {
   const criteria = frame.criteria ?? []
-  const dod = frame.dod ?? []
-  const isPending = frame.state === 'queued'
+  const dod: CriteriaBreakdownItem[] = frame.dod ?? []
+  const inferredDodCount = dod.filter((d) => d.provenance === 'inferred').length
+
   return (
     <div
       data-testid="goal-echo-card"
-      className="my-2 rounded-lg border border-[var(--color-accent)]/30 bg-[var(--color-surface-1)] px-4 py-3 text-xs"
+      className="my-2 border-y border-[var(--color-border)] py-2.5 px-1 text-xs"
     >
-      {/* Header — compiled-goal banner */}
+      {/* Header — record banner, flat zone style matching AskUserQuestionCard.
+          No "reply to confirm" language (ADR-081 D9 deletes the confirm
+          ritual): this is the agent's working assumptions, not a proposal. */}
       <div className="flex items-center gap-2 mb-2">
-        <Target size={14} weight="fill" className="shrink-0 text-[var(--color-accent)]" aria-hidden="true" />
-        <span className="font-medium text-[var(--color-secondary)] uppercase tracking-wide text-[10px]">
-          Compiled goal — reply to confirm
+        <Target size={12} weight="fill" className="shrink-0 text-[var(--color-accent)]" aria-hidden="true" />
+        <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--color-muted)]">
+          Goal — working assumptions
         </span>
       </div>
 
       {/* Restated goal statement (ADR-080 D-STATEMENT) — one clear sentence,
           the request restated close to the setter's own words, rendered as
           the LEAD line above the compiled condition. Additive-optional: not
-          present on legacy/ambiguous frames. */}
+          present on marker-path/legacy/ambiguous frames (ADR-081 round-2
+          B-3) — rendered gracefully absent, no placeholder. */}
       {frame.definition && (
         <p
           className="text-[var(--color-secondary)] break-words font-medium"
@@ -96,85 +174,45 @@ export function GoalEchoCard({ frame, onConfirm, onCancel, onAmend }: GoalEchoCa
         {frame.condition}
       </p>
 
-      {/* Round accounting */}
-      <p className="text-[var(--color-muted)] mt-1.5 tabular-nums" data-testid="goal-echo-round">
-        {frame.max_rounds} rounds · {frame.cap} concurrent loop{frame.cap === 1 ? '' : 's'}
-      </p>
+      {/* Round accounting — only when the numbers are real (see showProgress). */}
+      {showProgress && (
+        <p className="text-[var(--color-muted)] mt-1.5 tabular-nums" data-testid="goal-echo-round">
+          {frame.max_rounds} rounds · {frame.cap} concurrent loop{frame.cap === 1 ? '' : 's'}
+        </p>
+      )}
 
-      {/* Criteria breakdown — plain language first, per-row verifies-via chip
-          for technical payloads (ADR-074 D5.2 / FR-011), a small judgment
-          badge (boolean/quantitative/artifact, ADR-080 D-TYPES) on every
-          row. Rendered by the shared CriteriaBreakdown (D5.4) so criteria
-          read identically on every confirmation surface. */}
+      {/* Criteria breakdown — collapsed-by-default accordion. Plain language
+          first, a per-row verifies-via chip for technical payloads
+          (ADR-074 D5.2 / FR-011), a small judgment icon (boolean/
+          quantitative/artifact, ADR-080 D-TYPES) on every row once
+          expanded. Rendered by the shared CriteriaBreakdown (D5.4) so
+          criteria read identically on every surface. */}
       {criteria.length > 0 && (
-        <div className="mt-2.5" data-testid="goal-echo-criteria">
-          <div className="text-[var(--color-muted)] mb-1 text-[10px] uppercase tracking-wide">
-            Done when
-          </div>
+        <GoalAccordionSection
+          testId="goal-echo-criteria"
+          label={`Done when · ${criteria.length} criteri${criteria.length === 1 ? 'on' : 'a'}`}
+        >
           <CriteriaBreakdown criteria={criteria} />
-        </div>
+        </GoalAccordionSection>
       )}
 
-      {/* Definition of Done (ADR-080 D-DOD) — a DISTINCT block, generic
+      {/* Definition of Done (ADR-080 D-DOD) — a DISTINCT accordion, generic
           standing quality gates rather than outcome-specific checks. Every
-          item carries a judgment badge like a criterion; an item derived by
-          bounded inference (`provenance === 'inferred'`) is flagged
-          "inferred — confirm or drop" by the shared CriteriaBreakdown
-          renderer, so a layer-4 gate is never silently activated. */}
+          item carries a judgment icon like a criterion; an item derived by
+          bounded inference (`provenance === 'inferred'`) is flagged on the
+          COLLAPSED header itself ("N inferred — review") so it is never
+          hidden from the reader's attention, and again per-row once
+          expanded by the shared CriteriaBreakdown renderer — a layer-4
+          gate is never silently activated. */}
       {dod.length > 0 && (
-        <div className="mt-2.5 border-t border-[var(--color-border)] pt-2.5" data-testid="goal-echo-dod">
-          <div className="text-[var(--color-muted)] mb-1 text-[10px] uppercase tracking-wide">
-            Definition of Done
-          </div>
+        <GoalAccordionSection
+          testId="goal-echo-dod"
+          label={`Definition of Done · ${dod.length} item${dod.length === 1 ? '' : 's'}`}
+          hint={inferredDodCount > 0 ? `${inferredDodCount} inferred — review` : undefined}
+        >
           <CriteriaBreakdown criteria={dod} />
-        </div>
+        </GoalAccordionSection>
       )}
-
-      {/* Confirm / Cancel / Amend — ADR-078 D1. Rendered only while the card
-          is pending confirmation (`queued`); a card left mounted past
-          activation/clear renders no buttons at all. */}
-      {isPending && (
-        <div className="mt-2.5 flex items-center gap-2" data-testid="goal-echo-actions">
-          <button
-            type="button"
-            tabIndex={0}
-            onClick={onConfirm}
-            data-testid="goal-echo-confirm"
-            className="inline-flex items-center gap-1 rounded-md border border-[var(--color-accent)]/50 bg-[var(--color-accent)]/10 px-2.5 py-1 text-[11px] font-medium text-[var(--color-accent)] transition-colors hover:bg-[var(--color-accent)]/20"
-          >
-            <Check size={12} weight="bold" aria-hidden="true" />
-            Confirm
-          </button>
-          <button
-            type="button"
-            tabIndex={0}
-            onClick={onAmend}
-            data-testid="goal-echo-amend"
-            className="inline-flex items-center gap-1 rounded-md border border-transparent px-2.5 py-1 text-[11px] text-[var(--color-secondary)]/80 transition-colors hover:border-[var(--color-secondary)]/20 hover:text-[var(--color-secondary)]"
-          >
-            <PencilSimple size={12} aria-hidden="true" />
-            Amend
-          </button>
-          <button
-            type="button"
-            tabIndex={0}
-            onClick={onCancel}
-            data-testid="goal-echo-cancel"
-            className="inline-flex items-center gap-1 rounded-md border border-transparent px-2.5 py-1 text-[11px] text-[var(--color-muted)] transition-colors hover:text-[var(--color-secondary)]"
-          >
-            <X size={12} aria-hidden="true" />
-            Cancel
-          </button>
-        </div>
-      )}
-
-      {/* Secondary hint — a channel user with no card can still confirm by
-          typing (backend `IsGoalConfirm`), so the prose stays below the
-          buttons. */}
-      <div className="mt-2 flex items-center gap-1.5 text-[var(--color-muted)] italic">
-        <ArrowBendUpRight size={11} aria-hidden="true" />
-        <span>Reply to confirm, or restate to amend.</span>
-      </div>
     </div>
   )
 }

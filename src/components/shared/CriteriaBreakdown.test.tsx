@@ -12,6 +12,7 @@ import { render, screen } from '@testing-library/react'
 import {
   CriteriaBreakdown,
   formatVerifiesVia,
+  JUDGMENT_ICON,
   type CriteriaBreakdownItem,
 } from './CriteriaBreakdown'
 
@@ -56,6 +57,52 @@ describe('CriteriaBreakdown — itemized list, plain language first', () => {
     for (const label of ['prose', 'PROSE', 'check', 'CHECK', 'behavior', 'BEHAVIOR']) {
       expect(screen.queryByText(label)).not.toBeInTheDocument()
     }
+  })
+})
+
+// ADR-080 D-TYPES: judgment renders as a small muted icon (not text) — the
+// redesign (operator report 2026-09-07) that replaced the old uppercase
+// text badge, which added visual weight without adding information once
+// every row carries one. Legible via `title`/`aria-label`, never via
+// visible text content.
+describe('CriteriaBreakdown — judgment icon (ADR-080 D-TYPES)', () => {
+  it('renders an icon (no visible judgment word) for each judgment kind, with the matching accessible name', () => {
+    render(
+      <CriteriaBreakdown
+        criteria={[
+          { text: 'a', judgment: 'boolean' },
+          { text: 'b', judgment: 'quantitative' },
+          { text: 'c', judgment: 'artifact' },
+        ]}
+      />,
+    )
+    const badges = screen.getAllByTestId('criterion-judgment-badge')
+    expect(badges).toHaveLength(3)
+    for (const badge of badges) expect(badge.textContent).toBe('')
+    expect(badges[0]).toHaveAttribute('aria-label', JUDGMENT_ICON.boolean.label)
+    expect(badges[1]).toHaveAttribute('aria-label', JUDGMENT_ICON.quantitative.label)
+    expect(badges[2]).toHaveAttribute('aria-label', JUDGMENT_ICON.artifact.label)
+    // Same string surfaces as the native hover tooltip.
+    expect(badges[0]).toHaveAttribute('title', JUDGMENT_ICON.boolean.label)
+  })
+
+  it('renders no judgment icon when the criterion carries none', () => {
+    render(<CriteriaBreakdown criteria={[PROSE]} />)
+    expect(screen.queryByTestId('criterion-judgment-badge')).not.toBeInTheDocument()
+  })
+})
+
+// ADR-080 D-DOD: an `inferred` DoD item is flagged per-row, never silently
+// dropped from the render.
+describe('CriteriaBreakdown — inferred provenance flag (ADR-080 D-DOD)', () => {
+  it('flags a provenance:inferred item as "inferred — confirm or drop"', () => {
+    render(<CriteriaBreakdown criteria={[{ text: 'a', provenance: 'inferred' }]} />)
+    expect(screen.getByTestId('criterion-inferred-flag')).toHaveTextContent('inferred — confirm or drop')
+  })
+
+  it('does not flag a stated/workspace/floor item', () => {
+    render(<CriteriaBreakdown criteria={[{ text: 'a', provenance: 'stated' }]} />)
+    expect(screen.queryByTestId('criterion-inferred-flag')).not.toBeInTheDocument()
   })
 })
 

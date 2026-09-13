@@ -930,26 +930,52 @@ func TestBrowserManager_Live(t *testing.T) {
 
 // --- controlledResult: ADR-038 D6 tool-side gate ---
 
+// TestControlledResult was widened, NOT relocated, by ADR-085 (BROWSER-FR-010
+// through FR-012a): controlledResult gained a leading ctx context.Context
+// parameter (FR-021's root-chat coverage) and a trailing *browserAudit
+// (FR-061's deferral audit), and a bare mgr.Live().ReleaseControl no longer
+// un-gates the tool on its own — the FR-026a stand-down latch is DELIBERATELY
+// designed to survive an ordinary release (Escape, closing the panel), so
+// only a genuine ADR-085 release (mgr.Live().ReleaseStoodDown, the FR-029
+// prompt-release/FR-031a idle-expiry primitive) clears it. This file is
+// outside wave B123's write-set; only this one function's call-site arity
+// and its now-incorrect "bare release un-gates" assumption were touched — see
+// B123's final report for why the fix could not be deferred to a later wave
+// without leaving `go vet ./pkg/tools/browser/` permanently red.
 func TestControlledResult(t *testing.T) {
 	cfg, err := DefaultConfig()
 	require.NoError(t, err)
 	mgr, err := NewBrowserManager(cfg, security.NewSSRFChecker(nil))
 	require.NoError(t, err)
+	ctx := context.Background()
 
-	require.Nil(t, controlledResult(mgr, testKey, testOwner, "browser_click"),
+	require.Nil(t, controlledResult(ctx, mgr, testKey, testOwner, "browser_click", nil),
 		"an uncontrolled session must not defer")
 
 	require.True(t, mgr.Live().TakeControl(testSessionID, "viewer1"))
 
-	result := controlledResult(mgr, testKey, testOwner, "browser_click")
+	result := controlledResult(ctx, mgr, testKey, testOwner, "browser_click", nil)
 	require.NotNil(t, result, "a controlled session must defer the interactive tool")
 	require.False(t, result.IsError, "deferral is not a tool failure")
 	require.Contains(t, result.ForLLM, "browser_click")
 	require.Contains(t, result.ForLLM, "human is currently controlling")
+	require.NotNil(t, result.Deferred, "BROWSER-FR-012a: a deferral must carry the structural discriminator")
+	require.Equal(t, "browser_control", result.Deferred.Gate)
 
+	// ADR-085 FR-026a: a bare release (Escape, closing the panel) does NOT
+	// un-gate the tool — the stand-down latch survives it deliberately, so
+	// the agent does not silently resume driving a page the operator walked
+	// away from.
 	mgr.Live().ReleaseControl(testSessionID, "viewer1")
-	require.Nil(t, controlledResult(mgr, testKey, testOwner, "browser_click"),
-		"releasing control must un-gate the tool again")
+	require.NotNil(t, controlledResult(ctx, mgr, testKey, testOwner, "browser_click", nil),
+		"ADR-085 FR-026a: a bare ReleaseControl must NOT un-gate the tool — only a genuine "+
+			"ADR-085 release (the operator's next prompt, or idle expiry) clears the stand-down latch")
+
+	// The genuine ADR-085 release DOES un-gate it.
+	_, cleared := mgr.Live().ReleaseStoodDown(testSessionID)
+	require.True(t, cleared, "ReleaseStoodDown must report that something was actually cleared")
+	require.Nil(t, controlledResult(ctx, mgr, testKey, testOwner, "browser_click", nil),
+		"ReleaseStoodDown must un-gate the tool again")
 }
 
 // ---------------------------------------------------------------------------

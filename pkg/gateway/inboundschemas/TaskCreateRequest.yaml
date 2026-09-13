@@ -128,11 +128,27 @@ properties:
     items:
       $ref: ./AcceptanceCriterionInput.yaml
     description: >
-      Optional initial acceptance criteria (Definition of Done, ADR-049
-      D2/D5/FR-3). Agent tool paths reject a create with zero criteria;
-      human/UI creation may leave this empty (soft tier). Items use the
-      authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind`
-      may be omitted and is inferred server-side from the payload.
+      Initial acceptance criteria (ADR-049 D2/D5/FR-3). GOAL-FR-021/D-C
+      (2026-09-11, operator-ratified): creation through the API or the
+      interface now REQUIRES at least one criterion AND at least one
+      `dod` item (see `dod` below) — the prior "human/UI creation may
+      leave this empty (soft tier)" behaviour is RETIRED for new creates;
+      the server returns HTTP 400 when either is empty (GOAL-FR-047, not
+      enforced as a JSON-Schema `minItems` here — agent tool paths and the
+      REST handler share one 400 rejection, not two shapes of it). Items
+      use the authoring-time `AcceptanceCriterionInput` shape (ADR-074
+      D2): `kind` may be omitted and is inferred server-side from the
+      payload.
+  dod:
+    type: array
+    items:
+      $ref: ./AcceptanceCriterionInput.yaml
+    description: >
+      GOAL-FR-003/FR-021/FR-048/D-C — this task's Definition of Done,
+      DISTINCT from `criteria`. NEW field (ADR-086). Required (>= 1 item,
+      enforced with a 400, not schema-only — see `criteria` above) at
+      creation. Items use the authoring-time `AcceptanceCriterionInput`
+      shape, same as `criteria`.
   max_attempts:
     type: integer
     minimum: 1
@@ -140,7 +156,7 @@ properties:
     description: >
       Per-task override of the attempt ceiling before the goal loop wakes
       the owner (ADR-049 D7/FR-9). Null/absent inherits the global
-      `PlanningConfig.task_max_attempts` default (3).
+      `PlanningConfig.task_max_attempts` default (20).
     example: 5
   due:
     type: string

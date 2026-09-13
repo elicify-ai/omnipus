@@ -141,7 +141,7 @@ func createRecurringTaskViaAPI(
 		surfaceField = fmt.Sprintf(`,"surface":%q`, surface)
 	}
 	body := fmt.Sprintf(
-		`{"title":%q,"action":"llm","workspace_id":%q,"agent_id":"mia","trigger":{"type":"recurring","config":{"rrule":%q,"dtstart_ms":%d,"tz":%q}}%s}`,
+		`{"title":%q,"action":"llm","workspace_id":%q,"agent_id":"mia","trigger":{"type":"recurring","config":{"rrule":%q,"dtstart_ms":%d,"tz":%q}}%s,`+singleAttemptJSON+`,`+minimalCriteriaDodJSON+`}`,
 		title,
 		wsID,
 		rrule,
@@ -165,6 +165,25 @@ func createRecurringTaskViaAPI(
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &tsk))
 	return tsk
 }
+
+// singleAttemptJSON pins a create body's per-task attempt ceiling
+// (TaskCreateRequest.max_attempts, ADR-049 D7/FR-9) to one.
+//
+// Every fixture that later calls advanceTaskToDone needs it. Those fixtures
+// drive a REAL background run against the mock provider, whose canned reply
+// carries no TASK_STATUS completion marker — so finishTaskRun reads it as an
+// UNMET claim and the goal loop re-dispatches the task once per attempt until
+// the ceiling is spent (task_executor.go's consumeAttemptOrExhaust). With the
+// ceiling left at the global default that loop now runs TWENTY times: the
+// operator decision that unified task goals and chat goals under ONE global
+// attempt budget raised PlanningConfig.task_max_attempts from 3 to 20
+// (DECISIONS.md D-D/D-E, pkg/config/planning.go's DefaultTaskMaxAttempts).
+// That is ~20s of real redispatching per fixture, and it is not what any of
+// these tests are about — they are about occurrence rendering and repeating-
+// task transitions. Pinning the ceiling to 1 keeps the terminal state
+// deterministic and fast WITHOUT weakening advanceTaskToDone's assertion:
+// the run must still genuinely reach done or failed on its own.
+const singleAttemptJSON = `"max_attempts":1`
 
 // advanceTaskToDone walks id through the legal inbox->next->in_progress->done
 // transition path (matches createTaskWithStatusViaAPI's sequence).
@@ -268,7 +287,7 @@ func TestRestTasks_CreateRecurringRrule(t *testing.T) {
 		wsID := ensureTestWorkspace(t, api)
 		setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 		body := fmt.Sprintf(
-			`{"title":"Legacy","action":"llm","workspace_id":%q,"agent_id":"mia","trigger":{"type":"recurring","config":{"cron_expr":"0 9 * * MON"}}}`,
+			`{"title":"Legacy","action":"llm","workspace_id":%q,"agent_id":"mia","trigger":{"type":"recurring","config":{"cron_expr":"0 9 * * MON"}},`+minimalCriteriaDodJSON+`}`,
 			wsID,
 		)
 		w := httptest.NewRecorder()
@@ -395,7 +414,7 @@ func TestRestTasks_CreateRecurringRrule(t *testing.T) {
 		}
 		for _, c := range cases {
 			t.Run(c.name, func(t *testing.T) {
-				body := fmt.Sprintf(`{"title":"Bad","action":"llm","workspace_id":%q,"trigger":%s}`, wsID, c.trigger)
+				body := fmt.Sprintf(`{"title":"Bad","action":"llm","workspace_id":%q,"trigger":%s,`+minimalCriteriaDodJSON+`}`, wsID, c.trigger)
 				w := httptest.NewRecorder()
 				r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
 				r.Header.Set("Content-Type", "application/json")
@@ -533,7 +552,7 @@ func TestRestTasks_OccurrencesEndpoint(t *testing.T) {
 
 		body := fmt.Sprintf(
 			`{"title":"EveryDoneStillFires","action":"llm","workspace_id":%q,"agent_id":"mia",`+
-				`"trigger":{"type":"every","config":{"every_ms":60000}}}`,
+				`"trigger":{"type":"every","config":{"every_ms":60000}},`+singleAttemptJSON+`,`+minimalCriteriaDodJSON+`}`,
 			wsID,
 		)
 		w := httptest.NewRecorder()
@@ -579,7 +598,7 @@ func TestRestTasks_OccurrencesEndpoint(t *testing.T) {
 		setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 		atMs := time.Date(2020, 1, 1, 9, 0, 0, 0, time.UTC).UnixMilli()
 		body := fmt.Sprintf(
-			`{"title":"OnceDone","action":"llm","workspace_id":%q,"agent_id":"mia","trigger":{"type":"once","config":{"at_ms":%d}}}`,
+			`{"title":"OnceDone","action":"llm","workspace_id":%q,"agent_id":"mia","trigger":{"type":"once","config":{"at_ms":%d}},`+singleAttemptJSON+`,`+minimalCriteriaDodJSON+`}`,
 			wsID,
 			atMs,
 		)

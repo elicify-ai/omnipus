@@ -9,7 +9,13 @@ package config
 // whenever the corresponding field is zero, and used directly by DefaultConfig
 // (defaults.go) to populate a fresh install's config.json.
 const (
-	DefaultTaskMaxAttempts     = 3
+	// ADR-086 GOAL-FR-024/FR-026, plan row R-03 (operator-ratified via D10): ONE
+	// budget number for both owner kinds. This was 3 while a task's attempts and a
+	// goal's rounds were separate concepts; D10 records that "a task's 3 attempts
+	// was never a considered choice against the goal loop's 20 rounds". The two
+	// COUNTERS stay distinct (attempts and rounds are different brakes); only the
+	// NUMBER unifies. The 2x divergence ceiling therefore becomes 40.
+	DefaultTaskMaxAttempts     = 20
 	DefaultGoalMaxRounds       = 20
 	DefaultPlanJudgeMaxRounds  = 20
 	DefaultLoopMaxRuns         = 100

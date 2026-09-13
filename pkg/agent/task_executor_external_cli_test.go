@@ -44,10 +44,17 @@ func newExternalCLITaskTestLoop(t *testing.T, provider providers.LLMProvider) (a
 						Executor: &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "claude-code"},
 					},
 				},
+				// GOAL-FR-022/R-27: an external-CLI worker's TASK_STATUS
+				// success marker is adjudicated exactly like a native one —
+				// see judgeAgentConfigForTaskTests (task_completion_contract_
+				// test.go) for why a registered Judge is now mandatory for any
+				// harness whose task can reach a completion claim.
+				judgeAgentConfigForTaskTests(t),
 			},
 		},
 	}
 	al = mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
+	bindMetSoftTierJudge(t, al)
 	// See newNativeTaskCompletionTestLoop's identical Close() cleanup (same
 	// rationale: drain session workers/recaps before t.TempDir() cleanup runs).
 	t.Cleanup(func() { al.Close() })

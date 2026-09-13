@@ -200,43 +200,63 @@ func TestAudit_ReadOnlyCallsAreNotRecorded(t *testing.T) {
 	assert.Len(t, h.eventsNamed(t, audit.EventBrowserInstanceCreated), 1)
 }
 
-// TestAudit_WriteClassSetIsTheControlledResultSet is §14 rule 3 — ONE list, not
-// two. It parses this package's own source and asserts, per tool Execute body:
+// TestAudit_WriteClassSetIsTheControlledResultSet is §14 rule 3, AMENDED by
+// ADR-085 R3-a/FR-035 into a THREE-way partition (action / capture / exempt),
+// no longer the original two-way "gated <=> audited" biconditional. It parses
+// this package's own source and asserts, per tool Execute body:
 //
-//	calls controlledResult  <=>  calls recordBrowserAction
+//	calls recordBrowserAction  <=>  is in writeClassBrowserTools (action class)
+//	calls controlledResult     <=>  is in writeClassBrowserTools ∪ captureBrowserTools (action ∪ capture)
 //
 // A source-level assertion rather than eleven live tool calls, because four of
-// the seven write-class tools (navigate/click/type/evaluate) do real CDP work
-// after the emission and cannot be driven without a real Chrome. This closes
-// exactly the gap that would otherwise exist: a tool that is control-gated but
-// silently unaudited.
+// the seven original write-class tools (navigate/click/type/evaluate) do real
+// CDP work after the emission and cannot be driven without a real Chrome. This
+// closes exactly the gap that would otherwise exist: a tool that is
+// control-gated but silently unaudited AS AN ACTION, or a tool that acts on
+// the page with neither gate at all.
 func TestAudit_WriteClassSetIsTheControlledResultSet(t *testing.T) {
 	gated, audited := executeBodyCallSites(t)
 
 	require.NotEmpty(t, gated, "the parse found no controlledResult call sites — the parse is broken")
-	assert.Equal(t, gated, audited,
-		"every controlledResult-gated Execute must also record a browser action, and no other one "+
-			"may. The write-class set IS the gated set (§14 rule 3); two lists drift, and the drift is "+
-			"silent")
 
-	// And the sets agree with the declared maps in audit.go.
-	declared := make([]string, 0, len(writeClassBrowserTools))
+	// per-call-audited <=> action-class (FR-037).
+	declaredAction := make([]string, 0, len(writeClassBrowserTools))
 	for name := range writeClassBrowserTools {
-		declared = append(declared, name)
+		declaredAction = append(declaredAction, name)
 	}
-	assert.ElementsMatch(t, declared, toolNamesFor(t, gated),
-		"writeClassBrowserTools must list exactly the controlledResult-gated tools")
+	assert.ElementsMatch(t, declaredAction, toolNamesFor(t, audited),
+		"writeClassBrowserTools must list exactly the recordBrowserAction-calling (per-call-audited) "+
+			"tools — capture-class tools are gated but must NOT be audited per call (FR-037)")
 
-	// Every browser tool belongs to exactly one of the two declared sets. A
-	// NEW tool that belongs to neither is a finding here rather than a silent
-	// default into the unaudited half.
+	// gated <=> action ∪ capture (FR-036/FR-038's three-way split).
+	declaredGated := make([]string, 0, len(writeClassBrowserTools)+len(captureBrowserTools))
+	declaredGated = append(declaredGated, declaredAction...)
+	for name := range captureBrowserTools {
+		declaredGated = append(declaredGated, name)
+	}
+	assert.ElementsMatch(t, declaredGated, toolNamesFor(t, gated),
+		"the controlledResult-gated set must be exactly action ∪ capture (writeClassBrowserTools ∪ "+
+			"captureBrowserTools) — a name missing here is a tool that acts on, or reads, a page a "+
+			"human may be driving with no deferral; a name present but undeclared is drift between "+
+			"the parse and audit.go's rosters")
+
+	// Every browser tool belongs to EXACTLY ONE of the three declared classes
+	// (action / capture / exempt). A NEW tool that belongs to none, or more
+	// than one, is a finding here rather than a silent default.
 	for _, tool := range BrowserBuiltinMetadata() {
 		name := tool.Name()
-		inWrite := writeClassBrowserTools[name]
-		inRead := readOnlyBrowserTools[name]
-		assert.True(t, inWrite != inRead,
-			"%s is in %v write-class and %v read-only sets — every browser tool must be in exactly "+
-				"one, or its audit treatment is undecided", name, inWrite, inRead)
+		inAction := writeClassBrowserTools[name]
+		inCapture := captureBrowserTools[name]
+		inExempt := exemptBrowserTools[name]
+		memberships := 0
+		for _, in := range []bool{inAction, inCapture, inExempt} {
+			if in {
+				memberships++
+			}
+		}
+		assert.Equal(t, 1, memberships,
+			"%s is in action=%v capture=%v exempt=%v — every browser tool must be in EXACTLY ONE of "+
+				"the three classes, or its gate/audit treatment is undecided", name, inAction, inCapture, inExempt)
 	}
 }
 

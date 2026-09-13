@@ -197,5 +197,29 @@ properties:
     description: >
       Per-run judgement status. `pending` before any judge round; `met` /
       `unmet` set by the most recent `JudgeVerdict.per_criterion` entry.
-      Absence of evidence/a verdict never defaults to `met` (NFR-2).
+      Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32:
+      the outcome of the MOST RECENT verdict that mentioned this criterion
+      id — a projection re-applies only the criterion ids present in the
+      verdict it is projecting and never resets a criterion this round's
+      verdict did not mention back to `pending`; there is no per-criterion
+      round field recording when the status was last set.
     example: "pending"
+  clause_count:
+    type: integer
+    minimum: 1
+    description: >
+      JUDGE-FR-006b — the number of distinct clauses in this criterion's
+      `text`, computed once by `pkg/task/criterion.go::normalizeCriteria`
+      when the criterion is created or updated (never recomputed at
+      adjudication time — see FR-006b's rationale: a count derived at
+      judging time would let the judged party shrink a failing multi-clause
+      criterion into fewer clauses to reduce its own evidence bar). OPTIONAL
+      here only in the sense that a criterion loaded before this field
+      existed carries none until its own next load-time backfill; the
+      server always persists an explicit value going forward, the same
+      precedent as `status`'s own `CritPending` backfill. Consumed
+      exclusively as a grounding-evidence REPORTING signal (how many
+      distinctly-grounded evidence entries the Judge's investigation found)
+      — per operator decision D-B, grounding is never a proof gate, and
+      this field NEVER changes a verdict from `met` to anything else.
+    example: 1

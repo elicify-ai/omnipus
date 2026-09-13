@@ -24,8 +24,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/askuser"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 // AskUserQuestionToolName is the catalog name (allStaticToolNames member).
@@ -86,7 +88,7 @@ func (t *AskUserQuestionTool) Name() string { return AskUserQuestionToolName }
 
 // Description implements Tool.
 func (t *AskUserQuestionTool) Description() string {
-	return "Ask the human user up to 10 structured clarification questions on a single card, each with 2-6 options (plus an always-available free-text answer), and pause until they answer. Only usable on a web (SPA) session you own: on channel sessions ask conversationally in plain language instead, and as a delegated session use message_parent(kind=question, wait=true) toward your parent. To highlight one option, set the QUESTION's `recommended` field (a property of the question, NOT of an option) to that option's exact `label` string — it renders first with a badge, never pre-selected. Options carry only `label` and `description`; putting `recommended` inside an option is rejected. Add `default_safe: true` on a question (requires that question's `recommended`) to auto-resolve it to the recommended option after 30 minutes without an answer."
+	return "Ask the human user up to 10 structured clarification questions on a single card, each with 2-6 options (plus an always-available free-text answer), and pause until they answer. Only usable on a web (SPA) session you own: on channel sessions ask conversationally in plain language instead, and as a delegated session use message_parent(kind=question, wait=true) toward your parent. To highlight one option, set the QUESTION's `recommended` field (a property of the question, NOT of an option) to that option's exact `label` string — it renders first with a badge, never pre-selected. Options carry only `label` and `description`; a `recommended` mistakenly placed inside an option is auto-corrected onto the question (first truthy one wins) rather than failing the call. Add `default_safe: true` on a question (requires that question's `recommended`) to auto-resolve it to the recommended option after 30 minutes without an answer."
 }
 
 // Scope implements Tool.
@@ -257,6 +259,115 @@ func (t *AskUserQuestionTool) registry() AskUserQuestionRegistry {
 		return nil
 	}
 	return t.registryFn()
+}
+
+// NormalizeArgs implements the registry's argsNormalizer seam
+// (pkg/tools/registry.go) — it runs BEFORE validateToolArgs and its return
+// value is what both validation and Execute see.
+//
+// It accepts exactly one near-miss instead of hard-rejecting the whole
+// call: a model that places `recommended` on an OPTION rather than on its
+// QUESTION (spec-wrong per Description, but a genuine, repeatedly-observed
+// mistake — 2026-09-08 evidence: this was the FORCED first move of a goal
+// turn, and the hard rejection cascaded into 17 minutes of ungoverned
+// building). Any OTHER unexpected property is left completely untouched
+// here — it still fails validateToolArgs exactly as before; this only ever
+// reads and deletes the literal key "recommended" inside an options[]
+// entry.
+//
+// Deterministic lifting rules (mirrored in Description):
+//   - a question that ALREADY carries its own `recommended` value wins —
+//     every option-level marker for that question is dropped silently;
+//   - the FIRST option in a question carrying a TRUTHY `recommended` is
+//     lifted onto the question, verbatim as that option's own `label`; any
+//     later truthy marker in the SAME question is dropped;
+//   - a falsy value (bool false, "", "no") is simply dropped, never lifted.
+//
+// args is mutated in place and returned: safe because every tool call
+// receives its own freshly JSON-decoded args map that the registry never
+// reuses for anything but this one Execute call (registry.go's
+// ExecuteWithContext logs the ORIGINAL args before this runs, then passes
+// only the normalized map onward).
+func (t *AskUserQuestionTool) NormalizeArgs(args map[string]any) map[string]any {
+	rawQuestions, ok := args["questions"].([]any)
+	if !ok {
+		return args // malformed shape — validateToolArgs reports it normally
+	}
+
+	var normalizedQuestionIdx []int
+	for qi, qRaw := range rawQuestions {
+		qm, ok := qRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		rawOpts, ok := qm["options"].([]any)
+		if !ok {
+			continue
+		}
+		existingRec, _ := qm["recommended"].(string)
+		questionHasRecommended := strings.TrimSpace(existingRec) != ""
+		lifted := false
+		for _, oRaw := range rawOpts {
+			om, ok := oRaw.(map[string]any)
+			if !ok {
+				continue
+			}
+			rawOptRec, present := om["recommended"]
+			if !present {
+				continue
+			}
+			// The property never belongs on an option — drop it here
+			// unconditionally, whether or not it ends up lifted.
+			delete(om, "recommended")
+			if questionHasRecommended || lifted {
+				continue
+			}
+			label, _ := om["label"].(string)
+			if isTruthyRecommendedMarker(rawOptRec, label) {
+				qm["recommended"] = label
+				questionHasRecommended = true
+				lifted = true
+			}
+		}
+		if lifted {
+			normalizedQuestionIdx = append(normalizedQuestionIdx, qi)
+		}
+	}
+
+	if len(normalizedQuestionIdx) > 0 {
+		logger.InfoCF("agent", "AskUserQuestion: auto-corrected a misplaced option-level `recommended`, lifting it onto its question",
+			map[string]any{
+				"tool":             AskUserQuestionToolName,
+				"question_indices": normalizedQuestionIdx,
+			})
+	}
+	return args
+}
+
+// isTruthyRecommendedMarker reports whether v — an option's misplaced
+// `recommended` value — should be treated as "this option is the
+// recommended one" by NormalizeArgs. label is that SAME option's own
+// `label`, since a model sometimes echoes the label itself as the marker
+// (`recommended: "<label>"`).
+func isTruthyRecommendedMarker(v any, label string) bool {
+	switch val := v.(type) {
+	case bool:
+		return val
+	case string:
+		s := strings.TrimSpace(val)
+		if s == "" {
+			return false
+		}
+		switch strings.ToLower(s) {
+		case "true", "yes":
+			return true
+		case "false", "no":
+			return false
+		}
+		return s == label
+	default:
+		return false
+	}
 }
 
 // parseAskQuestions decodes the tool's `questions` argument into typed

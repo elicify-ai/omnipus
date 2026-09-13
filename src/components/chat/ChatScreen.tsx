@@ -36,11 +36,11 @@ import { Wordmark } from '@/components/shared/Wordmark'
 import { GenericToolCall } from './tools/GenericToolCall'
 import { detectToolResultSentinels } from './tools/toolResultSentinels'
 import { WebServeBlock } from './tools/WebServeUI'
+import { SetGoalCardBlock, classifySetGoalCall } from './tools/SetGoalToolUI'
 import { BrowserToolReplayBlock, isReplayBrowserToolName } from './tools/BrowserTool'
 import { RateLimitIndicator } from './RateLimitIndicator'
 import { GoalIndicator } from './GoalIndicator'
 import { GoalPillTray } from './GoalPillTray'
-import { GoalThreadTailCards } from './GoalThreadTailCards'
 import { AskUserQuestionThreadTail } from './AskUserQuestionCard'
 import { JudgeVerdictThreadCard } from './JudgeVerdictThreadCard'
 import { ActivityBar } from './ActivityBar'
@@ -70,6 +70,8 @@ import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderSubagentSpan, shouldRenderToolCall, shouldRenderJudgeVerdictInThread } from '@/lib/toolVisibility'
+import { isGoalRecordEmpty } from '@/lib/goalSetupState'
+import { GoalSetupFailureLine } from './tools/GoalSetupFailureLine'
 import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
 import type { SlashCommand, Skill, Agent } from '@/lib/api'
 import { AttachmentCard, AttachmentRemoveX, useFilePreview } from './AttachmentCard'
@@ -212,8 +214,29 @@ function UserMessage() {
 }
 
 function SystemMessage() {
+  const message = useMessage()
+  // Operator-reported UX fix, 2026-09-08: the goal-ack line is a synthetic
+  // `role: 'system'` ChatMessage (chat.ts's `case 'goal_status'` handler,
+  // buildGoalAckInsertion) carrying `goalAckGoalId` — everything else on
+  // this generic system-banner surface (help text, `/new`, etc.) has none,
+  // so this stays a no-op for those. Cross-referencing the store message
+  // (rather than AssistantUI's own `message`) mirrors AssistantMessage's
+  // identical storeMsg lookup a few components up.
+  const storeMsg = useChatStore((s) => s.messagesById[message.id])
+  const isGoalAck = !!storeMsg?.goalAckGoalId
+  // ADR-085 BROWSER-FR-042/FR-044 (wave B8, C-90): the browser-handover
+  // waiting notice is the same kind of synthetic `role: 'system'`
+  // ChatMessage, this time carrying `browserHandoverNoticeId` (chat.ts's
+  // `case 'browser_handover_notice'` handler, buildBrowserHandoverInsertion)
+  // — copying the shipped two-site `isGoalAck` pattern exactly. The e2e spec
+  // (tests/e2e/browser-control-handover.spec.ts) names this discriminator
+  // as its positive observable.
+  const isBrowserHandoverNotice = !!storeMsg?.browserHandoverNoticeId
   return (
-    <MessagePrimitive.Root className="flex justify-center py-2">
+    <MessagePrimitive.Root
+      className="flex justify-center py-2"
+      data-testid={isGoalAck ? 'goal-ack-line' : isBrowserHandoverNotice ? 'browser-handover-notice' : undefined}
+    >
       <div className="text-xs text-[var(--color-muted)] bg-[var(--color-surface-2)] px-3 py-1 rounded-full">
         <MessagePrimitive.Parts>
           {({ part }) => {
@@ -226,14 +249,40 @@ function SystemMessage() {
   )
 }
 
-// Animated thinking indicator with rotating status messages
+// Animated thinking indicator with rotating status messages. The first
+// shown phrase is always 'Thinking…' (deterministic opening beat); every
+// tick after that picks a random phrase from the pool, never immediately
+// repeating the one just shown. A caller (InlineThinkingIndicator) can
+// override the rotation entirely with a stable, context-specific `label`
+// — e.g. naming the hidden tool currently running — via ThinkingIndicator's
+// `label` prop.
 const THINKING_MESSAGES = [
   'Thinking…',
-  'Composing response…',
+  'Working on it…',
+  'Composing a response…',
   'Processing your request…',
   'Analyzing…',
-  'Generating…',
+  'Considering the details…',
+  'Piecing it together…',
+  'Reasoning it through…',
+  'Working through this…',
+  'Gathering my thoughts…',
+  'Figuring out the approach…',
+  'Reviewing the context…',
+  'Drafting a response…',
+  'Making sense of it…',
+  'Weighing the options…',
 ]
+
+/** Picks a random phrase from THINKING_MESSAGES that differs from `current` — never an immediate repeat. */
+function pickNextThinkingPhrase(current: string): string {
+  if (THINKING_MESSAGES.length <= 1) return THINKING_MESSAGES[0]
+  let next = current
+  while (next === current) {
+    next = THINKING_MESSAGES[Math.floor(Math.random() * THINKING_MESSAGES.length)]
+  }
+  return next
+}
 
 // ADR-051 — cap on the verbose-only "Technical details" disclosure content
 // in VirtualAssistantMessageRow (historical/replay render path). Mirrors
@@ -241,15 +290,190 @@ const THINKING_MESSAGES = [
 // truncated length when a provider's error payload is verbose.
 const ERROR_DETAIL_MAX_CHARS = 512
 
-function ThinkingIndicator() {
-  const [msgIndex, setMsgIndex] = useState(0)
+// Caps a context-specific thinking label (a bash `description`) to a single
+// line and ~48 chars — long enough to be informative, short enough to read
+// as a status word rather than a wrapped paragraph.
+const THINKING_LABEL_MAX_CHARS = 48
+
+/** Trims `value` to its first line and caps it at THINKING_LABEL_MAX_CHARS, appending an ellipsis when cut. */
+function truncateThinkingLabel(value: string): string {
+  const firstLine = value.split(/\r?\n/, 1)[0]?.trim() ?? ''
+  if (firstLine.length === 0) return ''
+  if (firstLine.length <= THINKING_LABEL_MAX_CHARS) return firstLine
+  return `${firstLine.slice(0, THINKING_LABEL_MAX_CHARS).trimEnd()}…`
+}
+
+// Maps the first token of a background `bash` command to a short verb
+// phrase for the thinking indicator (deriveBashThinkingLabel's step 2).
+// Deliberately closed/exact-match — an unrecognized command falls through
+// to the generic "Running a command…" rather than guessing.
+const BASH_COMMAND_VERBS: Record<string, string> = {
+  git: 'Running git…',
+  npm: 'Running npm…',
+  npx: 'Running npm…',
+  pnpm: 'Running npm…',
+  yarn: 'Running npm…',
+  go: 'Running Go…',
+  python: 'Running a script…',
+  python3: 'Running a script…',
+  curl: 'Fetching…',
+  wget: 'Fetching…',
+  docker: 'Running Docker…',
+  make: 'Building…',
+  bash: 'Running a script…',
+  sh: 'Running a script…',
+}
+
+/**
+ * Derives the thinking-indicator label for an in-progress `bash` call that
+ * is hidden from the thread (background dispatch, or the poll/read
+ * sub-case on an already-running background session — toolVisibility.ts).
+ * NEVER renders the raw `command` string (length + secret-leak risk) —
+ * only the call's own `description` (capped to one line/~48 chars) or a
+ * verb mapped from the command's first token.
+ */
+function deriveBashThinkingLabel(args: Record<string, unknown> | undefined): string {
+  const description = typeof args?.description === 'string' ? args.description : ''
+  const truncatedDescription = truncateThinkingLabel(description)
+  if (truncatedDescription) return truncatedDescription
+
+  const command = typeof args?.command === 'string' ? args.command.trim() : ''
+  if (command) {
+    const firstToken = command.split(/\s+/)[0] ?? ''
+    const verbKey = firstToken.split('/').pop() ?? firstToken
+    return BASH_COMMAND_VERBS[verbKey] ?? 'Running a command…'
+  }
+
+  return 'Working in the background…'
+}
+
+/**
+ * Derives the thinking-indicator label for an in-progress `delegate` call's
+ * "run" sub-case — the only delegate sub-case with a specific label (its
+ * `status`-poll sub-case, and any other hidden tool with no rule, fall
+ * through to the generic pool). Resolves the target agent's display name
+ * from the call's `agent_id` arg (pkg/tools/delegate.go's Parameters())
+ * against the agents list; never invents a name — falls back to a bare
+ * "Delegating…" when the id is absent or unresolvable.
+ */
+function deriveDelegateThinkingLabel(args: Record<string, unknown> | undefined, agents: Agent[]): string {
+  const agentId = typeof args?.agent_id === 'string' ? args.agent_id : ''
+  const target = agentId ? agents.find((a) => a.id === agentId) : undefined
+  return target?.name ? `Delegating to ${target.name}…` : 'Delegating…'
+}
+
+/**
+ * Finds the LAST tool-call part in a live message's `content` whose live
+ * status (looked up in the store's resolved ToolCall record, keyed by
+ * toolCallId — the same lookup FallbackToolUI uses) is still 'running', and
+ * — only when that call is hidden from the thread per toolVisibility.ts's
+ * shouldRenderToolCall — derives a specific, stable label for it.
+ *
+ * Returns null (generic rotating pool applies) when: the tool is visible
+ * (its own chip already shows progress), it's ToolSearch or any other
+ * hidden tool with no specific-label rule, or nothing is currently running.
+ * Defensive: never throws — an unexpected message/part shape falls back to
+ * the generic pool via the null return, exactly like "nothing found".
+ */
+function deriveHiddenRunningToolLabel(
+  content: unknown,
+  storeToolCalls: Record<string, { status?: string }>,
+  verboseChatEnabled: boolean,
+  agents: Agent[],
+): string | null {
+  try {
+    if (!Array.isArray(content)) return null
+    for (let i = content.length - 1; i >= 0; i--) {
+      const part = content[i] as
+        | { type?: string; toolCallId?: string; toolName?: string; args?: unknown }
+        | undefined
+      if (!part || part.type !== 'tool-call') continue
+      const { toolCallId, toolName } = part
+      if (typeof toolCallId !== 'string' || typeof toolName !== 'string') continue
+
+      const liveStatus = storeToolCalls[toolCallId]?.status
+      if (liveStatus !== 'running') continue // not the current in-progress step
+
+      const args = part.args as Record<string, unknown> | undefined
+      if (shouldRenderToolCall(toolName, args, verboseChatEnabled, false)) {
+        // Visible — its own chip already communicates progress.
+        return null
+      }
+
+      if (toolName === 'delegate') {
+        const action = typeof args?.action === 'string' ? args.action : 'run'
+        return action === 'run' ? deriveDelegateThinkingLabel(args, agents) : null
+      }
+      if (toolName === 'bash') {
+        return deriveBashThinkingLabel(args)
+      }
+      return null // ToolSearch, or any other hidden tool with no rule — generic pool.
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Goal-aware override for the thinking-indicator label (operator-reported
+ * UX fix, 2026-09-08 — see goalSetupState.ts's file doc comment for the
+ * full "17 minutes of a silent spinner" repro). While a session's goal is
+ * ACTIVE and its record is still EMPTY (isGoalRecordEmpty), the generic
+ * rotating pool is replaced with a purposeful, goal-specific phrase:
+ * "Setting acceptance criteria" while `set_goal` itself is the currently-
+ * running step, "Framing your goal" otherwise (including the very first
+ * beat, before any tool call has started). Returns null once the record is
+ * populated — this override is scoped to the empty-record window only, and
+ * the caller falls through to its existing label logic (deriveHiddenRunningToolLabel
+ * / the plain rotating pool) in that case.
+ *
+ * `runningToolNames` is deliberately a plain string array rather than a
+ * shared "call" shape — the live path derives it from AssistantUI message
+ * parts, the replay path from `PositionedToolCall[]`, and those two shapes
+ * have nothing else in common worth unifying for this one check.
+ */
+function deriveGoalAwareThinkingLabel(runningToolNames: string[], goalRecordEmpty: boolean): string | null {
+  if (!goalRecordEmpty) return null
+  return runningToolNames.includes('set_goal') ? 'Setting acceptance criteria' : 'Framing your goal'
+}
+
+/** Extracts the tool names of currently-`running` tool-call parts from a
+ * LIVE AssistantUI message's `content` array — the same shape
+ * deriveHiddenRunningToolLabel scans, but collecting every running name
+ * (there's normally at most one) rather than stopping at the first hidden
+ * one. Never throws; an unexpected shape yields an empty array. */
+function runningToolNamesFromLiveContent(
+  content: unknown,
+  storeToolCalls: Record<string, { status?: string }>,
+): string[] {
+  if (!Array.isArray(content)) return []
+  const names: string[] = []
+  try {
+    for (const part of content) {
+      const p = part as { type?: string; toolCallId?: string; toolName?: string } | undefined
+      if (!p || p.type !== 'tool-call') continue
+      if (typeof p.toolCallId !== 'string' || typeof p.toolName !== 'string') continue
+      if (storeToolCalls[p.toolCallId]?.status === 'running') names.push(p.toolName)
+    }
+  } catch {
+    return []
+  }
+  return names
+}
+
+function ThinkingIndicator({ label }: { label?: string | null } = {}) {
+  const [rotatingPhrase, setRotatingPhrase] = useState<string>(THINKING_MESSAGES[0])
 
   useEffect(() => {
+    if (label) return // a stable context-specific label overrides rotation entirely.
     const interval = setInterval(() => {
-      setMsgIndex((i) => (i + 1) % THINKING_MESSAGES.length)
+      setRotatingPhrase((prev) => pickNextThinkingPhrase(prev))
     }, 2000)
     return () => clearInterval(interval)
-  }, [])
+  }, [label])
+
+  const displayText = label ?? rotatingPhrase
 
   return (
     <span className="text-[var(--color-muted)] italic flex items-center gap-2.5 py-1">
@@ -258,7 +482,7 @@ function ThinkingIndicator() {
         <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-bounce" style={{ animationDelay: '150ms' }} />
         <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-bounce" style={{ animationDelay: '300ms' }} />
       </span>
-      <span className="text-xs transition-opacity duration-300">{THINKING_MESSAGES[msgIndex]}</span>
+      <span className="text-xs transition-opacity duration-300">{displayText}</span>
     </span>
   )
 }
@@ -296,11 +520,38 @@ function AssistantTextPart() {
 // Stays visible the entire turn — including between tool-call steps after some
 // text has streamed — so the user always knows the agent is still working.
 // Uses useMessage() for reactive state (not getState() which is a snapshot).
+//
+// Context-aware: when the current in-progress step is a HIDDEN tool call
+// (ToolSearch, background bash, delegate — see toolVisibility.ts) whose
+// tool-call part is present in message.content but rendered invisible, this
+// shows a specific, stable label for it (e.g. "Delegating to Ray…",
+// "Running the test suite…") instead of the generic rotating pool — see
+// deriveHiddenRunningToolLabel above.
 function InlineThinkingIndicator() {
   const message = useMessage()
   const isRunning = message.status?.type === 'running'
+  const storeToolCalls = useChatStore((s) => s.toolCalls)
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  // Operator-reported UX fix, 2026-09-08: goal-aware override, checked
+  // BEFORE the hidden-tool label — see deriveGoalAwareThinkingLabel's doc
+  // comment. goalStatus is the foreground session's latest goal_status
+  // frame (same field GoalIndicator already reads), so this needs no extra
+  // subscription setup.
+  const goalStatus = useChatStore((s) => s.goalStatus)
+  const { data: agents = [] } = useQuery<Agent[]>({
+    queryKey: ['agents'],
+    queryFn: fetchAgents,
+    staleTime: 60_000,
+  })
+
   if (!isRunning) return null
-  return <ThinkingIndicator />
+
+  const goalRecordEmpty = isGoalRecordEmpty(goalStatus)
+  const goalLabel = goalRecordEmpty
+    ? deriveGoalAwareThinkingLabel(runningToolNamesFromLiveContent(message.content, storeToolCalls), true)
+    : null
+  const label = goalLabel ?? deriveHiddenRunningToolLabel(message.content, storeToolCalls, verboseChatEnabled, agents)
+  return <ThinkingIndicator label={label} />
 }
 
 // Fallback tool UI for tools without a registered makeAssistantToolUI component.
@@ -345,14 +596,43 @@ function FallbackToolUI(props: {
 }) {
   const storeToolCalls = useChatStore((s) => s.toolCalls)
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  // Operator-reported UX fix, 2026-09-08: see GoalSetupFailureLine.tsx's
+  // file doc comment. goalStatus drives isGoalRecordEmpty below.
+  const goalStatus = useChatStore((s) => s.goalStatus)
   const liveCall = storeToolCalls[props.toolCallId]
+  const isError = props.isError ?? liveCall?.status === 'error'
+
+  // Narrow override: a FAILED call that would otherwise render visibly
+  // (respects toolVisibility.ts's hidden-tool contract — a failed
+  // background delegate/bash call is still never surfaced here), outside
+  // verbose chat (which already shows the raw call in full), while a goal
+  // is active with an empty record. `set_goal` itself never reaches this
+  // Fallback (it has its own registered makeAssistantToolUI), but the
+  // exclusion is kept explicit rather than assumed.
+  if (
+    isError &&
+    !verboseChatEnabled &&
+    props.toolName !== 'set_goal' &&
+    isGoalRecordEmpty(goalStatus) &&
+    shouldRenderToolCall(props.toolName, props.args as Record<string, unknown> | undefined, false, true)
+  ) {
+    return (
+      <GoalSetupFailureLine
+        toolName={props.toolName}
+        result={liveCall?.result ?? props.result}
+        error={liveCall?.error}
+      />
+    )
+  }
+
   return (
     <GenericToolCall
       toolName={props.toolName}
       args={props.args}
       result={liveCall?.result ?? props.result}
       status={props.status}
-      isError={props.isError ?? liveCall?.status === 'error'}
+      isError={isError}
       error={liveCall?.error}
       durationMs={liveCall?.duration_ms}
       sessionId={activeSessionId ?? ''}
@@ -526,6 +806,27 @@ function wouldToolCallBeVisible(
   errorFlag: boolean,
   verboseChatEnabled: boolean,
 ): boolean {
+  if (tool === 'set_goal') {
+    // ADR-082 D9: set_goal renders via its own dedicated UI
+    // (SetGoalCardBlock), which pre-empts GenericToolCall on both paths.
+    // "Visible" here must mean "that UI actually renders something", so
+    // this consults the SAME decision table the block renders from
+    // (classifySetGoalCall, review S4) — verbose chat shows the raw call,
+    // a failed call shows its quiet failure line, a record shows the card,
+    // a present-but-unparseable result shows a chip; only a still-running
+    // call (no result yet) or a completed call with no result at all is
+    // hidden, so a bubble consisting solely of one still shows the
+    // ThinkingIndicator rather than a blank shell.
+    return (
+      classifySetGoalCall({
+        args: params,
+        result,
+        isRunning: false,
+        isError: errorFlag,
+        verboseChatEnabled,
+      }) !== 'hidden'
+    )
+  }
   const isError = errorFlag || isMarshalErrorSentinel(result) || detectToolResultSentinels(result).any
   return shouldRenderToolCall(tool, params, verboseChatEnabled, isError)
 }
@@ -783,10 +1084,17 @@ export function VirtualUserMessageRow({
 
 /** Standalone system message row for the virtualizer. */
 function VirtualSystemMessageRow({ message }: { message: ChatMessage }) {
+  // Operator-reported UX fix, 2026-09-08: see SystemMessage's identical
+  // discriminator (live path) for the full rationale.
+  const isGoalAck = !!message.goalAckGoalId
+  // ADR-085 BROWSER-FR-042/FR-044 (wave B8, C-90): see SystemMessage's
+  // identical isBrowserHandoverNotice discriminator for the full rationale.
+  const isBrowserHandoverNotice = !!message.browserHandoverNoticeId
   return (
     <div
       data-message-role="system"
       data-message-id={message.id}
+      data-testid={isGoalAck ? 'goal-ack-line' : isBrowserHandoverNotice ? 'browser-handover-notice' : undefined}
       className="flex justify-center py-2"
     >
       <div className="text-xs text-[var(--color-muted)] bg-[var(--color-surface-2)] px-3 py-1 rounded-full">
@@ -865,6 +1173,11 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // Hooks) — reading getState() instead would silently freeze this row's
   // gating at whatever the preference was on its last actual re-render.
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  // Operator-reported UX fix, 2026-09-08: goal-aware thinking-indicator
+  // label + goal-setup failure line (replay/historical path) — see
+  // deriveGoalAwareThinkingLabel's and GoalSetupFailureLine's doc comments.
+  const goalStatus = useChatStore((s) => s.goalStatus)
+  const goalRecordEmpty = isGoalRecordEmpty(goalStatus)
 
   const messageAgentId = message.agentId ?? activeAgentId
   const agent = agents.find((a) => a.id === messageAgentId)
@@ -942,6 +1255,16 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   const visibleSpans = (message.spans ?? []).filter((span) => shouldRenderSubagentSpan(span, verboseChatEnabled))
   const showEmptyPlaceholder =
     !!message.isStreaming && !hasContent && !hasVisibleToolCalls && !hasMedia && !visibleSpans.length
+  // Operator-reported UX fix, 2026-09-08: same override as the live path's
+  // InlineThinkingIndicator, applied to the historical/virtualized "still
+  // streaming" placeholder (PlainMessageList renders an in-flight message
+  // through THIS row too — see the D-fix comment on hasContent above).
+  const emptyPlaceholderLabel = goalRecordEmpty
+    ? deriveGoalAwareThinkingLabel(
+        positionedToolCalls.filter((tc) => tc.status === 'running').map((tc) => tc.tool),
+        true,
+      )
+    : null
 
   return (
     <div
@@ -969,7 +1292,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
           </span>
         )}
         <div className="text-sm leading-relaxed text-[var(--color-secondary)]">
-          {showEmptyPlaceholder && <ThinkingIndicator />}
+          {showEmptyPlaceholder && <ThinkingIndicator label={emptyPlaceholderLabel} />}
           {/* Media attachments */}
           {!showEmptyPlaceholder && mediaItems.length > 0 && (
             <div className="flex flex-col gap-2 mb-2">
@@ -1087,6 +1410,50 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                   status={replayPartStatus(tc.status)}
                   isError={tc.status === 'error'}
                 />
+              )
+            }
+            // ADR-082 D9: set_goal renders its dedicated record card
+            // (SetGoalCardBlock) at the call's own interleaved position,
+            // built from the call's own result — never GenericToolCall
+            // (which self-gates set_goal to null; see toolVisibility.ts's
+            // `set_goal` case). Mirrors the live registration
+            // (SetGoalToolUI, OmnipusRuntimeProvider.tsx) so replay and
+            // live render identically.
+            if (tc.tool === 'set_goal') {
+              // `tc.result` is passed UNCHANGED (review S12): on replay it
+              // is the persisted `{ text: "<payload json>" }` envelope,
+              // which SetGoalCardBlock's parser unwraps itself. The store's
+              // resolved outcome (`status`/`error`) is passed explicitly so
+              // a failed registration renders its quiet trace (review S4).
+              return (
+                <SetGoalCardBlock
+                  key={callId}
+                  args={tc.params}
+                  result={tc.result}
+                  status={replayPartStatus(tc.status)}
+                  isRunning={tc.status === 'running'}
+                  isError={tc.status === 'error'}
+                  error={tc.error}
+                  durationMs={tc.duration_ms}
+                  sessionId={activeSessionId ?? ''}
+                />
+              )
+            }
+            // Operator-reported UX fix, 2026-09-08: same narrow override as
+            // the live path's FallbackToolUI — see GoalSetupFailureLine.tsx's
+            // file doc comment. Only intercepts a call that would otherwise
+            // render visibly (toolVisibility.ts's hidden-tool contract for
+            // background delegate/bash calls is unaffected — they stay
+            // hidden regardless), outside verbose chat, while a goal is
+            // active with an empty record.
+            if (
+              tc.status === 'error' &&
+              !verboseChatEnabled &&
+              goalRecordEmpty &&
+              shouldRenderToolCall(tc.tool, tc.params as Record<string, unknown> | undefined, false, true)
+            ) {
+              return (
+                <GoalSetupFailureLine key={callId} toolName={tc.tool} result={tc.result} error={tc.error} />
               )
             }
             return (
@@ -3047,8 +3414,17 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
           {/* Goal echo / amendment cards — ADR-053 FE-8: the compiled goal is
               echoed IN CHAT (no form/modal) when a pill is in `queued` state
               (newly compiled, awaiting the user's chat confirmation). Renders
-              nothing when no queued pills exist. */}
-          <GoalThreadTailCards />
+              nothing when no queued pills exist.
+              MOVED (operator report, 2026-09-07): this used to render here,
+              in this non-scrolling slot between the message list and the
+              composer — a long criteria/DoD ladder could overflow it with
+              the Confirm/Amend/Cancel buttons pushed off screen and
+              unreachable. It now renders INSIDE the scrollable message-list
+              container instead (see PlainMessageList / VirtualizedMessageListInner
+              below), so it scrolls with the transcript and the buttons are
+              always reachable. AskUserQuestionThreadTail stays here — its
+              tabbed one-question-at-a-time view is short and has no such
+              overflow risk. */}
 
           {/* AskUserQuestion card — askuserquestion-tool-spec v3 (ADR-074
               D4b): the flat, tabbed question zone (pending) or the collapsed

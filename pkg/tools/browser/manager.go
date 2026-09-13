@@ -134,6 +134,38 @@ type BrowserConfig struct {
 	// this to its own served start page so a reopened panel lands somewhere
 	// branded and actionable rather than on a blank void that reads as broken.
 	StartPageURL string `json:"start_page_url,omitempty"`
+
+	// --- ADR-085 browser control handover (BROWSER-FR-031a/FR-052) ---
+
+	// ControlIdleRelease is the LiveViewRegistry idle-release sweeper's
+	// window (tools.browser.control_idle_release), ALREADY resolved to its
+	// effective value by config.BrowserToolConfig.EffectiveControlIdleReleaseSec
+	// before it reaches here (registerSharedTools' translation) — this
+	// field never sees the raw "0 means unset" config zero value, only the
+	// resolved default (900s) or an explicit override. Zero here means the
+	// operator explicitly disabled expiry (an indefinite hold, opt-in only).
+	// Named to match this field's own config key rather than the
+	// IdleTTL/IdleCloseTTL naming above, because it governs a DIFFERENT
+	// thing (a held control lock, not a browsing context).
+	//
+	// It carries NO "Sec" suffix even though its config counterpart does:
+	// this one is a time.Duration (the suffix would be a lie, and
+	// staticcheck's ST1011 says so), while config.BrowserToolConfig's
+	// ControlIdleReleaseSec is an int of seconds and earns it. Two
+	// differently-typed fields, one config key — the translation between
+	// them is loop.go's registerSharedTools.
+	ControlIdleRelease time.Duration `json:"control_idle_release,omitempty"`
+	// TakeControlEnabled mirrors config.BrowserToolConfig.TakeControlEnabled
+	// (tools.browser.take_control_enabled). Read by the sweeper on every
+	// tick (BROWSER-FR-052): with this false, no take can succeed
+	// (pkg/gateway/browser_ws.go's own check), and this field is what lets
+	// the sweeper release an ALREADY-held wheel left over from before the
+	// flag flipped, on its own regardless of whether the panel is even
+	// attached — see LiveViewRegistry.sweepTick. A config reload rebuilds
+	// this manager wholesale (registerSharedTools' Shutdown-old/install-new
+	// pattern), so this value is as "live" as every other field on this
+	// struct: current as of the last reload, not baked in at process start.
+	TakeControlEnabled bool `json:"take_control_enabled,omitempty"`
 }
 
 // DefaultConfig returns a BrowserConfig with spec-defined defaults.
@@ -3927,6 +3959,16 @@ func (m *BrowserManager) InvalidateExecPathCache() {
 // Chrome. Either way the bookkeeping (sessions, started, allocCancel) is
 // reset cleanly and idempotently.
 func (m *BrowserManager) Shutdown() {
+	// ADR-085 FR-031a: stop this manager's LiveViewRegistry idle-release
+	// sweeper goroutine before anything else — otherwise a hot-reload
+	// (registerSharedTools' Shutdown-old/install-new pattern) leaks one
+	// sweeper goroutine per reload. m.live is set unconditionally by
+	// NewBrowserManager, so this is nil-guarded only for hand-built test
+	// managers that skip that constructor.
+	if m.live != nil {
+		m.live.Shutdown()
+	}
+
 	// Fix-wave CRIT (reviewer 1, conf 88): stop this manager's WebRTC
 	// CaptureSession, if any, BEFORE the connection/session teardown below.
 	// Without this, a live capturing session was orphaned by Shutdown — its

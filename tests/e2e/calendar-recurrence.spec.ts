@@ -108,10 +108,40 @@ async function deleteTestWorkspace(workspaceId: string): Promise<void> {
 
 // ── Task REST helpers (LLM-independent seeding + persistence checks) ──────────
 
+/**
+ * Seeds a task over REST for the calendar-rendering assertions below.
+ *
+ * `criteria` and `dod` are BOTH mandatory at creation (operator decision D-C,
+ * 2026-09-11; GOAL-FR-021/FR-047/FR-048) and the DoD must be DISTINCT from the
+ * acceptance criteria — `POST /api/v1/tasks` answers 400 naming whichever list
+ * is missing. Every caller here seeds a task purely so a CHIP renders on the
+ * calendar; none is ever dispatched or judged, so the gate is satisfied once,
+ * here, with a caller override left available for a test that needs specific
+ * text.
+ */
 async function createTaskApi(body: Record<string, unknown>): Promise<ApiTask> {
   const ctx = await newAdminApiContext();
+  const withGoalLists = {
+    criteria: [
+      {
+        kind: 'prose',
+        text: 'the scheduled task fires on its trigger',
+        author: { kind: 'user', id: 'admin' },
+        status: 'pending',
+      },
+    ],
+    dod: [
+      {
+        kind: 'prose',
+        text: 'the run is recorded against this task',
+        author: { kind: 'user', id: 'admin' },
+        status: 'pending',
+      },
+    ],
+    ...body,
+  };
   try {
-    const res = await ctx.post('/api/v1/tasks', { data: body });
+    const res = await ctx.post('/api/v1/tasks', { data: withGoalLists });
     if (!res.ok()) {
       const respBody = await res.text();
       throw new Error(`createTaskApi failed ${res.status()}: ${respBody}`);
@@ -310,6 +340,34 @@ test(
       await page.getByRole('combobox', { name: 'Agent' }).click();
       await page.getByRole('option', { name: /Mia/ }).first().click();
       await page.locator('#ces-prompt').fill('Post the sprint status summary to the team channel.');
+
+      // Acceptance criteria + Definition of Done are BOTH mandatory on this
+      // slide-over, on create and on edit (operator decision D-C, 2026-09-11;
+      // GOAL-FR-021/FR-047/FR-048/FR-053). CalendarEventSlideOver refuses to
+      // save with either list empty (it sets criteriaError/dodError and keeps
+      // the panel open), and the server answers 400 behind it — so they are
+      // filled here, alongside agent + instruction and BEFORE the recurrence
+      // rejection sub-check below, so that sub-check still isolates recurrence
+      // validity and nothing else.
+      //
+      // The two editors are AcceptanceCriteriaEditor and its thin wrapper
+      // DefinitionOfDoneEditor, so BOTH render a button named "Add criterion";
+      // each is scoped to its own editor via that editor's uniquely-labelled
+      // text input (aria-label "What must be true when this is done?" vs
+      // "Definition of Done item") rather than by nth(), which would silently
+      // follow DOM order if the panel is ever reordered.
+      const addUnderInput = (inputLabel: string) =>
+        slideOver.getByLabel(inputLabel, { exact: true }).locator('xpath=..');
+
+      const criteriaBlock = addUnderInput('What must be true when this is done?');
+      await criteriaBlock.getByLabel('What must be true when this is done?', { exact: true })
+        .fill('The sprint status summary is posted to the team channel.');
+      await criteriaBlock.getByRole('button', { name: 'Add criterion' }).click();
+
+      const dodBlock = addUnderInput('Definition of Done item');
+      await dodBlock.getByLabel('Definition of Done item', { exact: true })
+        .fill('The post is visible in the channel and names the sprint.');
+      await dodBlock.getByRole('button', { name: 'Add criterion' }).click();
 
       // Open the Repeat dropdown and select "Custom…".
       await page.locator('#recurrence-preset').click();

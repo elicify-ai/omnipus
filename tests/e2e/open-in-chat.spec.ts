@@ -109,10 +109,33 @@ test(
     // supplied by the client at creation. This is a real assertion, not a
     // soft-skip: a regression in task creation must fail the suite, not
     // silently vanish (see docs/internal/false-green-patterns.md).
+    //
+    // `criteria` and `dod` are BOTH mandatory at creation (operator decision
+    // D-C, 2026-09-11; GOAL-FR-021/FR-047/FR-048): the server answers 400
+    // naming whichever list is missing, and the DoD must be DISTINCT from the
+    // acceptance criteria. This task is inert scaffolding for the deep-link
+    // assertion below — it is never dispatched or judged — so both lists are
+    // the smallest honest pair that satisfies the gate.
     const taskResp = await apiFetch('POST', '/api/v1/tasks', {
       title: 'e2e-open-in-chat-test',
       prompt: 'Test task for open-in-chat e2e',
       workspace_id: workspaceId,
+      criteria: [
+        {
+          kind: 'prose',
+          text: 'the open-in-chat deep link reaches a live, working chat session',
+          author: { kind: 'user', id: 'admin' },
+          status: 'pending',
+        },
+      ],
+      dod: [
+        {
+          kind: 'prose',
+          text: 'this task exists in the workspace and is reachable by id',
+          author: { kind: 'user', id: 'admin' },
+          status: 'pending',
+        },
+      ],
     })
     expect(taskResp.ok, `POST /api/v1/tasks failed: ${JSON.stringify(taskResp.body)}`).toBe(true)
 

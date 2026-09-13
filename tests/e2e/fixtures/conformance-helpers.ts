@@ -174,6 +174,15 @@ export interface MemberSpec {
   /** Labels of members this one depends on; resolved to real task IDs. */
   blocked_by_labels?: string[]
   criteria: Criterion[]
+  /**
+   * Definition of Done — operator decision D-C (2026-09-11): criteria AND a
+   * definition of done are MANDATORY at task creation and at edit, and the
+   * DoD must be DISTINCT from the acceptance criteria (GOAL-FR-021/FR-048).
+   * `POST /api/v1/tasks` rejects a body with an empty/absent `dod` with HTTP
+   * 400. Optional here only so a member that does not care can inherit
+   * `defaultMemberDoD()` — createPlanMember always sends one.
+   */
+  dod?: Criterion[]
   max_attempts?: number
 }
 
@@ -187,6 +196,35 @@ export interface PlanFields {
 
 export function proseCriterion(text: string): Criterion {
   return { kind: 'prose', text, author: { kind: 'user', id: 'admin' }, status: 'pending' }
+}
+
+/**
+ * The default Definition of Done for a conformance fixture task.
+ *
+ * Operator decision D-C (2026-09-11) made criteria AND a definition of done
+ * mandatory at creation and at edit; `POST /api/v1/tasks` answers a body
+ * without `dod` with HTTP 400 ("dod is required: a task must have at least
+ * one definition-of-done item, DISTINCT from its acceptance criteria" —
+ * GOAL-FR-021/FR-048). Every conformance fixture therefore has to supply one.
+ *
+ * Deliberately a DELIVERY statement ("the assignee ran this task and left a
+ * reply on the record"), never a restatement of the member's acceptance
+ * criterion: the two lists have to differ, and a DoD that duplicates the
+ * criterion would also make the criterion's own met/unmet outcome — which is
+ * what these conformance tests actually assert — ambiguous.
+ *
+ * Deliberately PROSE, never `kind: check`: a check criterion is dispatched
+ * through the ASSIGNEE's own `bash` tool, and a conformance worker created by
+ * `createMainAgent` with no `builtinPolicies` override is seeded fully
+ * deny-by-default, so a check would fail closed on every member regardless of
+ * its command (see checkCriterion's own doc comment).
+ */
+export function defaultMemberDoD(label: string): Criterion[] {
+  return [
+    proseCriterion(
+      `the assignee ran the "${label}" task to completion and left its reply on the task record`,
+    ),
+  ]
 }
 
 /**
@@ -359,6 +397,10 @@ export async function createPlanMember(
     agent_id: agentId,
     plan_id: planId,
     criteria: member.criteria,
+    // D-C: mandatory at creation, distinct from `criteria` — see MemberSpec.dod
+    // and defaultMemberDoD. Without it POST /tasks answers 400 and no member
+    // is ever created.
+    dod: member.dod ?? defaultMemberDoD(member.label),
   }
   if (member.write_set !== undefined) body.write_set = member.write_set
   if (member.stream !== undefined) body.stream = member.stream

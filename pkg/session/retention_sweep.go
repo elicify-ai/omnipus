@@ -8,12 +8,59 @@ import (
 	"time"
 )
 
+// goalRetentionSweepFn is a package-level, swappable hook (GOAL-FR-043,
+// C-26, wave S3) that RetentionSweep invokes as a SEPARATE pass, strictly
+// AFTER its own lockAllSessionShards hold has been fully released — never
+// nested inside it. It receives the exact retentionDays RetentionSweep
+// itself was called with ("same schedule, same retention-days argument",
+// C-26's own words), so a goal record ages out under precisely the rule
+// this method already applies to session transcripts.
+//
+// The zero value (nil) is a no-op: a build that never wires a goal store
+// behaves exactly as it did before ADR-086. This package deliberately does
+// NOT import pkg/goal (mirrors pkg/goal/doc.go's "this package does not
+// itself import pkg/session" the other way round) — a direct
+// *goal.Store-typed hook here would force pkg/session to import pkg/goal,
+// and pkg/goal/retention.go's own hook contract (its sessionExists
+// predicate) needs the opposite direction to stay dependency-free, which
+// would be a real import cycle if both packages depended on each other.
+// Keeping this hook's signature free of any pkg/goal type means the
+// closure that DOES know about *goal.Store — built by whichever component
+// constructs both a *session.UnifiedStore and a *goal.Store together, via
+// SetGoalRetentionSweepFn — lives in that (necessarily higher-level)
+// package instead, exactly the way this package's own
+// retentionToolResultSweepFn/retentionTaskRunSweepFn hooks are wired in
+// pkg/gateway/gateway.go today.
+//
+// A non-nil error from the hook is logged at Warn and does not fail
+// RetentionSweep's own return value — the session-file sweep already
+// completed successfully by the time the hook runs, and a goal-side sweep
+// failure must not be reported as "the whole retention sweep failed" (this
+// mirrors executeSweepTick's existing treatment of
+// retentionToolResultSweepFn/retentionTaskRunSweepFn's own errors).
+var goalRetentionSweepFn func(retentionDays int) (removed int, err error)
+
+// SetGoalRetentionSweepFn installs (or, passed nil, uninstalls) the goal
+// retention hook RetentionSweep calls after releasing its session-shard
+// lock. Intended to be called once, at boot, before any concurrent sweep
+// can run — mirroring this codebase's existing SetXxx hook-injection
+// convention (e.g. pkg/agent's SetLiveWindowLookup, pkg/providers'
+// SetDefaultCredentialStore) rather than adding a mutex no other hook of
+// this shape in this codebase carries.
+func SetGoalRetentionSweepFn(fn func(retentionDays int) (removed int, err error)) {
+	goalRetentionSweepFn = fn
+}
+
 // RetentionSweep deletes .jsonl files inside session subdirectories whose
 // mtime is older than retentionDays*24h. It returns the count of files deleted.
 //
-// When retentionDays <= 0 the method is a no-op and returns (0, nil).
+// When retentionDays <= 0 the method is a no-op and returns (0, nil) —
+// goalRetentionSweepFn is not invoked either in that case, keeping the two
+// stores' "retention disabled" behaviour identical (GOAL-FR-043).
 // Per-file delete errors are logged at Warn and the sweep continues.
-// An error is returned only if the base directory walk cannot start.
+// An error is returned only if the base directory walk cannot start; on
+// that path the goal hook is also skipped, since "same schedule" does not
+// mean "run even when the session sweep itself never completed".
 //
 // After all aged .jsonl files are removed, session directories that contain
 // zero remaining .jsonl files are removed entirely (sidecar metadata and
@@ -39,13 +86,20 @@ import (
 // holds one lock for its entire call], so 64-in-index-order is not a
 // regression" — and batching the shard acquisition would reintroduce the
 // exact lock-order question this design closes.
+//
+// Cross-package lock order (ADR-086, C-26, this file's own contribution to
+// the chain documented authoritatively in unified_lock.go): goalLock ->
+// sessionLock -> cacheMu, one-directional. This method therefore unlocks
+// its own session shards EXPLICITLY (not via a deferred call reaching all
+// the way to function return) before ever invoking goalRetentionSweepFn,
+// on every return path — nothing inside the lockAllSessionShards hold may
+// call into a goal store, in either direction.
 func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 	if retentionDays <= 0 {
 		return 0, nil
 	}
 
 	unlock := us.lockAllSessionShards()
-	defer unlock()
 
 	cutoff := time.Now().Add(-time.Duration(retentionDays) * 24 * time.Hour)
 	removed := 0
@@ -118,6 +172,7 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 		return nil
 	})
 	if err != nil {
+		unlock()
 		return removed, err
 	}
 
@@ -171,6 +226,23 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 		if rmErr := os.RemoveAll(uploadsDir); rmErr != nil && !os.IsNotExist(rmErr) {
 			slog.Warn("session: retention_sweep: cascade-delete uploads failed",
 				"session_id", sessID, "error", rmErr)
+		}
+	}
+
+	// Cross-package lock order (see this method's doc comment and
+	// unified_lock.go's authoritative copy): every session shard is
+	// released here, BEFORE the goal retention pass — never nested inside
+	// lockAllSessionShards's hold, in either direction.
+	unlock()
+
+	if goalRetentionSweepFn != nil {
+		goalRemoved, goalErr := goalRetentionSweepFn(retentionDays)
+		if goalErr != nil {
+			slog.Warn("session: retention_sweep: goal sweep failed",
+				"error", goalErr)
+		} else if goalRemoved > 0 {
+			slog.Info("session: retention_sweep: goal records removed",
+				"removed", goalRemoved, "retention_days", retentionDays)
 		}
 	}
 

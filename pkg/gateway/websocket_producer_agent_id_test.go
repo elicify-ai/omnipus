@@ -140,7 +140,8 @@ func TestWsStreamer_SetProducerAgentID_EmptyIsNoop(t *testing.T) {
 //	Then the persisted assistant transcript entry's AgentID is
 //	  "ava-worker" — not "jim".
 func TestWsStreamer_Finalize_AttributesTranscriptToProducerAgentID(t *testing.T) {
-	_, _, al := newTestWSHandler(t)
+	handler, _, al := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
 
 	store := al.GetSessionStore()
 	require.NotNil(t, store, "session store must exist")
@@ -154,13 +155,14 @@ func TestWsStreamer_Finalize_AttributesTranscriptToProducerAgentID(t *testing.T)
 		doneCh:         make(chan struct{}),
 		replayDivertCh: make(chan []byte, replayLiveBufferCap),
 	}
+	bindTestConnToSession(handler, "chat-producer-attr", meta.ID, wc)
 
 	s := &wsStreamer{
-		conn:       wc,
 		chatID:     "chat-producer-attr",
 		sessionID:  meta.ID,
 		agentStore: store,
 		agentID:    "jim", // GetStreamer-time guess: the parent.
+		channel:    newWebchatChannel(handler),
 	}
 
 	s.SetProducerAgentID("ava-worker") // the agent loop stamps the true delegate.
@@ -197,7 +199,8 @@ func TestWsStreamer_Finalize_AttributesTranscriptToProducerAgentID(t *testing.T)
 // Traces to: pkg/gateway/websocket.go wsStreamer.SetTurnID / Finalize;
 // pkg/agent/turn.go stampStreamerTurnID.
 func TestWsStreamer_Finalize_StampsTurnID(t *testing.T) {
-	_, _, al := newTestWSHandler(t)
+	handler, _, al := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
 
 	store := al.GetSessionStore()
 	require.NotNil(t, store, "session store must exist")
@@ -211,12 +214,13 @@ func TestWsStreamer_Finalize_StampsTurnID(t *testing.T) {
 		doneCh:         make(chan struct{}),
 		replayDivertCh: make(chan []byte, replayLiveBufferCap),
 	}
+	bindTestConnToSession(handler, "chat-turnid-emission", meta.ID, wc)
 	s := &wsStreamer{
-		conn:       wc,
 		chatID:     "chat-turnid-emission",
 		sessionID:  meta.ID,
 		agentStore: store,
 		agentID:    "jim",
+		channel:    newWebchatChannel(handler),
 	}
 	s.SetTurnID("turn-xyz")
 
@@ -271,7 +275,8 @@ func TestWsStreamer_SetTurnID_EmptyIsNoop(t *testing.T) {
 //	  (exactly as pkg/agent/cancel.go's RequestCancel does),
 //	Then the REAL persisted entry is found and flagged Truncated=true.
 func TestWsStreamer_Finalize_TurnIDEnablesMarkLastEntryTruncatedCorrelation(t *testing.T) {
-	_, _, al := newTestWSHandler(t)
+	handler, _, al := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
 
 	store := al.GetSessionStore()
 	require.NotNil(t, store, "session store must exist")
@@ -285,13 +290,14 @@ func TestWsStreamer_Finalize_TurnIDEnablesMarkLastEntryTruncatedCorrelation(t *t
 		doneCh:         make(chan struct{}),
 		replayDivertCh: make(chan []byte, replayLiveBufferCap),
 	}
+	bindTestConnToSession(handler, "chat-turnid-corr", meta.ID, wc)
 
 	s := &wsStreamer{
-		conn:       wc,
 		chatID:     "chat-turnid-corr",
 		sessionID:  meta.ID,
 		agentStore: store,
 		agentID:    "jim",
+		channel:    newWebchatChannel(handler),
 	}
 	// Exactly what the agent loop does via stampStreamerProducerAgentID /
 	// stampStreamerTurnID immediately after obtaining the streamer.

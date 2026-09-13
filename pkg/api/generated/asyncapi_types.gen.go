@@ -153,6 +153,16 @@ type BrowserDetachFrame struct {
 	Type      string  `json:"type"`
 }
 
+// BrowserHandoverNoticeFrame — Server → client. ADR-085 BROWSER-FR-041/FR-042 visible waiting surface. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). THIS is the GENERATING copy (C-69: a WebSocket frame's generating copy is the inline schema here, not components/schemas/BrowserHandoverNoticeFrame.yaml, which exists only for the Constraint #8 5-step process and the pkg/gateway/inboundschemas/ sync) — keep both in sync by hand.
+type BrowserHandoverNoticeFrame struct {
+	// BROWSER-FR-044 — deterministic id from (sessionID, holdStartedAtUnixNano), reused verbatim for every emission within one unbroken hold; the SAME id is stamped onto the persisted transcript entry.
+	MessageId string `json:"message_id"`
+	SessionId string `json:"session_id"`
+	// BROWSER-FR-041/FR-048a. Includes the browser_handover tool's reason (plain text, truncated to 200 runes) when that is the producer.
+	Text string `json:"text"`
+	Type string `json:"type"`
+}
+
 // BrowserInputFrame — Client → server. A viewer input event to inject into the live browser via CDP Input.dispatch*. Only honoured while the viewer holds control (browser_control action=take). Coordinates are device (CSS) pixels of the WebRTC video frame, UNLESS capture_width/capture_height are present — then x/y are in that capture-frame pixel space and the server rescales them into the tab's real CSS viewport before dispatch (root cause 2026-07-31, fault 3).
 type BrowserInputFrame struct {
 	Button *string `json:"button,omitempty"`
@@ -384,7 +394,7 @@ type GoalStatusFrame struct {
 	ActiveLoops int    `json:"active_loops"`
 	Cap         int    `json:"cap"`
 	Condition   string `json:"condition"`
-	// ADR-074 D5.2 / judgment-first FR-011 — compiled criteria breakdown for the `queued` (pending-confirm) emission. Items are a hand-synced INLINE duplicate of the canonical components/schemas/AcceptanceCriterion.yaml shape (AsyncAPI does not resolve cross-file $ref for its own codegen — the JudgeVerdictFrame/CriterionVerdict precedent); keep both in sync by hand, never a third criteria shape.
+	// ADR-074 D5.2 / judgment-first FR-011 — compiled criteria breakdown for the `active` emission that follows a goal record register/update (ADR-081 `set_goal`) or marker activation. Items are a hand-synced INLINE duplicate of the canonical components/schemas/AcceptanceCriterion.yaml shape (AsyncAPI does not resolve cross-file $ref for its own codegen — the JudgeVerdictFrame/CriterionVerdict precedent); keep both in sync by hand, never a third criteria shape.
 	Criteria []struct {
 		Author struct {
 			Id   string `json:"id"`
@@ -400,16 +410,17 @@ type GoalStatusFrame struct {
 			Command          string `json:"command"`
 			ExpectedExitCode int    `json:"expected_exit_code"`
 		} `json:"check,omitempty"`
-		Id         *string `json:"id,omitempty"`
-		Judgment   string  `json:"judgment"`
-		Kind       string  `json:"kind"`
-		Provenance *string `json:"provenance,omitempty"`
-		Status     string  `json:"status"`
-		Text       string  `json:"text"`
+		ClauseCount *int    `json:"clause_count,omitempty"`
+		Id          *string `json:"id,omitempty"`
+		Judgment    string  `json:"judgment"`
+		Kind        string  `json:"kind"`
+		Provenance  *string `json:"provenance,omitempty"`
+		Status      string  `json:"status"`
+		Text        string  `json:"text"`
 	} `json:"criteria,omitempty"`
-	// ADR-080 D-STATEMENT — the compiled SMART restatement, rendered before the criteria breakdown. Present on the `queued` (pending-confirm) emission; keep in sync by hand with components/schemas/GoalStatusFrame.yaml.
+	// ADR-080 D-STATEMENT — the compiled SMART restatement, rendered before the criteria breakdown. Populated on the `active` emission that follows a goal record register/update (ADR-081 `set_goal`) or marker activation; MAY be absent on marker-path records; keep in sync by hand with components/schemas/GoalStatusFrame.yaml.
 	Definition *string `json:"definition,omitempty"`
-	// ADR-080 D-DOD — the goal's Definition of Done breakdown, DISTINCT from `criteria`, for the `queued` (pending-confirm) emission. Items are a hand-synced INLINE duplicate of the canonical components/schemas/AcceptanceCriterion.yaml shape, same as `criteria` above — keep both in sync by hand with components/schemas/GoalStatusFrame.yaml.
+	// ADR-080 D-DOD — the goal's Definition of Done breakdown, DISTINCT from `criteria`, for the `active` emission that follows a goal record register/update (ADR-081 `set_goal`) or marker activation. Items are a hand-synced INLINE duplicate of the canonical components/schemas/AcceptanceCriterion.yaml shape, same as `criteria` above — keep both in sync by hand with components/schemas/GoalStatusFrame.yaml.
 	Dod []struct {
 		Author struct {
 			Id   string `json:"id"`
@@ -425,12 +436,13 @@ type GoalStatusFrame struct {
 			Command          string `json:"command"`
 			ExpectedExitCode int    `json:"expected_exit_code"`
 		} `json:"check,omitempty"`
-		Id         *string `json:"id,omitempty"`
-		Judgment   string  `json:"judgment"`
-		Kind       string  `json:"kind"`
-		Provenance *string `json:"provenance,omitempty"`
-		Status     string  `json:"status"`
-		Text       string  `json:"text"`
+		ClauseCount *int    `json:"clause_count,omitempty"`
+		Id          *string `json:"id,omitempty"`
+		Judgment    string  `json:"judgment"`
+		Kind        string  `json:"kind"`
+		Provenance  *string `json:"provenance,omitempty"`
+		Status      string  `json:"status"`
+		Text        string  `json:"text"`
 	} `json:"dod,omitempty"`
 	// ADR-053 R§8.11 — the specific goal-id this pill/timer/round- budget belongs to (a session may carry multiple independent goals). Optional — see components/schemas/GoalStatusFrame.yaml for the shape decision.
 	GoalId       *string `json:"goal_id,omitempty"`
@@ -441,7 +453,7 @@ type GoalStatusFrame struct {
 	// Adjudications consumed so far (ADR-053 R§8.9 — one round = one adjudication, claim-triggered OR idle-settled).
 	Round     int    `json:"round"`
 	SessionId string `json:"session_id"`
-	// ADR-053 §Contract Surface — "Pill-state enum"/R§8.10 crosswalk (originally 8 states, superseding the earlier 4-value active/paused_judge_unavailable/brake_fired/cleared set — no back-compat at the time; `cleared` re-added as a 9th value by the UAT S3 fix so a user-initiated `/goal clear` no longer collapses into `failed`). See components/schemas/GoalStatusFrame.yaml for the full per-state crosswalk description.
+	// ADR-053 §Contract Surface — "Pill-state enum"/R§8.10 crosswalk (originally 8 states, superseding the earlier 4-value active/paused_judge_unavailable/brake_fired/cleared set — no back-compat at the time; `cleared` re-added as a 9th value by the UAT S3 fix so a user-initiated `/goal clear` no longer collapses into `failed`). Five values ADDED by the joint ADR-084/ADR-085/ADR-086 delivery (C-39): `judge_refused_god_mode` (JUDGE-FR-057a), `judge_cas_loss` (JUDGE-FR-083, reason string stays `cas_loss`), `blocked` (JUDGE-FR-093, not terminal), `claim_overturned` (JUDGE-FR-102, not terminal), `expired` (ADR-086 GOAL-FR-028, terminal). See components/schemas/GoalStatusFrame.yaml for the full per-state crosswalk description.
 	State string `json:"state"`
 	Type  string `json:"type"`
 }
@@ -454,10 +466,19 @@ type JudgeVerdictFrame struct {
 	Met          bool   `json:"met"`
 	Model        string `json:"model"`
 	PerCriterion []struct {
-		CriterionId   string  `json:"criterion_id"`
-		EvidenceQuote *string `json:"evidence_quote,omitempty"`
-		Met           bool    `json:"met"`
-		Reason        string  `json:"reason"`
+		CriterionId string `json:"criterion_id"`
+		Evidence    []struct {
+			Part   string  `json:"part"`
+			Quote  string  `json:"quote"`
+			Source *string `json:"source,omitempty"`
+			Target *string `json:"target,omitempty"`
+		} `json:"evidence,omitempty"`
+		EvidenceQuote  *string `json:"evidence_quote,omitempty"`
+		EvidenceSource *string `json:"evidence_source,omitempty"`
+		EvidenceTarget *string `json:"evidence_target,omitempty"`
+		Met            bool    `json:"met"`
+		Provenance     *string `json:"provenance,omitempty"`
+		Reason         string  `json:"reason"`
 	} `json:"per_criterion"`
 	PlanId *string `json:"plan_id,omitempty"`
 	Round  int     `json:"round"`
@@ -668,15 +689,26 @@ type SessionStartedFrame struct {
 	Type               string  `json:"type"`
 }
 
+// SessionStateActiveTurn — ADR-082 D4 — the in-flight foreground turn of the session a connection has just bound to. Keep in sync by hand with components/schemas/SessionStateActiveTurn.yaml.
+type SessionStateActiveTurn struct {
+	AgentId   string `json:"agent_id"`
+	StartedAt string `json:"started_at"`
+	TurnId    string `json:"turn_id"`
+}
+
 // SessionStateFrame — Server → client reconnect approval snapshot (FR-052, FR-073, FR-081). pending_approvals MUST be an array (never null). Backend coerces nil → []. SPA calls pending_approvals.map() — null crashes at render time.
 type SessionStateFrame struct {
-	EmittedAt string `json:"emitted_at"`
+	// ADR-082 D4 — present only when the attached session has a foreground turn in flight at emit time. Absent when idle. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
+	ActiveTurn *SessionStateActiveTurn `json:"active_turn,omitempty"`
+	EmittedAt  string                  `json:"emitted_at"`
 	// Always array, never null. Capped at 1000.
 	PendingApprovals []SessionStatePendingApproval `json:"pending_approvals"`
 	// askuserquestion-tool-spec v3 US-6 S1/FR-9 — snapshot of every PENDING AskUserQuestion card (global registry cap 64) so a reconnecting SPA re-hydrates its card + composer lock. Optional (older gateways omit it); absent/empty means no pending sets.
 	PendingAsks []AskUserQuestionCard `json:"pending_asks,omitempty"`
-	Type        string                `json:"type"`
-	UserId      string                `json:"user_id"`
+	// ADR-082 (review CR3) — the transcript session this snapshot describes; absent on the connection-open emit. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
+	SessionId *string `json:"session_id,omitempty"`
+	Type      string  `json:"type"`
+	UserId    string  `json:"user_id"`
 }
 
 // SessionStatePendingApproval — One pending approval entry in a SessionStateFrame.
@@ -983,4 +1015,5 @@ const (
 	WsFrameTypeJudgeVerdict             WsFrameType = "judge_verdict"
 	WsFrameTypeAskUserQuestion          WsFrameType = "ask_user_question"
 	WsFrameTypeAskUserAnswer            WsFrameType = "ask_user_answer"
+	WsFrameTypeBrowserHandoverNotice    WsFrameType = "browser_handover_notice"
 )

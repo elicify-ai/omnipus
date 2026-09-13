@@ -6,7 +6,7 @@
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_handover_notice"]);
 
 export const AuthFrame = z
   .object({
@@ -507,12 +507,22 @@ export const SessionStatePendingApproval = z
   })
   .strict();
 
+export const SessionStateActiveTurn = z
+  .object({
+    turn_id: z.string(),
+    agent_id: z.string(),
+    started_at: z.string(),
+  })
+  .strict();
+
 export const SessionStateFrame = z
   .object({
     type: z.literal("session_state"),
     user_id: z.string(),
     pending_approvals: z.array(SessionStatePendingApproval).max(1000),
     pending_asks: z.array(AskUserQuestionCard).max(64).optional(),
+    session_id: z.string().optional(),
+    active_turn: SessionStateActiveTurn.optional(),
     emitted_at: z.string(),
   })
   .strict();
@@ -795,7 +805,7 @@ export const GoalStatusFrame = z
     latest_reason: z.string(),
     active_loops: z.number().int().min(0),
     cap: z.number().int().min(1),
-    state: z.enum(["queued", "active", "waiting_on_user", "judge_unavailable", "re-planning", "judging", "done", "failed", "cleared"]),
+    state: z.enum(["queued", "active", "waiting_on_user", "judge_unavailable", "re-planning", "judging", "done", "failed", "cleared", "judge_refused_god_mode", "judge_cas_loss", "blocked", "claim_overturned", "expired"]),
     producing_session_id: z.string().min(1).optional(),
     criteria: z.array(z
     .object({
@@ -825,6 +835,7 @@ export const GoalStatusFrame = z
       })
       .strict(),
       status: z.enum(["pending", "met", "unmet"]),
+      clause_count: z.number().int().min(1).optional(),
     })
     .strict()).optional(),
     dod: z.array(z
@@ -855,6 +866,7 @@ export const GoalStatusFrame = z
       })
       .strict(),
       status: z.enum(["pending", "met", "unmet"]),
+      clause_count: z.number().int().min(1).optional(),
     })
     .strict()).optional(),
   })
@@ -899,11 +911,31 @@ export const JudgeVerdictFrame = z
       met: z.boolean(),
       reason: z.string(),
       evidence_quote: z.string().max(500).optional(),
+      evidence_source: z.enum(["diff", "transcript", "machine_check", "file_read", "session_read"]).optional(),
+      evidence_target: z.string().optional(),
+      provenance: z.enum(["judge_read", "deterministic_check", "diff", "transcript", "session_read", "none"]).optional(),
+      evidence: z.array(z
+      .object({
+        part: z.string().max(1000),
+        source: z.string().optional(),
+        target: z.string().optional(),
+        quote: z.string().max(500),
+      })
+      .strict()).max(50).optional(),
     })
     .strict()),
     model: z.string(),
     judged_at: z.string(),
     judge_agent_id: z.string(),
+  })
+  .strict();
+
+export const BrowserHandoverNoticeFrame = z
+  .object({
+    type: z.literal("browser_handover_notice"),
+    session_id: z.string().min(1),
+    message_id: z.string().min(1),
+    text: z.string().max(2000),
   })
   .strict();
 
@@ -980,6 +1012,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   LoopStatusFrame,
   PlanStatusFrame,
   JudgeVerdictFrame,
+  BrowserHandoverNoticeFrame,
 ]);
 
 export type WsFrameType = z.infer<typeof WsFrameType>;
