@@ -84,6 +84,7 @@ import { collectionPathToWorkspacePath } from '../knowledge/KnowledgeBacklinks'
 import { LibraryErrorBanner } from '../LibraryErrorBanner'
 import {
   useVaultSearch,
+  VAULT_SEARCH_QUERY_MAX_CHARS,
   type LoadCollectionInfoFn,
   type VaultSearchFn,
   type VaultSearchKind,
@@ -337,14 +338,19 @@ function orderCellsForDisplay(
 
 function RecordRow({ hit, query, onOpen }: { hit: VaultSearchRecordHit; query: string; onOpen: () => void }) {
   const orderedCells = orderCellsForDisplay(hit.cells, query)
-  const shownCells = orderedCells.slice(0, 4)
+  // UAT D-137: the "+N more" affordance looked expandable but sat inside
+  // the row's open button, so clicking it opened the note. It is now its
+  // own control, a SIBLING of the open button (a button may not nest one),
+  // that reveals the withheld cells in place.
+  const [expanded, setExpanded] = useState(false)
+  const shownCells = expanded ? orderedCells : orderedCells.slice(0, 4)
   // Finding S2: silently slicing to 4 left a 7-property record showing four
   // cells NONE of which contain the search term, with nothing saying a cell
   // was withheld — a real match that reads as a non-match. Say how many were
   // left out.
   const withheldCount = hit.cells.length - shownCells.length
   return (
-    <li>
+    <li className="flex flex-col">
       <button
         type="button"
         tabIndex={0}
@@ -373,18 +379,21 @@ function RecordRow({ hit, query, onOpen }: { hit: VaultSearchRecordHit; query: s
                 {stripWikilinkNotation(cell.value)}
               </span>
             ))}
-            {withheldCount > 0 && (
-              <Badge
-                variant="secondary"
-                data-testid="vault-search-record-cells-more"
-                className="px-1.5 py-0 text-[10px] leading-4"
-              >
-                +{withheldCount} more
-              </Badge>
-            )}
           </span>
         )}
       </button>
+      {(withheldCount > 0 || expanded) && (
+        <button
+          type="button"
+          tabIndex={0}
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          data-testid="vault-search-record-cells-more"
+          className="self-start rounded px-2 pb-1 text-[10px] leading-4 text-[var(--color-muted)] underline-offset-2 hover:underline"
+        >
+          {expanded ? 'Show fewer properties' : `+${withheldCount} more ${withheldCount === 1 ? 'property' : 'properties'}`}
+        </button>
+      )}
     </li>
   )
 }
@@ -590,6 +599,12 @@ export function LibrarySearchBar({
 }: LibrarySearchBarProps) {
   const [text, setText] = useState('')
   const [filter, setFilter] = useState<VaultSearchKind>('all')
+  // UAT D-132: an over-long query is refused HERE with a sentence and never
+  // becomes a request — before, the generated client's own Zod check threw
+  // and its raw issue list was rendered verbatim as the error.
+  const queryLength = text.trim().length
+  const queryTooLong = queryLength > VAULT_SEARCH_QUERY_MAX_CHARS
+  const hookQuery = queryTooLong ? '' : text
   const [openView, setOpenView] = useState<{ view: string; label: string } | null>(null)
   const inputId = useId()
 
@@ -599,6 +614,8 @@ export function LibrarySearchBar({
     isResolvingCollection,
     collectionId,
     collectionRootPath,
+    collectionDisplayName,
+    isInsideCollection,
     error: vaultError,
     response,
     counts,
@@ -610,7 +627,7 @@ export function LibrarySearchBar({
   } = useVaultSearch({
     workspaceId,
     folderPath,
-    query: text,
+    query: hookQuery,
     ...(limit === undefined ? {} : { limit }),
     ...(debounceMs === undefined ? {} : { debounceMs }),
     ...(searchFn === undefined ? {} : { searchFn }),
@@ -651,7 +668,7 @@ export function LibrarySearchBar({
   } = useFileSearch({
     workspaceId,
     folderPath,
-    query: text,
+    query: hookQuery,
     enabled: isFilesMode,
     ...(debounceMs === undefined ? {} : { debounceMs }),
     ...(searchFilesFn === undefined ? {} : { searchFn: searchFilesFn }),
@@ -706,8 +723,8 @@ export function LibrarySearchBar({
       : isResolvingCollection
         ? 'Checking this folder…'
         : isVaultMode
-          ? 'Search notes, records, views'
-          : 'Search files and folders'
+          ? 'Search notes, records, views, attachments'
+          : 'Search file and folder names'
   const ariaLabel = isVaultMode ? 'Search this knowledge base' : isFilesMode ? 'Search this folder' : 'Search'
 
   function openNote(path: string) {
@@ -798,12 +815,50 @@ export function LibrarySearchBar({
         )}
       </div>
 
+      {queryTooLong && (
+        <p role="alert" data-testid="library-search-query-too-long" className="text-xs leading-snug text-[var(--color-error)]">
+          Search text is limited to {VAULT_SEARCH_QUERY_MAX_CHARS.toLocaleString('en-US')} characters — yours is{' '}
+          {queryLength.toLocaleString('en-US')}. Shorten it to search.
+        </p>
+      )}
+
       {(!isActive || disabled) && children}
 
       {isActive && !disabled && (
         <div data-testid="library-search-active" className="flex flex-col gap-2">
           {error && (
             <LibraryErrorBanner message={error.message || 'Search failed.'} testId="library-search-error" />
+          )}
+
+          {/* UAT D-133 — the bar never changes what it searches without
+              saying so. Inside a vault it searches the WHOLE knowledge base
+              (the browsed folder is only where the reader happens to be);
+              outside one it matches file and folder names, not note
+              contents, and says which folder. */}
+          {!error && (isVaultMode || isFilesMode) && (
+            <p data-testid="library-search-mode" className="px-2 text-[11px] leading-snug text-[var(--color-muted)]">
+              {isVaultMode
+                ? isInsideCollection
+                  ? `Searching the whole knowledge base${collectionDisplayName ? ` “${collectionDisplayName}”` : ''} — this folder is inside it.`
+                  : `Searching this knowledge base${collectionDisplayName ? ` “${collectionDisplayName}”` : ''}.`
+                : `Searching file and folder names under “${folderPath === '' ? 'the workspace root' : folderPath}” — not note contents. This folder is not inside a knowledge base.`}
+            </p>
+          )}
+
+          {/* UAT D-130 (bar half) — a kind at the per-kind cap is a LOWER
+              bound, stated as a sentence next to the results rather than
+              only as a "+" on a tab badge. */}
+          {!error && isVaultMode && response && (
+            (() => {
+              const capped = (['notes', 'records', 'views', 'attachments'] as const).filter((k) => kindAtLimit(k))
+              if (capped.length === 0) return null
+              return (
+                <p data-testid="library-search-kind-cap" className="px-2 text-[11px] leading-snug text-[var(--color-muted)]">
+                  Showing the first {effectiveLimit} {capped.join(', ')} — the search returns at most {effectiveLimit} per
+                  kind, so more may exist. Narrow the search to see the rest.
+                </p>
+              )
+            })()
           )}
 
           {!error && isVaultMode && (
