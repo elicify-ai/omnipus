@@ -232,8 +232,15 @@ func Parameters() map[string]any {
 			},
 			"near": map[string]any{
 				"type": "string",
-				"description": "A note path or [[wikilink]]. Restricts the answer to notes within hops link " +
-					"steps of it, and composes with words and filter.",
+				"description": "A NOTE path or [[wikilink]] — not free text. Restricts the answer to notes " +
+					"within hops link steps of that note, and composes with words and filter. A near that " +
+					"names no note is refused; use words for text.",
+			},
+			"collection": map[string]any{
+				"type": "string",
+				"description": "Which knowledge base to query, by name, when more than one is mounted into " +
+					"this workspace. Omit when exactly one is in scope. Every row carries the collection " +
+					"it came from.",
 			},
 			"hops": map[string]any{
 				"type":        "integer",

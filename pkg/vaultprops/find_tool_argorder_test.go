@@ -30,9 +30,12 @@ import (
 // check runs first. The test therefore fails on a revert without needing a
 // vault, a workspace, or an index.
 func TestFindTool_UnknownArgumentRefusedBeforeScope(t *testing.T) {
+	// `where` is not an argument. (`collection` was the example here until
+	// UAT 2026-09-13 D-46 made it a real one — see
+	// uat_2026_09_13_collection_arg_test.go for what it does now.)
 	res := NewFindTool(t.TempDir()).Execute(context.Background(), map[string]any{
-		"collection": "kb",
-		"type":       "company",
+		"where": "kb",
+		"type":  "company",
 	})
 	if res == nil {
 		t.Fatal("Execute returned nil")
@@ -42,7 +45,7 @@ func TestFindTool_UnknownArgumentRefusedBeforeScope(t *testing.T) {
 	if !strings.Contains(got, "is not an argument") {
 		t.Errorf("the refusal does not tell the caller the argument is unknown, so it cannot act on it.\ngot: %s", got)
 	}
-	if !strings.Contains(got, "collection") {
+	if !strings.Contains(got, "where") {
 		t.Errorf("the refusal does not name the offending argument.\ngot: %s", got)
 	}
 	// The accepted set must be listed, or "not an argument" leaves the caller
@@ -80,8 +83,9 @@ func TestFindTool_ValidArgumentsStillReachTheScopeGate(t *testing.T) {
 	if !strings.Contains(got, "no single knowledge base") {
 		t.Fatalf("expected the scope refusal for a context with no workspace.\ngot: %s", got)
 	}
-	if !strings.Contains(got, "NO `collection` argument") {
-		t.Errorf("the scope refusal does not say this tool has no collection argument, so it still reads as 'you named the wrong one'.\ngot: %s", got)
+	// D-46: the tool now HAS a collection argument, and the remedy names it.
+	if !strings.Contains(got, "Name one with the `collection` argument") {
+		t.Errorf("the scope refusal does not name the collection argument as the remedy.\ngot: %s", got)
 	}
 }
 

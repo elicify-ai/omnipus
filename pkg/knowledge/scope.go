@@ -5,6 +5,7 @@
 package knowledge
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -163,6 +164,25 @@ func (s Scope) Contains(candidate string) bool {
 // naming another workspace's knowledge base matches nothing here and comes
 // back (zero, false), indistinguishable from a name that does not exist
 // anywhere (FR-053, MV-12, US-9 AS-2).
+// SelectionRefusal is the ONE sentence every knowledge tool renders when
+// Select(ref) returned false, so knowledge_find, knowledge_describe and
+// knowledge_read word the same condition the same way (UAT 2026-09-13, D-57;
+// describe used to render `no knowledge base "" is mounted` for the
+// no-argument, two-vaults case). Two shapes, chosen by the same rule Select
+// applied: with no name given, the scope was ambiguous (none mounted, or
+// more than one) and the remedy is to name one with `collection`; with a
+// name given, that name is not in scope and the names that are follow.
+func (s Scope) SelectionRefusal(tool, ref string) string {
+	listed := joinOrNone(s.Names())
+	if strings.TrimSpace(ref) == "" {
+		return fmt.Sprintf("%s: no single knowledge base is unambiguously in scope for this workspace "+
+			"(none mounted, or more than one); in scope: %s. Name one with the `collection` argument",
+			tool, listed)
+	}
+	return fmt.Sprintf("%s: no knowledge base %q is mounted into this workspace; in scope: %s",
+		tool, strings.TrimSpace(ref), listed)
+}
+
 func (s Scope) Select(ref string) (ScopedCollection, bool) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {

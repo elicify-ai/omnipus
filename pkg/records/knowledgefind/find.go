@@ -326,6 +326,12 @@ type Deps struct {
 	// excluding by "does it declare a type" is decided per candidate at the
 	// store, before any limit applies.
 	PlainNotesOnly bool
+	// CollectionName is the display name of the knowledge base this
+	// evaluation answers for (UAT 2026-09-13 D-46, #698). Find stamps it on
+	// the response and on every row as provenance, and Render prints it
+	// once in the header. Empty leaves both absent — an in-process caller
+	// that named no collection is not lied to with an invented one.
+	CollectionName string
 	// Now is the instant `now()` and `today()` are evaluated at, snapshotted
 	// ONCE for the whole response (FR-146). The zero value means "read the
 	// clock when the query starts", which is the same snapshot taken one layer
@@ -341,6 +347,28 @@ type Deps struct {
 // answer. What it never returns is a successful empty result over a question it
 // could not answer.
 func Find(ctx context.Context, d Deps, req generated.VaultFindRequest) (generated.VaultFindResponse, error) {
+	resp, err := find(ctx, d, req)
+	stampCollection(&resp, d.CollectionName)
+	return resp, err
+}
+
+// stampCollection writes D-46's provenance onto a response and each of its
+// rows — on EVERY response shape (rows, zero-hit, refusal, explain), because
+// a reader with two knowledge bases needs to know which one refused just as
+// much as which one answered.
+func stampCollection(resp *generated.VaultFindResponse, name string) {
+	if name == "" {
+		return
+	}
+	n := name
+	resp.Collection = &n
+	for i := range resp.Rows {
+		rn := name
+		resp.Rows[i].Collection = &rn
+	}
+}
+
+func find(ctx context.Context, d Deps, req generated.VaultFindRequest) (generated.VaultFindResponse, error) {
 	set := d.Schemas
 	if set == nil {
 		set = records.NewSchemaSet()

@@ -1272,10 +1272,9 @@ func (t *DescribeTool) Execute(ctx context.Context, args map[string]any) *tools.
 	col, ok := scope.Select(collectionRef)
 	if !ok {
 		// FR-024's posture, and the reason this tool exists: the valid names
-		// are LISTED, so learning them never costs a failed call.
-		return tools.ErrorResult(fmt.Sprintf(
-			"knowledge_describe: no knowledge base %q is mounted into this workspace; in scope: %s",
-			collectionRef, joinOrNone(scope.Names())))
+		// are LISTED, so learning them never costs a failed call. One shared
+		// sentence with knowledge_find and knowledge_read (D-57).
+		return tools.ErrorResult(scope.SelectionRefusal("knowledge_describe", collectionRef))
 	}
 
 	data, execErr := t.gather(ctx, scope, col, gatherOptions{
@@ -1639,9 +1638,7 @@ func (t *ReadTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	collectionRef := strings.TrimSpace(stringArg(args["collection"]))
 	col, ok := scope.Select(collectionRef)
 	if !ok {
-		return tools.ErrorResult(fmt.Sprintf(
-			"knowledge_read: no knowledge base %q is mounted into this workspace; in scope: %s",
-			collectionRef, joinOrNone(scope.Names())))
+		return tools.ErrorResult(scope.SelectionRefusal("knowledge_read", collectionRef))
 	}
 
 	data, rerr := t.gather(col, notePath, section, included, maxBytes)

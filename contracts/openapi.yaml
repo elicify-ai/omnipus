@@ -1086,6 +1086,21 @@ components:
             the problem COUNT always survive the trim, because the caveat is the one
             thing a shorter answer must not lose.
           example: "minimal"
+        collection:
+          type: string
+          minLength: 1
+          description: >
+            Which knowledge base to query, by name, when more than one is mounted
+            into the calling agent's workspace (UAT 2026-09-13 D-46, #698). Omitted
+            means "the one knowledge base in scope"; with two or more in scope and no
+            `collection`, the call is refused naming them — the same rule and the
+            same argument `knowledge_describe` and `knowledge_read` already take. A
+            name outside the caller's scope is refused listing the names in scope;
+            it can never widen scope (FR-060/FR-062). Every row and the response
+            itself carry the collection they came from (`collection` on
+            VaultFindRow / VaultFindResponse), so a reader with several knowledge
+            bases can tell which one answered.
+          example: "UAT Vault"
     VaultFilterNode:
       title: VaultFilterNode
       description: >

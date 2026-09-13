@@ -37,6 +37,17 @@ properties:
     description: >
       The note's display title.
     example: "Acme renewal FY27"
+  collection:
+    type: string
+    minLength: 1
+    description: >
+      The display name of the knowledge base this row came from — per-row
+      provenance (UAT 2026-09-13 D-46, #698), so a caller working across
+      several knowledge bases in one workspace never has to infer it from the
+      path. Present whenever the engine was told which collection it is
+      answering for (every tool and gateway call); absent only from an
+      in-process evaluation that named none.
+    example: "UAT Vault"
   line:
     type: integer
     minimum: 1

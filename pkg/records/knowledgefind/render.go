@@ -119,6 +119,10 @@ func writeHeader(b *strings.Builder, r generated.VaultFindResponse) {
 	b.WriteString("\n")
 
 	b.WriteString("QUERY: " + r.QueryEcho + "\n")
+	if r.Collection != nil && *r.Collection != "" {
+		// D-46 provenance, once: every row carries the same name on the wire.
+		b.WriteString("COLLECTION: " + *r.Collection + "\n")
+	}
 
 	if r.Index != nil {
 		fmt.Fprintf(b, "INDEX: %d of %d returned records agree across both indexes",

@@ -45,6 +45,7 @@ properties:
       - text_search_truncated
       - text_search_relaxed
       - frontmatter_malformed
+      - near_unresolved
       - aggregate_refused
       - index_unavailable
       - evaluation_bound_exceeded
@@ -161,6 +162,12 @@ properties:
       ordinary note. The indexer had always detected this and thrown the
       detection away as a log line. Non-fatal; the reason carries the parser's
       own message.
+      "near_unresolved" — UAT 2026-09-13, D-58. `near` names a NOTE (a path
+      or a [[wikilink]]) and walks the link graph out from it; it is not a
+      free-text search. A `near` that resolves to no note in the knowledge
+      base is refused by name rather than answered with a confident zero,
+      and the remedy points at `words` for text and at `knowledge_describe`
+      for the note names that exist.
       "aggregate_refused" — no aggregate is returned over a refused candidate
       set; it is never partial (FR-066).
       "index_unavailable" — the index predates record support and cannot hold

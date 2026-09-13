@@ -362,6 +362,7 @@ type RecordProblem = {
     | "text_search_truncated"
     | "text_search_relaxed"
     | "frontmatter_malformed"
+    | "near_unresolved"
     | "aggregate_refused"
     | "index_unavailable"
     | "evaluation_bound_exceeded"
@@ -664,6 +665,7 @@ type VaultFindRow = {
   id?: string | undefined;
   path: string;
   title: string;
+  collection?: string | undefined;
   line?: number | undefined;
   status?: ("open" | "done") | undefined;
   text?: string | undefined;
@@ -773,6 +775,7 @@ type VaultFindRequest = Partial<{
   limit: number;
   cursor: string;
   detail: "minimal" | "standard";
+  collection: string;
 }>;
 type VaultFindGroupBy = {
   property: string;
@@ -825,6 +828,7 @@ type VaultFindResponse = {
   complete_reason?: string | undefined;
   refused: boolean;
   counts: VaultFindCounts;
+  collection?: string | undefined;
   query_echo: string;
   index?: VaultIndexState | undefined;
   rows: Array<VaultFindRow>;
@@ -4760,6 +4764,7 @@ export const VaultFindRow: z.ZodType<VaultFindRow> = z.object({
   id: z.string().min(1).optional(),
   path: z.string().min(1),
   title: z.string(),
+  collection: z.string().min(1).optional(),
   line: z.number().int().gte(1).optional(),
   status: z.enum(["open", "done"]).optional(),
   text: z.string().optional(),
@@ -4817,6 +4822,7 @@ export const RecordProblem: z.ZodType<RecordProblem> = z.object({
     "text_search_truncated",
     "text_search_relaxed",
     "frontmatter_malformed",
+    "near_unresolved",
     "aggregate_refused",
     "index_unavailable",
     "evaluation_bound_exceeded",
@@ -5421,6 +5427,7 @@ export const VaultFindRequest: z.ZodType<VaultFindRequest> = z
     limit: z.number().int().gte(1),
     cursor: z.string().min(1),
     detail: z.enum(["minimal", "standard"]),
+    collection: z.string().min(1),
   })
   .partial();
 export const VaultFindCounts: z.ZodType<VaultFindCounts> = z.object({
@@ -5479,6 +5486,7 @@ export const VaultFindResponse: z.ZodType<VaultFindResponse> = z.object({
   complete_reason: z.string().optional(),
   refused: z.boolean(),
   counts: VaultFindCounts,
+  collection: z.string().min(1).optional(),
   query_echo: z.string(),
   index: VaultIndexState.optional(),
   rows: z.array(VaultFindRow),

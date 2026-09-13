@@ -46,6 +46,10 @@ const (
 var AcceptedParameters = []string{
 	"words", "type", "kind", "filter", "view", "near", "hops", "join",
 	"group_by", "sort", "select", "aggregate", "explain", "limit", "cursor", "detail",
+	// D-46 (#698): which knowledge base, when more than one is in scope.
+	// Consumed by the tool door (pkg/vaultprops/find_tool.go) BEFORE the
+	// engine runs — the engine never selects scope itself (FR-060).
+	"collection",
 }
 
 // Kind values.

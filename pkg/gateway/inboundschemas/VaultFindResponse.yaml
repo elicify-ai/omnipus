@@ -91,6 +91,16 @@ properties:
     allOf:
       - $ref: "./VaultFindCounts.yaml"
         x-go-type: VaultFindCounts
+  collection:
+    type: string
+    minLength: 1
+    description: >
+      The display name of the knowledge base this whole answer was evaluated
+      over (UAT 2026-09-13 D-46, #698). One answer is always one knowledge
+      base — `collection` on the request selects it — and the name is
+      repeated on every row so a row copied out of context keeps its
+      provenance. Absent only from an in-process evaluation that named none.
+    example: "UAT Vault"
   query_echo:
     type: string
     description: >

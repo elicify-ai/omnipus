@@ -279,6 +279,23 @@ func nearReachable(ctx context.Context, d Deps, q *query) (reached map[string]bo
 		// in which case anchorPath above carries it as hop 0. reached is empty
 		// (a plain note is not a graph node); the caller proceeds on anchorPath
 		// alone rather than short-circuiting to zero.
+		//
+		// UAT 2026-09-13, D-58: when the note resolver IS wired and found
+		// nothing either, `near` names no note in this knowledge base at all
+		// — typically free text ("budget overrun") from a caller who took
+		// `near` for a text search. That used to answer "COMPLETE: yes — 0
+		// records matched", a confident zero about a question the engine
+		// never evaluated. It is refused by name, with the argument that does
+		// what the caller meant. With no note resolver wired, absence cannot
+		// be proven and the zero-hit path stands.
+		if d.ResolveNear != nil && anchorPath == "" {
+			p := problem(generated.NearUnresolved,
+				fmt.Sprintf("near names no note in this knowledge base: %q — near takes a note path or a "+
+					"[[wikilink]] and walks the link graph out from it; it is not a text search", q.near),
+				"use words for free text, or name a note that exists (knowledge_describe lists record ids; "+
+					"knowledge_find words=... finds notes by content) and pass its path or [[title]] as near")
+			return nil, "", refuse(p, nil)
+		}
 		return map[string]bool{}, anchorPath, nil
 	}
 	g, refusal := buildRelationGraph(ctx, d)

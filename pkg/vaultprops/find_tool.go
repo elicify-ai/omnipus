@@ -151,22 +151,29 @@ func (t *FindTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	}
 
 	scope, _ := knowledge.ResolveTurnScope(ctx, t.home)
-	col, ok := scope.Select("")
+	// D-46 (#698): `collection` selects among several knowledge bases in
+	// scope, exactly as knowledge_describe and knowledge_read do. It is
+	// consumed HERE and never reaches the engine, which cannot select scope
+	// (FR-060); the argument is stripped from what is forwarded so the
+	// engine's own decode never sees an argument it has no meaning for.
+	collectionRef := ""
+	if v, ok := args["collection"].(string); ok {
+		collectionRef = strings.TrimSpace(v)
+	}
+	col, ok := scope.Select(collectionRef)
 	if !ok {
-		// NAMES THE REMEDY, NOT JUST THE OBSTACLE. Listing the collections in
-		// scope without saying what to do with them is what made the earlier
-		// refusal read as recoverable when it was not: this tool has no
-		// argument that accepts one of those names.
-		return tools.ErrorResult(fmt.Sprintf(
-			"knowledge_find: no single knowledge base is unambiguously in scope for this workspace "+
-				"(none mounted, or more than one); in scope: %s. knowledge_find has NO `collection` "+
-				"argument — it queries the one knowledge base in scope, so naming one here is not "+
-				"possible. Use knowledge_describe or knowledge_read, which do take a `collection`, "+
-				"or run this query in a workspace with exactly one knowledge base",
-			joinFindScopeNames(scope.Names())))
+		// NAMES THE REMEDY, NOT JUST THE OBSTACLE — one shared sentence with
+		// knowledge_describe and knowledge_read (D-57).
+		return tools.ErrorResult(scope.SelectionRefusal("knowledge_find", collectionRef))
+	}
+	forwarded := make(map[string]any, len(args))
+	for k, v := range args {
+		if k != "collection" {
+			forwarded[k] = v
+		}
 	}
 
-	raw, err := json.Marshal(args)
+	raw, err := json.Marshal(forwarded)
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("knowledge_find: could not encode arguments: %v", err))
 	}
@@ -176,6 +183,7 @@ func (t *FindTool) Execute(ctx context.Context, args map[string]any) *tools.Tool
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("knowledge_find: %v", err))
 	}
+	deps.CollectionName = col.Name
 
 	text, callErr := knowledgefind.Call(ctx, deps, raw)
 	if callErr != nil {
@@ -707,14 +715,4 @@ func propertiesStoreCoversCollection(ctx context.Context, store propindex.Store,
 		return false, err
 	}
 	return rows == expected, nil
-}
-
-// joinFindScopeNames renders a workspace's addressable collection names for
-// a refusal message, matching every other knowledge_* tool's "in scope: …"
-// wording.
-func joinFindScopeNames(names []string) string {
-	if len(names) == 0 {
-		return "none"
-	}
-	return strings.Join(names, ", ")
 }
