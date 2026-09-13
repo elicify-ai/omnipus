@@ -6,6 +6,10 @@
 //
 // ---------------------------------------------------------------------------
 // WHY THIS FILE EXISTS (Codex review 2026-09-14, finding 4)
+// Build-gated to the SQLite half (same constraint as sqlite.go): the
+// reconcile lock coordinates SQLite-store writes; on a no-SQLite build Open
+// refuses outright (nosqlite.go), there is no Index to reconcile, and the
+// Direct methods this file calls do not exist.
 //
 // SQLite serializes individual STATEMENTS. It does not serialize OPERATIONS,
 // and a reconcile is an operation that spans three of them:
@@ -50,6 +54,8 @@
 // are outside what it coordinates — the same posture as every other store
 // guarantee on this file-store family (ADR-054).
 // ---------------------------------------------------------------------------
+
+//go:build !records_no_sqlite && !mipsle && !netbsd && !(freebsd && arm)
 
 package propindex
 
