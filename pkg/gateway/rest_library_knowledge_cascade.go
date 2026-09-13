@@ -177,6 +177,9 @@ func (a *restAPI) renameNoteInCollection(
 		"links_rewritten": res.LinksRewritten, "files_rewritten": res.FilesRewritten,
 		"journal_id": res.JournalID,
 	})
+	// D-107: the note moved under a new name — same listing-staleness reason
+	// as the plain rename path.
+	a.emitLibraryChange(workspaceID, toRel, op)
 	fi, statErr := root.StatFile(toRel)
 	if statErr != nil {
 		mapLibraryErr(w, op, workspaceID, statErr)
@@ -216,5 +219,8 @@ func (a *restAPI) trashNoteInCollection(
 		"path": rel, "knowledge_base": note.collRel, "trash_id": res.TrashID,
 		"trash_path": res.TrashPath, "dangling_link_count": res.DanglingLinkCount,
 	})
+	// D-107: the note left the listing for the trash — other tabs' rows for
+	// it now point at a file that no longer exists at that path.
+	a.emitLibraryChange(workspaceID, rel, "delete")
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -123,6 +123,8 @@ channels:
         $ref: '#/components/messages/AskUserQuestionFrame'
       AskUserAnswerFrame:
         $ref: '#/components/messages/AskUserAnswerFrame'
+      LibraryChangedFrame:
+        $ref: '#/components/messages/LibraryChangedFrame'
   browser:
     address: /api/v1/browser/ws
     description: 'Live interactive browser channel (ADR-038). A dedicated WebSocket, separate from the chat channel, carrying
@@ -460,6 +462,18 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/AgentSwitchedFrame'
+  receiveLibraryChanged:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: 'A Library write landed on the REST surface (D-107 cross-tab reconciliation). Broadcast to every connected
+      client; the SPA invalidates its cached folder listings for the named workspace and lets the active queries refetch.
+      This is what lets two tabs agree without a reload: before it, the tab that did not perform the write kept serving
+      its stale listing indefinitely.
+
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/LibraryChangedFrame'
   receiveToolApprovalRequired:
     action: receive
     channel:
@@ -1235,6 +1249,16 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/ReplayErrorFrame'
+    LibraryChangedFrame:
+      name: LibraryChangedFrame
+      title: library_changed
+      summary: 'A Library write landed (server → client, D-107). Broadcast so every connected tab can drop its stale folder
+        listing for the named workspace.
+
+        '
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/LibraryChangedFrame'
   schemas:
     WsFrameType:
       title: WsFrameType
@@ -1299,6 +1323,7 @@ components:
       - judge_verdict
       - ask_user_question
       - ask_user_answer
+      - library_changed
     AuthFrame:
       title: AuthFrame
       description: Client → server authentication frame.
@@ -3032,6 +3057,44 @@ components:
         tool:
           type: string
           maxLength: 128
+    LibraryChangedFrame:
+      title: LibraryChangedFrame
+      description: >
+        Server → client (D-107, cross-tab listing invalidation). Emitted by
+        the Library REST write handlers after a mutation has landed, so every
+        OTHER connected tab can drop its stale folder listing and refetch.
+        Scope is deliberately coarse: clients invalidate every cached listing
+        query for the named workspace; `path` and `reason` are informational
+        (debugging, future refinement), never a scoping instruction.
+        Broadcast, not addressed — the originating tab receives it too, where
+        its own local invalidation makes the redundant one a no-op.
+      type: object
+      required:
+      - type
+      - workspace_id
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: library_changed
+        workspace_id:
+          type: string
+          minLength: 1
+          description: The workspace whose file tree changed. Clients invalidate their cached listings for this workspace.
+        path:
+          type: string
+          description: >
+            The workspace-relative path of the affected entry, when the
+            mutation was about one entry. Informational only — never a
+            scoping instruction. Absent for multi-entry mutations such as an
+            upload.
+        reason:
+          type: string
+          maxLength: 64
+          description: >
+            Which REST operation emitted the frame (e.g. "delete", "rename",
+            "mkdir", "upload", "write"). For debugging surfaces; clients must
+            not branch their invalidation on it.
     MediaPart:
       title: MediaPart
       description: One media attachment.

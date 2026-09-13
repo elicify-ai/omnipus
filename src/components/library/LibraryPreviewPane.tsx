@@ -38,12 +38,17 @@
 // renders from the token path and needs no content at all, so a too-large or
 // unreadable HTML file still RENDERS and merely loses its Edit affordance.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { X, SpinnerGap, ShieldWarning, ArrowClockwise, WarningCircle } from '@phosphor-icons/react'
 import { QueryErrorState } from '@/components/shared/QueryErrorState'
-import { fetchLibraryContent, libraryQueryKeys, mintLibraryPreviewToken } from '@/lib/api'
+import {
+  fetchLibraryContent,
+  libraryQueryKeys,
+  mintLibraryPreviewToken,
+  revokeLibraryPreviewToken,
+} from '@/lib/api'
 import type { LibraryEntry } from '@/lib/api'
 import type {
   LibraryPreviewTokenRequest,
@@ -389,6 +394,18 @@ function LibraryHtmlBody({
  * work-tree root is minted as a **file**: "bundle" there would mean the whole
  * workspace, which §10.5 forbids outright.
  */
+/**
+ * Revoke a preview token from teardown (D-110). Fire-and-forget on purpose:
+ * this runs when the pane is already gone, so there is no surface left to
+ * report a failure on, and a token that could not be revoked still dies at
+ * its own 15-minute expiry (FR-003m). Logged so the failure is not silent.
+ */
+function revokePreviewTokenQuietly(token: string): void {
+  void revokeLibraryPreviewToken(token).catch((err: unknown) => {
+    console.warn('[library] preview token revoke failed', err)
+  })
+}
+
 function previewTokenRequestFor(workspaceId: string, path: string): LibraryPreviewTokenRequest {
   const slash = path.lastIndexOf('/')
   if (slash <= 0) {
@@ -432,12 +449,45 @@ function LibraryHtmlFrame({
   entry: LibraryEntry
   mint: MintLibraryPreviewToken | null
 }) {
+  // UAT D-110 / Codex #11 (2026-09-13): the token this frame is CURRENTLY
+  // using, and whether the frame is still mounted. Closing the pane revokes
+  // the credential (DELETE /library/preview-token/{token}) instead of leaving
+  // it answering 200 until its 15-minute expiry. Two refs rather than state
+  // because the cleanup runs after React has stopped rendering this
+  // component, and because a mint that resolves AFTER unmount has no render
+  // left to land in — it is revoked straight from the query function, which
+  // is the only code that still runs at that point. Re-minting via Reload
+  // invalidates the previous token server-side (FR-003m), so only the newest
+  // one ever needs revoking here.
+  const liveTokenRef = useRef<string | null>(null)
+  const unmountedRef = useRef(false)
+  useEffect(() => {
+    // Reset on (re)mount: React StrictMode runs mount → cleanup → mount on
+    // one instance in development, and the refs persist across that pair.
+    unmountedRef.current = false
+    return () => {
+      unmountedRef.current = true
+      const token = liveTokenRef.current
+      liveTokenRef.current = null
+      if (token !== null) revokePreviewTokenQuietly(token)
+    }
+  }, [])
+
   const tokenQuery = useQuery({
     queryKey: ['library', workspaceId, 'preview-token', entry.path],
-    queryFn: () => {
+    queryFn: async () => {
       // Non-null by `enabled` below; react-query never calls a disabled query.
       const doMint = mint as MintLibraryPreviewToken
-      return doMint(previewTokenRequestFor(workspaceId, entry.path))
+      const minted = await doMint(previewTokenRequestFor(workspaceId, entry.path))
+      if (unmountedRef.current) {
+        // The reader closed the pane while the mint was in flight (D-110's
+        // "late mint"): nothing will ever put this token in a frame, so it
+        // must not stay live for fifteen minutes on nobody's behalf.
+        revokePreviewTokenQuietly(minted.token)
+      } else {
+        liveTokenRef.current = minted.token
+      }
+      return minted
     },
     enabled: mint !== null,
     // A token is a one-shot 15-minute credential. `staleTime: Infinity` keeps

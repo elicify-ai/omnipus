@@ -231,6 +231,8 @@ import {
   // record-field editor (contract-first #8):
   VaultRecord as VaultRecordSchema,
   RecordWriteRequest as RecordWriteRequestSchema,
+  RelationWriteRequest as RelationWriteRequestSchema,
+  RelationWriteResponse as RelationWriteResponseSchema,
   KnowledgeConflictError as KnowledgeConflictErrorSchema,
 } from '@/lib/api/generated/schemas'
 
@@ -556,6 +558,8 @@ import type {
   // record-field editor (step 5):
   VaultRecord,
   RecordWriteRequest,
+  RelationWriteRequest,
+  RelationWriteResponse,
   KnowledgeConflictError,
 } from '@/lib/api/generated/openapi-types'
 
@@ -4766,6 +4770,39 @@ export async function writeVaultRecord(
 }
 
 /**
+ * Add, remove or replace one record's relation (or person) targets
+ * (POST .../knowledge/records/{id}/relation — GAP-02 / #700).
+ *
+ * FR-045's verbs, verbatim: `add` and `remove` touch only the named targets
+ * and leave every other edge alone (never a read-then-write splice through
+ * RecordWriteRequest, which the server refuses for relation properties
+ * anyway); `replace` is the named destructive verb and the only one that
+ * accepts an empty `targets` (clearing the property). A no-op add or remove
+ * resolves with `changed: false` — a defined outcome, never an error.
+ *
+ * Same conflict contract as writeVaultRecord: a stale `version_token`
+ * surfaces as KnowledgeRecordConflictError (409) so the caller can re-read
+ * and offer a Retry rather than reporting a generic failure. The response
+ * carries the record after the write (with its fresh token) and the exact
+ * stored spelling of every target, so a picker can reconcile its chips from
+ * the response alone.
+ */
+export async function writeVaultRecordRelation(
+  workspaceId: string,
+  body: RelationWriteRequest,
+): Promise<RelationWriteResponse> {
+  try {
+    return await request<RelationWriteResponse>(
+      `/library/${encodeURIComponent(workspaceId)}/knowledge/records/${encodeURIComponent(body.id)}/relation`,
+      { method: 'POST', body: JSON.stringify(RelationWriteRequestSchema.parse(body)) },
+      RelationWriteResponseSchema as ZodType<RelationWriteResponse>,
+    )
+  } catch (err) {
+    throw knowledgeRecordConflictFromApiError(err)
+  }
+}
+
+/**
  * List the directories inside `path` on the operator's own machine, for the
  * mount folder picker.
  *
@@ -5389,6 +5426,27 @@ export function mintLibraryPreviewToken(
     { method: 'POST', body: JSON.stringify(body) },
     LibraryPreviewTokenResponseSchema as ZodType<LibraryPreviewTokenResponse>,
   )
+}
+
+/**
+ * Revoke one preview token before it expires
+ * (DELETE /library/preview-token/{token}, generated operation
+ * revokeLibraryPreviewToken — UAT 2026-09-13 D-110, Codex review #11).
+ *
+ * The endpoint shipped a round before this caller did: closing a preview
+ * cleared the pane's expiry timer and nothing else, so a copied frame URL
+ * kept answering 200 for the rest of its 15-minute life. LibraryPreviewPane's
+ * HTML frame now calls this from its unmount cleanup — including for a mint
+ * that completes AFTER the pane is gone — so the credential stops working the
+ * moment the reader is done with it.
+ *
+ * 204 whether the token was live, expired, already revoked or never existed
+ * (FR-003n): revoking can only narrow access, so a caller never needs to know
+ * which it was, and a 404 here would be an oracle for whether a token ever
+ * existed.
+ */
+export function revokeLibraryPreviewToken(token: string): Promise<void> {
+  return request<void>(`/library/preview-token/${encodeURIComponent(token)}`, { method: 'DELETE' })
 }
 
 /**

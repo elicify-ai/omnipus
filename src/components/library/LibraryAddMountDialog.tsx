@@ -39,6 +39,23 @@ interface LibraryAddMountDialogProps {
   isPending: boolean
   /** Server-side failure text, surfaced verbatim rather than re-worded. */
   error?: string
+  /**
+   * D-117 response half: the server REFUSED the grant (403). The reason it
+   * gave, rendered as the refused banner. Distinct from `error` on purpose —
+   * a policy refusal and a transport failure must not read the same, and the
+   * parent decides which prop a failure lands in (it sees the status code).
+   */
+  refusal?: string
+  /**
+   * D-117 response half: the server CREATED the mount (201) but its body
+   * carries `warning` — a broad grant it let through. Shown in THIS dialog
+   * (which the parent holds open) rather than a toast: a toast auto-dismisses
+   * and this is the one place the operator is already reading about the grant
+   * they just made.
+   */
+  createdWarning?: string
+  /** Fired when the operator acknowledges `createdWarning` (the "Done" click). */
+  onAcknowledgeWarning?: () => void
 }
 
 export function LibraryAddMountDialog({
@@ -47,6 +64,9 @@ export function LibraryAddMountDialog({
   onConfirm,
   isPending,
   error,
+  refusal,
+  createdWarning,
+  onAcknowledgeWarning,
 }: LibraryAddMountDialogProps) {
   const [path, setPath] = useState('')
   const [browsing, setBrowsing] = useState(false)
@@ -91,6 +111,9 @@ export function LibraryAddMountDialog({
       setAttemptedPath(undefined)
       setVerifying(false)
       setBroadAcknowledged(false)
+      // D-117 response half: the parent owns these (it owns the create call);
+      // clearing LOCAL attempt state here is enough — the parent clears its
+      // own the same way it always cleared `error`, in onOpenChange.
     }
   }, [open])
 
@@ -119,9 +142,21 @@ export function LibraryAddMountDialog({
   // not navigate).
   const selected = selectedVerdict ?? listing?.entries.find((e) => e.path === path)
   const trimmed = path.trim()
-  const canSubmit = trimmed.length > 0 && !isPending && !verifying && selected?.mountable !== false
+  // D-117 response half: once the server has ANSWERED, the dialog stops being
+  // a form and becomes the verdict. `createdWarning` (201 + warning) is the
+  // terminal state — the mount exists, so there is nothing left to submit;
+  // only Done. `refusal` (403) is scoped to the attempted path exactly like
+  // `error` (D-127): it describes THAT path, so editing the path retires it.
+  const showingCreatedWarning = createdWarning !== undefined
+  const canSubmit =
+    !showingCreatedWarning &&
+    trimmed.length > 0 &&
+    !isPending &&
+    !verifying &&
+    selected?.mountable !== false
   const needsBroadAck = selected?.broad === true && selected.mountable !== false && !broadAcknowledged
   const showServerError = error !== undefined && attemptedPath === trimmed
+  const showRefusal = refusal !== undefined && attemptedPath === trimmed
 
   /** Resolve the verdict for a typed path from its parent's listing. Returns
    *  the entry when the server lists it, undefined when it does not (or the
@@ -215,6 +250,29 @@ export function LibraryAddMountDialog({
             </p>
           )}
 
+          {/* D-117 response half — the SERVER's own verdict, distinct from the
+              pre-submission banners above (which reflect a folder listing).
+              A 403's reason and a 201's broad-grant warning are the two
+              answers that must never live in a toast. */}
+          {showRefusal && (
+            <p
+              className="flex items-start gap-2 text-sm text-[var(--color-error)]"
+              data-testid="library-add-mount-dialog-refused"
+            >
+              <Prohibit size={16} className="mt-0.5 shrink-0" />
+              {refusal}
+            </p>
+          )}
+          {showingCreatedWarning && (
+            <p
+              className="flex items-start gap-2 text-sm text-[var(--color-warning)]"
+              data-testid="library-add-mount-dialog-broad"
+            >
+              <Warning size={16} className="mt-0.5 shrink-0" />
+              {createdWarning}
+            </p>
+          )}
+
           <div className="flex items-center gap-2">
             <Button type="button" variant="outline" size="sm" onClick={toggleBrowse}>
               {browsing ? 'Hide browser' : 'Browse…'}
@@ -297,15 +355,29 @@ export function LibraryAddMountDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isPending}>
-            Cancel
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={isPending || showingCreatedWarning}
+          >
+            {showingCreatedWarning ? 'Close' : 'Cancel'}
           </Button>
           <Button
-            onClick={() => void handleConfirm()}
-            disabled={!canSubmit}
+            onClick={() =>
+              showingCreatedWarning ? onAcknowledgeWarning?.() : void handleConfirm()
+            }
+            disabled={showingCreatedWarning ? false : !canSubmit}
             data-testid="library-add-mount-confirm"
           >
-            {isPending ? 'Adding…' : verifying ? 'Checking…' : needsBroadAck ? 'Add anyway' : 'Add folder'}
+            {showingCreatedWarning
+              ? 'Done'
+              : isPending
+                ? 'Adding…'
+                : verifying
+                  ? 'Checking…'
+                  : needsBroadAck
+                    ? 'Add anyway'
+                    : 'Add folder'}
           </Button>
         </DialogFooter>
       </DialogContent>

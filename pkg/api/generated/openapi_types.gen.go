@@ -15574,6 +15574,24 @@ type RelationWriteRequest struct {
 // RelationWriteRequestOp "add" — add the targets, leaving existing ones in place. Adding a target already present is a no-op, not a duplicate. "remove" — remove the targets, leaving the rest in place. Removing a target that is not present is a no-op, not an error. "replace" — the existing targets are DISCARDED and replaced by `targets`. An empty `targets` clears the property. Named explicitly so that destroying a list is never the accidental outcome of a read-modify- write (FR-045).
 type RelationWriteRequestOp string
 
+// RelationWriteResponse Response body for POST .../knowledge/records/{id}/relation (GAP-02 / #700, 2026-09-14 fix round). The record as it stands AFTER the write — carrying a fresh `version_token`, exactly like RecordWriteRequest's update response — plus the facts a picker needs to reconcile its chips without a second read: whether the verb changed anything at all, and the exact stored spelling of each target.
+// `changed: false` is a DEFINED outcome, not a soft failure: the agent door's contract makes an add of an already-present target and a remove of an absent one idempotent no-ops that say "(unchanged — already so)", and this response preserves that honesty for the web door. A no-op still rotates no token — the returned `record.version_token` describes the same bytes the caller read.
+type RelationWriteResponse struct {
+	// Changed True when the write changed bytes on disk. False when the verb was a defined no-op (an add of a target already present, a remove of one absent, a replace that arrived at the same list) — never an error.
+	Changed bool `json:"changed"`
+
+	// Record One record: an ordinary Markdown note in the operator's own vault that declares a record type in its frontmatter (ADR-068 D1). There is no separate database — a record IS the note, and a note whose type matches no schema is simply an ordinary note, not an error (FR-005).
+	// Derived values — counts, sums, last-interaction dates, relation inverses — are NEVER present as stored properties here (D9, FR-046). They are computed at query time, because an agent reading frontmatter cannot tell a stale derived value from a fact, and every hand-maintained derived field found in the research is wrong in somebody's vault right now.
+	// NAMED VaultRecord, NOT Record. A component named "Record" generates a TypeScript `export type Record = ...` that shadows the built-in Record<K, V> utility type throughout the generated module, and tsc then fails with "Type 'Record' is not generic" on every unrelated use of it in the same file. That is a property of the generator's output, so no hand-edit could survive a regeneration.
+	Record VaultRecord `json:"record"`
+
+	// StoredTargets Every target this property now carries, in stored order and stored spelling (the "[[name]]" wikilink form). Always present — an empty array, never null; empty means the property is now absent or cleared.
+	StoredTargets []string `json:"stored_targets"`
+
+	// Warnings Non-fatal problems the write surfaced (e.g. a search index that could not be refreshed after the change). Always present — an empty array, never null. The write itself is on disk regardless.
+	Warnings []string `json:"warnings"`
+}
+
 // RestoreBackupRequest Request body for POST /api/v1/restore. Extracts a backup tar.gz archive over ~/.omnipus/, skipping config.json to preserve current settings.
 type RestoreBackupRequest struct {
 	// Filename Name of the backup file (without path). Must not contain path separators or traversal sequences. Must end with .tar.gz.
@@ -20293,6 +20311,9 @@ type FindVaultJSONRequestBody = VaultSearchRequest
 
 // WriteVaultRecordJSONRequestBody defines body for WriteVaultRecord for application/json ContentType.
 type WriteVaultRecordJSONRequestBody = RecordWriteRequest
+
+// WriteVaultRecordRelationJSONRequestBody defines body for WriteVaultRecordRelation for application/json ContentType.
+type WriteVaultRecordRelationJSONRequestBody = RelationWriteRequest
 
 // CreateLibraryDirectoryJSONRequestBody defines body for CreateLibraryDirectory for application/json ContentType.
 type CreateLibraryDirectoryJSONRequestBody = LibraryMkdirRequest

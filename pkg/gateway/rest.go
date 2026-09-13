@@ -176,6 +176,18 @@ type restAPI struct {
 	// that will only take effect after a restart.
 	appliedConfig *config.Config
 
+	// libraryChangeBroadcast is the D-107 cross-tab listing-invalidation hook:
+	// the Library REST write handlers call emitLibraryChange
+	// (library_change_broadcast.go) after a mutation lands, which fans a
+	// library_changed WS frame out through the chat WS handler so every OTHER
+	// connected tab drops its stale folder listing. A func-in-pointer rather
+	// than a *WSHandler field for the same reason previewTokens is one: the
+	// write handlers live in files that never see the WS route registrar, and
+	// a nil value (unwired tests, partial boots) must degrade to a no-op —
+	// wired in gateway.go right after this struct is built, once wsHandler
+	// exists.
+	libraryChangeBroadcast atomic.Pointer[func(gen.LibraryChangedFrame)]
+
 	// previewTokens is the live ADR-067 preview-token store (rest_library_preview.go),
 	// published by newLibraryPreviewRoutes at registration time.
 	//

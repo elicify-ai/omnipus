@@ -565,6 +565,12 @@ type RecordWriteRequestUpdate = {
   version_token: string;
   properties: Array<RecordPropertyValue>;
 };
+type RelationWriteResponse = {
+  record: VaultRecord;
+  changed: boolean;
+  stored_targets: Array<string>;
+  warnings: Array<string>;
+};
 type ViewPart = {
   part:
     | "table"
@@ -5053,6 +5059,21 @@ export const KnowledgeConflictError = z.object({
   expected_version: z.string().optional(),
   actual_version: z.string().optional(),
 });
+export const RelationWriteRequest = z.object({
+  id: z.string().min(1),
+  version_token: z.string().min(1),
+  property: z.string().min(1),
+  op: z.enum(["add", "remove", "replace"]),
+  targets: z.array(z.string().min(1)),
+});
+export const RelationWriteResponse: z.ZodType<RelationWriteResponse> = z.object(
+  {
+    record: VaultRecord,
+    changed: z.boolean(),
+    stored_targets: z.array(z.string().min(1)),
+    warnings: z.array(z.string().min(1)),
+  }
+);
 export const WorkspaceDelegationEdge: z.ZodType<WorkspaceDelegationEdge> =
   z.object({
     from_agent: z.string().min(1),
@@ -5365,13 +5386,6 @@ export const RecordQueryResponse: z.ZodType<RecordQueryResponse> = z.object({
   limit_requested: z.number().int().gte(1).optional(),
   total_matched: z.number().int().gte(0).optional(),
   next_cursor: z.string().min(1).optional(),
-});
-export const RelationWriteRequest = z.object({
-  id: z.string().min(1),
-  version_token: z.string().min(1),
-  property: z.string().min(1),
-  op: z.enum(["add", "remove", "replace"]),
-  targets: z.array(z.string().min(1)),
 });
 export const VaultFilterNode: z.ZodType<VaultFilterNode> = z.lazy(() =>
   z
@@ -8528,6 +8542,76 @@ A record IS the note (ADR-068 D1); a note whose type matches no schema is simply
         status: 404,
         description: `Resource not found.`,
         schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/library/:workspace_id/knowledge/records/:id/relation",
+    alias: "writeVaultRecordRelation",
+    description: `GAP-02 / #700 (2026-09-14 fix round). Wires RelationWriteRequest — previously a contract component with no path, its verbs served only by the agent&#x27;s knowledge_edit tool — to the gateway/SPA boundary, so the web&#x27;s relation and person pickers have a door. It goes through the SAME write machinery an agent&#x27;s write uses: the same exported NoteEdit splice primitives (AddListValue / RemoveListValue / SetPropertyList / SetPropertyScalarChecked / RemoveProperty), the same locked compare-and-swap EditNote, and the same post-write index refresh — no parallel splice logic on the gateway side.
+
+FR-045&#x27;s semantics are preserved verbatim: add and remove touch one target each and leave every other edge alone; replace is a named, destructive verb (an empty targets list clears the property, and is the ONLY op that accepts one); a no-op add or remove is reported as &#x60;changed: false&#x60;, never an error, and rotates no version token.
+
+FR-035 is enforced for scalar (many: false) relations: adding a second target to a filled slot is refused with 400 naming op &quot;replace&quot; as the way to move a single-slot relation. A property that is not a relation/person, or that is derived, is refused with 400 naming the expected shape — the same refusals the agent door renders.
+
+A stale version_token is refused with 409 and the typed KnowledgeConflictError body, exactly like a record update.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: RelationWriteRequest,
+      },
+      {
+        name: "workspace_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: RelationWriteResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `version_token no longer matches the record&#x27;s current version — it changed on disk since the caller last read it.
+`,
+        schema: KnowledgeConflictError,
       },
       {
         status: 429,
@@ -13320,7 +13404,7 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "library_changed"]);
 
 export const AuthFrame = z
   .object({
@@ -13716,6 +13800,15 @@ export const RateLimitFrame = z
     retry_after_seconds: z.number().min(0),
     agent_id: z.string().optional(),
     tool: z.string().max(128).optional(),
+  })
+  .strict();
+
+export const LibraryChangedFrame = z
+  .object({
+    type: z.literal("library_changed"),
+    workspace_id: z.string().min(1),
+    path: z.string().optional(),
+    reason: z.string().max(64).optional(),
   })
   .strict();
 
@@ -14287,6 +14380,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   ReplayErrorFrame,
   ToolResultProjectionFrame,
   RateLimitFrame,
+  LibraryChangedFrame,
   MediaFrame,
   AgentSwitchedFrame,
   ToolApprovalRequiredFrame,

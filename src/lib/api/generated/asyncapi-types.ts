@@ -64,7 +64,8 @@ export type WsFrameType =
   | "plan_status"
   | "judge_verdict"
   | "ask_user_question"
-  | "ask_user_answer";
+  | "ask_user_answer"
+  | "library_changed";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
@@ -372,6 +373,13 @@ export interface RateLimitFrame {
   retry_after_seconds: number;
   agent_id?: string;
   tool?: string;
+}
+
+export interface LibraryChangedFrame {
+  type: "library_changed";
+  workspace_id: string;
+  path?: string;
+  reason?: string;
 }
 
 export interface MediaPart {
@@ -831,6 +839,7 @@ export type WsFrame =
   | ReplayErrorFrame
   | ToolResultProjectionFrame
   | RateLimitFrame
+  | LibraryChangedFrame
   | MediaFrame
   | AgentSwitchedFrame
   | ToolApprovalRequiredFrame
@@ -911,6 +920,7 @@ export type ServerFrame =
   | ReplayErrorFrame
   | ToolResultProjectionFrame
   | RateLimitFrame
+  | LibraryChangedFrame
   | MediaFrame
   | AgentSwitchedFrame
   | ToolApprovalRequiredFrame

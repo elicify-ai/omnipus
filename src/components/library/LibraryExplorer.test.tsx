@@ -41,6 +41,12 @@ vi.mock('@/lib/api', async (importOriginal) => {
     // into the bar.
     searchVault: vi.fn(),
     searchFiles: vi.fn(),
+    // D-117 response half (2026-09-14 fix round): the Add-mount dialog asks
+    // the folder listing for a typed path's verdict before submitting, and
+    // the explorer POSTs the create — both must be mocked or this file's
+    // renders hit the real fetch the moment a test opens that dialog.
+    fetchHostFolders: vi.fn(),
+    createWorkspaceMount: vi.fn(),
     libraryDownloadUrl: vi.fn((wsId: string, path: string) => `/api/v1/library/${wsId}/download?path=${path}`),
     // HP-1 fix (defect-list-html-preview-2026-09-08.md): LibraryPreviewPane's
     // PREVIEW_TOKEN_MINTER now resolves to the real mintLibraryPreviewToken
@@ -66,6 +72,8 @@ import {
   fetchKnowledgeGraph,
   searchVault,
   searchFiles,
+  fetchHostFolders,
+  createWorkspaceMount,
   ApiError,
 } from '@/lib/api'
 
@@ -82,6 +90,8 @@ const mockedKnowledgeOutline = vi.mocked(fetchKnowledgeOutline)
 const mockedKnowledgeGraph = vi.mocked(fetchKnowledgeGraph)
 const mockedSearchVault = vi.mocked(searchVault)
 const mockedSearchFiles = vi.mocked(searchFiles)
+const mockedHostFolders = vi.mocked(fetchHostFolders)
+const mockedCreateMount = vi.mocked(createWorkspaceMount)
 
 import { LibraryExplorer } from './LibraryExplorer'
 
@@ -1502,5 +1512,72 @@ describe('LibraryExplorer — opening a markdown file reaches the STAGE 2 readin
     // does not apply".
     expect(screen.queryByTestId('knowledge-backlinks')).not.toBeInTheDocument()
     expect(mockedKnowledgeGraph).not.toHaveBeenCalled()
+  })
+})
+
+// D-117, response half (2026-09-14 fix round): the Add-mount dialog must
+// render the SERVER's own answer — the 201 body's `warning` (broad grant the
+// server allowed) and the 403's reason (grant the server refused) — inside
+// the dialog, not in a toast that auto-dismisses. These tests go through the
+// REAL explorer wiring (create menu → dialog → mutation → props) so a dialog
+// that renders the right banners from props nobody passes cannot pass.
+describe('LibraryExplorer — D-117 add-mount renders the server response in the dialog', () => {
+  async function openAddMount() {
+    await openCreateMenuAndClick(/Add a folder from your Mac/)
+    // Typed path: the dialog looks the verdict up in the parent's listing
+    // before submitting. An empty listing = "the server does not list it" =
+    // submit straight away, which is the case whose verdict only the server
+    // can give.
+    mockedHostFolders.mockResolvedValue({ path: '/', entries: [] })
+    fireEvent.change(await screen.findByTestId('library-add-mount-path'), {
+      target: { value: '/scratch/repo' },
+    })
+  }
+
+  it('a 201 carrying `warning` holds the dialog open with the broad banner until Done', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([makeWorkspaceNode()])
+    entriesByDir({ '': [] })
+    mockedCreateMount.mockResolvedValue({
+      name: 'repo',
+      host_path: '/scratch/repo',
+      status: 'ok',
+      warning: 'mounting "/scratch" is a broad grant: every file under it becomes agent-writable',
+    })
+
+    renderExplorer('ws-1')
+    await openAddMount()
+    fireEvent.click(screen.getByTestId('library-add-mount-confirm'))
+
+    await waitFor(() => expect(mockedCreateMount).toHaveBeenCalledTimes(1))
+    const banner = await screen.findByTestId('library-add-mount-dialog-broad')
+    expect(banner).toHaveTextContent('broad grant')
+    // The dialog is still open — the verdict stays on screen until acknowledged.
+    expect(screen.getByTestId('library-add-mount-confirm')).toHaveTextContent('Done')
+
+    fireEvent.click(screen.getByTestId('library-add-mount-confirm'))
+    await waitFor(() =>
+      expect(screen.queryByTestId('library-add-mount-dialog-broad')).not.toBeInTheDocument(),
+    )
+  })
+
+  it('a 403 refusal renders its reason as the refused banner, not the generic error', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([makeWorkspaceNode()])
+    entriesByDir({ '': [] })
+    mockedCreateMount.mockRejectedValue(
+      new ApiError(
+        403,
+        'mounting "/Users/op/.omnipus" is refused: it is this installation’s own data directory',
+      ),
+    )
+
+    renderExplorer('ws-1')
+    await openAddMount()
+    fireEvent.click(screen.getByTestId('library-add-mount-confirm'))
+
+    await waitFor(() => expect(mockedCreateMount).toHaveBeenCalledTimes(1))
+    expect(await screen.findByTestId('library-add-mount-dialog-refused')).toHaveTextContent(
+      'installation’s own data directory',
+    )
+    expect(screen.queryByTestId('library-add-mount-error')).not.toBeInTheDocument()
   })
 })

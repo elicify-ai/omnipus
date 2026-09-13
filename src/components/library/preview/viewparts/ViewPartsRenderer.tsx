@@ -150,6 +150,7 @@ export function ViewPartsRenderer({
   resolveWikilink,
   linkHref,
   workspaceId,
+  collectionId,
   onFieldWritten,
 }: {
   result: ViewResult
@@ -170,6 +171,11 @@ export function ViewPartsRenderer({
    *  needs a record type to write with and a cell in an untyped view never
    *  carries editable metadata anyway. */
   workspaceId?: string
+  /** GAP-02 / #700: the collection the view's records live in. Optional on
+   *  purpose — the VALUE editors do not need it; the relation/person PICKER
+   *  does (its search is scoped by collection). Absent leaves relation cells
+   *  inert, exactly as before this prop existed. */
+  collectionId?: string
   /** Invoked after a successful inline field write. The intended wiring
    *  point is BasePreview (owner of this view's TanStack Query cache): it
    *  invalidates the per-note caches ADR-083 §4.5 names (content, outline,
@@ -185,7 +191,14 @@ export function ViewPartsRenderer({
       : undefined
 
   const editContext: RecordEditContext | undefined =
-    workspaceId !== undefined ? { workspaceId, recordType: result.type, onFieldWritten } : undefined
+    workspaceId !== undefined
+      ? {
+          workspaceId,
+          recordType: result.type,
+          ...(collectionId !== undefined ? { collectionId } : {}),
+          onFieldWritten,
+        }
+      : undefined
 
   if (result.refusal !== undefined) return <RefusalState refusal={result.refusal} />
   if (result.rows.length === 0) return <EmptyState result={result} />

@@ -1,0 +1,51 @@
+title: RelationWriteResponse
+description: >
+  Response body for POST .../knowledge/records/{id}/relation (GAP-02 / #700,
+  2026-09-14 fix round). The record as it stands AFTER the write — carrying a
+  fresh `version_token`, exactly like RecordWriteRequest's update response —
+  plus the facts a picker needs to reconcile its chips without a second read:
+  whether the verb changed anything at all, and the exact stored spelling of
+  each target.
+
+  `changed: false` is a DEFINED outcome, not a soft failure: the agent door's
+  contract makes an add of an already-present target and a remove of an
+  absent one idempotent no-ops that say "(unchanged — already so)", and this
+  response preserves that honesty for the web door. A no-op still rotates no
+  token — the returned `record.version_token` describes the same bytes the
+  caller read.
+type: object
+additionalProperties: false
+required:
+  - record
+  - changed
+  - stored_targets
+  - warnings
+properties:
+  record:
+    $ref: "./VaultRecord.yaml"
+    x-go-type: VaultRecord
+    description: The record after the write, including its current version_token.
+  changed:
+    type: boolean
+    description: >
+      True when the write changed bytes on disk. False when the verb was a
+      defined no-op (an add of a target already present, a remove of one
+      absent, a replace that arrived at the same list) — never an error.
+  stored_targets:
+    type: array
+    description: >
+      Every target this property now carries, in stored order and stored
+      spelling (the "[[name]]" wikilink form). Always present — an empty
+      array, never null; empty means the property is now absent or cleared.
+    items:
+      type: string
+      minLength: 1
+  warnings:
+    type: array
+    description: >
+      Non-fatal problems the write surfaced (e.g. a search index that could
+      not be refreshed after the change). Always present — an empty array,
+      never null. The write itself is on disk regardless.
+    items:
+      type: string
+      minLength: 1

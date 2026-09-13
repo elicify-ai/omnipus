@@ -683,6 +683,67 @@ export function BasePreview({
             </button>
           )
         })}
+        {/* UAT D-119 (2026-09-13): a HEALTHY base is text too. The raw
+            editor used to exist only behind the "no views" empty state, so
+            a base whose views all loaded had no way to be opened, read or
+            repaired as the YAML it is. Gated on the listing's own
+            is_text_editable (the backend half of D-119 now sets it for
+            .base), never on the file having failed to parse. Library-only:
+            an embed shows a view, not a file. */}
+        {embed === undefined && entry.is_text_editable && (
+          <button
+            type="button"
+            tabIndex={0}
+            aria-pressed={showRaw}
+            onClick={() => setShowRaw((v) => !v)}
+            data-testid="base-preview-source-toggle"
+            title={showRaw ? 'Back to the views' : 'Open the base file as text'}
+            className={`-mb-px ml-auto flex shrink-0 items-center gap-1 whitespace-nowrap border-b-2 px-2.5 py-2 text-[12px] transition-colors ${
+              showRaw
+                ? 'border-[var(--color-accent)] text-[var(--color-secondary)]'
+                : 'border-transparent text-[var(--color-muted)] hover:text-[var(--color-secondary)]'
+            }`}
+          >
+            <Code size={13} /> {showRaw ? 'Views' : 'Source'}
+          </button>
+        )}
+        </div>
+      )}
+
+      {/* D-119: the base file as text, through the SAME view/edit shell every
+          other text file gets (LibraryCodePreview → LibraryTextPreview), so a
+          malformed base is repaired with the editor a healthy one is edited
+          with. The views body below stays mounted but hidden, so toggling
+          back costs no re-evaluation. A saved edit invalidates this base's
+          own views list and its cached bytes; whether the text becomes a
+          view is the importer's job (D-119's other half, D-13), not this
+          editor's. */}
+      {showRaw && (
+        <div className="flex-1 overflow-auto bg-[var(--color-surface-0)]" data-testid="base-preview-raw">
+          {rawQuery.isLoading ? (
+            <Centered>
+              <SpinnerGap size={16} className="animate-spin" /> Reading base file…
+            </Centered>
+          ) : rawQuery.data?.is_text === true && !rawQuery.data.too_large && rawQuery.data.content !== undefined ? (
+            <LibraryCodePreview
+              workspaceId={workspaceId}
+              entry={entry}
+              content={rawQuery.data.content}
+              onSaved={() => {
+                void queryClient.invalidateQueries({
+                  queryKey: ['library', workspaceId, 'knowledge', 'base-views', entry.path],
+                })
+                void queryClient.invalidateQueries({ queryKey: libraryQueryKeys.content(workspaceId, entry.path) })
+              }}
+            />
+          ) : (
+            <QueryErrorState
+              layout="fill"
+              message="Could not read this base file as text."
+              onRetry={() => void rawQuery.refetch()}
+              testId="base-preview-raw-error"
+            />
+          )}
         </div>
       )}
 
@@ -762,8 +823,16 @@ export function BasePreview({
             // record editing — ViewPartsRenderer builds its edit context from it,
             // and without this line the editors exist but no view can reach them.
             // Which cells actually offer an editor is decided per-cell from the
-            // wire (a derived or relation cell never does), not here.
+            // wire (a derived cell never does; a relation cell gets the PICKER,
+            // GAP-02 / #700), not here.
             workspaceId={workspaceId}
+            // The picker's search is scoped by collection (the find endpoint
+            // requires exactly one), so the collection this base's views run
+            // over is part of the edit context. Guarded: collectionId is
+            // absent while the knowledge-base info query is still loading —
+            // relation cells render inert for that window and gain their
+            // picker once it lands.
+            {...(collectionId !== undefined ? { collectionId } : {})}
             // A successful write changes the stored record, so the rendered view
             // is now stale. Invalidate rather than patching in place: the server
             // owns derived columns, and a locally-patched row would show a stale

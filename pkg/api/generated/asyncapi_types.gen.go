@@ -505,6 +505,17 @@ type LLMErrorReplay struct {
 	Retryable bool   `json:"retryable"`
 }
 
+// LibraryChangedFrame — Server → client (D-107, cross-tab listing invalidation). Emitted by the Library REST write handlers after a mutation has landed, so every OTHER connected tab can drop its stale folder listing and refetch. Scope is deliberately coarse: clients invalidate every cached listing query for the named workspace; `path` and `reason` are informational (debugging, future refinement), never a scoping instruction. Broadcast, not addressed — the originating tab receives it too, where its own local invalidation makes the redundant one a no-op.
+type LibraryChangedFrame struct {
+	// The workspace-relative path of the affected entry, when the mutation was about one entry. Informational only — never a scoping instruction. Absent for multi-entry mutations such as an upload.
+	Path *string `json:"path,omitempty"`
+	// Which REST operation emitted the frame (e.g. "delete", "rename", "mkdir", "upload", "write"). For debugging surfaces; clients must not branch their invalidation on it.
+	Reason *string `json:"reason,omitempty"`
+	Type   string  `json:"type"`
+	// The workspace whose file tree changed. Clients invalidate their cached listings for this workspace.
+	WorkspaceId string `json:"workspace_id"`
+}
+
 // LoopStatusFrame — Server → client. Status push for a session's active /loop (ADR-049 D6/D7/US-9). Emitted on run completion, state change, and stop. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Class not yet assigned by the ADR-057 W5 audit (FR-089) — do not assume presence or absence of producing_session_id until the audit classifies it.
 type LoopStatusFrame struct {
 	MaxRuns int    `json:"max_runs"`
@@ -1007,4 +1018,5 @@ const (
 	WsFrameTypeJudgeVerdict             WsFrameType = "judge_verdict"
 	WsFrameTypeAskUserQuestion          WsFrameType = "ask_user_question"
 	WsFrameTypeAskUserAnswer            WsFrameType = "ask_user_answer"
+	WsFrameTypeLibraryChanged           WsFrameType = "library_changed"
 )

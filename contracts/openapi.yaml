@@ -432,6 +432,8 @@ components:
       $ref: ./components/schemas/RecordWriteRequestUpdate.yaml
     RelationWriteRequest:
       $ref: ./components/schemas/RelationWriteRequest.yaml
+    RelationWriteResponse:
+      $ref: ./components/schemas/RelationWriteResponse.yaml
     ViewGroupBy:
       $ref: ./components/schemas/ViewGroupBy.yaml
     ViewPropertyConfig:
@@ -9655,6 +9657,93 @@ paths:
           description: >
             version_token no longer matches the record's current version —
             it changed on disk since the caller last read it (EMB-086).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KnowledgeConflictError'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /library/{workspace_id}/knowledge/records/{id}/relation:
+    post:
+      operationId: writeVaultRecordRelation
+      summary: Add, remove or replace one record's relation (or person) targets
+      description: >
+        GAP-02 / #700 (2026-09-14 fix round). Wires RelationWriteRequest —
+        previously a contract component with no path, its verbs served only
+        by the agent's knowledge_edit tool — to the gateway/SPA boundary, so
+        the web's relation and person pickers have a door. It goes through
+        the SAME write machinery an agent's write uses: the same exported
+        NoteEdit splice primitives (AddListValue / RemoveListValue /
+        SetPropertyList / SetPropertyScalarChecked / RemoveProperty), the
+        same locked compare-and-swap EditNote, and the same post-write index
+        refresh — no parallel splice logic on the gateway side.
+
+
+        FR-045's semantics are preserved verbatim: add and remove touch one
+        target each and leave every other edge alone; replace is a named,
+        destructive verb (an empty targets list clears the property, and is
+        the ONLY op that accepts one); a no-op add or remove is reported as
+        `changed: false`, never an error, and rotates no version token.
+
+
+        FR-035 is enforced for scalar (many: false) relations: adding a
+        second target to a filled slot is refused with 400 naming op
+        "replace" as the way to move a single-slot relation. A property that
+        is not a relation/person, or that is derived, is refused with 400
+        naming the expected shape — the same refusals the agent door renders.
+
+
+        A stale version_token is refused with 409 and the typed
+        KnowledgeConflictError body, exactly like a record update.
+      tags:
+      - Knowledge
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The record whose relation property is being changed (RelationWriteRequest.id's target).
+        example: "DE-0007"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RelationWriteRequest'
+      responses:
+        '200':
+          description: >
+            The verb ran. `changed` distinguishes a real write from a defined
+            no-op; both are 200 — the agent door reports the same outcome as
+            "(unchanged — already so)", never as a failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RelationWriteResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          description: >
+            version_token no longer matches the record's current version —
+            it changed on disk since the caller last read it.
           content:
             application/json:
               schema:

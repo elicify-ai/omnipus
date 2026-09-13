@@ -787,6 +787,8 @@ func (a *restAPI) handleLibraryEntryDelete(w http.ResponseWriter, r *http.Reques
 	// directory "reports" also kills a bundle token scoped to "reports/q3".
 	a.revokePreviewTokensForPath(workspaceID, rel)
 	a.logLibraryAudit(r, "library.delete", workspaceID, map[string]any{"path": rel})
+	// D-107: other tabs' listings still show the entry that just vanished.
+	a.emitLibraryChange(workspaceID, rel, "delete")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -969,6 +971,9 @@ func (a *restAPI) handleLibraryContentPut(w http.ResponseWriter, r *http.Request
 	w.Header().Set("ETag", libraryETagValue(newToken))
 	a.logLibraryAudit(r, "library.write", workspaceID,
 		map[string]any{"path": rel, "bytes": len(content), "binary": false})
+	// D-107: the file's size/mtime in other tabs' listings is now wrong (and
+	// a first-time create adds a row).
+	a.emitLibraryChange(workspaceID, rel, "write")
 	jsonOK(w, library.EntryFromInfo(rel, fi))
 }
 
@@ -1111,6 +1116,8 @@ func (a *restAPI) handleLibraryContentBinaryPut(w http.ResponseWriter, r *http.R
 	w.Header().Set("ETag", libraryETagValue(newToken))
 	a.logLibraryAudit(r, "library.write", workspaceID,
 		map[string]any{"path": rel, "bytes": len(decoded), "binary": true})
+	// D-107: same listing-staleness reason as the text PUT above.
+	a.emitLibraryChange(workspaceID, rel, "write")
 	jsonOK(w, library.EntryFromInfo(rel, fi))
 }
 
@@ -1260,6 +1267,11 @@ func (a *restAPI) handleLibraryUpload(w http.ResponseWriter, r *http.Request, wo
 	a.logLibraryAudit(r, "library.upload", workspaceID, map[string]any{
 		"path": targetDir, "count": len(resp.Entries),
 	})
+	// D-107: the uploaded entries appear in other tabs' listings of this
+	// folder. Path names the FOLDER uploaded into (the mutation is
+	// multi-entry; the frame's path is informational, never a scoping
+	// instruction).
+	a.emitLibraryChange(workspaceID, targetDir, "upload")
 	jsonCreated(w, resp)
 }
 
@@ -1307,6 +1319,11 @@ func (a *restAPI) handleLibraryMkdir(w http.ResponseWriter, r *http.Request, wor
 	}
 	entry := library.EntryFromInfo(rel, fi)
 	a.logLibraryAudit(r, "library.mkdir", workspaceID, map[string]any{"path": rel, "created": created})
+	// D-107: only an actual CREATE changes the tree — this handler is
+	// idempotent, and the no-op branch changed nothing any tab needs to see.
+	if created {
+		a.emitLibraryChange(workspaceID, rel, "mkdir")
+	}
 	if created {
 		jsonCreated(w, entry)
 	} else {
@@ -1445,6 +1462,9 @@ func (a *restAPI) handleLibraryCreateVault(w http.ResponseWriter, r *http.Reques
 	}
 	entry := library.EntryFromInfo(rel, fi)
 	a.logLibraryAudit(r, "library.create_vault", workspaceID, map[string]any{"path": rel})
+	// D-107: a new knowledge base folder appears in the listing (and, with
+	// hidden files shown, so does its marker).
+	a.emitLibraryChange(workspaceID, rel, "vault")
 	jsonCreated(w, entry)
 }
 
@@ -1705,6 +1725,9 @@ func (a *restAPI) handleLibraryRename(w http.ResponseWriter, r *http.Request, wo
 	// holder never saw, and this is the line that has to grow a second call.
 	a.revokePreviewTokensForPath(workspaceID, fromRel)
 	a.logLibraryAudit(r, "library.rename", workspaceID, map[string]any{"from": fromRel, "to": toRel})
+	// D-107: the old name is gone and the new one appeared — path names the
+	// NEW entry (the one a stale listing is missing).
+	a.emitLibraryChange(workspaceID, toRel, "rename")
 	jsonOK(w, library.EntryFromInfo(toRel, fi))
 }
 
@@ -1881,6 +1904,14 @@ func (a *restAPI) handleLibraryTransfer(w http.ResponseWriter, r *http.Request, 
 		"from_workspace_id": req.FromWorkspaceId, "from_path": fromRel,
 		"to_workspace_id": req.ToWorkspaceId, "to_path": toRel,
 	})
+	// D-107: the destination tree gained an entry, always; a cross-workspace
+	// MOVE additionally vacated one in the source tree, whose tabs need their
+	// own frame (a same-workspace move is covered by the destination frame —
+	// it is the same tree).
+	a.emitLibraryChange(req.ToWorkspaceId, toRel, string(mode))
+	if mode == transferModeMove && !sameWorkspace {
+		a.emitLibraryChange(req.FromWorkspaceId, fromRel, string(mode))
+	}
 	if mode == transferModeCopy {
 		jsonCreated(w, entry)
 	} else {
