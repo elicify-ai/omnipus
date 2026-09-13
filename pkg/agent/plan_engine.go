@@ -2453,6 +2453,13 @@ func (pe *PlanEngine) cancelMemberLocked(taskID, userID string) (*task.Task, err
 	if pe.dispatcher != nil {
 		pe.dispatcher.ClearEvidenceGateStreak(taskID)
 	}
+	// GOAL-FR-015/FR-027/FR-028: the same reasoning as the streak clear above,
+	// for the paired goal record — this is a terminal disposition for taskID
+	// that bypasses TaskExecutor's own chokepoints, so it must end the goal
+	// record itself or a user Stop leaves it ACTIVE forever. A user Stop maps
+	// to `cleared`, not `exhausted` (goalStateForTerminalTask), matching what
+	// `/goal clear` writes for the chat equivalent of the same action.
+	terminateTaskGoalRecord(taskID, updated.Status, updated.CancelReason, result)
 	if pe.agentLoop != nil {
 		sessionID := updated.SessionID
 		if sessionID == "" {

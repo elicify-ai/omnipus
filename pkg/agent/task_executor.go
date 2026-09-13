@@ -1401,11 +1401,38 @@ func (te *TaskExecutor) adjudicateClaim(
 		}
 	}
 
+	// ADR-080 D-DOD's judged-set union, applied to the TASK path (GOAL-FR-013's
+	// "one code path" for both owner kinds). A task's Definition of Done lives
+	// EXCLUSIVELY on its paired goal record — there is no Task.Dod field (see
+	// Task.Criteria's doc comment) — so judging `criteria` alone judged the
+	// acceptance criteria and silently skipped the mandatory DoD that task
+	// creation had just refused the task without.
+	//
+	// The union is the SAME shape the chat path has always fed the Judge
+	// (goal_compile.go::compiledGoalCriteriaFor: criteria first, then DoD),
+	// and it needs no change to JudgeCriteria/runVerifierAdjudication: DoD
+	// items are AcceptanceCriterion-shaped and simply widen in.Criteria, each
+	// earning its own per-criterion verdict, and an unmet one fails the whole
+	// claim through the SAME any-unmet-wins reduction the acceptance criteria
+	// use (judge.go's overall-Met AND-fold over PerCriterion). That is the
+	// point: a DoD nothing can fail is not a Definition of Done.
+	//
+	// IDs cannot collide across the two lists — each is minted per-list by
+	// task.NormalizeCriteria, and the fixed floor-DoD ids are namespaced
+	// "goal-dod-floor-*" — so the de-union below can always tell them apart.
+	dod := taskGoalDoD(t.ID)
+	judged := criteria
+	if len(dod) > 0 {
+		judged = make([]task.AcceptanceCriterion, 0, len(criteria)+len(dod))
+		judged = append(judged, criteria...)
+		judged = append(judged, dod...)
+	}
+
 	result := te.agentLoop.JudgeCriteria(ctx, JudgeCriteriaInput{
 		Scope:           task.VerdictScopeTask,
 		TaskID:          t.ID,
 		AssigneeAgentID: t.AgentID,
-		Criteria:        criteria,
+		Criteria:        judged,
 		Attempt:         t.AttemptCount + 1,
 		ClaimText:       claimSummary,
 		// Product-blocker fix (ADR-052 FR-011/012 x ADR-046 P1): the task's
@@ -1482,15 +1509,36 @@ func (te *TaskExecutor) adjudicateClaim(
 	// conditioned on the overall verdict), and only writes when the
 	// projection actually changed something (Applied > 0) — a pure no-op
 	// verdict against this task's criteria never touches the store.
-	if projected, pstats := projectVerdictOntoCriteria(t.Criteria, verdict); pstats.Applied > 0 {
-		if _, perr := te.store.Update(t.ID, task.Patch{Criteria: &projected}); perr != nil {
+	//
+	// GOAL-FR-041 (the de-union): now that the judged set is Criteria ∪ DoD,
+	// verdict.PerCriterion legitimately carries ids from BOTH lists, and the
+	// two lists live in two DIFFERENT stores. projectGoalVerdict splits the
+	// verdict by real list membership BEFORE projecting, so neither side
+	// reports the other side's ids as unresolved — the acceptance-criterion
+	// verdicts go to the task store (their ids came from t.Criteria) and the
+	// DoD verdicts go to the goal record (their ids came from its DoD list).
+	// Passing the flat union to either projection would warn-log every id
+	// belonging to the other one.
+	projectedCriteria, projectedDoD, pstats := projectGoalVerdict(t.Criteria, dod, verdict)
+	if pstats.Applied > 0 {
+		if _, perr := te.store.Update(t.ID, task.Patch{Criteria: &projectedCriteria}); perr != nil {
 			logger.WarnCF("task_executor",
 				"adjudicateClaim: could not persist the verdict projection onto task criteria (GOAL-FR-036)",
 				map[string]any{"task_id": t.ID, "error": perr.Error()})
 		} else {
-			t.Criteria = projected
+			t.Criteria = projectedCriteria
+		}
+		if len(dod) > 0 {
+			persistTaskGoalDoDProjection(t.ID, projectedDoD)
 		}
 	}
+
+	// The paired goal record is this task's durable adjudication record
+	// (ADR-086) — stamp the verdict, reason and round onto it before the
+	// terminal transition completeTaskWithResult/consumeAttemptOrExhaust is
+	// about to trigger reads it, so the record freezes carrying the
+	// adjudication rather than as an empty shell. See recordTaskGoalVerdict.
+	recordTaskGoalVerdict(t.ID, verdict, result.Reason)
 
 	if verdict.Met {
 		te.completeTaskWithResult(t, taskSessionID, task.StatusInProgress, true, claimSummary, run)
@@ -2024,6 +2072,13 @@ func (te *TaskExecutor) completeTaskWithResult(
 	// dropped-conflict early returns), exactly like the UnifiedMeta archive
 	// this line sits next to.
 	te.finalizeTaskLifecycle(taskSessionID, status)
+	// GOAL-FR-015/FR-027/FR-028: end the paired goal record with its task.
+	// Placed with finalizeTaskLifecycle — AFTER the CAS write above lands and
+	// never on the dropped-conflict early returns, because a dropped write
+	// means some OTHER writer owns this task's outcome and will end the goal
+	// record itself. `final` is read back from the store, so CancelReason is
+	// whatever actually persisted rather than whatever this call was handed.
+	terminateTaskGoalRecord(t.ID, final.Status, final.CancelReason, result)
 	te.closeRun(t.ID, run, status, result)
 	te.recordEvidenceBoundary(final)
 	te.onTaskComplete(final)
@@ -2663,6 +2718,10 @@ func (te *TaskExecutor) failTask(taskID, reason string) {
 			map[string]any{"task_id": taskID, "error": err.Error()})
 		return
 	}
+	// GOAL-FR-015: terminal disposition — end the paired goal record too. See
+	// terminateTaskGoalRecord's doc comment for why all three terminal writers
+	// must call it (this one has no chokepoint in common with the other two).
+	terminateTaskGoalRecord(taskID, updated.Status, updated.CancelReason, reason)
 	te.emitStatusChanged(updated, task.StatusFailed)
 }
 
