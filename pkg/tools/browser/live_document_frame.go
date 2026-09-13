@@ -47,11 +47,14 @@ type liveDocumentInitial struct {
 }
 
 type liveDocumentWork struct {
-	cs       *CaptureSession
-	token    *captureDocumentTransition
-	loaderID cdp.LoaderID
-	settling bool
-	deadline time.Time
+	cs              *CaptureSession
+	token           *captureDocumentTransition
+	loaderID        cdp.LoaderID
+	settling        bool
+	deadline        time.Time
+	committed       bool
+	reconciled      bool
+	failureReported bool
 }
 
 // Called under lv.mu. Listener registration does no browser I/O; initial
@@ -273,6 +276,7 @@ func (w *liveDocumentWatch) onEvent(event any) {
 	}
 	frame := w.frameID
 	if paint && !work.settling {
+		work.committed = true
 		work.settling = true
 		go w.settle(work, frame, work.loaderID)
 	}
@@ -371,15 +375,42 @@ func (w *liveDocumentWatch) settle(work *liveDocumentWork, frame cdp.FrameID, lo
 	if !w.owns(work) {
 		return
 	}
-	// Paint waits outside command admission so navigation and held-key
-	// cleanup remain usable while the page is slow or changing.
-	err := w.lv.runCDP(ctx, documentPaintTimeout, paint)
-	if err != nil {
-		w.reportFailure(work, err)
+	recovered := false
+	for {
+		measured, err := w.paintAndCaptureDocument(ctx, work, paint, stopToken)
+		if errors.Is(err, ErrStaleCaptureFrame) && measured.Generation == 0 && !recovered {
+			if replacement, ok, recoveryErr := w.reconcileDocument(ctx, work, paint); recoveryErr != nil {
+				err = recoveryErr
+			} else if ok {
+				recovered, paint = true, replacement
+				continue
+			}
+		}
+		if err == nil && recovered {
+			logger.InfoCF("browser", "live view document recovery", map[string]any{"outcome": "recapture_requested", "attempt": 1})
+		}
+		if err != nil {
+			if measured.Generation != 0 && w.active() && w.lv.mgr.CaptureSessionForPanel(w.lv.sessionID) == work.cs {
+				current := work.cs.FrameState()
+				if current.CaptureID == measured.CaptureID && current.Generation == measured.Generation {
+					w.reportFailure(nil, err)
+				}
+			} else {
+				w.reportFailure(work, err)
+			}
+		}
 		return
 	}
+}
+
+func (w *liveDocumentWatch) paintAndCaptureDocument(ctx context.Context, work *liveDocumentWork, paint documentPaintAction, stopToken func() bool) (CaptureFrameState, error) {
+	// Paint waits outside command admission so navigation and held-key
+	// cleanup remain usable while the page is slow or changing.
+	if err := w.lv.runCDP(ctx, documentPaintTimeout, paint); err != nil {
+		return CaptureFrameState{}, err
+	}
 	var measured CaptureFrameState
-	_, err = w.lv.withViewportAdmission(ctx, w.target, func(operation context.Context) (bool, error) {
+	_, err := w.lv.withViewportAdmission(ctx, w.target, func(operation context.Context) (bool, error) {
 		if !w.owns(work) {
 			return false, ErrStaleCaptureFrame
 		}
@@ -403,21 +434,59 @@ func (w *liveDocumentWatch) settle(work *liveDocumentWork, frame cdp.FrameID, lo
 		}
 		return nil
 	})
-	if err != nil {
-		if measured.Generation != 0 && w.active() && w.lv.mgr.CaptureSessionForPanel(w.lv.sessionID) == work.cs {
-			current := work.cs.FrameState()
-			if current.CaptureID == measured.CaptureID && current.Generation == measured.Generation {
-				w.reportFailure(nil, err)
-			}
-		} else {
-			w.reportFailure(work, err)
-		}
+	return measured, err
+}
+
+// Reconciliation repairs only a previously committed current document. A
+// provisional navigation, queued browser event, or replacement token must win.
+// The fresh tree is a candidate for another complete paint proof, never input
+// authorization by itself. The caller retains the original deadline.
+func (w *liveDocumentWatch) reconcileDocument(ctx context.Context, work *liveDocumentWork, previous documentPaintAction) (documentPaintAction, bool, error) {
+	w.mu.Lock()
+	sequence := w.observed.Load()
+	eligible := func() bool {
+		w.lv.mu.Lock()
+		currentWatch := w.lv.documentWatch == w
+		w.lv.mu.Unlock()
+		return currentWatch && ctx.Err() == nil && w.work == work && work.committed && !work.failureReported && w.frameID == previous.frameID && w.loaderID == previous.loaderID && work.loaderID == previous.loaderID && !w.inputPending() && w.observed.Load() == sequence && w.owns(work)
 	}
+	if work.reconciled || !eligible() {
+		w.mu.Unlock()
+		return documentPaintAction{}, false, nil
+	}
+	work.reconciled = true
+	w.mu.Unlock()
+	var tree *page.FrameTree
+	err := w.lv.runCDP(ctx, time.Until(work.deadline), chromedp.ActionFunc(func(ctx context.Context) error {
+		var err error
+		tree, err = page.GetFrameTree().Do(ctx)
+		return err
+	}))
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err != nil {
+		return documentPaintAction{}, false, err
+	}
+	if tree == nil || tree.Frame == nil || tree.Frame.ID != previous.frameID || tree.Frame.LoaderID == "" || tree.Frame.LoaderID == previous.loaderID || !eligible() {
+		return documentPaintAction{}, false, nil
+	}
+	work.loaderID, w.loaderID = tree.Frame.LoaderID, tree.Frame.LoaderID
+	logger.InfoCF("browser", "live view document recovery", map[string]any{"outcome": "retrying_committed_picture", "attempt": 1})
+	return documentPaintAction{frameID: tree.Frame.ID, loaderID: tree.Frame.LoaderID}, true, nil
 }
 
 func (w *liveDocumentWatch) reportFailure(work *liveDocumentWork, err error) {
 	if !w.active() || work != nil && !w.owns(work) {
 		return
+	}
+	if work != nil {
+		w.mu.Lock()
+		if work.failureReported || w.work != work || !w.owns(work) {
+			w.mu.Unlock()
+			return
+		}
+		work.failureReported = true
+		w.mu.Unlock()
 	}
 	logger.WarnCF("browser", "live view document refresh failed", map[string]any{"session_id": w.lv.sessionID, "error": err.Error()})
 	w.emitFailure("The browser could not confirm the new page picture. Reload the page or retry the browser connection.")
