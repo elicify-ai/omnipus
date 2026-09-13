@@ -684,9 +684,13 @@ func (p *Plan) normalize() error {
 	if len([]rune(p.Description)) > maxPlanDescriptionRunes {
 		return verr("description must be %d characters or fewer", maxPlanDescriptionRunes)
 	}
-	if len([]rune(p.HandoverText)) > maxPlanHandoverRunes {
-		return verr("handover_text must be %d characters or fewer", maxPlanHandoverRunes)
-	}
+	// HandoverText is CLAMPED, not rejected — it is the one bounded field on
+	// this struct that is server-set from provider-controlled input, with no
+	// author in the loop who could shorten it. Rejecting it does not produce
+	// a shorter note, it produces no note at all and a deterministically
+	// failing write. See handover_clamp.go for the full rationale and for why
+	// Store.write clamps again as the unbypassable last mile.
+	clampPlanHandover(p)
 	if len([]rune(p.Rationale)) > maxPlanRationaleRunes {
 		return verr("rationale must be %d characters or fewer", maxPlanRationaleRunes)
 	}

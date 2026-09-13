@@ -95,6 +95,13 @@ func (s *Store) load(id string) (*Plan, error) {
 // flock. Callers that perform a read-modify-write MUST already hold the
 // per-plan lock (Lock); write itself does not take it.
 func (s *Store) write(p *Plan) error {
+	// The unbypassable half of the HandoverText bound (handover_clamp.go).
+	// normalize() already clamped for every caller that went through
+	// Create/Update; this call is what guarantees no writer — present or
+	// future, in this package or outside it — can put an unbounded handover
+	// on disk by skipping normalize. Idempotent, and a no-op for the
+	// overwhelming majority of writes that are already within the bound.
+	clampPlanHandover(p)
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return fmt.Errorf("plan: create dir: %w", err)
 	}
@@ -420,9 +427,11 @@ func (s *Store) updateLocked(id string, patch Patch) (*Plan, error) {
 		p.FailedReason = *patch.FailedReason
 	}
 	if patch.HandoverText != nil {
-		if len([]rune(*patch.HandoverText)) > maxPlanHandoverRunes {
-			return nil, verr("handover_text must be %d characters or fewer", maxPlanHandoverRunes)
-		}
+		// No length gate here on purpose: an over-long handover is CLAMPED by
+		// normalize() below (and again by write()), never rejected. A refused
+		// write is how a plan whose members all succeeded ended up failed
+		// because one provider error string was verbose — see
+		// handover_clamp.go.
 		p.HandoverText = *patch.HandoverText
 	}
 	if patch.LastUnmetTerminalSignature != nil {
