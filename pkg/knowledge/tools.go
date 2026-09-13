@@ -1389,7 +1389,10 @@ func (t *DescribeTool) gather(
 					"collection_root", root.Path(), "manifest_path", manifestPath, "error", statErr)
 			case exists:
 				if m, merr := LoadManifest(manifestPath, root.Path()); merr == nil {
-					data.ManifestCount, data.ManifestKnown = m.Len(), true
+					// NoteCount, not Len: the sentence says "notes" and is
+					// compared with NotesOnDisk, which the integrity walk
+					// counts over markdown only (D-34).
+					data.ManifestCount, data.ManifestKnown = m.NoteCount(), true
 				}
 			}
 		}

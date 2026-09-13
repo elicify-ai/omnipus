@@ -128,7 +128,7 @@ func listCollectionFreshness(deps ToolDeps, collectionRoot string) string {
 		return indexFreshness(data)
 	}
 	if m, merr := LoadManifest(manifestPath, collectionRoot); merr == nil {
-		data.ManifestCount, data.ManifestKnown = m.Len(), true
+		data.ManifestCount, data.ManifestKnown = m.NoteCount(), true // notes, not files (D-34)
 	}
 	return indexFreshness(data)
 }

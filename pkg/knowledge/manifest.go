@@ -191,6 +191,20 @@ func (m *Manifest) Remove(relPath string) { delete(m.Entries, relPath) }
 // Len returns the number of recorded files.
 func (m *Manifest) Len() int { return len(m.Entries) }
 
+// NoteCount is Len restricted to markdown notes (ScanKindNote). knowledge_
+// describe and knowledge_list say "notes" and compare the figure with the
+// notes the integrity walk found on disk; counting attachments too is how
+// "index holds 48 of 30 notes on disk" happened (UAT 2026-09-13, D-34).
+func (m *Manifest) NoteCount() int {
+	n := 0
+	for _, e := range m.Entries {
+		if e.Kind == ScanKindNote {
+			n++
+		}
+	}
+	return n
+}
+
 // ManifestExists reports whether a manifest file is present at path, without
 // attempting to parse it.
 //
