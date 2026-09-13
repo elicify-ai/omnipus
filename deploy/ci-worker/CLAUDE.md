@@ -204,9 +204,16 @@ Three things to know before trusting it:
    payload instead of writing it. Use `fly ssh sftp put deploy/ci-worker/runci.sh
    /cache/runci.sh --app <app>` then `chmod +x` over the console. (Found when first provisioning
    this worker.)
-3. **`OPENROUTER_API_KEY_B`/`_C` are not set on it** (only slot `a`), so the LLM shards run at
-   single-key parallelism; a 429 burst there is a rate-limit artefact, not a code regression.
-   Set them with `fly secrets set --app ci-omnipus-3` when the extra keys are to hand.
+3. **`OPENROUTER_API_KEY_B`/`_C` are not set on it** (only slot `a`), so all nine LLM shards
+   share one key. What that looks like is NOT 429s (zero were logged on 2026-09-12) but
+   **slow completions**: judge calls of ~80 s, a supervisor re-plan turn of 3 min, a
+   goal test taking 5+ min in the matrix and 2 min when run alone. The tests with the
+   tightest real-time windows lose the race first — `Conformance_t3b_TargetedRetryOnlyE2E`
+   (4 judge rounds inside a 7-min window) failed in the matrix and passed in 8.8 min in
+   isolation on the same commit, and the judge's own 120 s call timeout tripped three times
+   in one conformance-chat shard. Before reading such a failure as a regression, re-run the
+   ONE spec with `E2E_SPECS=…` (no contention) and compare durations; then set the extra
+   keys with `fly secrets set --app ci-omnipus-3` so the matrix stops sharing one window.
 
 Detached runs (`nohup … > /tmp/ci-run.log &` over the console) survive an SSH drop and a
 session restart; resume by reading `/tmp/ci-run.log` and `ps -eo pid,etime,cmd | grep
