@@ -815,7 +815,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 
 	if runInBackground {
 		ownerSessionID := ToolTranscriptSessionID(ctx)
-		return t.runBackground(ctx, command, cwd, timeoutSeconds, lim, ownerSessionID, cb)
+		return t.runBackground(ctx, command, cwd, baseDir, timeoutSeconds, lim, ownerSessionID, cb)
 	}
 	started := time.Now()
 	result := t.runForeground(ctx, command, lim, timeoutSeconds)
@@ -831,9 +831,12 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 // sees it even if the agent ignores the notice. God mode is the operator's
 // explicit opt-out of confinement and is skipped; so is an unrestricted tool
 // (restrictToWorkspace=false), whose whole point is that the workspace is
-// not a boundary. Background runs are not swept: their completion is
-// delivered asynchronously and a sweep there would race the command that is
-// still writing.
+// not a boundary. Background runs ARE swept — at their completion, in
+// runBackground's completion goroutine, the one place that knows the
+// process has exited and its pipes are drained, so the walk cannot race a
+// command that is still writing (Claude review 2026-09-14: sweeping only
+// the foreground path left a background run free to plant the very escape
+// the sweep exists to name).
 func (t *ExecTool) sweepAfterRun(ctx context.Context, command, cwd, baseDir string, started time.Time, result *ToolResult) *ToolResult {
 	if result == nil || t.godMode || !t.restrictToWorkspace {
 		return result
@@ -2083,21 +2086,24 @@ func sandboxLimitsEnv(lim sandbox.Limits) []string {
 // SessionManager.KillAllForSessions rather than a single exact match. The
 // completion goroutine below fires cb exactly once — on natural completion,
 // failure, timeout, or explicit kill (FR-B9) — via whichever ToolResult best
-// describes the final state.
+// describes the final state. baseDir is the same turn base directory
+// executeRun computed; the completion goroutine needs it for the D-14
+// post-command symlink sweep it runs before delivering the result.
 func (t *ExecTool) runBackground(
 	ctx context.Context,
-	command, cwd string,
+	command, cwd, baseDir string,
 	timeoutSeconds int32,
 	lim sandbox.Limits,
 	ownerSessionID string,
 	cb AsyncCallback,
 ) *ToolResult {
+	started := time.Now()
 	sessionID := generateSessionID()
 	session := &ProcessSession{
 		ID:             sessionID,
 		Command:        command,
 		Background:     true,
-		StartTime:      time.Now().Unix(),
+		StartTime:      started.Unix(),
 		Status:         StatusRunning,
 		OwnerSessionID: ownerSessionID,
 	}
@@ -2276,8 +2282,24 @@ func (t *ExecTool) runBackground(
 		// (timeoutSeconds <= 0): nothing ever selects on it in that case.
 		close(naturalCompletionCh)
 
+		// D-14 background coverage (Claude review 2026-09-14): run the
+		// post-command escaping-symlink sweep HERE, at the completion
+		// goroutine — the one place that knows the process has exited and
+		// its pipes are drained, so the walk cannot race a command that is
+		// still writing. Before this, only the foreground path swept, so a
+		// background run could plant the very symlink escape the sweep
+		// exists to name and never be reported. The sweep is report-only
+		// (see sweepAfterRun) and shares its skip conditions (god mode,
+		// unrestricted tool); it runs even when cb is nil so the operator's
+		// audit entry is still written, and its notice is folded into the
+		// completion result the callback delivers. sweepAfterRun reads only
+		// context VALUES off ctx (agent/workspace identity for the policy
+		// lookup and the audit entry), so a turn that has since ended does
+		// not silence it.
+		completion := backgroundCompletionResult(sessionID, finalStatus, finalExitCode, outputSoFar)
+		completion = t.sweepAfterRun(ctx, command, cwd, baseDir, started, completion)
 		if cb != nil {
-			cb(context.Background(), backgroundCompletionResult(sessionID, finalStatus, finalExitCode, outputSoFar))
+			cb(context.Background(), completion)
 		}
 	}()
 
