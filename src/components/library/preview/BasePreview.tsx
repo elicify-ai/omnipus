@@ -45,7 +45,6 @@ import { Button } from '@/components/ui/button'
 import { QueryErrorState } from '@/components/shared/QueryErrorState'
 import {
   fetchKnowledgeBaseViews,
-  fetchKnowledgeGraph,
   fetchKnowledgeViewResult,
   fetchLibraryContent,
   libraryDownloadUrl,
@@ -128,16 +127,7 @@ export {
   withLinkGraphSlot,
   linkGraphInFlightCount,
 } from './useCollectionLinkGraph'
-
-const defaultLoadGraph: KnowledgeGraphLoader = ({ workspaceId, collectionId, kind, path, paths, hops, limit }) =>
-  fetchKnowledgeGraph(workspaceId, {
-    collectionId,
-    kind,
-    ...(path === undefined ? {} : { path }),
-    ...(paths === undefined || paths.length === 0 ? {} : { paths }),
-    ...(hops === undefined ? {} : { hops }),
-    ...(limit === undefined ? {} : { limit }),
-  })
+import { defaultKnowledgeGraphLoader as defaultLoadGraph } from './useCollectionLinkGraph'
 
 /**
  * ADR-083 EMB-040/EMB-043/EMB-046/EMB-047/EMB-048/EMB-049 — the extra

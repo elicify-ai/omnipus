@@ -42,7 +42,7 @@
 // produced still renders, with an explicit marker, never dropped and never
 // fabricated; a file-search walk that stopped early states the bound it hit.
 
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -71,6 +71,16 @@ import { cn } from '@/lib/utils'
 import { fetchKnowledgeViewResult } from '@/lib/api'
 import type { ViewResult } from '@/lib/api/generated/openapi-types'
 import { ViewPartsRenderer } from '../preview/viewparts/ViewPartsRenderer'
+// Codex review #12: the saved-view dialog resolves a relation cell's
+// `[[wikilink]]` against the COLLECTION, with the same evidence ladder and
+// the same ONE multi-path request the base preview uses — never a second,
+// divergent resolution path, and never the raw wikilink text as a path.
+import {
+  collectionLinkRowPaths,
+  defaultKnowledgeGraphLoader,
+  makeCollectionLinkResolver,
+  useCollectionLinkGraph,
+} from '../preview/useCollectionLinkGraph'
 // WL-2: the note reader's own wikilink stripper, imported rather than
 // reimplemented. A search hit's snippet and a record's cell value are RAW
 // byte excerpts of file content — frontmatter included — so a match falling
@@ -84,6 +94,7 @@ import { stripWikilinkNotation } from '../preview/wikilinkNotation'
 // the bar never disagrees with the engine about which words a hit matched.
 import { foldForMatch, foldedMatchRanges } from './foldForMatch'
 import { collectionPathToWorkspacePath, libraryNoteHref } from '../knowledge/KnowledgeBacklinks'
+import type { KnowledgeGraphLoader } from '../knowledge/KnowledgeBacklinks'
 import { LibraryErrorBanner } from '../LibraryErrorBanner'
 import {
   useVaultSearch,
@@ -188,6 +199,9 @@ export interface LibrarySearchBarProps {
   searchFilesFn?: FileSearchFn
   loadCollectionInfo?: LoadCollectionInfoFn
   loadViewResult?: LoadViewResultFn
+  /** Codex #12: the link-graph client behind the saved-view dialog's
+   *  collection-aware cell resolver. Same seam BasePreview exposes. */
+  loadGraph?: KnowledgeGraphLoader
   className?: string
 }
 
@@ -603,6 +617,7 @@ export function LibrarySearchBar({
   searchFilesFn,
   loadCollectionInfo,
   loadViewResult = fetchKnowledgeViewResult,
+  loadGraph = defaultKnowledgeGraphLoader,
   className,
 }: LibrarySearchBarProps) {
   const [text, setText] = useState('')
@@ -774,6 +789,35 @@ export function LibrarySearchBar({
     enabled: openView !== null && workspaceId !== null && collectionId !== undefined,
     retry: false,
   })
+
+  // ── Codex review #12: a collection-aware resolver for the saved-view dialog ──
+  // The dialog's relation cells used to render with NO resolver, so
+  // ViewCellLink fell back to the RAW wikilink target as the path — a
+  // basename cell ("[[Sofia Marchetti]]") navigated to the literal
+  // "vault/Sofia Marchetti" and landed on not-found. The dialog now draws
+  // its evidence from the SAME one multi-path link-graph request the base
+  // preview makes (useCollectionLinkGraph), over the dialog's own rows, and
+  // resolves with the same two-tier ladder (makeCollectionLinkResolver) —
+  // an edge names the real note, and only a target naming one of the rows
+  // in THIS view falls back to resolved-or-unknown.
+  const dialogViewResult = viewResultQuery.data
+  const dialogLinkRowPaths = useMemo(
+    () => (dialogViewResult ? collectionLinkRowPaths(dialogViewResult.rows) : []),
+    [dialogViewResult],
+  )
+  const dialogLinkGraph = useCollectionLinkGraph({
+    workspaceId,
+    collectionId,
+    paths: dialogLinkRowPaths,
+    loadGraph,
+  })
+  const dialogResolveWikilink = useMemo(
+    () =>
+      dialogViewResult
+        ? makeCollectionLinkResolver(dialogLinkGraph.edges, dialogLinkGraph.nodes, dialogViewResult.rows)
+        : undefined,
+    [dialogViewResult, dialogLinkGraph.edges, dialogLinkGraph.nodes],
+  )
 
   // ── Vault-mode honesty (US-1 honesty port) ────────────────────────────────
   const notReadyReason = response && !response.complete ? response.complete_reason : undefined
@@ -1208,7 +1252,10 @@ export function LibrarySearchBar({
           )}
           {/* UAT D-72: the SAME row-open and relation-cell link wiring the
               base preview has, so a `[[Sofia Marchetti]]` cell is a real
-              link here too instead of raw brackets. */}
+              link here too instead of raw brackets. Codex #12: the cell is
+              RESOLVED against the collection first (dialogResolveWikilink),
+              so the click opens the note the link graph names — never the
+              literal wikilink text as a path. */}
           {viewResultQuery.data && (
             <ViewPartsRenderer
               result={viewResultQuery.data}
@@ -1216,6 +1263,7 @@ export function LibrarySearchBar({
                 openNote(p)
                 setOpenView(null)
               }}
+              {...(dialogResolveWikilink ? { resolveWikilink: dialogResolveWikilink } : {})}
               {...(workspaceId !== null && collectionRootPath !== undefined
                 ? {
                     linkHref: (p: string) =>

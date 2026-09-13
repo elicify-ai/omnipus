@@ -17,6 +17,7 @@ import {
 } from '@/lib/api/generated/schemas'
 import { ApiError } from '@/lib/api-error'
 import { LibrarySearchBar } from './LibrarySearchBar'
+import type { KnowledgeGraphLoader } from '../knowledge/KnowledgeBacklinks'
 import type { VaultSearchResponse, KnowledgeBaseInfo, VaultSearchFn, LoadCollectionInfoFn } from './useVaultSearch'
 import type { FileSearchResponse, FileSearchFn } from './useFileSearch'
 import type { ViewResult } from '@/lib/api/generated/openapi-types'
@@ -106,6 +107,7 @@ function renderBar(opts: {
   onOpenNote?: (p: string) => void
   onOpenFolder?: (p: string) => boolean
   loadViewResult?: LoadViewResultFn
+  loadGraph?: KnowledgeGraphLoader
   debounceMs?: number
 } = {}) {
   const searchFn: VaultSearchFn =
@@ -128,6 +130,7 @@ function renderBar(opts: {
         loadCollectionInfo={loadCollectionInfo}
         {...(opts.onOpenFolder ? { onOpenFolder: opts.onOpenFolder } : {})}
         {...(opts.loadViewResult ? { loadViewResult: opts.loadViewResult } : {})}
+        {...(opts.loadGraph ? { loadGraph: opts.loadGraph } : {})}
       >
         <div data-testid="file-tree">The file tree</div>
       </LibrarySearchBar>
@@ -1463,6 +1466,68 @@ describe('UAT D-72 / D-136 — the saved-view dialog links relation cells and na
     await screen.findByTestId('library-search-view-dialog')
     await waitFor(() => expect(screen.getByText('Saved view')).toBeInTheDocument())
     expect(screen.queryByTestId('library-search-view-source')).not.toBeInTheDocument()
+  })
+
+  // Codex review #12 (fan-out round): the dialog's link callbacks omitted
+  // resolveWikilink, so a BASENAME wikilink cell ("[[Sofia Marchetti]]")
+  // navigated to the literal path "vault/Sofia Marchetti" — a not-found view.
+  // The dialog now uses the SAME collection-aware resolver the base preview
+  // uses (useCollectionLinkGraph/makeCollectionLinkResolver), and this test
+  // asserts the RESOLVED DESTINATION of the click, not just that a link
+  // exists.
+  it('clicking a relation cell opens the RESOLVED note, never the literal wikilink name (Codex #12)', async () => {
+    const onOpenNote = vi.fn()
+    const loadGraph = vi.fn().mockResolvedValue({
+      collection_id: 'kb_1',
+      kind: 'links' as const,
+      nodes: [{ path: 'People/Sofia Marchetti.md', exists: true }],
+      edges: [
+        {
+          from_path: 'Projects/a.md',
+          to_path: 'People/Sofia Marchetti.md',
+          link_text: 'Sofia Marchetti',
+          heading_found: false,
+          resolution: 'exact_path' as const,
+          ambiguous: false,
+        },
+      ],
+      skipped: [],
+      truncated: false,
+    })
+    const loadViewResult = vi.fn().mockResolvedValue(
+      viewResult({
+        parts: [{ part: 'table', source: { part: 'table' }, columns: ['file.name', 'owner'] }],
+        rows: [
+          {
+            path: 'Projects/a.md',
+            title: 'Core Platform Migration',
+            cells: [{ property: 'owner', value: '[[Sofia Marchetti]]', relation: true }],
+            joins: [],
+          },
+        ],
+      }),
+    )
+    renderBar({
+      res: response({ views: [{ view: 'open-deals', label: 'Open deals' }] }),
+      loadViewResult,
+      loadGraph,
+      onOpenNote,
+    })
+    type('deals')
+    await waitFor(() => expect(screen.getByText('Open deals')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('vault-search-view-hit'))
+    const dialog = await screen.findByTestId('library-search-view-dialog')
+    const link = await within(dialog).findByTestId('viewpart-cell-link')
+    // DIES ON the old code: no resolver → the cell read data-kb-state
+    // "unknown" and its path was the RAW wikilink target.
+    await waitFor(() => expect(link).toHaveAttribute('data-kb-state', 'resolved'))
+    fireEvent.click(link)
+    // DIES ON the old code: 'vault/Sofia Marchetti' — a literal not-found
+    // path. The destination is the note the collection's link graph names.
+    expect(onOpenNote).toHaveBeenCalledWith('vault/People/Sofia Marchetti.md')
+    expect(onOpenNote).not.toHaveBeenCalledWith('vault/Sofia Marchetti')
+    // And the click closed the dialog, as every open-path here does.
+    expect(screen.queryByTestId('library-search-view-dialog')).not.toBeInTheDocument()
   })
 })
 

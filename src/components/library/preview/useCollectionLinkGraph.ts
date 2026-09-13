@@ -28,12 +28,33 @@ import { useQuery } from '@tanstack/react-query'
 import type { UseQueryResult } from '@tanstack/react-query'
 
 import { ApiError } from '@/lib/api-error'
+import { fetchKnowledgeGraph } from '@/lib/api'
 import type {
   KnowledgeGraphEdge,
   KnowledgeGraphNode,
 } from '@/lib/api/generated/openapi-types'
 import type { KnowledgeGraphLoader } from '../knowledge/KnowledgeBacklinks'
 import type { KbLinkResolution } from './knowledgeMarkdown'
+
+/** The production graph client every surface sharing this hook defaults to;
+ *  tests inject their own through the component's `loadGraph` seam. */
+export const defaultKnowledgeGraphLoader: KnowledgeGraphLoader = ({
+  workspaceId,
+  collectionId,
+  kind,
+  path,
+  paths,
+  hops,
+  limit,
+}) =>
+  fetchKnowledgeGraph(workspaceId, {
+    collectionId,
+    kind,
+    ...(path === undefined ? {} : { path }),
+    ...(paths === undefined || paths.length === 0 ? {} : { paths }),
+    ...(hops === undefined ? {} : { hops }),
+    ...(limit === undefined ? {} : { limit }),
+  })
 
 /** Rows whose own markdown this surface wants link evidence for, at most.
  *  Deliberately below the server's `paths` bound (64) so a future caller
