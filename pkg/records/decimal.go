@@ -352,6 +352,46 @@ func (d Decimal) String() string {
 	return s
 }
 
+// TrimTrailingZeros returns d at the smallest scale that still represents
+// exactly the same value: 223.0000000000 becomes 223, 2.500 becomes 2.5, and
+// 0.000 stays 0 at scale 0 (never an empty string). UAT 2026-09-13 D-61: a
+// scale no author declared is a ROUNDING BOUND, not a padding instruction, so
+// a value that did not need rounding is shown in its shortest exact form. A
+// scale an author DID declare (toFixed, round) is a request for those zeros
+// and is never trimmed — that decision is the caller's; this method only
+// does the trimming.
+//
+// The receiver is left untouched; a new Decimal is returned. A value at
+// scale zero or a negative scale is returned as-is (there are no fractional
+// zeros to trim, and a negative scale's implicit zeros are the value's own
+// magnitude, e.g. 1e3).
+func (d Decimal) TrimTrailingZeros() Decimal {
+	if d.scale <= 0 {
+		return d
+	}
+	u := d.int()
+	if u == nil {
+		return d
+	}
+	// int() hands back the RECEIVER'S OWN pointer — every other reader treats
+	// it as immutable — so the divisions below run on a copy.
+	u = new(big.Int).Set(u)
+	sc := d.scale
+	ten := big.NewInt(10)
+	rem := new(big.Int)
+	// big.Int.Mod takes the sign of the receiver, so a negative value that is
+	// exactly divisible still answers zero — which is the only question asked.
+	for sc > 0 && rem.Mod(u, ten).Sign() == 0 && u.Sign() != 0 {
+		u.Div(u, ten)
+		sc--
+	}
+	if u.Sign() == 0 {
+		// Zero trims all the way: "0", not "0.00".
+		return NewDecimal(u, 0)
+	}
+	return NewDecimal(u, sc)
+}
+
 // pow10 returns 10^n as a big.Int. n must be >= 0.
 //
 // The parameter is int64 rather than int32 deliberately: every caller derives n

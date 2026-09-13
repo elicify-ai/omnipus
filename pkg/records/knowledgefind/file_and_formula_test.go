@@ -504,14 +504,18 @@ func TestProductionLoader_ServesASavedViewsFormula(t *testing.T) {
 	if !found {
 		t.Fatalf("no `formula.days_until_due` cell in the row; cells = %+v", resp.Rows[0].Cells)
 	}
-	// FR-144's default scale: a formula number that no `round`/`toFixed`
-	// declared crosses the boundary at ten decimal places, so the rendering is
-	// `2.0000000000` and not `2`. Asserted EXACTLY rather than as a prefix —
-	// the scale is part of the contract, and a prefix check would go on passing
-	// if the value became 2.5 (a `.days` truncated to a component instead of
-	// the documented total) or 20.
-	if cell != "2.0000000000" {
-		t.Errorf("formula.days_until_due = %q, want %q — 2026-09-02 is exactly two days after 2026-08-31, rendered at FR-144's default scale", cell, "2.0000000000")
+	// FR-144's default scale, as D-61 (2026-09-14) ruled it reads: a formula
+	// number that no `round`/`toFixed` declared crosses the boundary at ten
+	// decimal places as a ROUNDING BOUND, not a padding instruction — an exact
+	// value renders in its shortest exact form, so `2` and not `2.0000000000`.
+	// (The padded rendering was D-61's reported defect: a reader cannot tell
+	// false precision from real precision. A DECLARED scale still keeps its
+	// zeros; that half is pinned in pkg/records/formula_display_scale_test.go.)
+	// Still asserted EXACTLY rather than as a prefix — a prefix check would go
+	// on passing if the value became 2.5 (a `.days` truncated to a component
+	// instead of the documented total) or 20.
+	if cell != "2" {
+		t.Errorf("formula.days_until_due = %q, want %q — 2026-09-02 is exactly two days after 2026-08-31, exact at an undeclared scale (D-61)", cell, "2")
 	}
 }
 

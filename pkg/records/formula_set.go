@@ -283,6 +283,7 @@ func ValidateFormulaSet(sources map[string]string, schema *Schema) (*FormulaSet,
 			continue
 		}
 		d.Type, d.Arity, d.Scale = typ, arity, scale
+		d.ScaleDeclared = formulaDeclaresScale(d.Root)
 		env.Formulas[name] = d
 		trees[name] = d
 
@@ -314,6 +315,17 @@ func ValidateFormulaSet(sources map[string]string, schema *Schema) (*FormulaSet,
 	}
 	sort.Strings(set.names)
 	return set, nil
+}
+
+// formulaDeclaresScale answers whether the formula's ROOT is a `toFixed` or
+// `round` call — FR-144's own definition of a declared scale ("FormulaDefault-
+// Scale unless `toFixed`/`round` at the root of the expression said
+// otherwise"). The root is the whole question: a toFixed nested inside a larger
+// expression has its scale WIDENED by its siblings' default (widerScale), and
+// that widened 10 is a bound, not an author's request for ten places (D-61).
+func formulaDeclaresScale(root FormulaNode) bool {
+	c, ok := root.(*Call)
+	return ok && (c.Name == "toFixed" || c.Name == "round")
 }
 
 // validFormulaName refuses a name a query could not address.

@@ -75,6 +75,18 @@ type FormulaResult struct {
 	Absent bool
 	// Scale is the DECLARED scale a number crossed the boundary at (FR-144).
 	Scale int32
+	// ScaleDeclared says whether an author declared that scale (a root
+	// toFixed/round call) or it is FR-144's default bound. D-61: an exact
+	// value at an UNDECLARED scale is shown in its shortest exact form, a
+	// declared one exactly as asked.
+	ScaleDeclared bool
+	// Note explains a result a bare number would misrepresent. D-61's case: a
+	// NEGATIVE date difference — `(start - today()).days` with a future start
+	// reads as a countdown, and a reader shown a bare "-79" cannot tell it
+	// from an elapsed count. The note is on the RESULT, where every consumer
+	// (knowledgefind's cells, a base preview) can show it without re-deriving
+	// provenance; it is empty when there is nothing to explain.
+	Note string
 	// Rounded says the exact rational did not fit at Scale and the value shown
 	// is a rounding of it. FR-144: "a rounded value is labelled as rounded" —
 	// an unlabelled rounded number is the failure FR-152 records.
@@ -86,6 +98,11 @@ type FormulaResult struct {
 
 	values []TypedValue
 	texts  []string
+	// dateDiff records that the value descends from a date subtraction, so a
+	// NEGATIVE number can be explained at the boundary (D-61's Note). It is
+	// provenance, not a type: arithmetic over a date difference keeps it, the
+	// sign alone is judged when the result is materialised.
+	dateDiff bool
 }
 
 // Values returns the typed values the formula produced. Empty when Absent.
@@ -243,17 +260,30 @@ func (e *FormulaEvaluator) Evaluate(name string) (FormulaResult, bool) {
 	delete(e.inProgress, name)
 
 	res := FormulaResult{
-		Name:     name,
-		Type:     decl.Type,
-		Arity:    decl.Arity,
-		Absent:   val.absent,
-		Scale:    decl.Scale,
-		Rounded:  val.rounded,
-		Problems: problems,
+		Name:          name,
+		Type:          decl.Type,
+		Arity:         decl.Arity,
+		Absent:        val.absent,
+		Scale:         decl.Scale,
+		ScaleDeclared: decl.ScaleDeclared,
+		Rounded:       val.rounded,
+		Problems:      problems,
+		dateDiff:      val.dateDiff,
 	}
-	res.values, res.texts, res.Rounded = val.materialize(decl.Scale, val.rounded)
+	res.values, res.texts, res.Rounded = val.materialize(decl.Scale, decl.ScaleDeclared, val.rounded)
 	if len(res.values) == 0 && len(res.texts) == 0 {
 		res.Absent = true
+	}
+	// D-61's second half, judged HERE — at the boundary where the value leaves
+	// the evaluator — and not at the subtraction that produced it: the sign of
+	// the FINAL value is what a reader sees, so `(a - b).days * 2` that ends
+	// negative is explained, `0 - (a - b).days` that ends positive is not, and
+	// an ordinary negative (`2 - 5`, no dates anywhere) never was the
+	// evaluator's to explain.
+	if res.Note == "" && val.dateDiff && val.typ == FormulaNumber {
+		if it, ok := val.single(); ok && it.num != nil && it.num.Sign() < 0 {
+			res.Note = "negative because the first date is later than the second — this span counts DOWN from the first date to the second, so read it as a countdown, not an elapsed count"
+		}
 	}
 	e.memo[name] = res
 	return res, true
@@ -284,8 +314,13 @@ type fval struct {
 	// are not the same question. A `many` property holding one element is still
 	// a list, and `isType("list")` has to say so; `len(items)` cannot tell that
 	// apart from a scalar, and an absent list has no items at all.
-	many    bool
-	rounded bool
+	many bool
+	// rounded is FR-144's label: the exact rational did not fit at the
+	// declared scale. dateDiff is D-61's provenance: the value descends from a
+	// date subtraction, so a negative result is explained (FormulaResult.Note)
+	// rather than shown bare. Both ride through arithmetic the same way.
+	rounded  bool
+	dateDiff bool
 }
 
 func absentOf(t FormulaType) fval { return fval{typ: t, absent: true} }
@@ -328,7 +363,7 @@ func (v fval) single() (fitem, bool) {
 // the DECLARED scale, rounded half-even, with the rounding LABELLED. It happens
 // once, at the end, rather than at every arithmetic step, which is the whole
 // point of carrying rationals internally.
-func (v fval) materialize(scale int32, alreadyRounded bool) ([]TypedValue, []string, bool) {
+func (v fval) materialize(scale int32, scaleDeclared, alreadyRounded bool) ([]TypedValue, []string, bool) {
 	if v.absent {
 		return nil, nil, alreadyRounded
 	}
@@ -346,6 +381,15 @@ func (v fval) materialize(scale int32, alreadyRounded bool) ([]TypedValue, []str
 		case FormulaNumber:
 			d, r := ratToDecimal(it.num, scale)
 			rounded = rounded || r
+			// D-61: the value is exact at a scale nobody declared — the
+			// default is a rounding bound, not a padding instruction, so the
+			// DECIMAL itself is trimmed (not just its Raw text): every
+			// consumer renders the Decimal, and each of them showed
+			// `223.0000000000`. A declared scale, or a value that genuinely
+			// needed the places (rounded), keeps every digit it has.
+			if !scaleDeclared && !r {
+				d = d.TrimTrailingZeros()
+			}
 			values = append(values, TypedValue{Type: TypeDecimal, Number: d, Raw: d.String()})
 		case FormulaText:
 			values = append(values, TypedValue{Type: TypeText, Text: it.text, Raw: it.text})
@@ -493,7 +537,8 @@ func (e *FormulaEvaluator) evalFieldAccess(node *FieldAccess) (fval, []Compariso
 	if !ok || it.num == nil {
 		return absentOf(rule.result), problems
 	}
-	return numberVal(new(big.Rat).Quo(it.num, div)), problems
+	// `.days` on a date difference keeps the duration's provenance (D-61).
+	return withDateDiff(numberVal(new(big.Rat).Quo(it.num, div)), recv.dateDiff), problems
 }
 
 // nanosPerSecond is written as a decimal integer rather than as 1e9 on purpose:
@@ -522,7 +567,10 @@ func evalDateDifference(left, right fval, problems []ComparisonProblem) (fval, [
 		return absentOf(FormulaDuration), problems
 	}
 	nanos := new(big.Int).Sub(instantNanos(l.date), instantNanos(r.date))
-	return durationVal(new(big.Rat).SetFrac(nanos, big.NewInt(nanosPerSecond))), problems
+	// D-61 provenance: everything downstream of this duration — `.days` on it,
+	// arithmetic over that — may end up a NEGATIVE number a reader has to be
+	// able to read correctly. The sign is not judged here; the descent is.
+	return withDateDiff(durationVal(new(big.Rat).SetFrac(nanos, big.NewInt(nanosPerSecond))), true), problems
 }
 
 func (e *FormulaEvaluator) evalRef(node *Ref) (fval, []ComparisonProblem) {
@@ -654,7 +702,7 @@ func fvalFromResult(res FormulaResult) fval {
 		v.many = res.Arity == ArityMany
 		return v
 	}
-	out := fval{typ: res.Type, rounded: res.Rounded, many: res.Arity == ArityMany}
+	out := fval{typ: res.Type, rounded: res.Rounded, dateDiff: res.dateDiff, many: res.Arity == ArityMany}
 	if res.Type == FormulaPresentation {
 		for _, t := range res.texts {
 			out.items = append(out.items, fitem{text: t})
@@ -702,7 +750,9 @@ func (e *FormulaEvaluator) evalUnary(node *UnaryOp) (fval, []ComparisonProblem) 
 	if node.Op == "!" {
 		return boolVal(!it.flag), problems
 	}
-	return numberVal(new(big.Rat).Neg(it.num)), problems
+	// Negating a date difference is still a date difference (D-61: the sign is
+	// judged at the boundary, not here).
+	return withDateDiff(numberVal(new(big.Rat).Neg(it.num)), operand.dateDiff), problems
 }
 
 func (e *FormulaEvaluator) evalBinary(node *BinaryOp) (fval, []ComparisonProblem) {
@@ -768,14 +818,23 @@ func (e *FormulaEvaluator) evalArithmetic(node *BinaryOp, left, right fval, prob
 		})
 	}
 	rounded := left.rounded || right.rounded
+	// D-61: date-difference provenance rides through arithmetic exactly the
+	// way the rounded label does — an operand that descended from a date
+	// subtraction makes the result descend from one too.
+	dateDiff := left.dateDiff || right.dateDiff
+	finish := func(v fval) (fval, []ComparisonProblem) {
+		v.rounded = rounded
+		v.dateDiff = dateDiff
+		return v, problems
+	}
 
 	switch node.Op {
 	case "+":
-		return withRounded(numberVal(new(big.Rat).Add(l.num, r.num)), rounded), problems
+		return finish(numberVal(new(big.Rat).Add(l.num, r.num)))
 	case "-":
-		return withRounded(numberVal(new(big.Rat).Sub(l.num, r.num)), rounded), problems
+		return finish(numberVal(new(big.Rat).Sub(l.num, r.num)))
 	case "*":
-		return withRounded(numberVal(new(big.Rat).Mul(l.num, r.num)), rounded), problems
+		return finish(numberVal(new(big.Rat).Mul(l.num, r.num)))
 	case "/":
 		if r.num.Sign() == 0 {
 			// FR-144: division by zero is an ABSENT result plus a NAMED
@@ -787,7 +846,7 @@ func (e *FormulaEvaluator) evalArithmetic(node *BinaryOp, left, right fval, prob
 				Remedy: "guard the divisor, for example with if(divisor != 0, a / divisor)",
 			})
 		}
-		return withRounded(numberVal(new(big.Rat).Quo(l.num, r.num)), rounded), problems
+		return finish(numberVal(new(big.Rat).Quo(l.num, r.num)))
 	case "%":
 		m, ok := ratMod(l.num, r.num)
 		if !ok {
@@ -797,13 +856,17 @@ func (e *FormulaEvaluator) evalArithmetic(node *BinaryOp, left, right fval, prob
 				Remedy: "wrap the operand in round()",
 			})
 		}
-		return withRounded(numberVal(m), rounded), problems
+		return finish(numberVal(m))
 	}
 	return absentOf(FormulaNumber), problems
 }
 
-func withRounded(v fval, rounded bool) fval {
-	v.rounded = rounded
+// withDateDiff stamps date-difference provenance (D-61) on a freshly built
+// value. It is withRounded's one-flag sibling — that helper was folded into
+// evalArithmetic's finish closure when the two flags began travelling
+// together; this one stays for the three single-flag call sites.
+func withDateDiff(v fval, dateDiff bool) fval {
+	v.dateDiff = dateDiff
 	return v
 }
 
@@ -863,7 +926,7 @@ func (v fval) operand(name string) (PropertyValue, bool) {
 	pv := PropertyValue{Property: prop, State: StateAbsent}
 	if !v.absent {
 		pv.State = StatePresent
-		values, _, _ := v.materialize(FormulaDefaultScale, false)
+		values, _, _ := v.materialize(FormulaDefaultScale, false, false)
 		pv.Values = values
 	}
 	return pv, true
@@ -1225,7 +1288,14 @@ func formulaItemText(typ FormulaType, it fitem) string {
 		if it.num == nil {
 			return ""
 		}
-		d, _ := ratToDecimal(it.num, FormulaDefaultScale)
+		// Presentation text (format(), link()) crosses at the DEFAULT scale,
+		// which nobody declared — D-61: exact values render in their shortest
+		// exact form here too, so `format(due.days, "{} days")` says "2 days",
+		// not "2.0000000000 days".
+		d, r := ratToDecimal(it.num, FormulaDefaultScale)
+		if !r {
+			d = d.TrimTrailingZeros()
+		}
 		return d.String()
 	}
 	return it.text
