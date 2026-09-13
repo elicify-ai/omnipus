@@ -233,3 +233,5 @@ occasionally the write lands mid-`RemoveAll` and fails an otherwise green test w
 130 dirs, all `cache/model_limits.json` (ADR-066 rung 4's fetch on a background context).
 
 **Cost / lifecycle**: the worker is stopped when idle (no public service). If `fly status` shows the machine `stopped`, run `fly machines start <id> --app ci-omnipus` once before invoking `runci.sh`; the SSH console will auto-start it otherwise. Watch the persistent `/cache` volume for disk pressure — `fly ssh console --app ci-omnipus -C 'df -h /cache'`.
+
+**Trap 7 — stopping a run: kill the exact pid, never a process group.** `ps -o pgid` can print `0` for a nohup'd `runci.sh`; `kill -TERM -0` then signals every process on the VM, including init, and the Fly machine stops (2026-09-14, `ci-omnipus-3`, recovered with `fly machines start <id>`; `/cache` survived). Stop a superseded run with `kill -TERM <runci pid>` and, if its children linger, `pkill -TERM -P <runci pid>`. Note also that a GATE FAILURE in `go-build` does not end the run: the remaining gates still execute, so a superseded run holds the lock for the full duration unless stopped.
