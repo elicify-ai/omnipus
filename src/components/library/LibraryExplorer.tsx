@@ -69,6 +69,7 @@ import {
   copyLibraryEntry,
   uploadLibraryFiles,
   mkdirLibraryEntry,
+  createLibraryTextFile,
   libraryDownloadUrl,
   libraryQueryKeys,
   createWorkspaceMount,
@@ -84,6 +85,7 @@ import { LibraryCreateMenu } from './LibraryCreateMenu'
 import { LibraryMountsDialog } from './LibraryMountsDialog'
 import { mountNameFromPath } from './libraryMountName'
 import { LibraryNewFolderDialog } from './LibraryNewFolderDialog'
+import { LibraryNewNoteDialog } from './LibraryNewNoteDialog'
 import { LibraryPreviewPane } from './LibraryPreviewPane'
 import { LibraryErrorBanner } from './LibraryErrorBanner'
 import { KnowledgePanel } from './knowledge/KnowledgePanel'
@@ -272,6 +274,9 @@ export function LibraryExplorer({
   const [uploadError, setUploadError] = useState<string>()
   const [newFolderOpen, setNewFolderOpen] = useState(false)
   const [newFolderError, setNewFolderError] = useState<string>()
+  // UAT #699 / D-115: "New note" — a markdown file in the current folder.
+  const [newNoteOpen, setNewNoteOpen] = useState(false)
+  const [newNoteError, setNewNoteError] = useState<string>()
 
   useEffect(() => {
     onWorkspaceChange?.(workspaceId)
@@ -625,6 +630,43 @@ export function LibraryExplorer({
     },
   })
 
+  // UAT #699 / D-115 (2026-09-13). The note is created through the same
+  // compare-and-swap PUT the editor saves with, sending the ABSENT version
+  // token: a name that is already taken comes back as a 409 with the
+  // server's own reason, never an overwrite. On success the new file is
+  // SELECTED (goTo with its path), so the reader lands in it — the pane's
+  // Edit button is one click away and the view shows the seeded title.
+  const newNoteMutation = useMutation({
+    mutationFn: ({ wsId, path, content }: { wsId: string; path: string; content: string }) =>
+      createLibraryTextFile(wsId, path, content),
+    onMutate: () => {
+      setNewNoteError(undefined)
+    },
+    onSuccess: (result, vars) => {
+      invalidateEntries(vars.wsId)
+      invalidateWorkspaces()
+      setNewNoteOpen(false)
+      setNewNoteError(undefined)
+      addToast({ message: `Created ${result.value.name}.`, variant: 'success' })
+      goTo(vars.wsId, result.value.path)
+    },
+    onError: (err) => {
+      setNewNoteError(getLibraryErrorMessage(err, 'Could not create the note'))
+    },
+  })
+
+  function openNewNoteDialog() {
+    setNewNoteError(undefined)
+    setNewNoteOpen(true)
+  }
+
+  function handleCreateNote(fileName: string) {
+    if (!workspaceId) return
+    const path = browsedDir ? `${browsedDir}/${fileName}` : fileName
+    const title = fileName.replace(/\.(md|markdown)$/i, '')
+    newNoteMutation.mutate({ wsId: workspaceId, path, content: `# ${title}\n\n` })
+  }
+
   function openRenameDialog(entry: LibraryEntry) {
     setRenameError(undefined)
     setRenameTarget(entry)
@@ -821,6 +863,7 @@ export function LibraryExplorer({
             mountedCount={workspaceMounts.length}
             uploadPending={uploadMutation.isPending}
             onNewFolder={openNewFolderDialog}
+            onNewNote={openNewNoteDialog}
             onAddMount={() => setAddMountOpen(true)}
             onManageMounts={() => setMountsOpen(true)}
             onUpload={() => fileInputRef.current?.click()}
@@ -908,7 +951,14 @@ export function LibraryExplorer({
           poll — the frame is the contract's answer to progress (FR-080). */}
       {workspaceId !== null && (
         <div className="shrink-0 p-2 pb-0">
-          <KnowledgePanel workspaceId={workspaceId} path={browsedDir} />
+          {/* UAT #699 / D-115: the empty-collection state's "Write the first
+              note" button is live only when a handler is wired; with none the
+              panel used to say nothing at all about how a note gets made. */}
+          <KnowledgePanel
+            workspaceId={workspaceId}
+            path={browsedDir}
+            {...(!isReservedLibraryDir ? { onCreateNote: openNewNoteDialog } : {})}
+          />
         </div>
       )}
 
@@ -1095,6 +1145,19 @@ export function LibraryExplorer({
         isPending={mkdirMutation.isPending}
         error={newFolderError}
         onSubmit={handleCreateFolder}
+      />
+
+      {/* ── New note dialog (UAT #699 / D-115; creates inside the CURRENT directory) ── */}
+      <LibraryNewNoteDialog
+        open={newNoteOpen}
+        onOpenChange={(open) => {
+          setNewNoteOpen(open)
+          if (!open) setNewNoteError(undefined)
+        }}
+        siblingNames={new Set(sortedEntries.map((e) => e.name))}
+        isPending={newNoteMutation.isPending}
+        error={newNoteError}
+        onSubmit={handleCreateNote}
       />
 
       {/* ── Move / Copy dialog (D-9, cross-workspace) ──────────────────────── */}

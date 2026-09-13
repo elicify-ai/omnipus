@@ -5166,6 +5166,37 @@ export async function putLibraryContent(
 }
 
 /**
+ * The version token that says "I believe this file does not exist yet" —
+ * `pkg/knowledge/version.go`'s `TokenAbsent`, spelled the same way here so a
+ * CREATE goes through the same compare-and-swap door an update does: the
+ * server refuses with 409 when a file already occupies the path, so two
+ * people creating the same note at once can never silently overwrite each
+ * other (UAT #699 / D-115, 2026-09-13).
+ */
+export const LIBRARY_VERSION_ABSENT = 'v1:absent'
+
+/**
+ * Create a NEW text file (UAT #699 / D-115: the Library's "New note").
+ *
+ * This is `putLibraryContent` with the absent-token sentinel, not a separate
+ * endpoint: PUT .../content already treats `expect_version: "v1:absent"` as
+ * an exclusive create (`checkLibraryVersion` in pkg/gateway/rest_library.go
+ * accepts it only when nothing is at the path). A path that is already
+ * taken therefore surfaces as LibraryVersionConflictError (409) — the same
+ * error class the editor already knows how to explain — never as an
+ * overwrite. Inside a knowledge base the file watcher indexes the new note
+ * like any other write, so the record-create door (which needs a declared
+ * record type and at least one property) is not required for a plain note.
+ */
+export function createLibraryTextFile(
+  workspaceId: string,
+  path: string,
+  content: string,
+): Promise<LibraryVersionedResult<LibraryEntry>> {
+  return putLibraryContent(workspaceId, { path, content, expect_version: LIBRARY_VERSION_ABSENT })
+}
+
+/**
  * Write binary file content (a filled PDF, image, any non-UTF-8 bytes) from the
  * Library editor (feature B). Sibling of putLibraryContent — the text route
  * cannot carry bytes. `content_base64` is standard base64; the server decodes,
