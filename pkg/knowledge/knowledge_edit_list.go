@@ -538,6 +538,14 @@ func RemoveListValue(key, value string) NoteEdit {
 // current value is destroyed by this call must not depend on which YAML
 // style it happens to be written in.
 func SetPropertyScalarChecked(key, value string) NoteEdit {
+	return setPropertyScalarCheckedWith(key, value, false)
+}
+
+// setPropertyScalarCheckedWith is SetPropertyScalarChecked with the D-49
+// bare-number choice threaded through: plain=true writes the value through
+// SetPropertyPlain (a schema-validated number or boolean, unquoted), false
+// through SetProperty's ordinary quoting.
+func setPropertyScalarCheckedWith(key, value string, plain bool) NoteEdit {
 	return func(src []byte) ([]byte, error) {
 		span, err := parseListSpan(src, key)
 		if err != nil {
@@ -559,6 +567,9 @@ func SetPropertyScalarChecked(key, value string) NoteEdit {
 				"%w: %q currently holds a value this tool cannot confidently parse as a plain "+
 					"scalar; no change made. Send a list value instead, or edit the file directly",
 				ErrMultiLineValue, key)
+		}
+		if plain {
+			return SetPropertyPlain(key, value)(src)
 		}
 		return SetProperty(key, value)(src)
 	}

@@ -73,11 +73,13 @@
 //   - Line-range replace: the span handed to the splice runs from the START
 //     of the first named line to the START of the line AFTER the last named
 //     line — i.e. it consumes the LAST replaced line's own terminator (or
-//     runs to EOF when the last line has none). That means the replacement
-//     fully owns line endings for the span it replaces: if body does not end
-//     with a newline and further lines follow in the file, those lines will
-//     directly abut whatever body ends with. This is stated as the rule
-//     rather than discovered by a test writer guessing at the implementation.
+//     runs to EOF when the last line has none). A line range names WHOLE
+//     LINES, so the replacement is kept on whole lines too: when body is
+//     non-empty, does not itself end with a newline, and further lines
+//     follow in the file, the terminator the range consumed is written
+//     back after body (in the file's own LF/CRLF form) — the last line of
+//     body never abuts the first surviving line (UAT 2026-09-13 D-05). An
+//     empty body deletes the whole lines, terminator included.
 //
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -244,6 +246,82 @@ func ReplaceBody(path string, anchor string, lineRange *LineRange, body string) 
 	}
 }
 
+// ReplaceBodyReport is what a successful replace_body actually did (UAT
+// 2026-09-13 D-18): an anchor replaces ONLY its own bytes, and a caller who
+// sent `anchor: "Budget:"` with a whole-sentence body got the sentence
+// spliced after the label with the old sentence still in place, reported as
+// a plain "(changed)". The report says which span went and what stayed.
+type ReplaceBodyReport struct {
+	Mode          string // "anchor" or "line_range"
+	Line          int    // anchor: the 1-based line the match starts on
+	AnchorBytes   int    // anchor: the matched byte count
+	KeptBefore    string // anchor: text on the same line before the match, if any
+	KeptAfter     string // anchor: text on the same line after the match, if any
+	Start, End    int    // line_range: the lines replaced
+	BodyLineCount int    // lines the replacement text spans
+}
+
+// Describe renders the report for the tool reply. Empty for a line_range
+// (the caller named the lines; nothing was kept on them).
+func (r ReplaceBodyReport) Describe() string {
+	if r.Mode != "anchor" {
+		return ""
+	}
+	s := fmt.Sprintf("replaced only the %d-byte anchor on line %d", r.AnchorBytes, r.Line)
+	var kept []string
+	if r.KeptBefore != "" {
+		kept = append(kept, fmt.Sprintf("before it: %q", r.KeptBefore))
+	}
+	if r.KeptAfter != "" {
+		kept = append(kept, fmt.Sprintf("after it: %q", r.KeptAfter))
+	}
+	if len(kept) > 0 {
+		s += "; kept on that line " + strings.Join(kept, ", ") + " — to replace the whole line, make the anchor the whole line or use line_range"
+	}
+	return s
+}
+
+// ReplaceBodyReporting is ReplaceBody plus the D-18 report, filled in when
+// the edit runs successfully.
+func ReplaceBodyReporting(path string, anchor string, lineRange *LineRange, body string, report *ReplaceBodyReport) NoteEdit {
+	inner := ReplaceBody(path, anchor, lineRange, body)
+	return func(src []byte) ([]byte, error) {
+		out, err := inner(src)
+		if err != nil || report == nil {
+			return out, err
+		}
+		switch {
+		case anchor != "":
+			bodyStart, _ := replaceBodyOffset(src)
+			matches := findAnchorMatches(src, bodyStart, []byte(anchor))
+			if len(matches) == 1 {
+				off := matches[0]
+				lineStart := bytes.LastIndexByte(src[:off], '\n') + 1
+				lineEnd := off + len(anchor)
+				if i := bytes.IndexByte(src[lineEnd:], '\n'); i >= 0 {
+					lineEnd += i
+				} else {
+					lineEnd = len(src)
+				}
+				*report = ReplaceBodyReport{
+					Mode: "anchor", Line: replaceBodyLineAt(src, off), AnchorBytes: len(anchor),
+					KeptBefore: string(src[lineStart:off]),
+					KeptAfter:  strings.TrimRight(string(src[off+len(anchor):lineEnd]), "\r"),
+				}
+				// A multi-line anchor keeps nothing "on that line" after it in
+				// any useful sense; only report the single-line kept tail.
+				if strings.Contains(anchor, "\n") {
+					report.KeptBefore, report.KeptAfter = "", ""
+				}
+			}
+		case lineRange != nil:
+			*report = ReplaceBodyReport{Mode: "line_range", Start: lineRange.Start, End: lineRange.End}
+		}
+		report.BodyLineCount = strings.Count(body, "\n") + 1
+		return out, nil
+	}
+}
+
 // failingEdit returns a NoteEdit that always refuses with err, without
 // touching src — used for request-shape errors that are wrong independent of
 // any file's content, so there is no reason to read src at all.
@@ -320,12 +398,38 @@ func ReplaceBodyByLineRange(path string, start, end int, body string) NoteEdit {
 
 		spanStart := offsets[start-1]
 		spanEnd := offsets[end]
-		out := make([]byte, 0, spanStart+len(body)+(len(src)-spanEnd))
+		// The span consumes the LAST replaced line's own terminator, so a
+		// replacement that does not end with one would weld its final line
+		// onto the first surviving line after the range ("YYY" + "DDD4" ->
+		// "YYYDDD4" — UAT 2026-09-13 D-05). A line-range replacement is a
+		// replacement of whole LINES: the terminator the range took is put
+		// back, in the file's own form (LF or CRLF), whenever body is
+		// non-empty, does not already end with one, and lines follow. An
+		// empty body is a deletion of the whole lines, terminator included,
+		// which is what a caller deleting lines means.
+		terminator := lineTerminatorBefore(src, spanEnd)
+		out := make([]byte, 0, spanStart+len(body)+len(terminator)+(len(src)-spanEnd))
 		out = append(out, src[:spanStart]...)
 		out = append(out, body...)
+		if body != "" && terminator != "" && !strings.HasSuffix(body, "\n") && spanEnd < len(src) {
+			out = append(out, terminator...)
+		}
 		out = append(out, src[spanEnd:]...)
 		return out, nil
 	}
+}
+
+// lineTerminatorBefore returns the line terminator that ends at byte offset
+// end — "\r\n", "\n", or "" when the byte before end is not a newline (the
+// span ran to EOF on a file whose last line has no terminator).
+func lineTerminatorBefore(src []byte, end int) string {
+	if end <= 0 || end > len(src) || src[end-1] != '\n' {
+		return ""
+	}
+	if end >= 2 && src[end-2] == '\r' {
+		return "\r\n"
+	}
+	return "\n"
 }
 
 // replaceBodyOffset returns the byte offset where the note's BODY starts —

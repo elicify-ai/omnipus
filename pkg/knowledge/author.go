@@ -461,6 +461,15 @@ func CreateNote(fsys LinkFS, c *Collection, req CreateNoteRequest) (CreateNoteRe
 	// `id:`. Inert for an ordinary note; see stampNewRecordIdentity for the
 	// full list of cases it declines, and for why it runs BEFORE the note's
 	// own write lock rather than inside it.
+	//
+	// UAT 2026-09-13 D-52: an occupied path is checked BEFORE minting, so a
+	// create that O_EXCL is about to refuse does not first burn an
+	// identifier from the type's counter (the counter is never lowered,
+	// FR-038, so every such gap was permanent). O_EXCL below still decides
+	// the race; this is only the cheap, non-authoritative early answer.
+	if _, statErr := fsys.Lstat(abs); statErr == nil {
+		return CreateNoteResult{}, audit.refuse([]string{rel}, fmt.Errorf("%w: %q", ErrNoteExists, rel))
+	}
 	content, mintedID, mintErr := stampNewRecordIdentity(req.Lock, c.Root(), content)
 	if mintErr != nil {
 		return CreateNoteResult{}, audit.refuse([]string{rel}, mintErr)
@@ -869,7 +878,21 @@ func EditNote(fsys LinkFS, c *Collection, req EditNoteRequest) (EditNoteResult, 
 //     requirement asked for.
 //   - There is no frontmatter at all: a block is created at the top of the
 //     file and the original content follows it, unchanged.
-func SetProperty(key, value string) NoteEdit {
+func SetProperty(key, value string) NoteEdit { return setPropertyWith(key, value, false) }
+
+// SetPropertyPlain is SetProperty for a value the CALLER has already
+// validated as a number or a boolean against the note's own schema (UAT
+// 2026-09-13 D-49): it is written bare — `budget: 480000`, `done: true` —
+// never double-quoted. SetProperty quotes anything that looks numeric or
+// boolean because, on an ungoverned note, it cannot tell the number 480000
+// from the text "480000"; a caller holding the schema can, and every other
+// YAML reader of the file expects a declared number to look like one. The
+// caller is responsible for only passing a value that IS a plain number or
+// `true`/`false` (see knowledgeEditWritesPlain); anything else must go
+// through SetProperty's quoting.
+func SetPropertyPlain(key, value string) NoteEdit { return setPropertyWith(key, value, true) }
+
+func setPropertyWith(key, value string, plain bool) NoteEdit {
 	return func(src []byte) ([]byte, error) {
 		if err := authorValidatePropertyKey(key); err != nil {
 			return nil, err
@@ -877,6 +900,9 @@ func SetProperty(key, value string) NoteEdit {
 		encoded, err := authorEncodeScalar(value)
 		if err != nil {
 			return nil, err
+		}
+		if plain && (authorLooksNumeric(value) || value == "true" || value == "false") {
+			encoded = value
 		}
 		block, err := fmParse(src)
 		if err != nil {
