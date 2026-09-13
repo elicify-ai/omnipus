@@ -50,7 +50,7 @@
 // a token already known to be stale. Same rule for a 200 that carries no
 // token: an anomaly that is stated, never a silent no-op.
 
-import { useEffect, useState, type MouseEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import { PencilSimple, SpinnerGap, WarningCircle } from '@phosphor-icons/react'
 import type {
   RecordPropertyValue,
@@ -220,6 +220,17 @@ export function EditableCell({
   const [saving, setSaving] = useState(false)
   const [conflictMessage, setConflictMessage] = useState<string>()
   const [error, setError] = useState<string>()
+  // UAT D-112 (2026-09-13): ONE commit at a time, tracked in a ref rather
+  // than in `saving` state. A single Enter used to produce TWO byte-identical
+  // writes with the same version token: Enter called commit(), commit's
+  // `setSaving(true)` re-rendered the focused <input> as `disabled`, the
+  // browser then fired `blur` on the now-disabled control, and `onBlur`
+  // called commit() again — the second write 409'd against the token the
+  // first had just replaced and the reader was told "this changed while you
+  // were editing" while editing alone. State is the wrong guard because the
+  // blur lands in the same tick as the state update; a ref is read
+  // synchronously and is already true when the blur arrives.
+  const commitInFlightRef = useRef(false)
 
   // The row/cell this instance was given can change identity under it (a
   // fresh view-result fetch, or a different row scrolled into view) —
@@ -249,6 +260,7 @@ export function EditableCell({
 
   async function commit(raw: string): Promise<void> {
     if (target === undefined) return
+    if (commitInFlightRef.current) return
     if (versionToken === undefined) {
       setError('Could not confirm this record’s current version — reopen it and try again.')
       return
@@ -265,6 +277,7 @@ export function EditableCell({
         values: raw === '' ? [] : [buildRecordValue(cell.type as EditableCellType, raw)],
       },
     ]
+    commitInFlightRef.current = true
     setSaving(true)
     setError(undefined)
     try {
@@ -349,6 +362,7 @@ export function EditableCell({
         setError(getErrorMessage(err, 'Could not save this field'))
       }
     } finally {
+      commitInFlightRef.current = false
       setSaving(false)
     }
   }
