@@ -45,16 +45,28 @@ func goalStoreForWorkspace(home string) *goal.Store { return goal.NewStore(home)
 // convention (parseCriteriaArgsFromWorkspaceTool, allCheckCriteriaWorkspace,
 // deferWorkspaceDoneClaimToJudge all mirror a pkg/tools/task.go twin rather
 // than import it).
+//
+// THE CRITERIA COME FROM t, NEVER FROM THE CALLER. This signature used to take
+// a `criteria []task.AcceptanceCriterion` alongside criteriaProvided, and every
+// one of its call sites handed it the PRE-normalisation slice it had just given
+// to the task store — the one whose criteria still carry empty ids. The store
+// mints ids into its own deep copy (task.normalizeCriteria), and goal.New /
+// Goal.SetCriteria then mint a SECOND, different set for the same text. The
+// criterion id is the join key the verdict projection de-unions the Judge's
+// result on (GOAL-FR-007/FR-041), so the same criterion ended up reading `met`
+// on the task and `pending` on its goal record. Taking the list off t makes
+// that divergence unrepresentable rather than merely fixed at three call sites.
 func syncWorkspaceTaskGoalRecord(
 	home string,
 	t *task.Task,
-	criteria []task.AcceptanceCriterion, criteriaProvided bool,
+	criteriaProvided bool,
 	dod []task.AcceptanceCriterion, dodProvided bool,
 	goalMaxRoundsFn func() int,
 ) error {
 	if !criteriaProvided && !dodProvided {
 		return nil
 	}
+	criteria := t.Criteria
 	gs := goalStoreForWorkspace(home)
 	now := time.Now().UTC()
 	existing, err := gs.GetByOwner(generated.GoalOwnerKindTask, t.ID)
@@ -100,6 +112,101 @@ func syncWorkspaceTaskGoalRecord(
 		return nil
 	})
 	return err
+}
+
+// pairedWorkspaceGoalDoD returns the Definition of Done currently persisted on
+// the goal record paired with taskID, or nil when the task has no paired record
+// at all (a legacy pre-D-C task, GOAL-FR-023/FR-048). Mirrors pkg/tools's
+// pairedGoalDoD.
+//
+// It exists for the one edit shape that cannot evaluate the distinctness rule
+// (GOAL-FR-021/FR-047/FR-048) from the call arguments alone: an update that
+// replaces `criteria` and leaves `dod` untouched has to compare the NEW criteria
+// against the DoD already on file, and the task record has no DoD field to read
+// it from (ADR-086 D5). A read fault is returned, never swallowed.
+func pairedWorkspaceGoalDoD(home, taskID string) ([]task.AcceptanceCriterion, error) {
+	g, err := goalStoreForWorkspace(home).GetByOwner(generated.GoalOwnerKindTask, taskID)
+	if err != nil {
+		if errors.Is(err, goal.ErrOwnerNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("load paired goal record: %w", err)
+	}
+	return g.DoD, nil
+}
+
+// goalTerminalReasonOwnerDeleted is the TerminalReason stamped on a goal record
+// whose owning task was deleted, mirroring the vocabulary
+// pkg/agent/task_goal_terminal.go's terminalReasonForTask uses for the other
+// task endings.
+const goalTerminalReasonOwnerDeleted = "owning task was deleted"
+
+// terminateGoalForOwnerDeletion is the TRANSITION half of GOAL-FR-044 ("a goal
+// MUST NOT outlive its owner as an unreferenced record. Deleting a task MUST
+// transition and remove its goal"), as a pure function over the record so it is
+// directly testable without a store.
+//
+// Only an ACTIVE record is transitioned, and it is transitioned to `cleared` —
+// the terminal vocabulary FR-028 reserves for an explicit operator ending,
+// which is what deleting the owning task is. A `defining` record (a task
+// deleted before it ever ran) is left untouched and is NOT an error: forcing a
+// transition there would invent an adjudication that never happened, the same
+// reasoning pkg/agent's terminateTaskGoalRecord states.
+//
+// Mirrored — not shared — by pkg/gateway/rest_tasks.go and pkg/tools/task.go,
+// per this file's own "duplicated rather than exported+imported" convention.
+func terminateGoalForOwnerDeletion(g *goal.Goal, now time.Time) error {
+	if g == nil || g.State != generated.GoalStateActive {
+		return nil
+	}
+	return g.Terminate(generated.GoalStateCleared, goalTerminalReasonOwnerDeleted, now)
+}
+
+// removeTaskGoalRecords implements GOAL-FR-044/EC-4 in full for one task: every
+// goal record owned by taskID is transitioned out of the active phase and then
+// removed, so no goal survives the deletion of its owner.
+//
+// The three task-delete surfaces share no chokepoint: task.Store.Delete cannot
+// do this itself because pkg/goal imports pkg/task, so the dependency can only
+// run the other way.
+//
+// It iterates List rather than calling GetByOwner because GetByOwner refuses to
+// guess when a task somehow owns more than one record — and refusing is the
+// wrong answer here: leaving one behind would be precisely the unreferenced
+// orphan FR-044 forbids. Errors are joined rather than short-circuited so one
+// unwritable record cannot strand the others.
+func removeTaskGoalRecords(gs *goal.Store, taskID string) error {
+	if gs == nil || taskID == "" {
+		return nil
+	}
+	goals, skipped, err := gs.List()
+	if err != nil {
+		return fmt.Errorf("list goal records: %w", err)
+	}
+	if len(skipped) > 0 {
+		slog.Warn("delete_task_in_workspace: unreadable goal records skipped while removing a "+
+			"deleted task's goal", "task_id", taskID, "skipped", skipped)
+	}
+	now := time.Now().UTC()
+	var errs []error
+	for i := range goals {
+		if goals[i].OwnerKind != generated.GoalOwnerKindTask || goals[i].OwnerID != taskID {
+			continue
+		}
+		goalID := goals[i].GoalID
+		if _, uErr := gs.Update(goalID, func(g *goal.Goal) error {
+			return terminateGoalForOwnerDeletion(g, now)
+		}); uErr != nil {
+			// Record the fault and still remove the record: a goal that cannot
+			// be transitioned must not therefore be left behind ACTIVE and
+			// unreferenced, which is the worse of the two outcomes.
+			errs = append(errs, fmt.Errorf("terminate goal record %q: %w", goalID, uErr))
+		}
+		if dErr := gs.Delete(goalID); dErr != nil {
+			errs = append(errs, fmt.Errorf("delete goal record %q: %w", goalID, dErr))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // taskStoreFor returns a task.Store rooted at the home's tasks directory. It
@@ -460,7 +567,11 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 	// AgentID is set at all (an unassigned, human-tracking-only task never
 	// enters the goal loop/judge machinery, so criteria enforcement does not
 	// apply to it).
-	var goalCriteria, goalDoD []task.AcceptanceCriterion
+	// Only the DoD needs carrying past this block: the criteria reach the goal
+	// record off tk.Criteria, which store.Create normalises in place (see
+	// syncWorkspaceTaskGoalRecord's doc comment on why the criteria may not be
+	// passed separately).
+	var goalDoD []task.AcceptanceCriterion
 	if tk.AgentID != "" {
 		rawCriteria, _ := args["criteria"].([]any)
 		if len(rawCriteria) == 0 {
@@ -487,7 +598,16 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 		if dErr != nil {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT", dErr.Error(), "dod"))
 		}
-		goalCriteria, goalDoD = criteria, dod
+		// The DISTINCTNESS half of the same rule the refusal above advertises.
+		// It was advertised on every surface and checked on none: a task whose
+		// DoD restates its acceptance criteria spends a second judged slot on a
+		// sentence already being scored (the judge unions Criteria and DoD).
+		// See task.ValidateDoDDistinct for the rule and for why it stops at
+		// whitespace and case. Checked before any store write.
+		if vErr := task.ValidateDoDDistinct(criteria, dod); vErr != nil {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", vErr.Error(), "dod"))
+		}
+		goalDoD = dod
 		// D2 rule 5 (FR-017/052): an all-check criteria set can never be
 		// adjudicated MET if the assignee's effective bash policy is deny or
 		// ask (ask resolves to deny unattended at judge time, D2 rule 2).
@@ -640,7 +760,7 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 				return cfg.Planning.EffectiveGoalMaxRounds()
 			}
 		}
-		if gErr := syncWorkspaceTaskGoalRecord(t.deps.Home, &tk, goalCriteria, true, goalDoD, true, goalMaxRoundsFn); gErr != nil {
+		if gErr := syncWorkspaceTaskGoalRecord(t.deps.Home, &tk, true, goalDoD, true, goalMaxRoundsFn); gErr != nil {
 			slog.Error("create_task_in_workspace: failed to create paired goal record",
 				"task_id", tk.ID, "error", gErr)
 			return tools.ErrorResult(errorJSON("SAVE_FAILED",
@@ -1040,6 +1160,36 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 		updated = append(updated, "dod")
 	}
 
+	// GOAL-FR-048 binds the distinctness rule at SAVE, not only at create —
+	// otherwise the rule is a door you walk around: create with a distinct DoD,
+	// then edit it into a duplicate.
+	//
+	// An edit may touch one list and not the other, so the comparison is
+	// against the EFFECTIVE post-edit pair: the submitted list where one was
+	// submitted, the persisted list otherwise. The persisted criteria come off
+	// the task record; the persisted DoD can only come off the paired goal
+	// record, which is the only place a task's DoD exists (ADR-086 D5).
+	// Checked before store.Update, so a refusal writes nothing at all.
+	if criteriaProvided || dodProvided {
+		effectiveCriteria := goalCriteria
+		if !criteriaProvided {
+			effectiveCriteria = existing.Criteria
+		}
+		effectiveDoD := goalDoD
+		if !dodProvided {
+			persistedDoD, dErr := pairedWorkspaceGoalDoD(t.deps.Home, id)
+			if dErr != nil {
+				return tools.ErrorResult(errorJSON("SAVE_FAILED",
+					"could not read the task's Definition of Done to check it stays distinct from "+
+						"the criteria: "+dErr.Error(), "criteria"))
+			}
+			effectiveDoD = persistedDoD
+		}
+		if vErr := task.ValidateDoDDistinct(effectiveCriteria, effectiveDoD); vErr != nil {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", vErr.Error(), "dod"))
+		}
+	}
+
 	// Apply the field patch via the store (DAG validation + atomic write).
 	result, err := store.Update(id, patch)
 	if err != nil {
@@ -1091,7 +1241,7 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 				return cfg.Planning.EffectiveGoalMaxRounds()
 			}
 		}
-		if gErr := syncWorkspaceTaskGoalRecord(t.deps.Home, result, goalCriteria, criteriaProvided, goalDoD, dodProvided, goalMaxRoundsFn); gErr != nil {
+		if gErr := syncWorkspaceTaskGoalRecord(t.deps.Home, result, criteriaProvided, goalDoD, dodProvided, goalMaxRoundsFn); gErr != nil {
 			slog.Error("update_task_in_workspace: failed to sync paired goal record",
 				"task_id", id, "error", gErr)
 			goalSyncWarning = gErr.Error()
@@ -1209,6 +1359,18 @@ func (t *TaskDeleteTool) Execute(ctx context.Context, args map[string]any) *tool
 	if len(unblocked) > 0 {
 		slog.Info("sysagent: task delete: unblocked dependents", "deleted_id", id, "unblocked", unblocked)
 	}
+	// GOAL-FR-044/EC-4: a goal MUST NOT outlive its owner as an unreferenced
+	// record. Best-effort and non-fatal for the same reason the cascade-edge
+	// cleanup above is — the task's own file is ALREADY gone — and surfaced to
+	// the caller for the same reason too, via the same warning-field pattern.
+	// Logged at Error because the outcome is a permanent orphan.
+	var goalCleanupWarning string
+	if gErr := removeTaskGoalRecords(goalStoreForWorkspace(t.deps.Home), id); gErr != nil {
+		slog.Error("delete_task_in_workspace: paired goal record could not be removed with its owner "+
+			"(GOAL-FR-044) — it is now an unreferenced orphan", "task_id", id, "error", gErr)
+		goalCleanupWarning = gErr.Error()
+	}
+
 	result := map[string]any{"id": id, "deleted": true}
 	if len(unblocked) > 0 {
 		result["unblocked_tasks"] = unblocked
@@ -1216,6 +1378,10 @@ func (t *TaskDeleteTool) Execute(ctx context.Context, args map[string]any) *tool
 	if cascadeFailed {
 		result["cascade_warning"] = "the task was deleted but some other tasks' blocked_by edges could not " +
 			"be cleaned up and now reference a deleted task"
+	}
+	if goalCleanupWarning != "" {
+		result["goal_cleanup_warning"] = "the task was deleted, but its paired goal record could not " +
+			"be removed: " + goalCleanupWarning
 	}
 	return tools.NewToolResult(successJSON(result))
 }

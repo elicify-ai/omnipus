@@ -168,14 +168,31 @@ func quoteFieldList(names []string) string {
 // a.agentLoop.GetConfig() rather than through an optional injected accessor,
 // since the gateway (unlike the tool constructors wired in pkg/agent/loop.go,
 // outside this wave's write-set) always has it.
+//
+// THE CRITERIA COME FROM t, NEVER FROM THE CALLER. This signature used to take
+// a `criteria []task.AcceptanceCriterion` alongside criteriaProvided, and every
+// one of its call sites handed it the PRE-normalisation slice it had just given
+// to the task store — the one whose criteria still carry empty ids. The store
+// mints ids into its own deep copy (task.normalizeCriteria), and goal.New /
+// Goal.SetCriteria then mint a SECOND, different set for the same text. The
+// criterion id is the join key the verdict projection de-unions the Judge's
+// result on (GOAL-FR-007/FR-041), so the same criterion ended up reading `met`
+// on the task and `pending` on its goal record: two contradictory answers to
+// "was this met". Taking the list off t — the record the store has already
+// normalised and persisted — makes that divergence unrepresentable rather than
+// merely fixed at three call sites. criteriaProvided remains a parameter
+// because it carries something t cannot: whether THIS request touched criteria
+// at all (an edit that supplies only `dod` must leave the goal's criteria
+// alone).
 func (a *restAPI) syncTaskGoalRecord(
 	t *task.Task,
-	criteria []task.AcceptanceCriterion, criteriaProvided bool,
+	criteriaProvided bool,
 	dod []task.AcceptanceCriterion, dodProvided bool,
 ) error {
 	if !criteriaProvided && !dodProvided {
 		return nil
 	}
+	criteria := t.Criteria
 	gs := goalStoreForTasks(a.taskStore)
 	now := time.Now().UTC()
 	existing, err := gs.GetByOwner(gen.GoalOwnerKindTask, t.ID)
@@ -226,6 +243,113 @@ func (a *restAPI) syncTaskGoalRecord(
 		return nil
 	})
 	return err
+}
+
+// pairedGoalDoD returns the Definition of Done currently persisted on the goal
+// record paired with taskID, or nil when the task has no paired record at all
+// (a legacy pre-D-C task, GOAL-FR-023/FR-048).
+//
+// It exists for the one edit shape that cannot evaluate the distinctness rule
+// (GOAL-FR-021/FR-047/FR-048) from the request alone: a PATCH that replaces
+// `criteria` and leaves `dod` untouched has to compare the NEW criteria against
+// the DoD already on file, and the task record has no DoD field to read it from
+// (ADR-086 D5 — pkg/task/task.go has no Dod at all).
+//
+// A read fault is returned, never swallowed: it means the rule could not be
+// evaluated, and a rule that silently does not run is exactly the failure this
+// whole change exists to stop.
+func (a *restAPI) pairedGoalDoD(taskID string) ([]task.AcceptanceCriterion, error) {
+	g, err := goalStoreForTasks(a.taskStore).GetByOwner(gen.GoalOwnerKindTask, taskID)
+	if err != nil {
+		if errors.Is(err, goal.ErrOwnerNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("load paired goal record: %w", err)
+	}
+	return g.DoD, nil
+}
+
+// goalTerminalReasonOwnerDeleted is the TerminalReason stamped on a goal record
+// whose owning task was deleted. It mirrors the vocabulary
+// pkg/agent/task_goal_terminal.go's terminalReasonForTask uses for the other
+// task endings, so a reader of the audit trail sees one consistent sentence
+// shape for "the owner ended this".
+const goalTerminalReasonOwnerDeleted = "owning task was deleted"
+
+// terminateGoalForOwnerDeletion is the TRANSITION half of GOAL-FR-044 ("a goal
+// MUST NOT outlive its owner as an unreferenced record. Deleting a task MUST
+// transition and remove its goal"), as a pure function over the record so it is
+// directly testable without a store.
+//
+// Only an ACTIVE record is transitioned, and it is transitioned to `cleared` —
+// the terminal vocabulary FR-028 reserves for an explicit operator ending, which
+// is exactly what deleting the owning task is. It is not `met` (nothing was
+// adjudicated), not `exhausted` (no budget ran out) and not `expired` (nothing
+// timed out).
+//
+// A `defining` record — a task deleted before it ever ran — is left untouched
+// and is NOT an error: goal.Goal.Terminate refuses a non-active record outright,
+// and forcing a transition would invent an adjudication that never happened.
+// That is the same reasoning pkg/agent's terminateTaskGoalRecord states for the
+// terminal-task path. An already-terminal record is likewise a no-op, which
+// makes the whole delete path idempotent.
+func terminateGoalForOwnerDeletion(g *goal.Goal, now time.Time) error {
+	if g == nil || g.State != gen.GoalStateActive {
+		return nil
+	}
+	return g.Terminate(gen.GoalStateCleared, goalTerminalReasonOwnerDeleted, now)
+}
+
+// removeTaskGoalRecords implements GOAL-FR-044/EC-4 in full for one task:
+// every goal record owned by taskID is transitioned out of the active phase and
+// then removed, so no goal survives the deletion of its owner.
+//
+// Mirrored — not shared — by pkg/tools/task.go and pkg/sysagent/tools/task.go,
+// following this file family's established convention for the goal-store
+// helpers (goalStoreForTasks, syncTaskGoalRecord). The three task-delete
+// surfaces share no chokepoint: task.Store.Delete cannot do this itself because
+// pkg/goal imports pkg/task, so the dependency can only run the other way.
+//
+// It iterates List rather than calling GetByOwner because GetByOwner refuses to
+// guess when a task somehow owns more than one record — and refusing is the
+// wrong answer here. "Remove everything this owner owns" is well defined for
+// any number of records, including the broken two-record state, and leaving one
+// behind would be precisely the unreferenced orphan FR-044 forbids.
+//
+// Errors from individual records are joined rather than short-circuited: one
+// unwritable record must not stop the others from being cleaned up.
+func removeTaskGoalRecords(gs *goal.Store, taskID string) error {
+	if gs == nil || taskID == "" {
+		return nil
+	}
+	goals, skipped, err := gs.List()
+	if err != nil {
+		return fmt.Errorf("list goal records: %w", err)
+	}
+	if len(skipped) > 0 {
+		slog.Warn("task delete: unreadable goal records skipped while removing a deleted task's goal",
+			"task_id", taskID, "skipped", skipped)
+	}
+	now := time.Now().UTC()
+	var errs []error
+	for i := range goals {
+		if goals[i].OwnerKind != gen.GoalOwnerKindTask || goals[i].OwnerID != taskID {
+			continue
+		}
+		goalID := goals[i].GoalID
+		if _, uErr := gs.Update(goalID, func(g *goal.Goal) error {
+			return terminateGoalForOwnerDeletion(g, now)
+		}); uErr != nil {
+			// Record the fault and still remove the record: a goal that cannot
+			// be transitioned must not therefore be left behind ACTIVE and
+			// unreferenced, which is the worse of the two outcomes.
+			errs = append(errs, fmt.Errorf("terminate goal record %q: %w", goalID, uErr))
+		}
+		if dErr := gs.Delete(goalID); dErr != nil {
+			errs = append(errs, fmt.Errorf("delete goal record %q: %w", goalID, dErr))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // decodeTaskJSONBody decodes a JSON request body into dst, writing a 400 and
@@ -1820,6 +1944,18 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dod = dodFromCreateWire(*req.Dod)
+	// The DISTINCTNESS half of the same rule the refusal above advertises
+	// ("distinct from its acceptance criteria"). It was advertised and never
+	// checked: a UAT tester pasted one sentence into both boxes and the task
+	// saved with 201. See task.ValidateDoDDistinct for the rule and for why it
+	// stops at whitespace and case rather than reaching for similarity.
+	//
+	// Checked BEFORE taskStore.Create, so a refused pair leaves no task and no
+	// goal record behind.
+	if err := task.ValidateDoDDistinct(criteria, dod); err != nil {
+		jsonErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if req.MaxAttempts != nil {
 		v := *req.MaxAttempts
 		t.MaxAttempts = &v
@@ -1867,8 +2003,11 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 	// Done is authored ahead of time onto its own paired goal record, which
 	// stays in the "defining" phase until the task itself starts (GOAL-FR-012
 	// — nothing here activates it). t.Criteria above is a dual-write for the
-	// consumers not yet re-pointed to read the goal record this round.
-	if gErr := a.syncTaskGoalRecord(t, criteria, true, dod, true); gErr != nil {
+	// consumers not yet re-pointed to read the goal record this round — and,
+	// since taskStore.Create has now normalised t.Criteria in place, it is
+	// also the list syncTaskGoalRecord reads, so both records carry ONE set of
+	// criterion ids (see that function's doc comment).
+	if gErr := a.syncTaskGoalRecord(t, true, dod, true); gErr != nil {
 		slog.Error("rest: task create: failed to create paired goal record",
 			"task_id", t.ID, "error", gErr)
 		// Both lists are always provided on the create path, so the
@@ -1922,6 +2061,13 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	// for why the refusal is whole-request rather than partial. The check runs
 	// HERE — before any field is copied into the patch and before any store
 	// write — so a mixed frozen+mutable request leaves nothing behind.
+	//
+	// existingForDefinition is retained past the freeze check for the
+	// distinctness rule below: frozenTaskDefinitionFields reports a non-empty
+	// list whenever `criteria` or `dod` is present, so whenever that rule needs
+	// the task's CURRENT criteria (an edit that supplies only `dod`), this read
+	// has already happened and must not be repeated.
+	var existingForDefinition *task.Task
 	if frozen := frozenTaskDefinitionFields(&req); len(frozen) > 0 {
 		existing, gErr := a.taskStore.Get(id)
 		if gErr != nil {
@@ -1938,6 +2084,7 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 			jsonErr(w, http.StatusConflict, runningTaskFrozenFieldMessage(frozen))
 			return
 		}
+		existingForDefinition = existing
 	}
 
 	// Detail #8: advancing a partial (no prompt/description) task to `next` is
@@ -2146,6 +2293,55 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		}
 		patchDoD = dodFromUpdateWire(*req.Dod)
 	}
+	// GOAL-FR-048 binds the distinctness rule at SAVE, not only at create —
+	// otherwise the rule is a door you walk around: create with a distinct DoD,
+	// then edit it into a duplicate.
+	//
+	// An edit may touch one list and not the other, so the comparison is
+	// against the EFFECTIVE post-edit pair: the submitted list where one was
+	// submitted, the persisted list otherwise. The persisted criteria come off
+	// the task record; the persisted DoD can only come off the paired goal
+	// record, which is the only place a task's DoD exists (ADR-086 D5).
+	//
+	// Checked BEFORE UpdateWithPrior, so a refusal writes nothing at all —
+	// matching the freeze check's own "a mixed request leaves nothing behind".
+	if criteriaProvided || dodProvided {
+		effectiveCriteria := patchCriteria
+		if !criteriaProvided {
+			if existingForDefinition == nil {
+				// A never-firing tripwire, not a fallback:
+				// frozenTaskDefinitionFields reports "criteria"/"dod" whenever
+				// either is present, so the read above has always happened by
+				// the time this branch is reachable. If that ever stops being
+				// true, the rule must FAIL LOUDLY rather than silently not run
+				// — a rule that quietly skips itself is the whole defect class
+				// this change exists to close.
+				slog.Error("rest: task patch: the Definition-of-Done distinctness check was reached "+
+					"with no task read — frozenTaskDefinitionFields and the criteria/dod block have "+
+					"drifted apart", "task_id", id)
+				jsonErr(w, http.StatusInternalServerError,
+					"could not check the Definition of Done against the acceptance criteria")
+				return
+			}
+			effectiveCriteria = existingForDefinition.Criteria
+		}
+		effectiveDoD := patchDoD
+		if !dodProvided {
+			persistedDoD, dErr := a.pairedGoalDoD(id)
+			if dErr != nil {
+				slog.Error("rest: task patch: could not read the paired goal record's "+
+					"Definition of Done for the distinctness check", "task_id", id, "error", dErr)
+				jsonErr(w, http.StatusInternalServerError,
+					"could not read the task's Definition of Done")
+				return
+			}
+			effectiveDoD = persistedDoD
+		}
+		if vErr := task.ValidateDoDDistinct(effectiveCriteria, effectiveDoD); vErr != nil {
+			jsonErr(w, http.StatusBadRequest, vErr.Error())
+			return
+		}
+	}
 	if req.MaxAttempts != nil {
 		v := *req.MaxAttempts
 		vp := &v
@@ -2270,7 +2466,7 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	// two lists) is a 400 — the client can fix it by sending both. Every
 	// other failure is a storage fault and stays a 500.
 	if criteriaProvided || dodProvided {
-		if gErr := a.syncTaskGoalRecord(updated, patchCriteria, criteriaProvided, patchDoD, dodProvided); gErr != nil {
+		if gErr := a.syncTaskGoalRecord(updated, criteriaProvided, patchDoD, dodProvided); gErr != nil {
 			slog.Error("rest: task update: failed to sync paired goal record",
 				"id", id, "error", gErr)
 			if errors.Is(gErr, errGoalRecordNeedsBothLists) {
@@ -2441,6 +2637,23 @@ func (a *restAPI) handleTaskDelete(w http.ResponseWriter, id string) {
 			"advanced_id",
 			depID,
 		)
+	}
+	// GOAL-FR-044/EC-4: a goal MUST NOT outlive its owner as an unreferenced
+	// record — deleting a task transitions and removes its paired goal. Before
+	// this, every deleted task left its goal record behind, owned by a task id
+	// that no longer resolves and (if the task had ever run) permanently
+	// `active`: the retention sweep is the only thing that would ever have
+	// touched it again.
+	//
+	// Best-effort and non-fatal, for the same reason the cascade-edge cleanup
+	// above is: the task's own file is ALREADY gone, so a goal-store fault must
+	// not retroactively turn a completed delete into a failure the caller will
+	// retry against a task that no longer exists. Logged at Error rather than
+	// Warn because the outcome is a permanent orphan, and silence about it is
+	// how this defect reached UAT in the first place.
+	if gErr := removeTaskGoalRecords(goalStoreForTasks(a.taskStore), id); gErr != nil {
+		slog.Error("rest: task delete: paired goal record could not be removed with its owner "+
+			"(GOAL-FR-044) — it is now an unreferenced orphan", "task_id", id, "error", gErr)
 	}
 	// Remove the deleted task's time-trigger cron job (if any) so it does not
 	// fire against a missing task.

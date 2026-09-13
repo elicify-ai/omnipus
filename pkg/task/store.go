@@ -1593,6 +1593,25 @@ func ValidateStandaloneRestart(status Status, cancelReason CancelReason) error {
 // Delete removes the task file for id and cascade-cleans inbound blocked_by
 // edges (every other task that depended on id loses that edge). It returns the
 // IDs of tasks that became fully unblocked (their blocked_by list emptied).
+//
+// GOAL-FR-044 — WHY THE PAIRED GOAL RECORD IS NOT REMOVED HERE. FR-044 says a
+// goal must not outlive its owner, and pkg/goal/retention.go's own Sweep doc
+// comment names this function as where the other half of that rule was meant
+// to live: "a direct call from pkg/task/store.go's own deletion path". It
+// cannot live here, and that is not an oversight to correct — it is a cycle.
+// pkg/goal imports pkg/task (a Goal's Criteria and DoD ARE
+// []task.AcceptanceCriterion), so pkg/task can never import pkg/goal to call
+// back the other way. The hook having been assigned an uninhabitable home is
+// why it stayed unwritten until a deleted task was found leaving a permanently
+// active, unreferenced goal behind.
+//
+// It therefore lives in the CALLERS, one mirrored copy per delete surface —
+// pkg/gateway/rest_tasks.go, pkg/tools/task.go and pkg/sysagent/tools/task.go,
+// each named removeTaskGoalRecords. Any NEW task-delete surface must call it
+// too; there is no chokepoint here that would do it automatically. Introducing
+// one would mean a delete-observer seam on this store (a callback field or a
+// package-level registry) — a design change that deserves its own ADR rather
+// than being smuggled in behind a bug fix.
 func (s *Store) Delete(id string) (unblockedIDs []string, err error) {
 	if err := validateID(id); err != nil {
 		return nil, err

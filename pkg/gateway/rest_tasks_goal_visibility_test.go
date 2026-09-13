@@ -201,8 +201,18 @@ func TestPatchTaskGoalWriteFailureReturns500(t *testing.T) {
 
 	duplicateGoalRecordForOwner(t, api, id)
 
+	// BOTH lists are supplied, and that is load-bearing rather than incidental:
+	// this test is about a goal-record WRITE failure, so the request must
+	// actually reach the write. A criteria-ONLY edit no longer does — the
+	// GOAL-FR-048 distinctness check has to compare the new criteria against
+	// the DoD already on file, and on this deliberately-corrupted record that
+	// READ fails first, so the request is refused before any write is
+	// attempted (covered separately by
+	// TestPatchWithUnreadableGoalDoDRefusesBeforeWriting). Supplying both lists
+	// leaves the distinctness check needing no goal read at all, which restores
+	// exactly the scenario SF-5 exists to pin.
 	newCriteria := `[{"text":"an edited criterion","author":{"kind":"user","id":"tester"},"status":"pending"}]`
-	w := patchTaskJSON(t, api, id, `{"criteria":`+newCriteria+`}`)
+	w := patchTaskJSON(t, api, id, `{"criteria":`+newCriteria+`,"dod":`+validDoDJSON+`}`)
 
 	require.NotEqual(t, http.StatusOK, w.Code,
 		"a PATCH whose criteria could not be persisted must not answer 200: body=%s", w.Body.String())
