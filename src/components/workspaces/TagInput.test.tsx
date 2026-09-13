@@ -154,6 +154,42 @@ describe('TagInput — validation feedback reaches the DOM', () => {
   })
 })
 
+describe('TagInput — a tag list that already contains a duplicate', () => {
+  // `validateTag` stops a HUMAN adding the same tag twice, but nothing stops a
+  // duplicate ARRIVING. `pkg/task/store.go` assigns `t.Tags = newTags`
+  // verbatim and `pkg/gateway/rest_tasks.go` passes the array straight
+  // through, so any non-SPA client can persist ['release', 'release']. The
+  // editor has to survive that — and the sibling write-set editor, which
+  // shares its whole implementation (ChipListInput), had exactly this defect
+  // before it was keyed and removed by INDEX.
+  it('renders both copies without colliding React keys', () => {
+    const consoleErrors: string[] = []
+    const spy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      consoleErrors.push(args.map(String).join(' '))
+    })
+    try {
+      renderInput({ tags: ['release', 'release', 'urgent'] })
+      expect(screen.getAllByRole('button', { name: 'Remove tag release' })).toHaveLength(2)
+      expect(consoleErrors.join('\n')).not.toMatch(/same key/i)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('removes only the copy whose own X was clicked', async () => {
+    // Filtering by VALUE deletes every copy at once — a tag set the operator
+    // never asked for, PATCHed as a full replacement.
+    const user = userEvent.setup()
+    const { onChange } = renderInput({ tags: ['release', 'release', 'urgent'] })
+
+    const removeButtons = screen.getAllByRole('button', { name: 'Remove tag release' })
+    expect(removeButtons).toHaveLength(2)
+    await user.click(removeButtons[0])
+
+    expect(onChange).toHaveBeenCalledWith(['release', 'urgent'])
+  })
+})
+
 describe('TagInput — ariaLabel / placeholder overrides', () => {
   it('supports a custom ariaLabel + placeholder for reuse in different contexts', () => {
     renderInput({ ariaLabel: 'Add label', placeholder: 'Add a label…' })

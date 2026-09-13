@@ -1,6 +1,7 @@
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
-import { WriteSetInput } from '@/components/workspaces/WriteSetInput'
+import { ChipListInput } from '@/components/workspaces/ChipListInput'
+import { validateWriteSetPath } from '@/lib/writeSetValidation'
 
 // The two PLAN-MEMBER fields (`write_set` and `is_join`, ADR-053 §Contract
 // Surface / US-11 G-16), each as a WHOLE field — label, control and helper
@@ -75,7 +76,40 @@ export function WriteSetField({
           {WRITE_SET_LABEL}
         </Label>
       )}
-      <WriteSetInput id={id} paths={paths} onChange={onChange} />
+      {/* The path editor is `ChipListInput` configured for PATHS. This is the
+          only place that configuration exists — the former `WriteSetInput`
+          wrapper was deleted, because with a single call site it forwarded
+          props and nothing else. Two settings below are deliberate departures
+          from the tag configuration of the same editor, because these are
+          paths and not tags:
+
+            - No case folding (that lives in `validateWriteSetPath`, which does
+              not lowercase). A path's case is load-bearing: `pkg/Plan` and
+              `pkg/plan` are different files on a case-sensitive checkout, and
+              `pkg/plan/lint.go` compares them literally.
+            - Monospace, neutral-surface chips rather than accent-coloured
+              pills, so a write set reads as code the lint will compare rather
+              than as free-form labels.
+
+          `keepDraftOnError` is the third: a rejected path stays in the box so
+          the author can correct it in place, rather than retyping a long path
+          from scratch. */}
+      <ChipListInput
+        id={id}
+        values={paths}
+        onChange={onChange}
+        validate={validateWriteSetPath}
+        noun="path"
+        maxLength={500}
+        keepDraftOnError
+        ariaLabel="Add a path this task writes"
+        placeholder="e.g. pkg/plan/lint.go"
+        inputClassName="font-mono"
+        chipClassName="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] font-mono text-[var(--color-secondary)] max-w-[200px]"
+        chipRemoveClassName="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors"
+        testId="write-set-input"
+        chipTestId="write-set-chip"
+      />
       <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">{WRITE_SET_HELP}</p>
     </div>
   )

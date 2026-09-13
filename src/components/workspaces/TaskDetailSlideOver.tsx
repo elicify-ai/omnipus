@@ -29,7 +29,8 @@ export function TaskDetailSlideOver({ task, onClose }: TaskDetailSlideOverProps)
           // MOUNTED when the selected task changes (both tasks are non-null,
           // so `open` never goes false), and the panel's subtree holds
           // per-task local state its own effects do not reach — most sharply
-          // WriteSetInput's in-progress path draft and its inline validation
+          // the write-set ChipListInput's in-progress path draft and its
+          // inline validation
           // error. Without this, typing a path into task A and clicking task B
           // shows A's draft and A's error sitting in B's panel, and pressing
           // Add commits that path to the WRONG task. Keying on the id remounts

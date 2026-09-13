@@ -7,9 +7,9 @@
  * board: `open={task != null}` stays true, so the panel is re-rendered with a
  * new `task` prop rather than remounted. The panel's own resync effect covers
  * the state it owns (prompt, title, due, errors) — but not the state its
- * CHILDREN own. `WriteSetInput` holds the in-progress path and its inline
- * validation error in local `useState`, which no effect on the panel can
- * reach.
+ * CHILDREN own. The write-set `ChipListInput` holds the in-progress path and
+ * its inline validation error in local `useState`, which no effect on the
+ * panel can reach.
  *
  * So the draft and the error follow the operator from task A into task B's
  * panel, and pressing Add there commits A's path to B — a write to the wrong
