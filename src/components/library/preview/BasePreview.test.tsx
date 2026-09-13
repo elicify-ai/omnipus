@@ -452,8 +452,9 @@ describe('BasePreview — tabs over the views the server says this base owns', (
             // loaded (there is only one row, "INV-A") — the old row-scoped
             // resolver could never resolve it. It IS, however, a real
             // wikilink written in that row's own file ("a.md"), so the
-            // collection's link graph resolves it.
-            if (req.path === 'a.md') {
+            // collection's link graph resolves it. D-135: the whole row set
+            // arrives as ONE multi-path request now, never one per row.
+            if (req.paths?.includes('a.md')) {
               return graph({ edges: [linkEdge()], nodes: [{ path: 'companies/korn-ferry.md', exists: true }] })
             }
             return graph()
@@ -472,7 +473,7 @@ describe('BasePreview — tabs over the views the server says this base owns', (
           await screen.findByTestId('viewpart-table')
           await waitFor(() =>
             expect(loadGraph).toHaveBeenCalledWith(
-              expect.objectContaining({ collectionId: 'kb_1', kind: 'links', path: 'a.md' }),
+              expect.objectContaining({ collectionId: 'kb_1', kind: 'links', paths: ['a.md'] }),
             ),
           )
           const link = await screen.findByTestId('viewpart-cell-link')
@@ -661,7 +662,7 @@ describe('UAT D-135 — a base view no longer fires one graph request per row', 
     expect(rowCarriesWikilink({})).toBe(false)
   })
 
-  it('issues a graph request for the wikilink-bearing row ONLY, not for every row', async () => {
+  it('issues ONE graph request naming the wikilink-bearing row ONLY — rows with no [[wikilink]] are not in it', async () => {
     const loadGraph = vi.fn().mockResolvedValue(graph())
     renderBase({
       loadGraph,
@@ -677,9 +678,35 @@ describe('UAT D-135 — a base view no longer fires one graph request per row', 
       ),
     })
     await screen.findByTestId('viewpart-table')
-    await waitFor(() => expect(loadGraph).toHaveBeenCalledWith(expect.objectContaining({ path: 'a.md' })))
-    // DIES ON the old code: three rows → three requests, b.md and c.md included.
-    expect(loadGraph).toHaveBeenCalledTimes(1)
+    // DIES ON the pre-multi-path code: the request carried `path: 'a.md'`
+    // (one request per row, b.md and c.md queued behind it); DIES ON the
+    // pre-D-135 code with three requests at all.
+    await waitFor(() => expect(loadGraph).toHaveBeenCalledTimes(1))
+    expect(loadGraph).toHaveBeenCalledWith(expect.objectContaining({ kind: 'links', paths: ['a.md'] }))
+    expect(loadGraph).not.toHaveBeenCalledWith(expect.objectContaining({ path: 'a.md' }))
+  })
+
+  it('a view with SEVERAL wikilink rows still makes exactly ONE request, carrying every path (D-135 full fix)', async () => {
+    const loadGraph = vi.fn().mockResolvedValue(graph())
+    renderBase({
+      loadGraph,
+      loadViewResult: vi.fn().mockResolvedValue(
+        result({
+          parts: [{ part: 'table', source: { part: 'table' }, columns: ['file.name', 'client'] }],
+          rows: [
+            { path: 'a.md', title: 'INV-A', cells: [{ property: 'client', value: '[[Korn Ferry]]' }], joins: [] },
+            { path: 'b.md', title: 'INV-B', cells: [{ property: 'client', value: '[[Acme Ltd]]' }], joins: [] },
+            { path: 'c.md', title: 'INV-C', cells: [{ property: 'client', value: '[[Bolt Inc]]' }], joins: [] },
+          ],
+        }),
+      ),
+    })
+    await screen.findByTestId('viewpart-table')
+    await waitFor(() => expect(loadGraph).toHaveBeenCalledTimes(1))
+    // DIES ON the code this replaces: three separate requests (one per row).
+    expect(loadGraph).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'links', paths: ['a.md', 'b.md', 'c.md'] }),
+    )
   })
 
   it(`withLinkGraphSlot: never more than ${LINK_GRAPH_MAX_IN_FLIGHT} link-graph requests on the wire at once`, async () => {

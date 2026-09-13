@@ -4530,6 +4530,11 @@ export interface KnowledgeGraphQuery { // not-wire-format: query-parameter argum
   /** COLLECTION-relative path of the note the query is about. Required by the
    *  contract for links/backlinks/neighbourhood. */
   path?: string
+  /** UAT D-135 — kind=links only, mutually exclusive with `path`: several
+   *  notes whose outbound links are wanted in ONE answer (the union of their
+   *  edges; `source_path` is then absent on the wire). Bounded by the contract
+   *  to 64 paths. */
+  paths?: string[]
   hops?: number
   limit?: number
 }
@@ -4549,6 +4554,9 @@ export function fetchKnowledgeGraph(
 ): Promise<KnowledgeGraphResponse> {
   const params = new URLSearchParams({ collection_id: query.collectionId, kind: query.kind })
   if (query.path !== undefined && query.path !== '') params.set('path', query.path)
+  // Repeated keys (paths=a&paths=b), matching the contract's explode: true —
+  // one member per row whose links are wanted, never a comma-joined string.
+  for (const p of query.paths ?? []) params.append('paths', p)
   if (query.hops !== undefined) params.set('hops', String(query.hops))
   if (query.limit !== undefined) params.set('limit', String(query.limit))
   return request<KnowledgeGraphResponse>(
