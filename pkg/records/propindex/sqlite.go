@@ -49,7 +49,15 @@ const driverName = "sqlite"
 // because nothing in it says which schema produced which row — the only honest
 // answer is "unknown", and the only correct response to unknown is to
 // re-derive. Hence the bump rather than an ALTER TABLE.
-const schemaVersion = 3
+//
+// Revision 4 (UAT 2026-09-13, D-06): `parse_error` on `notes` — the reason a
+// note's frontmatter could not be read, when it could not. The indexer had
+// always DETECTED an unclosed `---` fence (records.ParseRecord sets
+// Record.ParseError), logged it, and then wrote a row indistinguishable from a
+// healthy typeless note's, so neither knowledge_find's problems[] nor
+// check_integrity could ever name the file. A version-3 file holds no such
+// column and no way to tell "healthy" from "unreadable", so it is re-derived.
+const schemaVersion = 4
 
 // Index is the SQLite properties index.
 type Index struct {
@@ -361,7 +369,8 @@ CREATE TABLE IF NOT EXISTS notes (
 	ctime         BLOB,
 	size          BLOB,
 	declared_type TEXT    NOT NULL DEFAULT '',
-	schema_fp     TEXT    NOT NULL DEFAULT ''
+	schema_fp     TEXT    NOT NULL DEFAULT '',
+	parse_error   TEXT    NOT NULL DEFAULT ''
 );
 CREATE UNIQUE INDEX IF NOT EXISTS notes_by_path ON notes(path);
 CREATE INDEX IF NOT EXISTS notes_narrowing ON notes(record_type, kind, path);
@@ -555,13 +564,13 @@ func (ix *Index) upsertOne(ctx context.Context, tx *sql.Tx, rows NoteRows) error
 			return fmt.Errorf("propindex: updating %q: %w", rows.Path, err)
 		}
 	} else {
-		const q = `INSERT INTO notes (path, kind, record_type, record_id, source_hash, indexed_at, mtime, ctime, size, declared_type, schema_fp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		const q = `INSERT INTO notes (path, kind, record_type, record_id, source_hash, indexed_at, mtime, ctime, size, declared_type, schema_fp, parse_error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		res, err := ix.execTx(ctx, tx, PhaseWrite, q,
 			rows.Path, rows.Kind, rows.RecordType, []byte(rows.RecordID), rows.SourceHash, now,
 			nanoTimeColumn(rows.MtimeNanos),
 			ctimeColumn(rows.CtimeNanos, rows.HasCtime),
 			sizeColumn(rows.Size, rows.StatKnown()),
-			rows.DeclaredType, rows.SchemaFingerprint)
+			rows.DeclaredType, rows.SchemaFingerprint, rows.ParseError)
 		if err != nil {
 			return fmt.Errorf("propindex: inserting %q: %w", rows.Path, err)
 		}
@@ -932,7 +941,7 @@ func (ix *Index) CountCandidates(ctx context.Context, sel Selector) (int, error)
 // rule — the tags and links, which ARE children, get their own statements
 // below.
 const candidateColumns = `n.note_id, n.path, n.record_type, n.record_id, n.source_hash, ` +
-	`n.mtime, n.ctime, n.size, ` +
+	`n.mtime, n.ctime, n.size, n.parse_error, ` +
 	`p.prop, p.elem, p.state, p.vtype, p.v_text, p.v_num, p.v_time, p.v_link, p.v_raw, p.quoted`
 
 // Candidates streams the narrowed population, one record at a time.
@@ -993,6 +1002,7 @@ func (ix *Index) streamCandidates(ctx context.Context, q string, args []any, vis
 		var (
 			id                              int64
 			path, recordType, sourceHash    string
+			parseError                      string
 			recordID                        []byte
 			mtime, ctime, size              []byte
 			prop, vtype                     sql.NullString
@@ -1000,7 +1010,7 @@ func (ix *Index) streamCandidates(ctx context.Context, q string, args []any, vis
 			vText, vNum, vTime, vLink, vRaw []byte
 		)
 		if err := rows.Scan(&id, &path, &recordType, &recordID, &sourceHash,
-			&mtime, &ctime, &size,
+			&mtime, &ctime, &size, &parseError,
 			&prop, &elem, &state, &vtype, &vText, &vNum, &vTime, &vLink, &vRaw, &quoted); err != nil {
 			return fmt.Errorf("propindex: reading a candidate row: %w", err)
 		}
@@ -1026,6 +1036,7 @@ func (ix *Index) streamCandidates(ctx context.Context, q string, args []any, vis
 				RecordType: recordType,
 				RecordID:   string(recordID),
 				SourceHash: sourceHash,
+				ParseError: parseError,
 				File:       decodeFileMeta(mtime, ctime, size),
 				Props:      map[string]StoredProp{},
 			}

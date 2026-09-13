@@ -361,6 +361,7 @@ type RecordProblem = {
     | "scope_truncated"
     | "text_search_truncated"
     | "text_search_relaxed"
+    | "frontmatter_malformed"
     | "aggregate_refused"
     | "index_unavailable"
     | "evaluation_bound_exceeded"
@@ -4815,6 +4816,7 @@ export const RecordProblem: z.ZodType<RecordProblem> = z.object({
     "scope_truncated",
     "text_search_truncated",
     "text_search_relaxed",
+    "frontmatter_malformed",
     "aggregate_refused",
     "index_unavailable",
     "evaluation_bound_exceeded",

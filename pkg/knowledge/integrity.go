@@ -101,6 +101,17 @@ const (
 	// the walk, not a typed one: it needs no properties index and runs on every
 	// build, which is why it is NOT in typedCategories below.
 	CategoryAmbiguousName IntegrityCategory = "ambiguous name"
+	// CategoryMalformedFrontmatter — a note whose frontmatter could not be
+	// read at all (UAT 2026-09-13, D-06): typically an opening `---` fence
+	// that never closes, so the whole file is taken as YAML and fails. Such a
+	// note declares nothing it appears to declare. Read straight off the
+	// notes on disk, so it runs on every build and needs no properties index.
+	CategoryMalformedFrontmatter IntegrityCategory = "malformed frontmatter"
+	// CategoryNonConformingValue — a declared property of a typed note that
+	// holds a value the schema does not accept (a scalar where a list was
+	// declared, an enum label outside the set, text where a number was
+	// declared). Read off the notes and their schemas on disk (D-06).
+	CategoryNonConformingValue IntegrityCategory = "non-conforming value"
 )
 
 // IntegrityCategories is the closed set, in render order. Typed categories
@@ -114,6 +125,8 @@ var IntegrityCategories = []IntegrityCategory{
 	CategoryBrokenLink,
 	CategoryOrphan,
 	CategoryAmbiguousName,
+	CategoryMalformedFrontmatter,
+	CategoryNonConformingValue,
 }
 
 // typedCategories are the ones that need the properties index. On a build
@@ -829,6 +842,10 @@ func CheckIntegrity(ctx context.Context, opts IntegrityOptions) (*IntegrityRepor
 	// one an agent is about to create a broken reference into.
 	checkAmbiguousNames(sink, walk.Files, inScope)
 
+	if err := checkFrontmatterHealth(ctx, opts, sink, walk.Files, inScope); err != nil {
+		return nil, err
+	}
+
 	return &IntegrityReport{
 		ScopeLabel: integrityScopeLabel(opts.CollectionName, opts.RecordType),
 		NotesSwept: notes,
@@ -848,6 +865,73 @@ func CheckIntegrity(ctx context.Context, opts IntegrityOptions) (*IntegrityRepor
 // A record_type scope narrows via inScope on the members: a collision is
 // reported when at least one of the colliding notes is in scope, since that is
 // the note whose links the scoped sweep is answering for.
+// checkFrontmatterHealth is D-06's sweep: every note is parsed, and one that
+// could not be read is named under CategoryMalformedFrontmatter; every typed
+// note is then checked property by property against its declared schema, and
+// a value the schema does not accept is named under
+// CategoryNonConformingValue. Both facts were already detected by the indexer
+// and discarded; this is where they reach the operator. Runs without the
+// properties index, so it is never NOT RUN on a SQLite-less build.
+//
+// A note that cannot be read at all is reported as unreadable rather than
+// skipped silently, under the malformed category: a reader must be able to
+// see that the sweep could not vouch for it.
+func checkFrontmatterHealth(ctx context.Context, opts IntegrityOptions, sink *findingSink, files []string, inScope func(string) bool) error {
+	for _, rel := range files {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !IsMarkdownPath(rel) {
+			continue
+		}
+		abs, err := opts.Root.ResolveContainedNoSymlink(opts.FS, rel)
+		if err != nil {
+			continue
+		}
+		src, err := ReadNoteContent(opts.FS, abs)
+		if err != nil {
+			continue
+		}
+		rec := records.ParseRecord(rel, src)
+		if rec.ParseError != "" {
+			if opts.RecordType == "" {
+				sink.add(CategoryMalformedFrontmatter, rel, fmt.Sprintf(
+					"%s — the frontmatter could not be read (%s); the note declares no type and no properties",
+					rel, rec.ParseError))
+			}
+			continue
+		}
+		typeName := rec.TypeName()
+		if typeName == "" || opts.Schemas == nil {
+			continue
+		}
+		if opts.RecordType != "" && typeName != opts.RecordType {
+			continue
+		}
+		schema, ok := opts.Schemas.Get(typeName)
+		if !ok || !inScope(rel) {
+			continue
+		}
+		for _, name := range schema.PropertyOrder {
+			prop, ok := schema.Property(name)
+			if !ok {
+				continue
+			}
+			pv := records.ResolveProperty(rec, prop)
+			if pv.State != records.StateNonConforming {
+				continue
+			}
+			reason := "the value does not conform to the declaration"
+			if len(pv.Findings) > 0 && pv.Findings[0].Reason != "" {
+				reason = pv.Findings[0].Reason
+			}
+			sink.add(CategoryNonConformingValue, rel, fmt.Sprintf(
+				"%s — %s.%s: %s", rel, typeName, name, reason))
+		}
+	}
+	return nil
+}
+
 func checkAmbiguousNames(sink *findingSink, files []string, inScope func(string) bool) {
 	byName := map[string][]string{}
 	for _, f := range files {

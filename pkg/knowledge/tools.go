@@ -1186,7 +1186,8 @@ func (t *DescribeTool) Description() string {
 		"this first — a guessed property, type or template name is refused, and the real ones " +
 		"are here. check_integrity sweeps the WHOLE knowledge base for duplicate identifiers, " +
 		"relations resolving to nothing or the wrong type, broken wikilinks, orphan notes, " +
-		"index rows with no note and ambiguous note names; bounded, says when it clamps. Reads only."
+		"index rows with no note, ambiguous note names, malformed frontmatter and values that do " +
+		"not conform to their declaration; bounded, says when it clamps. Reads only."
 }
 
 // Scope classifies the tool for per-agent visibility filtering.

@@ -517,6 +517,10 @@ var integrityCategoryPhrase = map[IntegrityCategory]string{
 	CategoryOrphan:             "orphan notes",
 	CategoryOrphanRow:          "index rows with no note",
 	CategoryAmbiguousName:      "ambiguous note names",
+	// UAT 2026-09-13, D-06: the two health categories the indexer used to
+	// detect and discard.
+	CategoryMalformedFrontmatter: "malformed frontmatter",
+	CategoryNonConformingValue:   "values that do not conform to their declaration",
 }
 
 // TestDescribeDescription_NamesEveryIntegrityCategory — FR-079 requires the

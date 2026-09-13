@@ -169,6 +169,14 @@ type Candidate struct {
 	// disagreement, not which side is behind.
 	SourceHash string
 
+	// ParseError is the reason this note's frontmatter could not be read, or
+	// "" when it could (UAT 2026-09-13, D-06). A note whose frontmatter opens
+	// with `---` and never closes is indexed — it still has a path, a body
+	// and checkboxes — but it declares NOTHING the file appears to declare,
+	// and a consumer must be able to say so rather than serve it as an
+	// ordinary, healthy note.
+	ParseError string
+
 	// File is FR-131's stat metadata, decoded from the three `notes` columns:
 	// `file.mtime`, `file.ctime` and `file.size`.
 	//

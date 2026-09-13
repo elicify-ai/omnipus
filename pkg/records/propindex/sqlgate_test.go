@@ -502,6 +502,7 @@ var valueColumns = map[string]string{
 	// a query may narrow on.
 	"declared_type": "the type a note's frontmatter CLAIMS, resolved or not; narrowing on it would answer `type=` with notes of an undeclared type (FR-005). Compared in Go by the indexer only",
 	"schema_fp":     "the fingerprint of the schema this row was derived from; the indexer compares it in Go against the loaded schema set, and no query has any business mentioning it",
+	"parse_error":   "the reason a note's frontmatter could not be read (UAT 2026-09-13, D-06); a health fact rendered into problems[] by the engine, never a filter target — narrowing on it would let a query silently exclude or select the very notes it must name",
 
 	// note_tasks.
 	"line":   "a source line number; a renderer's coordinate, not a filter target",

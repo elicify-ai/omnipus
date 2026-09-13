@@ -176,6 +176,12 @@ type NoteRows struct {
 	DeclaredType      string
 	SchemaFingerprint string
 
+	// ParseError is records.Record.ParseError as BuildNoteRows saw it: the
+	// reason the frontmatter could not be read, or "" (D-06). Stored so the
+	// detection reaches knowledge_find's problems[] and check_integrity
+	// instead of ending in a log line.
+	ParseError string
+
 	// Size, MtimeNanos, CtimeNanos and HasCtime are the file's stat AS THE WALK
 	// OBSERVED IT — FR-131's three new `notes` columns, backing `file.size`,
 	// `file.mtime` and `file.ctime`.
@@ -300,6 +306,7 @@ func BuildNoteRows(rec records.Record, schema *records.Schema, src []byte, hash 
 		// actually used — see the fields' own comment for why the freshness
 		// test needs both.
 		DeclaredType: rec.TypeName(),
+		ParseError:   rec.ParseError,
 	}
 	if schema != nil {
 		rows.SchemaFingerprint = schema.Fingerprint

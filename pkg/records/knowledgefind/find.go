@@ -1322,10 +1322,59 @@ func (e *evaluation) visit(c propindex.Candidate) (propindex.Verdict, error) {
 		return propindex.Rejected, nil
 	}
 
+	e.recordNoteHealth(c, cand, values)
+
 	e.survivors = append(e.survivors, survivor{
 		cand: c, score: hit.Score, textHash: hit.SourceHash, hasText: hasText, values: values,
 	})
 	return propindex.Accepted, nil
+}
+
+// recordNoteHealth names, in problems[], a survivor whose frontmatter could
+// not be read or whose declared property holds a value the schema does not
+// accept (UAT 2026-09-13, D-06). Both were DETECTED before — the parser sets
+// Record.ParseError, BuildNoteRows stores the non-conforming state row — and
+// both were then served as a healthy row with no marker anywhere the caller
+// reads. The row is still returned (it is a real note at a real path); the
+// problem is non-fatal and makes the verdict COMPLETE: no with the reason.
+func (e *evaluation) recordNoteHealth(c propindex.Candidate, cand *candidate, values map[string]records.PropertyValue) {
+	var ps []generated.RecordProblem
+	if c.ParseError != "" {
+		p := problem(generated.FrontmatterMalformed,
+			fmt.Sprintf("%s: the frontmatter could not be read (%s), so this note declares no type and no properties",
+				c.Path, c.ParseError),
+			"close the frontmatter block with a `---` line, or fix the YAML the message names",
+			cand.identity())
+		p.Paths = &[]string{c.Path}
+		ps = append(ps, p)
+	}
+	names := make([]string, 0, len(values))
+	for name, pv := range values {
+		if pv.State == records.StateNonConforming {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		pv := values[name]
+		reason := "the stored value does not conform to the declaration"
+		if len(pv.Findings) > 0 && pv.Findings[0].Reason != "" {
+			reason = pv.Findings[0].Reason
+		} else if got, expected := cand.evidence(name); got != "" || expected != "" {
+			reason = fmt.Sprintf("holds %q where %s was expected", got, expected)
+		}
+		p := problem(generated.TypeMismatch,
+			fmt.Sprintf("%s: property %s — %s", c.Path, name, reason),
+			"correct the value to the declared shape, or change the declaration with knowledge_configure",
+			cand.identity())
+		n := name
+		p.Property = &n
+		p.Paths = &[]string{c.Path}
+		ps = append(ps, p)
+	}
+	if len(ps) > 0 {
+		e.recordProblems(ps)
+	}
 }
 
 // materialise decodes the render and sort columns for one survivor.

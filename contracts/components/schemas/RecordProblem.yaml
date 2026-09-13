@@ -44,6 +44,7 @@ properties:
       - scope_truncated
       - text_search_truncated
       - text_search_relaxed
+      - frontmatter_malformed
       - aggregate_refused
       - index_unavailable
       - evaluation_bound_exceeded
@@ -152,6 +153,14 @@ properties:
       zzqqxx: 0") so the caller sees which word was not found. The rows are
       still returned — a near match is often the useful answer — but they can
       no longer be mistaken for files containing every word.
+      "frontmatter_malformed" — UAT 2026-09-13, D-06. The note's frontmatter
+      could not be read (typically an opening `---` fence that never closes),
+      so the note declares NOTHING it appears to declare: no type, no
+      properties. The row is still returned — it is a real note at a real
+      path — but it is named here so a reader never takes it for a healthy
+      ordinary note. The indexer had always detected this and thrown the
+      detection away as a log line. Non-fatal; the reason carries the parser's
+      own message.
       "aggregate_refused" — no aggregate is returned over a refused candidate
       set; it is never partial (FR-066).
       "index_unavailable" — the index predates record support and cannot hold
