@@ -309,7 +309,7 @@ func TestWsStreamer_Finalize_TurnIDEnablesMarkLastEntryTruncatedCorrelation(t *t
 
 	// This is the exact call pkg/agent/cancel.go's RequestCancel makes on a
 	// mid-stream cancel, with the real turn ID it tracked throughout the turn.
-	require.NoError(t, store.MarkLastEntryTruncated(meta.ID, "turn-cancel-1"))
+	require.NoError(t, store.MarkLastEntryTruncated(meta.ID, "turn-cancel-1", "cancelled"))
 
 	entries, err := store.ReadTranscript(meta.ID)
 	require.NoError(t, err, "read transcript")

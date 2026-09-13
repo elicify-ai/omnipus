@@ -1197,9 +1197,22 @@ func (us *UnifiedStore) AppendTranscript(sessionID string, entry TranscriptEntry
 	return nil
 }
 
+// validTruncationReasons enumerates the only accepted values for the reason
+// parameter of MarkLastEntryTruncated (ADR-087 D2). Absent on a persisted
+// entry means "cancelled" (legacy) — but a caller of this function must
+// always name one explicitly; there is no default at the write path.
+var validTruncationReasons = map[string]bool{
+	"cancelled":         true,
+	"max_output_tokens": true,
+}
+
 // MarkLastEntryTruncated finds the last assistant transcript entry for the
 // given session in transcript.jsonl that belongs to turnID and rewrites it
-// with truncated=true.
+// with truncated=true and truncation_reason=reason.
+//
+// reason MUST be one of "cancelled" or "max_output_tokens" (ADR-087 D2); any
+// other value is rejected with an error and the entry is left untouched —
+// this function never writes an unrecognized reason to disk.
 //
 // H2: The turnID parameter scopes the backward-walk to entries whose
 // turn_id matches. This prevents a cancel on turn T2 from mutating the
@@ -1219,10 +1232,13 @@ func (us *UnifiedStore) AppendTranscript(sessionID string, entry TranscriptEntry
 //
 // Returns nil if no matching assistant entry is found (e.g., cancel arrived
 // before any assistant content was written). Returns an error only on I/O
-// failure.
-func (us *UnifiedStore) MarkLastEntryTruncated(sessionID, turnID string) error {
+// failure or an unrecognized reason.
+func (us *UnifiedStore) MarkLastEntryTruncated(sessionID, turnID, reason string) error {
 	if err := validateSessionID(sessionID); err != nil {
 		return err
+	}
+	if !validTruncationReasons[reason] {
+		return fmt.Errorf("unified_store: mark truncated: invalid truncation reason %q (must be \"cancelled\" or \"max_output_tokens\")", reason)
 	}
 	if turnID == "" {
 		slog.Warn(
@@ -1299,6 +1315,7 @@ func (us *UnifiedStore) MarkLastEntryTruncated(sessionID, turnID string) error {
 		return fmt.Errorf("unified_store: mark truncated: unmarshal target entry: %w", jsonErr)
 	}
 	target.Truncated = true
+	target.TruncationReason = reason
 	rewritten, jsonErr := json.Marshal(target)
 	if jsonErr != nil {
 		return fmt.Errorf("unified_store: mark truncated: marshal updated entry: %w", jsonErr)

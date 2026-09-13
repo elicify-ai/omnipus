@@ -555,7 +555,7 @@ func (al *AgentLoop) RequestCancel(
 		// not by mutating this single event after the fact.
 		// Mark the last transcript entry as truncated.
 		if store != nil {
-			if err := store.MarkLastEntryTruncated(sessionID, turnID); err != nil {
+			if err := store.MarkLastEntryTruncated(sessionID, turnID, "cancelled"); err != nil {
 				slog.Warn("agent: RequestCancel: MarkLastEntryTruncated failed",
 					"session_id", sessionID, "turn_id", turnID, "error", err)
 			}

@@ -288,10 +288,18 @@ type TranscriptEntry struct {
 	// For compaction entries.
 	MessagesCompacted int `json:"messages_compacted,omitempty"`
 
-	// Truncated is set to true on the last assistant entry when a turn is
-	// canceled mid-stream. Only serialized when true (FR-14). Only written to
-	// transcript.jsonl; context.jsonl is never mutated (FR-14a).
+	// Truncated is set to true on the last assistant entry when the turn's
+	// answer is incomplete — see TruncationReason for why. Only serialized
+	// when true (FR-14). Only written to transcript.jsonl; context.jsonl is
+	// never mutated (FR-14a).
 	Truncated bool `json:"truncated,omitempty"`
+
+	// TruncationReason narrows why Truncated is true: "cancelled" (the user
+	// canceled mid-stream) or "max_output_tokens" (the provider's output
+	// limit cut the answer off). Absent on a Truncated entry means
+	// "cancelled" (legacy — every entry written before this field existed).
+	// See ADR-087 D2.
+	TruncationReason string `json:"truncation_reason,omitempty"`
 
 	// Cancel-specific fields — only populated for EntryTypeTurnCancelled entries
 	// (FR-15). All are omitempty so they are invisible on other entry types.
