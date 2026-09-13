@@ -91,6 +91,7 @@ import { LibraryPreviewPane } from './LibraryPreviewPane'
 import { LibraryErrorBanner } from './LibraryErrorBanner'
 import { KnowledgePanel } from './knowledge/KnowledgePanel'
 import { LibrarySearchBar } from './search/LibrarySearchBar'
+import { useLibraryCrossTabRefresh } from './useLibraryCrossTabRefresh'
 import { confirmDiscardLibraryEdits } from './preview/unsavedGuard'
 import { getLibraryErrorMessage } from './libraryErrorMessage'
 
@@ -262,6 +263,12 @@ export function LibraryExplorer({
   const addressed = address !== undefined && onAddressChange !== undefined
   const workspaceId = addressed ? address?.workspaceId ?? null : internalWorkspaceId
   const selectedPath = addressed ? address?.path ?? null : internalSelectedPath
+
+  // D-107, pull half: this tab's listing refreshes when the user returns to
+  // it (focus / visibilitychange→visible). The push half — the
+  // library_changed WS frame emitted by every Library write — covers tabs
+  // that never see a focus event (two windows side by side).
+  useLibraryCrossTabRefresh(workspaceId)
 
   // C4: seeds the fullscreen pop-out's INITIAL browsed folder from
   // `address.folder` when there is no `address.path` to derive one from

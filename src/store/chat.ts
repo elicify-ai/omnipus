@@ -5,7 +5,7 @@ import { useUiStore } from '@/store/ui'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore, registerChatSetReplaying, registerChatResetForReplay } from '@/store/session'
 import { queryClient } from '@/lib/queryClient'
-import { tasksQueryKeys } from '@/lib/api'
+import { tasksQueryKeys, libraryQueryKeys } from '@/lib/api'
 import type { Message, ToolCall, AgentKind, Agent } from '@/lib/api'
 import type { WsReceiveFrame, WsReplayMessageFrame, WsRateLimitFrame, WsSubagentStartFrame, WsSubagentEndFrame } from '@/lib/ws'
 import type {
@@ -4749,6 +4749,23 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
         case 'task_status_changed':
           queryClient.invalidateQueries({ queryKey: ['tasks'] })
+          break
+
+        // D-107 (2026-09-14): a Library write landed on the REST surface —
+        // usually in ANOTHER tab, which is the whole point. GLOBAL frame (no
+        // session_id — it describes a workspace's file tree, not a chat).
+        // Invalidate EVERY cached library query for the named workspace
+        // (partial-key ['library', workspace_id] covers entries in every
+        // folder, both include_hidden variants, and content) rather than
+        // trying to compute which folders were affected — a wrong folder set
+        // would reintroduce exactly the stale-listing defect this exists to
+        // remove. The workspaces list carries entry_count, so it goes too.
+        // The originating tab's redundant invalidate is a no-op (its own
+        // mutation already invalidated), and the focus-path pull half lives
+        // in useLibraryCrossTabRefresh for tabs that never see a WS event.
+        case 'library_changed':
+          queryClient.invalidateQueries({ queryKey: ['library', frame.workspace_id] })
+          queryClient.invalidateQueries({ queryKey: libraryQueryKeys.workspaces() })
           break
 
         // Per-task run history (ADR-050 / task-run-history-spec §3.8): fires

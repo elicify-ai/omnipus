@@ -38,6 +38,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/askuser"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
@@ -5181,6 +5182,14 @@ func setupAndStartServices(
 		taskLock:               task.TaskFileLock,               // shared striped lock for board task RMW
 	}
 	api.cronService.Store(runningServices.CronService) // #264: schedules CRUD (atomic.Pointer)
+	// D-107: the Library REST write handlers broadcast a library_changed WS
+	// frame after every landed mutation, so a second tab's folder listing
+	// reconciles without a reload. wsHandler was built earlier in boot; store
+	// its broadcast method behind the restAPI's nil-safe hook
+	// (library_change_broadcast.go) — nil until here, no-op after shutdownless
+	// tests that never wire it.
+	libraryChangeFn := func(f gen.LibraryChangedFrame) { wsHandler.broadcastLibraryChange(f) }
+	api.libraryChangeBroadcast.Store(&libraryChangeFn)
 	// ADR-067 FR-037 (T067-11): a catalog refresh invalidates the
 	// entitlement cache — the intersection behind every cached answer was
 	// computed against a document that is no longer the served one.
