@@ -5,9 +5,36 @@ description: >
   (builtin.policies, a complete map) and the legacy explicit/inherit
   mode format (builtin.mode + builtin.visible) for backward compatibility.
   Legacy fields are converted to policy format server-side before persisting.
+
+  ROUND-TRIP SHAPE (UAT 2026-09-13 D-86): the body of a GET
+  /api/v1/agents/{id}/tools response (AgentToolsResponse — config + tools +
+  agent_type) is ALSO accepted as-is. When the top-level `builtin` is absent
+  and `config.builtin` is present, the server reads the policy map from
+  `config.builtin` (and MCP bindings from `config.mcp`); `tools` and
+  `agent_type` are read-only echoes and are ignored on write. A body carrying
+  neither `builtin` nor `config.builtin` is rejected with 400, never
+  persisted as an empty policy map.
 type: object
 additionalProperties: false
 properties:
+  config:
+    $ref: AgentToolsCfg.yaml
+  tools:
+    type: array
+    description: >
+      Ignored on write. Present so a GET response body round-trips through
+      PUT unchanged (D-86); the effective per-tool list is always recomputed
+      by the server.
+    items:
+      $ref: AgentToolEntry.yaml
+  agent_type:
+    type: string
+    description: >
+      Ignored on write. Present so a GET response body round-trips through
+      PUT unchanged (D-86); an agent's type is not editable here. Deliberately
+      NOT an enum: a second copy of the agent-type enum changes oapi-codegen's
+      collision-avoidance constant naming for the whole file and breaks the
+      hand-written pkg/api/generated/fixtures.go.
   builtin:
     type: object
     description: Builtin tool policy configuration for this agent.

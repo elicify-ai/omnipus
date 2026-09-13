@@ -8271,16 +8271,34 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 	// malformed request. This is the one defect of the three that failed in
 	// the ALLOW direction, so it is rejected here at the earliest possible
 	// point, before any normalization can make a partial body look valid.
-	if req.Builtin == nil {
+	//
+	// UAT 2026-09-13 D-86: the body of a GET /agents/{id}/tools response
+	// (AgentToolsResponse: config + tools + agent_type) is accepted as-is,
+	// so a client can read, modify and write back the same shape. When the
+	// top-level `builtin` is absent and `config.builtin` is present, the
+	// policy map (and MCP bindings, from `config.mcp`) are read from there;
+	// `tools` and `agent_type` are read-only echoes and are ignored. A body
+	// carrying NEITHER `builtin` nor `config.builtin` is still rejected.
+	roundTrip := req.Builtin == nil && req.Config != nil && req.Config.Builtin != nil
+	if req.Builtin == nil && !roundTrip {
 		jsonErr(w, http.StatusBadRequest,
 			"builtin.policies is required: this endpoint replaces the agent's complete tool-policy map, "+
-				"so a body with no \"builtin\" object is rejected rather than persisted as an empty policy")
+				"so a body with no \"builtin\" object (and no \"config.builtin\" object, the GET response shape) "+
+				"is rejected rather than persisted as an empty policy")
 		return
 	}
 	// Extract builtin fields. There is no default_policy field on the wire
 	// any more (CLAUDE.md hard constraint 6).
 	var builtinPolicies map[string]string
-	if req.Builtin != nil && req.Builtin.Policies != nil {
+	switch {
+	case roundTrip:
+		if req.Config.Builtin.Policies != nil {
+			builtinPolicies = make(map[string]string, len(req.Config.Builtin.Policies))
+			for k, v := range req.Config.Builtin.Policies {
+				builtinPolicies[k] = string(v)
+			}
+		}
+	case req.Builtin.Policies != nil:
 		builtinPolicies = make(map[string]string, len(req.Builtin.Policies))
 		for k, v := range req.Builtin.Policies {
 			builtinPolicies[k] = string(v)
@@ -8343,9 +8361,28 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 		ID    string
 		Tools []string
 	}
-	if req.Mcp != nil && req.Mcp.Servers != nil {
-		configuredServers := cfg.Tools.MCP.Servers
+	// The MCP binding list comes from the top-level `mcp` when present, or
+	// from `config.mcp` on a D-86 round-trip body; the two are the same
+	// shape on the wire but distinct generated types, so they are normalised
+	// into one list before validation.
+	type mcpBindingWire struct {
+		Id    string
+		Tools *[]string
+	}
+	var mcpBindings []mcpBindingWire
+	switch {
+	case req.Mcp != nil && req.Mcp.Servers != nil:
 		for _, s := range *req.Mcp.Servers {
+			mcpBindings = append(mcpBindings, mcpBindingWire{Id: s.Id, Tools: s.Tools})
+		}
+	case roundTrip && req.Config.Mcp != nil && req.Config.Mcp.Servers != nil:
+		for _, s := range *req.Config.Mcp.Servers {
+			mcpBindings = append(mcpBindings, mcpBindingWire{Id: s.Id, Tools: s.Tools})
+		}
+	}
+	if mcpBindings != nil {
+		configuredServers := cfg.Tools.MCP.Servers
+		for _, s := range mcpBindings {
 			if s.Id == "" {
 				jsonErr(w, http.StatusUnprocessableEntity, "mcp.servers[].id must not be empty")
 				return

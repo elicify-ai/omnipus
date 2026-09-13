@@ -758,6 +758,90 @@ func (e AgentToolsUpdateRequestBuiltinPolicies) Valid() bool {
 	}
 }
 
+// Defines values for AgentToolsUpdateRequestConfigBuiltinPolicies.
+const (
+	AgentToolsUpdateRequestConfigBuiltinPoliciesAllow AgentToolsUpdateRequestConfigBuiltinPolicies = "allow"
+	AgentToolsUpdateRequestConfigBuiltinPoliciesAsk   AgentToolsUpdateRequestConfigBuiltinPolicies = "ask"
+	AgentToolsUpdateRequestConfigBuiltinPoliciesDeny  AgentToolsUpdateRequestConfigBuiltinPolicies = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolsUpdateRequestConfigBuiltinPolicies enum.
+func (e AgentToolsUpdateRequestConfigBuiltinPolicies) Valid() bool {
+	switch e {
+	case AgentToolsUpdateRequestConfigBuiltinPoliciesAllow:
+		return true
+	case AgentToolsUpdateRequestConfigBuiltinPoliciesAsk:
+		return true
+	case AgentToolsUpdateRequestConfigBuiltinPoliciesDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentToolsUpdateRequestToolsConfiguredPolicy.
+const (
+	AgentToolsUpdateRequestToolsConfiguredPolicyAllow AgentToolsUpdateRequestToolsConfiguredPolicy = "allow"
+	AgentToolsUpdateRequestToolsConfiguredPolicyAsk   AgentToolsUpdateRequestToolsConfiguredPolicy = "ask"
+	AgentToolsUpdateRequestToolsConfiguredPolicyDeny  AgentToolsUpdateRequestToolsConfiguredPolicy = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolsUpdateRequestToolsConfiguredPolicy enum.
+func (e AgentToolsUpdateRequestToolsConfiguredPolicy) Valid() bool {
+	switch e {
+	case AgentToolsUpdateRequestToolsConfiguredPolicyAllow:
+		return true
+	case AgentToolsUpdateRequestToolsConfiguredPolicyAsk:
+		return true
+	case AgentToolsUpdateRequestToolsConfiguredPolicyDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentToolsUpdateRequestToolsEffectivePolicy.
+const (
+	AgentToolsUpdateRequestToolsEffectivePolicyAllow AgentToolsUpdateRequestToolsEffectivePolicy = "allow"
+	AgentToolsUpdateRequestToolsEffectivePolicyAsk   AgentToolsUpdateRequestToolsEffectivePolicy = "ask"
+	AgentToolsUpdateRequestToolsEffectivePolicyDeny  AgentToolsUpdateRequestToolsEffectivePolicy = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolsUpdateRequestToolsEffectivePolicy enum.
+func (e AgentToolsUpdateRequestToolsEffectivePolicy) Valid() bool {
+	switch e {
+	case AgentToolsUpdateRequestToolsEffectivePolicyAllow:
+		return true
+	case AgentToolsUpdateRequestToolsEffectivePolicyAsk:
+		return true
+	case AgentToolsUpdateRequestToolsEffectivePolicyDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentToolsUpdateRequestToolsManifestTier.
+const (
+	AgentToolsUpdateRequestToolsManifestTierCompressed AgentToolsUpdateRequestToolsManifestTier = "compressed"
+	AgentToolsUpdateRequestToolsManifestTierFull       AgentToolsUpdateRequestToolsManifestTier = "full"
+	AgentToolsUpdateRequestToolsManifestTierInfra      AgentToolsUpdateRequestToolsManifestTier = "infra"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolsUpdateRequestToolsManifestTier enum.
+func (e AgentToolsUpdateRequestToolsManifestTier) Valid() bool {
+	switch e {
+	case AgentToolsUpdateRequestToolsManifestTierCompressed:
+		return true
+	case AgentToolsUpdateRequestToolsManifestTierFull:
+		return true
+	case AgentToolsUpdateRequestToolsManifestTierInfra:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AgentUpdateRequestExecutorKind.
 const (
 	AgentUpdateRequestExecutorKindExternalCli AgentUpdateRequestExecutorKind = "external-cli"
@@ -7813,19 +7897,19 @@ func (e ToolApprovalResponseStatus) Valid() bool {
 
 // Defines values for ToolCallContentState.
 const (
-	Capped  ToolCallContentState = "capped"
-	Emptied ToolCallContentState = "emptied"
-	Full    ToolCallContentState = "full"
+	ToolCallContentStateCapped  ToolCallContentState = "capped"
+	ToolCallContentStateEmptied ToolCallContentState = "emptied"
+	ToolCallContentStateFull    ToolCallContentState = "full"
 )
 
 // Valid indicates whether the value is a known member of the ToolCallContentState enum.
 func (e ToolCallContentState) Valid() bool {
 	switch e {
-	case Capped:
+	case ToolCallContentStateCapped:
 		return true
-	case Emptied:
+	case ToolCallContentStateEmptied:
 		return true
-	case Full:
+	case ToolCallContentStateFull:
 		return true
 	default:
 		return false
@@ -7870,19 +7954,19 @@ func (e ToolCallStatus) Valid() bool {
 
 // Defines values for ToolPolicy.
 const (
-	ToolPolicyAllow ToolPolicy = "allow"
-	ToolPolicyAsk   ToolPolicy = "ask"
-	ToolPolicyDeny  ToolPolicy = "deny"
+	Allow ToolPolicy = "allow"
+	Ask   ToolPolicy = "ask"
+	Deny  ToolPolicy = "deny"
 )
 
 // Valid indicates whether the value is a known member of the ToolPolicy enum.
 func (e ToolPolicy) Valid() bool {
 	switch e {
-	case ToolPolicyAllow:
+	case Allow:
 		return true
-	case ToolPolicyAsk:
+	case Ask:
 		return true
-	case ToolPolicyDeny:
+	case Deny:
 		return true
 	default:
 		return false
@@ -9725,7 +9809,11 @@ type AgentToolsResponseToolsEffectivePolicy string
 type AgentToolsResponseToolsManifestTier string
 
 // AgentToolsUpdateRequest Request body for PUT /api/v1/agents/{id}/tools. Replaces the agent's tool policy configuration. Supports both the current policy format (builtin.policies, a complete map) and the legacy explicit/inherit mode format (builtin.mode + builtin.visible) for backward compatibility. Legacy fields are converted to policy format server-side before persisting.
+// ROUND-TRIP SHAPE (UAT 2026-09-13 D-86): the body of a GET /api/v1/agents/{id}/tools response (AgentToolsResponse — config + tools + agent_type) is ALSO accepted as-is. When the top-level `builtin` is absent and `config.builtin` is present, the server reads the policy map from `config.builtin` (and MCP bindings from `config.mcp`); `tools` and `agent_type` are read-only echoes and are ignored on write. A body carrying neither `builtin` nor `config.builtin` is rejected with 400, never persisted as an empty policy map.
 type AgentToolsUpdateRequest struct {
+	// AgentType Ignored on write. Present so a GET response body round-trips through PUT unchanged (D-86); an agent's type is not editable here. Deliberately NOT an enum: a second copy of the agent-type enum changes oapi-codegen's collision-avoidance constant naming for the whole file and breaks the hand-written pkg/api/generated/fixtures.go.
+	AgentType *string `json:"agent_type,omitempty"`
+
 	// Builtin Builtin tool policy configuration for this agent.
 	Builtin *struct {
 		// Mode Legacy format, retained for one release of transitional compatibility. Ignored outright when a complete policies map is also present (policies always wins). Sent ALONE (no policies), mode does not successfully "build" a working policy on its own any more: under the mandatory coverage-validation model (no default_policy fallback), "explicit" converts visible[] into agent-level "allow" entries for just those names — it does not synthesize a deny-all baseline for every other static builtin tool — and "inherit" produces no per-tool entries at all. Both leave most static builtin tools without an explicit policy entry, so the request is rejected with 400 (a coverage-gap error) unless the global sandbox.tool_policies floor happens to cover every remaining tool. Callers must send a complete policies map to reliably succeed.
@@ -9738,6 +9826,27 @@ type AgentToolsUpdateRequest struct {
 		Visible *[]string `json:"visible,omitempty"`
 	} `json:"builtin,omitempty"`
 
+	// Config Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
+	Config *struct {
+		// Builtin Controls builtin tool visibility for this agent.
+		Builtin *struct {
+			// Policies Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+			Policies map[string]AgentToolsUpdateRequestConfigBuiltinPolicies `json:"policies"`
+		} `json:"builtin,omitempty"`
+
+		// Mcp MCP server bindings for this agent.
+		Mcp *struct {
+			// Servers List of MCP server bindings.
+			Servers *[]struct {
+				// Id MCP server identifier as registered in config.json.
+				Id string `json:"id"`
+
+				// Tools Specific tool names to expose from this server. When absent, all tools from the server are available.
+				Tools *[]string `json:"tools,omitempty"`
+			} `json:"servers,omitempty"`
+		} `json:"mcp,omitempty"`
+	} `json:"config,omitempty"`
+
 	// Mcp MCP server bindings for this agent.
 	Mcp *struct {
 		// Servers List of MCP server bindings.
@@ -9749,6 +9858,21 @@ type AgentToolsUpdateRequest struct {
 			Tools *[]string `json:"tools,omitempty"`
 		} `json:"servers,omitempty"`
 	} `json:"mcp,omitempty"`
+
+	// Tools Ignored on write. Present so a GET response body round-trips through PUT unchanged (D-86); the effective per-tool list is always recomputed by the server.
+	Tools *[]struct {
+		// ConfiguredPolicy The policy as written in the agent's config.
+		ConfiguredPolicy AgentToolsUpdateRequestToolsConfiguredPolicy `json:"configured_policy"`
+
+		// EffectivePolicy The policy actually enforced at LLM-call time after global policy overrides are applied.
+		EffectivePolicy AgentToolsUpdateRequestToolsEffectivePolicy `json:"effective_policy"`
+
+		// ManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via ToolSearch; "infra" = always-callable discovery tool (ToolSearch) that drives the manifest mechanism itself and never appears in the manifest block.
+		ManifestTier AgentToolsUpdateRequestToolsManifestTier `json:"manifest_tier"`
+
+		// Name Canonical tool name.
+		Name string `json:"name"`
+	} `json:"tools,omitempty"`
 }
 
 // AgentToolsUpdateRequestBuiltinMode Legacy format, retained for one release of transitional compatibility. Ignored outright when a complete policies map is also present (policies always wins). Sent ALONE (no policies), mode does not successfully "build" a working policy on its own any more: under the mandatory coverage-validation model (no default_policy fallback), "explicit" converts visible[] into agent-level "allow" entries for just those names — it does not synthesize a deny-all baseline for every other static builtin tool — and "inherit" produces no per-tool entries at all. Both leave most static builtin tools without an explicit policy entry, so the request is rejected with 400 (a coverage-gap error) unless the global sandbox.tool_policies floor happens to cover every remaining tool. Callers must send a complete policies map to reliably succeed.
@@ -9756,6 +9880,18 @@ type AgentToolsUpdateRequestBuiltinMode string
 
 // AgentToolsUpdateRequestBuiltinPolicies defines model for AgentToolsUpdateRequest.Builtin.Policies.
 type AgentToolsUpdateRequestBuiltinPolicies string
+
+// AgentToolsUpdateRequestConfigBuiltinPolicies defines model for AgentToolsUpdateRequest.Config.Builtin.Policies.
+type AgentToolsUpdateRequestConfigBuiltinPolicies string
+
+// AgentToolsUpdateRequestToolsConfiguredPolicy The policy as written in the agent's config.
+type AgentToolsUpdateRequestToolsConfiguredPolicy string
+
+// AgentToolsUpdateRequestToolsEffectivePolicy The policy actually enforced at LLM-call time after global policy overrides are applied.
+type AgentToolsUpdateRequestToolsEffectivePolicy string
+
+// AgentToolsUpdateRequestToolsManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via ToolSearch; "infra" = always-callable discovery tool (ToolSearch) that drives the manifest mechanism itself and never appears in the manifest block.
+type AgentToolsUpdateRequestToolsManifestTier string
 
 // AgentUpdateRequest Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, and soul. Exception (ADR-052 FR-038): locked `type: system` agents (e.g. the Judge) DO accept `soul` mutations — soul/rubric unification means the Judge's soul is its judging rubric, editable while the agent stays otherwise locked. model, timeout_seconds, and max_tool_iterations may be updated on locked agents. heartbeat, heartbeat_enabled, and heartbeat_interval are accepted but ignored on all agents (heartbeat is workspace-scoped, ADR-027). At least one field must be present (minProperties: 1) — empty patches are rejected 400. Fields not applicable to the agent's type (e.g. tools_cfg on subagent_3p) are rejected 400 with code field_not_applicable_to_type.
 type AgentUpdateRequest struct {

@@ -141,6 +141,14 @@ type PreviewGrant struct {
 	ScopeRoot string
 	// Scope is the grant shape.
 	Scope PreviewScope
+	// Entry is, for a bundle grant, the workspace-relative path of the
+	// document the token was minted to open (the url the mint response
+	// returned). It is the one non-asset file a bundle token serves: every
+	// other file under the bundle root must be a web asset by extension
+	// (libraryPreviewBundleAssetExt) or it is not served — UAT 2026-09-13
+	// D-105 found a bundle token minted for one HTML file reading any
+	// sibling document (a .md note) unauthenticated. Empty for a file grant.
+	Entry string
 	// SessionKey identifies the minting session so logout can revoke it. It is
 	// a one-way digest of the presented credential, never the credential
 	// itself — see PreviewSessionKey.
@@ -315,6 +323,17 @@ func (s *PreviewTokenStore) Mint(
 	sessionKey, workspaceID, rawPath string,
 	scope PreviewScope,
 ) (token string, grant PreviewGrant, err error) {
+	return s.MintWithEntry(sessionKey, workspaceID, rawPath, scope, "")
+}
+
+// MintWithEntry is Mint with the bundle's entry document recorded on the
+// grant (PreviewGrant.Entry). entryRel is the workspace-relative path of the
+// document the returned url opens; it is ignored for a file grant.
+func (s *PreviewTokenStore) MintWithEntry(
+	sessionKey, workspaceID, rawPath string,
+	scope PreviewScope,
+	entryRel string,
+) (token string, grant PreviewGrant, err error) {
 	if sessionKey == "" {
 		return "", PreviewGrant{}, ErrPreviewTokenSession
 	}
@@ -374,6 +393,9 @@ func (s *PreviewTokenStore) Mint(
 		Scope:       scope,
 		SessionKey:  sessionKey,
 		ExpiresAt:   s.now().Add(PreviewTokenTTL),
+	}
+	if scope == PreviewScopeBundle {
+		grant.Entry = entryRel
 	}
 	s.byToken[token] = grant
 	if s.bySession[sessionKey] == nil {
