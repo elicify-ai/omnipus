@@ -30,3 +30,6 @@ Checks on `bcc192e78b7ee15b5b361a36b459f36cef979075` are still running/queued. T
 
 
 Bounded source review found no raw-string bypass at the new escaped browser diagnostic sites. `browserLogValue` keeps control characters, quotes and backslashes escaped through the existing console formatter. Persisting annotations are consistent with an unmodeled sanitizer, although annotation JSON cannot prove the CodeQL model. Older raw relay and schema-error logging remain real separate concerns: both existed unchanged in `release/v0.1.1` (relay commit `9fd6c3c1df`, schema commit `32fb66c2d8`). They are not silently marked fixed. No security-check suppression or global logger change was made.
+
+
+The lib-store job progressed past the repaired coverage guard and exposed two concrete browser omissions: Retry lacked the project's explicit `tabIndex`, and the exact client-frame test omitted the ADR-081 `browser_input_offer` contract member. Retry now has `tabIndex={0}`; the test retains exact-set equality and includes the independently defined contract message. The two affected files passed 79 tests, focused lint and independent review. The local Playwright fixture CI step did not execute because the preceding Vitest step failed; local four-case fixture proof remains separate. Final UI build and CI follow-up are pending.

@@ -2374,7 +2374,7 @@ export function BrowserLiveView({
     <div data-input-mode={inputMode} data-input-state={inputMode === 'dedicated' ? inputState : 'websocket'} className={cn('relative flex h-full min-h-0 flex-col bg-[var(--color-primary)]', className)}>
       {inputError && <div role="alert" data-testid="browser-input-error" className="absolute bottom-2 left-2 right-2 z-30 rounded bg-[var(--color-primary)] p-2 text-sm">
         <span>{inputError}</span>{' '}
-        <button type="button" onClick={() => {
+        <button type="button" tabIndex={0} onClick={() => {
           if (inputRef.current?.needsAttachmentRetry) setConnectionAttempt((attempt) => attempt + 1)
           else inputRef.current?.start()
         }}>Retry input</button>
