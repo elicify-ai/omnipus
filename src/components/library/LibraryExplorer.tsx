@@ -716,8 +716,8 @@ export function LibraryExplorer({
       invalidateWorkspaces()
       setNewNoteOpen(false)
       setNewNoteError(undefined)
-      addToast({ message: `Created ${result.value.name}.`, variant: 'success' })
-      goTo(vars.wsId, result.value.path)
+      addToast({ message: `Created ${result.data.name}.`, variant: 'success' })
+      goTo(vars.wsId, result.data.path)
     },
     onError: (err) => {
       setNewNoteError(getLibraryErrorMessage(err, 'Could not create the note'))

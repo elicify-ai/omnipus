@@ -95,10 +95,13 @@ beforeEach(() => {
 describe('LibraryExplorer — New note (UAT #699 / D-115)', () => {
   it('create menu → New note → the file is created with the ABSENT version token, inside the browsed folder, and selected', async () => {
     mockedFetchEntries.mockResolvedValue([makeEntry({ name: 'existing.md', path: 'Q4/existing.md' })])
+    // The REAL LibraryVersionedResult shape ({ data, version }) — the first
+    // draft of this test mirrored a wrong `{ value }` shape from the code
+    // under test and passed against it; typecheck caught it, this did not.
     mockedCreate.mockResolvedValue({
-      value: makeEntry({ name: 'Meeting.md', path: 'Q4/Meeting.md', size: 12 }),
-      versionToken: 'v1:abc',
-    } as never)
+      data: makeEntry({ name: 'Meeting.md', path: 'Q4/Meeting.md', size: 12 }),
+      version: 'v1:abc',
+    })
     const onAddressChange = vi.fn()
     render(
       <QueryClientProvider client={makeClient()}>
