@@ -9135,6 +9135,29 @@ paths:
           for links, backlinks and neighbourhood; ignored for unresolved and
           orphans, which are collection-wide.
         example: "architecture/sandboxing.md"
+      - name: paths
+        in: query
+        required: false
+        schema:
+          type: array
+          items:
+            type: string
+            minLength: 1
+          minItems: 1
+        style: form
+        explode: true
+        description: >
+          Collection-relative paths of SEVERAL notes whose outbound links are
+          wanted in one answer (UAT D-135). Only valid with kind=links, and
+          mutually exclusive with path — a caller sends one or the other. The
+          response is the UNION of every listed note's outbound edges; each
+          edge still names its own from_path, and source_path is absent
+          because the query is not about any single note. A caller rendering
+          many rows (a base view's relation cells) sends this instead of one
+          request per row, which is what tripped the gateway's own rate
+          limiter. Bounded: at most 64 paths per query, refused up front with
+          a 400 naming the cap when exceeded.
+        example: "notes/a.md"
       - name: hops
         in: query
         required: false

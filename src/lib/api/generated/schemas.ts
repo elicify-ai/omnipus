@@ -8255,6 +8255,11 @@ Every query is bounded by hop count and node count (FR-054) and reports its own 
         schema: z.string().optional(),
       },
       {
+        name: "paths",
+        type: "Query",
+        schema: z.array(z.string().min(1)).min(1).optional(),
+      },
+      {
         name: "hops",
         type: "Query",
         schema: z.number().int().gte(1).optional(),

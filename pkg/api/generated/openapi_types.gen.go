@@ -20000,6 +20000,9 @@ type GetKnowledgeGraphParams struct {
 	// Path Collection-relative path of the note the query is about. Required for links, backlinks and neighbourhood; ignored for unresolved and orphans, which are collection-wide.
 	Path *string `form:"path,omitempty" json:"path,omitempty"`
 
+	// Paths Collection-relative paths of SEVERAL notes whose outbound links are wanted in one answer (UAT D-135). Only valid with kind=links, and mutually exclusive with path — a caller sends one or the other. The response is the UNION of every listed note's outbound edges; each edge still names its own from_path, and source_path is absent because the query is not about any single note. A caller rendering many rows (a base view's relation cells) sends this instead of one request per row, which is what tripped the gateway's own rate limiter. Bounded: at most 64 paths per query, refused up front with a 400 naming the cap when exceeded.
+	Paths *[]string `form:"paths,omitempty" json:"paths,omitempty"`
+
 	// Hops Maximum hops for a neighbourhood query. Clamped to the server bound; the value actually used is echoed as hop_limit_applied.
 	Hops *int `form:"hops,omitempty" json:"hops,omitempty"`
 

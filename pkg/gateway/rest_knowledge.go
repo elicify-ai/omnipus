@@ -467,6 +467,12 @@ func (a *restAPI) allowKnowledgeRetrieval(w http.ResponseWriter, workspaceID str
 // GET /library/{workspace_id}/knowledge/graph
 // ---------------------------------------------------------------------------
 
+// knowledgeGraphMaxPaths bounds the multi-path kind=links query (UAT D-135,
+// contracts/openapi.yaml's `paths` parameter). 64 comfortably covers the
+// SPA-side row cap (COLLECTION_LINK_ROW_QUERY_CAP, 40) while still refusing
+// the "send the whole collection" shape up front rather than walking it.
+const knowledgeGraphMaxPaths = 64
+
 func (a *restAPI) handleKnowledgeGraph(w http.ResponseWriter, r *http.Request, workspaceID string) {
 	q := r.URL.Query()
 	collectionID := strings.TrimSpace(q.Get("collection_id"))
@@ -485,10 +491,33 @@ func (a *restAPI) handleKnowledgeGraph(w http.ResponseWriter, r *http.Request, w
 		jsonErr(w, http.StatusBadRequest, "invalid path")
 		return
 	}
+	// UAT D-135: `paths` — several notes whose outbound links are wanted in
+	// ONE answer. Valid for kind=links only, and mutually exclusive with
+	// `path`: an answer that silently meant "path plus everything in paths"
+	// would be a third semantics nobody asked for.
+	rawPaths := q["paths"]
+	if len(rawPaths) > 0 {
+		if kind != gen.KnowledgeGraphResponseKindLinks {
+			jsonErr(w, http.StatusBadRequest,
+				"paths is only valid with kind=links — the other kinds answer the whole collection or a single path")
+			return
+		}
+		if strings.TrimSpace(q.Get("path")) != "" {
+			jsonErr(w, http.StatusBadRequest,
+				"send path or paths, one or the other — path answers one note, paths answers several")
+			return
+		}
+		if len(rawPaths) > knowledgeGraphMaxPaths {
+			jsonErr(w, http.StatusBadRequest, fmt.Sprintf(
+				"paths names %d notes; the limit is %d — split the request into batches of at most %d",
+				len(rawPaths), knowledgeGraphMaxPaths, knowledgeGraphMaxPaths))
+			return
+		}
+	}
 	needsPath := kind == gen.KnowledgeGraphResponseKindLinks ||
 		kind == gen.KnowledgeGraphResponseKindBacklinks ||
 		kind == gen.KnowledgeGraphResponseKindNeighbourhood
-	if needsPath && notePath == "" {
+	if needsPath && notePath == "" && len(rawPaths) == 0 {
 		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("path is required for kind %q", kind))
 		return
 	}
@@ -500,7 +529,10 @@ func (a *restAPI) handleKnowledgeGraph(w http.ResponseWriter, r *http.Request, w
 		Edges:        []gen.KnowledgeGraphEdge{},
 		Skipped:      []gen.KnowledgeGraphSkip{},
 	}
-	if needsPath {
+	// A multi-path links query is about no single note, so source_path —
+	// "the note the query was about" — stays absent (the contract's own
+	// wording for the `paths` parameter); each edge names its own from_path.
+	if needsPath && len(rawPaths) == 0 {
 		p := notePath
 		resp.SourcePath = &p
 	}
@@ -547,6 +579,29 @@ func (a *restAPI) handleKnowledgeGraph(w http.ResponseWriter, r *http.Request, w
 
 	switch kind {
 	case gen.KnowledgeGraphResponseKindLinks:
+		// UAT D-135 multi-path arm: the union of every listed note's outbound
+		// edges, de-duplicated on input so a repeated path is one row, not
+		// two identical edges.
+		if len(rawPaths) > 0 {
+			seen := make(map[string]struct{}, len(rawPaths))
+			for _, raw := range rawPaths {
+				p, err := library.CleanRelPath(raw)
+				if err != nil || p == "" {
+					jsonErr(w, http.StatusBadRequest, fmt.Sprintf("invalid path in paths: %q", raw))
+					return
+				}
+				if _, dup := seen[p]; dup {
+					continue
+				}
+				seen[p] = struct{}{}
+				nodes.add(p)
+				for _, l := range g.Links(p) {
+					resp.Edges = append(resp.Edges, knowledgeEdge(l))
+					nodes.add(knowledgeEdgeTarget(l))
+				}
+			}
+			break
+		}
 		nodes.add(notePath)
 		for _, l := range g.Links(notePath) {
 			resp.Edges = append(resp.Edges, knowledgeEdge(l))
