@@ -157,3 +157,49 @@ it('surfaces fatal state for the same peer even when a newer control overtook it
   expect(s.machine.state).toBe('failed')
   expect(s.pc.close).toHaveBeenCalledTimes(1)
 })
+
+// Control-ordering contract: pause immediately, use an identity the socket has
+// actually seen, and recover without retiring the separate media connection.
+it.each(['createOffer', 'setLocalDescription', 'gather'] as const)('acknowledges control during unsignaled %s and negotiates a fresh attempt', async (stage) => {
+  const s = setup()
+  let release!: () => void
+  const pending = new Promise<void>((resolve) => { release = resolve })
+  if (stage === 'createOffer') s.pc.createOffer.mockImplementationOnce(async () => { await pending; return { type: 'offer', sdp: 'retired' } })
+  if (stage === 'setLocalDescription') s.pc.setLocalDescription.mockImplementationOnce(() => pending)
+  if (stage === 'gather') {
+    s.pc.iceGatheringState = 'gathering'
+    Object.assign(s.pc, { addEventListener: vi.fn(), removeEventListener: vi.fn() })
+  }
+  s.machine.start()
+  await Promise.resolve(); await Promise.resolve()
+  expect(s.offer).not.toHaveBeenCalled()
+  expect(s.machine.beginControl()).toBe(1)
+  expect(s.machine.controlIdentity).toEqual({ input_epoch: 0, control_epoch: 1 })
+  expect(s.machine.applyControlAck({ type: 'browser_input_control_ack', session_id: 'session', input_epoch: 1, control_epoch: 1, ok: true })).toBe(false)
+  s.pc.iceGatheringState = 'complete'
+  expect(s.machine.applyControlAck({ type: 'browser_input_control_ack', session_id: 'session', input_epoch: 0, control_epoch: 1, ok: true })).toBe(true)
+  release()
+  await vi.waitFor(() => expect(s.offer.mock.calls).toEqual([[{ sdp: 'offer-sdp', offer_id: 2, input_epoch: 2, control_epoch: 1 }]]))
+  s.machine.applyAnswer({ type: 'browser_input_answer', session_id: 'session', offer_id: 1, input_epoch: 1, control_epoch: 0, sdp: 'retired' })
+  expect(s.pc.setRemoteDescription).not.toHaveBeenCalled()
+  s.machine.applyAnswer({ type: 'browser_input_answer', session_id: 'session', offer_id: 2, input_epoch: 2, control_epoch: 1, sdp: 'fresh' })
+  await vi.waitFor(() => expect(s.machine.state).toBe('ready'))
+  s.machine.stop()
+})
+
+it.each(['answer-first', 'ack-first'] as const)('preserves a signaled pending input peer when control arrives: %s', async (order) => {
+  const s = setup(); s.machine.start()
+  await vi.waitFor(() => expect(s.offer).toHaveBeenCalledTimes(1))
+  s.machine.beginControl()
+  expect(s.machine.controlIdentity).toEqual({ input_epoch: 1, control_epoch: 1 })
+  expect(s.pc.close).not.toHaveBeenCalled()
+  const answer = () => s.machine.applyAnswer({ type: 'browser_input_answer', session_id: 'session', offer_id: 1, input_epoch: 1, control_epoch: 0, sdp: 'answer' })
+  const ack = () => expect(s.machine.applyControlAck({ type: 'browser_input_control_ack', session_id: 'session', input_epoch: 1, control_epoch: 1, ok: true })).toBe(true)
+  if (order === 'answer-first') { answer(); await Promise.resolve(); await Promise.resolve(); expect(s.machine.sendInput(s.input)).toBe(false); ack() }
+  else { ack(); expect(s.machine.sendInput(s.input)).toBe(false); answer() }
+  await vi.waitFor(() => expect(s.machine.state).toBe('ready'))
+  expect(s.offer).toHaveBeenCalledTimes(1)
+  expect(s.machine.sendInput(s.input)).toBe(true)
+  expect(s.sent('input-hover')[0]).toMatchObject({ input_epoch: 1, control_epoch: 1, hover_seq: 1 })
+  s.machine.stop()
+})

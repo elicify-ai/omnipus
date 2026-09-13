@@ -21,6 +21,7 @@ type browserDedicatedInput struct {
 	epoch, offer, control, applied int
 	peer                           *webrtc.DedicatedInputPeer
 	cancel                         context.CancelFunc
+	controlChanged                 chan struct{}
 }
 
 func (s *browserConnState) dedicatedInput() *browserDedicatedInput {
@@ -43,6 +44,7 @@ func (s *browserConnState) setDedicatedInput(enabled bool) {
 func (d *browserDedicatedInput) close() {
 	d.mu.Lock()
 	d.closed = true
+	d.notifyControlChangedLocked()
 	if d.cancel != nil {
 		d.cancel()
 	}
@@ -146,38 +148,34 @@ func (h *BrowserWSHandler) dispatchDedicatedInputOffer(wc *browserWSConn, state 
 			cancel()
 			return
 		}
-		h.mediaLifecycleMu.RLock()
-		h.mediaConnMu.Lock()
-		closed := h.mediaClosed
-		h.mediaConnMu.Unlock()
-		if closed {
-			h.mediaLifecycleMu.RUnlock()
-			sendState("Browser transport is closed.")
+		peer, err := d.installPeer(ctx, f.InputEpoch, f.OfferId, func(control int) (*webrtc.DedicatedInputPeer, error) {
+			h.mediaLifecycleMu.RLock()
+			defer h.mediaLifecycleMu.RUnlock()
+			h.mediaConnMu.Lock()
+			closed := h.mediaClosed
+			h.mediaConnMu.Unlock()
+			if closed {
+				return nil, errors.New("Browser transport is closed.")
+			}
+			return webrtc.NewDedicatedInputPeer(route, webrtc.Config{StunServer: cfg.Tools.Browser.WebRTCStunServer, MediaUDPMux: h.sharedMediaUDPMux(cfg), MediaTCPMux: h.sharedMediaTCPMux(cfg), PublicIPs: resolveWebRTCPublicIPs(cfg)}, f.InputEpoch, control, func(origin context.Context, in generated.BrowserInputFrame) {
+				raw, err := json.Marshal(in)
+				if err == nil {
+					sink(origin, viewer, raw)
+				}
+			}, func(raw []byte) error {
+				message, _ := ValidateInboundFrameJSON("BrowserInputFrame", raw)
+				if message != "" {
+					return errors.New(message)
+				}
+				return nil
+			}, sendState), nil
+		})
+		if err != nil {
+			sendState(err.Error())
 			cancel()
 			return
 		}
-		peer := webrtc.NewDedicatedInputPeer(route, webrtc.Config{StunServer: cfg.Tools.Browser.WebRTCStunServer, MediaUDPMux: h.sharedMediaUDPMux(cfg), MediaTCPMux: h.sharedMediaTCPMux(cfg), PublicIPs: resolveWebRTCPublicIPs(cfg)}, f.InputEpoch, f.ControlEpoch, func(origin context.Context, in generated.BrowserInputFrame) {
-			raw, err := json.Marshal(in)
-			if err == nil {
-				sink(origin, viewer, raw)
-			}
-		}, func(raw []byte) error {
-			message, _ := ValidateInboundFrameJSON("BrowserInputFrame", raw)
-			if message != "" {
-				return errors.New(message)
-			}
-			return nil
-		}, sendState)
-		h.mediaLifecycleMu.RUnlock()
 		defer func() { peer.Close(); <-peer.Closed() }()
-		d.mu.Lock()
-		if source.Err() != nil || d.closed || d.epoch != f.InputEpoch || d.control != f.ControlEpoch {
-			d.mu.Unlock()
-			peer.Close()
-			return
-		}
-		d.peer = peer
-		d.mu.Unlock()
 		answer, err := peer.Answer(ctx, f.Sdp)
 		if err != nil {
 			sendState("Input negotiation failed. Retry input.")
@@ -258,8 +256,21 @@ func (h *BrowserWSHandler) dispatchDedicatedControl(wc *browserWSConn, state *br
 	var source context.Context
 	var done <-chan struct{}
 	var err error
+	var retired *webrtc.DedicatedInputPeer
 	if peer != nil {
 		source, done, err = peer.PauseControl(next)
+		if err != nil {
+			// An admitted replacement may still be joining the canceled old
+			// peer. Its retirement belongs to this control too; never cancel
+			// the new offer merely because the old queue cannot pause again.
+			retiredSource := peer.RetiredSource()
+			if retiredSource.Err() != nil {
+				retired = peer
+				peer.Close()
+				source, done, err = retiredSource, peer.Closed(), nil
+				peer = nil
+			}
+		}
 	}
 	d.mu.Unlock()
 	if err != nil {
@@ -299,6 +310,13 @@ func (h *BrowserWSHandler) dispatchDedicatedControl(wc *browserWSConn, state *br
 				return
 			}
 		}
+		if retired != nil {
+			d.mu.Lock()
+			if d.peer == retired {
+				d.peer = nil
+			}
+			d.mu.Unlock()
+		}
 		ok := runBrowserInputControl(ctx, func(operation context.Context) {
 			switch typ {
 			case "browser_input":
@@ -332,10 +350,13 @@ func (h *BrowserWSHandler) dispatchDedicatedControl(wc *browserWSConn, state *br
 			return
 		}
 		if ok {
-			d.applied = next
 			if d.control == next && peer != nil {
 				err = peer.ResumeControl(next)
 				ok = err == nil
+			}
+			if ok {
+				d.applied = next
+				d.notifyControlChangedLocked()
 			}
 		}
 		d.mu.Unlock()

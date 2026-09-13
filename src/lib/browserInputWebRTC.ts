@@ -18,6 +18,7 @@ export class BrowserInputWebRTCSession {
   private hover: RTCDataChannel | null = null
   private iceServers: RTCIceServer[] = []
   private epoch = 0
+  private signaledEpoch = 0
   private control = 0
   private acknowledgedControl = 0
   private offeredControl = 0
@@ -34,7 +35,7 @@ export class BrowserInputWebRTCSession {
 
   constructor(private readonly options: Options) {}
   get awaitingControl(): boolean { return this.control !== this.acknowledgedControl }
-  resetAttachment(): void { this.stop(); this.epoch = this.control = this.acknowledgedControl = 0 }
+  resetAttachment(): void { this.stop(); this.epoch = this.signaledEpoch = this.control = this.acknowledgedControl = 0 }
   get state(): BrowserInputState { return this.currentState }
   setICEServers(servers: RTCIceServer[]): void { this.iceServers = servers }
 
@@ -71,9 +72,9 @@ export class BrowserInputWebRTCSession {
         if (this.pc === pc && ['failed', 'closed', 'disconnected'].includes(pc.connectionState)) this.fail('Input connection lost. Retry input.')
       }
       const offer = await pc.createOffer()
-      if (this.pc !== pc) return
+      if (this.pc !== pc || this.epoch !== epoch) return
       await pc.setLocalDescription(offer)
-      if (this.pc !== pc) return
+      if (this.pc !== pc || this.epoch !== epoch) return
       if (pc.iceGatheringState !== 'complete') await new Promise<void>((resolve) => {
         const done = () => { pc.removeEventListener('icegatheringstatechange', changed); this.cancelGather = null; resolve() }
         const changed = () => { if (pc.iceGatheringState === 'complete') done() }
@@ -81,8 +82,12 @@ export class BrowserInputWebRTCSession {
         pc.addEventListener('icegatheringstatechange', changed)
         changed()
       })
-      if (this.pc !== pc) return
-      if (!pc.localDescription?.sdp || !this.options.sendOffer({ sdp: pc.localDescription.sdp, offer_id: this.epoch, input_epoch: this.epoch, control_epoch: this.offeredControl })) this.fail('Input offer was not sent. Retry input.')
+      if (this.pc !== pc || this.epoch !== epoch) return
+      if (!pc.localDescription?.sdp || !this.options.sendOffer({ sdp: pc.localDescription.sdp, offer_id: epoch, input_epoch: epoch, control_epoch: this.offeredControl })) {
+        this.fail('Input offer was not sent. Retry input.')
+        return
+      }
+      this.signaledEpoch = epoch
     } catch {
       if (this.epoch !== epoch || (attemptedPeer !== null && this.pc !== attemptedPeer)) return
       this.fail('Could not negotiate the input connection. Retry input.')
@@ -112,22 +117,27 @@ export class BrowserInputWebRTCSession {
     if (!Number.isSafeInteger(this.control + 1)) { this.fail('Input control identity exhausted.'); return null }
     this.control++
     this.reliableSequence = this.hoverSequence = this.barrier = 0
-    if (this.pc && !this.answered) this.cleanup()
+    // A local attempt has no server identity until its offer is on the socket.
+    // Keep signaled peers alive: the original answer still completes their SDP.
+    if (this.pc && this.signaledEpoch !== this.epoch) this.cleanup()
     this.held.clear() // Server retires and releases the preceding control epoch.
     this.change('paused')
     this.armTimeout('Browser control acknowledgment timed out. Retry input.')
     return this.control
   }
 
-  get controlIdentity(): BrowserInputControl { return { input_epoch: this.epoch, control_epoch: this.control } }
+  get controlIdentity(): BrowserInputControl { return { input_epoch: this.signaledEpoch, control_epoch: this.control } }
 
   applyControlAck(frame: BrowserInputControlAckFrame): boolean {
-    if (frame.input_epoch !== this.epoch || frame.control_epoch !== this.control || this.control === this.acknowledgedControl) return false
+    if (frame.input_epoch !== this.signaledEpoch || frame.control_epoch !== this.control || this.control === this.acknowledgedControl) return false
     if (!frame.ok) { this.fail(frame.reason || 'Browser control failed. Retry input.'); return true }
     this.acknowledgedControl = this.control
     this.clearTimer()
     if (!this.pc && this.wanted) this.start()
-    else this.updateReady()
+    else if (this.pc) {
+      this.armTimeout('Input connection timed out. Retry input.')
+      this.updateReady()
+    }
     return true
   }
 
