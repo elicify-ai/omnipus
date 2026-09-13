@@ -24,6 +24,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchLibraryEntries: vi.fn(),
     fetchLibraryContent: vi.fn(),
     createLibraryTextFile: vi.fn(),
+    uploadLibraryFiles: vi.fn(),
     fetchKnowledgeBaseInfo: vi.fn(),
     fetchKnowledgeOutline: vi.fn(),
     fetchKnowledgeGraph: vi.fn(),
@@ -39,11 +40,12 @@ import {
   fetchLibraryEntries,
   fetchLibraryContent,
   createLibraryTextFile,
+  uploadLibraryFiles,
   fetchKnowledgeBaseInfo,
   fetchKnowledgeOutline,
   ApiError,
 } from '@/lib/api'
-import { LibraryExplorer } from './LibraryExplorer'
+import { LibraryExplorer, uploadOutcomeMessage } from './LibraryExplorer'
 
 const mockedFetchWorkspaces = vi.mocked(fetchLibraryWorkspaces)
 const mockedFetchEntries = vi.mocked(fetchLibraryEntries)
@@ -171,5 +173,41 @@ describe('LibraryExplorer — New note (UAT #699 / D-115)', () => {
     expect(screen.queryByTestId('knowledge-create-note-unavailable')).not.toBeInTheDocument()
     fireEvent.click(button)
     expect(await screen.findByTestId('library-new-note-dialog')).toBeInTheDocument()
+  })
+})
+
+// UAT D-124 (2026-09-13): the upload toast never said a file was renamed.
+describe('LibraryExplorer — D-124 the upload toast names a renamed file', () => {
+  it('uploadOutcomeMessage states each rename, and stays terse when nothing was renamed', () => {
+    expect(uploadOutcomeMessage(['a.png'], ['a.png'])).toBe('Uploaded 1 file.')
+    expect(uploadOutcomeMessage(['a.png', 'b.png'], ['a.png', 'b.png'])).toBe('Uploaded 2 files.')
+    expect(uploadOutcomeMessage(['photo.png'], ['photo (2).png'])).toBe(
+      'Uploaded 1 file. photo.png was saved as photo (2).png because that name was already taken.',
+    )
+    expect(uploadOutcomeMessage(['a.png', 'b.png'], ['a (1).png', 'b (1).png'])).toMatch(
+      /a\.png was saved as a \(1\)\.png; b\.png was saved as b \(1\)\.png because those names were already taken\./,
+    )
+  })
+
+  it('the toast after a duplicate upload names the new file name', async () => {
+    mockedFetchEntries.mockResolvedValue([])
+    vi.mocked(uploadLibraryFiles).mockResolvedValue({
+      entries: [makeEntry({ name: 'photo (2).png', path: 'photo (2).png', mime: 'image/png', is_text_editable: false })],
+    } as never)
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <LibraryExplorer initialWorkspaceId="ws-1" />
+      </QueryClientProvider>,
+    )
+    await waitFor(() => expect(screen.getByTestId('library-upload-input')).toBeInTheDocument())
+    const file = new File(['data'], 'photo.png', { type: 'image/png' })
+    fireEvent.change(screen.getByTestId('library-upload-input'), { target: { files: [file] } })
+    await waitFor(() =>
+      expect(
+        useUiStore
+          .getState()
+          .toasts.some((t) => t.message === 'Uploaded 1 file. photo.png was saved as photo (2).png because that name was already taken.'),
+      ).toBe(true),
+    )
   })
 })

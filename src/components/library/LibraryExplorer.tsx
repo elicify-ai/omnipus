@@ -209,6 +209,27 @@ function baseNameOf(filePath: string): string {
   return cut === -1 ? filePath : filePath.slice(cut + 1)
 }
 
+/**
+ * The upload toast (UAT D-124, 2026-09-13). A duplicate upload is correctly
+ * auto-suffixed server-side (`photo (1).png`), but the toast said only
+ * "Uploaded 1 file." — the reader who uploaded `photo.png` found out it was
+ * now `photo (2).png` only by reading the list. Renames are matched by
+ * position: the server returns one entry per uploaded file, in order.
+ * Exported for the test; pure.
+ */
+export function uploadOutcomeMessage(fileNames: readonly string[], savedNames: readonly string[]): string {
+  const count = savedNames.length
+  let message = `Uploaded ${count} file${count === 1 ? '' : 's'}.`
+  const renamed: string[] = []
+  for (let i = 0; i < Math.min(fileNames.length, savedNames.length); i++) {
+    if (fileNames[i] !== savedNames[i]) renamed.push(`${fileNames[i]} was saved as ${savedNames[i]}`)
+  }
+  if (renamed.length > 0) {
+    message += ` ${renamed.join('; ')} because ${renamed.length === 1 ? 'that name was' : 'those names were'} already taken.`
+  }
+  return message
+}
+
 export function LibraryExplorer({
   initialWorkspaceId,
   address,
@@ -639,7 +660,10 @@ export function LibraryExplorer({
       invalidateWorkspaces()
       setUploadError(undefined)
       addToast({
-        message: `Uploaded ${data.entries.length} file${data.entries.length === 1 ? '' : 's'}.`,
+        message: uploadOutcomeMessage(
+          vars.files.map((f) => f.name),
+          data.entries.map((e) => e.name),
+        ),
         variant: 'success',
       })
     },
