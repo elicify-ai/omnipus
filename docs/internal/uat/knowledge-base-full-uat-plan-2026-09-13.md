@@ -270,3 +270,100 @@ Defect register: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat/evidenc
 ## Appendix C — Runbook for the harness
 
 1. Operator runs Section 0. 2. Operator drives Phase 1 (B-01…B-33, Q-01…Q-18) sequentially, saving each tool-call card. 3. When B-25 is done, T1 and T3 start in parallel; when B-23 is done, T5 starts; T2 and T4 start after B-30. Each tester is one subagent with one persona and its rows. 4. Operator runs X-01…X-06 interleaved. 5. Orchestrator merges the six reports into `DEFECTS.md` and the summary table, and hands both to the founder.
+
+---
+
+## Delta 1 (2026-09-13, same day) — gaps found on self-review
+
+The first cut missed the following. Each row was checked against the code before being added (facts in brackets).
+
+### 1F. Builder — schema evolution, templates, property types, tasks, out-of-band writes
+
+| ID | Prompt | Expected | Oracle |
+|---|---|---|---|
+| B-34 | `knowledge_describe detail: full` for `project` and list **every property type the schema layer accepts**; then create record type `kitchen_sink` with one property of each type (text, enum, date, checkbox, integer, decimal, list, relation, derived/expression, plus any others `describe` names) | `create_record_type` | the type list in evidence is the authoritative enumeration for T3's cell-editing matrix; any type not editable in the UI is a GAP row, not a defect |
+| B-35 | Evolve `project` with `edit_record_type` [takes a whole `definition`]: add property `risk` enum; rename `priority` → `prio`; remove `tags`; add an enum value; remove an enum value still in use | edit accepted or refused per case | records with the removed enum value are reported (integrity), never silently rewritten; views referencing `priority` show `view-refusal` with remedy |
+| B-36 | Reorder enum values of `status` | accepted | existing rows unchanged; board columns re-order |
+| B-37 | Create `.omnipus-vault/templates/meeting.md` via `bash`, then `knowledge_edit create template: meeting` | template applied [FR-047a: templates live under `.omnipus-vault/templates/`] | body and frontmatter from template; id minted |
+| B-38 | Derived/expression property [FR-140..148]: define `days_open` = today − start; change `start` | `set_property` on `start` | derived value in table updates; writing `days_open` refused (FR-046) |
+| B-39 | Notes with `- [ ]` / `- [x]` task lines; `knowledge_find kind: task` [KindTask exists] | tasks listed with done state | count matches |
+| B-40 | Write a note **directly with `bash`** (bypassing knowledge tools), then `knowledge_find words:` for it; edit it with `bash`; delete it with `bash` | find sees create/edit/delete without restart | if not, the index refresh path is a defect (S2) |
+| B-41 | Create a note with malformed frontmatter (unclosed `---`) and one with a YAML scalar where a list is expected | both indexed as notes with problems reported | reader shows `knowledge-outline-frontmatter-malformed`; find `problems[]` names the file |
+| B-42 | `delete_view` on a view an embed references | deleted | Overview shows `kb-base-embed-missing-view` |
+| B-43 | Second vault in the same workspace (`Second Vault`, U-14): create a record type of the same name there; `knowledge_find` without a collection argument [find has **no** `collection` arg] | scope is the turn's workspace; result either unions both collections with provenance or names the ambiguity | never silently one of the two (I4 multi-collection residual) |
+| B-44 | Mounted vault: Builder calls `request_mount` for the founder copy path, then `knowledge_list type:` there | mount created (policy `allow`), reads work | writes to the founder copy are **out of bounds** for this campaign — Builder must refuse the Operator's prompt to edit it, and that refusal is itself PASS |
+
+### 1G. Builder — query completeness
+
+| ID | Query | Expected |
+|---|---|---|
+| Q-19 | `select: [title, status, file.mtime, file.size, file.backlinks]` [16 `file.*` virtuals: author, backlinks, ctime, embeds, ext, file, folder, links, modified, mtime, mtimes, name, path, properties, size, tags] | projection only; virtuals correct |
+| Q-20 | `sort: file.backlinks desc` | ordering matches reader backlink counts |
+| Q-21 | `filter` on each operator the engine exposes (equals, not, contains, gt/lt on date and decimal, in, is-empty) | documented per operator; unknown operator refused naming the operator |
+| Q-22 | `detail: full` vs default | full carries body excerpt; default does not |
+| Q-23 | Cursor paging while the Builder inserts a record mid-walk | no duplicate, no skip within a page; `next` remains valid or is refused with reason |
+| Q-24 | `view:` referencing a `formula.<name>` property [`formula.` namespace, FR-018c] | formula column present; unknown formula → `RejectViewUnknownFormula` |
+| Q-25 | `grep` caps [MaxFiles 50 000, MaxMatches 1 000, MaxDepth 32, Deadline 10 s, OutputBytes]: pattern `.` over the founder copy (766 notes + attachments) | `truncated: true` with `truncated_reason` ∈ {matches, deadline, output, …}; counts honest |
+| Q-26 | `grep` with a `.gitignore` in the vault ignoring `Assets/`; a symlink to `/etc` | ignored dir pruned and counted; symlink never followed |
+| Q-27 | `grep` on a 200 KB single-line file | line windowed, not dropped |
+| Q-28 | `knowledge_find` on the founder copy: `type:` of an imported schema, `join:` across its imported relation | imported schemas queryable exactly as built ones |
+
+### 2G. Testers — previews and editing that the first cut skipped
+
+| ID | Actor | Steps | Expected |
+|---|---|---|---|
+| U-51 | T1 | PDF **edit mode**: `library-pdf-mode-edit`; `library-pdf-add-signature` → draw on `library-pdf-signature-canvas`, `-clear`, `-insert` on page 2; `-signature-chip-*`; `-signature-remove-*`; `library-pdf-save`; then Download and open the saved file | signature visible on page 2 of the downloaded PDF (visual); `library-pdf-no-fields-note` on a form-less PDF; `-field-probe-error` never on a valid PDF |
+| U-52 | T1 | PDF `#page=abc`, `#page=0`, `#page=999` embeds (Builder writes notation) | malformed → link with reason; out-of-range → error mount, not blank |
+| U-53 | T1 | `library-thumb-*` for images in rows; tiles view with an image property | thumbnails render; broken image shows a placeholder, not a broken icon |
+| U-54 | T2 | Edit `csv`, `json`, `yaml`, `mmd` as text; save; invalid JSON/YAML | grammar highlighting; mermaid re-renders after save; invalid content saved as-is with a visible warning (no silent repair) |
+| U-55 | T2 | Edit `Projects.base` as **raw text**; introduce invalid YAML; then fix | `base-preview-unloadable` / `-raw` with reason; fix restores tabs |
+| U-56 | T2 | Move a note to **another workspace** (`library-transfer-dialog-workspace`), and into a mount (`-mount-warning`) | warning shown; wikilinks from the old vault now unresolved and visibly so |
+| U-57 | T2 | Download button and versioned download; cancel a large download mid-way | file downloads; cancel does not surface as an error toast (AbortError swallowed by design) |
+| U-58 | T2 | Delete the `.omnipus-vault` folder from the UI (hidden toggle on) | KnowledgePanel drops to "not a knowledge base" state; no crash; records stop indexing; restore by Builder re-creating |
+| U-59 | T2 | Mount a folder that has a **`.obsidian` marker but no `.omnipus-vault`** | detected as a vault; records/views absent until `records import-obsidian`; UI states that |
+| U-60 | T2 | Add a mount whose folder contains skills | `library-mount-skills-disclosure-dialog` and `-threshold-warning` |
+| U-61 | T3 | Board view: confirm **no drag-and-drop** exists [no draggable in production viewparts] — status changes only via cell edit | GAP row citing this appendix, unless DnD appears, then it is tested |
+| U-62 | T3 | Local filter/sort inside an embedded view | GAP (EMB-047 not done); any control that appears to filter but does not is an S3 |
+| U-63 | T3 | Calendar: navigate months; a record with no `start`; two records same day | unscheduled records listed or counted; no overlap hides a record |
+| U-64 | T3 | Summary/trend/breakdown/chart/crosstab numbers vs Q-07/Q-19 totals | equal; chart axes labelled |
+| U-65 | T4 | Search across **two vaults** in one workspace | statement names which collection each hit is from, or the bar scopes to one and says so |
+| U-66 | T4 | Search the founder copy (766 notes): time to first result; `-coverage-so-far` while indexing | < 3 s after index; honesty rows during index |
+| U-67 | T1 | Founder-copy regression pass: open 10 real `.base` files, 10 notes with embeds, 5 notes with ```` ```mermaid ```` fences, 3 PDFs, 3 HTML, the `Home.md` dashboard | every one renders as before the branch; fences draw; each screenshot compared with the same note in Obsidian (founder supplies) |
+| U-68 | T1 | Pop-out deep link `/#/library?workspace=…&path=…&folder=…`; browser back/forward; F5 | state restored; no duplicate panels |
+| U-69 | T5 | Keyboard only: Tab through create menu and dialogs; Esc closes; Enter confirms | focus visible; no trap |
+| U-70 | T5 | Dark theme visual check on every preview kind (default theme) | no unreadable contrast; PDF/HTML frames not white-flashing beyond first paint |
+
+### 2H. Permissions, sandbox, audit (Operator + a second agent)
+
+| ID | Steps | Expected |
+|---|---|---|
+| P-01 | Create agent **UAT Asker** with `knowledge_edit: ask`; prompt it to set a property | `tool_approval_required` card in chat; approve → write happens; decline → no write, agent told |
+| P-02 | Create agent **UAT Denied** with `knowledge_edit: deny`, `knowledge_read: allow` | read works; write refused with the policy named; audit row `decision=deny` |
+| P-03 | Builder asked to write a note **outside** its workspace and outside any mount | refused by the path guard; audit row; no file |
+| P-04 | Builder asked to `git commit` inside the workspace (evidence repo guard) | denied (`git_evidence_sandbox_block`) and the denial is in the **audit trail**, not only the log (fix 3) |
+| P-05 | Builder repeats a failing command with a changing description | circuit breaker trips at 3 (notice) and 6 (refusal) (fix 1) |
+| P-06 | `sandbox.mode: off` on a copy of the instance (Operator, separate home) | god-mode banner; same knowledge scenarios still governed by tool policy |
+
+### 2I. Lifecycle, persistence, CLI
+
+| ID | Steps | Expected |
+|---|---|---|
+| R-01 | Restart the UAT gateway mid-campaign (after B-30) | index rebuilt or reloaded; id counters continue (`PRJ-0007`, not `PRJ-0001`); trash intact; views intact; version tokens still valid or 409 with a fresh token |
+| R-02 | Two Builders (same agent, two chats) edit the same record concurrently | one wins, one gets a conflict; never a merged corruption (G-series) |
+| R-03 | `records stamp-ids --dry-run` on the founder copy while the gateway is running | lock coordination: CLI waits or the tool reports a busy lock; never both writing |
+| C-01 | `records import-obsidian --dry-run` then real import on a fresh Obsidian-style folder (`.obsidian`, frontmatter notes, two `.base` files with one untranslatable filter) | schemas inferred (FR-100), views translated (FR-102), the untranslatable filter reported by name; `--dry-run` writes nothing |
+| C-02 | Same import twice | idempotent |
+| API-01 | Operator (API oracle only): `POST /knowledge/records` `mode: create` with `version_token` present; `mode: update` with `path` present | both 400 (discriminated union); create mints an id; update requires a token |
+
+### 2J. Non-functional budgets (recorded, not asserted, unless a threshold is given)
+
+| ID | Measure | Threshold |
+|---|---|---|
+| N-01 | Index time for the founder copy after mount | record; flag if > 60 s |
+| N-02 | Find latency p50/p95 over Q-01…Q-28 | flag if p95 > 2 s |
+| N-03 | Preview open time per kind (T1 measures from click to first paint via screenshot timestamps) | flag if > 3 s except PDF first page (45 s budget) |
+| N-04 | Gateway RSS before/after the campaign (`ps`) | flag if growth > 300 MB |
+| N-05 | Console errors per scenario | zero, WS reconnect excluded |
+
+### Runbook additions
+Section 1F runs after 1D; 1G after 1E; T-rows U-51…U-70 join their personas' queues; P-01…P-06 and R-01…R-03, C-01, C-02, API-01 are Operator work after Phase 2; N-01…N-05 are collected throughout.
