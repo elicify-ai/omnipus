@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers/common"
 )
 
 func makeCandidate(provider, model string) FallbackCandidate {
@@ -829,4 +830,109 @@ func TestResolveCandidatesWithLookup_KnownBareSlug_NoWarn(t *testing.T) {
 	if strings.Contains(string(data), "addCandidate") {
 		t.Errorf("log file unexpectedly contains addCandidate warn entry for a resolved slug; got:\n%s", string(data))
 	}
+}
+
+// TestFallbackChain_ToolArgumentsErrorIsNotFailoverable is the ADR-087 D3.1 /
+// Finding #8 pin: a *common.ToolArgumentsError reaching FallbackChain.Execute
+// must survive as the returned error's chain (errors.As reachable), must not
+// mark the candidate's cooldown, and must not trigger a second candidate
+// attempt — the refusal is a deterministic content fault, not a transient
+// provider fault, so failing over to a second candidate would just re-send
+// the same oversized request and repeat the truncation while never
+// debiting the FIRST candidate's already-billed usage from anywhere but
+// that first candidate's own error.
+func TestFallbackChain_ToolArgumentsErrorIsNotFailoverable(t *testing.T) {
+	t.Run("single candidate", func(t *testing.T) {
+		ct := NewCooldownTracker()
+		fc := NewFallbackChain(ct)
+		candidates := []FallbackCandidate{makeCandidate("openai", "gpt-4")}
+
+		usage := &UsageInfo{PromptTokens: 100, CompletionTokens: 50, TotalTokens: 150}
+		tae := common.NewToolArgumentsError("write_file", errors.New("invalid tool arguments: fragment"), true)
+		tae.Usage = usage
+
+		attempts := 0
+		run := func(ctx context.Context, provider, model string) (*LLMResponse, error) {
+			attempts++
+			return nil, tae
+		}
+
+		_, err := fc.Execute(context.Background(), candidates, run)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if attempts != 1 {
+			t.Errorf("attempts = %d, want 1 (no failover on a ToolArgumentsError)", attempts)
+		}
+
+		var gotTAE *common.ToolArgumentsError
+		if !errors.As(err, &gotTAE) {
+			t.Fatalf("returned error does not carry a *common.ToolArgumentsError in its chain: %v", err)
+		}
+		if gotTAE.Usage == nil || gotTAE.Usage.TotalTokens != 150 {
+			t.Errorf("Usage = %+v, want the candidate's billed usage (150 total)", gotTAE.Usage)
+		}
+
+		if !ct.IsAvailable(ModelKey("openai", "gpt-4")) {
+			t.Error("candidate was put in cooldown; a ToolArgumentsError must never cool down its candidate")
+		}
+		if ct.ErrorCount(ModelKey("openai", "gpt-4")) != 0 {
+			t.Errorf("ErrorCount = %d, want 0 (MarkFailure must never be called for a ToolArgumentsError)",
+				ct.ErrorCount(ModelKey("openai", "gpt-4")))
+		}
+	})
+
+	t.Run("multi candidate", func(t *testing.T) {
+		ct := NewCooldownTracker()
+		fc := NewFallbackChain(ct)
+		candidates := []FallbackCandidate{
+			makeCandidate("openai", "gpt-4"),
+			makeCandidate("anthropic", "claude"),
+			makeCandidate("groq", "llama"),
+		}
+
+		firstUsage := &UsageInfo{PromptTokens: 200, CompletionTokens: 75, TotalTokens: 275}
+
+		attempts := 0
+		run := func(ctx context.Context, provider, model string) (*LLMResponse, error) {
+			attempts++
+			tae := common.NewToolArgumentsError("write_file", errors.New("invalid tool arguments: fragment"), true)
+			if provider == "openai" {
+				tae.Usage = firstUsage
+			} else {
+				// Must never be reached — a second candidate call is itself
+				// the defect. Give it a distinguishable usage so the test
+				// fails loudly (wrong totals) if the guard above ever does.
+				tae.Usage = &UsageInfo{TotalTokens: 999999}
+			}
+			return nil, tae
+		}
+
+		_, err := fc.Execute(context.Background(), candidates, run)
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if attempts != 1 {
+			t.Fatalf("attempts = %d, want 1 (a ToolArgumentsError must abort the chain at the first candidate, "+
+				"not fail over to remaining candidates)", attempts)
+		}
+
+		var gotTAE *common.ToolArgumentsError
+		if !errors.As(err, &gotTAE) {
+			t.Fatalf("returned error does not carry a *common.ToolArgumentsError in its chain: %v", err)
+		}
+		if gotTAE.Usage == nil || gotTAE.Usage.TotalTokens != 275 {
+			t.Errorf("Usage = %+v, want the FIRST candidate's billed usage (275 total)", gotTAE.Usage)
+		}
+
+		for _, key := range []string{
+			ModelKey("openai", "gpt-4"),
+			ModelKey("anthropic", "claude"),
+			ModelKey("groq", "llama"),
+		} {
+			if !ct.IsAvailable(key) {
+				t.Errorf("candidate %q was put in cooldown; a ToolArgumentsError must never cool down any candidate", key)
+			}
+		}
+	})
 }

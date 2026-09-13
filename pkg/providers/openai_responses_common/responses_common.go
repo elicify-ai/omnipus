@@ -245,6 +245,32 @@ func parseResponse(apiResp *responses.Response) (*protocoltypes.LLMResponse, err
 	var reasoningContent strings.Builder
 	var toolCalls []protocoltypes.ToolCall
 
+	// Computed up front (apiResp.Status/IncompleteDetails/Usage are
+	// top-level fields, not dependent on the output-item loop below) so a
+	// tool-call decode failure can attach this same evidence to the
+	// refusal (ADR-087 D3.9 / D5 / D7) instead of returning bare.
+	//
+	// The Responses API's raw truncation signal is Status=="incomplete"
+	// with IncompleteDetails.Reason=="max_output_tokens" — neither string
+	// matches AttachToolArgumentsEvidence's normalised-spelling matcher
+	// ("length"/"max_tokens"/"truncated"), so it is mapped to "length"
+	// here, the same normalised value this function already used below for
+	// the response's own FinishReason. Status=="incomplete" with
+	// Reason=="content_filter" is a refusal, not a cutoff, so it is
+	// deliberately NOT mapped to truncation evidence.
+	truncationEvidenceReason := ""
+	if apiResp.Status == "incomplete" && apiResp.IncompleteDetails.Reason == "max_output_tokens" {
+		truncationEvidenceReason = "length"
+	}
+	var usage *protocoltypes.UsageInfo
+	if apiResp.Usage.TotalTokens > 0 {
+		usage = &protocoltypes.UsageInfo{
+			PromptTokens:     int(apiResp.Usage.InputTokens),
+			CompletionTokens: int(apiResp.Usage.OutputTokens),
+			TotalTokens:      int(apiResp.Usage.TotalTokens),
+		}
+	}
+
 	for _, item := range apiResp.Output {
 		switch item.Type {
 		case "message":
@@ -261,7 +287,7 @@ func parseResponse(apiResp *responses.Response) (*protocoltypes.LLMResponse, err
 				json.RawMessage(item.Arguments.OfString), item.Name,
 			)
 			if err != nil {
-				return nil, err
+				return nil, common.AttachToolArgumentsEvidence(err, truncationEvidenceReason, usage)
 			}
 			toolCalls = append(toolCalls, protocoltypes.ToolCall{
 				ID:        item.CallID,
@@ -281,15 +307,6 @@ func parseResponse(apiResp *responses.Response) (*protocoltypes.LLMResponse, err
 	}
 	if apiResp.Status == "incomplete" {
 		finishReason = "length"
-	}
-
-	var usage *protocoltypes.UsageInfo
-	if apiResp.Usage.TotalTokens > 0 {
-		usage = &protocoltypes.UsageInfo{
-			PromptTokens:     int(apiResp.Usage.InputTokens),
-			CompletionTokens: int(apiResp.Usage.OutputTokens),
-			TotalTokens:      int(apiResp.Usage.TotalTokens),
-		}
 	}
 
 	return &protocoltypes.LLMResponse{

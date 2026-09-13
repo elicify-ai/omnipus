@@ -359,13 +359,19 @@ func normalizeFinishReason(reason string) string {
 // honest reading is that the model never finished saying what it wanted done.
 //
 // Why we don't rely on finish_reason alone (ADR-087 D7): on the primary
-// transports this project talks to — OpenAI-compatible and
-// Anthropic-compatible endpoints — finish_reason (respectively stop_reason)
-// IS reliable, and is wired up as real truncation evidence rather than
-// ignored (see ToolArgumentsError.Truncated below). But a minority of
-// OpenAI-compatible servers get the field wrong specifically on the
-// tool-call path: vLLM's streaming handler has marked a choice as having
-// produced tool calls the moment any delta carries one, with no check that
+// transports this project talks to — OpenAI-compatible endpoints
+// (common.ParseResponse and openai_compat's streaming parser), the native
+// Anthropic Messages API (anthropic/provider.go's parseResponse), the
+// OpenAI Responses API (openai_responses_common's parseResponse), and
+// Bedrock Converse (bedrock/provider_bedrock.go's parseResponse) —
+// finish_reason (respectively stop_reason) IS reliable, and every one of
+// those five decode sites calls AttachToolArgumentsEvidence (or, for
+// Bedrock's non-common.DecodeToolCallArguments path, constructs a
+// *ToolArgumentsError directly) so it is wired up as real truncation
+// evidence rather than ignored (see ToolArgumentsError.Truncated below).
+// But a minority of OpenAI-compatible servers get the field wrong
+// specifically on the tool-call path: vLLM's streaming handler has marked
+// a choice as having produced tool calls the moment any delta carries one, with no check that
 // the call is complete, reporting "tool_calls" in place of the engine's
 // real "length" (vllm#47903, open; the proposed fix vllm#47963 has sat
 // unreviewed, and the merged non-streaming fix is gated behind a flag the

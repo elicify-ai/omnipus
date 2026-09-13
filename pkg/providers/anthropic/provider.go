@@ -485,6 +485,25 @@ func parseResponse(resp *anthropic.Message) (*LLMResponse, error) {
 	var reasoning strings.Builder
 	var toolCalls []ToolCall
 
+	// PromptTokens = plain (uncached) input; cache tokens are tracked separately.
+	// TotalTokens = plain input + cache_creation + cache_read + output.
+	// Computed up front (resp.Usage/resp.StopReason are top-level fields, not
+	// dependent on the content-block loop below) so a tool-call decode
+	// failure can attach this same evidence to the refusal (ADR-087 D3.9 /
+	// D5 / D7) instead of returning bare.
+	cacheWrite := int(resp.Usage.CacheCreationInputTokens)
+	cacheRead := int(resp.Usage.CacheReadInputTokens)
+	promptTokens := int(resp.Usage.InputTokens)
+	completionTokens := int(resp.Usage.OutputTokens)
+	total := promptTokens + cacheWrite + cacheRead + completionTokens
+	usage := &UsageInfo{
+		PromptTokens:     promptTokens,
+		CompletionTokens: completionTokens,
+		CacheWriteTokens: cacheWrite,
+		CacheReadTokens:  cacheRead,
+		TotalTokens:      total,
+	}
+
 	for _, block := range resp.Content {
 		switch block.Type {
 		case "thinking":
@@ -497,7 +516,15 @@ func parseResponse(resp *anthropic.Message) (*LLMResponse, error) {
 			tu := block.AsToolUse()
 			args, err := common.DecodeToolCallArguments(tu.Input, tu.Name)
 			if err != nil {
-				return nil, err
+				// The refused attempt's stop reason and billed usage are
+				// both already in hand at this scope — attach them so the
+				// caller's classifier (and cost accounting) sees real
+				// evidence instead of having to guess from the fragment
+				// alone (ADR-087 D3.9 / D5 / D7). resp.StopReason's raw
+				// string spelling ("max_tokens") already matches the
+				// normalised spelling AttachToolArgumentsEvidence looks
+				// for, so it is passed through unmapped.
+				return nil, common.AttachToolArgumentsEvidence(err, string(resp.StopReason), usage)
 			}
 			toolCalls = append(toolCalls, ToolCall{
 				ID:        tu.ID,
@@ -529,26 +556,12 @@ func parseResponse(resp *anthropic.Message) (*LLMResponse, error) {
 		finishReason = "content_filter"
 	}
 
-	// PromptTokens = plain (uncached) input; cache tokens are tracked separately.
-	// TotalTokens = plain input + cache_creation + cache_read + output.
-	cacheWrite := int(resp.Usage.CacheCreationInputTokens)
-	cacheRead := int(resp.Usage.CacheReadInputTokens)
-	promptTokens := int(resp.Usage.InputTokens)
-	completionTokens := int(resp.Usage.OutputTokens)
-	total := promptTokens + cacheWrite + cacheRead + completionTokens
-
 	return &LLMResponse{
 		Content:      content.String(),
 		Reasoning:    reasoning.String(),
 		ToolCalls:    toolCalls,
 		FinishReason: finishReason,
-		Usage: &UsageInfo{
-			PromptTokens:     promptTokens,
-			CompletionTokens: completionTokens,
-			CacheWriteTokens: cacheWrite,
-			CacheReadTokens:  cacheRead,
-			TotalTokens:      total,
-		},
+		Usage:        usage,
 	}, nil
 }
 
