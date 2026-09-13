@@ -8,5 +8,5 @@ import (
 )
 
 func statCtime(st *syscall.Stat_t) time.Time {
-	return time.Unix(st.Ctim.Sec, st.Ctim.Nsec)
+	return time.Unix(int64(st.Ctim.Sec), int64(st.Ctim.Nsec))
 }
