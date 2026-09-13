@@ -28,6 +28,10 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchLibraryWorkspaces: vi.fn(),
     fetchLibraryEntries: vi.fn(),
     createWorkspaceMount: vi.fn(),
+    // UAT D-117: the Add-mount dialog now asks for a typed path's verdict
+    // before submitting. An empty listing means "not listed" and the submit
+    // proceeds — this test is about what happens AFTER the mount is created.
+    fetchHostFolders: vi.fn(async () => ({ path: '/', entries: [] })),
   }
 })
 

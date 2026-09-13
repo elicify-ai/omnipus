@@ -63,6 +63,20 @@ export function LibraryAddMountDialog({
   const [selectedVerdict, setSelectedVerdict] = useState<HostFolderEntry | null>(null)
   const [listError, setListError] = useState<string>()
   const [loading, setLoading] = useState(false)
+  // UAT D-127 (2026-09-13): the server's refusal is for the path that was
+  // SUBMITTED. It used to stay on screen beside a corrected path right up
+  // until the next attempt succeeded; now it is shown only while the field
+  // still holds the path it was about to.
+  const [attemptedPath, setAttemptedPath] = useState<string>()
+  // UAT D-117, dialog half (2026-09-13): a TYPED path carries no verdict —
+  // only a browsed row does — so `/tmp` mounted in one click with nothing
+  // said about its breadth. Before submitting an unverified path the dialog
+  // now asks the server for the verdict on that exact folder; a broad one
+  // is shown and needs a second, explicit click ("Add anyway"), a refused
+  // one is refused here. If the lookup itself fails the submit proceeds and
+  // the server's own check (W5's backend refusal) is the authority.
+  const [verifying, setVerifying] = useState(false)
+  const [broadAcknowledged, setBroadAcknowledged] = useState(false)
 
   // Reset on every open so a previous attempt's path and error never bleed
   // into a fresh one — this dialog grants disk access, and a stale prefill is
@@ -74,6 +88,9 @@ export function LibraryAddMountDialog({
       setListing(null)
       setListError(undefined)
       setSelectedVerdict(null)
+      setAttemptedPath(undefined)
+      setVerifying(false)
+      setBroadAcknowledged(false)
     }
   }, [open])
 
@@ -102,7 +119,48 @@ export function LibraryAddMountDialog({
   // not navigate).
   const selected = selectedVerdict ?? listing?.entries.find((e) => e.path === path)
   const trimmed = path.trim()
-  const canSubmit = trimmed.length > 0 && !isPending && selected?.mountable !== false
+  const canSubmit = trimmed.length > 0 && !isPending && !verifying && selected?.mountable !== false
+  const needsBroadAck = selected?.broad === true && selected.mountable !== false && !broadAcknowledged
+  const showServerError = error !== undefined && attemptedPath === trimmed
+
+  /** Resolve the verdict for a typed path from its parent's listing. Returns
+   *  the entry when the server lists it, undefined when it does not (or the
+   *  lookup failed) — never throws. */
+  async function lookUpVerdict(target: string): Promise<HostFolderEntry | undefined> {
+    const cut = target.lastIndexOf('/')
+    const parent = cut <= 0 ? '/' : target.slice(0, cut)
+    try {
+      const parentListing = await fetchHostFolders(parent)
+      return parentListing.entries.find((e) => e.path === target)
+    } catch {
+      return undefined
+    }
+  }
+
+  async function handleConfirm() {
+    if (!canSubmit) return
+    if (needsBroadAck) {
+      // "Add anyway": the warning has been on screen since the previous
+      // click; this click is the acknowledgement AND the submit.
+      setBroadAcknowledged(true)
+      setAttemptedPath(trimmed)
+      onConfirm(trimmed)
+      return
+    }
+    let verdict = selected
+    if (verdict === undefined) {
+      setVerifying(true)
+      verdict = await lookUpVerdict(trimmed)
+      setVerifying(false)
+      if (verdict !== undefined) {
+        setSelectedVerdict(verdict)
+        if (verdict.mountable === false) return
+        if (verdict.broad) return
+      }
+    }
+    setAttemptedPath(trimmed)
+    onConfirm(trimmed)
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -125,6 +183,7 @@ export function LibraryAddMountDialog({
             onChange={(e) => {
               setPath(e.target.value)
               setSelectedVerdict(null)
+              setBroadAcknowledged(false)
             }}
             placeholder="/Users/you/Documents/projects/my-repo"
             className="font-mono text-sm"
@@ -230,7 +289,7 @@ export function LibraryAddMountDialog({
             </div>
           )}
 
-          {error && (
+          {showServerError && (
             <p className="text-sm text-[var(--color-error)]" data-testid="library-add-mount-error">
               {error}
             </p>
@@ -242,11 +301,11 @@ export function LibraryAddMountDialog({
             Cancel
           </Button>
           <Button
-            onClick={() => onConfirm(trimmed)}
+            onClick={() => void handleConfirm()}
             disabled={!canSubmit}
             data-testid="library-add-mount-confirm"
           >
-            {isPending ? 'Adding…' : 'Add folder'}
+            {isPending ? 'Adding…' : verifying ? 'Checking…' : needsBroadAck ? 'Add anyway' : 'Add folder'}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -406,6 +406,34 @@ describe('LibraryExplorer — destructive-action confirm (delete)', () => {
     expect(mockedDelete).not.toHaveBeenCalled()
     expect(screen.getByTestId('library-row-draft.md')).toBeInTheDocument()
   })
+
+  // UAT D-121 (2026-09-13): the knowledge-base marker folder got the generic
+  // folder wording, which said nothing about it BEING the knowledge base or
+  // that the UI cannot make the folder one again afterwards.
+  it('deleting ".omnipus-vault" names what it is and what is lost, unlike an ordinary folder', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    mockedFetchEntries.mockResolvedValue([
+      makeEntry({ name: '.omnipus-vault', path: 'UAT Vault/.omnipus-vault', is_dir: true }),
+      makeEntry({ name: 'Assets', path: 'UAT Vault/Assets', is_dir: true }),
+    ])
+
+    renderExplorer('ws-1')
+
+    await waitFor(() => expect(screen.getByTestId('library-row-UAT Vault/.omnipus-vault')).toBeInTheDocument())
+    await openRowMenuAndClick('UAT Vault/.omnipus-vault', /delete/i)
+    await waitFor(() => expect(screen.getByTestId('library-delete-confirm')).toBeInTheDocument())
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(/is what makes "UAT Vault" a knowledge base/i)
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(/record types, id sequences, saved views and trash/i)
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(/cannot be made one again from here/i)
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
+    await waitFor(() => expect(screen.queryByTestId('library-delete-confirm')).not.toBeInTheDocument())
+
+    // Positive control: an ordinary folder keeps the generic wording.
+    await openRowMenuAndClick('UAT Vault/Assets', /delete/i)
+    await waitFor(() => expect(screen.getByTestId('library-delete-confirm')).toBeInTheDocument())
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(/"Assets" and everything inside it will be permanently deleted/i)
+    expect(screen.getByRole('alertdialog')).not.toHaveTextContent(/knowledge base/i)
+  })
 })
 
 describe('LibraryExplorer — unsaved-edit navigation guard', () => {

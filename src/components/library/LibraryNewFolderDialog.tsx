@@ -27,6 +27,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { LibraryErrorBanner } from './LibraryErrorBanner'
+import { returnFocusToCreateMenu } from './returnFocusToCreateMenu'
 
 interface LibraryNewFolderDialogProps {
   open: boolean
@@ -75,7 +76,7 @@ export function LibraryNewFolderDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent data-testid="library-new-folder-dialog">
+      <DialogContent data-testid="library-new-folder-dialog" onCloseAutoFocus={returnFocusToCreateMenu}>
         <DialogHeader>
           <DialogTitle>New folder</DialogTitle>
         </DialogHeader>
@@ -91,14 +92,18 @@ export function LibraryNewFolderDialog({
               if (e.key === 'Enter') handleSubmit()
             }}
           />
-          {hasSlash && (
-            <p className="text-xs text-[var(--color-error)]" data-testid="library-new-folder-slash">
-              A folder name can't contain "/".
-            </p>
-          )}
-          {!hasSlash && hasTraversal && (
+          {/* Traversal is named FIRST (UAT D-128): "../x" contains both a
+              ".." and a "/", and the more specific reason is the one to
+              state — the slash rule alone would label an escape attempt as
+              a spelling nit. */}
+          {hasTraversal && (
             <p className="text-xs text-[var(--color-error)]" data-testid="library-new-folder-traversal">
               A folder name can't contain "..".
+            </p>
+          )}
+          {!hasTraversal && hasSlash && (
+            <p className="text-xs text-[var(--color-error)]" data-testid="library-new-folder-slash">
+              A folder name can't contain "/".
             </p>
           )}
           {!hasSlash && !hasTraversal && collides && (

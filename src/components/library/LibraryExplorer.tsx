@@ -1201,12 +1201,22 @@ export function LibraryExplorer({
       <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete {deleteTarget?.is_dir ? 'folder' : 'file'}?</AlertDialogTitle>
+            <AlertDialogTitle>
+              {deleteTarget?.name === VAULT_MARKER_DIR
+                ? 'Delete this knowledge base’s settings?'
+                : `Delete ${deleteTarget?.is_dir ? 'folder' : 'file'}?`}
+            </AlertDialogTitle>
             <AlertDialogDescription>
               {deleteTarget
-                ? deleteTarget.is_dir
-                  ? `"${deleteTarget.name}" and everything inside it will be permanently deleted. This cannot be undone.`
-                  : `"${deleteTarget.name}" will be permanently deleted. This cannot be undone.`
+                ? deleteTarget.name === VAULT_MARKER_DIR
+                  ? // UAT D-121 (2026-09-13): the marker folder IS the
+                    // knowledge base. The generic folder wording said
+                    // nothing about that, and the UI cannot recreate a
+                    // knowledge base over the same folder afterwards.
+                    `"${VAULT_MARKER_DIR}" is what makes "${parentFolderName(deleteTarget.path)}" a knowledge base. Deleting it removes its record types, id sequences, saved views and trash — the notes stay as plain files, but the folder stops being a knowledge base and cannot be made one again from here. This cannot be undone.`
+                  : deleteTarget.is_dir
+                    ? `"${deleteTarget.name}" and everything inside it will be permanently deleted. This cannot be undone.`
+                    : `"${deleteTarget.name}" will be permanently deleted. This cannot be undone.`
                 : ''}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -1242,6 +1252,15 @@ function ListSkeleton() {
       ))}
     </div>
   )
+}
+
+/** The knowledge-base marker directory's name (pkg/knowledge's VaultDir). */
+const VAULT_MARKER_DIR = '.omnipus-vault'
+
+/** The display name of the folder that contains `path`, or the workspace root. */
+function parentFolderName(path: string): string {
+  const parts = path.split('/').filter(Boolean)
+  return parts.length >= 2 ? parts[parts.length - 2] : 'this workspace'
 }
 
 function EmptyState({ icon, message }: { icon: React.ReactNode; message: string }) {
