@@ -1038,12 +1038,34 @@ func (al *AgentLoop) runVerifierAdjudication(
 			registry.Unregister(unitID)
 		}
 	}()
+	// notifiedUnavailable records whether in.OnUnavailable has fired at least
+	// once on this call, so the OnRecovered half below only fires as an actual
+	// RECOVERY — never on the ordinary first-try-succeeds path, which never
+	// told the caller anything was wrong in the first place.
+	notifiedUnavailable := false
+	// pauseForUnavailability is the single wrapper every judge-unavailability
+	// backoff in this loop goes through, so the flag above and the hook
+	// notification inside judgeBackoffWait can never drift apart across the
+	// three (currently) distinct unavailability causes below.
+	pauseForUnavailability := func(attemptIdx int, reason string) error {
+		notifiedUnavailable = true
+		return al.judgeBackoffWait(ctx, in, attemptIdx, reason)
+	}
 	// Sign-off finding 1: record this call's outcome against unitID's
 	// consecutive-Unavailable streak. Reads the named return `unavailable`
 	// AFTER it has been set by whichever return statement below fires — a
 	// defer over a named return always observes the final value.
 	defer func() {
 		recordVerifierAvailabilityOutcome(unitID, unavailable)
+		// Judge-availability recovery (JudgeCriteriaInput.OnRecovered): this
+		// call paused at least once and then finished WITHOUT unavailability,
+		// so whatever the caller surfaced about the pause is now stale and
+		// must be retracted before the result reaches it. The Unavailable
+		// case is deliberately excluded — the caller's own end-of-round
+		// cleanup owns that one.
+		if notifiedUnavailable && !unavailable {
+			in.notifyRecovered()
+		}
 	}()
 
 	windowText := al.resolveVerifierWindowText(in)
@@ -1057,7 +1079,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 		if !ok || judgeInst == nil || judgeInst.Provider == nil {
 			const notConfiguredReason = "judge_not_configured: Judge System Agent is not registered"
 			logger.WarnCF("agent", "verifier: Judge System Agent not resolvable; pausing (D7 unavailability)", nil)
-			if waitErr := al.judgeBackoffWait(ctx, attempt, notConfiguredReason); waitErr != nil {
+			if waitErr := pauseForUnavailability(attempt, notConfiguredReason); waitErr != nil {
 				return nil, "", "", true, notConfiguredReason, nil
 			}
 			continue
@@ -1067,7 +1089,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 		if !allowed {
 			logger.WarnCF("agent", "verifier: SEC-26 gate denied verifier LLM call; pausing (D7 unavailability)",
 				map[string]any{"reason": denyReason, "retry_after_s": retryAfter.Seconds()})
-			if waitErr := al.judgeBackoffWait(ctx, attempt, denyReason); waitErr != nil {
+			if waitErr := pauseForUnavailability(attempt, denyReason); waitErr != nil {
 				return nil, "", "", true, denyReason, nil
 			}
 			continue
@@ -1169,7 +1191,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 		if callErr != nil {
 			logger.WarnCF("agent", "verifier: turn failed; pausing (D7 unavailability)",
 				map[string]any{"error": callErr.Error()})
-			if waitErr := al.judgeBackoffWait(ctx, attempt, callErr.Error()); waitErr != nil {
+			if waitErr := pauseForUnavailability(attempt, callErr.Error()); waitErr != nil {
 				return nil, "", "", true, callErr.Error(), nil
 			}
 			continue

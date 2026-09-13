@@ -173,6 +173,56 @@ type JudgeCriteriaInput struct {
 	// scope-correlation exclusivity rule below — it is orthogonal enrichment,
 	// not a scope-correlating id.
 	WorkspaceID string
+
+	// OnUnavailable, when non-nil, is invoked ONCE per judge-unavailability
+	// backoff, immediately BEFORE judgeBackoffWait sleeps — reason is the
+	// same cause string that goes to the WARN log (provider error, SEC-26
+	// denial, turn timeout, "Judge System Agent is not registered"), backoff
+	// is the interval about to be waited out.
+	//
+	// Why this exists (silent-stall defect, 2026-09-13): JudgeCriteria
+	// retries an unavailable Judge FOREVER inside one round on the
+	// 60/120/300s D7 schedule, bounded only by the caller's ctx (10 minutes
+	// for a plan round). For those ten minutes the plan sat at
+	// state=running/plan_phase=judging with NOTHING anywhere saying why —
+	// indistinguishable, to a human on the board or to an E2E oracle, from a
+	// wedge. This hook lets the CALLER surface the pause on its own record
+	// (the plan engine writes Plan.PausedReason, which already rides the
+	// plan_status WS frame and renders as a chip). It does NOT change retry
+	// semantics in any way: when, how often, and how long JudgeCriteria
+	// retries are all identical whether or not this is set.
+	//
+	// Contract for implementers: called from the judging goroutine,
+	// synchronously, with none of JudgeCriteria's own locks held — but it
+	// MUST return promptly (it delays the backoff sleep by its own duration)
+	// and MUST NOT panic (a panic here takes down the judging goroutine).
+	// Optional on every scope; task and goal scope leave it nil today.
+	OnUnavailable func(reason string, backoff time.Duration)
+
+	// OnRecovered, when non-nil, is invoked at most once per JudgeCriteria
+	// call — after at least one OnUnavailable fired AND the adjudication then
+	// completed without unavailability (a real verdict, or a fail-closed
+	// "ran but produced no judgment" outcome; both mean the judge is
+	// reachable again). Fires before the verdict is returned, so a caller
+	// clearing a pause marker here is guaranteed to have cleared it before it
+	// sees the result. Never fires when the call itself ends Unavailable (ctx
+	// cancelled mid-backoff) — the caller's own end-of-round cleanup owns
+	// that case. Same promptness/no-panic contract as OnUnavailable.
+	OnRecovered func()
+}
+
+// notifyUnavailable invokes in.OnUnavailable when set (nil-safe).
+func (in JudgeCriteriaInput) notifyUnavailable(reason string, backoff time.Duration) {
+	if in.OnUnavailable != nil {
+		in.OnUnavailable(reason, backoff)
+	}
+}
+
+// notifyRecovered invokes in.OnRecovered when set (nil-safe).
+func (in JudgeCriteriaInput) notifyRecovered() {
+	if in.OnRecovered != nil {
+		in.OnRecovered()
+	}
 }
 
 // validate enforces JudgeCriteriaInput's scope invariant (7-reviewer gate
@@ -877,19 +927,36 @@ func (al *AgentLoop) checkJudgeSEC26(agentType, agentID string) (allowed bool, r
 	return true, 0, ""
 }
 
-// judgeBackoffWait sleeps on the cron-style backoff schedule (judgeRetryBackoff),
-// clamping to the last (longest) interval for any attemptIdx beyond the
-// table — the "normal cadence" the spec's Judge-unavailability dataset
-// describes for the 4th+ occurrence. Returns a non-nil error (ctx canceled)
-// when the caller should give up.
-func (al *AgentLoop) judgeBackoffWait(ctx context.Context, attemptIdx int, reason string) error {
+// judgeBackoffDuration returns the backoff interval for attemptIdx on the
+// cron-style schedule (judgeRetryBackoff), clamping to the last (longest)
+// interval for any attemptIdx beyond the table — the "normal cadence" the
+// spec's Judge-unavailability dataset describes for the 4th+ occurrence.
+func judgeBackoffDuration(attemptIdx int) time.Duration {
 	idx := attemptIdx
 	if idx >= len(judgeRetryBackoff) {
 		idx = len(judgeRetryBackoff) - 1
 	}
-	d := judgeRetryBackoff[idx]
+	if idx < 0 {
+		idx = 0
+	}
+	return judgeRetryBackoff[idx]
+}
+
+// judgeBackoffWait sleeps on the cron-style backoff schedule
+// (judgeBackoffDuration). Returns a non-nil error (ctx canceled) when the
+// caller should give up.
+//
+// It is also the SINGLE notification point for in.OnUnavailable: the hook
+// fires here, immediately before the sleep, so no unavailability pause can
+// ever be waited out without the caller having been told about it first (see
+// JudgeCriteriaInput.OnUnavailable for why that matters). in is taken by
+// value purely to reach those hooks; nothing else about it is read here and
+// retry semantics are entirely independent of whether they are set.
+func (al *AgentLoop) judgeBackoffWait(ctx context.Context, in JudgeCriteriaInput, attemptIdx int, reason string) error {
+	d := judgeBackoffDuration(attemptIdx)
 	logger.WarnCF("agent", "judge: unavailable, backing off before retry",
 		map[string]any{"reason": reason, "backoff_ms": d.Milliseconds()})
+	in.notifyUnavailable(reason, d)
 	return judgeSleepFn(ctx, d)
 }
 

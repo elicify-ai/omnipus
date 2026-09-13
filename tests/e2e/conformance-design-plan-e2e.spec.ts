@@ -37,6 +37,45 @@ import {
   startFreshChatWithJim,
 } from './fixtures/conformance-helpers'
 
+// ── Judge-unavailability pause (silent-stall oracle) ─────────────────────────
+//
+// A plan-level judge round retries an unavailable Judge FOREVER inside the
+// round on the 60/120/300s D7 backoff, bounded only by planJudgeRoundTimeout
+// (10 min). That is legitimate behaviour — a provider blip must not fail a
+// plan — but for those ten minutes the plan used to sit at
+// state="running" / plan_phase="judging" with NOTHING saying why, which is
+// indistinguishable from a wedge. This suite failed on exactly that
+// (Conformance_t3b, 3/3 twice, "observed state=running phase=judging").
+//
+// The engine now writes Plan.paused_reason with this stable prefix for the
+// duration of each backoff (pkg/plan's PausedReasonJudgeUnavailable,
+// pkg/agent/plan_engine.go's noteJudgeUnavailable), so the two cases are now
+// distinguishable from the outside — and this file asserts BOTH directions:
+//
+//   - a plan carrying this reason is legitimately HELD, not wedged;
+//   - a plan sitting at plan_phase="judging" past the judge call timeout
+//     WITHOUT this reason is a FAILURE. That is the silent stall, and it must
+//     never pass again just because a wedge and a backoff look alike.
+const JUDGE_PAUSE_PREFIX = 'judge temporarily unavailable'
+
+// judgeCallTimeout (pkg/agent/judge.go) bounds ONE verifier turn. A single
+// healthy-but-slow turn can therefore legitimately hold plan_phase="judging"
+// for up to 120s with no pause reason; past that the turn has either errored
+// (→ backoff → paused_reason) or the round has moved on.
+const JUDGE_CALL_TIMEOUT_MS = 120_000
+
+// Grace on top of JUDGE_CALL_TIMEOUT_MS before an unexplained "judging" is
+// called a stall. Covers poll jitter and a round boundary that falls between
+// two samples (the judge_rounds reset below covers the common case of that,
+// this covers the rest). Deliberately small — the whole point is that a
+// multi-minute silent judging phase must be reportable.
+const SILENT_JUDGE_STALL_MS = JUDGE_CALL_TIMEOUT_MS + 30_000
+
+/** True when a `running` plan is legitimately held on a judge-unavailability backoff. */
+function heldOnJudgeBackoff(state: string, pausedReason: string | undefined): boolean {
+  return state === 'running' && (pausedReason ?? '').startsWith(JUDGE_PAUSE_PREFIX)
+}
+
 // ── Conformance_t2_PlanLifecycleE2E ──────────────────────────────────────────
 //
 // BDD (§9.1 t2): plan lifecycle — Execute → gated approve → members per DAG
@@ -275,21 +314,35 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
   // 2026-07-30, CI shard llm-conformance: this plan was observed at
   // state="running" phase="dispatching" at window-close — exactly the
   // documented post-correction re-run, not a stall.
+  //
+  // ALSO acceptable, and now explicitly named rather than swept up by the
+  // "judging is an active phase" clause above: state="running" with a
+  // paused_reason starting JUDGE_PAUSE_PREFIX. That is a plan waiting out a
+  // D7 judge backoff — held on purpose, and now SAYING so (see this file's
+  // header). It is a legitimate terminus for this window precisely because
+  // the plan is no longer silent about it.
   const ACTIVE_ROUND_PHASES = new Set(['dispatching', 'judging', 'synthesizing'])
   const HELD_PHASES = new Set([HOLD_PHASE, 'stalled'])
   const finalDeadline = Date.now() + 180_000
   let planState = ''
   let planPhase = ''
+  let planPausedReason = ''
   let reachedTerminalOrHold = false
   while (Date.now() < finalDeadline) {
-    const poll = await apiFetch<{ state: string; plan_phase?: string }>(page, 'GET', `/api/v1/plans/${planId}`)
+    const poll = await apiFetch<{ state: string; plan_phase?: string; paused_reason?: string }>(
+      page,
+      'GET',
+      `/api/v1/plans/${planId}`,
+    )
     if (!poll.ok) throw new Error(`t2: GET /plans/{id} poll (final) failed ${poll.status}: ${poll.raw}`)
     planState = poll.body.state
     planPhase = poll.body.plan_phase ?? ''
+    planPausedReason = poll.body.paused_reason ?? ''
     if (
       planState === 'done' ||
       planState === 'failed' ||
       HELD_PHASES.has(planPhase) ||
+      heldOnJudgeBackoff(planState, planPausedReason) ||
       (planState === 'running' && ACTIVE_ROUND_PHASES.has(planPhase))
     ) {
       reachedTerminalOrHold = true
@@ -299,8 +352,9 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
   }
   expect(
     reachedTerminalOrHold,
-    `t2: plan ${planId} must be at a documented terminus (done/failed), still legitimately held/stalled, or ` +
-      `observably still progressing through an active round — observed state="${planState}" phase="${planPhase}". ` +
+    `t2: plan ${planId} must be at a documented terminus (done/failed), still legitimately held/stalled, ` +
+      `paused on a judge backoff, or observably still progressing through an active round — observed ` +
+      `state="${planState}" phase="${planPhase}" paused_reason="${planPausedReason}". ` +
       'A wedge here means the correction-append → re-judge cycle stalled after the sampling window.',
   ).toBe(true)
 })
@@ -466,21 +520,57 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
   const seenSessionIds = new Set<string>()
   let finalPlanState = ''
   let finalPlanPhase = ''
+  let finalPausedReason = ''
+  // Silent-stall oracle (see this file's header). Tracks how long the plan has
+  // been continuously observed at plan_phase="judging" WITHOUT a
+  // judge-unavailability paused_reason. The judge_rounds reset below keeps a
+  // round boundary that falls between two samples from being misread as one
+  // long judging phase.
+  let judgingSinceMs: number | null = null
+  let judgingSinceRounds = -1
+  let silentJudgeStall: string | null = null
   const observeDeadline = Date.now() + 420_000
   while (Date.now() < observeDeadline) {
-    const poll = await apiFetch<{ state: string; plan_phase?: string; supervision?: { session_id?: string } }>(
-      page,
-      'GET',
-      `/api/v1/plans/${planId}`,
-    )
+    const poll = await apiFetch<{
+      state: string
+      plan_phase?: string
+      paused_reason?: string
+      judge_rounds?: number
+      supervision?: { session_id?: string }
+    }>(page, 'GET', `/api/v1/plans/${planId}`)
     if (!poll.ok) throw new Error(`t3b: GET /plans/{id} poll (observe) failed ${poll.status}: ${poll.raw}`)
     finalPlanState = poll.body.state
     finalPlanPhase = poll.body.plan_phase ?? ''
+    finalPausedReason = poll.body.paused_reason ?? ''
+    const rounds = poll.body.judge_rounds ?? 0
     const sid = poll.body.supervision?.session_id
     if (sid) seenSessionIds.add(sid)
+
+    const explained = finalPausedReason.startsWith(JUDGE_PAUSE_PREFIX)
+    if (finalPlanState === 'running' && finalPlanPhase === 'judging' && !explained) {
+      if (judgingSinceMs === null || rounds !== judgingSinceRounds) {
+        judgingSinceMs = Date.now()
+        judgingSinceRounds = rounds
+      }
+      const heldMs = Date.now() - judgingSinceMs
+      if (heldMs > SILENT_JUDGE_STALL_MS && silentJudgeStall === null) {
+        silentJudgeStall =
+          `plan ${planId} sat at state="running" plan_phase="judging" for ${Math.round(heldMs / 1000)}s ` +
+          `(judge_rounds stayed at ${rounds}) with paused_reason="${finalPausedReason}". A verifier turn is ` +
+          `capped at ${JUDGE_CALL_TIMEOUT_MS / 1000}s, so past that the round is either retrying an ` +
+          'unavailable judge — which MUST surface as paused_reason "' +
+          `${JUDGE_PAUSE_PREFIX}…" — or genuinely wedged. Either way, a plan that says nothing here is the ` +
+          'defect: an operator watching the board cannot tell the two apart.'
+      }
+    } else {
+      judgingSinceMs = null
+      judgingSinceRounds = -1
+    }
+
     if (finalPlanState === 'done' || finalPlanState === 'failed') break
     await page.waitForTimeout(4_000)
   }
+  expect(silentJudgeStall, `t3b: silent judge stall — ${silentJudgeStall}`).toBeNull()
 
   // Collect every plan_correct call (any status) across every adjudication
   // session this plan ever used.
@@ -554,9 +644,20 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
 
   // No-wedge sanity: the plan must not still be stuck neither terminal nor
   // held after the full observation window.
+  //
+  // A plan paused on a judge backoff counts as legitimately held — it is
+  // waiting on an unavailable Judge, on purpose, and is now SAYING so. This is
+  // the one case that used to sink this test as an unexplained
+  // state="running" phase="judging"; it is admitted here only because the
+  // silent-stall oracle above has already failed the run if the plan ever sat
+  // at "judging" past the judge call timeout WITHOUT saying why. The pair is
+  // the point: a visible pause is a hold, a silent one is a failure.
   expect(
-    finalPlanState === 'done' || finalPlanState === 'failed' || finalPlanPhase === HOLD_PHASE,
+    finalPlanState === 'done' ||
+      finalPlanState === 'failed' ||
+      finalPlanPhase === HOLD_PHASE ||
+      heldOnJudgeBackoff(finalPlanState, finalPausedReason),
     `t3b: plan ${planId} must be at a documented terminus or still legitimately held after the observation ` +
-      `window — observed state="${finalPlanState}" phase="${finalPlanPhase}".`,
+      `window — observed state="${finalPlanState}" phase="${finalPlanPhase}" paused_reason="${finalPausedReason}".`,
   ).toBe(true)
 })
