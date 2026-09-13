@@ -91,3 +91,31 @@ describe('LibraryImagePreview — width modifier (EMB-030: a size after a bar ap
     expect(screen.queryByText('400')).not.toBeInTheDocument()
   })
 })
+
+// UAT D-107 (2026-09-13): a deleted file used to preview as the browser's own
+// broken-image glyph — no message, no placeholder.
+describe('LibraryImagePreview — D-107 a picture that fails to load says so', () => {
+  it('replaces the broken image with a notice naming the file and offers Try again', async () => {
+    const { fireEvent, waitFor } = await import('@testing-library/react')
+    render(<LibraryImagePreview workspaceId="ws-1" entry={ENTRY} />)
+    fireEvent.error(screen.getByRole('img'))
+    const notice = await screen.findByTestId('library-image-unavailable')
+    expect(notice).toHaveTextContent('diagram.png')
+    expect(notice).toHaveTextContent(/deleted or moved/)
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+
+    // Try again re-requests with a fresh URL, not the cached failure.
+    fireEvent.click(screen.getByTestId('library-image-retry'))
+    await waitFor(() => expect(screen.getByRole('img')).toBeInTheDocument())
+    expect(screen.getByRole('img').getAttribute('src')).toMatch(/retry=1$/)
+  })
+
+  it('a new entry resets the failure state', async () => {
+    const { fireEvent } = await import('@testing-library/react')
+    const view = render(<LibraryImagePreview workspaceId="ws-1" entry={ENTRY} />)
+    fireEvent.error(screen.getByRole('img'))
+    await screen.findByTestId('library-image-unavailable')
+    view.rerender(<LibraryImagePreview workspaceId="ws-1" entry={{ ...ENTRY, path: 'assets/other.png', name: 'other.png' }} />)
+    expect(screen.getByRole('img')).toHaveAttribute('alt', 'other.png')
+  })
+})

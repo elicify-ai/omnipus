@@ -225,3 +225,13 @@ describe('audio — a source the browser refuses', () => {
     expect(screen.getByTestId('library-audio-unplayable')).toHaveTextContent(/download it instead/i)
   })
 })
+
+// UAT D-102 (2026-09-13): the native control bar painted in Chromium's LIGHT
+// scheme on the dark pane because nothing declared a colour scheme.
+describe('LibraryAudioPreview — D-102 native controls follow the dark theme', () => {
+  it('declares color-scheme: dark on the element itself', async () => {
+    const { LibraryAudioPreview } = await import('./LibraryAudioPreview')
+    render(<LibraryAudioPreview workspaceId="ws-1" entry={ENTRY} />)
+    expect(screen.getByTestId('library-audio-element').style.colorScheme).toBe('dark')
+  })
+})

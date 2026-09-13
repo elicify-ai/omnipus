@@ -50,6 +50,8 @@ export function LibraryVideoPreview({ workspaceId, entry, variant = 'pane' }: Li
         /* No <track>: a workspace video file carries no caption track to attach. */
         <video
           controls
+          // UAT D-102: same native-control colour rule as LibraryAudioPreview.
+          style={{ colorScheme: 'dark' }}
           src={src}
           onError={() => setFailed(true)}
           className="max-h-full max-w-full rounded-md"
