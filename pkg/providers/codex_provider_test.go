@@ -227,7 +227,10 @@ func TestParseCodexResponse_TextOutput(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	result := orc.ParseResponseFromStruct(&resp)
+	result, err := orc.ParseResponseFromStruct(&resp)
+	if err != nil {
+		t.Fatalf("ParseResponseFromStruct: %v", err)
+	}
 	if result.Content != "Hello there!" {
 		t.Errorf("Content = %q, want %q", result.Content, "Hello there!")
 	}
@@ -268,7 +271,10 @@ func TestParseCodexResponse_FunctionCall(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	result := orc.ParseResponseFromStruct(&resp)
+	result, err := orc.ParseResponseFromStruct(&resp)
+	if err != nil {
+		t.Fatalf("ParseResponseFromStruct: %v", err)
+	}
 	if len(result.ToolCalls) != 1 {
 		t.Fatalf("len(ToolCalls) = %d, want 1", len(result.ToolCalls))
 	}

@@ -211,7 +211,10 @@ func (p *CodexCliProvider) parseJSONLEvents(output string) (*LLMResponse, error)
 	content := strings.Join(contentParts, "\n")
 
 	// Extract tool calls from response text
-	toolCalls := extractToolCallsFromText(content)
+	toolCalls, err := extractToolCallsFromText(content)
+	if err != nil {
+		return nil, err
+	}
 
 	finishReason := "stop"
 	if len(toolCalls) > 0 {

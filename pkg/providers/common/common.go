@@ -21,7 +21,6 @@ import (
 
 	"golang.org/x/net/http2"
 
-	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
@@ -298,7 +297,11 @@ func ParseResponse(body io.Reader) (*LLMResponse, error) {
 
 		if tc.Function != nil {
 			name = tc.Function.Name
-			arguments = DecodeToolCallArguments(tc.Function.Arguments, name)
+			decodedArgs, err := DecodeToolCallArguments(tc.Function.Arguments, name)
+			if err != nil {
+				return nil, err
+			}
+			arguments = decodedArgs
 		}
 
 		toolCall := ToolCall{
@@ -339,50 +342,165 @@ func normalizeFinishReason(reason string) string {
 	return reason
 }
 
-// DecodeToolCallArguments decodes a tool call's arguments from raw JSON.
-func DecodeToolCallArguments(raw json.RawMessage, name string) map[string]any {
+// ErrToolArgumentsUndecodable reports a tool call whose `arguments` payload
+// was PRESENT but could not be decoded into a JSON object.
+//
+// This is a hard error — never a degraded dispatch — and the reason is
+// truncation. When a generation hits the output-token cap partway through a
+// tool call, what reaches us is a fragment: `{"query`, or in the shape
+// llama.cpp is known to emit, a bare `{`. Those are not "weird arguments",
+// they are the visible end of a response that was cut off, and the only
+// honest reading is that the model never finished saying what it wanted done.
+//
+// Why we cannot lean on finish_reason to tell us that instead: on the
+// tool-call path it is not trustworthy. vLLM's streaming handler marks a
+// choice as having produced tool calls the moment any delta carries one, with
+// no check that the call is complete, and then reports "tool_calls" in place
+// of the engine's real "length" — so a truncated call affirmatively claims to
+// be finished (vllm#47903, open; the proposed fix vllm#47963 has sat
+// unreviewed, and the merged non-streaming fix is gated behind a flag the
+// Hermes path does not set). Parsing the arguments is the cheap, local check
+// that does not depend on an upstream field the upstream itself overwrites.
+//
+// What went wrong before this was an error: every decode site substituted a
+// stand-in — a `raw` key holding the fragment, or an empty map — and
+// dispatched the tool anyway. The tool then failed downstream on schema
+// validation with "missing required property path" or "unexpected property
+// raw", which is a true statement about the map and a false statement about
+// the cause. The model, told it forgot a parameter, re-sends the same
+// oversized call and is truncated again. Surfacing truncation as truncation
+// is what breaks that loop.
+//
+// Refusing the whole response rather than dropping the one bad call is
+// deliberate. A response cut off mid-call is incomplete as a whole, so the
+// tool calls that did parse are a partial view of a plan the model never
+// finished expressing; running them commits side effects for a decision that
+// was never fully stated. It also keeps the fragment out of session history —
+// an undecodable call appended to the transcript is re-sent on every
+// subsequent request, which is how one truncated call permanently wedges a
+// conversation (llama.cpp#21771, open).
+// The message opens with "invalid tool arguments" deliberately: that exact
+// phrase is the pinned substring pkg/agent's translate_error.go matches to
+// label an error CodeToolArgs (ADR-051 Rev 4 FR-018). Without it the turn
+// still fails loudly but the user is shown the generic CodeUnknown copy
+// instead of the tool-argument copy that actually describes what happened.
+// Wording note: this text must never contain the phrase "token limit" — the
+// classifier's contextOverflowPatterns match it and would re-label a
+// truncated call as a context-window overflow, which is a different fault
+// with different advice. Say "output cap" instead.
+var ErrToolArgumentsUndecodable = errors.New("invalid tool arguments: payload is not decodable JSON")
+
+// maxUndecodableArgumentsQuoted bounds how many bytes of an offending payload
+// an error quotes. The fragment is the diagnostic — it is what tells an
+// operator "this was cut off" rather than "this was malformed" — but a
+// hostile or runaway payload must not flood a log line.
+const maxUndecodableArgumentsQuoted = 256
+
+// DecodeToolCallArguments decodes one tool call's `arguments` payload into the
+// map the dispatcher hands the tool.
+//
+// This is the ONLY tool-argument decoder in the codebase. Every provider —
+// openai_compat (streaming and non-streaming), anthropic, the OpenAI
+// Responses API, bedrock, and the CLI-provider text extractor — routes
+// through it, because the alternative is what was here before: eight decode
+// sites that had drifted into five different policies for the same fragment
+// (`{"raw": …}`, `{"_raw": …}` under a different key, an empty map, with and
+// without a log). Add a new provider by calling this, not by writing a sixth.
+//
+// An ABSENT payload is not an error. Empty, whitespace, and explicit `null`
+// all decode to an empty map with a nil error, because a zero-parameter tool
+// legitimately sends nothing at all — `list_mounts`, `browser_snapshot` and
+// the sysagent's parameterless tools all do. Only a payload that is present
+// and undecodable returns ErrToolArgumentsUndecodable; conflating the two is
+// the defect this function exists to avoid.
+func DecodeToolCallArguments(raw json.RawMessage, name string) (map[string]any, error) {
 	arguments := make(map[string]any)
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
-		return arguments
+		return arguments, nil
 	}
 
 	var decoded any
 	if err := json.Unmarshal(raw, &decoded); err != nil {
-		logger.WarnCF(
-			"common",
-			"failed to decode tool call arguments payload",
-			map[string]any{"tool": name, "error": err.Error()},
-		)
-		arguments["raw"] = string(raw)
-		return arguments
+		return nil, undecodableArgumentsError(name, string(raw), err)
 	}
 
 	switch v := decoded.(type) {
 	case string:
+		// The OpenAI wire format specifies `arguments` as a JSON-ENCODED
+		// STRING, so a conforming payload decodes once to a string that must
+		// itself be decoded. A truncated call typically fails on this second
+		// pass, not the first.
 		if strings.TrimSpace(v) == "" {
-			return arguments
+			return arguments, nil
 		}
 		if err := json.Unmarshal([]byte(v), &arguments); err != nil {
-			logger.WarnCF(
-				"common",
-				"failed to decode tool call arguments",
-				map[string]any{"tool": name, "error": err.Error()},
-			)
-			arguments["raw"] = v
+			return nil, undecodableArgumentsError(name, v, err)
 		}
-		return arguments
+		return arguments, nil
 	case map[string]any:
-		return v
+		return v, nil
 	default:
-		logger.WarnCF(
-			"common",
-			"unsupported tool call arguments type",
-			map[string]any{"tool": name, "type": fmt.Sprintf("%T", decoded)},
-		)
-		arguments["raw"] = string(raw)
-		return arguments
+		// Valid JSON, wrong shape: a bare number, array or boolean where an
+		// object belongs. Not dispatchable as named parameters, so it fails
+		// exactly like a fragment does.
+		return nil, NewToolArgumentsError(fmt.Errorf(
+			"%w: tool %q: arguments decoded to %T, want a JSON object: %s",
+			ErrToolArgumentsUndecodable, name, decoded, quoteUndecodableArguments(string(raw)),
+		))
 	}
+}
+
+// undecodableArgumentsError builds the error for a payload that would not
+// parse, quoting the fragment so the truncation is visible in the message.
+func undecodableArgumentsError(name, payload string, cause error) error {
+	// Both the sentinel and the underlying JSON cause are wrapped with %w, so
+	// errors.Is matches ErrToolArgumentsUndecodable AND a caller that cares
+	// can still reach the *json.SyntaxError underneath.
+	return NewToolArgumentsError(fmt.Errorf(
+		"%w: tool %q: %w: %s",
+		ErrToolArgumentsUndecodable, name, cause, quoteUndecodableArguments(payload),
+	))
+}
+
+// NewToolArgumentsError wraps an undecodable-arguments cause as a
+// *ProviderError so the agent loop's classifier can see it.
+//
+// The wrapping is load-bearing, not decoration. pkg/agent's
+// errorToProviderError synthesises an EMPTY *ProviderError for any error that
+// is not already one, and classifyByProviderError then classifies on that
+// empty Body — so a bare fmt.Errorf, however well worded, reaches the user as
+// the generic "something went wrong" copy. Putting the message in Body with
+// Status 0 routes it to classifyByMessage, which finds the pinned
+// "invalid tool arguments" substring and applies the CodeToolArgs copy.
+//
+// Status is deliberately 0: no HTTP request failed. The upstream returned a
+// perfectly good 200 whose CONTENT was cut off, and claiming a status code
+// would send the classifier down the HTTP ladder for a fault that has none.
+//
+// Callers in other provider packages (bedrock's Smithy-document path, and any
+// future non-JSON transport) use this so their refusal classifies identically
+// to the JSON ones.
+func NewToolArgumentsError(cause error) *ProviderError {
+	return &ProviderError{
+		Status: 0,
+		Body:   cause.Error(),
+		Err:    cause,
+	}
+}
+
+// quoteUndecodableArguments renders a payload for an error message, capped at
+// maxUndecodableArgumentsQuoted bytes and reporting the true length when it
+// had to cut. Quoting via %q escapes the partial UTF-8 sequence a byte-offset
+// cut can leave behind, so the result is always printable.
+func quoteUndecodableArguments(payload string) string {
+	if len(payload) > maxUndecodableArgumentsQuoted {
+		return fmt.Sprintf(
+			"%q…[%d bytes total]",
+			payload[:maxUndecodableArgumentsQuoted], len(payload),
+		)
+	}
+	return fmt.Sprintf("%q", payload)
 }
 
 // --- HTTP response helpers ---

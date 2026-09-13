@@ -10,6 +10,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
@@ -104,7 +105,7 @@ func (p *Provider) Chat(
 		return nil, fmt.Errorf("claude API call: %w", err)
 	}
 
-	return parseResponse(resp), nil
+	return parseResponse(resp)
 }
 
 // ChatStream implements providers.StreamingProvider.
@@ -245,7 +246,7 @@ func (p *Provider) streamWithCallbacks(
 		return nil, fmt.Errorf("claude API call: %w", err)
 	}
 
-	return parseResponse(&msg), nil
+	return parseResponse(&msg)
 }
 
 func (p *Provider) GetDefaultModel() string {
@@ -303,10 +304,30 @@ func buildParams(
 					if tc.Name == "" {
 						continue
 					}
+					// OUTBOUND rebuild: this re-serialises OUR OWN history back
+					// into an Anthropic request, so unlike the inbound decode in
+					// parseResponse a failure here is an internal invariant
+					// violation, not a truncated upstream reply. It stays
+					// non-fatal — refusing to rebuild would make one bad history
+					// entry permanently unsendable, which is the wedge described
+					// in common.ErrToolArgumentsUndecodable — but it no longer
+					// happens in silence. Before, the error was discarded
+					// outright and an empty arguments block was sent as if the
+					// model had called the tool with no parameters.
 					args := tc.Arguments
 					if args == nil && tc.Function != nil && tc.Function.Arguments != "" {
-						if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
-							args = map[string]any{}
+						decoded, err := common.DecodeToolCallArguments(
+							json.RawMessage(tc.Function.Arguments), tc.Name,
+						)
+						if err != nil {
+							logger.ErrorCF(
+								"anthropic",
+								"stored tool call arguments will not decode when rebuilding the request; "+
+									"sending an empty arguments block",
+								map[string]any{"tool": tc.Name, "id": tc.ID, "error": err.Error()},
+							)
+						} else {
+							args = decoded
 						}
 					}
 					if args == nil {
@@ -459,7 +480,7 @@ func translateTools(tools []ToolDefinition) []anthropic.ToolUnionParam {
 	return result
 }
 
-func parseResponse(resp *anthropic.Message) *LLMResponse {
+func parseResponse(resp *anthropic.Message) (*LLMResponse, error) {
 	var content strings.Builder
 	var reasoning strings.Builder
 	var toolCalls []ToolCall
@@ -474,13 +495,9 @@ func parseResponse(resp *anthropic.Message) *LLMResponse {
 			content.WriteString(tb.Text)
 		case "tool_use":
 			tu := block.AsToolUse()
-			var args map[string]any
-			if err := json.Unmarshal(tu.Input, &args); err != nil {
-				logger.WarnCF("anthropic", "failed to decode tool call input", map[string]any{
-					"tool":  tu.Name,
-					"error": err.Error(),
-				})
-				args = map[string]any{"raw": string(tu.Input)}
+			args, err := common.DecodeToolCallArguments(tu.Input, tu.Name)
+			if err != nil {
+				return nil, err
 			}
 			toolCalls = append(toolCalls, ToolCall{
 				ID:        tu.ID,
@@ -532,7 +549,7 @@ func parseResponse(resp *anthropic.Message) *LLMResponse {
 			CacheReadTokens:  cacheRead,
 			TotalTokens:      total,
 		},
-	}
+	}, nil
 }
 
 func normalizeBaseURL(apiBase string) string {

@@ -403,16 +403,17 @@ func parseStreamResponse(
 		if !ok {
 			continue
 		}
-		args := make(map[string]any)
-		raw := acc.argsJSON.String()
-		if raw != "" {
-			if err := json.Unmarshal([]byte(raw), &args); err != nil {
-				logger.WarnCF("openai_compat", "failed to decode tool call arguments", map[string]any{
-					"tool":  acc.name,
-					"error": err.Error(),
-				})
-				args["raw"] = raw
-			}
+		// The streaming path is where truncation actually lands: the arguments
+		// arrive as a run of deltas appended into acc.argsJSON, and a
+		// generation that hits the output-token cap simply stops mid-run,
+		// leaving a fragment. Decoding it is the check that catches that —
+		// finish_reason cannot be relied on here (see
+		// common.ErrToolArgumentsUndecodable).
+		args, err := common.DecodeToolCallArguments(
+			json.RawMessage(acc.argsJSON.String()), acc.name,
+		)
+		if err != nil {
+			return nil, err
 		}
 		toolCalls = append(toolCalls, ToolCall{
 			ID:        acc.id,

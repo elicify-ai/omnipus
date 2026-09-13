@@ -111,7 +111,10 @@ func TestParseResponse_TextOnly(t *testing.T) {
 			OutputTokens: 20,
 		},
 	}
-	result := parseResponse(resp)
+	result, err := parseResponse(resp)
+	if err != nil {
+		t.Fatalf("parseResponse: %v", err)
+	}
 	if result.Usage.PromptTokens != 10 {
 		t.Errorf("PromptTokens = %d, want 10", result.Usage.PromptTokens)
 	}
@@ -136,7 +139,10 @@ func TestParseResponse_StopReasons(t *testing.T) {
 		resp := &anthropic.Message{
 			StopReason: tt.stopReason,
 		}
-		result := parseResponse(resp)
+		result, err := parseResponse(resp)
+		if err != nil {
+			t.Fatalf("parseResponse: %v", err)
+		}
 		if result.FinishReason != tt.want {
 			t.Errorf("StopReason %q: FinishReason = %q, want %q", tt.stopReason, result.FinishReason, tt.want)
 		}
