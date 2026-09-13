@@ -1037,3 +1037,25 @@ func TestLibraryWriteRefusals_AuditReasonsAreDistinct(t *testing.T) {
 		reasons,
 		"the three refusal classes must be distinguishable from one another in the log")
 }
+
+// UAT D-126 (2026-09-13): the 409's `error` is shown verbatim to a person and
+// must read as a sentence, not as a namespaced log line.
+func TestLibraryConflict_ErrorTextCarriesNoLogNamespace(t *testing.T) {
+	deleted := newLibraryConflictErr("Q4/marek.md", "v1:aaaa", "")
+	assert.Equal(t, "Q4/marek.md changed on disk since you opened it: it has been deleted", deleted.body.Error)
+	changed := newLibraryConflictErr("Q4/marek.md", "v1:aaaa", "v1:bbbb")
+	assert.Equal(t, "Q4/marek.md changed on disk since you opened it", changed.body.Error)
+	assert.NotContains(t, changed.body.Error, "library:")
+
+	// And end to end, through the real handler.
+	api, id := buildLibraryTestAPI(t)
+	seed := libPutJSON(t, api, "/api/v1/library/"+id+"/content",
+		`{"path":"stale.txt","content":"v0","expect_version":"v1:absent"}`)
+	require.Equal(t, http.StatusOK, seed.Code, "body: %s", seed.Body.String())
+	w := libPutJSON(t, api, "/api/v1/library/"+id+"/content",
+		`{"path":"stale.txt","content":"v1","expect_version":"a-token-nobody-issued"}`)
+	require.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
+	var conflict gen.LibraryConflictError
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &conflict))
+	assert.Equal(t, "stale.txt changed on disk since you opened it", conflict.Error)
+}

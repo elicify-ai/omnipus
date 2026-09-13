@@ -433,6 +433,12 @@ export function useLibraryFileEditor({
         setStatus('conflict')
         setError(err.userMessage)
         addToast({ message: err.userMessage, variant: 'error' })
+        // UAT D-126 (2026-09-13): the folder listing kept showing the
+        // PRE-conflict size and time while the banner said the file had
+        // moved on — only the editor knew. A 409 is proof the file changed
+        // on disk, so the listing is refreshed the same way a successful
+        // save refreshes it.
+        void queryClient.invalidateQueries({ queryKey: ['library', workspaceId, 'entries'] })
         return
       }
       setConflict(undefined)

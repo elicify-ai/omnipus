@@ -411,3 +411,43 @@ describe('useLibraryFileEditor — stale-promise resurrection', () => {
     expect(result.current.error).toMatch(/version/i)
   })
 })
+
+// UAT D-126 (2026-09-13): while the conflict banner was up, the file list
+// still showed the PRE-conflict size — only the editor knew the file had
+// moved on. A 409 is proof the file changed on disk, so the listing must be
+// refreshed like a successful save refreshes it.
+describe('useLibraryFileEditor — D-126 a 409 refreshes the folder listing', () => {
+  it('invalidates the workspace entries queries when a save is refused as a conflict', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    const sharedWrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+    mockedFetchVersioned.mockResolvedValue({
+      data: { path: 'Q4/marek.md', content: '# M\n', size: 4, is_text: true, too_large: false },
+      version: 'v1:stale-token',
+    })
+    mockedPut.mockRejectedValueOnce(
+      new LibraryVersionConflictError(
+        {
+          error: 'Q4/marek.md changed on disk since you opened it',
+          code: 'library_version_conflict',
+          path: 'Q4/marek.md',
+          expected_version: 'v1:stale-token',
+          actual_version: 'v1:fresh-token',
+        },
+        JSON.stringify({ error: 'Q4/marek.md changed on disk since you opened it' }),
+      ),
+    )
+
+    const { result } = renderHook(
+      () => useLibraryFileEditor({ workspaceId: 'ws-1', path: 'Q4/marek.md', initialContent: '# M\n' }),
+      { wrapper: sharedWrapper },
+    )
+    act(() => result.current.setDraft('# M\n\nmore\n'))
+    act(() => result.current.save())
+
+    await waitFor(() => expect(result.current.status).toBe('conflict'))
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['library', 'ws-1', 'entries'] })
+  })
+})

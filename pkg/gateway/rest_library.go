@@ -616,12 +616,16 @@ func newLibraryConflictErr(relPath, expected, actual string) *libraryConflictErr
 		e := expected
 		body.ExpectedVersion = &e
 	}
+	// UAT D-126 (2026-09-13): `error` is the sentence a PERSON reads in the
+	// editor's conflict banner. It used to carry the "library: " log
+	// namespace, which made it read like an internal log line. The namespace
+	// belongs in the log record (logLibraryWriteRefused), not the wire text.
 	if actual == "" {
-		body.Error = fmt.Sprintf("library: %s changed on disk since you opened it: it has been deleted", relPath)
+		body.Error = fmt.Sprintf("%s changed on disk since you opened it: it has been deleted", relPath)
 	} else {
 		act := actual
 		body.ActualVersion = &act
-		body.Error = fmt.Sprintf("library: %s changed on disk since you opened it", relPath)
+		body.Error = fmt.Sprintf("%s changed on disk since you opened it", relPath)
 	}
 	return &libraryConflictError{body: body}
 }
