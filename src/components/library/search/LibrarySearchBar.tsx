@@ -80,6 +80,9 @@ import { ViewPartsRenderer } from '../preview/viewparts/ViewPartsRenderer'
 // wikilinkNotation.ts because the `query` fence inside a note shows excerpts
 // from the same engine's same field and needs the identical fix.
 import { stripWikilinkNotation } from '../preview/wikilinkNotation'
+// UAT D-129: one accent-folding rule for every client-side comparison, so
+// the bar never disagrees with the engine about which words a hit matched.
+import { foldForMatch, foldedMatchRanges } from './foldForMatch'
 import { collectionPathToWorkspacePath, libraryNoteHref } from '../knowledge/KnowledgeBacklinks'
 import { LibraryErrorBanner } from '../LibraryErrorBanner'
 import {
@@ -219,8 +222,10 @@ function countBadge(n: number, more = false) {
 function vaultCoverage(query: string, hit: VaultSearchNoteHit): { term: string; found: boolean }[] {
   const words = Array.from(new Set(query.split(/\s+/).filter((w) => w.length > 0)))
   if (words.length < 2) return []
-  const haystack = `${hit.title ?? ''} ${hit.path} ${hit.snippet ?? ''}`.toLowerCase()
-  return words.map((term) => ({ term, found: haystack.includes(term.toLowerCase()) }))
+  // UAT D-129: one folding rule (foldForMatch) — `cafe` covers "Café", and
+  // an NFC and an NFD spelling of the same word cover each other.
+  const haystack = foldForMatch(`${hit.title ?? ''} ${hit.path} ${hit.snippet ?? ''}`)
+  return words.map((term) => ({ term, found: haystack.includes(foldForMatch(term)) }))
 }
 
 function CoverageChips({ coverage }: { coverage: { term: string; found: boolean }[] }) {
@@ -327,10 +332,11 @@ function orderCellsForDisplay(
   const words = query
     .split(/\s+/)
     .filter((w) => w.length > 0)
-    .map((w) => w.toLowerCase())
+    .map(foldForMatch)
   if (words.length === 0) return cells
+  // UAT D-129: folded on both sides, so `zurich` credits a "Zürich" cell.
   const isMatch = (cell: VaultSearchRecordHit['cells'][number]) =>
-    words.some((w) => cell.value.toLowerCase().includes(w) || cell.property.toLowerCase().includes(w))
+    words.some((w) => foldForMatch(cell.value).includes(w) || foldForMatch(cell.property).includes(w))
   const matched = cells.filter(isMatch)
   const unmatched = cells.filter((c) => !isMatch(c))
   return [...matched, ...unmatched]
@@ -434,25 +440,27 @@ function ViewRow({ hit, onOpen }: { hit: VaultSearchViewHit; onOpen: () => void 
  *  accent (`--color-accent`), not yellow — the founder asked for yellow,
  *  but yellow reads as "warning" elsewhere in this palette; flagged in the
  *  defect writeup as reversible. */
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
 function highlightQuery(text: string, query: string): ReactNode {
   const words = query.split(/\s+/).filter((w) => w.length > 0)
   if (words.length === 0) return text
-  const pattern = new RegExp(`(${words.map(escapeRegExp).join('|')})`, 'gi')
-  const parts = text.split(pattern)
-  if (parts.length <= 1) return text
-  return parts.map((part, i) =>
-    i % 2 === 1 ? (
+  // UAT D-129: the match is found on the accent-folded text and the
+  // highlight is sliced from the ORIGINAL, so `cafe` lights up "Café" as
+  // the reader sees it, accent and all.
+  const ranges = foldedMatchRanges(text, words)
+  if (ranges.length === 0) return text
+  const out: ReactNode[] = []
+  let cursor = 0
+  ranges.forEach(([start, end], i) => {
+    if (start > cursor) out.push(text.slice(cursor, start))
+    out.push(
       <span key={i} className="rounded-sm bg-[var(--color-accent)]/25 text-[var(--color-accent)]">
-        {part}
-      </span>
-    ) : (
-      part
-    ),
-  )
+        {text.slice(start, end)}
+      </span>,
+    )
+    cursor = end
+  })
+  if (cursor < text.length) out.push(text.slice(cursor))
+  return out
 }
 
 /** One FileSearchHit — a NAME match (path only) or a CONTENT match (path,

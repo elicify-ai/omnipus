@@ -1465,3 +1465,75 @@ describe('UAT D-72 / D-136 — the saved-view dialog links relation cells and na
     expect(screen.queryByTestId('library-search-view-source')).not.toBeInTheDocument()
   })
 })
+
+describe('UAT D-129 (web half) — client-side matching folds accents like the engine', () => {
+  const NFD_CAFE = 'café' // "café" as e + combining acute (NFD)
+
+  it('coverage chips credit `cafe` against a "Café" hit instead of contradicting the engine', async () => {
+    renderBar({
+      res: response({
+        notes: [{ path: 'menus/cafe.md', title: 'Café menu', snippet: 'Zürich résumé' }],
+      }),
+    })
+    type('cafe zurich resume')
+    await waitFor(() => expect(screen.getByTestId('vault-search-note-hit')).toBeInTheDocument())
+    // DIES ON the old code: `cafe`, `zurich` and `resume` all read as "not
+    // covered" because the haystack was only lower-cased, never folded.
+    expect(screen.getAllByTestId('vault-search-coverage-hit')).toHaveLength(3)
+    expect(screen.queryAllByTestId('vault-search-coverage-miss')).toHaveLength(0)
+  })
+
+  it('the NFC and the NFD spelling of café cover each other', async () => {
+    renderBar({
+      res: response({
+        notes: [{ path: `${NFD_CAFE} (1).png`, title: `${NFD_CAFE} (1).png` }],
+      }),
+    })
+    type('café menu') // typed as NFC
+    await waitFor(() => expect(screen.getByTestId('vault-search-note-hit')).toBeInTheDocument())
+    const chips = screen.getAllByTestId(/vault-search-coverage-(hit|miss)/)
+    const cafeChip = chips.find((c) => c.textContent?.includes('café'))
+    expect(cafeChip).toBeDefined()
+    // DIES ON the old code: "café" (NFC) is not a substring of "café" (NFD).
+    expect(cafeChip?.getAttribute('data-testid')).toBe('vault-search-coverage-hit')
+  })
+
+  it('highlights the accented word as the reader sees it when the query has no accent', async () => {
+    renderBar({ res: response({ notes: [{ path: 'menus/cafe.md', title: 'Café menu' }] }) })
+    type('cafe')
+    const hit = await screen.findByTestId('vault-search-note-hit')
+    // DIES ON the old code: the regex `/cafe/gi` never matched "Café", so
+    // nothing was highlighted.
+    const mark = hit.querySelector('span[class*="color-accent"]')
+    expect(mark).not.toBeNull()
+    expect(mark?.textContent).toBe('Café')
+  })
+
+  it('orders a "Zürich" cell first for the query `zurich` instead of withholding it', async () => {
+    renderBar({
+      res: response({
+        records: [
+          {
+            path: 'crm/acme.md',
+            title: 'Acme',
+            record_type: 'company',
+            cells: [
+              { property: 'status', value: 'open' },
+              { property: 'owner', value: 'Sofia' },
+              { property: 'tier', value: 'gold' },
+              { property: 'since', value: '2021' },
+              { property: 'city', value: 'Zürich' },
+            ],
+          },
+        ],
+      }),
+    })
+    type('zurich')
+    const hit = await screen.findByTestId('vault-search-record-hit')
+    // DIES ON the old code: the one cell that explains the hit was the
+    // fifth, unmatched under a bare lower-case compare, and so withheld
+    // behind "+1 more".
+    expect(within(hit).getByText('Zürich')).toBeInTheDocument()
+    expect(within(hit).queryByText('2021')).toBeNull()
+  })
+})
