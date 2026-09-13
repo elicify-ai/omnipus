@@ -172,6 +172,12 @@ func isKnownPropertyType(t PropertyType) bool {
 	return false
 }
 
+// PropertyTypeNames is every supported property type, as declared in a
+// schema file, in PropertyTypes order — the list knowledge_describe states
+// so an agent can learn it without triggering a refusal (UAT 2026-09-13
+// D-24).
+func PropertyTypeNames() []string { return propertyTypeNames() }
+
 func propertyTypeNames() []string {
 	out := make([]string, 0, len(PropertyTypes))
 	for _, t := range PropertyTypes {

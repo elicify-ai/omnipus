@@ -649,7 +649,15 @@ func (tr *Trasher) Restore(req RestoreRequest) (*RestoreResult, error) {
 		return nil, err
 	}
 	if _, statErr := fsys.Lstat(destAbs); statErr == nil {
-		rerr := fmt.Errorf("%w: %s — move or rename it first", ErrRestoreDestinationExists, orig)
+		// UAT 2026-09-13 D-22: name BOTH sides of the collision — the live
+		// note in the way and the trashed copy that cannot land — so the
+		// caller can tell which is which and where the copy still is.
+		trashRel := chosen.FileAbs
+		if rel, relErr := filepath.Rel(tr.Root.Path(), chosen.FileAbs); relErr == nil {
+			trashRel = filepath.ToSlash(rel)
+		}
+		rerr := fmt.Errorf("%w: a live note already occupies %s, so the trashed copy (trashed_at %s, kept at %s) cannot be restored onto it — move or rename the live note with knowledge_restructure first, then restore again",
+			ErrRestoreDestinationExists, orig, chosen.TrashID, trashRel)
 		tr.emit(trashOpRestore, "refused", []string{orig}, rerr.Error())
 		return nil, rerr
 	} else if !errors.Is(statErr, fs.ErrNotExist) {

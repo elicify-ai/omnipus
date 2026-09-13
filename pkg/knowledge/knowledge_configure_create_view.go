@@ -55,9 +55,14 @@
 package knowledge
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -128,6 +133,9 @@ func buildCreateViewKindParamDescription() string {
 // in this tool, create_view included.
 var createViewArgNames = []string{
 	"kind", "filter", "number", "unit", "date", "image", "choice", "group_by", "columns", "sort", "limit",
+	// source (UAT 2026-09-13 D-13): the .base data file this view belongs
+	// to. Shared with write_view — see viewSourceArg.
+	"source",
 }
 
 // ---------------------------------------------------------------------------
@@ -213,6 +221,18 @@ func stringListArg(raw any, argName string) ([]string, string) {
 		s := strings.TrimSpace(v)
 		if s == "" {
 			return nil, ""
+		}
+		// UAT 2026-09-13 D-55: a JSON list ENCODED AS A STRING
+		// ("[\"owner\", \"done_ratio\"]") used to count as one element and
+		// be refused for the wrong reason ("got 1"). Decode it as the list
+		// it plainly is; a string that only looks like one is refused for
+		// what it is.
+		if strings.HasPrefix(s, "[") {
+			var decoded []any
+			if err := json.Unmarshal([]byte(s), &decoded); err != nil {
+				return nil, fmt.Sprintf("'%s' looks like a JSON list written as a string (%q) but does not parse as one — send a real list, or a single property name", argName, s)
+			}
+			return stringListArg(decoded, argName)
 		}
 		return []string{s}, ""
 	case []any:
@@ -764,9 +784,12 @@ func (t *ConfigureTool) execCreateView(target mutationTarget, args map[string]an
 	}
 	kind := generated.ViewDefKind(kindStr)
 	if !kind.Valid() {
+		// D-32: cross-reference the OTHER vocabulary, so an agent holding a
+		// write_view `layout` word knows why it is not a `kind`.
 		return t.deps.refuse(authorOpConfigure, target, nil, fmt.Sprintf(
-			"kind %q is not one of the eight declared view kinds; permitted: %s",
-			kindStr, strings.Join(ViewKindOrder, ", ")))
+			"kind %q is not one of the eight declared view kinds; permitted: %s "+
+				"(`kind` is create_view's vocabulary; write_view's legacy `layout` — %s — is a different one, and is written for you here)",
+			kindStr, strings.Join(ViewKindOrder, ", "), strings.Join(records.ViewLayoutNames(), ", ")))
 	}
 
 	typeName := strings.TrimSpace(stringArg(args["type"]))
@@ -789,6 +812,18 @@ func (t *ConfigureTool) execCreateView(target mutationTarget, args map[string]an
 	if berr != "" {
 		return t.deps.refuse(authorOpConfigure, target, nil, "create_view: "+berr)
 	}
+	source, srefusal := viewSourceArg(target, args["source"])
+	if srefusal != "" {
+		return t.deps.refuse(authorOpConfigure, target, nil, "create_view: "+srefusal)
+	}
+	// D-21: a view name is a file; an identical or case-colliding name is
+	// refused rather than silently overwritten (or, on a case-insensitive
+	// filesystem, silently written over the OTHER spelling).
+	if existing, _, verr := records.LoadViews(root, schemas); verr == nil {
+		if crefusal := viewNameCollisionRefusal(existing, viewName, "", true); crefusal != "" {
+			return t.deps.refuse(authorOpConfigure, target, nil, "create_view: "+crefusal)
+		}
+	}
 
 	parts, refusal := composePartsForKind(kind, schema, bindings)
 	if refusal != "" {
@@ -804,6 +839,9 @@ func (t *ConfigureTool) execCreateView(target mutationTarget, args map[string]an
 	}
 	if typeName != "" {
 		defMap["type"] = typeName
+	}
+	if source != "" {
+		defMap["source"] = source
 	}
 	if bindings.filter != nil {
 		defMap["filter"] = bindings.filter
@@ -843,12 +881,17 @@ func (t *ConfigureTool) execCreateView(target mutationTarget, args map[string]an
 	if werr := overwriteControlPlaneFile(target, viewPath, yamlBytes); werr != nil {
 		return t.deps.refuse(authorOpConfigure, target, []string{relControlPlanePath(root, viewPath)}, "create_view: "+werr.Error())
 	}
+	sourceCreated, sourceWarn := ensureStarterBaseFile(target, source, parsed.DisplayLabel())
 
+	paths := []string{relControlPlanePath(root, viewPath)}
+	if sourceCreated {
+		paths = append(paths, source)
+	}
 	t.deps.record(AuthorAuditRecord{
 		Operation: authorOpConfigure, Outcome: AuthorOutcomeApplied,
 		AgentID: target.agentID, WorkspaceID: target.workspaceID,
 		Collection: target.col.Name, Root: root,
-		Paths: []string{relControlPlanePath(root, viewPath)}, At: t.deps.now(),
+		Paths: paths, At: t.deps.now(),
 	})
 
 	viewType := ""
@@ -859,8 +902,123 @@ func (t *ConfigureTool) execCreateView(target mutationTarget, args map[string]an
 		Op: opCreateView, Name: viewName, Path: relControlPlanePath(root, viewPath),
 		ViewType: viewType, Kind: string(kind),
 		PartsSummary: summarizeParts(parts),
-		Unservable:   t.serveRefusalFor(root, schemas, viewName),
+		Source:       source, SourceCreated: sourceCreated, SourceWarning: sourceWarn,
+		Unservable: t.serveRefusalFor(root, schemas, viewName),
 	}))
+}
+
+// viewSourceArg reads create_view's / write_view's `source` argument (UAT
+// 2026-09-13 D-13): the collection-relative path of the .base data file this
+// view belongs to. SavedView.Def.Source is the ONLY thing that ties a saved
+// view to a data file — the Library base preview and the `![[X.base#View]]`
+// embed both list views by it — so an agent-created view with no source had
+// no UI surface at all. Returns "" when no source was given.
+func viewSourceArg(target mutationTarget, raw any) (string, string) {
+	source := strings.TrimSpace(stringArg(raw))
+	if source == "" {
+		return "", ""
+	}
+	rel, err := cleanNoteArg(source)
+	if err != nil {
+		return "", fmt.Sprintf("'source' %q is not a path inside this collection: %v", source, err)
+	}
+	if !isDataFileTarget(rel) {
+		return "", fmt.Sprintf("'source' must name a .base data file (e.g. \"Projects.base\"), got %q", source)
+	}
+	if _, rerr := authorWriteTargetForRel(target, rel); rerr != nil {
+		return "", fmt.Sprintf("'source' %q: %v", source, rerr)
+	}
+	return rel, ""
+}
+
+// authorWriteTargetForRel resolves a collection-relative path to the absolute
+// location a write would land at, through the same containment gate every
+// note write uses.
+func authorWriteTargetForRel(target mutationTarget, rel string) (string, error) {
+	root, err := NewCollectionRoot(OSLinkFS(), target.collection.Root())
+	if err != nil {
+		return "", err
+	}
+	return authorWriteTarget(OSLinkFS(), root, rel)
+}
+
+// ensureStarterBaseFile writes a minimal Obsidian-compatible .base file at
+// source when none exists yet (D-13: "knowledge_base_create writes a starter
+// .base when asked" — the ask is a `source` naming a file that is not there),
+// so the Library has a data file to open and the view has somewhere to
+// appear. An existing file is never touched: the vault's own .base files are
+// the operator's (FR-102 — a source is recorded, never re-read or rewritten).
+// Returns whether a file was created and a warning when it could not be.
+func ensureStarterBaseFile(target mutationTarget, source, label string) (created bool, warning string) {
+	if source == "" {
+		return false, ""
+	}
+	abs, err := authorWriteTargetForRel(target, source)
+	if err != nil {
+		return false, fmt.Sprintf("could not resolve %s: %v", source, err)
+	}
+	if _, statErr := OSLinkFS().Lstat(abs); statErr == nil {
+		return false, ""
+	}
+	if mkErr := os.MkdirAll(filepath.Dir(abs), noteDirPerm); mkErr != nil {
+		return false, fmt.Sprintf("could not create the folder for %s: %v", source, mkErr)
+	}
+	content := "# Data file started by knowledge_configure. Its views are saved under\n" +
+		"# " + records.VaultMarkerDirName + "/" + records.ViewsDirName + "/ with `source: " + source + "`.\n" +
+		"views:\n" +
+		"  - type: table\n" +
+		"    name: " + strconv.Quote(label) + "\n"
+	f, oerr := os.OpenFile(abs, os.O_WRONLY|os.O_CREATE|os.O_EXCL, noteFilePerm)
+	if oerr != nil {
+		if errors.Is(oerr, fs.ErrExist) {
+			return false, ""
+		}
+		return false, fmt.Sprintf("could not create %s: %v", source, oerr)
+	}
+	if _, werr := f.WriteString(content); werr != nil {
+		_ = f.Close()
+		_ = os.Remove(abs)
+		return false, fmt.Sprintf("could not write %s: %v", source, werr)
+	}
+	if cerr := f.Close(); cerr != nil {
+		return false, fmt.Sprintf("could not close %s: %v", source, cerr)
+	}
+	return true, ""
+}
+
+// viewNameCollisionRefusal is UAT 2026-09-13 D-21: names and labels of saved
+// views must be unique, and unique WITHOUT regard to case — a view is one
+// file, and on a case-insensitive filesystem "Case Ladder" and "CASE LADDER"
+// are the SAME file, so the second write silently destroyed the first while
+// reporting two saves. Labels must be unique because embeds and the base
+// preview address a view by its label. isCreate refuses an exact name match
+// too (create_view never overwrites); write_view is an upsert of the exact
+// name and only refuses the case-colliding and label-colliding cases.
+func viewNameCollisionRefusal(existing *records.ViewSet, viewName, label string, isCreate bool) string {
+	if existing == nil {
+		return ""
+	}
+	nameKey := records.FoldKey(viewName)
+	labelKey := ""
+	if strings.TrimSpace(label) != "" {
+		labelKey = records.FoldKey(strings.TrimSpace(label))
+	}
+	for _, v := range existing.Views() {
+		name := v.Def.Name
+		switch {
+		case name == viewName && isCreate:
+			return fmt.Sprintf("a view named %q already exists at %s; create_view never overwrites — use write_view to replace it, delete_view first, or choose another name",
+				viewName, filepath.ToSlash(v.SourcePath))
+		case name != viewName && records.FoldKey(name) == nameKey:
+			return fmt.Sprintf("view name %q collides with the existing view %q: the two differ only by letter case, and on a case-insensitive filesystem they are ONE file — the write would silently replace the other view. Choose a name that differs in more than case",
+				viewName, name)
+		}
+		if labelKey != "" && name != viewName && records.FoldKey(v.DisplayLabel()) == labelKey {
+			return fmt.Sprintf("label %q is already carried by view %q; a label must be unique (ignoring case) because embeds and the base preview address a view by its label",
+				label, name)
+		}
+	}
+	return ""
 }
 
 // ---------------------------------------------------------------------------

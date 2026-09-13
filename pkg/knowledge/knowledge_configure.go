@@ -83,6 +83,7 @@
 package knowledge
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -175,7 +176,7 @@ var configureOpArgNames = map[string][]string{
 	opCreateRecordType: {"type", "definition"},
 	opEditRecordType:   {"type", "definition"},
 	opDeleteRecordType: {"type"},
-	opWriteView:        {"view", "definition"},
+	opWriteView:        {"view", "definition", "source"},
 	opCreateView:       append([]string{"view", "type"}, createViewArgNames...),
 	opDeleteView:       {"view"},
 }
@@ -331,6 +332,15 @@ func (t *ConfigureTool) Parameters() map[string]any {
 			"view": map[string]any{
 				"type":        "string",
 				"description": "create_view / write_view / delete_view: the view name.",
+			},
+			"source": map[string]any{
+				"type": "string",
+				"description": "create_view / write_view, optional: the .base data file this " +
+					"view belongs to, as a path relative to the collection root (e.g. " +
+					"'Projects.base'). Views reach the Library's base preview and the " +
+					"'![[Projects.base#View]]' embed ONLY through this; a view without a " +
+					"source answers knowledge_find but has no place in the UI. A starter " +
+					".base file is written for you if none exists at that path.",
 			},
 			"kind": map[string]any{
 				"type": "string",
@@ -501,7 +511,14 @@ func (t *ConfigureTool) execCreateRecordType(target mutationTarget, args map[str
 	root := target.collection.Root()
 	typeName := strings.TrimSpace(stringArg(args["type"]))
 	if typeName == "" {
-		return t.deps.refuse(authorOpConfigure, target, nil, "'type' is required for create_record_type")
+		// UAT 2026-09-13 D-47: a `type` inside the definition is the same
+		// declaration; it need not be repeated at the top level.
+		if defMap, ok := args["definition"].(map[string]any); ok {
+			typeName = strings.TrimSpace(stringArg(defMap["type"]))
+		}
+	}
+	if typeName == "" {
+		return t.deps.refuse(authorOpConfigure, target, nil, "'type' is required for create_record_type (at the top level, or as definition.type)")
 	}
 	// The name becomes a filename under records.SchemaDir — see
 	// controlPlaneNameRefusal for why that is checked before anything else.
@@ -640,6 +657,15 @@ func (t *ConfigureTool) execEditRecordType(target mutationTarget, args map[strin
 	}
 	newReport := records.Validate(newSet, matches, records.ValidateOptions{})
 	cascade := computeEditCascade(oldReport, newReport)
+	// UAT 2026-09-13 D-25: "8 validate clean" was true under the validator's
+	// rules and untrue in every way that mattered — after `priority` was
+	// renamed to `prio`, 8 of 8 notes still carried `priority:` (now ignored
+	// by every reader) and none carried `prio:`, and two saved views naming
+	// `priority` silently stopped loading. Both are counted here.
+	if newSchema, ok := newSet.Get(typeName); ok {
+		cascade.StaleKeys = staleKeysAcrossRecords(newSchema, matches)
+	}
+	cascade.ViewsBroken = viewsNewlyRejected(root, oldSet, newSet)
 
 	t.deps.record(AuthorAuditRecord{
 		Operation: authorOpConfigure, Outcome: AuthorOutcomeApplied,
@@ -793,6 +819,28 @@ func (t *ConfigureTool) execWriteView(target mutationTarget, args map[string]any
 		}
 	}
 	defMap["name"] = viewName
+	// D-13: `source` (the .base data file) may come as an argument or inside
+	// the definition; both must agree when both are given.
+	source, srefusal := viewSourceArg(target, args["source"])
+	if srefusal != "" {
+		return t.deps.refuse(authorOpConfigure, target, nil, "write_view: "+srefusal)
+	}
+	if defSource, ok := defMap["source"]; ok {
+		if s, _ := defSource.(string); strings.TrimSpace(s) != "" {
+			defRel, drefusal := viewSourceArg(target, s)
+			if drefusal != "" {
+				return t.deps.refuse(authorOpConfigure, target, nil, "write_view: definition."+drefusal)
+			}
+			if source != "" && defRel != source {
+				return t.deps.refuse(authorOpConfigure, target, nil, fmt.Sprintf(
+					"write_view: 'source' is %q but definition.source is %q; they must agree", source, s))
+			}
+			source = defRel
+		}
+	}
+	if source != "" {
+		defMap["source"] = source
+	}
 
 	yamlBytes, merr := marshalDefinition(defMap)
 	if merr != nil {
@@ -811,16 +859,32 @@ func (t *ConfigureTool) execWriteView(target mutationTarget, args map[string]any
 	if rej := records.ValidateViewAgainstSchemas(parsed, schemas); rej != nil {
 		return t.deps.refuse(authorOpConfigure, target, nil, "write_view: "+rej.Reason)
 	}
+	// D-21: write_view is an upsert of THIS exact name, but a case-colliding
+	// name or a label another view already carries is refused.
+	if existing, _, verr := records.LoadViews(root, schemas); verr == nil {
+		label := ""
+		if parsed.Def.Label != nil {
+			label = *parsed.Def.Label
+		}
+		if crefusal := viewNameCollisionRefusal(existing, viewName, label, false); crefusal != "" {
+			return t.deps.refuse(authorOpConfigure, target, nil, "write_view: "+crefusal)
+		}
+	}
 
 	if werr := overwriteControlPlaneFile(target, viewPath, yamlBytes); werr != nil {
 		return t.deps.refuse(authorOpConfigure, target, []string{relControlPlanePath(root, viewPath)}, "write_view: "+werr.Error())
 	}
+	sourceCreated, sourceWarn := ensureStarterBaseFile(target, source, parsed.DisplayLabel())
 
+	paths := []string{relControlPlanePath(root, viewPath)}
+	if sourceCreated {
+		paths = append(paths, source)
+	}
 	t.deps.record(AuthorAuditRecord{
 		Operation: authorOpConfigure, Outcome: AuthorOutcomeApplied,
 		AgentID: target.agentID, WorkspaceID: target.workspaceID,
 		Collection: target.col.Name, Root: root,
-		Paths: []string{relControlPlanePath(root, viewPath)}, At: t.deps.now(),
+		Paths: paths, At: t.deps.now(),
 	})
 	// ViewDef.Type is a *string since FR-018b made `type` optional: an UNTYPED
 	// view spans every note in scope and is entirely legal. ParseView refuses
@@ -836,6 +900,7 @@ func (t *ConfigureTool) execWriteView(target mutationTarget, args map[string]any
 	return tools.NewToolResult(RenderConfigure(ConfigureData{
 		Op: opWriteView, Name: viewName, Path: relControlPlanePath(root, viewPath),
 		ViewType: viewType, Unservable: t.serveRefusalFor(root, schemas, viewName),
+		Source: source, SourceCreated: sourceCreated, SourceWarning: sourceWarn,
 	}))
 }
 
@@ -893,6 +958,15 @@ func (t *ConfigureTool) execDeleteView(target mutationTarget, args map[string]an
 			"no view %q is declared; declared views: %s", viewName, joinOrNone(set.Names())))
 	}
 
+	// UAT 2026-09-13 D-27: name the downstream damage BEFORE the file goes —
+	// every other destructive op in the family does. Embeds are found by
+	// the label (what `![[X.base#Label]]` carries) and by the name.
+	embeds := notesEmbeddingView(root, v)
+	rawSource := ""
+	if v.Def.Source != nil && strings.TrimSpace(*v.Def.Source) != "" {
+		rawSource = strings.TrimSpace(*v.Def.Source)
+	}
+
 	if werr := removeControlPlaneFile(target, v.SourcePath); werr != nil {
 		return t.deps.refuse(authorOpConfigure, target, []string{relControlPlanePath(root, v.SourcePath)}, "delete_view: "+werr.Error())
 	}
@@ -905,7 +979,49 @@ func (t *ConfigureTool) execDeleteView(target mutationTarget, args map[string]an
 	})
 	return tools.NewToolResult(RenderConfigure(ConfigureData{
 		Op: opDeleteView, Name: viewName, Path: relControlPlanePath(root, v.SourcePath),
+		Embeds: embeds, RawSource: rawSource, Label: v.DisplayLabel(),
 	}))
+}
+
+// deleteViewEmbedListMax bounds how many embedding notes a delete_view
+// response names; the count is always exact.
+const deleteViewEmbedListMax = 10
+
+// notesEmbeddingView lists the notes whose body carries an embed of v —
+// `![[<anything>#<label>]]` or `#<name>]]`, with or without a `|size` — so
+// delete_view can say which dashboards will show a broken embed. A walk
+// failure answers nil: the cascade line is then simply absent, never wrong.
+func notesEmbeddingView(root string, v *records.SavedView) []string {
+	fsys := OSLinkFS()
+	croot, err := NewCollectionRoot(fsys, root)
+	if err != nil {
+		return nil
+	}
+	wr, err := WalkContained(fsys, croot)
+	if err != nil {
+		return nil
+	}
+	needles := [][]byte{
+		[]byte("#" + v.DisplayLabel() + "]]"), []byte("#" + v.DisplayLabel() + "|"),
+		[]byte("#" + v.Def.Name + "]]"), []byte("#" + v.Def.Name + "|"),
+	}
+	var out []string
+	for _, rel := range wr.Files {
+		if !IsMarkdownPath(rel) {
+			continue
+		}
+		content, rerr := ReadNoteContent(fsys, filepath.Join(croot.Path(), filepath.FromSlash(rel)))
+		if rerr != nil {
+			continue
+		}
+		for _, n := range needles {
+			if idx := bytes.Index(content, n); idx >= 0 && bytes.Contains(content[:idx], []byte("![[")) {
+				out = append(out, rel)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -921,6 +1037,65 @@ type ConfigureCascade struct {
 	NewlyReported int
 	LostValidity  int
 	Examples      []string
+	// StaleKeys counts, per key, the matched notes still carrying a
+	// frontmatter key the (new) schema does not declare — the aftermath of a
+	// rename or removal (D-25). Declaration order is not meaningful here;
+	// rendered sorted by key.
+	StaleKeys map[string]int
+	// ViewsBroken names saved views that loaded before this edit and are
+	// rejected after it, with the loader's own reason (D-25).
+	ViewsBroken []string
+}
+
+// staleKeysAcrossRecords counts, per key, how many of the matched records
+// carry a frontmatter key the schema does not declare — excluding the
+// discriminator/identity keys, which no schema declares.
+func staleKeysAcrossRecords(sc *records.Schema, matches []records.Record) map[string]int {
+	out := map[string]int{}
+	for _, rec := range matches {
+		for _, key := range rec.Frontmatter.Keys {
+			switch key {
+			case records.RecordTypeKey, records.RecordIDKey, records.RecordIDKeyNamespaced:
+				continue
+			}
+			if _, ok := sc.Property(key); !ok {
+				out[key]++
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// viewsNewlyRejected lists the saved views the loader accepts against oldSet
+// and rejects against newSet — "view X names property priority, which
+// record type project does not declare" — each with the loader's reason.
+func viewsNewlyRejected(root string, oldSet, newSet *records.SchemaSet) []string {
+	_, before, berr := records.LoadViews(root, oldSet)
+	_, after, aerr := records.LoadViews(root, newSet)
+	if berr != nil || aerr != nil || after == nil {
+		return nil
+	}
+	wasRejected := map[string]bool{}
+	if before != nil {
+		for _, r := range before.Rejections {
+			wasRejected[r.Name+"|"+string(r.Code)] = true
+		}
+	}
+	var out []string
+	for _, r := range after.Rejections {
+		if wasRejected[r.Name+"|"+string(r.Code)] {
+			continue
+		}
+		name := r.Name
+		if name == "" && len(r.Paths) > 0 {
+			name = filepath.Base(r.Paths[0])
+		}
+		out = append(out, fmt.Sprintf("%s (%s)", name, r.Reason))
+	}
+	return out
 }
 
 // computeCreateCascade reports AC-C1: the count of pre-existing notes
@@ -1237,6 +1412,25 @@ func controlPlaneNameRefusal(argName, name, dir string) string {
 	case name == "." || name == "..":
 		return refuse("names a directory, not a file")
 	}
+	// UAT 2026-09-13 D-56: a name is a file name and, for a record type, a
+	// value every note's `type:` key holds — so quotes, control characters
+	// and the characters no filesystem accepts are refused by name, and a
+	// type name may carry no whitespace at all.
+	for _, r := range name {
+		switch {
+		case r < 0x20 || r == 0x7f:
+			return fmt.Sprintf("'%s' %q contains a control character; use letters, digits, spaces, '-' or '_'", argName, name)
+		case strings.ContainsRune("\"'<>:|?*", r):
+			return fmt.Sprintf("'%s' %q contains %q, which is not allowed in a file name; use letters, digits, spaces, '-' or '_'", argName, name, r)
+		}
+	}
+	if strings.HasPrefix(name, ".") {
+		return fmt.Sprintf("'%s' %q begins with '.', which would make a hidden file; start with a letter or digit", argName, name)
+	}
+	if argName == "type" && strings.ContainsAny(name, " \t") {
+		return fmt.Sprintf("'type' %q contains whitespace; a record type name is written into every note's `type:` key — use letters, digits, '-' or '_' (e.g. %q)",
+			name, strings.Join(strings.Fields(name), "-"))
+	}
 
 	// The backstop: the file this name produces must sit directly in dir.
 	// Checked against the join the callers actually perform, so the two can
@@ -1296,6 +1490,20 @@ type ConfigureData struct {
 	// other than create_view.
 	PartsSummary []string
 
+	// Source is the .base data file the saved view is tied to (D-13),
+	// SourceCreated whether this call wrote a starter file there, and
+	// SourceWarning why it could not. Empty for a view with no source.
+	Source        string
+	SourceCreated bool
+	SourceWarning string
+
+	// Embeds are the notes that embed the view delete_view just removed
+	// (D-27); RawSource is that view's .base file, which delete_view does
+	// NOT edit; Label is the label those embeds address it by.
+	Embeds    []string
+	RawSource string
+	Label     string
+
 	// Unservable is write_view's/create_view's answer to "will knowledge_find run this?",
 	// empty when it will. See ConfigureTool.serveRefusalFor: a view carrying
 	// `formulas`, a descending grouping or a stored `disabled` flag is written
@@ -1328,6 +1536,7 @@ func RenderConfigure(d ConfigureData) string {
 		}
 		fmt.Fprintf(&b, "view %q saved at %s, %s\n", d.Name, d.Path, queries)
 		fmt.Fprintf(&b, "CASCADE (meaning): what this view returns changes; no note's own validity changes\n")
+		writeViewSourceLine(&b, d)
 		if d.Unservable != "" {
 			// Stated AFTER the cascade block (spec §4.1.6 puts the cascade
 			// first) and before anything else, in the words the loader itself
@@ -1343,14 +1552,45 @@ func RenderConfigure(d ConfigureData) string {
 		fmt.Fprintf(&b, "view %q saved at %s, kind=%s, %s\n", d.Name, d.Path, d.Kind, queries)
 		fmt.Fprintf(&b, "CASCADE (meaning): what this view returns changes; no note's own validity changes\n")
 		fmt.Fprintf(&b, "PARTS: %s\n", strings.Join(d.PartsSummary, " -> "))
+		writeViewSourceLine(&b, d)
 		if d.Unservable != "" {
 			fmt.Fprintf(&b, "NOT SERVABLE by knowledge_find: %s\n", d.Unservable)
 		}
 	case opDeleteView:
 		fmt.Fprintf(&b, "view %q deleted (%s removed)\n", d.Name, d.Path)
 		fmt.Fprintf(&b, "CASCADE (meaning): no note's own validity changes; any query naming this view by name is now refused\n")
+		if len(d.Embeds) > 0 {
+			shown := d.Embeds
+			more := ""
+			if len(shown) > deleteViewEmbedListMax {
+				shown = shown[:deleteViewEmbedListMax]
+				more = fmt.Sprintf(", and %d more", len(d.Embeds)-deleteViewEmbedListMax)
+			}
+			fmt.Fprintf(&b, "  %d note(s) embed this view (as #%s) and will now show it as a broken embed: %s%s\n",
+				len(d.Embeds), d.Label, strings.Join(shown, ", "), more)
+		}
+		if d.RawSource != "" {
+			fmt.Fprintf(&b, "  the data file %s still lists a view named %q — this op removes only the saved view, never a .base file; edit %s in the Library to remove it there too\n",
+				d.RawSource, d.Label, d.RawSource)
+		}
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// writeViewSourceLine is the D-13 SOURCE line for write_view/create_view: an
+// agent must be able to see whether the view it just saved has a place in
+// the Library at all.
+func writeViewSourceLine(b *strings.Builder, d ConfigureData) {
+	switch {
+	case d.Source == "":
+		fmt.Fprintf(b, "SOURCE: none — this view answers knowledge_find but appears in no data file; give source: <file>.base to show it in the Library's base preview and in ![[<file>.base#%s]] embeds\n", d.Name)
+	case d.SourceCreated:
+		fmt.Fprintf(b, "SOURCE: %s (a starter data file was created there; open it in the Library to see this view)\n", d.Source)
+	case d.SourceWarning != "":
+		fmt.Fprintf(b, "SOURCE: %s — WARNING: %s\n", d.Source, d.SourceWarning)
+	default:
+		fmt.Fprintf(b, "SOURCE: %s\n", d.Source)
+	}
 }
 
 func writeCascadeBlock(b *strings.Builder, typeName string, c *ConfigureCascade) {
@@ -1371,4 +1611,19 @@ func writeCascadeBlock(b *strings.Builder, typeName string, c *ConfigureCascade)
 		fmt.Fprintf(b, "  0 newly reported\n")
 	}
 	fmt.Fprintf(b, "  %d record(s) lost validity\n", c.LostValidity)
+	if len(c.StaleKeys) > 0 {
+		keys := sortedMapKeys(c.StaleKeys)
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			parts = append(parts, fmt.Sprintf("%s (%d note(s))", k, c.StaleKeys[k]))
+		}
+		fmt.Fprintf(b, "  STALE KEYS: notes still carry key(s) this type no longer declares — %s — which no reader or query evaluates; on each note, set the declared key with knowledge_edit set_property and remove the old one with value: null, or re-declare the property\n",
+			strings.Join(parts, ", "))
+	}
+	if len(c.ViewsBroken) > 0 {
+		fmt.Fprintf(b, "  VIEWS BROKEN: %d saved view(s) no longer load after this edit:\n", len(c.ViewsBroken))
+		for _, v := range c.ViewsBroken {
+			fmt.Fprintf(b, "    %s\n", v)
+		}
+	}
 }
