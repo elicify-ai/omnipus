@@ -43,3 +43,24 @@ This does **not** reproduce or resolve the user's intermittent dedicated-input f
 Evidence: /Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/validation/browser-input-connection/remote-smoke-20260913T151651Z/current-dedicated-dedicate-3d7d2-rag-and-recovery-stay-exact/input-connection-evidence.json
 
 Mandatory dedicated-routing changes are tracked separately in ADR-081 and its specification. Their local verification includes 382 focused frontend tests, a subsequent 16-test type-correct fixture check, the focused gateway suite, and deliberate WebSocket/media-bypass faults caught by the new boundary tests. The deployment status must be read from verified build provenance, not inferred from this report.
+
+## Confirmed post-deployment dispatch timeouts — 2026-09-13
+
+### Timeline
+
+The recent Fly log snapshot for runtime `848fe93bd` contains **22 input dispatch deadline errors from 15:36:51 to 15:39:26 UTC (23:36:51–23:39:26 Bali)**, all for browser viewer `49f670ee-5ff0-41b3-9c51-7f92eefef02b`. This is a count within the retrieved recent log window, not a total for the whole session. Earlier media shutdown/startup warnings are present; they do not explain the subsequent input failures. The snapshot has no matching viewport timeout or memory warning during this error sequence.
+
+### Cause and limits
+
+These gestures reached the server's WebRTC input sink and then failed in the live browser's Chrome-command dispatch path. `dispatchInputContext` starts an operation budget of at most two seconds before internal tab/input gate waits, cleanup, frame admission and coordinate mapping. `dispatchTrackedInput` passes the remaining budget to Chrome and emits the exact reported error if command execution or its final context check expires. Thus the error is downstream of WebRTC delivery; it is not evidence that these gestures failed to reach the backend.
+
+The logs do not contain input kind, time spent in each internal stage, or Chrome acknowledgment timing. They cannot distinguish a slow Chrome response from a budget mostly consumed by prior internal work, nor prove whether an uncertain action executed before acknowledgment timed out. Page-load time must not be mislabeled as harness overhead. The next useful measurement is bounded stage timing on the **dedicated** input path, covering queue wait, gate wait, mapping and Chrome dispatch separately. The existing optional gateway timing collector is wired to the legacy WebSocket path, so enabling it alone would not answer this question. No deadline or production behavior was changed during this investigation.
+
+### Evidence
+
+Repeated log text:
+> browser-webrtc: input dispatch failed — error="browser live: input dispatch failed: context deadline exceeded"
+
+Snapshot: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/.local/browser-input-final-validation/current-deadlines-clean.log
+
+Source: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/pkg/gateway/browser_webrtc_input_context.go:82; /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/pkg/tools/browser/live_input_context.go:15 and :301.

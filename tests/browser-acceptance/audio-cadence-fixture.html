@@ -1,0 +1,49 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Constant visual clock and isolated audio cadence</title>
+<style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:white}canvas{width:100%;height:100%;display:block}button{position:absolute;left:25%;top:40%;width:50%;height:20%;font:24px sans-serif}</style>
+<canvas id="picture"></canvas><button id="advance">Start no-audio-context baseline</button>
+<script>
+'use strict';
+const canvas = document.getElementById('picture'), context = canvas.getContext('2d');
+const button = document.getElementById('advance');
+let audio, oscillator, gain, analyser, phase = -1, fault = false;
+const values = new Float32Array(2048);
+button.onclick = async () => {
+  try {
+    const next = phase + 1;
+    if (next === 0) {
+      phase = 0;
+      button.textContent = 'Start zero-gain audio clock';
+    } else if (next === 1) {
+      audio = new AudioContext(); oscillator = audio.createOscillator(); gain = audio.createGain(); analyser = audio.createAnalyser();
+      gain.gain.value = 0;
+      oscillator.connect(gain).connect(analyser).connect(audio.destination); oscillator.start();
+      await audio.resume();
+      phase = 1;
+      button.textContent = 'Close audio clock';
+    } else if (next === 2) {
+      oscillator.stop(); await audio.close();
+      phase = 2;
+      button.textContent = 'Experiment complete'; button.disabled = true;
+    }
+  } catch { fault = true; button.textContent = 'Audio clock failed'; }
+};
+function draw() {
+  canvas.width = innerWidth; canvas.height = innerHeight;
+  const w = canvas.width, h = canvas.height;
+  context.fillStyle = 'white'; context.fillRect(0, 0, w, h);
+  context.fillStyle = 'rgb(255,128,0)'; context.fillRect(0, h * .85, w * .2, h * .15);
+  context.fillStyle = fault || phase < 0 ? 'magenta' : ['red', 'lime', 'blue'][phase]; context.fillRect(0, 0, w / 3, h * .18);
+  let rms = 0;
+  if (analyser) { analyser.getFloatTimeDomainData(values); rms = Math.sqrt(values.reduce((sum, x) => sum + x * x, 0) / values.length); }
+  context.fillStyle = audio?.state === 'running' ? 'lime' : 'red'; context.fillRect(w / 3, 0, w / 3, h * .18);
+  context.fillStyle = rms > .005 ? 'lime' : 'red'; context.fillRect(w * 2 / 3, 0, w / 3, h * .18);
+  const visualTicks = Math.floor(performance.now() / 250);
+  for (let bit = 0; bit < 24; bit++) { context.fillStyle = visualTicks & (1 << bit) ? 'white' : 'black'; context.fillRect(w * (.1 + .8 * bit / 24), h * .22, w * .8 / 24 + 1, h * .07); }
+  context.fillStyle = 'black'; context.font = '18px sans-serif';
+  context.fillText('Phase ' + phase + ' · independent visual ticks ' + visualTicks + ' · measured RMS ' + rms.toFixed(4), 20, h * .35);
+}
+const timer = setInterval(draw, 250); draw();
+addEventListener('pagehide', () => { clearInterval(timer); if (audio && audio.state !== 'closed') { oscillator?.stop(); void audio.close(); } }, { once: true });
+</script>

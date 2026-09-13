@@ -1,0 +1,11 @@
+<!doctype html><meta charset="utf-8"><title>Intentional renderer stall calibration</title>
+<style>html,body{margin:0;overflow:hidden;background:#111}canvas{width:100vw;height:100vh;display:block}</style><canvas></canvas>
+<script>
+const nonce=Number(new URL(location.href).searchParams.get('nonce'));
+if(!Number.isInteger(nonce)||nonce<1||nonce>65535)throw Error('Valid nonce required');
+const canvas=document.querySelector('canvas'),ctx=canvas.getContext('2d');
+let count=0,blockedMs=0,errors=0;
+function paint(){canvas.width=innerWidth;canvas.height=innerHeight;ctx.fillStyle='#ff00ff';ctx.fillRect(0,0,canvas.width,canvas.height);[nonce,count,blockedMs,errors].forEach((value,row)=>{for(let bit=0;bit<32;bit++){ctx.fillStyle=(value>>>bit)&1?'white':'black';ctx.fillRect(canvas.width*(.1+.8*bit/32),canvas.height*(.15+row*.18),canvas.width*.8/32,canvas.height*.12)}})}
+addEventListener('wheel',event=>{event.preventDefault();if(!event.isTrusted)errors++;count++;if(count===1){const start=performance.now();while(performance.now()-start<3000){}blockedMs=Math.floor(performance.now()-start)}paint()},{passive:false});
+addEventListener('resize',paint);paint();
+</script>
