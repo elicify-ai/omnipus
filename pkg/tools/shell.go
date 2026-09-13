@@ -824,11 +824,16 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 
 // sweepAfterRun runs the post-command escaping-symlink sweep (D-14, see
 // shell_escape_sweep.go) over the turn's roots and appends its report to the
-// tool result. God mode is the operator's explicit opt-out of confinement
-// and is skipped; so is an unrestricted tool (restrictToWorkspace=false),
-// whose whole point is that the workspace is not a boundary. Background runs
-// are not swept: their completion is delivered asynchronously and a sweep
-// there would race the command that is still writing.
+// tool result. The sweep REPORTS and never removes (Codex review 2026-09-14
+// finding #2: a link inside the command's time window cannot be attributed
+// to the command, and deleting an unattributable link destroys a person's
+// work). Every finding is written to the audit log as well, so the operator
+// sees it even if the agent ignores the notice. God mode is the operator's
+// explicit opt-out of confinement and is skipped; so is an unrestricted tool
+// (restrictToWorkspace=false), whose whole point is that the workspace is
+// not a boundary. Background runs are not swept: their completion is
+// delivered asynchronously and a sweep there would race the command that is
+// still writing.
 func (t *ExecTool) sweepAfterRun(ctx context.Context, command, cwd, baseDir string, started time.Time, result *ToolResult) *ToolResult {
 	if result == nil || t.godMode || !t.restrictToWorkspace {
 		return result
@@ -845,22 +850,27 @@ func (t *ExecTool) sweepAfterRun(ctx context.Context, command, cwd, baseDir stri
 	if notice == "" {
 		return result
 	}
-	if len(res.Removed) > 0 {
-		links := make([]map[string]string, 0, len(res.Removed))
-		for _, r := range res.Removed {
+	if len(res.Found) > 0 {
+		links := make([]map[string]string, 0, len(res.Found))
+		for _, r := range res.Found {
 			links = append(links, map[string]string{"link": r.Link, "target": r.Target})
 		}
 		if t.auditLogger != nil {
+			// The command itself was allowed and ran; this entry is a
+			// warning attached to it, not a denial of anything. "removed"
+			// is deliberately absent from the details: nothing was.
 			if err := t.auditLogger.Log(&audit.Entry{
 				Event:    audit.EventExec,
-				Decision: audit.DecisionDeny,
+				Decision: audit.DecisionAllow,
 				AgentID:  ToolAgentID(ctx),
 				Tool:     t.Name(),
 				Command:  command,
 				Details: map[string]any{
 					"cwd":               cwd,
+					"warning":           "escaping_symlinks",
 					"escaping_symlinks": links,
-					"reason":            "symlink(s) escaping the workspace removed after the command ran",
+					"reason": "symlink(s) pointing outside the workspace appeared during this command's window; " +
+						"they were reported, not removed (creator cannot be attributed with certainty) — operator review",
 				},
 			}); err != nil {
 				slog.Warn("bash: audit write failed", "agent_id", ToolAgentID(ctx), "error", err)
@@ -1356,12 +1366,12 @@ func outsideWorkDirRefusal(p, cwdPath string, use pathUseVerdict, readWithheld b
 // where it does not, the statement says so rather than implying a protection
 // that is not there. The post-command symlink sweep (sweepEscapingSymlinks)
 // is named because it is the one check that does look at what the command
-// actually did rather than what it said.
+// actually did rather than what it said — and it reports, never removes.
 func guardNatureStatement() string {
 	if sandbox.TurnPolicyBaseInstalled() {
 		return "Note: this guard scans the command text and is advisory — a path assembled at runtime is not seen by it. " +
 			"The enforced boundary is the kernel sandbox, which confines the command by the real path it touches; " +
-			"symlinks created inside the workspace that point outside it are removed after the command runs."
+			"symlinks inside the workspace that point outside it are reported after the command runs (never removed) and recorded for the operator."
 	}
 	return "Note: this guard scans the command text and is advisory — a path assembled at runtime is not seen by it. " +
 		"On this host NO kernel sandbox is active, so this scan and the post-command symlink sweep are the only checks on where a command writes."
