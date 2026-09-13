@@ -349,6 +349,8 @@ export class BrowserWebRTCSession {
   private disconnectedTimer: ReturnType<typeof setTimeout> | null = null
   private retryTimer: ReturnType<typeof setTimeout> | null = null
   private iceGatheringTimer: ReturnType<typeof setTimeout> | null = null
+  private receiverHealthTimer: ReturnType<typeof setInterval> | null = null
+  private videoTrack: MediaStreamTrack | null = null
 
   private streamCb: ((stream: MediaStream, identity: BrowserPeerIdentity) => void) | null = null
   private inputOpenCb: (() => void) | null = null
@@ -708,6 +710,16 @@ export class BrowserWebRTCSession {
   }
 
   private _wirePeerConnectionEvents(pc: RTCPeerConnection): void {
+    // Native close() can change state without emitting an ICE event. Check
+    // only definite receiver failure: an unchanged live picture is healthy.
+    const checkReceiver = () => {
+      if (this.pc !== pc || this.stopped) return
+      if (pc.connectionState === 'closed' || pc.iceConnectionState === 'closed') this._fallback('media-closed')
+      else if (pc.connectionState === 'failed') this._fallback('connection-failed')
+      else if (this.videoTrack?.readyState === 'ended') this._fallback('video-track-ended')
+    }
+    pc.onconnectionstatechange = checkReceiver
+    this.receiverHealthTimer = setInterval(checkReceiver, 250)
     pc.ontrack = (event: RTCTrackEvent) => {
       if (this.pc !== pc || this.stopped) return
       // Remote-CONTROL latency fix (live report, macOS 2026-08-13: "scrolling
@@ -737,6 +749,7 @@ export class BrowserWebRTCSession {
       } catch {
         // Hint-setting must never break track wiring.
       }
+      if (event.track.kind === 'video') this.videoTrack = event.track
       const incoming = event.streams[0]
       if (incoming) {
         this.remoteStream = incoming
@@ -769,6 +782,8 @@ export class BrowserWebRTCSession {
         // session-lifetime cap and a long session on a flaky link would
         // still end up permanently stranded in the panel's failure state.
         this.retryCount = 0
+      } else if (iceState === 'closed') {
+        this._fallback('media-closed')
       } else if (iceState === 'failed') {
         this._fallback('ice-failed')
       } else if (iceState === 'disconnected') {
@@ -858,6 +873,11 @@ export class BrowserWebRTCSession {
   }
 
   private _cleanupPeer(): void {
+    if (this.receiverHealthTimer !== null) {
+      clearInterval(this.receiverHealthTimer)
+      this.receiverHealthTimer = null
+    }
+    this.videoTrack = null
     this._clearAnswerTimeout()
     this._clearDisconnectedTimer()
     if (this.iceGatheringTimer !== null) {

@@ -226,10 +226,15 @@ func (h *BrowserWSHandler) dispatchDedicatedControl(wc *browserWSConn, state *br
 		}
 		session := state.commandAttachment().sessionID
 		current := func() bool { d.mu.Lock(); defer d.mu.Unlock(); return !d.closed && d.epoch == observedEpoch }
-		if epoch == 0 || offer == 0 {
-			if f.ControlEpoch != nil {
-				control = *f.ControlEpoch
-			}
+		acknowledge := epoch == 0 || offer == 0
+		// A control refusal must remain distinguishable from transport loss
+		// after the client closes its input peer. Echo the failed request's
+		// identity, never a newer control; malformed counters stay bounded.
+		if f.ControlEpoch != nil && *f.ControlEpoch >= 0 && *f.ControlEpoch <= 9007199254740991 {
+			control = *f.ControlEpoch
+			acknowledge = true
+		}
+		if acknowledge {
 			wc.sendCriticalScopedGen(generated.BrowserInputControlAckFrame{Type: "browser_input_control_ack", SessionId: session, InputEpoch: epoch, ControlEpoch: control, Ok: false, Reason: &reason}, dropContext(session, viewer, "input-control-failed"), request.ctx, current)
 		} else {
 			wc.sendCriticalScopedGen(generated.BrowserInputStateFrame{Type: "browser_input_state", SessionId: session, InputEpoch: epoch, OfferId: offer, ControlEpoch: control, State: "failed", Reason: &reason}, dropContext(session, viewer, "input-control-failed"), request.ctx, current)

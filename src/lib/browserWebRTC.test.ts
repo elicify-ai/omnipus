@@ -1476,3 +1476,60 @@ describe('BrowserWebRTCSession — capture and attempt identity', () => {
   })
 
 })
+
+
+describe('BrowserWebRTCSession — receiver liveness', () => {
+  it.each(['closed', 'failed', 'ended'] as const)('retires a proven %s receiver without relying on a browser event and offers media again', async (failure) => {
+    vi.useFakeTimers()
+    const pc = makeFakePc(), replacement = makeFakePc()
+    pc.iceGatheringState = replacement.iceGatheringState = 'complete'
+    const factory = vi.fn().mockReturnValueOnce(asRTCPeerConnection(pc)).mockReturnValue(asRTCPeerConnection(replacement))
+    const machine = new BrowserWebRTCSession({ pcFactory: factory, retryDelayMs: 1000 })
+    const onFallback = vi.fn(), sendOffer = vi.fn()
+    machine.onFallback(onFallback)
+    try {
+      machine.start(sendOffer)
+      await vi.advanceTimersByTimeAsync(0)
+      pc.iceConnectionState = 'connected'; pc.oniceconnectionstatechange?.()
+      const track = { kind: 'video', readyState: 'live' }
+      pc.ontrack?.({ track, streams: [new FakeMediaStream([track as MediaStreamTrack])] } as unknown as RTCTrackEvent)
+      if (failure === 'ended') track.readyState = 'ended'
+      else Object.assign(pc, { connectionState: failure, iceConnectionState: failure })
+      await vi.advanceTimersByTimeAsync(250)
+      expect(onFallback.mock.calls).toEqual([[failure === 'ended' ? 'video-track-ended' : failure === 'closed' ? 'media-closed' : 'connection-failed']])
+      expect(machine.state).toBe('fallback')
+      expect(pc.close).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(factory).toHaveBeenCalledTimes(2)
+      expect(sendOffer).toHaveBeenCalledTimes(2)
+      machine.stop()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { machine.stop(); vi.useRealTimers() }
+  })
+
+  it('does not treat an unchanged live picture as failure, and ignores retired receiver callbacks', async () => {
+    vi.useFakeTimers()
+    const pc = makeFakePc(), replacement = makeFakePc()
+    pc.iceGatheringState = replacement.iceGatheringState = 'complete'
+    const peers = [pc, replacement]
+    const machine = new BrowserWebRTCSession({ pcFactory: () => asRTCPeerConnection(peers.shift()!), maxRetries: 0 })
+    const onFallback = vi.fn(); machine.onFallback(onFallback)
+    try {
+      machine.start(vi.fn()); await vi.advanceTimersByTimeAsync(0)
+      pc.iceConnectionState = 'connected'; pc.oniceconnectionstatechange?.()
+      const track = { kind: 'video', readyState: 'live' }
+      pc.ontrack?.({ track, streams: [new FakeMediaStream([track as MediaStreamTrack])] } as unknown as RTCTrackEvent)
+      await vi.advanceTimersByTimeAsync(10000)
+      expect(machine.state).toBe('connected'); expect(onFallback).not.toHaveBeenCalled()
+      const retiredCallback = (pc as unknown as RTCPeerConnection).onconnectionstatechange
+      machine.stop(); expect(vi.getTimerCount()).toBe(0)
+      machine.start(vi.fn()); await vi.advanceTimersByTimeAsync(0)
+      replacement.iceConnectionState = 'connected'; replacement.oniceconnectionstatechange?.()
+      Object.assign(pc, { connectionState: 'closed' }); track.readyState = 'ended'
+      retiredCallback?.call(asRTCPeerConnection(pc), new Event('connectionstatechange'))
+      await vi.advanceTimersByTimeAsync(250)
+      expect(machine.state).toBe('connected'); expect(onFallback).not.toHaveBeenCalled()
+      machine.stop(); expect(vi.getTimerCount()).toBe(0)
+    } finally { machine.stop(); vi.useRealTimers() }
+  })
+})

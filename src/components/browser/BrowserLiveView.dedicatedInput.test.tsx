@@ -81,9 +81,13 @@ it('uses dedicated first-gesture input without implicit take or WebSocket fallba
   fireEvent.keyDown(s.frame, { key: 'b' })
   expect(s.peer.channels['input-reliable'].send).toHaveBeenCalledTimes(1)
   expect(s.video.srcObject).toBe(originalMedia)
+  expect(s.socket.frames.filter(f => f.type === 'browser_control')).toEqual([{ type: 'browser_control', action: 'release', input_epoch: 1, control_epoch: 1 }])
+  act(() => s.socket.receive({ type: 'browser_input_control_ack', session_id: 's1', input_epoch: 1, control_epoch: 1, ok: true, capture_id: capture, capture_generation: 1 }))
+  expect(screen.getByTestId('browser-input-error')).toBeVisible()
+  expect(s.socket.frames.filter(f => f.type === 'browser_input_offer')).toHaveLength(1)
   fireEvent.click(screen.getByRole('button', { name: 'Retry input' }))
   await waitFor(() => expect(s.socket.frames.filter(f => f.type === 'browser_input_offer')).toHaveLength(2))
-  act(() => s.socket.receive({ type: 'browser_input_answer', session_id: 's1', input_epoch: 2, offer_id: 2, control_epoch: 0, sdp: 'answer2' }))
+  act(() => s.socket.receive({ type: 'browser_input_answer', session_id: 's1', input_epoch: 2, offer_id: 2, control_epoch: 1, sdp: 'answer2' }))
   await waitFor(() => expect(document.querySelector('[data-input-state="ready"]')).not.toBeNull())
   expect(s.video.srcObject).toBe(originalMedia)
   expect(s.socket.frames.filter(f => f.type === 'browser_input')).toEqual([])
@@ -101,4 +105,31 @@ it('waits for the control acknowledgment and its presented capture generation', 
   act(() => { health(s.socket, 2, 200); emitBrowserFrame(s.video, { rtpTimestamp: 200, expectedDisplayTime: performance.now() - 1 }) })
   fireEvent.keyDown(s.frame, { key: 'a' })
   expect(s.peer.channels['input-reliable'].send.mock.calls.map(([data]) => JSON.parse(data).capture_generation)).toEqual([2])
+})
+
+
+it('queues Retry behind failed-input retirement without replacing media or its socket', async () => {
+  const s = await connected(), originalMedia = s.video.srcObject
+  fireEvent.keyDown(s.frame, { key: 'ArrowLeft', code: 'ArrowLeft' })
+  act(() => s.peer.close())
+  expect(s.socket.frames.at(-1)).toEqual({ type: 'browser_control', action: 'release', input_epoch: 1, control_epoch: 1 })
+  fireEvent.click(screen.getByRole('button', { name: 'Retry input' }))
+  expect(Socket.instances).toHaveLength(1)
+  expect(s.socket.frames.filter(f => f.type === 'browser_input_offer')).toHaveLength(1)
+  expect(screen.getByTestId('browser-input-error')).toBeVisible()
+  act(() => s.socket.receive({ type: 'browser_input_control_ack', session_id: 's1', input_epoch: 1, control_epoch: 1, ok: true, capture_id: capture, capture_generation: 1 }))
+  await waitFor(() => expect(s.socket.frames.filter(f => f.type === 'browser_input_offer')).toHaveLength(2))
+  expect(s.socket.frames.at(-1)).toMatchObject({ type: 'browser_input_offer', input_epoch: 2, control_epoch: 1 })
+  expect(s.video.srcObject).toBe(originalMedia)
+  expect(s.socket.frames.filter(f => f.type === 'browser_input')).toEqual([])
+})
+
+it('uses a fresh attachment when the failed-input retirement socket cannot send', async () => {
+  const s = await connected()
+  s.socket.readyState = 3
+  act(() => s.peer.close())
+  expect(screen.getByTestId('browser-input-error')).toBeVisible()
+  fireEvent.click(screen.getByRole('button', { name: 'Retry input' }))
+  await waitFor(() => expect(Socket.instances).toHaveLength(2))
+  expect(s.socket.frames.filter(f => f.type === 'browser_control')).toEqual([])
 })

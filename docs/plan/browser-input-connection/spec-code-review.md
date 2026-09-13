@@ -29,3 +29,9 @@ The independent reviewer rechecked only MAJ-001 and its correction: addressed in
 - Final repeated paired timing evidence; early correctness handoff alone does not establish a speed gain.
 
 Earlier evidence remains valid within scope: the two-channel connection and short live correctness/recovery smoke passed on deployed `f092b634d`; the review demonstrates that these tests do not cover every startup interleaving. The default remains WebSocket. No main, installed Mac, tool-policy or memory-threshold changes are part of this correction.
+
+## Live follow-up — media receiver closure
+
+The deployed correction `e15b9caef` passed the 13-checkpoint dedicated smoke and both controlled negotiation interleavings. The inverse recovery test exposed a separate gap: native receiver `close()` can change connection state without the ICE event used by the session. After explicit receiver closure, no unsafe-picture/recovery indication appeared within 45 seconds. This does not reproduce natural packet loss.
+
+The prepared correction checks only definite receiver failure (closed/failed connection or ended video track), using existing media-only recovery. It does not infer failure from a static picture. The independent bounded review found no concrete defect: cleanup clears the check, old-peer callbacks are fenced, and input connection/socket ownership is preserved. The 250 ms interval is not a guaranteed detection deadline in throttled background tabs. Focused media unit tests passed; updated deployment and inverse live proof remain pending.

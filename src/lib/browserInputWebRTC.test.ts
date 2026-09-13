@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { BrowserInputWebRTCSession } from './browserInputWebRTC'
 
-function setup() {
+function setup(onFailure?: () => boolean) {
   const channels: Record<string, { readyState: string; bufferedAmount: number; send: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn>; onopen?: () => void; onclose?: () => void }> = {}
   const pc = {
     iceGatheringState: 'complete', connectionState: 'new', localDescription: { sdp: 'offer-sdp' },
@@ -12,7 +12,7 @@ function setup() {
   }
   const offer = vi.fn(() => true)
   const changed = vi.fn()
-  const machine = new BrowserInputWebRTCSession({ pcFactory: () => pc as unknown as RTCPeerConnection, sendOffer: offer, onState: changed })
+  const machine = new BrowserInputWebRTCSession({ pcFactory: () => pc as unknown as RTCPeerConnection, sendOffer: offer, onState: changed, onFailure })
   async function connect() {
     machine.start()
     await vi.waitFor(() => expect(offer).toHaveBeenCalledTimes(1))
@@ -201,5 +201,83 @@ it.each(['answer-first', 'ack-first'] as const)('preserves a signaled pending in
   expect(s.offer).toHaveBeenCalledTimes(1)
   expect(s.machine.sendInput(s.input)).toBe(true)
   expect(s.sent('input-hover')[0]).toMatchObject({ input_epoch: 1, control_epoch: 1, hover_seq: 1 })
+  s.machine.stop()
+})
+
+
+describe('failed input retirement over the ordered control socket', () => {
+  it('retires once even without local held keys, stays failed after ack, and waits for explicit Retry', async () => {
+    const retired = vi.fn(() => { s.machine.beginControl(); return true })
+    const s = setup(retired); await s.connect()
+    s.machine.fail('local input closed')
+    expect(retired).toHaveBeenCalledTimes(1)
+    expect(s.machine.state).toBe('failed')
+    expect(s.machine.awaitingRetirement).toBe(true)
+    expect(s.machine.needsAttachmentRetry).toBe(false)
+    s.machine.fail('duplicate closure')
+    expect(retired).toHaveBeenCalledTimes(1)
+    s.machine.applyControlAck({ type: 'browser_input_control_ack', session_id: 'session', input_epoch: 1, control_epoch: 1, ok: true })
+    expect(s.machine.state).toBe('failed')
+    expect(s.machine.awaitingRetirement).toBe(false)
+    expect(s.offer).toHaveBeenCalledTimes(1)
+    s.machine.start()
+    await vi.waitFor(() => expect(s.offer).toHaveBeenCalledTimes(2))
+    expect(s.offer.mock.calls.at(-1)).toEqual([{ sdp: 'offer-sdp', offer_id: 2, input_epoch: 2, control_epoch: 1 }])
+    s.machine.stop()
+  })
+  it('queues explicit Retry behind only the matching retirement acknowledgment', async () => {
+    const s = setup(() => { s.machine.beginControl(); return true }); await s.connect()
+    s.machine.fail('local input closed'); s.machine.start()
+    expect(s.machine.state).toBe('failed'); expect(s.offer).toHaveBeenCalledTimes(1)
+    expect(s.machine.applyControlAck({ type: 'browser_input_control_ack', session_id: 'session', input_epoch: 0, control_epoch: 1, ok: true })).toBe(false)
+    expect(s.offer).toHaveBeenCalledTimes(1)
+    expect(s.machine.applyControlAck({ type: 'browser_input_control_ack', session_id: 'session', input_epoch: 1, control_epoch: 1, ok: true })).toBe(true)
+    await vi.waitFor(() => expect(s.offer).toHaveBeenCalledTimes(2))
+    s.machine.stop()
+  })
+  it.each(['send-failed', 'ack-failed', 'timeout'] as const)('requires a fresh attachment after retirement %s without repeated release', async (failure) => {
+    const retired = vi.fn(() => { if (failure !== 'send-failed') s.machine.beginControl(); return failure !== 'send-failed' })
+    const s = setup(retired); await s.connect(); vi.useFakeTimers()
+    try {
+      s.machine.fail('local input closed')
+      if (failure === 'ack-failed') s.machine.applyControlAck({ type: 'browser_input_control_ack', session_id: 'session', input_epoch: 1, control_epoch: 1, ok: false })
+      if (failure === 'timeout') vi.advanceTimersByTime(30000)
+      expect(s.machine.awaitingRetirement).toBe(false)
+      expect(s.machine.needsAttachmentRetry).toBe(true)
+      expect(s.machine.state).toBe('failed')
+      s.machine.start(); await Promise.resolve()
+      expect(s.offer).toHaveBeenCalledTimes(1); expect(retired).toHaveBeenCalledTimes(1)
+      s.machine.resetAttachment()
+      expect(s.machine.needsAttachmentRetry).toBe(false)
+      expect(s.machine.controlIdentity).toEqual({ input_epoch: 0, control_epoch: 0 })
+    } finally { s.machine.stop(); vi.useRealTimers() }
+  })
+  it('does not retire an offer that never reached the server', async () => {
+    const retired = vi.fn(() => true), s = setup(retired)
+    s.pc.createOffer.mockImplementationOnce(() => new Promise(() => {}))
+    s.machine.start(); s.machine.fail('local setup failed')
+    expect(retired).not.toHaveBeenCalled()
+    expect(s.machine.needsAttachmentRetry).toBe(false)
+    s.machine.stop()
+  })
+})
+
+
+it('ignores transport failure while ordered retirement awaits its own acknowledgment', async () => {
+  const s = setup(() => { s.machine.beginControl(); return true }); await s.connect()
+  s.machine.fail('input closed'); s.machine.start()
+  const refusal = { type: 'browser_input_state' as const, session_id: 'session', input_epoch: 1, offer_id: 1, control_epoch: 1, state: 'failed' as const, reason: 'Input retirement refused' }
+  for (const old of [{ input_epoch: 0 }, { offer_id: 0 }, { control_epoch: 0 }, { input_epoch: 2, offer_id: 2 }]) {
+    s.machine.applyState({ ...refusal, ...old })
+    expect(s.machine.awaitingRetirement).toBe(true)
+    expect(s.machine.needsAttachmentRetry).toBe(false)
+  }
+  s.machine.applyState(refusal)
+  expect(s.machine.awaitingRetirement).toBe(true)
+  expect(s.machine.needsAttachmentRetry).toBe(false)
+  expect(s.machine.state).toBe('failed')
+  expect(s.offer).toHaveBeenCalledTimes(1)
+  expect(s.machine.applyControlAck({ type: 'browser_input_control_ack', session_id: 'session', input_epoch: 1, control_epoch: 1, ok: true })).toBe(true)
+  await vi.waitFor(() => expect(s.offer).toHaveBeenCalledTimes(2))
   s.machine.stop()
 })

@@ -952,6 +952,7 @@ export function BrowserLiveView({
     refreshFrameGate()
     const inputMachine = inputMode === 'dedicated' ? new BrowserInputWebRTCSession({
       sendOffer: (offer) => wsRef.current?.sendInputOffer(offer) ?? false,
+      onFailure: () => wsRef.current?.sendControl('release') ?? false,
       onState: (state, reason) => {
         setInputState(state)
         setInputError(state === 'failed' ? reason || 'Input connection failed.' : null)
@@ -2374,7 +2375,7 @@ export function BrowserLiveView({
       {inputError && <div role="alert" data-testid="browser-input-error" className="absolute bottom-2 left-2 right-2 z-30 rounded bg-[var(--color-primary)] p-2 text-sm">
         <span>{inputError}</span>{' '}
         <button type="button" onClick={() => {
-          if (inputRef.current?.awaitingControl) setConnectionAttempt((attempt) => attempt + 1)
+          if (inputRef.current?.needsAttachmentRetry) setConnectionAttempt((attempt) => attempt + 1)
           else inputRef.current?.start()
         }}>Retry input</button>
       </div>}

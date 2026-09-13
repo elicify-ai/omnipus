@@ -9,6 +9,7 @@ interface Options { // not-wire-format: local dependency injection and lifecycle
   pcFactory?: (config: RTCConfiguration) => RTCPeerConnection
   sendOffer: (offer: BrowserInputOffer) => boolean
   onState: (state: BrowserInputState, reason?: string) => void
+  onFailure?: () => boolean
 }
 
 /** Data-only peer owned by one socket attachment. Failed actions are never replayed. */
@@ -19,6 +20,9 @@ export class BrowserInputWebRTCSession {
   private iceServers: RTCIceServer[] = []
   private epoch = 0
   private signaledEpoch = 0
+  private retiredEpoch = 0
+  private retirementControl: number | null = null
+  private retirementRejected = false
   private control = 0
   private acknowledgedControl = 0
   private offeredControl = 0
@@ -35,13 +39,20 @@ export class BrowserInputWebRTCSession {
 
   constructor(private readonly options: Options) {}
   get awaitingControl(): boolean { return this.control !== this.acknowledgedControl }
-  resetAttachment(): void { this.stop(); this.epoch = this.signaledEpoch = this.control = this.acknowledgedControl = 0 }
+  get awaitingRetirement(): boolean { return this.retirementControl === this.control && this.awaitingControl }
+  get needsAttachmentRetry(): boolean { return this.retirementRejected || (this.awaitingControl && !this.awaitingRetirement) }
+  resetAttachment(): void {
+    this.stop()
+    this.epoch = this.signaledEpoch = this.retiredEpoch = this.control = this.acknowledgedControl = 0
+    this.retirementControl = null
+    this.retirementRejected = false
+  }
   get state(): BrowserInputState { return this.currentState }
   setICEServers(servers: RTCIceServer[]): void { this.iceServers = servers }
 
   start(): void {
     this.wanted = true
-    if (this.pc || this.control !== this.acknowledgedControl) return
+    if (this.pc || this.retirementRejected || this.control !== this.acknowledgedControl) return
     this.cleanup()
     if (!Number.isSafeInteger(this.epoch + 1)) { this.fail('Input connection identity exhausted.'); return }
     this.epoch++
@@ -109,6 +120,8 @@ export class BrowserInputWebRTCSession {
   }
 
   applyState(frame: BrowserInputStateFrame): void {
+    // Once locally retired, transport failure can race successful ordered
+    // cleanup. Only its control acknowledgment determines retirement success.
     if (!this.pc || frame.input_epoch !== this.epoch || frame.offer_id !== this.epoch) return
     if (frame.state === 'failed' || frame.state === 'closed') this.fail(frame.reason || 'Input connection unavailable. Retry input.')
   }
@@ -121,7 +134,7 @@ export class BrowserInputWebRTCSession {
     // Keep signaled peers alive: the original answer still completes their SDP.
     if (this.pc && this.signaledEpoch !== this.epoch) this.cleanup()
     this.held.clear() // Server retires and releases the preceding control epoch.
-    this.change('paused')
+    if (this.currentState !== 'failed') this.change('paused')
     this.armTimeout('Browser control acknowledgment timed out. Retry input.')
     return this.control
   }
@@ -130,7 +143,14 @@ export class BrowserInputWebRTCSession {
 
   applyControlAck(frame: BrowserInputControlAckFrame): boolean {
     if (frame.input_epoch !== this.signaledEpoch || frame.control_epoch !== this.control || this.control === this.acknowledgedControl) return false
-    if (!frame.ok) { this.fail(frame.reason || 'Browser control failed. Retry input.'); return true }
+    if (!frame.ok) {
+      if (this.retirementControl !== null) this.retirementRejected = true
+      this.retirementControl = null
+      this.fail(frame.reason || 'Browser control failed. Retry input.')
+      return true
+    }
+    this.retirementControl = null
+    this.retirementRejected = false
     this.acknowledgedControl = this.control
     this.clearTimer()
     if (!this.pc && this.wanted) this.start()
@@ -169,7 +189,21 @@ export class BrowserInputWebRTCSession {
     return true
   }
 
-  fail(reason: string): void { this.cleanup(); this.change('failed', reason) }
+  fail(reason: string): void {
+    if (this.currentState === 'failed' && !this.pc && this.awaitingRetirement) return
+    this.wanted = false
+    this.cleanup()
+    this.change('failed', reason)
+    if (this.signaledEpoch > this.retiredEpoch && this.options.onFailure) {
+      // Retire server ownership even when local held-key bookkeeping is empty.
+      // Mark before calling out: a failed send must not recurse or send twice.
+      this.retiredEpoch = this.signaledEpoch
+      const previousControl = this.control
+      const sent = this.options.onFailure()
+      if (sent && this.control > previousControl && this.awaitingControl) this.retirementControl = this.control
+      else this.retirementRejected = true
+    }
+  }
   stop(): void { this.wanted = false; this.cleanup(); this.change('idle') }
   private updateReady(): void {
     if (!this.pc || !this.answered || this.reliable?.readyState !== 'open' || this.hover?.readyState !== 'open') return
@@ -179,7 +213,14 @@ export class BrowserInputWebRTCSession {
   }
   private change(state: BrowserInputState, reason?: string): void { this.currentState = state; this.options.onState(state, reason) }
   private clearTimer(): void { if (this.timer !== null) clearTimeout(this.timer); this.timer = null }
-  private armTimeout(reason: string): void { this.clearTimer(); this.timer = setTimeout(() => this.fail(reason), 30_000) }
+  private armTimeout(reason: string): void {
+    this.clearTimer()
+    this.timer = setTimeout(() => {
+      if (this.retirementControl !== null) this.retirementRejected = true
+      this.retirementControl = null
+      this.fail(reason)
+    }, 30_000)
+  }
   private cleanup(): void {
     const pc = this.pc
     this.pc = null
