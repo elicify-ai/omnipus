@@ -4366,12 +4366,6 @@ export interface components {
              * @example 4096
              */
             max_tokens?: number;
-            /**
-             * Format: double
-             * @description Nucleus sampling probability mass. 1.0 disables nucleus sampling.
-             * @example 1
-             */
-            top_p?: number;
         };
         /**
          * AgentRateLimits
@@ -4580,12 +4574,6 @@ export interface components {
                  * @example 4096
                  */
                 max_tokens?: number;
-                /**
-                 * Format: double
-                 * @description Nucleus sampling probability mass. 1.0 disables nucleus sampling.
-                 * @example 1
-                 */
-                top_p?: number;
             };
             /** @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies. */
             rate_limits?: {
@@ -4706,12 +4694,6 @@ export interface components {
                  * @example 4096
                  */
                 max_tokens?: number;
-                /**
-                 * Format: double
-                 * @description Nucleus sampling probability mass. 1.0 disables nucleus sampling.
-                 * @example 1
-                 */
-                top_p?: number;
             };
             /** @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies. */
             rate_limits?: {
@@ -4947,12 +4929,6 @@ export interface components {
                  * @example 4096
                  */
                 max_tokens?: number;
-                /**
-                 * Format: double
-                 * @description Nucleus sampling probability mass. 1.0 disables nucleus sampling.
-                 * @example 1
-                 */
-                top_p?: number;
             };
             /** @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies. */
             rate_limits?: {

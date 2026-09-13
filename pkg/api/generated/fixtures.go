@@ -2517,7 +2517,6 @@ func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 	description := "Focused research assistant"
 	temperature := 0.7
 	maxTokens := 4096
-	topP := 1.0
 	maxCost := 5.0
 	maxCalls := 100
 	maxTools := 60
@@ -2541,11 +2540,9 @@ func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 		ModelParams: &struct {
 			MaxTokens   *int     `json:"max_tokens,omitempty"`
 			Temperature *float64 `json:"temperature,omitempty"`
-			TopP        *float64 `json:"top_p,omitempty"`
 		}{
 			MaxTokens:   &maxTokens,
 			Temperature: &temperature,
-			TopP:        &topP,
 		},
 		RateLimits: &struct {
 			MaxCostPerDay         *float64 `json:"max_cost_per_day,omitempty"`
@@ -2762,7 +2759,6 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 	description := "Updated description"
 	temperature := 0.5
 	maxTokens := 2048
-	topP := 0.9
 	allow := AgentUpdateRequestToolsCfgBuiltinPoliciesAllow
 	heartbeat := "Check queue every hour."
 	soul := "You are a helpful assistant."
@@ -2783,11 +2779,9 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 		ModelParams: &struct {
 			MaxTokens   *int     `json:"max_tokens,omitempty"`
 			Temperature *float64 `json:"temperature,omitempty"`
-			TopP        *float64 `json:"top_p,omitempty"`
 		}{
 			MaxTokens:   &maxTokens,
 			Temperature: &temperature,
-			TopP:        &topP,
 		},
 		ToolsCfg: &struct {
 			Builtin *struct {

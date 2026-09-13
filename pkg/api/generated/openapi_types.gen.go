@@ -8718,9 +8718,6 @@ type Agent struct {
 
 		// Temperature Sampling temperature (0.0 – 2.0). Lower = more deterministic.
 		Temperature *float64 `json:"temperature,omitempty"`
-
-		// TopP Nucleus sampling probability mass. 1.0 disables nucleus sampling.
-		TopP *float64 `json:"top_p,omitempty"`
 	} `json:"model_params,omitempty"`
 
 	// Name Human-readable display name.
@@ -8868,9 +8865,6 @@ type AgentCreateRequestMain struct {
 
 		// Temperature Sampling temperature (0.0 – 2.0). Lower = more deterministic.
 		Temperature *float64 `json:"temperature,omitempty"`
-
-		// TopP Nucleus sampling probability mass. 1.0 disables nucleus sampling.
-		TopP *float64 `json:"top_p,omitempty"`
 	} `json:"model_params,omitempty"`
 
 	// Name Display name for the new agent.
@@ -8974,9 +8968,6 @@ type AgentCreateRequestSubagent struct {
 
 		// Temperature Sampling temperature (0.0 – 2.0). Lower = more deterministic.
 		Temperature *float64 `json:"temperature,omitempty"`
-
-		// TopP Nucleus sampling probability mass. 1.0 disables nucleus sampling.
-		TopP *float64 `json:"top_p,omitempty"`
 	} `json:"model_params,omitempty"`
 
 	// Name Display name for the new agent.
@@ -9131,9 +9122,6 @@ type AgentModelParams struct {
 
 	// Temperature Sampling temperature (0.0 – 2.0). Lower = more deterministic.
 	Temperature *float64 `json:"temperature,omitempty"`
-
-	// TopP Nucleus sampling probability mass. 1.0 disables nucleus sampling.
-	TopP *float64 `json:"top_p,omitempty"`
 }
 
 // AgentRateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies and per-agent overrides are ignored.
@@ -9428,9 +9416,6 @@ type AgentUpdateRequest struct {
 
 		// Temperature Sampling temperature (0.0 – 2.0). Lower = more deterministic.
 		Temperature *float64 `json:"temperature,omitempty"`
-
-		// TopP Nucleus sampling probability mass. 1.0 disables nucleus sampling.
-		TopP *float64 `json:"top_p,omitempty"`
 	} `json:"model_params,omitempty"`
 
 	// Name New display name. Rejected on locked agents.

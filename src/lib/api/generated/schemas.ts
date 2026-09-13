@@ -302,7 +302,6 @@ type FallbackModel = {
 type AgentModelParams = Partial<{
   temperature: number;
   max_tokens: number;
-  top_p: number;
 }>;
 type AgentRateLimits = Partial<{
   use_global_defaults: boolean;
@@ -343,7 +342,6 @@ type AgentCreateRequestMain = {
     | Partial<{
         temperature: number;
         max_tokens: number;
-        top_p: number;
       }>
     | undefined;
   rate_limits?:
@@ -375,7 +373,6 @@ type AgentCreateRequestSubagent = {
     | Partial<{
         temperature: number;
         max_tokens: number;
-        top_p: number;
       }>
     | undefined;
   rate_limits?:
@@ -435,7 +432,6 @@ type AgentUpdateRequest = Partial<{
   model_params: Partial<{
     temperature: number;
     max_tokens: number;
-    top_p: number;
   }>;
   rate_limits: Partial<{
     use_global_defaults: boolean;
@@ -2077,7 +2073,6 @@ export const AgentModelParams: z.ZodType<AgentModelParams> = z
   .object({
     temperature: z.number().gte(0).lte(2),
     max_tokens: z.number().int().gte(1),
-    top_p: z.number().gte(0).lte(1),
   })
   .partial()
   .passthrough();
@@ -2168,11 +2163,7 @@ export const AgentCreateRequestMain =
     tools_cfg: AgentToolsCfg.optional(),
     fallback_models: z.array(FallbackModel).max(2).optional(),
     model_params: z
-      .object({
-        temperature: z.number(),
-        max_tokens: z.number().int(),
-        top_p: z.number(),
-      })
+      .object({ temperature: z.number(), max_tokens: z.number().int() })
       .partial()
       .passthrough()
       .optional(),
@@ -2208,11 +2199,7 @@ export const AgentCreateRequestSubagent =
     tools_cfg: AgentToolsCfg.optional(),
     fallback_models: z.array(FallbackModel).max(2).optional(),
     model_params: z
-      .object({
-        temperature: z.number(),
-        max_tokens: z.number().int(),
-        top_p: z.number(),
-      })
+      .object({ temperature: z.number(), max_tokens: z.number().int() })
       .partial()
       .passthrough()
       .optional(),
@@ -2289,11 +2276,7 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
     icon: z.string().max(50),
     fallback_models: z.array(FallbackModel).max(2),
     model_params: z
-      .object({
-        temperature: z.number(),
-        max_tokens: z.number().int(),
-        top_p: z.number(),
-      })
+      .object({ temperature: z.number(), max_tokens: z.number().int() })
       .partial()
       .passthrough(),
     rate_limits: z

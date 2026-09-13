@@ -145,11 +145,6 @@ properties:
         type: integer
         description: Maximum tokens to generate per turn.
         example: 4096
-      top_p:
-        type: number
-        format: double
-        description: Nucleus sampling probability mass. 1.0 disables nucleus sampling.
-        example: 1.0
   rate_limits:
     type: object
     description: Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies.

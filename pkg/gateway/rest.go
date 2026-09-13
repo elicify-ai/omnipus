@@ -1989,14 +1989,14 @@ func applyAgentOverrides(ag *gen.Agent, ac *config.AgentConfig) {
 	// (Q1 fix). Previously config.AgentConfig had no ModelParams field at
 	// all, so a PUT that set it returned 200 and GET always echoed
 	// model_params: null — the ADR-037 anti-pattern (mirrors the
-	// FallbackModels/ShellPolicy echo fixes above). top_p is intentionally
-	// left unset here: it is rejected 400 at write time (no provider
-	// adapter implements it), so ac.ModelParams.TopP never exists to echo.
+	// FallbackModels/ShellPolicy echo fixes above). top_p was removed from
+	// the wire entirely in T2 (see agentModelParamsInput's doc comment) — no
+	// provider adapter in this codebase ever implemented it — so there is no
+	// third field left to echo.
 	if ac.ModelParams != nil {
 		mp := struct { // not-wire-format: mirrors gen.Agent.ModelParams inline shape
 			MaxTokens   *int     `json:"max_tokens,omitempty"`
 			Temperature *float64 `json:"temperature,omitempty"`
-			TopP        *float64 `json:"top_p,omitempty"`
 		}{
 			MaxTokens:   ac.ModelParams.MaxTokens,
 			Temperature: ac.ModelParams.Temperature,
@@ -2499,10 +2499,18 @@ func agentCreateShellPolicyFromWire(wp *struct {
 // model_params separately per schema), but all three are structurally
 // identical (same field names/types/tags/order), so one non-generic helper
 // below handles every call site.
+//
+// top_p (T2): removed from the wire entirely — no provider adapter in this
+// codebase implements nucleus sampling and there was no agents.defaults
+// equivalent to fall back to, so it never had anywhere to go once
+// commit 2b057e15 (Q1) started actually persisting model_params instead of
+// silently dropping the whole object. See rest.go's raw-body top_p sniff on
+// updateAgent (mirrors the sandbox_profile/delegation_policy precedent) and
+// AgentCreateRequest{Main,Subagent}'s unconditional DisallowUnknownFields
+// decode for how a client still sending top_p is rejected now.
 type agentModelParamsInput struct {
 	Temperature *float64
 	MaxTokens   *int
-	TopP        *float64
 }
 
 // agentModelParamsFromWire converts any of the three request variants'
@@ -2513,31 +2521,12 @@ type agentModelParamsInput struct {
 func agentModelParamsFromWire(mp *struct {
 	MaxTokens   *int     `json:"max_tokens,omitempty"`
 	Temperature *float64 `json:"temperature,omitempty"`
-	TopP        *float64 `json:"top_p,omitempty"`
 },
 ) *agentModelParamsInput {
 	if mp == nil {
 		return nil
 	}
-	return &agentModelParamsInput{Temperature: mp.Temperature, MaxTokens: mp.MaxTokens, TopP: mp.TopP}
-}
-
-// rejectUnsupportedModelParamsTopP is the single validation seam for
-// model_params.top_p, introduced by commit 2b057e15 (Q1 fix) for
-// updateAgent and reused here by createAgent so the two paths cannot drift.
-// No provider adapter in this codebase implements nucleus sampling and
-// there is no agents.defaults equivalent to fall back to, so accepting it
-// silently (200/201, persisted and echoed, never honored on any turn) would
-// be exactly the ADR-037 anti-pattern this fix exists to close, just moved
-// one layer down. Returns true when the request is clean; on a rejected
-// top_p it writes the 400 response itself and returns false so the caller
-// can `return` directly without persisting anything.
-func rejectUnsupportedModelParamsTopP(w http.ResponseWriter, in *agentModelParamsInput) bool {
-	if in == nil || in.TopP == nil {
-		return true
-	}
-	jsonErr(w, http.StatusBadRequest, "model_params.top_p is not supported by any provider adapter")
-	return false
+	return &agentModelParamsInput{Temperature: mp.Temperature, MaxTokens: mp.MaxTokens}
 }
 
 // mergeAgentModelParams is the single persistence seam for model_params,
@@ -2548,10 +2537,7 @@ func rejectUnsupportedModelParamsTopP(w http.ResponseWriter, in *agentModelParam
 // actually sent overwrite the persisted value (mirrors the ShellPolicy
 // partial-patch pattern elsewhere in this file), so a partial patch (e.g.
 // only max_tokens) does not clobber an existing temperature. existing may
-// be nil (e.g. on create, or an agent with no prior override); in is
-// assumed already validated via rejectUnsupportedModelParamsTopP (or to
-// have no top_p at all) — this function does not itself reject top_p, it
-// simply never copies it (config.AgentModelParams has no TopP field).
+// be nil (e.g. on create, or an agent with no prior override).
 func mergeAgentModelParams(existing *config.AgentModelParams, in *agentModelParamsInput) *config.AgentModelParams {
 	if in == nil {
 		return existing
@@ -2854,12 +2840,13 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "fallback_models exceeds maxItems: 2")
 		return
 	}
-	// model_params.top_p (T1 follow-up to Q1/2b057e15): mirrors updateAgent's
-	// early top_p rejection so the create path cannot silently drop it the
-	// way it silently dropped the whole model_params object before this fix.
-	if !rejectUnsupportedModelParamsTopP(w, modelParamsIn) {
-		return
-	}
+	// model_params.top_p (T2): removed from the wire entirely — see
+	// agentModelParamsInput's doc comment. No explicit rejection is needed
+	// here: gen.AgentCreateRequestMain/Subagent no longer have a top_p
+	// property at all, and decodeAgentCreateVariant's unconditional
+	// DisallowUnknownFields decode above already rejects a client still
+	// sending {"model_params":{"top_p":...}} with a 400 "unknown field"
+	// error before this point is ever reached.
 	// W2 spec §4.7 / §9.2 row 8: whitespace-only soul is rejected (the wire
 	// schema enforces minLength:1; whitespace-only is the natural
 	// soft-bypass). Backend trims before validation.
@@ -3433,6 +3420,22 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		)
 		return
 	}
+	// model_params.top_p (T2): removed from the wire entirely (see
+	// agentModelParamsInput's doc comment — no provider adapter implements
+	// nucleus sampling and there is no global default to fall back to).
+	// gen.AgentUpdateRequest.ModelParams no longer has a TopP field at all,
+	// and decodeAndValidate's fast path below is non-strict by default
+	// (validate_inbound defaults false) — without this explicit raw-body
+	// sniff a client still sending {"model_params":{"top_p":...}} would have
+	// the field silently dropped by Go's default JSON decode, and the PUT
+	// would report 200 with no change applied instead of the loud 400 this
+	// codebase's own create-path convention expects (same
+	// sandbox_profile/delegation_policy raw-body-sniff precedent above).
+	if bytes.Contains(rawBody, []byte(`"top_p"`)) {
+		jsonErr(w, http.StatusBadRequest,
+			"model_params.top_p is not supported by any provider adapter")
+		return
+	}
 
 	var req gen.AgentUpdateRequest
 	validateEnabled := cfg.Gateway.ValidateInbound
@@ -3588,20 +3591,6 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// REST caller (not the SPA) cannot smuggle a 3rd entry past the schema.
 	if req.FallbackModels != nil && len(*req.FallbackModels) > 2 {
 		jsonErr(w, http.StatusBadRequest, "fallback_models exceeds maxItems: 2")
-		return
-	}
-
-	// model_params.top_p (Q1 follow-up, extracted to
-	// rejectUnsupportedModelParamsTopP so createAgent reuses the identical
-	// check — T1 fix): the wire schema carries a top_p property, but no
-	// provider adapter in this codebase implements nucleus sampling and
-	// there is no global default for it either — wiring it would be new
-	// cross-provider feature work, not this persistence fix. Accepting it
-	// silently (200, quietly ignored on every turn) would be exactly the
-	// ADR-037 anti-pattern this fix exists to close, just moved one layer
-	// down (persisted and echoed, but never honored). Reject it explicitly
-	// instead of pretending it works.
-	if !rejectUnsupportedModelParamsTopP(w, agentModelParamsFromWire(req.ModelParams)) {
 		return
 	}
 
