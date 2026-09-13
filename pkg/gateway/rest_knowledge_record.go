@@ -845,6 +845,7 @@ func (a *restAPI) handleRecordUpdate(w http.ResponseWriter, r *http.Request, act
 	}
 
 	a.logRecordWriteAudit(r, actor, workspaceID, found.scoped.Name, found.relPath, id)
+	a.refreshRecordIndexes(r, workspaceID, found.collection.Root(), res.RelPath)
 
 	// res.Content and res.Version describe the SAME bytes, both captured
 	// inside the write lock. No re-read, so there is no window for another
@@ -852,6 +853,28 @@ func (a *restAPI) handleRecordUpdate(w http.ResponseWriter, r *http.Request, act
 	// that can turn a landed write into a 500 (review F8/H5).
 	rec := records.ParseRecord(found.relPath, res.Content)
 	jsonOK(w, buildVaultRecordWire(found.schema, rec, found.relPath, res.Version))
+}
+
+// refreshRecordIndexes re-derives one note's rows in the text and properties
+// indexes right after a record write landed — UAT D-67 (2026-09-13).
+//
+// Before this, a cell edit made through a base view was correct on disk and
+// carried a fresh version token, yet every view kept rendering the OLD value
+// (the view answer is served from the properties index, which only a full
+// sync at boot or after drift ever rebuilt) until the gateway was restarted.
+// The agent door (knowledge_edit) has always refreshed both indexes after its
+// own writes; this is the same call, so the two doors now give the same
+// read-your-own-write guarantee.
+//
+// Never a refusal: the write is already on disk. A refresh that fails is
+// logged at Error inside knowledge.RefreshIndexesForNote and named again here
+// with the request context, and the view layer's own `stale_record` problem
+// remains the user-visible signal until the next scheduled reconcile.
+func (a *restAPI) refreshRecordIndexes(r *http.Request, workspaceID, collectionRoot, relPath string) {
+	if warning := knowledge.RefreshIndexesForNote(r.Context(), a.homePath, collectionRoot, relPath); warning != "" {
+		logger.WarnCF("rest", "knowledge: record write landed but an index could not be refreshed",
+			map[string]any{"workspace_id": workspaceID, "path": relPath, "warning": warning})
+	}
 }
 
 // handleRecordCreate is CW-7's create door: `id` absent, `path` required, the
@@ -1005,6 +1028,7 @@ func (a *restAPI) handleRecordCreate(w http.ResponseWriter, r *http.Request, act
 	}
 
 	a.logRecordWriteAudit(r, actor, workspaceID, sc.Name, res.RelPath, id)
+	a.refreshRecordIndexes(r, workspaceID, col.Root(), res.RelPath)
 	rec := records.ParseRecord(res.RelPath, content)
 	jsonCreated(w, buildVaultRecordWire(schema, rec, res.RelPath, res.Version))
 }
