@@ -382,3 +382,34 @@ describe('KbQueryFenceEmbed — the lazy-mount budget (EMB-065/066)', () => {
     expect(await screen.findByText('Landlock notes')).toBeInTheDocument()
   })
 })
+
+// ── UAT 2026-09-13 D-114 ─────────────────────────────────────────────────────
+import { incompleteLead } from './KbQueryFenceEmbed'
+
+describe('UAT D-114 — "still indexing" is claimed only when the reason says so', () => {
+  it('states a permanent view-load failure as what it is, not as indexing progress', async () => {
+    vi.mocked(searchVault).mockResolvedValue(
+      emptyResponse({
+        complete: false,
+        complete_reason:
+          '2 saved view file(s) failed to load and could not be searched (projects--active-projects, projects--project-board)',
+        notes: [{ path: 'a.md', title: 'A' }],
+      }),
+    )
+    renderEmbed()
+    const incomplete = await screen.findByTestId('kb-query-fence-incomplete')
+    // DIES ON the old code: every incomplete answer said "still indexing".
+    expect(incomplete).not.toHaveTextContent(/still indexing/i)
+    expect(incomplete).toHaveTextContent(/could not be searched/i)
+    expect(incomplete).toHaveTextContent('projects--active-projects')
+  })
+
+  it('incompleteLead: indexing vocabulary keeps the indexing sentence; anything else does not', () => {
+    expect(incompleteLead('index not ready yet')).toMatch(/still indexing/i)
+    expect(incompleteLead('index catching up')).toMatch(/still indexing/i)
+    expect(incompleteLead("the index's freshness could not be verified for this search")).toMatch(/still indexing/i)
+    expect(incompleteLead('records: 1 record-type schema file(s) failed to load')).not.toMatch(/still indexing/i)
+    expect(incompleteLead(undefined)).toBe('These results may be incomplete.')
+    expect(incompleteLead('   ')).toBe('These results may be incomplete.')
+  })
+})

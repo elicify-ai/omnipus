@@ -991,3 +991,47 @@ describe('KnowledgeNoteView — transclusion heading honesty (ADR-083 EMB-035/EM
     })
   })
 })
+
+// ── UAT 2026-09-13 D-42 ─────────────────────────────────────────────────────
+describe('UAT D-42 — an embed with a block anchor the graph never verified does not look healthy', () => {
+  const KB_INFO_D42 = {
+    'notes/vault': info({ root_path: 'notes/vault', is_knowledge_base: true, collection_id: COLLECTION }),
+  }
+  function renderEmbedNoteD42(opts: { content: string; loadGraph: KnowledgeGraphLoader }) {
+    const loadOutline = vi.fn().mockResolvedValue(outline())
+    const loadInfo = detectionOf(KB_INFO_D42)
+    return renderView({ loadOutline, loadInfo, loadGraph: opts.loadGraph, content: opts.content })
+  }
+
+  it('an inline ![[note#^block]] drawn as a link says the anchor is unverified, while the note itself stays resolved', async () => {
+    const loadGraph = vi.fn(async (req: { kind: string }) =>
+      req.kind === 'links'
+        ? graph({
+            kind: 'links',
+            nodes: [{ path: 'Projects/Core Platform Migration.md', title: 'Core Platform Migration', exists: true }],
+            edges: [
+              embedEdge({
+                to_path: 'Projects/Core Platform Migration.md',
+                link_text: 'Projects/Core Platform Migration.md',
+                block: 'someblock',
+              }),
+            ],
+          })
+        : graph(),
+    ) as unknown as KnowledgeGraphLoader
+
+    renderEmbedNoteD42({
+      content: 'See ![[Projects/Core Platform Migration.md#^someblock]] for the plan.',
+      loadGraph,
+    })
+
+    await waitFor(() => {
+      const el = screen.getByTestId('markdown-link')
+      expect(el.getAttribute('data-kb-state')).toBe('resolved')
+    })
+    // DIES ON the old code: the badge said only why the embed was a link;
+    // nothing anywhere said the anchor itself had never been checked.
+    const badge = await screen.findByTestId('kb-embed-link-reason')
+    expect(badge.textContent ?? '').toMatch(/block anchor "\^someblock" is not verified/i)
+  })
+})

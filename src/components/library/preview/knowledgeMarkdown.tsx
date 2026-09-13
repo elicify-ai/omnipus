@@ -1137,11 +1137,25 @@ function isVideoEmbedDestination(raw: string): boolean {
  * so it only ever sees the note's OWN written `![]()` syntax, never a node a
  * later plugin produced.
  */
+/** UAT D-41: the attribute `remarkKbVideoImages` stamps on a link it made
+ *  out of `![](video-url)` EMBED notation. The `a` slot mounts VideoEmbed
+ *  only for a link carrying it; a plain `[text](video-url)` link the author
+ *  wrote as a link stays a link — never a refused-video box. */
+export const VIDEO_EMBED_ATTR = 'data-kb-video-embed'
+
 function rewriteVideoImageNodes(parent: MdNode): void {
   if (!parent.children) return
   parent.children = parent.children.map((child) => {
     if (child.type === 'image' && child.url && isVideoEmbedDestination(child.url)) {
-      return { type: 'link', url: child.url, children: [{ type: 'text', value: child.alt ?? '' }] }
+      // UAT D-41: the rewritten node is TAGGED as the embed it was
+      // authored as (`![](url)`), so the `a` slot can tell it from a plain
+      // `[text](url)` link to the same host — which stays a link.
+      return {
+        type: 'link',
+        url: child.url,
+        children: [{ type: 'text', value: child.alt ?? '' }],
+        data: { hProperties: { [VIDEO_EMBED_ATTR]: 'true' } },
+      }
     }
     rewriteVideoImageNodes(child)
     return child
@@ -1158,16 +1172,33 @@ export function remarkKbVideoImages() {
  *  same reasoning as the file header's UNVERIFIED_LINK_CLASS note. Exported for
  *  the same reason: reused as-is by any other surface honestly rendering the
  *  `unresolved` KbLinkState, rather than redrawn from a second copy. */
-export function UnresolvedLink({ children, detail }: { children?: ReactNode; detail: string }) {
+export function UnresolvedLink({
+  children,
+  detail,
+  label = 'unresolved link',
+}: {
+  children?: ReactNode
+  detail: string
+  /** UAT D-111: the prefix before the reason. "unresolved link" means the
+   *  target could not be found; a deliberately downgraded embed (one level
+   *  inside a transclusion) is NOT that and says "embed shown as a link"
+   *  instead, so a reader skimming can tell "fine, just one level down"
+   *  from "this file is missing" without reading to the end. */
+  label?: string
+}) {
   return (
     <span
       data-testid="markdown-link"
       data-kb-unresolved="true"
-      title={detail}
+      data-kb-unresolved-label={label}
+      title={`${label}: ${detail}`}
       className="text-[var(--color-muted)] border-b border-dotted border-[var(--color-muted)] cursor-not-allowed"
     >
       {children}
-      <span className="sr-only"> (unresolved link: {detail})</span>
+      <span className="sr-only">
+        {' '}
+        ({label}: {detail})
+      </span>
     </span>
   )
 }
@@ -1439,6 +1470,7 @@ function EmbedFallback({
   kind,
   hasPage,
   inlineReason,
+  block,
   children,
 }: {
   target: string
@@ -1463,6 +1495,12 @@ function EmbedFallback({
   /** Reason written by `promoteStandaloneEmbeds` for an embed that shares
    *  its line with other text. */
   inlineReason?: string
+  /** UAT D-42: the `#^block` anchor of the notation, when any. The link
+   *  graph verifies files and headings, never block anchors (there is no
+   *  `block_found` beside `heading_found`), so a resolved embed drawn as a
+   *  link says the anchor is unverified instead of looking healthy. A
+   *  MOUNTED transclusion checks the anchor itself (`sliceBlock`). */
+  block?: string
   children?: ReactNode
 }) {
   switch (state) {
@@ -1477,7 +1515,12 @@ function EmbedFallback({
     case 'unresolved':
       if (outsideRoot) return <ContainmentRefusedEmbed>{children}</ContainmentRefusedEmbed>
       return (
-        <UnresolvedLink detail={reason ?? `no file in this collection matches "${target}"`}>
+        <UnresolvedLink
+          detail={reason ?? `no file in this collection matches "${target}"`}
+          // UAT D-111: a deliberately downgraded nested embed is not a
+          // missing target and must not read as one.
+          label={reason === NESTED_TRANSCLUSION_EMBED_REASON ? 'embed shown as a link' : 'unresolved link'}
+        >
           {children}
         </UnresolvedLink>
       )
@@ -1494,7 +1537,11 @@ function EmbedFallback({
           target={target}
           verified
           isEmbed
-          embedReason={resolvedEmbedLinkReason(kind, hasPage === true, inlineReason)}
+          embedReason={
+            block !== undefined && block !== ''
+              ? `${resolvedEmbedLinkReason(kind, hasPage === true, inlineReason)}; the block anchor "^${block}" is not verified — the link graph checks files and headings only, so open the note to confirm it exists`
+              : resolvedEmbedLinkReason(kind, hasPage === true, inlineReason)
+          }
           ambiguousDetail={
             ambiguous
               ? `more than one file matched this embed's target; showing the first — also matches: ${candidates ?? 'no other candidates were reported'}`
@@ -1551,10 +1598,16 @@ const TRANSCLUSION_RESERVED_HEIGHT_PX = 72
  *  `resolution.state === 'resolved'`, so a nested note's own embeds can
  *  never produce one — there is nothing for a loop detector or a depth cap
  *  to catch, because there is no second level for either to reach. */
+/** UAT D-111: the one reason that means "downgraded on purpose", compared
+ *  by identity in `EmbedFallback` so the badge can say "embed shown as a
+ *  link" instead of "unresolved link". Exported as a test seam. */
+export const NESTED_TRANSCLUSION_EMBED_REASON =
+  'embeds inside a transcluded note are shown as links — open the note itself to see them'
+
 function nestedTranscludedEmbedResolver(): EmbedResolution {
   return {
     state: 'unresolved',
-    reason: 'embeds inside a transcluded note are shown as links — open the note itself to see them',
+    reason: NESTED_TRANSCLUSION_EMBED_REASON,
   }
 }
 
@@ -1920,6 +1973,7 @@ function KnowledgeMarkdownLink(
     'data-kb-target'?: string
     'data-kb-heading'?: string
     'data-kb-block'?: string
+    'data-kb-video-embed'?: string
     'data-kb-embed'?: string
     'data-kb-embed-kind'?: string
     'data-kb-embed-state'?: string
@@ -2058,6 +2112,7 @@ function KnowledgeMarkdownLink(
           {...(props['data-kb-embed-link-reason'] !== undefined
             ? { inlineReason: props['data-kb-embed-link-reason'] }
             : {})}
+          {...(props['data-kb-block'] !== undefined ? { block: props['data-kb-block'] } : {})}
         >
           {children}
         </EmbedFallback>
@@ -2120,10 +2175,18 @@ function KnowledgeMarkdownLink(
   // point. Everything else with its own scheme is handed to the inherited
   // renderer, exactly as before.
   if (raw === '' || hasOwnScheme(raw)) {
+    // UAT D-41: a link the author wrote as a LINK (not `![](url)` embed
+    // notation, which remarkKbVideoImages tags) still mounts the facade
+    // (B11) — but when its host is refused, VideoEmbed degrades it back to
+    // the plain link the author wrote instead of a refused-video box.
     if (isVideoEmbedDestination(raw)) {
       return (
         <LazyEmbedMount reservedHeight={360} className="my-3 block">
-          <VideoEmbed url={raw} title={codeText(children) || undefined} />
+          <VideoEmbed
+            url={raw}
+            title={codeText(children) || undefined}
+            authoredAsLink={props['data-kb-video-embed'] !== 'true'}
+          />
         </LazyEmbedMount>
       )
     }

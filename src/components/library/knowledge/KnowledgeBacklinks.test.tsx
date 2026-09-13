@@ -483,3 +483,25 @@ describe('KnowledgeBacklinks', () => {
     await waitFor(() => expect(rows()).toHaveLength(1))
   })
 })
+
+// ── UAT 2026-09-13 D-62 ─────────────────────────────────────────────────────
+describe('UAT D-62 — one linking note is one mention, and a block-anchored link says so', () => {
+  it('counts DISTINCT source notes and labels the block-anchored row', async () => {
+    const loadGraph = vi.fn().mockResolvedValue(
+      makeGraph({
+        nodes: [node('Dashboards/Overview.md'), node('other.md')],
+        edges: [
+          edge({ from_path: 'Dashboards/Overview.md', embed: true }),
+          edge({ from_path: 'Dashboards/Overview.md', block: 'someblock' }),
+          edge({ from_path: 'other.md' }),
+        ],
+      }),
+    )
+    renderBacklinks({ loadGraph, collapsible: true })
+    // DIES ON the old code: the count was the edge count, 3.
+    await waitFor(() => expect(screen.getByTestId('knowledge-backlinks-toggle-count').textContent).toBe('2'))
+    fireEvent.click(screen.getByTestId('knowledge-backlinks-toggle'))
+    const blockRow = await screen.findByTestId('knowledge-backlink-block')
+    expect(blockRow.textContent).toContain('^someblock')
+  })
+})

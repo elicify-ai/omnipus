@@ -45,6 +45,24 @@ import { stripWikilinkNotation } from './wikilinkNotation'
 
 type VaultSearchResponse = components['schemas']['VaultSearchResponse']
 
+/** UAT D-114: the lead sentence of the incomplete-answer notice, chosen from
+ *  the server's own `complete_reason`. "Still indexing" is claimed ONLY when
+ *  the reason itself says the index is not ready / catching up — the
+ *  handler's own vocabulary (`rest_knowledge_find.go`: "index not ready
+ *  yet", "still indexing", "freshness could not be verified"). Any other
+ *  reason (a saved-view file or a record-type schema that failed to load —
+ *  permanent until an operator fixes it) is stated as a part of the
+ *  knowledge base that could not be searched, never as indexing progress.
+ *  No reason at all gets the neutral sentence. Exported as a test seam. */
+export function incompleteLead(reason: string | undefined): string {
+  const r = (reason ?? '').trim()
+  if (r === '') return 'These results may be incomplete.'
+  if (/(indexing|not ready|catching up|freshness)/i.test(r)) {
+    return 'This knowledge base is still indexing — results may be incomplete.'
+  }
+  return 'Part of this knowledge base could not be searched — results may be incomplete.'
+}
+
 /** A short results-list shape — smaller than a saved-view embed's reserved
  *  height, larger than a single-line notice (EMB-066 / test 96: heights
  *  differ per kind). */
@@ -161,12 +179,19 @@ function KbQueryFenceEmbedContent({ workspaceId, collectionId, query }: KbQueryF
   // instead of them: an incomplete answer returning two real matches used to
   // discard both, which is strictly less honest than "here is what we have
   // so far, and it may be incomplete".
+  //
+  // UAT D-114: "still indexing" was asserted for EVERY incomplete answer,
+  // including one whose own reason was a permanent condition (two saved
+  // view files that fail to load) on an index that was open and serving —
+  // the banner contradicted itself and sent the reader to wait for a job
+  // that had finished. The indexing claim is now made only when the
+  // server's reason says so; any other reason is stated as what it is.
   const incompleteNotice = data.complete ? null : (
     <div
       data-testid="kb-query-fence-incomplete"
       className="mb-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-xs text-[var(--color-muted)]"
     >
-      This knowledge base is still indexing — results may be incomplete.
+      {incompleteLead(data.complete_reason)}
       {data.complete_reason ? ` (${data.complete_reason})` : ''}
     </div>
   )
