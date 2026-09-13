@@ -20,7 +20,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/goal"
-	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -32,12 +31,15 @@ type unifiedTask = task.Task
 
 func tasksDir(home string) string { return filepath.Join(home, "tasks") }
 
-// goalStoreForWorkspace returns a goal.Store rooted at home (mirrors
-// pkg/tools/task.go's goalStoreForTasks; duplicated rather than
-// exported+imported — see this file's own "duplicated rather than
-// exported+imported" convention above). This package already carries `home`
-// directly on Deps, so no Dir()-derivation is needed here.
-func goalStoreForWorkspace(home string) *goal.Store { return goal.NewStore(home) }
+// This file has NO goal-store wrapper and NO task-delete goal cleanup of its
+// own. The goal store is constructed inline as goal.NewStore(t.deps.Home) —
+// the retired goalStoreForWorkspace added nothing to that one call — and the
+// delete cleanup is tools.RemoveTaskGoalRecords (pkg/tools/task.go), the single
+// implementation shared with the REST surface and the plain delete_task tool.
+// The private copies that used to live here (goalTerminalReasonOwnerDeleted,
+// terminateGoalForOwnerDeletion, removeTaskGoalRecords) were byte-identical
+// mirrors and are deleted; mirroring is the shape that let the sibling
+// task-terminal hook reach only three of its seven writers.
 
 // syncWorkspaceTaskGoalRecord mirrors pkg/tools/task.go's syncTaskGoalRecord
 // exactly (ADR-086 D2/D5, GOAL-FR-003/FR-012/FR-021/FR-029) — see its doc
@@ -67,7 +69,7 @@ func syncWorkspaceTaskGoalRecord(
 		return nil
 	}
 	criteria := t.Criteria
-	gs := goalStoreForWorkspace(home)
+	gs := goal.NewStore(home)
 	now := time.Now().UTC()
 	existing, err := gs.GetByOwner(generated.GoalOwnerKindTask, t.ID)
 	if err != nil {
@@ -125,7 +127,7 @@ func syncWorkspaceTaskGoalRecord(
 // against the DoD already on file, and the task record has no DoD field to read
 // it from (ADR-086 D5). A read fault is returned, never swallowed.
 func pairedWorkspaceGoalDoD(home, taskID string) ([]task.AcceptanceCriterion, error) {
-	g, err := goalStoreForWorkspace(home).GetByOwner(generated.GoalOwnerKindTask, taskID)
+	g, err := goal.NewStore(home).GetByOwner(generated.GoalOwnerKindTask, taskID)
 	if err != nil {
 		if errors.Is(err, goal.ErrOwnerNotFound) {
 			return nil, nil
@@ -133,80 +135,6 @@ func pairedWorkspaceGoalDoD(home, taskID string) ([]task.AcceptanceCriterion, er
 		return nil, fmt.Errorf("load paired goal record: %w", err)
 	}
 	return g.DoD, nil
-}
-
-// goalTerminalReasonOwnerDeleted is the TerminalReason stamped on a goal record
-// whose owning task was deleted, mirroring the vocabulary
-// pkg/agent/task_goal_terminal.go's terminalReasonForTask uses for the other
-// task endings.
-const goalTerminalReasonOwnerDeleted = "owning task was deleted"
-
-// terminateGoalForOwnerDeletion is the TRANSITION half of GOAL-FR-044 ("a goal
-// MUST NOT outlive its owner as an unreferenced record. Deleting a task MUST
-// transition and remove its goal"), as a pure function over the record so it is
-// directly testable without a store.
-//
-// Only an ACTIVE record is transitioned, and it is transitioned to `cleared` —
-// the terminal vocabulary FR-028 reserves for an explicit operator ending,
-// which is what deleting the owning task is. A `defining` record (a task
-// deleted before it ever ran) is left untouched and is NOT an error: forcing a
-// transition there would invent an adjudication that never happened, the same
-// reasoning pkg/agent's terminateTaskGoalRecord states.
-//
-// Mirrored — not shared — by pkg/gateway/rest_tasks.go and pkg/tools/task.go,
-// per this file's own "duplicated rather than exported+imported" convention.
-func terminateGoalForOwnerDeletion(g *goal.Goal, now time.Time) error {
-	if g == nil || g.State != generated.GoalStateActive {
-		return nil
-	}
-	return g.Terminate(generated.GoalStateCleared, goalTerminalReasonOwnerDeleted, now)
-}
-
-// removeTaskGoalRecords implements GOAL-FR-044/EC-4 in full for one task: every
-// goal record owned by taskID is transitioned out of the active phase and then
-// removed, so no goal survives the deletion of its owner.
-//
-// The three task-delete surfaces share no chokepoint: task.Store.Delete cannot
-// do this itself because pkg/goal imports pkg/task, so the dependency can only
-// run the other way.
-//
-// It iterates List rather than calling GetByOwner because GetByOwner refuses to
-// guess when a task somehow owns more than one record — and refusing is the
-// wrong answer here: leaving one behind would be precisely the unreferenced
-// orphan FR-044 forbids. Errors are joined rather than short-circuited so one
-// unwritable record cannot strand the others.
-func removeTaskGoalRecords(gs *goal.Store, taskID string) error {
-	if gs == nil || taskID == "" {
-		return nil
-	}
-	goals, skipped, err := gs.List()
-	if err != nil {
-		return fmt.Errorf("list goal records: %w", err)
-	}
-	if len(skipped) > 0 {
-		slog.Warn("delete_task_in_workspace: unreadable goal records skipped while removing a "+
-			"deleted task's goal", "task_id", taskID, "skipped", skipped)
-	}
-	now := time.Now().UTC()
-	var errs []error
-	for i := range goals {
-		if goals[i].OwnerKind != generated.GoalOwnerKindTask || goals[i].OwnerID != taskID {
-			continue
-		}
-		goalID := goals[i].GoalID
-		if _, uErr := gs.Update(goalID, func(g *goal.Goal) error {
-			return terminateGoalForOwnerDeletion(g, now)
-		}); uErr != nil {
-			// Record the fault and still remove the record: a goal that cannot
-			// be transitioned must not therefore be left behind ACTIVE and
-			// unreferenced, which is the worse of the two outcomes.
-			errs = append(errs, fmt.Errorf("terminate goal record %q: %w", goalID, uErr))
-		}
-		if dErr := gs.Delete(goalID); dErr != nil {
-			errs = append(errs, fmt.Errorf("delete goal record %q: %w", goalID, dErr))
-		}
-	}
-	return errors.Join(errs...)
 }
 
 // taskStoreFor returns a task.Store rooted at the home's tasks directory. It
@@ -317,36 +245,13 @@ func allCheckCriteriaWorkspace(criteria []task.AcceptanceCriterion) bool {
 	return true
 }
 
-// validateTaskPlanLinkageWorkspace enforces the same-workspace FK a
-// Task.plan_id reference must satisfy AND rejects linking to a terminal
-// (done/failed) plan (ADR-052 spec "Edge Cases": "create_task(plan_id)
-// referencing a plan already done -> reject"). Mirrors
-// pkg/tools/plan.go's validateTaskPlanLinkage exactly (duplicated rather
-// than exported+imported: that helper is unexported package-internal to
-// pkg/tools, and this package must not reach into pkg/tools' internals —
-// same rationale as parseCriteriaArgsFromWorkspaceTool above). planID == ""
-// (no linkage requested) is always valid (nil). A nil planStore fails
-// CLOSED — an unwired store is a configuration error, never a permission
-// grant.
-func validateTaskPlanLinkageWorkspace(planStore *plan.Store, planID, workspaceID string) error {
-	if planID == "" {
-		return nil
-	}
-	if planStore == nil {
-		return fmt.Errorf("cannot verify plan_id %q: plan store is not configured", planID)
-	}
-	if err := planStore.ValidatePlanWorkspace(planID, workspaceID); err != nil {
-		return err
-	}
-	p, err := planStore.Get(planID)
-	if err != nil {
-		return fmt.Errorf("could not load plan %q: %w", planID, err)
-	}
-	if plan.IsTerminal(p.State) {
-		return fmt.Errorf("plan %q is %q (terminal) and cannot accept new member tasks", planID, p.State)
-	}
-	return nil
-}
+// This package has NO plan-linkage validator of its own — create_task_in_
+// workspace calls tools.ValidateTaskPlanMembership (pkg/tools/plan.go)
+// directly, the same choke point the plain create_task tool and the REST
+// surface use. The retired local copy here (validateTaskPlanLinkageWorkspace)
+// was a byte-for-byte duplicate kept only because the original was
+// unexported; exporting it removed the reason for the copy. Do not re-add
+// one — a second copy is how the rule drifts.
 
 // delegationDenied evaluates the FR-6.2 delegation gate for an update/delete
 // mutation that targets a task assigned to (or being reassigned to) targetAgentID.
@@ -369,7 +274,7 @@ func NewTaskCreateTool(d *Deps) *TaskCreateTool  { return &TaskCreateTool{deps: 
 func (t *TaskCreateTool) Name() string           { return "create_task_in_workspace" }
 func (t *TaskCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *TaskCreateTool) Description() string {
-	return "Create a task on the workspace board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call list_workspaces first to get the workspace_id.\nParameters: name (required, the task title), description (optional), prompt (optional, agent instruction), workspace_id (required, from list_workspaces), agent_id (optional, agent to assign), status (optional: inbox=new/untriaged, next=ready, blocked, done, failed — defaults to inbox; in_progress is rejected — it is only ever reached through real dispatch via run_task, never persisted directly), due (optional, RFC 3339 due date/time), priority (optional, 1 highest to 5 lowest, default 3), plan_id (optional, ID of the Plan this task is a member of — must exist in the same workspace and must not be a terminal plan), write_set (optional, array of concrete paths this plan member creates/edits; meaningful only alongside plan_id), stream (optional, the parallel-group id this plan member belongs to), is_join (optional, true marks this plan member as an authored join/assemble member), blocked_by (optional, array of task IDs this task is blocked by), criteria (REQUIRED when agent_id is set: at least one acceptance criterion), dod (REQUIRED when agent_id is set: at least one definition-of-done item, distinct from criteria — GOAL-FR-021/D-C). Before authoring acceptance criteria or dod, load the define-goal skill (via the Skill tool) and follow its quality bar. Assigning agent_id to an agent other than yourself is delegation and requires delegation trust to that agent within the workspace, or the call is refused. If every acceptance criterion is kind=check, the assignee must have bash policy allow — otherwise the criteria set could never be satisfied and the create is rejected. An unknown status value is rejected, not defaulted."
+	return "Create a task on the workspace board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call list_workspaces first to get the workspace_id.\nParameters: name (required, the task title), description (optional), prompt (optional, agent instruction), workspace_id (required, from list_workspaces), agent_id (optional, agent to assign), status (optional: inbox=new/untriaged, next=ready, blocked, done, failed — defaults to inbox; in_progress is rejected — it is only ever reached through real dispatch via run_task, never persisted directly), due (optional, RFC 3339 due date/time), priority (optional, 1 highest to 5 lowest, default 3), plan_id (optional, ID of the Plan this task is a member of — must exist in the same workspace and must still be a draft plan; a plan's membership is frozen at approval), write_set (optional, array of concrete paths this plan member creates/edits; meaningful only alongside plan_id), stream (optional, the parallel-group id this plan member belongs to), is_join (optional, true marks this plan member as an authored join/assemble member), blocked_by (optional, array of task IDs this task is blocked by), criteria (REQUIRED when agent_id is set: at least one acceptance criterion), dod (REQUIRED when agent_id is set: at least one definition-of-done item, distinct from criteria — GOAL-FR-021/D-C). Before authoring acceptance criteria or dod, load the define-goal skill (via the Skill tool) and follow its quality bar. Assigning agent_id to an agent other than yourself is delegation and requires delegation trust to that agent within the workspace, or the call is refused. If every acceptance criterion is kind=check, the assignee must have bash policy allow — otherwise the criteria set could never be satisfied and the create is rejected. An unknown status value is rejected, not defaulted."
 }
 
 func (t *TaskCreateTool) Parameters() map[string]any {
@@ -391,7 +296,7 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 			},
 			"plan_id": map[string]any{
 				"type":        "string",
-				"description": "ID of the Plan this task is a member of (optional). Must exist in the same workspace and must not be a terminal (done/failed) plan.",
+				"description": "ID of the Plan this task is a member of (optional). Must exist in the same workspace and must still be a DRAFT plan — a plan's membership is frozen at approval, so an approved, running, done or failed plan rejects a new member.",
 			},
 			"write_set": map[string]any{
 				"type":        "array",
@@ -663,11 +568,12 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 		tk.Priority = pr
 	}
 
-	// Optional plan_id (ADR-052 FR-002): same-workspace FK + not-terminal
-	// (validateTaskPlanLinkageWorkspace above). A call with no plan_id is
+	// Optional plan_id (ADR-052 FR-002): same-workspace FK + draft-only
+	// membership (tools.ValidateTaskPlanMembership — see its doc for why an
+	// approved/running plan refuses a new member). A call with no plan_id is
 	// entirely unaffected — the check is a no-op for planID == "".
 	if v, ok := args["plan_id"].(string); ok && v != "" {
-		if pErr := validateTaskPlanLinkageWorkspace(t.deps.PlanStore, v, tk.WorkspaceID); pErr != nil {
+		if pErr := tools.ValidateTaskPlanMembership(t.deps.PlanStore, v, tk.WorkspaceID); pErr != nil {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT", pErr.Error(), "plan_id"))
 		}
 		tk.PlanID = v
@@ -1229,7 +1135,7 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 	// anyway, this just keeps the logs honest.
 	if task.IsTerminal(result.Status) && !task.IsTerminal(existing.Status) {
 		tools.TerminateTaskGoalRecord(
-			goalStoreForWorkspace(t.deps.Home), id, result.Status, result.CancelReason, result.Result)
+			goal.NewStore(t.deps.Home), id, result.Status, result.CancelReason, result.Result)
 	}
 
 	// FR-6.5: when the task newly reaches terminal "done", advance dependents.
@@ -1353,6 +1259,21 @@ func (t *TaskDeleteTool) Execute(ctx context.Context, args map[string]any) *tool
 		}
 	}
 
+	// GOAL-FR-044/EC-4: a goal MUST NOT outlive its owner as an unreferenced
+	// record. Runs BEFORE the task file is removed and a failure refuses the
+	// whole delete — see tools.RemoveTaskGoalRecords' doc for why this ordering
+	// replaced the best-effort-afterwards shape all three delete surfaces used
+	// to share. Nothing has been deleted yet here, so refusing leaves the task
+	// and its goal exactly as they were and a retry is safe.
+	if gErr := tools.RemoveTaskGoalRecords(goal.NewStore(t.deps.Home), id); gErr != nil {
+		slog.Error("delete_task_in_workspace: refusing to delete a task whose paired goal record "+
+			"could not be removed (GOAL-FR-044) — nothing was deleted", "task_id", id, "error", gErr)
+		return tools.ErrorResult(errorJSON("GOAL_CLEANUP_FAILED",
+			"the task was NOT deleted: its paired goal record could not be removed, and deleting "+
+				"the task anyway would leave that record behind as an unreferenced orphan: "+gErr.Error(),
+			"Retry the delete once the goal store is writable again"))
+	}
+
 	unblocked, err := store.Delete(id)
 	cascadeFailed := false
 	if err != nil {
@@ -1375,18 +1296,6 @@ func (t *TaskDeleteTool) Execute(ctx context.Context, args map[string]any) *tool
 	if len(unblocked) > 0 {
 		slog.Info("sysagent: task delete: unblocked dependents", "deleted_id", id, "unblocked", unblocked)
 	}
-	// GOAL-FR-044/EC-4: a goal MUST NOT outlive its owner as an unreferenced
-	// record. Best-effort and non-fatal for the same reason the cascade-edge
-	// cleanup above is — the task's own file is ALREADY gone — and surfaced to
-	// the caller for the same reason too, via the same warning-field pattern.
-	// Logged at Error because the outcome is a permanent orphan.
-	var goalCleanupWarning string
-	if gErr := removeTaskGoalRecords(goalStoreForWorkspace(t.deps.Home), id); gErr != nil {
-		slog.Error("delete_task_in_workspace: paired goal record could not be removed with its owner "+
-			"(GOAL-FR-044) — it is now an unreferenced orphan", "task_id", id, "error", gErr)
-		goalCleanupWarning = gErr.Error()
-	}
-
 	result := map[string]any{"id": id, "deleted": true}
 	if len(unblocked) > 0 {
 		result["unblocked_tasks"] = unblocked
@@ -1394,10 +1303,6 @@ func (t *TaskDeleteTool) Execute(ctx context.Context, args map[string]any) *tool
 	if cascadeFailed {
 		result["cascade_warning"] = "the task was deleted but some other tasks' blocked_by edges could not " +
 			"be cleaned up and now reference a deleted task"
-	}
-	if goalCleanupWarning != "" {
-		result["goal_cleanup_warning"] = "the task was deleted, but its paired goal record could not " +
-			"be removed: " + goalCleanupWarning
 	}
 	return tools.NewToolResult(successJSON(result))
 }

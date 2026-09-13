@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // validCriteriaJSON / validDoDJSON are minimal, well-formed single-item
@@ -132,7 +133,7 @@ func TestCreateTaskRejectsEmptyCriteria(t *testing.T) {
 // including the server-computed clause_count (JUDGE-FR-006b).
 //
 // This test FAILS on a reverted implementation two independent ways: (a) no
-// goal record is created at all (goalStoreForTasks(...).GetByOwner returns
+// goal record is created at all (tools.GoalStoreForTasks(...).GetByOwner returns
 // goal.ErrOwnerNotFound), and (b) even if a record existed, GET would carry
 // no `dod` field without toWireDod being wired into toWireTask.
 func TestCreateTaskPersistsGoalRecordWithCriteriaAndDoD(t *testing.T) {
@@ -155,7 +156,7 @@ func TestCreateTaskPersistsGoalRecordWithCriteriaAndDoD(t *testing.T) {
 	// The paired goal record exists, is task-owned, and is in "defining"
 	// (GOAL-FR-012 — a task's goal does not activate until the task starts;
 	// nothing in this create path may activate it).
-	g, gErr := goalStoreForTasks(api.taskStore).GetByOwner(gen.GoalOwnerKindTask, created.Id)
+	g, gErr := tools.GoalStoreForTasks(api.taskStore).GetByOwner(gen.GoalOwnerKindTask, created.Id)
 	require.NoError(t, gErr, "expected a paired goal record for the newly-created task")
 	assert.Equal(t, gen.GoalOwnerKindTask, g.OwnerKind)
 	assert.Equal(t, created.Id, g.OwnerID)
@@ -279,7 +280,7 @@ func TestPatchTaskUpdatesGoalRecordCriteria(t *testing.T) {
 	api.HandleTasks(wPatch, rPatch)
 	require.Equal(t, http.StatusOK, wPatch.Code, "body=%s", wPatch.Body.String())
 
-	g, gErr := goalStoreForTasks(api.taskStore).GetByOwner(gen.GoalOwnerKindTask, created.Id)
+	g, gErr := tools.GoalStoreForTasks(api.taskStore).GetByOwner(gen.GoalOwnerKindTask, created.Id)
 	require.NoError(t, gErr)
 	require.Len(t, g.Criteria, 1)
 	assert.Equal(t, "a DIFFERENT criterion", g.Criteria[0].Text,

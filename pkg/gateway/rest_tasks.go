@@ -17,7 +17,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
@@ -29,22 +28,21 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/goal"
-	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// goalStoreForTasks returns a goal.Store rooted at the SAME $OMNIPUS_HOME
-// a.taskStore is rooted at (task.Store.Dir() is always "<home>/tasks").
-// Mirrors pkg/tools/task.go's helper of the same name exactly — see its doc
-// comment for the full rationale (pkg/goal cannot be constructor-injected
-// here without touching gateway.go, which is outside this wave's write-set;
-// constructing a fresh goal.Store per call is safe and cheap, pkg/entity's
-// cross-call locking is process-wide and shared by every Store[T] instance).
-func goalStoreForTasks(store *task.Store) *goal.Store {
-	return goal.NewStore(filepath.Dir(store.Dir()))
-}
+// This file has NO goal-store derivation and NO task-delete goal cleanup of
+// its own. It calls tools.GoalStoreForTasks and tools.RemoveTaskGoalRecords
+// (pkg/tools/task.go) — the single implementations shared with the create_task
+// / delete_task agent tools and the System Agent's workspace task tools. The
+// private copies that used to live here (goalStoreForTasks,
+// goalTerminalReasonOwnerDeleted, terminateGoalForOwnerDeletion,
+// removeTaskGoalRecords) were byte-identical mirrors and are deleted; mirroring
+// is the shape that let the sibling task-terminal hook reach only three of its
+// seven writers. pkg/tools/task_goal_delete_guard_test.go keeps the delete-side
+// call-site set closed.
 
 // errGoalRecordNeedsBothLists marks the one syncTaskGoalRecord failure that is
 // the CALLER's fault rather than a storage fault: bootstrapping a paired goal
@@ -194,7 +192,7 @@ func (a *restAPI) syncTaskGoalRecord(
 		return nil
 	}
 	criteria := t.Criteria
-	gs := goalStoreForTasks(a.taskStore)
+	gs := tools.GoalStoreForTasks(a.taskStore)
 	now := time.Now().UTC()
 	existing, err := gs.GetByOwner(gen.GoalOwnerKindTask, t.ID)
 	if err != nil {
@@ -260,7 +258,7 @@ func (a *restAPI) syncTaskGoalRecord(
 // evaluated, and a rule that silently does not run is exactly the failure this
 // whole change exists to stop.
 func (a *restAPI) pairedGoalDoD(taskID string) ([]task.AcceptanceCriterion, error) {
-	g, err := goalStoreForTasks(a.taskStore).GetByOwner(gen.GoalOwnerKindTask, taskID)
+	g, err := tools.GoalStoreForTasks(a.taskStore).GetByOwner(gen.GoalOwnerKindTask, taskID)
 	if err != nil {
 		if errors.Is(err, goal.ErrOwnerNotFound) {
 			return nil, nil
@@ -268,89 +266,6 @@ func (a *restAPI) pairedGoalDoD(taskID string) ([]task.AcceptanceCriterion, erro
 		return nil, fmt.Errorf("load paired goal record: %w", err)
 	}
 	return g.DoD, nil
-}
-
-// goalTerminalReasonOwnerDeleted is the TerminalReason stamped on a goal record
-// whose owning task was deleted. It mirrors the vocabulary
-// pkg/agent/task_goal_terminal.go's terminalReasonForTask uses for the other
-// task endings, so a reader of the audit trail sees one consistent sentence
-// shape for "the owner ended this".
-const goalTerminalReasonOwnerDeleted = "owning task was deleted"
-
-// terminateGoalForOwnerDeletion is the TRANSITION half of GOAL-FR-044 ("a goal
-// MUST NOT outlive its owner as an unreferenced record. Deleting a task MUST
-// transition and remove its goal"), as a pure function over the record so it is
-// directly testable without a store.
-//
-// Only an ACTIVE record is transitioned, and it is transitioned to `cleared` —
-// the terminal vocabulary FR-028 reserves for an explicit operator ending, which
-// is exactly what deleting the owning task is. It is not `met` (nothing was
-// adjudicated), not `exhausted` (no budget ran out) and not `expired` (nothing
-// timed out).
-//
-// A `defining` record — a task deleted before it ever ran — is left untouched
-// and is NOT an error: goal.Goal.Terminate refuses a non-active record outright,
-// and forcing a transition would invent an adjudication that never happened.
-// That is the same reasoning pkg/agent's terminateTaskGoalRecord states for the
-// terminal-task path. An already-terminal record is likewise a no-op, which
-// makes the whole delete path idempotent.
-func terminateGoalForOwnerDeletion(g *goal.Goal, now time.Time) error {
-	if g == nil || g.State != gen.GoalStateActive {
-		return nil
-	}
-	return g.Terminate(gen.GoalStateCleared, goalTerminalReasonOwnerDeleted, now)
-}
-
-// removeTaskGoalRecords implements GOAL-FR-044/EC-4 in full for one task:
-// every goal record owned by taskID is transitioned out of the active phase and
-// then removed, so no goal survives the deletion of its owner.
-//
-// Mirrored — not shared — by pkg/tools/task.go and pkg/sysagent/tools/task.go,
-// following this file family's established convention for the goal-store
-// helpers (goalStoreForTasks, syncTaskGoalRecord). The three task-delete
-// surfaces share no chokepoint: task.Store.Delete cannot do this itself because
-// pkg/goal imports pkg/task, so the dependency can only run the other way.
-//
-// It iterates List rather than calling GetByOwner because GetByOwner refuses to
-// guess when a task somehow owns more than one record — and refusing is the
-// wrong answer here. "Remove everything this owner owns" is well defined for
-// any number of records, including the broken two-record state, and leaving one
-// behind would be precisely the unreferenced orphan FR-044 forbids.
-//
-// Errors from individual records are joined rather than short-circuited: one
-// unwritable record must not stop the others from being cleaned up.
-func removeTaskGoalRecords(gs *goal.Store, taskID string) error {
-	if gs == nil || taskID == "" {
-		return nil
-	}
-	goals, skipped, err := gs.List()
-	if err != nil {
-		return fmt.Errorf("list goal records: %w", err)
-	}
-	if len(skipped) > 0 {
-		slog.Warn("task delete: unreadable goal records skipped while removing a deleted task's goal",
-			"task_id", taskID, "skipped", skipped)
-	}
-	now := time.Now().UTC()
-	var errs []error
-	for i := range goals {
-		if goals[i].OwnerKind != gen.GoalOwnerKindTask || goals[i].OwnerID != taskID {
-			continue
-		}
-		goalID := goals[i].GoalID
-		if _, uErr := gs.Update(goalID, func(g *goal.Goal) error {
-			return terminateGoalForOwnerDeletion(g, now)
-		}); uErr != nil {
-			// Record the fault and still remove the record: a goal that cannot
-			// be transitioned must not therefore be left behind ACTIVE and
-			// unreferenced, which is the worse of the two outcomes.
-			errs = append(errs, fmt.Errorf("terminate goal record %q: %w", goalID, uErr))
-		}
-		if dErr := gs.Delete(goalID); dErr != nil {
-			errs = append(errs, fmt.Errorf("delete goal record %q: %w", goalID, dErr))
-		}
-	}
-	return errors.Join(errs...)
 }
 
 // decodeTaskJSONBody decodes a JSON request body into dst, writing a 400 and
@@ -659,7 +574,7 @@ type taskGoalIndex map[string]*goal.Goal
 // buildRollupIndex exactly — see taskGoalIndex's doc comment for why this
 // exists at all.
 func (a *restAPI) buildTaskGoalIndex() (taskGoalIndex, error) {
-	all, _, err := goalStoreForTasks(a.taskStore).List()
+	all, _, err := tools.GoalStoreForTasks(a.taskStore).List()
 	if err != nil {
 		return nil, err
 	}
@@ -765,7 +680,7 @@ func (a *restAPI) toWireTask(t task.Task, idx rollupIndex, gidx taskGoalIndex) (
 	if gidx != nil {
 		g = gidx[t.ID]
 	} else if a.taskStore != nil {
-		found, gErr := goalStoreForTasks(a.taskStore).GetByOwner(gen.GoalOwnerKindTask, t.ID)
+		found, gErr := tools.GoalStoreForTasks(a.taskStore).GetByOwner(gen.GoalOwnerKindTask, t.ID)
 		switch {
 		case gErr == nil:
 			g = found
@@ -1571,46 +1486,20 @@ func (a *restAPI) validateTaskAgentID(agentID, workspaceID string) error {
 	return nil
 }
 
-// validateTaskPlanID enforces the same-workspace FK on Task.PlanID (ADR-049
-// D1, mirrors the removed validateMilestoneFK): a task may only reference a
-// plan that lives in its own workspace. Returns nil when planID is empty
-// (nothing to validate). Fails CLOSED (400) when a.planStore is nil — an
-// uninitialized dependency is never treated as "no FK to check", mirroring
-// validateTaskAgentID's errTaskAgentLoopUnavailable convention immediately
-// above.
+// The REST surface has NO plan-linkage validator of its own. POST /tasks and
+// PATCH /tasks/{id} both call tools.ValidateTaskPlanMembership (pkg/tools/
+// plan.go) directly — the one choke point shared with the create_task and
+// create_task_in_workspace agent tools, so "may this task join this plan?"
+// has exactly one answer in this codebase. A REST-local wrapper (the retired
+// validateTaskPlanID, and its errTaskPlanStoreUnavailable sentinel) is what
+// let the rule drift here in the first place: it rejected only TERMINAL
+// plans, so the UI could attach a member to an approved or running plan that
+// plan-lint would never see. Do not reintroduce one.
 //
-// Also rejects linking to a TERMINAL plan (done/failed): a terminal plan can
-// never accept new member tasks, and allowing the attach would leave a member
-// pointing at a dead plan. This is data integrity (parity with
-// pkg/tools/plan.go's validateTaskPlanLinkage), not a dispatch-approval
-// mechanism — task dispatch authority is governed solely by the run_task tool
-// policy (allow/deny/ask), enforced in the agent loop.
-func (a *restAPI) validateTaskPlanID(planID, workspaceID string) error {
-	if planID == "" {
-		return nil
-	}
-	if a.planStore == nil {
-		return errTaskPlanStoreUnavailable
-	}
-	if err := validateEntityID(planID); err != nil {
-		return fmt.Errorf("invalid plan_id: %w", err)
-	}
-	if err := a.planStore.ValidatePlanWorkspace(planID, workspaceID); err != nil {
-		return err
-	}
-	p, err := a.planStore.Get(planID)
-	if err != nil {
-		return fmt.Errorf("could not load plan %q: %w", planID, err)
-	}
-	if plan.IsTerminal(p.State) {
-		return fmt.Errorf("plan %q is %q (terminal) and cannot accept new member tasks", planID, p.State)
-	}
-	return nil
-}
-
-// errTaskPlanStoreUnavailable is returned by validateTaskPlanID when
-// a.planStore is nil — see its doc comment for the fail-closed rationale.
-var errTaskPlanStoreUnavailable = errors.New("task: plan store not initialized; cannot validate plan_id")
+// Path-traversal safety needs no separate validateEntityID call here either:
+// plan.Store.Get runs pkg/plan's own validateID on every lookup, with the
+// identical "/", "\", "..", NUL" rejection, and the error surfaces as a 400
+// exactly like every other rejection below.
 
 // resolveAgentName returns the display name for an agent ID from the registry,
 // or "" when unknown.
@@ -1909,7 +1798,9 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		t.ParentTaskID = *req.ParentTaskId
 	}
 	if req.PlanId != nil && *req.PlanId != "" {
-		if err := a.validateTaskPlanID(*req.PlanId, req.WorkspaceId); err != nil {
+		// Same-workspace FK + draft-only membership, via the one choke point
+		// every attach path shares (tools.ValidateTaskPlanMembership).
+		if err := tools.ValidateTaskPlanMembership(a.planStore, *req.PlanId, req.WorkspaceId); err != nil {
 			jsonErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -2220,7 +2111,13 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 				jsonErr(w, http.StatusInternalServerError, "could not read task")
 				return
 			}
-			if err := a.validateTaskPlanID(*req.PlanId, existingForPlanCheck.WorkspaceID); err != nil {
+			// Same-workspace FK + draft-only membership, via the one choke
+			// point every attach path shares. This is the RE-PARENT/attach
+			// half of PATCH (plan A -> plan B, or standalone -> plan B); the
+			// DETACH half (plan_id -> "") is the else branch below and is
+			// deliberately not gated — leaving a plan is always allowed.
+			if err := tools.ValidateTaskPlanMembership(
+				a.planStore, *req.PlanId, existingForPlanCheck.WorkspaceID); err != nil {
 				jsonErr(w, http.StatusBadRequest, err.Error())
 				return
 			}
@@ -2602,7 +2499,7 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	if task.IsTerminal(updated.Status) &&
 		(priorForUpdate == nil || !task.IsTerminal(priorForUpdate.Status)) {
 		tools.TerminateTaskGoalRecord(
-			goalStoreForTasks(a.taskStore), id, updated.Status, updated.CancelReason, updated.Result)
+			tools.GoalStoreForTasks(a.taskStore), id, updated.Status, updated.CancelReason, updated.Result)
 	}
 
 	a.auditTask("task.update", id)
@@ -2625,6 +2522,31 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 func (a *restAPI) handleTaskDelete(w http.ResponseWriter, id string) {
 	if err := validateEntityID(id); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid task ID")
+		return
+	}
+	// GOAL-FR-044/EC-4: a goal MUST NOT outlive its owner as an unreferenced
+	// record — deleting a task transitions and removes its paired goal. Every
+	// deleted task used to leave its goal record behind, owned by a task id
+	// that no longer resolves and (if the task had ever run) permanently
+	// `active`; the retention sweep was the only thing that would ever have
+	// touched it again.
+	//
+	// Runs BEFORE the task file is removed, and a failure REFUSES the whole
+	// delete (500) rather than logging and answering 204. The old ordering
+	// could only report the orphan; this one prevents it. Answering 204 while
+	// knowing a permanent orphan was just created is the same class of lie as
+	// SF-6 in this file (emitting a task with no `dod` after a goal-record read
+	// fault, indistinguishable from a task that genuinely has none) — and
+	// unlike a mid-delete failure, nothing has happened yet here, so the
+	// caller's retry is both meaningful and safe (RemoveTaskGoalRecords is
+	// idempotent). The two agent tools take the identical path; this is the one
+	// answer all three delete surfaces now give.
+	if gErr := tools.RemoveTaskGoalRecords(tools.GoalStoreForTasks(a.taskStore), id); gErr != nil {
+		slog.Error("rest: task delete: refusing to delete a task whose paired goal record could not "+
+			"be removed (GOAL-FR-044) — nothing was deleted", "task_id", id, "error", gErr)
+		jsonErr(w, http.StatusInternalServerError,
+			"could not delete task: its paired goal record could not be removed, and deleting the "+
+				"task anyway would leave that record behind as an unreferenced orphan")
 		return
 	}
 	unblocked, err := a.taskStore.Delete(id)
@@ -2663,23 +2585,6 @@ func (a *restAPI) handleTaskDelete(w http.ResponseWriter, id string) {
 			"advanced_id",
 			depID,
 		)
-	}
-	// GOAL-FR-044/EC-4: a goal MUST NOT outlive its owner as an unreferenced
-	// record — deleting a task transitions and removes its paired goal. Before
-	// this, every deleted task left its goal record behind, owned by a task id
-	// that no longer resolves and (if the task had ever run) permanently
-	// `active`: the retention sweep is the only thing that would ever have
-	// touched it again.
-	//
-	// Best-effort and non-fatal, for the same reason the cascade-edge cleanup
-	// above is: the task's own file is ALREADY gone, so a goal-store fault must
-	// not retroactively turn a completed delete into a failure the caller will
-	// retry against a task that no longer exists. Logged at Error rather than
-	// Warn because the outcome is a permanent orphan, and silence about it is
-	// how this defect reached UAT in the first place.
-	if gErr := removeTaskGoalRecords(goalStoreForTasks(a.taskStore), id); gErr != nil {
-		slog.Error("rest: task delete: paired goal record could not be removed with its owner "+
-			"(GOAL-FR-044) — it is now an unreferenced orphan", "task_id", id, "error", gErr)
 	}
 	// Remove the deleted task's time-trigger cron job (if any) so it does not
 	// fire against a missing task.
@@ -3342,7 +3247,7 @@ func (a *restAPI) reconcileStuckTasks() {
 		// statuses. CancelReason is empty here (this is not a user Stop), so
 		// the record ends `exhausted`, matching the attempts-exhausted ending.
 		tools.TerminateTaskGoalRecord(
-			goalStoreForTasks(a.taskStore), t.ID, task.StatusFailed, "", result)
+			tools.GoalStoreForTasks(a.taskStore), t.ID, task.StatusFailed, "", result)
 	}
 	if reset > 0 {
 		slog.Info("rest: reconcile stuck tasks: reset in_progress→failed on boot", "count", reset)

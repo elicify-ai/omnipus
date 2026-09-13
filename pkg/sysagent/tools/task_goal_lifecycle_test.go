@@ -22,6 +22,7 @@ package systools_test
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -158,4 +159,47 @@ func TestDeleteTaskInWorkspaceRemovesItsGoalRecord_GOALFR044(t *testing.T) {
 	require.NoError(t, lErr)
 	assert.Empty(t, skipped)
 	assert.Empty(t, all, "no goal record may survive the deletion of its only owner")
+}
+
+// TestDeleteTaskInWorkspace_GoalCleanupFailure_RefusesTheDeleteEntirely is the
+// System Agent half of the ONE answer all three task-delete surfaces now give
+// when the paired goal record cannot be removed (GOAL-FR-044/EC-4).
+//
+// delete_task_in_workspace used to remove the task and then surface a
+// `goal_cleanup_warning` alongside a successful delete. The orphaned record was
+// permanent. tools.RemoveTaskGoalRecords now runs before the task file is
+// removed and a failure refuses the delete outright.
+func TestDeleteTaskInWorkspace_GoalCleanupFailure_RefusesTheDeleteEntirely(t *testing.T) {
+	deps, home := newTestDepsWithHome(t)
+	seedWorkspace(t, home, testWorkspaceID)
+	id := createWorkspaceTaskForGoalLifecycle(t, deps, "the work is done", "the reviewer signed it off")
+
+	gs := goal.NewStore(home)
+	_, err := gs.GetByOwner(generated.GoalOwnerKindTask, id)
+	require.NoError(t, err, "fixture: the task must have a paired goal record before the delete")
+
+	dir := gs.Dir()
+	require.NoError(t, os.Chmod(dir, 0o000))
+	t.Cleanup(func() {
+		if cErr := os.Chmod(dir, 0o700); cErr != nil {
+			t.Logf("restore goal dir permissions: %v", cErr)
+		}
+	})
+	if _, rErr := os.ReadDir(dir); rErr == nil {
+		t.Skip("goal entity directory is still readable with mode 0000 (running as root?) — " +
+			"this test cannot create the storage fault it is about")
+	}
+
+	res := systools.NewTaskDeleteTool(deps).Execute(
+		tools.WithAgentID(context.Background(), "jim"),
+		map[string]any{"id": id, "confirm": true})
+	require.True(t, res.IsError,
+		"a delete that cannot remove the paired goal record must fail, not report success with a "+
+			"warning field: %s", res.ForLLM)
+	require.Contains(t, res.ForLLM, "goal record", "the refusal must say what actually failed")
+
+	require.NoError(t, os.Chmod(dir, 0o700))
+	stored, gErr := task.New(home + "/tasks").Get(id)
+	require.NoError(t, gErr, "the task must survive a refused delete — otherwise the refusal is a lie")
+	require.Equal(t, id, stored.ID)
 }

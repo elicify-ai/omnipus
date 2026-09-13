@@ -17,6 +17,7 @@ package tools
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -34,7 +35,7 @@ import (
 const uatDuplicateSentence = "Running the script prints the exact line: Hello, UAT-T2"
 
 // newGoalLifecycleTools builds the three task tools over one isolated home, so
-// goalStoreForTasks (which derives the goal root from the task store's PARENT
+// GoalStoreForTasks (which derives the goal root from the task store's PARENT
 // directory) lands inside the test's own temp dir rather than beside it.
 // goalLifecycleTools is the struct form of newGoalLifecycleTools. It exists so
 // a test that needs only two of the five values can name those two instead of
@@ -277,4 +278,45 @@ func TestTerminateGoalForOwnerDeletionTransitionsOnlyActiveRecords(t *testing.T)
 		"a never-started goal is not an error to delete")
 	assert.Equal(t, generated.GoalStateDefining, defining.State,
 		"a goal whose task never ran must not be given a fabricated terminal verdict")
+}
+
+// TestTaskDelete_GoalCleanupFailure_RefusesTheDeleteEntirely is the agent-tool
+// half of the ONE answer all three task-delete surfaces now give when the
+// paired goal record cannot be removed (GOAL-FR-044/EC-4).
+//
+// delete_task used to remove the task and THEN attempt the cleanup, reporting
+// a `goal_cleanup_warning` alongside a successful delete when that attempt
+// failed. The record was then a permanent orphan — active, owned by an id that
+// no longer resolves — and nothing could undo it. RemoveTaskGoalRecords now
+// runs first and a failure refuses the delete, so the orphan is prevented
+// rather than reported and the caller has somewhere to go.
+func TestTaskDelete_GoalCleanupFailure_RefusesTheDeleteEntirely(t *testing.T) {
+	lt := newGoalLifecycleTools2(t)
+	id := createGoalLifecycleTask(t, lt.create, lt.taskStore, "the work is done", "no secrets in the output")
+
+	_, err := lt.goalStore.GetByOwner(generated.GoalOwnerKindTask, id)
+	require.NoError(t, err, "fixture: the task must have a paired goal record before the delete")
+
+	dir := lt.goalStore.Dir()
+	require.NoError(t, os.Chmod(dir, 0o000))
+	t.Cleanup(func() {
+		if cErr := os.Chmod(dir, 0o700); cErr != nil {
+			t.Logf("restore goal dir permissions: %v", cErr)
+		}
+	})
+	if _, rErr := os.ReadDir(dir); rErr == nil {
+		t.Skip("goal entity directory is still readable with mode 0000 (running as root?) — " +
+			"this test cannot create the storage fault it is about")
+	}
+
+	res := lt.del.Execute(goalLifecycleCtx(), map[string]any{"task_id": id})
+	require.True(t, res.IsError,
+		"a delete that cannot remove the paired goal record must fail, not report success with a "+
+			"warning field: %s", res.ForLLM)
+	require.Contains(t, res.ForLLM, "goal record",
+		"the refusal must say what actually failed")
+
+	stored, gErr := lt.taskStore.Get(id)
+	require.NoError(t, gErr, "the task must survive a refused delete — otherwise the refusal is a lie")
+	require.Equal(t, id, stored.ID)
 }

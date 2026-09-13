@@ -26,7 +26,7 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/goal"
-	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // uatDuplicateSentence is the exact text the UAT tester pasted into BOTH the
@@ -123,7 +123,7 @@ func TestPatchTaskRefusesDoDIdenticalToCriteria_GOALFR048(t *testing.T) {
 		"an edit that makes the DoD restate an existing criterion must be refused; body=%s", w.Body.String())
 
 	// Nothing may have landed: the task's stored DoD must be untouched.
-	g, gErr := goalStoreForTasks(api.taskStore).GetByOwner(gen.GoalOwnerKindTask, id)
+	g, gErr := tools.GoalStoreForTasks(api.taskStore).GetByOwner(gen.GoalOwnerKindTask, id)
 	require.NoError(t, gErr)
 	require.Len(t, g.DoD, 1)
 	assert.Equal(t, "no secrets in the output", g.DoD[0].Text,
@@ -186,7 +186,7 @@ func TestTaskAndGoalShareCriterionIDs_GOALFR007(t *testing.T) {
 	require.Len(t, stored.Criteria, 1)
 	require.NotEmpty(t, stored.Criteria[0].ID, "the task's criterion must carry a minted id")
 
-	g, err := goalStoreForTasks(api.taskStore).GetByOwner(gen.GoalOwnerKindTask, id)
+	g, err := tools.GoalStoreForTasks(api.taskStore).GetByOwner(gen.GoalOwnerKindTask, id)
 	require.NoError(t, err)
 	require.Len(t, g.Criteria, 1)
 
@@ -209,7 +209,7 @@ func TestPatchTaskKeepsCriterionIDsInSync_GOALFR007(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, stored.Criteria, 1)
 
-	g, err := goalStoreForTasks(api.taskStore).GetByOwner(gen.GoalOwnerKindTask, id)
+	g, err := tools.GoalStoreForTasks(api.taskStore).GetByOwner(gen.GoalOwnerKindTask, id)
 	require.NoError(t, err)
 	require.Len(t, g.Criteria, 1)
 
@@ -229,7 +229,7 @@ func TestDeletingTaskRemovesItsGoalRecord_GOALFR044(t *testing.T) {
 	wsID := ensureTestWorkspace(t, api)
 	id := createTaskWithGoal(t, api, wsID, "doomed task")
 
-	gs := goalStoreForTasks(api.taskStore)
+	gs := tools.GoalStoreForTasks(api.taskStore)
 	_, err := gs.GetByOwner(gen.GoalOwnerKindTask, id)
 	require.NoError(t, err, "fixture: the task must have a paired goal record before the delete")
 
@@ -255,7 +255,7 @@ func TestDeletingAnActiveTaskRemovesItsGoalRecord_GOALFR044(t *testing.T) {
 	wsID := ensureTestWorkspace(t, api)
 	id := createTaskWithGoal(t, api, wsID, "running task")
 
-	gs := goalStoreForTasks(api.taskStore)
+	gs := tools.GoalStoreForTasks(api.taskStore)
 	rec, err := gs.GetByOwner(gen.GoalOwnerKindTask, id)
 	require.NoError(t, err)
 
@@ -273,33 +273,10 @@ func TestDeletingAnActiveTaskRemovesItsGoalRecord_GOALFR044(t *testing.T) {
 		"an active goal must not outlive the deletion of its owning task (GOAL-FR-044/EC-4)")
 }
 
-// TestTerminateGoalForOwnerDeletionTransitionsOnlyActiveRecords pins the
-// "transition AND remove" half of FR-044 rather than only the removal, on the
-// pure function the delete path runs inside its store mutation. An ACTIVE
-// record ends with the explicit-clear vocabulary FR-028 requires; a `defining`
-// record — a task deleted before it ever ran — is left alone, because forcing
-// a transition there would invent an adjudication that never happened (the
-// same reasoning terminateTaskGoalRecord states for the terminal-task path).
-func TestTerminateGoalForOwnerDeletionTransitionsOnlyActiveRecords(t *testing.T) {
-	now := time.Now().UTC()
-	author := task.CriterionAuthor{Kind: "user", ID: "tester"}
-	crit := []task.AcceptanceCriterion{{Text: "the work is done", Status: task.CritPending, Author: author}}
-	dod := []task.AcceptanceCriterion{{Text: "no secrets in the output", Status: task.CritPending, Author: author}}
-
-	active, err := goal.New(gen.GoalOwnerKindTask, "task-1", gen.TaskExplicit, "do it", "", crit, dod, 3, now)
-	require.NoError(t, err)
-	require.NoError(t, active.Activate("session-1", now))
-
-	require.NoError(t, terminateGoalForOwnerDeletion(active, now))
-	assert.Equal(t, gen.GoalStateCleared, active.State,
-		"deleting a goal's owner is an explicit operator ending, not an adjudication (FR-028)")
-	assert.NotEmpty(t, active.TerminalReason,
-		"a terminal record must say what ended it")
-
-	defining, err := goal.New(gen.GoalOwnerKindTask, "task-2", gen.TaskExplicit, "do it", "", crit, dod, 3, now)
-	require.NoError(t, err)
-	require.NoError(t, terminateGoalForOwnerDeletion(defining, now),
-		"a never-started goal is not an error to delete")
-	assert.Equal(t, gen.GoalStateDefining, defining.State,
-		"a goal whose task never ran must not be given a fabricated terminal verdict")
-}
+// The pure-function half of FR-044 ("transition AND remove", not only remove)
+// is covered where the one implementation now lives:
+// pkg/tools/task_goal_lifecycle_test.go's
+// TestTerminateGoalForOwnerDeletionTransitionsOnlyActiveRecords. This file used
+// to carry a byte-identical copy of that test against a byte-identical private
+// copy of the function; both are deleted. The REST-level behaviour — that a
+// DELETE actually removes the record — stays covered by the handler test above.

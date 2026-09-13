@@ -25,18 +25,64 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
-// --- shared plan/task-linkage validation (also used by create_task's
-// optional plan_id — ADR-052 FR-002) ---
+// --- shared plan/task-linkage validation (the ONE choke point every
+// direct-attach path calls — ADR-052 FR-002) ---
 
-// validateTaskPlanLinkage enforces the same-workspace FK a Task.plan_id
-// reference must satisfy — mirroring plan.Store.ValidatePlanWorkspace, which
-// this wraps — AND additionally rejects linking to a TERMINAL (done/failed)
-// plan (ADR-052 spec "Edge Cases": "create_task(plan_id) referencing a plan
-// already done -> reject (can't add to a terminal plan)"). planID == ""
-// (no linkage requested) is always valid (nil). A nil planStore fails
-// CLOSED — an unwired store is a configuration error, never a permission
-// grant (mirrors every other unwired-checker discipline in this package).
-func validateTaskPlanLinkage(planStore *plan.Store, planID, workspaceID string) error {
+// ValidateTaskPlanMembership is the single gate every DIRECT plan-membership
+// attach must pass, whoever is asking. It answers one question — "may this
+// task become a member of this plan, right now?" — and all three direct-attach
+// entry points route through it, so the rule cannot drift between them:
+//
+//   - the create_task agent tool (pkg/tools/task.go, same package);
+//   - the create_task_in_workspace System Agent tool
+//     (pkg/sysagent/tools/task.go);
+//   - the REST surface, POST /api/v1/tasks and PATCH /api/v1/tasks/{id}
+//     (pkg/gateway/rest_tasks.go's validateTaskPlanID, which layers its own
+//     path-traversal check on the id and then delegates the rule here).
+//
+// planID == "" (no linkage requested) is always valid (nil), so a create/patch
+// that never mentions a plan is completely unaffected. A nil planStore fails
+// CLOSED — an unwired store is a configuration error, never a permission grant
+// (mirrors every other unwired-checker discipline in this package).
+//
+// Two independent preconditions, kept as two distinct errors on purpose (they
+// are different operator problems with different fixes, and the SPA renders
+// whatever comes back verbatim):
+//
+//  1. SAME-WORKSPACE FK — a task may only reference a plan that lives in its
+//     own workspace. Delegated to plan.Store.ValidatePlanWorkspace, which owns
+//     that rule and phrases its own error.
+//
+//  2. THE PLAN MUST STILL BE A DRAFT. Only plan.StateDraft accepts a new
+//     member; approved, running, done and failed all refuse.
+//
+// Why (2) is the whole non-terminal half and not just the terminal one it used
+// to be: plan-lint (pkg/plan/lint.go — write-set disjointness between parallel
+// members, and the join-point rule for a member that converges >=2 parallel
+// predecessors) runs at APPROVE and nowhere else, from the two approve paths
+// (handlePlanApprove in pkg/gateway/rest_plans.go, and the execute_plan tool
+// below). The only OTHER writer of plan members — a plansupervisor correction
+// — is linted by plan.LintCorrection inside PlanEngine.AppendCorrection. A
+// member attached directly to an already-approved or already-running plan
+// reaches NEITHER of those, so it enters the plan with its write_set, its
+// blocked_by edges and its is_join flag never checked against the members
+// already there — and PlanEngine.promoteInboxMembers then promotes it to
+// `next` and dispatches it (plan.Plan.PermitsMemberDispatch is true for both
+// approved and running). That is how a plan acquires a lint violation it can
+// never be re-linted for. Membership is therefore frozen at approval: a plan's
+// member set is exactly what approve linted.
+//
+// The terminal (done/failed) case keeps its own separate message — a terminal
+// plan is dead rather than merely locked, and "author this before approving"
+// is not useful advice for it (ADR-052 spec "Edge Cases": "create_task(plan_id)
+// referencing a plan already done -> reject (can't add to a terminal plan)").
+//
+// Corrections are deliberately NOT routed through here: PlanEngine.
+// AppendCorrection builds its tail members itself and is gated by
+// plan.LintCorrection, which is the equivalent (and stricter) check for a plan
+// that is already under way. Adding work to a running plan is that path's job,
+// not this one's.
+func ValidateTaskPlanMembership(planStore *plan.Store, planID, workspaceID string) error {
 	if planID == "" {
 		return nil
 	}
@@ -52,6 +98,14 @@ func validateTaskPlanLinkage(planStore *plan.Store, planID, workspaceID string) 
 	}
 	if plan.IsTerminal(p.State) {
 		return fmt.Errorf("plan %q is %q (terminal) and cannot accept new member tasks", planID, p.State)
+	}
+	if p.State != plan.StateDraft {
+		return fmt.Errorf(
+			"plan %q is %q and can no longer accept new member tasks: a plan's membership is frozen "+
+				"at approval, because plan-lint (write-set overlap and join points) runs once, at "+
+				"approve, and never again — only a %q plan may gain members. Add this task before "+
+				"approving the plan, or have the plan supervisor append it as a correction",
+			planID, p.State, plan.StateDraft)
 	}
 	return nil
 }

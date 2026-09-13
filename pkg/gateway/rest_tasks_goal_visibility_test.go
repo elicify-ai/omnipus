@@ -28,6 +28,7 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // postTaskJSON POSTs body to /api/v1/tasks and returns the recorder.
@@ -71,7 +72,7 @@ func getTaskRec(t *testing.T, api *restAPI, id string) *httptest.ResponseRecorde
 // check forbids reaching it through the API).
 func duplicateGoalRecordForOwner(t *testing.T, api *restAPI, ownerID string) {
 	t.Helper()
-	gs := goalStoreForTasks(api.taskStore)
+	gs := tools.GoalStoreForTasks(api.taskStore)
 	orig, err := gs.GetByOwner(gen.GoalOwnerKindTask, ownerID)
 	require.NoError(t, err, "fixture: the task must already have a paired goal record")
 
@@ -176,7 +177,7 @@ func TestPatchTaskBothListsBootstrapsRecord(t *testing.T) {
 		`{"criteria":`+validCriteriaJSON+`,"dod":`+validDoDJSON+`}`)
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 
-	g, err := goalStoreForTasks(api.taskStore).GetByOwner(gen.GoalOwnerKindTask, legacy.ID)
+	g, err := tools.GoalStoreForTasks(api.taskStore).GetByOwner(gen.GoalOwnerKindTask, legacy.ID)
 	require.NoError(t, err, "a PATCH carrying both lists must bootstrap the paired goal record")
 	require.Len(t, g.DoD, 1)
 	assert.Equal(t, "no secrets in the output", g.DoD[0].Text)

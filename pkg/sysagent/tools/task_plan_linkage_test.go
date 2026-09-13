@@ -166,3 +166,56 @@ func TestCreateTaskInWorkspace_NoPlanID_Unaffected(t *testing.T) {
 	})
 	assert.False(t, result.IsError, "plan-less create_task_in_workspace must be unaffected by an unwired plan store: %s", result.ForLLM)
 }
+
+// TestCreateTaskInWorkspace_PlanMembership_NonDraftPlanRefused is the agent-
+// tool half of the draft-only membership rule (operator directive: adding a
+// task to a running plan must not be possible for the agent OR via the UI).
+//
+// A member attached to an already-approved or already-running plan reaches
+// neither plan.Lint (approve-time) nor plan.LintCorrection (supervision-time),
+// so it enters the plan with its write_set and join obligations unchecked.
+// The System Agent tool pays the same gate as the REST surface and the plain
+// create_task tool — they all call tools.ValidateTaskPlanMembership.
+func TestCreateTaskInWorkspace_PlanMembership_NonDraftPlanRefused(t *testing.T) {
+	for _, target := range []plan.State{plan.StateApproved, plan.StateRunning} {
+		t.Run(string(target), func(t *testing.T) {
+			deps, home := newTestDepsWithHome(t)
+			seedWorkspace(t, home, testWorkspaceID)
+			planStore, planID := seedPlanForLinkage(t, home, testWorkspaceID)
+			deps.PlanStore = planStore
+
+			approved := plan.StateApproved
+			_, err := planStore.Update(planID, plan.Patch{State: &approved})
+			require.NoError(t, err)
+			if target == plan.StateRunning {
+				running := plan.StateRunning
+				_, err = planStore.Update(planID, plan.Patch{State: &running})
+				require.NoError(t, err)
+			}
+
+			create := systools.NewTaskCreateTool(deps)
+			ctx := tools.WithAgentID(context.Background(), "jim")
+			result := create.Execute(ctx, map[string]any{
+				"name":         "smuggled member",
+				"workspace_id": testWorkspaceID,
+				"agent_id":     "worker-agent",
+				"plan_id":      planID,
+				"write_set":    []any{"src/app.ts"},
+				"criteria":     workspaceCriteriaArg(),
+				"dod":          workspaceDoDArg(),
+			})
+
+			require.True(t, result.IsError, "expected rejection for a %s plan; got %s", target, result.ForLLM)
+			assert.Contains(t, result.ForLLM, string(target),
+				"the refusal must name the plan's state, not fail generically")
+			assert.Contains(t, result.ForLLM, "membership is frozen",
+				"rejection must come from the membership gate, not an earlier gate")
+
+			// Nothing persisted: a refused attach leaves no orphan task.
+			taskStore := task.New(home + "/tasks")
+			all, lerr := taskStore.List(task.Filter{WorkspaceID: testWorkspaceID})
+			require.NoError(t, lerr)
+			assert.Empty(t, all, "a refused attach must persist no task at all")
+		})
+	}
+}

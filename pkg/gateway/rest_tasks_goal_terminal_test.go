@@ -40,6 +40,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // runOneSessionID is the session a task's first run is bound to. Its only
@@ -69,7 +70,7 @@ func startTaskWithActiveGoal(t *testing.T, api *restAPI, wsID, title string) (ta
 	wIP := patchTaskJSON(t, api, taskID, `{"status":"in_progress"}`)
 	require.Equal(t, http.StatusOK, wIP.Code, "next->in_progress; body=%s", wIP.Body.String())
 
-	gs := goalStoreForTasks(api.taskStore)
+	gs := tools.GoalStoreForTasks(api.taskStore)
 	rec, err := gs.GetByOwner(gen.GoalOwnerKindTask, taskID)
 	require.NoError(t, err, "fixture: the task must have a paired goal record")
 
@@ -147,7 +148,7 @@ func TestPatchTaskToTerminalEndsItsGoalRecord_GOALFR015(t *testing.T) {
 				"fixture broken: the PATCH did not actually move the task, so nothing about its "+
 					"goal record is being proven")
 
-			rec, err := goalStoreForTasks(api.taskStore).GetByOwner(gen.GoalOwnerKindTask, taskID)
+			rec, err := tools.GoalStoreForTasks(api.taskStore).GetByOwner(gen.GoalOwnerKindTask, taskID)
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantGoalState, rec.State,
 				"PATCH /api/v1/tasks/{id} is a real terminal writer — validateTransition permits "+
@@ -184,7 +185,7 @@ func TestPatchTaskToFailedLeavesTheGoalReactivatable_R04(t *testing.T) {
 	w := patchTaskJSON(t, api, taskID, `{"status":"failed"}`)
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 
-	gs := goalStoreForTasks(api.taskStore)
+	gs := tools.GoalStoreForTasks(api.taskStore)
 	afterPatch, err := gs.GetByOwner(gen.GoalOwnerKindTask, taskID)
 	require.NoError(t, err)
 	require.True(t, afterPatch.IsTerminal(),
@@ -263,7 +264,7 @@ func TestReconcileStuckTasksEndsItsGoalRecord_GOALFR015(t *testing.T) {
 		"fixture broken: boot reconciliation did not reset the stuck task, so nothing about its "+
 			"goal record is being proven")
 
-	rec, err := goalStoreForTasks(api.taskStore).GetByOwner(gen.GoalOwnerKindTask, taskID)
+	rec, err := tools.GoalStoreForTasks(api.taskStore).GetByOwner(gen.GoalOwnerKindTask, taskID)
 	require.NoError(t, err)
 	assert.Equal(t, gen.GoalStateExhausted, rec.State,
 		"reconcileStuckTasks writes a terminal status to every task a crash left in_progress, so it "+
@@ -288,7 +289,7 @@ func TestPatchTaskToNextLeavesItsGoalRecordAlone(t *testing.T) {
 	w := patchTaskJSON(t, api, taskID, `{"status":"next"}`)
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 
-	rec, err := goalStoreForTasks(api.taskStore).GetByOwner(gen.GoalOwnerKindTask, taskID)
+	rec, err := tools.GoalStoreForTasks(api.taskStore).GetByOwner(gen.GoalOwnerKindTask, taskID)
 	require.NoError(t, err)
 	assert.Equal(t, gen.GoalStateActive, rec.State,
 		"a non-terminal PATCH must not touch the goal record — the task is still being worked on")
