@@ -62,6 +62,7 @@ import { cn } from '@/lib/utils'
 import {
   fetchLibraryWorkspaces,
   fetchLibraryEntries,
+  fetchKnowledgeBaseInfo,
   deleteLibraryEntry,
   renameLibraryEntry,
   moveLibraryEntry,
@@ -484,12 +485,27 @@ export function LibraryExplorer({
     },
   })
 
+  // UAT #701 / D-123 (2026-09-13): inside a knowledge base the Library's
+  // delete goes to `.omnipus-vault/trash/` and its rename rewrites inbound
+  // links, so the dialogs must say so. Same key KnowledgePanel already uses
+  // for the browsed folder, so this is a cache hit whenever the panel is up.
+  const browsedKnowledgeQuery = useQuery({
+    queryKey: ['knowledge-base-info', workspaceId, browsedDir],
+    queryFn: () => fetchKnowledgeBaseInfo(workspaceId as string, browsedDir),
+    enabled: workspaceId !== null,
+    staleTime: 30_000,
+  })
+  const browsedInOmnipusVault =
+    browsedKnowledgeQuery.data?.is_knowledge_base === true && browsedKnowledgeQuery.data.marker === 'omnipus_vault'
+  const isVaultNote = (e: LibraryEntry | null): boolean =>
+    e !== null && !e.is_dir && browsedInOmnipusVault && /\.(md|markdown)$/i.test(e.name)
+
   const deleteMutation = useMutation({
     mutationFn: ({ wsId, entryPath }: { wsId: string; entryPath: string }) => deleteLibraryEntry(wsId, entryPath),
     onSuccess: (_data, vars) => {
       invalidateEntries(vars.wsId)
       invalidateWorkspaces()
-      addToast({ message: 'Deleted.', variant: 'success' })
+      addToast({ message: isVaultNote(deleteTarget) ? 'Moved to the knowledge base’s trash.' : 'Deleted.', variant: 'success' })
       setDeleteTarget(null)
       if (selectedPath === vars.entryPath) goTo(workspaceId, null)
     },
@@ -1058,6 +1074,7 @@ export function LibraryExplorer({
           }
         }}
         entry={renameTarget}
+        rewritesLinks={isVaultNote(renameTarget)}
         siblingNames={new Set(sortedEntries.filter((e) => e.path !== renameTarget?.path).map((e) => e.name))}
         isPending={renameMutation.isPending}
         error={renameError}
@@ -1204,7 +1221,9 @@ export function LibraryExplorer({
             <AlertDialogTitle>
               {deleteTarget?.name === VAULT_MARKER_DIR
                 ? 'Delete this knowledge base’s settings?'
-                : `Delete ${deleteTarget?.is_dir ? 'folder' : 'file'}?`}
+                : isVaultNote(deleteTarget)
+                  ? 'Move note to trash?'
+                  : `Delete ${deleteTarget?.is_dir ? 'folder' : 'file'}?`}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {deleteTarget
@@ -1214,9 +1233,11 @@ export function LibraryExplorer({
                     // nothing about that, and the UI cannot recreate a
                     // knowledge base over the same folder afterwards.
                     `"${VAULT_MARKER_DIR}" is what makes "${parentFolderName(deleteTarget.path)}" a knowledge base. Deleting it removes its record types, id sequences, saved views and trash — the notes stay as plain files, but the folder stops being a knowledge base and cannot be made one again from here. This cannot be undone.`
-                  : deleteTarget.is_dir
-                    ? `"${deleteTarget.name}" and everything inside it will be permanently deleted. This cannot be undone.`
-                    : `"${deleteTarget.name}" will be permanently deleted. This cannot be undone.`
+                  : isVaultNote(deleteTarget)
+                    ? `"${deleteTarget.name}" will be moved to this knowledge base’s trash. Links to it from other notes will stop resolving until it is restored; an agent can restore it from the trash.`
+                    : deleteTarget.is_dir
+                      ? `"${deleteTarget.name}" and everything inside it will be permanently deleted. This cannot be undone.`
+                      : `"${deleteTarget.name}" will be permanently deleted. This cannot be undone.`
                 : ''}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -1231,7 +1252,7 @@ export function LibraryExplorer({
                 deleteMutation.mutate({ wsId: workspaceId, entryPath: deleteTarget.path })
               }}
             >
-              {deleteMutation.isPending ? 'Deleting…' : 'Delete'}
+              {deleteMutation.isPending ? 'Deleting…' : isVaultNote(deleteTarget) ? 'Move to trash' : 'Delete'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

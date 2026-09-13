@@ -23,3 +23,18 @@ import "context"
 func RefreshIndexesForNote(ctx context.Context, home, collectionRoot, relPath string) string {
 	return refreshIndexesForNote(ctx, home, collectionRoot, relPath)
 }
+
+// RefreshIndexesForRename is the exported face of refreshIndexesForRename
+// for the Library's rename/move door (UAT #701 / D-123): `from` leaves both
+// indexes and every path in `touched` — the destination plus every note
+// whose inbound links were rewritten — is re-derived in one pass.
+func RefreshIndexesForRename(ctx context.Context, home, collectionRoot, from string, touched []string) string {
+	return refreshIndexesForRename(ctx, home, collectionRoot, from, touched)
+}
+
+// RemoveFromIndexesForNote is the exported face of removeFromIndexesForNote
+// for the Library's delete door (UAT #701 / D-123): the note was moved to
+// the knowledge base's trash, so its live entry leaves both indexes.
+func RemoveFromIndexesForNote(ctx context.Context, home, collectionRoot, relPath string) string {
+	return removeFromIndexesForNote(ctx, home, collectionRoot, relPath)
+}

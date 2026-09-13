@@ -760,6 +760,19 @@ func (a *restAPI) handleLibraryEntryDelete(w http.ResponseWriter, r *http.Reques
 	}
 	defer root.Close()
 
+	// UAT #701 / D-123: a note inside a knowledge base goes to that
+	// knowledge base's trash (restorable), the way the agent door deletes —
+	// see rest_library_knowledge_cascade.go.
+	note, noteErr := a.libraryNoteInCollection(root, rel)
+	if noteErr != nil {
+		mapLibraryErr(w, "delete entry", workspaceID, noteErr)
+		return
+	}
+	if note != nil {
+		a.trashNoteInCollection(w, r, workspaceID, note, rel)
+		return
+	}
+
 	if err := root.Delete(rel); err != nil {
 		mapLibraryErr(w, "delete entry", workspaceID, err)
 		return
@@ -1659,6 +1672,19 @@ func (a *restAPI) handleLibraryRename(w http.ResponseWriter, r *http.Request, wo
 		return
 	}
 
+	// UAT #701 / D-123: a note renamed within its knowledge base has every
+	// inbound wikilink rewritten, the way the agent door renames — see
+	// rest_library_knowledge_cascade.go.
+	note, noteErr := a.libraryNoteInCollection(root, fromRel)
+	if noteErr != nil {
+		mapLibraryErr(w, "rename", workspaceID, noteErr)
+		return
+	}
+	if note != nil && sameCollectionDestination(root, note, toRel) {
+		a.renameNoteInCollection(w, r, "rename", workspaceID, root, note, fromRel, toRel)
+		return
+	}
+
 	fi, err := root.Rename(fromRel, toRel)
 	if err != nil {
 		mapLibraryErr(w, "rename", workspaceID, err)
@@ -1803,6 +1829,24 @@ func (a *restAPI) handleLibraryTransfer(w http.ResponseWriter, r *http.Request, 
 	// of a mount into workspace storage, would skip the check entirely.
 	if !checkCreateName(w, toRoot, toRel, string(mode), req.ToWorkspaceId) {
 		return
+	}
+
+	// UAT #701 / D-123: a same-workspace MOVE of a note to another folder of
+	// the SAME knowledge base is a rename in the knowledge layer's terms —
+	// every inbound wikilink is rewritten. A copy duplicates bytes and
+	// rewrites nothing; a cross-workspace or cross-knowledge-base move is a
+	// real departure the link graph cannot follow, so both keep the plain
+	// filesystem semantics.
+	if mode == transferModeMove && sameWorkspace {
+		note, noteErr := a.libraryNoteInCollection(fromRoot, fromRel)
+		if noteErr != nil {
+			mapLibraryErr(w, string(mode), req.FromWorkspaceId, noteErr)
+			return
+		}
+		if note != nil && sameCollectionDestination(fromRoot, note, toRel) {
+			a.renameNoteInCollection(w, r, string(mode), req.FromWorkspaceId, fromRoot, note, fromRel, toRel)
+			return
+		}
 	}
 
 	var fi os.FileInfo
