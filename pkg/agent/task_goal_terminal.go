@@ -33,12 +33,15 @@
 // `state: active` forever: three terminated UAT tasks left three active,
 // round-0 records behind, contradicting the very tasks they belonged to.
 //
-// This is NOT a reintroduction of the deleted terminateGoalRecordForOwner.
-// That function was deleted because it was session-owner-only and therefore a
-// silent no-op for exactly the records this file exists to end. This one is
-// task-owner-only BY DESIGN and performs no transition of its own — it resolves
-// the owner and delegates to the single terminateGoalRecordByID, so there is
-// still exactly one implementation of the transition itself.
+// The first fix for Half 2 shipped an UNEXPORTED helper here with three call
+// sites and a doc comment asserting those three were the terminal writers.
+// Review finding C1: there are at least seven, and three of them live in
+// pkg/gateway, pkg/tools and pkg/sysagent/tools where an unexported pkg/agent
+// symbol is not merely unused but unreachable. The transition therefore moved
+// to pkg/tools.TerminateTaskGoalRecord — one implementation, shared by all
+// four writer packages — and what remains in this file is the pkg/agent-side
+// wrapper plus this narrative. Read that function's section header for why the
+// obvious chokepoint (task.Store's own status write) is impossible.
 package agent
 
 import (
@@ -50,13 +53,15 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // taskGoalDoD returns the Definition of Done recorded on the goal record
-// paired with taskID, or nil when the task has none to judge.
+// paired with taskID.
 //
-// nil is returned — never an error — for every "there is nothing to union"
-// shape, because each is a legitimate state rather than a fault:
+// (nil, nil) means "this task genuinely has no Definition of Done to union in",
+// and is returned for the two shapes that are legitimate states rather than
+// faults:
 //
 //   - no paired goal record at all (goal.ErrOwnerNotFound): a pre-D-C legacy
 //     task, or a Scratchpad task that never had one (GOAL-FR-023). Debug only;
@@ -66,34 +71,76 @@ import (
 //     through the product (goal.Goal.Validate requires a non-empty DoD) but is
 //     cheap to tolerate.
 //
-// A genuine STORE FAULT is different and is logged at Warn: the DoD exists and
-// could not be read, so this adjudication is about to judge a narrower set than
-// the operator authored. It still returns nil rather than failing the claim —
-// D-B's precedent (a reporting obligation must never become a gate) applied to
-// the mechanism itself: a transient goal-store read error must not convert a
-// worker's legitimate claim into a failed attempt.
-func taskGoalDoD(taskID string) []task.AcceptanceCriterion {
+// A STORE FAULT returns an ERROR, and the caller must not let the claim be
+// judged at all (review finding C2). This function used to return a bare nil
+// with one WARN for every fault, which made the mandatory Definition of Done
+// FAIL OPEN: nil is indistinguishable from "no DoD" at the call site, so the
+// judged set silently narrowed to the acceptance criteria alone, a Met verdict
+// followed, and completeTaskWithResult wrote StatusDone. One unreadable file
+// and the whole gate — including the floor-DoD items goal-dod-floor-no-secrets
+// and goal-dod-floor-grounded-claims — evaporated, while the task read Done.
+//
+// THE D-B QUESTION, ANSWERED. The old behaviour cited operator decision D-B
+// ("evidence tiers and provenance are REPORTING obligations, never gates: no
+// tier value, no provenance value and no quote check may flip a criterion's
+// outcome, withhold a verdict or downgrade a met"). D-B governs what may be
+// done to a VERDICT the Judge has already returned — it forbids the grounding
+// machinery from overruling the Judge's own judgement. It says nothing about
+// whether a criterion the operator authored reaches the Judge in the first
+// place. Refusing to adjudicate an input set we know to be incomplete flips no
+// criterion, downgrades no met and withholds no verdict; it declines to
+// manufacture one. The precedent that DOES apply is two lines of REST away:
+// rest_tasks.go's toWireTask returns 500 on this identical unreadable record,
+// with the reasoning "a reader seeing an empty DoD would conclude the task has
+// none and act on it" (SF-6). It would be incoherent for the DISPLAY of a
+// task's DoD to fail closed while the GATE it represents failed open.
+//
+// The unreadable-record case needs its own detection because goal.Store hides
+// it: GetByOwner delegates to List and DISCARDS List's `skipped` return, so a
+// goal record file that exists on disk but cannot be unmarshalled resolves to
+// ErrOwnerNotFound — byte-identical to a task that never had a record. That is
+// the exact shape the C2 scenario produces (a partially-written record under
+// disk pressure, or a second process on Windows where fileutil.WithFlock is a
+// documented no-op, ADR-054 §5). So ErrOwnerNotFound is re-checked against
+// List's own `skipped`: any unreadable record on disk means this task's DoD
+// cannot be proven absent, and "cannot be proven absent" is not "absent".
+// A skipped record alongside a record we DID resolve for this task is
+// irrelevant and deliberately does not fault — that one belongs to some other
+// owner, and blocking every task's adjudication on it would be a denial of
+// service, not a safeguard.
+func taskGoalDoD(taskID string) ([]task.AcceptanceCriterion, error) {
 	if taskID == "" {
-		return nil
+		return nil, nil
 	}
-	g, err := resolveGoalRecordStore().GetByOwner(generated.GoalOwnerKindTask, taskID)
-	if err != nil {
-		if errors.Is(err, goal.ErrOwnerNotFound) {
-			logger.DebugCF("task_executor",
-				"goal: task has no paired goal record — judging acceptance criteria only, with no Definition of Done (GOAL-FR-023)",
-				map[string]any{"task_id": taskID})
-			return nil
+	gs := resolveGoalRecordStore()
+	g, err := gs.GetByOwner(generated.GoalOwnerKindTask, taskID)
+	switch {
+	case err == nil:
+		if len(g.DoD) == 0 {
+			return nil, nil
 		}
-		logger.WarnCF("task_executor",
-			"goal: could not read the paired goal record's Definition of Done — this claim is being judged "+
-				"against the acceptance criteria ALONE (GOAL-FR-047/FR-048 DoD not enforced for this round)",
-			map[string]any{"task_id": taskID, "error": err.Error()})
-		return nil
+		return g.DoD, nil
+
+	case errors.Is(err, goal.ErrOwnerNotFound):
+		_, skipped, lErr := gs.List()
+		if lErr != nil {
+			return nil, fmt.Errorf(
+				"the goal store could not be listed, so this task's Definition of Done cannot be "+
+					"proven absent: %w", lErr)
+		}
+		if len(skipped) > 0 {
+			return nil, fmt.Errorf(
+				"%d goal record(s) on disk are unreadable (%v), so this task's Definition of Done "+
+					"cannot be proven absent", len(skipped), skipped)
+		}
+		logger.DebugCF("task_executor",
+			"goal: task has no paired goal record — judging acceptance criteria only, with no Definition of Done (GOAL-FR-023)",
+			map[string]any{"task_id": taskID})
+		return nil, nil
+
+	default:
+		return nil, fmt.Errorf("read the paired goal record's Definition of Done: %w", err)
 	}
-	if len(g.DoD) == 0 {
-		return nil
-	}
-	return g.DoD
 }
 
 // persistTaskGoalDoDProjection writes the DoD half of a verdict projection
@@ -173,112 +220,27 @@ func recordTaskGoalVerdict(taskID string, verdict *task.JudgeVerdict, reason str
 	}
 }
 
-// goalStateForTerminalTask maps a task's terminal disposition onto the goal
-// state its paired record must end in, using the SAME vocabulary
-// goal_loop.go::clearGoalStatus already uses for a chat goal — so a task goal
-// and a chat goal that ended the same way read the same way:
+// terminateTaskGoalRecord is this package's entry point to the ONE shared
+// task-terminal -> goal-terminal transition, tools.TerminateTaskGoalRecord.
 //
-//	task done                       -> met        (clearGoalStatus's goalClearNoteMet)
-//	task failed, stopped by a user  -> cleared    (clearGoalStatus's goalClearNoteUser)
-//	task failed, any other reason   -> exhausted  (clearGoalStatus's default)
+// The transition used to be implemented HERE, unexported, and that is review
+// finding C1: three of at least seven real terminal writers live in
+// pkg/gateway, pkg/tools and pkg/sysagent/tools, none of which can reach an
+// unexported pkg/agent symbol, so more than half the writers could not have
+// called this hook even if their authors had wanted to. The implementation
+// moved to pkg/tools — the only package all four writer packages already
+// import that can also see pkg/goal — and this wrapper exists purely so
+// pkg/agent's three call sites (completeTaskWithResult, failTask,
+// PlanEngine.cancelMemberLocked) keep their short, store-free signature.
+// Read tools.TerminateTaskGoalRecord's section header for the full rationale,
+// including why a real store-level chokepoint is impossible here.
 //
-// `expired` is deliberately NOT produced here: it belongs to the idle-expiry
-// calendar sweep (goalIdleExpirySweep), which is about a goal nobody touched
-// for days, not about a task that ran and finished.
-//
-// ok is false for a non-terminal status, so a caller that reaches this with a
-// mid-flight task transitions nothing.
-func goalStateForTerminalTask(status task.Status, cancelReason task.CancelReason) (generated.GoalState, bool) {
-	switch status {
-	case task.StatusDone:
-		return generated.GoalStateMet, true
-	case task.StatusFailed:
-		if cancelReason == task.CancelReasonStoppedByUser {
-			return generated.GoalStateCleared, true
-		}
-		return generated.GoalStateExhausted, true
-	default:
-		return "", false
-	}
-}
-
-// terminateTaskGoalRecord ends the goal record paired with a task that has
-// just reached a terminal status (GOAL-FR-015/FR-027/FR-028).
-//
-// Call it from EVERY terminal disposition of a task. There are three, and they
-// do not share a chokepoint: TaskExecutor.completeTaskWithResult (judged
-// done/failed and the attempts-exhausted wind-down), TaskExecutor.failTask
-// (an infrastructure failure) and PlanEngine.cancelMemberLocked (a user Stop).
-// cancelMemberLocked's own comment already names the other two as its peers for
-// exactly this reason — the evidence-gate streak clear has the same shape.
-//
-// Every outcome is a no-op rather than an error except a genuine store fault:
-//
-//   - no paired goal record (GOAL-FR-023 legacy/Scratchpad task): nothing to end.
-//   - the record is still `defining`: the task terminated without ever starting
-//     (Stop on a queued task, or a create-then-cancel). `defining` is the
-//     legitimate resting state for a record whose task has not run —
-//     goal.Goal.Terminate refuses it outright, and forcing a transition would
-//     invent an adjudication that never happened.
-//   - the record is already terminal: the chat path (or a previous call) ended
-//     it. Idempotent by construction.
-//
-// Best-effort and non-fatal: the task has ALREADY been written terminal by the
-// caller, so a broken goal store must never retroactively change the task's
-// own outcome — the same contract TaskExecutor.recordEvidenceBoundary states
-// for the evidence repo. A fault is logged at Warn so "the goal record was not
-// closed" is never silent, which is precisely how this defect survived to UAT.
+// On the deliberate near-duplication with goal_loop.go's
+// terminateGoalRecordByID: that function remains the CHAT/session-owner
+// transition and is untouched. The task-owner transition is now a single
+// implementation shared by every task writer, which is the property that was
+// actually missing — one unexported copy reachable by one package out of four
+// is not "exactly one implementation", it is an unreachable one.
 func terminateTaskGoalRecord(taskID string, status task.Status, cancelReason task.CancelReason, reason string) {
-	if taskID == "" {
-		return
-	}
-	state, ok := goalStateForTerminalTask(status, cancelReason)
-	if !ok {
-		logger.WarnCF("task_executor",
-			"goal: refusing to terminate a task's goal record for a non-terminal task status",
-			map[string]any{"task_id": taskID, "status": string(status)})
-		return
-	}
-
-	g, err := resolveGoalRecordStore().GetByOwner(generated.GoalOwnerKindTask, taskID)
-	if err != nil {
-		if errors.Is(err, goal.ErrOwnerNotFound) {
-			logger.DebugCF("task_executor",
-				"goal: terminated task has no paired goal record to end (GOAL-FR-023)",
-				map[string]any{"task_id": taskID})
-			return
-		}
-		logger.WarnCF("task_executor",
-			"goal: could not look up the paired goal record of a terminated task — the record may be left ACTIVE (GOAL-FR-015)",
-			map[string]any{"task_id": taskID, "status": string(status), "error": err.Error()})
-		return
-	}
-	if !g.IsActive() {
-		logger.DebugCF("task_executor",
-			"goal: paired goal record is not active — nothing to terminate",
-			map[string]any{"task_id": taskID, "goal_id": g.GoalID, "goal_state": string(g.State)})
-		return
-	}
-
-	if terr := terminateGoalRecordByID(g.GoalID, state, terminalReasonForTask(status, reason)); terr != nil {
-		// terminateGoalRecordByID already logged the storage fault itself;
-		// this adds the task-side context that call has no way to know.
-		logger.WarnCF("task_executor",
-			"goal: the paired goal record of a terminated task could not be transitioned — it is still ACTIVE (GOAL-FR-015)",
-			map[string]any{"task_id": taskID, "goal_id": g.GoalID, "goal_state": string(state), "error": terr.Error()})
-		return
-	}
-	logger.InfoCF("task_executor", "goal: paired goal record terminated with its task",
-		map[string]any{"task_id": taskID, "goal_id": g.GoalID, "goal_state": string(state)})
-}
-
-// terminalReasonForTask builds the Goal.TerminalReason text retained on the
-// record. It names the task outcome that ended the goal and carries the task's
-// own result/reason text when there is one, so a terminal goal record explains
-// itself without a reader having to go and find the task.
-func terminalReasonForTask(status task.Status, reason string) string {
-	if reason == "" {
-		return fmt.Sprintf("owning task reached %s", status)
-	}
-	return fmt.Sprintf("owning task reached %s: %s", status, truncateTaskOutput(reason))
+	tools.TerminateTaskGoalRecord(resolveGoalRecordStore(), taskID, status, cancelReason, reason)
 }

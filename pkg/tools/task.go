@@ -231,6 +231,173 @@ func removeTaskGoalRecords(gs *goal.Store, taskID string) error {
 	return errors.Join(errs...)
 }
 
+// --- the task-terminal -> goal-terminal hook (GOAL-FR-015/FR-027/FR-028) ----
+//
+// Review finding C1. terminateTaskGoalRecord shipped as an UNEXPORTED helper
+// in pkg/agent with three call sites, and its own doc comment asserted those
+// three "are" the terminal writers. They are not. A task also reaches a
+// terminal status through PATCH /api/v1/tasks/{id} (rest_tasks.go's
+// handleTaskPatch — validateTransition permits in_progress->done and ->failed,
+// which is what a Kanban drag onto Done or Failed sends), through the boot
+// reconciler that resets EVERY stranded in_progress task to failed
+// (reconcileStuckTasks), and through update_task / update_task_in_workspace
+// with status:"failed" (the done-claim judge deferral only intercepts `done`).
+// Those three live in pkg/gateway, pkg/tools and pkg/sysagent/tools, none of
+// which can see an unexported pkg/agent symbol — so the hook was structurally
+// unreachable from more than half of the writers it claimed to cover.
+//
+// WHY THIS LIVES HERE, AND WHY IT IS NOT A STORE-LEVEL CHOKEPOINT. The real
+// chokepoint would be task.Store's own status-write path (updateLocked): one
+// place, no call sites to forget. It is impossible — pkg/goal imports pkg/task
+// (for the shared AcceptanceCriterion type), so pkg/task cannot import pkg/goal
+// back. task.Patch.Criteria's own doc comment and removeTaskGoalRecords' both
+// already state this for the two sibling problems ("this store has no way to do
+// that itself ... the dependency can only run the other way").
+//
+// pkg/tools is the nearest thing to a chokepoint that IS reachable: it imports
+// pkg/goal and pkg/task, and it is imported by all three of the other writer
+// packages (pkg/agent, pkg/gateway, pkg/sysagent/tools). So the TRANSITION has
+// exactly one implementation, shared — not the five mirrored copies this file
+// family's other goal helpers use (goalStoreForTasks, syncTaskGoalRecord,
+// terminateGoalForOwnerDeletion). Mirroring is what let three of seven writers
+// ship without the hook at all; for a rule whose whole job is to be applied
+// everywhere, one copy is the point.
+//
+// The remaining call sites are then made ENFORCEABLE rather than remembered:
+// task_goal_terminal_guard_test.go enumerates every function in pkg/agent,
+// pkg/gateway, pkg/tools and pkg/sysagent/tools that writes task.Patch.Status,
+// and fails when a new one appears that neither calls this hook nor carries a
+// written justification for why it cannot reach a terminal status.
+
+// terminalGoalReasonMaxRunes bounds the task text carried onto the goal
+// record's TerminalReason. Mirrors pkg/agent's maxFailClosedOutputChars, the
+// bound the task's own Result already carries, so the goal record cannot grow
+// a copy of an unbounded worker response.
+const terminalGoalReasonMaxRunes = 2000
+
+// GoalStateForTerminalTask maps a task's terminal disposition onto the goal
+// state its paired record must end in, using the SAME vocabulary
+// pkg/agent/goal_loop.go's clearGoalStatus already uses for a chat goal — so a
+// task goal and a chat goal that ended the same way read the same way:
+//
+//	task done                       -> met        (clearGoalStatus's goalClearNoteMet)
+//	task failed, stopped by a user  -> cleared    (clearGoalStatus's goalClearNoteUser)
+//	task failed, any other reason   -> exhausted  (clearGoalStatus's default)
+//
+// `expired` is deliberately NOT produced here: it belongs to the idle-expiry
+// calendar sweep (goalIdleExpirySweep), which is about a goal nobody touched
+// for days, not about a task that ran and finished.
+//
+// ok is false for a non-terminal status, so a caller that reaches this with a
+// mid-flight task transitions nothing.
+func GoalStateForTerminalTask(status task.Status, cancelReason task.CancelReason) (generated.GoalState, bool) {
+	switch status {
+	case task.StatusDone:
+		return generated.GoalStateMet, true
+	case task.StatusFailed:
+		if cancelReason == task.CancelReasonStoppedByUser {
+			return generated.GoalStateCleared, true
+		}
+		return generated.GoalStateExhausted, true
+	default:
+		return "", false
+	}
+}
+
+// TerminalGoalReasonForTask builds the Goal.TerminalReason text retained on the
+// record. It names the task outcome that ended the goal and carries the task's
+// own result/reason text when there is one, so a terminal goal record explains
+// itself without a reader having to go and find the task.
+func TerminalGoalReasonForTask(status task.Status, reason string) string {
+	if reason == "" {
+		return fmt.Sprintf("owning task reached %s", status)
+	}
+	return fmt.Sprintf("owning task reached %s: %s", status, truncateGoalReason(reason))
+}
+
+// truncateGoalReason bounds s to terminalGoalReasonMaxRunes runes, noting the
+// cut so a reader is not misled into thinking the text ended there naturally.
+// Rune-safe (slices a []rune, never a byte index) for the same reason
+// pkg/agent's truncateRunes is.
+func truncateGoalReason(s string) string {
+	r := []rune(s)
+	if len(r) <= terminalGoalReasonMaxRunes {
+		return s
+	}
+	return string(r[:terminalGoalReasonMaxRunes]) + "\n... (truncated, output continues)"
+}
+
+// TerminateTaskGoalRecord ends the goal record paired with a task that has just
+// reached a terminal status (GOAL-FR-015/FR-027/FR-028). Call it from EVERY
+// terminal disposition of a task — see this section's header comment for the
+// seven that exist and why they cannot be collapsed into one.
+//
+// Every outcome is a no-op rather than an error except a genuine store fault:
+//
+//   - no paired goal record (GOAL-FR-023 legacy/Scratchpad task): nothing to end.
+//   - the record is still `defining`: the task terminated without ever starting
+//     (Stop on a queued task, or a create-then-cancel). `defining` is the
+//     legitimate resting state for a record whose task has not run —
+//     goal.Goal.Terminate refuses it outright, and forcing a transition would
+//     invent an adjudication that never happened.
+//   - the record is already terminal: another writer (or a previous call) ended
+//     it. Idempotent by construction, which is what makes it safe to call from
+//     every writer without any of them having to know about the others.
+//
+// Best-effort and non-fatal: the task has ALREADY been written terminal by the
+// caller, so a broken goal store must never retroactively change the task's own
+// outcome. A fault is logged at Warn so "the goal record was not closed" is
+// never silent — which is precisely how the original defect survived to UAT.
+func TerminateTaskGoalRecord(
+	gs *goal.Store, taskID string, status task.Status, cancelReason task.CancelReason, reason string,
+) {
+	if gs == nil || taskID == "" {
+		return
+	}
+	state, ok := GoalStateForTerminalTask(status, cancelReason)
+	if !ok {
+		slog.Warn("task goal: refusing to terminate a task's goal record for a non-terminal task status",
+			"task_id", taskID, "status", string(status))
+		return
+	}
+
+	g, err := gs.GetByOwner(generated.GoalOwnerKindTask, taskID)
+	if err != nil {
+		if errors.Is(err, goal.ErrOwnerNotFound) {
+			slog.Debug("task goal: terminated task has no paired goal record to end (GOAL-FR-023)",
+				"task_id", taskID)
+			return
+		}
+		slog.Warn("task goal: could not look up the paired goal record of a terminated task — "+
+			"the record may be left ACTIVE (GOAL-FR-015)",
+			"task_id", taskID, "status", string(status), "error", err)
+		return
+	}
+	if g.State != generated.GoalStateActive {
+		slog.Debug("task goal: paired goal record is not active — nothing to terminate",
+			"task_id", taskID, "goal_id", g.GoalID, "goal_state", string(g.State))
+		return
+	}
+
+	now := time.Now().UTC()
+	terminalReason := TerminalGoalReasonForTask(status, reason)
+	if _, uErr := gs.Update(g.GoalID, func(cur *goal.Goal) error {
+		if cur.State != generated.GoalStateActive {
+			// Another writer ended it between the read above and this
+			// lock-held mutate. Not a fault — see the idempotence note.
+			return nil
+		}
+		return cur.Terminate(state, terminalReason, now)
+	}); uErr != nil {
+		slog.Warn("task goal: the paired goal record of a terminated task could not be transitioned — "+
+			"it is still ACTIVE (GOAL-FR-015)",
+			"task_id", taskID, "goal_id", g.GoalID, "goal_state", string(state), "error", uErr)
+		return
+	}
+	slog.Info("task goal: paired goal record terminated with its task",
+		"task_id", taskID, "goal_id", g.GoalID, "goal_state", string(state))
+}
+
 // TaskListTool lists tasks for the calling agent.
 type TaskListTool struct {
 	BaseTool
@@ -1812,6 +1979,24 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 				"task_id", taskID, "error", gErr)
 			goalSyncWarning = gErr.Error()
 		}
+	}
+
+	// GOAL-FR-015/FR-027/FR-028 (review finding C1): this tool is one of the
+	// seven terminal task writers, and it was one of the four with no goal
+	// hook at all. The done-claim judge deferral above only intercepts `done`
+	// — status:"failed" was written straight through, leaving the paired goal
+	// record ACTIVE forever and silently killing Goal.Reactivate on every
+	// subsequent re-run of that task (activateTaskGoal's `default:` branch).
+	//
+	// Keyed on `updated.Status` (what actually landed on disk) rather than on
+	// the requested `newStatus`, so a deferred done-claim — which deliberately
+	// leaves patch.Status unset — correctly terminates nothing. The prior-
+	// status guard keeps a no-op resend on an already-terminal task from
+	// re-entering the hook; the hook is idempotent anyway, this just keeps the
+	// logs honest.
+	if task.IsTerminal(updated.Status) && !task.IsTerminal(existing.Status) {
+		TerminateTaskGoalRecord(
+			goalStoreForTasks(t.store), taskID, updated.Status, updated.CancelReason, updated.Result)
 	}
 
 	// FR-6.5: when the task newly reaches "done", advance dependents (mirror

@@ -594,6 +594,11 @@ func TestDeleteAgent_OwningActivePlan_Rejected(t *testing.T) {
 	var p gen.Plan
 	require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &p))
 
+	// A plan needs at least one member to be approvable (plan-lint's
+	// LintEmptyPlan). This test's subject is agent deletion, not approval —
+	// the member is fixture, not assertion.
+	mustCreateTask(t, api, wsID, "owned plan member", p.Id)
+
 	require.Equal(t, http.StatusOK, postPlanAction(t, api, p.Id, "approve").Code)
 	// PUT can no longer set state at all (ADR-052 FR-007/A1) — drive the
 	// approved->running transition directly via the store instead.
@@ -635,6 +640,9 @@ func TestDeleteAgent_PlanStoreListError_FailsClosed(t *testing.T) {
 	require.Equal(t, http.StatusCreated, wCreate.Code)
 	var p gen.Plan
 	require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &p))
+	// See above: a member is required for approval; the subject here is the
+	// plan-store list error, not the member.
+	mustCreateTask(t, api, wsID, "owned plan 2 member", p.Id)
 	require.Equal(t, http.StatusOK, postPlanAction(t, api, p.Id, "approve").Code)
 	running := plan.StateRunning
 	_, rerr := api.planStore.Update(p.Id, plan.Patch{State: &running})

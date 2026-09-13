@@ -1216,6 +1216,22 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 		}
 	}
 
+	// GOAL-FR-015/FR-027/FR-028 (review finding C1): this privileged tool is
+	// one of the seven terminal task writers and had no goal hook at all. The
+	// judge deferral above only intercepts `done` — status:"failed" was
+	// written straight through, leaving the paired goal record ACTIVE forever
+	// and silently killing Goal.Reactivate on every re-run of that task.
+	//
+	// Keyed on result.Status (what landed on disk) rather than the requested
+	// status, so a deferred done-claim — which deliberately leaves patch.Status
+	// unset — terminates nothing. The prior-status guard keeps a no-op resend
+	// on an already-terminal task out of the hook; the hook is idempotent
+	// anyway, this just keeps the logs honest.
+	if task.IsTerminal(result.Status) && !task.IsTerminal(existing.Status) {
+		tools.TerminateTaskGoalRecord(
+			goalStoreForWorkspace(t.deps.Home), id, result.Status, result.CancelReason, result.Result)
+	}
+
 	// FR-6.5: when the task newly reaches terminal "done", advance dependents.
 	if result.Status == task.StatusDone {
 		if advanced, advErr := store.AdvanceBlockedDependents(id); advErr != nil {

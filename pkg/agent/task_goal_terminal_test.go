@@ -42,14 +42,24 @@ import (
 
 // TestTerminatedTaskEndsItsGoalRecord is UAT defect D-2's oracle.
 //
-// Each row drives a REAL terminal writer — there are three and they share no
-// chokepoint, which is why the defect could be fixed in one and still leak
-// through the other two:
+// Each row drives a REAL terminal writer. These are the three that live in
+// THIS package — they are NOT all the terminal writers there are, and the
+// sentence that used to claim they were is what review finding C1 is about:
 //
 //   - completeTaskWithResult: the judged done/failed outcome and the
 //     attempts-exhausted wind-down;
 //   - failTask: an infrastructure failure;
 //   - PlanEngine.cancelMemberLocked: a user Stop.
+//
+// Four more live outside pkg/agent and are covered elsewhere, because a test
+// in this package cannot reach them: PATCH /api/v1/tasks/{id} and boot
+// reconciliation (pkg/gateway/rest_tasks_goal_terminal_test.go), and the two
+// update_task tools (pkg/tools, pkg/sysagent/tools). The complete, enforced
+// list is pkg/tools/task_goal_terminal_guard_test.go's registry, which fails
+// when a new task-status writer appears unclassified — precisely so the next
+// reader of THIS comment is not misled into thinking three is the whole set.
+// All seven now route through the one shared transition,
+// tools.TerminateTaskGoalRecord.
 //
 // The `defining` row is the differentiation control, and it is the one that
 // stops this test being satisfiable by "just terminate the record always": a

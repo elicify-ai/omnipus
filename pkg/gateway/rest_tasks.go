@@ -32,6 +32,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // goalStoreForTasks returns a goal.Store rooted at the SAME $OMNIPUS_HOME
@@ -2579,6 +2580,31 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		}
 	}
 
+	// GOAL-FR-015/FR-027/FR-028 (review finding C1): end the paired goal
+	// record when THIS patch is what moved the task terminal.
+	//
+	// This is the writer the original three-call-site fix missed most
+	// visibly, because it is the one a user drives by hand: validateTransition
+	// permits in_progress->done and in_progress->failed, so dragging a card
+	// onto Done or Failed on the board arrives here, answered 200, and left
+	// the goal record `state: active` forever. The next run of that task then
+	// silently skipped Goal.Reactivate (activateTaskGoal's `default:` branch
+	// matches neither IsDefining nor IsTerminal), inheriting the previous
+	// run's attempts, rounds and per-criterion statuses — a DoD item marked
+	// `met` in run 1 served as `met` for work run 2 never did.
+	//
+	// priorForUpdate is UpdateWithPrior's snapshot, captured atomically under
+	// the SAME per-task lock as the write, so the "did this patch move it"
+	// test cannot be raced by a concurrent writer the way a separate pre-patch
+	// Get() could be. The hook is idempotent, so a nil prior (defensive only —
+	// UpdateWithPrior returns one on every success) falls through to the
+	// terminal test alone rather than skipping the record.
+	if task.IsTerminal(updated.Status) &&
+		(priorForUpdate == nil || !task.IsTerminal(priorForUpdate.Status)) {
+		tools.TerminateTaskGoalRecord(
+			goalStoreForTasks(a.taskStore), id, updated.Status, updated.CancelReason, updated.Result)
+	}
+
 	a.auditTask("task.update", id)
 	if req.Trigger != nil {
 		// FR-022: audit a recurrence-trigger change (legacy→RRULE or
@@ -3305,6 +3331,18 @@ func (a *restAPI) reconcileStuckTasks() {
 		}
 		reset++
 		a.reconcileStuckTaskRuns(t.ID)
+		// GOAL-FR-015/FR-027/FR-028 (review finding C1): this reset is a real
+		// terminal write — every task this loop touches was in_progress a
+		// moment ago and is `failed` now — so its paired goal record must end
+		// with it, exactly as the judged and user-driven endings do. Left
+		// unhooked, a single crash-and-restart was enough to leave every
+		// in-flight task's goal record permanently ACTIVE, which is also the
+		// state that makes the NEXT run of each of those tasks skip
+		// Goal.Reactivate and inherit the dead run's counters and criterion
+		// statuses. CancelReason is empty here (this is not a user Stop), so
+		// the record ends `exhausted`, matching the attempts-exhausted ending.
+		tools.TerminateTaskGoalRecord(
+			goalStoreForTasks(a.taskStore), t.ID, task.StatusFailed, "", result)
 	}
 	if reset > 0 {
 		slog.Info("rest: reconcile stuck tasks: reset in_progress→failed on boot", "count", reset)

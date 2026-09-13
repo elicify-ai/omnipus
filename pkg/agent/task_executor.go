@@ -881,8 +881,25 @@ func (te *TaskExecutor) activateTaskGoal(t *task.Task, taskSessionID string) err
 		case cur.IsTerminal():
 			return cur.Reactivate(taskSessionID, now)
 		default:
-			// Already active — defensive no-op (should not happen under
-			// ClaimForRun's single-dispatch-per-claim invariant).
+			// Already active. This is where UAT defect D-2 did its real
+			// damage and it must never be silent again: Goal.Reactivate is
+			// reachable only from a TERMINAL record, so a record left active
+			// by a previous run makes THIS run inherit that run's
+			// attempts_used, rounds_used, per-criterion statuses (a DoD item
+			// marked `met` last time is served as `met` for work this run
+			// never did), latest_reason, both keeper budgets and an
+			// active_session_id pointing at an archived session — with no
+			// TerminalHistory entry and no error anywhere. Forcing a
+			// transition here is not the answer (Reactivate refuses a
+			// non-terminal record outright, and inventing one would fake an
+			// adjudication); making it LOUD is, because it means some
+			// terminal writer did not call the goal hook. WARN, not Debug.
+			logger.WarnCF("task_executor",
+				"goal: paired goal record was already ACTIVE at run start — Goal.Reactivate is being "+
+					"skipped, so this run inherits the PREVIOUS run's attempts, rounds, criterion "+
+					"statuses and keeper budgets (R-04 re-entry contract not applied). Some terminal "+
+					"writer did not end this record when its task last terminated.",
+				map[string]any{"task_id": t.ID, "goal_id": g.GoalID, "session_id": taskSessionID})
 			return nil
 		}
 	}); uerr != nil {
@@ -1420,7 +1437,36 @@ func (te *TaskExecutor) adjudicateClaim(
 	// IDs cannot collide across the two lists — each is minted per-list by
 	// task.NormalizeCriteria, and the fixed floor-DoD ids are namespaced
 	// "goal-dod-floor-*" — so the de-union below can always tell them apart.
-	dod := taskGoalDoD(t.ID)
+	// Review finding C2 — the DoD read fails CLOSED. taskGoalDoD used to
+	// answer every store fault with a bare nil, and nil here is
+	// indistinguishable from "this task has no Definition of Done": the judged
+	// set silently narrowed to the acceptance criteria alone, the Judge
+	// returned Met on them, and completeTaskWithResult wrote StatusDone. One
+	// unreadable goal record and the operator's mandatory DoD — including the
+	// floor items goal-dod-floor-no-secrets and goal-dod-floor-grounded-claims
+	// — was never evaluated, while the task showed Done.
+	//
+	// The outcome shape is EC-6's judge-unavailable rule, the same one the two
+	// branches above use, and for the same reason: this is a claim that CANNOT
+	// be adjudicated, not a claim that is false. Non-terminal, NO round and NO
+	// attempt consumed, the task left in_progress with its run still open, and
+	// one operator-visible WARN naming the real cause. A transient fault must
+	// not burn a worker's attempt budget any more than it may wave a claim
+	// through. Checked BEFORE dispatch, so a claim that cannot be judged never
+	// costs a verifier turn — the same placement the empty-claim branch above
+	// takes ("fail closed BEFORE any verifier dispatch"). See taskGoalDoD's
+	// doc comment for why operator decision D-B does not license failing open
+	// here.
+	dod, dodErr := taskGoalDoD(t.ID)
+	if dodErr != nil {
+		logger.WarnCF("task_executor",
+			"goal-loop: cannot adjudicate — this task's Definition of Done could not be read, so the "+
+				"claim cannot be judged against the gate the operator authored (GOAL-FR-047/FR-048). "+
+				"Leaving the task in_progress and consuming no attempt; it is retried on the next run, "+
+				"and boot reconciliation is the backstop if no retry comes.",
+			map[string]any{"task_id": t.ID, "reason": "dod_unreadable", "error": dodErr.Error()})
+		return ""
+	}
 	judged := criteria
 	if len(dod) > 0 {
 		judged = make([]task.AcceptanceCriterion, 0, len(criteria)+len(dod))
