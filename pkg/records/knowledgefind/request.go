@@ -96,6 +96,11 @@ type query struct {
 	clamped    bool
 	cursor     string
 	minimal    bool
+	// wire is the caller's request AS RECEIVED (cursor stripped), snapshotted
+	// by Find before any view is merged into it. It rides inside every cursor
+	// this query issues so a cursor-only follow-up continues THIS query
+	// rather than an unfiltered scan (UAT 2026-09-13, D-08).
+	wire generated.VaultFindRequest
 	// renderRows is Deps.RenderRows, carried so applyLimit and the budget can
 	// both see it. Zero is every tool call.
 	renderRows int
@@ -427,7 +432,8 @@ func (q *query) applyColumns(req generated.VaultFindRequest) *RefusalError {
 				p.Permitted = &permitted
 				return refuse(p, nil)
 			}
-			desc := g.Direction != nil && *g.Direction == generated.VaultFindGroupByDirectionDesc
+			desc := g.Direction != nil && (*g.Direction == generated.VaultFindGroupByDirectionDesc ||
+				*g.Direction == generated.VaultFindGroupByDirectionDescending)
 			q.groupBy = append(q.groupBy, groupSpec{property: g.Property, desc: desc, prop: prop})
 			q.touched = append(q.touched, g.Property)
 		}
@@ -501,7 +507,8 @@ func (q *query) applyColumns(req generated.VaultFindRequest) *RefusalError {
 				p.Permitted = &permitted
 				return refuse(p, nil)
 			}
-			desc := s.Direction != nil && *s.Direction == generated.VaultFindSortDirectionDesc
+			desc := s.Direction != nil && (*s.Direction == generated.VaultFindSortDirectionDesc ||
+				*s.Direction == generated.VaultFindSortDirectionDescending)
 			q.sort = append(q.sort, sortKey{property: s.Property, desc: desc, prop: prop})
 			q.touched = append(q.touched, s.Property)
 		}

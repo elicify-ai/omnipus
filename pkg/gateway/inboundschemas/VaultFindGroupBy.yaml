@@ -33,12 +33,22 @@ properties:
     enum:
       - asc
       - desc
+      - ascending
+      - descending
     x-enum-varnames:
       - VaultFindGroupByDirectionAsc
       - VaultFindGroupByDirectionDesc
+      - VaultFindGroupByDirectionAscending
+      - VaultFindGroupByDirectionDescending
     description: >
       Order of the GROUPS themselves — not of the records inside them, which is
       `sort`'s job.
+
+
+      `ascending` / `descending` are exact aliases of `asc` / `desc` (UAT
+      2026-09-13, D-10): a saved view written with the long spelling was
+      accepted at write time and then refused at every query, so the two
+      parsers now share one vocabulary. Anything else is still refused by name.
 
 
       Omitted means `asc`. That default is stated here rather than declared as

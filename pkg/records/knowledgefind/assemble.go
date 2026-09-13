@@ -8,6 +8,7 @@ package knowledgefind
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -144,6 +145,16 @@ func (q *query) echo() string {
 		}
 		parts = append(parts, "sort="+s.property+" "+dir)
 	}
+	if len(q.sort) > 0 {
+		// The null-ordering rule is STATED, not left for the reader to
+		// infer from where the empty rows landed (D-33).
+		parts = append(parts, "(rows with no value for a sorted property come last)")
+	}
+	if len(q.selectCols) > 0 {
+		// The projection is part of what was asked (D-60): an echo that
+		// omits it documents a different query from the one that ran.
+		parts = append(parts, "select="+strings.Join(q.selectCols, ","))
+	}
 	for _, a := range q.aggregates {
 		parts = append(parts, "aggregate="+a.label())
 	}
@@ -185,7 +196,24 @@ func (a aggregate) label() string {
 func sortSurvivors(rows []survivor, q *query) {
 	sort.SliceStable(rows, func(i, j int) bool {
 		for _, key := range q.sort {
-			c, ok := compareByProperty(rows[i], rows[j], key.property)
+			// ABSENCE IS DECIDED BEFORE THE DIRECTION IS APPLIED (UAT
+			// 2026-09-13, D-33). compareByProperty already puts a missing
+			// value after a present one, but flipping ITS sign for `desc`
+			// flipped that rule too, so `sort: start desc` put the notes with
+			// no start date at the very top — "nobody recorded this" where the
+			// reader was looking for the latest. A row with no value sorts
+			// last in both directions; only real comparisons are reversed.
+			ai, aok := firstValue(rows[i], key.property)
+			bj, bok := firstValue(rows[j], key.property)
+			switch {
+			case !aok && !bok:
+				continue
+			case !aok:
+				return false
+			case !bok:
+				return true
+			}
+			c, ok := records.Compare(ai, bj)
 			if !ok || c == 0 {
 				continue
 			}
@@ -390,7 +418,7 @@ func (e *evaluation) assemble(ctx context.Context, d Deps, echo string) generate
 	// exact Shown this pessimistically forces nextActions to see, do not
 	// matter yet — both are corrected below, once trimming has actually run.
 	if len(rows) > minRenderedRows || offset+len(rows) < evaluated {
-		c := encodeCursor(offset+len(rows), d.Epoch)
+		c := encodeCursor(offset+len(rows), d.Epoch, q.wire)
 		resp.NextCursor = &c
 		realShown := resp.Counts.Shown
 		resp.Counts.Shown = 0
@@ -423,7 +451,7 @@ func (e *evaluation) assemble(ctx context.Context, d Deps, echo string) generate
 	// left in resp.Rows, so it is the one number guaranteed to match what this
 	// response actually sent.
 	if consumed := offset + resp.Counts.Shown; consumed < evaluated {
-		c := encodeCursor(consumed, d.Epoch)
+		c := encodeCursor(consumed, d.Epoch, q.wire)
 		resp.NextCursor = &c
 	} else {
 		resp.NextCursor = nil
@@ -557,30 +585,55 @@ func nextActions(q *query, resp *generated.VaultFindResponse) []generated.VaultF
 // encodeCursor stamps the offset WITH the epoch it was issued against, which is
 // what makes a stale cursor detectable at all. A bare offset would silently
 // address a different row after the corpus changed.
-func encodeCursor(offset int, epoch int64) string {
-	return base64.RawURLEncoding.EncodeToString(
-		[]byte(fmt.Sprintf("%d.%d", offset, epoch)))
+//
+// THE CURSOR ALSO CARRIES THE QUERY (UAT 2026-09-13, D-08). The tool's own
+// NEXT block says `knowledge_find cursor="…"` and nothing else, and a caller
+// who followed it exactly got page two of a DIFFERENT query: the offset and
+// epoch survived, the type, filter, sort, select and limit did not, and page
+// two of `type=project sort=start desc limit=2` was an unfiltered scan of
+// every note kind reported as a normal continuation. The request as received
+// (view name, filter, sort, select, limit — everything but the cursor) is
+// therefore sealed into the token, so a cursor alone is a complete, faithful
+// continuation, and a cursor sent WITH a different query is refused rather
+// than silently answered for either (Find's cursor check). An old two-part
+// token still decodes; it just carries no query.
+func encodeCursor(offset int, epoch int64, wire generated.VaultFindRequest) string {
+	wire.Cursor = nil
+	head := fmt.Sprintf("%d.%d", offset, epoch)
+	if body, err := json.Marshal(wire); err == nil && string(body) != "{}" {
+		head += "." + string(body)
+	}
+	return base64.RawURLEncoding.EncodeToString([]byte(head))
 }
 
-func decodeCursor(s string) (offset int, epoch int64, ok bool) {
+// decodeCursor returns the offset and epoch a cursor was issued with, and —
+// when the token carries one — the request it continues.
+func decodeCursor(s string) (offset int, epoch int64, carried *generated.VaultFindRequest, ok bool) {
 	raw, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
-		return 0, 0, false
+		return 0, 0, nil, false
 	}
-	parts := strings.SplitN(string(raw), ".", 2)
-	if len(parts) != 2 {
-		return 0, 0, false
+	parts := strings.SplitN(string(raw), ".", 3)
+	if len(parts) < 2 {
+		return 0, 0, nil, false
 	}
 	o, err1 := strconv.Atoi(parts[0])
 	e, err2 := strconv.ParseInt(parts[1], 10, 64)
 	if err1 != nil || err2 != nil || o < 0 {
-		return 0, 0, false
+		return 0, 0, nil, false
 	}
-	return o, e, true
+	if len(parts) == 3 && parts[2] != "" {
+		var req generated.VaultFindRequest
+		if err := json.Unmarshal([]byte(parts[2]), &req); err != nil {
+			return 0, 0, nil, false
+		}
+		carried = &req
+	}
+	return o, e, carried, true
 }
 
 func cursorOffset(s string) int {
-	off, _, ok := decodeCursor(s)
+	off, _, _, ok := decodeCursor(s)
 	if !ok {
 		return 0
 	}
@@ -653,6 +706,9 @@ func rawEcho(req generated.VaultFindRequest) string {
 			}
 			parts = append(parts, "aggregate="+label)
 		}
+	}
+	if req.Select != nil && len(*req.Select) > 0 {
+		parts = append(parts, "select="+strings.Join(*req.Select, ","))
 	}
 	if req.Explain != nil && *req.Explain {
 		parts = append(parts, "explain=true")

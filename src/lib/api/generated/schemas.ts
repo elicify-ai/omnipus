@@ -775,11 +775,11 @@ type VaultFindRequest = Partial<{
 }>;
 type VaultFindGroupBy = {
   property: string;
-  direction?: ("asc" | "desc") | undefined;
+  direction?: ("asc" | "desc" | "ascending" | "descending") | undefined;
 };
 type VaultFindSort = {
   property: string;
-  direction?: ("asc" | "desc") | undefined;
+  direction?: ("asc" | "desc" | "ascending" | "descending") | undefined;
 };
 type VaultFindAggregate = {
   op:
@@ -816,7 +816,7 @@ type VaultFilterNode = Partial<{
     | "IN"
     | "IS NULL"
     | "IS NOT NULL";
-  value: string;
+  value: string | number | boolean | Array<string | number | boolean>;
   values: Array<string>;
 }>;
 type VaultFindResponse = {
@@ -5331,7 +5331,12 @@ export const VaultFilterNode: z.ZodType<VaultFilterNode> = z.lazy(() =>
         "IS NULL",
         "IS NOT NULL",
       ]),
-      value: z.string(),
+      value: z.union([
+        z.string(),
+        z.number(),
+        z.boolean(),
+        z.array(z.union([z.string(), z.number(), z.boolean()])),
+      ]),
       values: z.array(z.string()).min(1),
     })
     .partial()
@@ -5370,11 +5375,11 @@ export const ViewDef: z.ZodType<ViewDef> = z.object({
 });
 export const VaultFindGroupBy: z.ZodType<VaultFindGroupBy> = z.object({
   property: z.string().min(1),
-  direction: z.enum(["asc", "desc"]).optional(),
+  direction: z.enum(["asc", "desc", "ascending", "descending"]).optional(),
 });
 export const VaultFindSort: z.ZodType<VaultFindSort> = z.object({
   property: z.string().min(1),
-  direction: z.enum(["asc", "desc"]).optional(),
+  direction: z.enum(["asc", "desc", "ascending", "descending"]).optional(),
 });
 export const VaultFindAggregate: z.ZodType<VaultFindAggregate> = z.object({
   op: z.enum([

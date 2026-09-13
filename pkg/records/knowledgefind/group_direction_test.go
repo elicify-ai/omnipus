@@ -296,13 +296,15 @@ func TestGroupDirection_UnknownSpellingIsRefusedByName(t *testing.T) {
 	d := f.deps()
 
 	plant := "plant"
-	bad := generated.VaultFindGroupByDirection("descending")
+	// "descending" is an accepted alias since UAT 2026-09-13 D-10; the
+	// unknown spelling this guards against is now a genuinely unknown one.
+	bad := generated.VaultFindGroupByDirection("downwards")
 	resp := mustRefuse(t, d, generated.VaultFindRequest{
 		Type:    &plant,
 		GroupBy: groupBy(generated.VaultFindGroupBy{Property: "condition", Direction: &bad}),
 	})
 	reason := resp.Problems[0].Reason
-	if !strings.Contains(reason, "descending") {
+	if !strings.Contains(reason, "downwards") {
 		t.Errorf("the refusal does not quote the spelling it rejected: %q", reason)
 	}
 	if !strings.Contains(reason, "condition") {

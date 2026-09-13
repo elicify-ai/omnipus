@@ -319,13 +319,15 @@ func TestSortDirection_IsRefusedWhenItIsNotADirection(t *testing.T) {
 	f := newFixture(t)
 	f.plant(1, "growing", "40.0")
 
-	bad := generated.VaultFindSortDirection("descending")
+	// "descending" is an accepted alias since UAT 2026-09-13 D-10; the
+	// unknown spelling this guards against is now a genuinely unknown one.
+	bad := generated.VaultFindSortDirection("downwards")
 	sorts := []generated.VaultFindSort{{Property: "height_cm", Direction: &bad}}
 	r := req(withType("plant"))
 	r.Sort = &sorts
 
 	resp := mustRefuse(t, f.deps(), r)
-	if !strings.Contains(resp.Problems[0].Reason, "descending") {
+	if !strings.Contains(resp.Problems[0].Reason, "downwards") {
 		t.Errorf("the refusal does not quote the direction the caller wrote: %q",
 			resp.Problems[0].Reason)
 	}

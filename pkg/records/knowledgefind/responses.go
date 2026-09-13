@@ -532,7 +532,7 @@ func findTasks(ctx context.Context, d Deps, q *query, echo string) (generated.Va
 	// those bytes on every pass or the final response can grow past budget
 	// again once the real cursor and NEXT block are added below.
 	if len(rows) > minRenderedRows || offset+len(rows) < evaluated {
-		c := encodeCursor(offset+len(rows), d.Epoch)
+		c := encodeCursor(offset+len(rows), d.Epoch, q.wire)
 		resp.NextCursor = &c
 		realShown := resp.Counts.Shown
 		resp.Counts.Shown = 0
@@ -553,7 +553,7 @@ func findTasks(ctx context.Context, d Deps, q *query, echo string) (generated.Va
 	// starts the next page past every row the byte budget dropped, and those
 	// rows are never returned by any page.
 	if consumed := offset + resp.Counts.Shown; consumed < evaluated {
-		c := encodeCursor(consumed, d.Epoch)
+		c := encodeCursor(consumed, d.Epoch, q.wire)
 		resp.NextCursor = &c
 	} else {
 		resp.NextCursor = nil

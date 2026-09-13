@@ -6648,12 +6648,12 @@ export interface components {
              */
             op?: "=" | "<>" | "<" | "<=" | ">" | ">=" | "LIKE" | "IN" | "IS NULL" | "IS NOT NULL";
             /**
-             * @description LEAF FORM, every operator except `IN`, `IS NULL` and `IS NOT NULL`. The operand in LEXICAL form — the same text a frontmatter file would hold — so it is read by exactly the same parser as a record's own value (R-12: the rules apply identically whether a value came from a query literal or from a note).
+             * @description LEAF FORM, every operator except `IS NULL` and `IS NOT NULL`. The operand in LEXICAL form — the same text a frontmatter file would hold — so it is read by exactly the same parser as a record's own value (R-12: the rules apply identically whether a value came from a query literal or from a note).
              *
-             *     It is a string on the wire for that reason, and the reason is not convenience. A JSON number would arrive already parsed by a JSON decoder into a binary float, at which point a decimal property's exactness is gone before the engine ever sees it. A literal that cannot be read in the property's declared type is REFUSED naming both (FR-022e), never coerced.
+             *     A STRING IS THE CANONICAL FORM, and every other accepted shape is converted to it BEFORE the engine sees it, from the literal's own bytes, never through a binary float (UAT 2026-09-13, D-11): a JSON number is taken as the exact digits the caller wrote (`100000`, `12.50`), a boolean as `true`/`false`, and an ARRAY is accepted as the `IN` operand — it is moved to `values` element by element. The old string-only typing made `IN` uninvokable (the array was rejected by the decoder while the operator demanded one) and forced numbers to be quoted. The Go type stays `string` (x-go-type) because the engine's single parser reads lexical form; the decoder is the one place the conversion happens. A literal that cannot be read in the property's declared type is still REFUSED naming both (FR-022e), never coerced.
              * @example open
              */
-            value?: string;
+            value?: string | number | boolean | (string | number | boolean)[];
             /**
              * @description LEAF FORM, `IN` only. The candidate set, in the same lexical form as `value`. It MUST be non-empty: an empty `IN` list can match nothing, so honouring one would return zero records for a query the caller believes selects something — the silent empty result this surface exists to prevent, arriving through a different door. It is REFUSED instead (FR-022d). A single-element list means `=`.
              * @example [
@@ -6774,11 +6774,15 @@ export interface components {
              */
             property: string;
             /**
-             * @description Omitted means `asc`. Stated in prose rather than as a JSON Schema `default:` deliberately: openapi-typescript promotes a defaulted property to REQUIRED while oapi-codegen still emits an optional field, so a `default:` here would split the two generated languages on one field.
+             * @description `ascending` / `descending` are exact aliases of `asc` / `desc` (UAT 2026-09-13, D-10): a saved view written with the long spelling was accepted at write time and then refused at every query, so the two parsers now share one vocabulary. Anything else is still refused by name.
+             *
+             *     Rows with NO value for the sorted property sort LAST in BOTH directions (UAT 2026-09-13, D-33), and the response's QUERY echo says so.
+             *
+             *     Omitted means `asc`. Stated in prose rather than as a JSON Schema `default:` deliberately: openapi-typescript promotes a defaulted property to REQUIRED while oapi-codegen still emits an optional field, so a `default:` here would split the two generated languages on one field.
              * @example desc
              * @enum {string}
              */
-            direction?: "asc" | "desc";
+            direction?: "asc" | "desc" | "ascending" | "descending";
         };
         /**
          * VaultFindGroupBy
@@ -6794,6 +6798,8 @@ export interface components {
             property: string;
             /**
              * @description Order of the GROUPS themselves — not of the records inside them, which is `sort`'s job.
+             *
+             *     `ascending` / `descending` are exact aliases of `asc` / `desc` (UAT 2026-09-13, D-10): a saved view written with the long spelling was accepted at write time and then refused at every query, so the two parsers now share one vocabulary. Anything else is still refused by name.
              *
              *     Omitted means `asc`. That default is stated here rather than declared as a JSON Schema `default:` for the reason RecordFilter.yaml gives on `negate`: openapi-typescript promotes a defaulted property to REQUIRED while oapi-codegen still emits an optional pointer, so a `default:` here would make the two generated languages disagree about one field.
              *
@@ -6820,7 +6826,7 @@ export interface components {
              * @example desc
              * @enum {string}
              */
-            direction?: "asc" | "desc";
+            direction?: "asc" | "desc" | "ascending" | "descending";
         };
         /**
          * VaultFindAggregate

@@ -5,6 +5,7 @@
 package knowledgefind
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -394,6 +395,29 @@ func decodeRequest(raw []byte) (generated.VaultFindRequest, *RefusalError) {
 		return req, r
 	}
 
+	// LITERALS ARRIVE IN ANY JSON SHAPE AND LEAVE AS LEXICAL STRINGS (UAT
+	// 2026-09-13, D-11). The generated type reads `value` as a string, so a
+	// JSON number or an array was rejected by the decoder with a Go struct
+	// path in the message — while the `IN` operator demanded exactly that
+	// array. The conversion happens HERE, on the literal's own bytes, so a
+	// decimal keeps every digit the caller wrote.
+	if filter, ok := probe["filter"]; ok && len(filter) > 0 {
+		normalized, r := normalizeFilterLiterals(filter, "filter", 0)
+		if r != nil {
+			return req, r
+		}
+		if string(normalized) != string(filter) {
+			probe["filter"] = normalized
+			rebuilt, err := json.Marshal(probe)
+			if err != nil {
+				return req, refuse(problem(generated.UnsupportedParameter,
+					fmt.Sprintf("the arguments could not be re-encoded after reading the filter: %v", err),
+					"check the argument types; call knowledge_describe if you are unsure what a property holds"), err)
+			}
+			raw = rebuilt
+		}
+	}
+
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return req, refuse(problem(generated.UnsupportedParameter,
 			fmt.Sprintf("the arguments did not match the expected shape: %v", err),
@@ -488,6 +512,201 @@ func checkFilterNodeKeys(root json.RawMessage) *RefusalError {
 		}
 	}
 	return nil
+}
+
+// filterLiteralMaxDepth bounds the recursive literal walk the same way
+// FR-023c bounds the tree itself; a deeper tree is refused rather than
+// descended.
+const filterLiteralMaxDepth = 64
+
+// normalizeFilterLiterals rewrites one filter node — and, through `all`,
+// `any` and `not`, its children — so that every literal reaches the
+// generated type in the ONE shape it declares: `value` a string, `values` a
+// list of strings (D-11).
+//
+//   - a JSON number becomes the exact digits the caller wrote (`100000`,
+//     `12.50`), taken from the raw bytes and never through a float;
+//   - a JSON boolean becomes `true` / `false`;
+//   - an ARRAY in `value` is the `IN` operand and is MOVED to `values`,
+//     element by element under the same rules — the array is what the
+//     operator's own refusal told the caller to send, and there was no field
+//     that would take it;
+//   - a string is left exactly as it is.
+//
+// An object, a nested array, or an array given in BOTH `value` and `values`
+// is refused by name: none of those has a lexical form a property parser
+// could read, and guessing one would be the silent coercion FR-022e forbids.
+func normalizeFilterLiterals(raw json.RawMessage, where string, depth int) (json.RawMessage, *RefusalError) {
+	if depth > filterLiteralMaxDepth {
+		return nil, refuse(problem(generated.UnsupportedParameter,
+			fmt.Sprintf("the filter tree at %s is nested more than %d levels deep", where, filterLiteralMaxDepth),
+			"flatten the filter; a tree this deep cannot be a real predicate"), nil)
+	}
+	var node map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &node); err != nil {
+		// Not an object: the generated type's own decode refuses it with the
+		// right message.
+		return raw, nil
+	}
+	changed := false
+
+	for _, key := range []string{"all", "any"} {
+		child, ok := node[key]
+		if !ok {
+			continue
+		}
+		var kids []json.RawMessage
+		if err := json.Unmarshal(child, &kids); err != nil {
+			continue
+		}
+		kidChanged := false
+		for i := range kids {
+			out, r := normalizeFilterLiterals(kids[i], fmt.Sprintf("%s.%s[%d]", where, key, i), depth+1)
+			if r != nil {
+				return nil, r
+			}
+			if string(out) != string(kids[i]) {
+				kids[i] = out
+				kidChanged = true
+			}
+		}
+		if kidChanged {
+			enc, err := json.Marshal(kids)
+			if err != nil {
+				return nil, refuse(problem(generated.UnsupportedParameter,
+					fmt.Sprintf("the filter at %s.%s could not be re-encoded: %v", where, key, err), ""), err)
+			}
+			node[key] = enc
+			changed = true
+		}
+	}
+	if child, ok := node["not"]; ok {
+		out, r := normalizeFilterLiterals(child, where+".not", depth+1)
+		if r != nil {
+			return nil, r
+		}
+		if string(out) != string(child) {
+			node["not"] = out
+			changed = true
+		}
+	}
+
+	if v, ok := node["value"]; ok {
+		trimmed := bytes.TrimSpace(v)
+		switch {
+		case len(trimmed) == 0:
+		case trimmed[0] == '"':
+			// Already lexical.
+		case trimmed[0] == '[':
+			if _, both := node["values"]; both {
+				return nil, refuse(problem(generated.UnsupportedParameter,
+					fmt.Sprintf("the leaf at %s gives a list in both value and values", where),
+					"send the IN list in `values` (or in `value`), not both"), nil)
+			}
+			list, r := normalizeLiteralList(trimmed, where+".value")
+			if r != nil {
+				return nil, r
+			}
+			delete(node, "value")
+			node["values"] = list
+			changed = true
+		default:
+			lit, r := scalarLiteralText(trimmed, where+".value")
+			if r != nil {
+				return nil, r
+			}
+			enc, _ := json.Marshal(lit)
+			node["value"] = enc
+			changed = true
+		}
+	}
+	if v, ok := node["values"]; ok {
+		trimmed := bytes.TrimSpace(v)
+		if len(trimmed) > 0 && trimmed[0] == '[' {
+			list, r := normalizeLiteralList(trimmed, where+".values")
+			if r != nil {
+				return nil, r
+			}
+			if string(list) != string(trimmed) {
+				node["values"] = list
+				changed = true
+			}
+		}
+	}
+
+	if !changed {
+		return raw, nil
+	}
+	out, err := json.Marshal(node)
+	if err != nil {
+		return nil, refuse(problem(generated.UnsupportedParameter,
+			fmt.Sprintf("the filter node at %s could not be re-encoded: %v", where, err), ""), err)
+	}
+	return out, nil
+}
+
+// normalizeLiteralList turns a JSON array of scalars into a JSON array of
+// lexical strings, refusing any element that has no lexical form.
+func normalizeLiteralList(raw []byte, where string) (json.RawMessage, *RefusalError) {
+	var elems []json.RawMessage
+	if err := json.Unmarshal(raw, &elems); err != nil {
+		return nil, refuse(problem(generated.UnsupportedParameter,
+			fmt.Sprintf("the list at %s could not be read: %v", where, err),
+			"send a JSON array of values"), err)
+	}
+	out := make([]string, 0, len(elems))
+	for i, e := range elems {
+		lit, r := scalarLiteralText(bytes.TrimSpace(e), fmt.Sprintf("%s[%d]", where, i))
+		if r != nil {
+			return nil, r
+		}
+		out = append(out, lit)
+	}
+	enc, err := json.Marshal(out)
+	if err != nil {
+		return nil, refuse(problem(generated.UnsupportedParameter,
+			fmt.Sprintf("the list at %s could not be re-encoded: %v", where, err), ""), err)
+	}
+	return enc, nil
+}
+
+// scalarLiteralText returns the lexical text of one JSON scalar: a string's
+// contents, a number's exact digits, a boolean's name.
+func scalarLiteralText(raw []byte, where string) (string, *RefusalError) {
+	if len(raw) == 0 {
+		return "", refuse(problem(generated.LiteralTypeMismatch,
+			fmt.Sprintf("the literal at %s is empty", where), "give the value as a string"), nil)
+	}
+	switch raw[0] {
+	case '"':
+		var str string
+		if err := json.Unmarshal(raw, &str); err != nil {
+			return "", refuse(problem(generated.LiteralTypeMismatch,
+				fmt.Sprintf("the literal at %s could not be read as a string: %v", where, err), ""), err)
+		}
+		return str, nil
+	case '{', '[':
+		return "", refuse(problem(generated.LiteralTypeMismatch,
+			fmt.Sprintf("the literal at %s is a %s, which has no lexical form a property can hold",
+				where, map[byte]string{'{': "JSON object", '[': "nested list"}[raw[0]]),
+			"give each value as a string, a number or a boolean; for IN, a flat list of them"), nil)
+	}
+	text := string(raw)
+	switch text {
+	case "true", "false":
+		return text, nil
+	case "null":
+		return "", refuse(problem(generated.LiteralTypeMismatch,
+			fmt.Sprintf("the literal at %s is null", where),
+			"to match records with no value use the IS NULL operator; to match a value, give it"), nil)
+	}
+	// A number: json.Valid guarantees the token is a well-formed literal, and
+	// its own bytes ARE the exact lexical form — no float in between.
+	if !json.Valid(raw) {
+		return "", refuse(problem(generated.LiteralTypeMismatch,
+			fmt.Sprintf("the literal at %s is not valid JSON", where), ""), nil)
+	}
+	return text, nil
 }
 
 // unknownParameterRemedy points at the argument that does the job, for the

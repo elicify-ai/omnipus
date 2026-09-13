@@ -6,6 +6,7 @@ package knowledgefind
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -333,6 +334,21 @@ func Find(ctx context.Context, d Deps, req generated.VaultFindRequest) (generate
 	// discards the view's own `type:` and then resolves to no schema — running
 	// the view's filter against EVERY note in the vault and presenting it as
 	// the view's answer, marked complete.
+	// A CURSOR CONTINUES THE QUERY IT WAS ISSUED FOR (UAT 2026-09-13, D-08).
+	// Every cursor this package issues carries the request it belongs to
+	// (encodeCursor); a follow-up that sends the cursor ALONE — which is
+	// exactly what the NEXT block tells the caller to do — is completed from
+	// it, and a follow-up that sends the cursor with a DIFFERENT query is
+	// refused by name rather than answered for one of the two.
+	if r := restoreCursorQuery(&req); r != nil {
+		return refusalResponse(req, rawEcho(req), r), r
+	}
+	// The request as received, before any saved view is merged into it —
+	// what a cursor must carry so the continuation re-applies the view by
+	// name exactly as the first page did.
+	wire := req
+	wire.Cursor = nil
+
 	if r := checkBlankNarrowing(req); r != nil {
 		return refusalResponse(req, rawEcho(req), r), r
 	}
@@ -353,6 +369,7 @@ func Find(ctx context.Context, d Deps, req generated.VaultFindRequest) (generate
 	// the wikilink's own text, same as the comparator. d.Resolve may be nil —
 	// project.go degrades rather than panicking.
 	q.resolve = d.Resolve
+	q.wire = wire
 	echo := q.echo()
 
 	// THE PLATFORM GATE, BEFORE ANY RETRIEVAL.
@@ -527,7 +544,7 @@ func applyView(req *generated.VaultFindRequest, loader ViewLoader) *RefusalError
 // FR-020c: an unhonourable cursor is an ERROR, never a silent restart — a silent
 // restart returns page one while the caller believes it is reading page four.
 func checkCursor(cursor string, epoch int64) *RefusalError {
-	off, issued, ok := decodeCursor(cursor)
+	off, issued, _, ok := decodeCursor(cursor)
 	if !ok {
 		return refuse(problem(generated.StaleCursor,
 			fmt.Sprintf("the cursor %q was not issued by this system", cursor),
@@ -540,6 +557,43 @@ func checkCursor(cursor string, epoch int64) *RefusalError {
 			"re-run the query — the corpus changed underneath the page boundary"), nil)
 	}
 	_ = off
+	return nil
+}
+
+// restoreCursorQuery completes a cursor-only request from the query sealed in
+// the cursor, and refuses a cursor sent alongside a different query (D-08).
+//
+// "Cursor-only" is decided on the wire shape — every other field absent —
+// and "different" by comparing the JSON of the two requests with the cursor
+// stripped, so a caller who re-sends the identical query with the cursor
+// (the other natural way to page) is not refused for it. A cursor with no
+// carried query (an old two-part token, or one not issued by this system)
+// is left for checkCursor to judge.
+func restoreCursorQuery(req *generated.VaultFindRequest) *RefusalError {
+	if req.Cursor == nil || *req.Cursor == "" {
+		return nil
+	}
+	_, _, carried, ok := decodeCursor(*req.Cursor)
+	if !ok || carried == nil {
+		return nil
+	}
+	cursor := *req.Cursor
+	sent := *req
+	sent.Cursor = nil
+	sentJSON, err1 := json.Marshal(sent)
+	carriedJSON, err2 := json.Marshal(*carried)
+	if err1 != nil || err2 != nil {
+		return nil
+	}
+	switch {
+	case string(sentJSON) == "{}":
+		*req = *carried
+		req.Cursor = &cursor
+	case string(sentJSON) != string(carriedJSON):
+		return refuse(problem(generated.StaleCursor,
+			"that cursor was issued for a different query ("+rawEcho(*carried)+"), not for the one sent with it",
+			"send the cursor on its own to continue the original query, or drop the cursor to run the new one from its first page"), nil)
+	}
 	return nil
 }
 
@@ -1546,7 +1600,7 @@ func textOnlyResponse(d Deps, q *query, echo string, hits []TextHit, truncated b
 	}
 	finishVerdict(&resp, q)
 	if consumed := offset + resp.Counts.Shown; consumed < evaluated {
-		c := encodeCursor(consumed, d.Epoch)
+		c := encodeCursor(consumed, d.Epoch, q.wire)
 		resp.NextCursor = &c
 	}
 	resp.Next = nextActions(q, &resp)

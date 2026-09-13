@@ -19,11 +19,23 @@ properties:
     example: "arr"
   direction:
     type: string
-    enum: [asc, desc]
+    enum: [asc, desc, ascending, descending]
     x-enum-varnames:
       - VaultFindSortDirectionAsc
       - VaultFindSortDirectionDesc
+      - VaultFindSortDirectionAscending
+      - VaultFindSortDirectionDescending
     description: >
+      `ascending` / `descending` are exact aliases of `asc` / `desc` (UAT
+      2026-09-13, D-10): a saved view written with the long spelling was
+      accepted at write time and then refused at every query, so the two
+      parsers now share one vocabulary. Anything else is still refused by name.
+
+
+      Rows with NO value for the sorted property sort LAST in BOTH directions
+      (UAT 2026-09-13, D-33), and the response's QUERY echo says so.
+
+
       Omitted means `asc`. Stated in prose rather than as a JSON Schema
       `default:` deliberately: openapi-typescript promotes a defaulted property
       to REQUIRED while oapi-codegen still emits an optional field, so a

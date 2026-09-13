@@ -1204,20 +1204,38 @@ components:
             empty string, an empty list and a zero are all VALUES, not absence (R-3).
           example: "="
         value:
-          type: string
+          x-go-type: string
+          oneOf:
+            - type: string
+            - type: number
+            - type: boolean
+            - type: array
+              minItems: 1
+              items:
+                oneOf:
+                  - type: string
+                  - type: number
+                  - type: boolean
           description: >
-            LEAF FORM, every operator except `IN`, `IS NULL` and `IS NOT NULL`. The
+            LEAF FORM, every operator except `IS NULL` and `IS NOT NULL`. The
             operand in LEXICAL form — the same text a frontmatter file would hold — so
             it is read by exactly the same parser as a record's own value (R-12: the
             rules apply identically whether a value came from a query literal or from
             a note).
 
 
-            It is a string on the wire for that reason, and the reason is not
-            convenience. A JSON number would arrive already parsed by a JSON decoder
-            into a binary float, at which point a decimal property's exactness is
-            gone before the engine ever sees it. A literal that cannot be read in the
-            property's declared type is REFUSED naming both (FR-022e), never coerced.
+            A STRING IS THE CANONICAL FORM, and every other accepted shape is
+            converted to it BEFORE the engine sees it, from the literal's own
+            bytes, never through a binary float (UAT 2026-09-13, D-11): a JSON
+            number is taken as the exact digits the caller wrote (`100000`,
+            `12.50`), a boolean as `true`/`false`, and an ARRAY is accepted as the
+            `IN` operand — it is moved to `values` element by element. The old
+            string-only typing made `IN` uninvokable (the array was rejected by the
+            decoder while the operator demanded one) and forced numbers to be
+            quoted. The Go type stays `string` (x-go-type) because the engine's
+            single parser reads lexical form; the decoder is the one place the
+            conversion happens. A literal that cannot be read in the property's
+            declared type is still REFUSED naming both (FR-022e), never coerced.
           example: "open"
         values:
           type: array
