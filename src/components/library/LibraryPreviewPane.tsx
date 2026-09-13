@@ -212,17 +212,28 @@ export function LibraryPreviewPane({
       case 'mermaid':
       case 'text': {
         if (contentQuery.isLoading) return loadingBody
-        if (contentQuery.isError) {
-          return (
-            <QueryErrorState
-              layout="fill"
-              message="Could not load this file."
-              onRetry={() => void contentQuery.refetch()}
-              testId="library-content-error"
-            />
-          )
+        // UAT D-98 (2026-09-13): the error state is for a file that could
+        // not be loaded AT ALL, never for a background refetch that failed
+        // while content is already on screen. With `isError` alone, a
+        // refetch during a network outage (TanStack keeps `data` but flips
+        // `isError`) replaced a live editor — and the reader's unsaved text
+        // — with "Could not load this file. / Retry". Keyed on the ABSENCE
+        // of data instead, so an editor is never torn down by a refresh it
+        // did not ask for; a stale-but-present body keeps rendering and the
+        // next successful refetch updates it.
+        if (contentQuery.data === undefined) {
+          if (contentQuery.isError) {
+            return (
+              <QueryErrorState
+                layout="fill"
+                message="Could not load this file."
+                onRetry={() => void contentQuery.refetch()}
+                testId="library-content-error"
+              />
+            )
+          }
+          return loadingBody
         }
-        if (!contentQuery.isSuccess) return loadingBody
         return (
           <LibraryTextBody
             workspaceId={workspaceId}

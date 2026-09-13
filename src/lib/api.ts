@@ -4980,6 +4980,7 @@ async function putLibraryVersionedWrite<TRes>(
   apiPath: string,
   body: unknown,
   resSchema: ZodType<TRes>,
+  signal?: AbortSignal,
 ): Promise<LibraryVersionedResult<TRes>> {
   if (readCSRFCookie() === null) {
     throw new ApiError(
@@ -4988,13 +4989,14 @@ async function putLibraryVersionedWrite<TRes>(
       { code: 'csrf_missing' },
     )
   }
-  return withCsrfRetry(() => attemptPutLibraryVersionedWrite(apiPath, body, resSchema))
+  return withCsrfRetry(() => attemptPutLibraryVersionedWrite(apiPath, body, resSchema, signal))
 }
 
 async function attemptPutLibraryVersionedWrite<TRes>(
   apiPath: string,
   body: unknown,
   resSchema: ZodType<TRes>,
+  signal?: AbortSignal,
 ): Promise<LibraryVersionedResult<TRes>> {
   let res: Response
   try {
@@ -5003,6 +5005,11 @@ async function attemptPutLibraryVersionedWrite<TRes>(
       credentials: 'include',
       headers: buildHeaders(),
       body: JSON.stringify(body),
+      // UAT D-98 (2026-09-13): a save with no deadline hung in "Saving…"
+      // for as long as the network was down — Save disabled, no error, no
+      // retry. The editor hook passes a timeout signal so a stalled PUT
+      // fails loudly and the button comes back.
+      ...(signal ? { signal } : {}),
     })
   } catch (cause) {
     throw new ApiError(0, 'Network unavailable. Check your connection.', { cause })
@@ -5135,6 +5142,7 @@ export async function downloadLibraryFileVersioned(
 export async function putLibraryContent(
   workspaceId: string,
   body: LibraryContentRequest & { expect_version: string },
+  opts?: { signal?: AbortSignal },
 ): Promise<LibraryVersionedResult<LibraryEntry>> {
   // `async` (not a bare `throw` in a non-async function returning a Promise
   // type) is deliberate: every OTHER rejection path in this module surfaces
@@ -5153,6 +5161,7 @@ export async function putLibraryContent(
     `/library/${encodeURIComponent(workspaceId)}/content`,
     body,
     LibraryEntrySchema as ZodType<LibraryEntry>,
+    opts?.signal,
   )
 }
 
