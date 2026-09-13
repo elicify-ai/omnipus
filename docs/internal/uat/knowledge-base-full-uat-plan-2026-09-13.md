@@ -384,3 +384,16 @@ These were confirmed in code before the campaign starts. A tester hitting one re
 | #702 | Roadmap candidates, not defects: import as agent tool, attachment full-text search, whole-PDF inline embed, graph view, link autocomplete, autosave, board drag-and-drop, embedded filter/sort, properties panel, add-row, query-fence paging, tags browser, canvas preview | U-61, U-62 and any GAP row cite #702 |
 
 Founder rulings recorded 2026-09-13: Obsidian import via agent not expected yet; drag-and-drop not expected; PDF link-only embedding acceptable (nice to have); graph view and link autocomplete not expected; explicit save acceptable for now.
+
+---
+
+## Execution record (2026-09-13)
+
+Executed the same day on the durable UAT instance (binary `f83c84223`) with eight lanes: Operator (agent door, 85 rows), OP2 (cross-door), T1, T3, T3b, T5, T2, T4. Evidence, per-lane reports, the defect register (`DEFECTS.md`) and the founder report (`UAT-REPORT-2026-09-13.md`) live outside the repo under `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat/evidence/2026-09-13/`. Founder ruling: findings are reported, not filed as GitHub issues.
+
+Harness lessons folded into the plan for next time:
+- Tester subagents each need a private Playwright server declared inline in their agent definition as a list entry with `type: stdio`; a server named `playwright` is shadowed by the session's shared browser; lanes wait for their `mcp__pw_<lane>__*` tools; screenshot paths must be absolute.
+- The product is single-session per account; with two accounts, at most two lanes run concurrently. A lane ends its report with `LANE DONE`; the next lane on that account starts only after it.
+- Approval modals from one account's agent render in the other account's browser (logged as a defect).
+- Five gateway restarts were needed because the properties index closes on imports, schema writes, folder deletions and ordinary cell edits (the campaign's first S1).
+- Rows that assumed a declarable derived type, a `v1:absent` create form, `detail: full`, ranked `near` search, or a `file-search-match-count` testid were plan errors and are marked GAP-PLAN in the register.
