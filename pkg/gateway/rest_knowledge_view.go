@@ -1496,6 +1496,28 @@ func (b *viewResultBuilder) buildPart(src gen.ViewPart) gen.ViewResultPart {
 		return p
 	}
 
+	// UAT D-69 — a legacy `layout: calendar` (the shape every imported
+	// Obsidian calendar arrives in) synthesises a calendar part with no
+	// `date:` binding, and the SPA's month grid plots against exactly that
+	// binding — so the grid drew every month empty while the view file's
+	// own `untranslated` note promised a table. The binding is inferred
+	// here, from the view's own property list first and the record type's
+	// declaration order second; when no date property exists at all the
+	// answer says so in `problems` instead of serving an empty grid as fact.
+	if src.Part == gen.ViewPartPartCalendar && !b.declaredParts && viewPartDateUnbound(src) {
+		if inferred, ok := b.inferCalendarDate(src); ok {
+			p.Source.Date = &inferred
+		} else {
+			fix := "add a date property to the record type, or give the view a `parts` stack with `date:` through knowledge_configure"
+			b.out.Problems = append(b.out.Problems, gen.RecordProblem{
+				Code:    gen.ViewPartIneligible,
+				Reason:  "the calendar layout names no date property to place records on, and none of this view's properties is a date — the grid has nothing to plot",
+				Fix:     &fix,
+				Records: []string{},
+			})
+		}
+	}
+
 	switch src.Part {
 	case gen.ViewPartPartTable, gen.ViewPartPartList, gen.ViewPartPartTiles,
 		gen.ViewPartPartColumns, gen.ViewPartPartCalendar:
@@ -1509,6 +1531,41 @@ func (b *viewResultBuilder) buildPart(src gen.ViewPart) gen.ViewResultPart {
 		b.buildCrosstabPartData(&p, src)
 	}
 	return p
+}
+
+// viewPartDateUnbound reports whether a part carries no usable `date:`.
+func viewPartDateUnbound(src gen.ViewPart) bool {
+	return src.Date == nil || strings.TrimSpace(*src.Date) == ""
+}
+
+// inferCalendarDate picks the date property a layout-only calendar should
+// place records on: the first date-typed property the view lists, else the
+// first the record type declares. Reports false when there is none.
+func (b *viewResultBuilder) inferCalendarDate(src gen.ViewPart) (string, bool) {
+	if b.view.Def.Type == nil {
+		return "", false
+	}
+	sc, ok := b.env.Schemas.Get(*b.view.Def.Type)
+	if !ok || sc == nil {
+		return "", false
+	}
+	isDate := func(name string) bool {
+		prop, found := sc.Property(name)
+		return found && prop != nil && prop.Type == records.TypeDate
+	}
+	if src.Properties != nil {
+		for _, name := range *src.Properties {
+			if isDate(name) {
+				return name, true
+			}
+		}
+	}
+	for _, name := range sc.PropertyOrder {
+		if isDate(name) {
+			return name, true
+		}
+	}
+	return "", false
 }
 
 func viewPartAggregateOf(src gen.ViewPart) gen.ViewPartAggregate {
