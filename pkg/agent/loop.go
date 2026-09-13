@@ -1329,17 +1329,12 @@ func (al *AgentLoop) preserveTruncatedAccumulator(ts *turnState) {
 		// ts.finalContent / ts.truncationReason just set above.
 		return
 	}
-	if accumulated != "" {
-		ts.appendAssistantTranscript(accumulated)
-	} else {
-		ts.appendAssistantTranscriptAllowEmpty("")
-	}
-	if ts.transcriptStore != nil && ts.transcriptSessionID != "" {
-		if markErr := ts.transcriptStore.MarkLastEntryTruncated(ts.transcriptSessionID, ts.turnID, truncationReasonMaxOutputTokens); markErr != nil {
-			logger.WarnCF("agent", "failed to mark truncated accumulator on terminal exit",
-				map[string]any{"session_id": ts.transcriptSessionID, "turn_id": ts.turnID, "error": markErr.Error()})
-		}
-	}
+	// ADR-087 D4a/D4b: stamp Truncated/TruncationReason in the SAME write as
+	// the content — see appendAssistantTranscriptTruncated's doc comment.
+	// This replaces the former append-then-MarkLastEntryTruncated two-step,
+	// which reopened and rewrote the whole transcript.jsonl just to stamp
+	// two fields on the entry constructed one call earlier.
+	ts.appendAssistantTranscriptTruncated(accumulated, truncationReasonMaxOutputTokens)
 }
 
 // ErrReloadNotConfigured is returned by TriggerReload when no reload function
@@ -13512,23 +13507,18 @@ turnLoop:
 	ts.mu.RUnlock()
 	truncReason := ts.getTruncationReason()
 	if !hasActiveStreamer {
-		if finalContent != "" {
+		// ADR-087 D4a/D4b: this is the non-streaming write choke point.
+		// When the turn was truncated, stamp Truncated/TruncationReason in
+		// the SAME write as the content — see
+		// appendAssistantTranscriptTruncated's doc comment for why this
+		// replaces the former append-then-MarkLastEntryTruncated two-step
+		// (for the streaming case, finalizeStreamer's own deferred call
+		// does the single-write equivalent after wsStreamer.Finalize
+		// persists its entry).
+		if truncReason != "" {
+			ts.appendAssistantTranscriptTruncated(finalContent, truncReason)
+		} else if finalContent != "" {
 			ts.appendAssistantTranscript(finalContent)
-		} else if truncReason != "" {
-			// ADR-087 D4a: the zero-content entry MarkLastEntryTruncated
-			// (below) needs something to find — appendAssistantTranscript's
-			// ordinary content=="" no-op does not apply here.
-			ts.appendAssistantTranscriptAllowEmpty("")
-		}
-		// ADR-087 D4a/D4b: this is the non-streaming write choke point —
-		// mark the entry just written (or, for the streaming case,
-		// finalizeStreamer's own deferred call does the equivalent AFTER
-		// wsStreamer.Finalize persists its entry).
-		if truncReason != "" && ts.transcriptStore != nil && ts.transcriptSessionID != "" {
-			if markErr := ts.transcriptStore.MarkLastEntryTruncated(ts.transcriptSessionID, ts.turnID, truncReason); markErr != nil {
-				logger.WarnCF("agent", "failed to mark truncated transcript entry",
-					map[string]any{"session_id": ts.transcriptSessionID, "turn_id": ts.turnID, "error": markErr.Error()})
-			}
 		}
 	}
 

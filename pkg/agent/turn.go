@@ -1763,8 +1763,10 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) {
 		// turn's TurnID (written by an earlier tool-calling round via
 		// appendIntermediateAssistantTranscript) as truncated. The
 		// non-streaming path (loop.go's own write choke point, gated on
-		// !hasActiveStreamer) still calls MarkLastEntryTruncated directly —
-		// this streamer probe only covers the streamed case.
+		// !hasActiveStreamer) now has an equivalent single-write fix of its
+		// own — appendAssistantTranscriptTruncated — so neither path calls
+		// MarkLastEntryTruncated post-hoc anymore; this streamer probe only
+		// covers the streamed case.
 		if truncReason != "" {
 			if tset, ok := s.(streamerTruncationSetter); ok {
 				tset.SetTruncation(truncReason)
@@ -2107,30 +2109,63 @@ func (ts *turnState) appendIntermediateAssistantTranscript(content string, produ
 // producedModel is the model string that emitted THIS response. Pass ""
 // to fall back to ts.lastProducedModel.
 func (ts *turnState) appendAssistantTranscript(content string, producedModel ...string) {
-	ts.appendAssistantTranscriptImpl(content, false, producedModel...)
+	ts.appendAssistantTranscriptImpl(content, false, false, "", producedModel...)
 }
 
-// appendAssistantTranscriptAllowEmpty is appendAssistantTranscript's ADR-087
-// D4a variant: a turn truncated at the output-token limit with literally no
-// content produced still needs a persisted assistant entry — otherwise
-// MarkLastEntryTruncated (the non-streaming tail's write choke point in
-// loop.go) has no entry to find and the annotation is silently lost. Only
-// called from the non-streaming path (loop.go, gated on !hasActiveStreamer);
+// validTruncationReasonsAgent mirrors pkg/session's unexported
+// validTruncationReasons (ADR-087 D2): the only two values
+// appendAssistantTranscriptTruncated will ever stamp onto a persisted
+// entry. Kept in lockstep with session.MarkLastEntryTruncated's own set —
+// pkg/session cannot be imported for the map itself since it is
+// unexported, but both lists must never diverge.
+var validTruncationReasonsAgent = map[string]bool{
+	"cancelled":         true,
+	"max_output_tokens": true,
+}
+
+// appendAssistantTranscriptTruncated is the ADR-087 D4a/D4b non-streaming
+// write-choke-point fix: it stamps Truncated=true and TruncationReason on
+// the assistant entry in the SAME construction/write appendAssistantTranscript
+// already performs, instead of the pre-fix two-step pattern (append the
+// entry, then have loop.go immediately call session.MarkLastEntryTruncated
+// to re-read, re-parse, and rewrite the whole transcript.jsonl just to
+// stamp two fields on the entry that was built one call earlier). The
+// streaming path already writes truncation state in a single pass via
+// wsStreamer.Finalize (commit 47c086ca); this brings the non-streaming
+// path to parity.
+//
+// content == "" is allowed and always written (D4a: a turn truncated with
+// no output produced still needs a persisted, correctly-flagged entry) —
 // the streamed path's equivalent zero-content write is wsStreamer.Finalize
 // itself (WP C, pkg/gateway/websocket.go), stamped via the
-// streamerTruncationSetter probe in finalizeStreamer below rather than a
-// post-hoc MarkLastEntryTruncated call. Every other no-content call site
-// keeps going through appendAssistantTranscript's ordinary empty-content
-// no-op; this bypass is scoped to the non-streaming truncation caller.
-func (ts *turnState) appendAssistantTranscriptAllowEmpty(producedModel ...string) {
-	ts.appendAssistantTranscriptImpl("", true, producedModel...)
+// streamerTruncationSetter probe in finalizeStreamer below.
+//
+// reason MUST be one of session's two accepted values ("cancelled",
+// "max_output_tokens" — ADR-087 D2, see validTruncationReasonsAgent). Any
+// other value is a programming error at this call site: rather than
+// silently persist an unrecognized reason (which session.MarkLastEntryTruncated
+// would itself have rejected), this logs loudly at Error level and falls
+// back to writing the entry WITHOUT the truncation fields — so the
+// content is never lost, but a bad reason can never masquerade as a valid
+// one on disk.
+func (ts *turnState) appendAssistantTranscriptTruncated(content, reason string, producedModel ...string) {
+	if !validTruncationReasonsAgent[reason] {
+		logger.ErrorCF("agent", "appendAssistantTranscriptTruncated: invalid truncation reason, entry written WITHOUT truncation stamp",
+			map[string]any{"session_id": ts.transcriptSessionID, "turn_id": ts.turnID, "reason": reason})
+		ts.appendAssistantTranscriptImpl(content, true, false, "", producedModel...)
+		return
+	}
+	ts.appendAssistantTranscriptImpl(content, true, true, reason, producedModel...)
 }
 
 // appendAssistantTranscriptImpl is the shared body behind
-// appendAssistantTranscript and appendAssistantTranscriptAllowEmpty —
+// appendAssistantTranscript and appendAssistantTranscriptTruncated —
 // allowEmpty controls only whether a "" content is written (D4a) or
-// no-opped (every other caller).
-func (ts *turnState) appendAssistantTranscriptImpl(content string, allowEmpty bool, producedModel ...string) {
+// no-opped (every other caller); truncated / truncationReason set
+// session.TranscriptEntry's Truncated / TruncationReason fields at
+// construction, so a truncated non-streaming entry is written once instead
+// of appended-then-rewritten.
+func (ts *turnState) appendAssistantTranscriptImpl(content string, allowEmpty bool, truncated bool, truncationReason string, producedModel ...string) {
 	if ts.abandoned.Load() {
 		abandonedWritesSuppressed.Add(1)
 		ts.warnAbandonedTranscriptWrite("appendAssistantTranscript")
@@ -2179,6 +2214,12 @@ func (ts *turnState) appendAssistantTranscriptImpl(content string, allowEmpty bo
 		// identical stamp for the full rationale — non-empty only for a
 		// child delegation sub-turn's own final-turn text.
 		ParentSpawnCallID: ts.parentSpawnCallID,
+		// Truncated / TruncationReason: set only by
+		// appendAssistantTranscriptTruncated (ADR-087 D4a/D4b) so a
+		// non-streaming truncated turn's Truncated flag lands in this same
+		// write, never via a follow-up rewrite of transcript.jsonl.
+		Truncated:        truncated,
+		TruncationReason: truncationReason,
 	}
 	if err := ts.transcriptStore.AppendTranscriptStrict(ts.transcriptSessionID, entry); err != nil {
 		transcriptWriteFailures.Add(1)
