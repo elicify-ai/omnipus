@@ -145,10 +145,18 @@ func (t *EditTool) execRelation(ctx context.Context, target mutationTarget, args
 	// stored the way the vault's own relations are spelled — the bare note
 	// name when that name is unique in the collection, the path without its
 	// extension otherwise — and the reply says what was stored.
-	targets, normalised := normalizeRelationTargets(target, targets)
+	//
+	// One index answers BOTH name questions this op asks of the collection:
+	// how a target is STORED (D-94, above) and whether two spellings name the
+	// SAME note (Codex review 2026-09-14, finding 8) — a link written before
+	// D-94 as "[[People/Acme Ltd]]" and a caller naming "Acme Ltd" are one
+	// edge, and matching them by bytes made the remove a silent no-op and the
+	// add a duplicate.
+	ix := newRelationNameIndex(target)
+	targets, normalised := ix.normalize(targets)
 
 	var gov knowledgeEditGovernance
-	edit := knowledgeEditRelationEdit(set, report, property, relationOp, targets, &gov)
+	edit := knowledgeEditRelationEdit(set, report, property, relationOp, targets, &gov, ix)
 
 	res, err := EditNote(OSLinkFS(), target.collection, EditNoteRequest{
 		RelPath: rel, Edits: []NoteEdit{edit}, ExpectVersion: expect,
@@ -171,9 +179,59 @@ func (t *EditTool) execRelation(ctx context.Context, target mutationTarget, args
 	}))
 }
 
-// normalizeRelationTargets maps each caller-given relation target to the
-// form it is stored in (D-94). A target already spelled as a wikilink is
-// left exactly as sent (the caller copied it from a read). Otherwise:
+// relationNameIndex answers the two name questions op "relation" asks of the
+// collection it is writing into, from ONE walk of that collection:
+//
+//   - how a caller-given target is STORED (D-94's normalisation);
+//   - whether two spellings name the SAME note (identity).
+//
+// Both answers derive from the same fact — how many markdown files in the
+// collection carry each (folded) bare name — so the walk happens once and is
+// shared. A collection that cannot be walked answers nil counts, and both
+// questions degrade the same way D-94 already did: the path form is kept,
+// and identity falls back to the folded spelling (a walk failure never
+// widens what "same note" means).
+type relationNameIndex struct {
+	target mutationTarget
+	loaded bool
+	counts map[string]int // nil until a successful walk
+}
+
+// newRelationNameIndex builds the index for one op. Nothing is walked until
+// the first question that needs it.
+func newRelationNameIndex(target mutationTarget) *relationNameIndex {
+	return &relationNameIndex{target: target}
+}
+
+// nameCounts walks the collection once, counting folded bare names of
+// markdown files. It returns nil when the walk fails, and caches both the
+// result and the failure so a later question does not re-walk.
+func (ix *relationNameIndex) nameCounts() map[string]int {
+	if ix.loaded {
+		return ix.counts
+	}
+	ix.loaded = true
+	fsys := OSLinkFS()
+	root, err := NewCollectionRoot(fsys, ix.target.collection.Root())
+	if err != nil {
+		return nil
+	}
+	wr, err := WalkContained(fsys, root)
+	if err != nil {
+		return nil
+	}
+	ix.counts = make(map[string]int, len(wr.Files))
+	for _, rel := range wr.Files {
+		if IsMarkdownPath(rel) {
+			ix.counts[records.FoldKey(trimMarkdownExt(path.Base(rel)))]++
+		}
+	}
+	return ix.counts
+}
+
+// normalize maps each caller-given relation target to the form it is stored
+// in (D-94). A target already spelled as a wikilink is left exactly as sent
+// (the caller copied it from a read). Otherwise:
 //
 //   - a trailing ".md" is dropped — a wikilink never carries it;
 //   - a directory prefix is dropped when the note's bare name occurs ONCE
@@ -186,31 +244,7 @@ func (t *EditTool) execRelation(ctx context.Context, target mutationTarget, args
 //
 // The second return lists "given -> stored" for every target that changed,
 // so the reply can say so rather than echo the input as if it were stored.
-func normalizeRelationTargets(target mutationTarget, targets []string) ([]string, []string) {
-	var counts map[string]int
-	walked := false
-	countNames := func() map[string]int {
-		if walked {
-			return counts
-		}
-		walked = true
-		fsys := OSLinkFS()
-		root, err := NewCollectionRoot(fsys, target.collection.Root())
-		if err != nil {
-			return nil
-		}
-		wr, err := WalkContained(fsys, root)
-		if err != nil {
-			return nil
-		}
-		counts = make(map[string]int, len(wr.Files))
-		for _, rel := range wr.Files {
-			if IsMarkdownPath(rel) {
-				counts[records.FoldKey(trimMarkdownExt(path.Base(rel)))]++
-			}
-		}
-		return counts
-	}
+func (ix *relationNameIndex) normalize(targets []string) ([]string, []string) {
 	out := make([]string, 0, len(targets))
 	var notes []string
 	for _, given := range targets {
@@ -219,19 +253,55 @@ func normalizeRelationTargets(target mutationTarget, targets []string) ([]string
 			out = append(out, t)
 			continue
 		}
-		stored := trimMarkdownExt(strings.ReplaceAll(t, "\\", "/"))
-		if strings.Contains(stored, "/") {
-			base := path.Base(stored)
-			if names := countNames(); names != nil && names[records.FoldKey(base)] == 1 {
-				stored = base
-			}
-		}
+		stored := ix.storedForm(t)
 		if stored != t {
 			notes = append(notes, fmt.Sprintf("%s -> [[%s]]", given, stored))
 		}
 		out = append(out, stored)
 	}
 	return out, notes
+}
+
+// storedForm is D-94's answer for one name: extension off, backslashes to
+// slashes, and the directory prefix dropped when the bare name is unique.
+// It does NOT unwrap "[[...]]" — normalisation passes a wikilink through
+// untouched, and only sameNote looks inside one.
+func (ix *relationNameIndex) storedForm(name string) string {
+	stored := trimMarkdownExt(strings.ReplaceAll(strings.TrimSpace(name), "\\", "/"))
+	if strings.Contains(stored, "/") {
+		base := path.Base(stored)
+		if names := ix.nameCounts(); names != nil && names[records.FoldKey(base)] == 1 {
+			stored = base
+		}
+	}
+	return stored
+}
+
+// sameNote answers whether two stored or requested relation spellings name
+// the SAME note — the comparison Codex review 2026-09-14 finding 8 found
+// missing. Matching by bytes made a link stored before D-94's normalisation
+// ("[[People/Acme Ltd]]") unremovable by any spelling the caller could send
+// after it ("[[Acme Ltd]]"), and made an add of the same note a second edge.
+//
+// Identity is D-94's own spelling rule, applied to BOTH sides and folded:
+// two spellings are the same note exactly when the vault would store them
+// the same way. That rule keeps two notes sharing a basename ("People/Smith",
+// "Clients/Smith") two notes — their path forms stay path forms because the
+// name is not unique — and it never invents a match the walk cannot see: a
+// name that resolves to nothing matches only its own spelling.
+func (ix *relationNameIndex) sameNote(a, b string) bool {
+	return ix.identityKey(a) == ix.identityKey(b)
+}
+
+// identityKey is the folded stored form of one spelling, brackets and all:
+// a "[[...]]" wikilink is unwrapped first, so stored and requested spellings
+// meet on the same ground.
+func (ix *relationNameIndex) identityKey(spelling string) string {
+	t := strings.TrimSpace(spelling)
+	if len(t) >= 4 && strings.HasPrefix(t, "[[") && strings.HasSuffix(t, "]]") {
+		t = t[2 : len(t)-2]
+	}
+	return records.FoldKey(ix.storedForm(t))
 }
 
 // knowledgeEditDecodeTargets reads the `targets` argument.
@@ -323,7 +393,7 @@ func knowledgeEditRelationWikilink(target string) string {
 //     direction — AddListValue creates a fresh one-item list against an
 //     absent key, and REFUSES rather than silently promotes an existing
 //     scalar.
-func knowledgeEditRelationEdit(set *records.SchemaSet, report *records.SchemaLoadReport, property, relationOp string, targets []string, gov *knowledgeEditGovernance) NoteEdit {
+func knowledgeEditRelationEdit(set *records.SchemaSet, report *records.SchemaLoadReport, property, relationOp string, targets []string, gov *knowledgeEditGovernance, ix *relationNameIndex) NoteEdit {
 	return func(src []byte) ([]byte, error) {
 		schema, typeName, reason, detail := knowledgeEditResolveSchema(set, report, src)
 		governed := reason == knowledgeEditGoverned
@@ -377,29 +447,34 @@ func knowledgeEditRelationEdit(set *records.SchemaSet, report *records.SchemaLoa
 		}
 
 		if !listShaped {
-			return knowledgeEditRelationScalarSplice(src, typeName, property, relationOp, wikilinks)
+			return knowledgeEditRelationScalarSplice(src, typeName, property, relationOp, wikilinks, ix)
 		}
-		return knowledgeEditRelationListSplice(src, property, relationOp, wikilinks)
+		return knowledgeEditRelationListSplice(src, property, relationOp, wikilinks, ix)
 	}
 }
 
 // knowledgeEditRelationListSplice applies a verb to a list-shaped relation
 // property.
 //
-// add and remove go one element at a time through AddListValue /
-// RemoveListValue, which is the whole point of the verbs existing: each
-// touches ONLY its own element's bytes and leaves every other edge in the
-// list exactly as it was, including edges this caller has never seen. Both
-// are idempotent by those primitives' own documented contract — an add of a
-// target already present, or a remove of one that is not there, returns src
-// unchanged and reports "unchanged", never an error.
+// add and remove go one element at a time through AddListValueUnless /
+// RemoveListValueWhere with SAME-NOTE predicates, which is the whole point
+// of the verbs existing: each touches ONLY its own element's bytes and
+// leaves every other edge in the list exactly as it was, including edges
+// this caller has never seen — and "its own element" means the note it
+// names, not the bytes it was spelled with (Codex review 2026-09-14 finding
+// 8: a remove names "[[Acme Ltd]]", the stored edge says
+// "[[People/Acme Ltd]]", and the edge removed is the STORED one, exactly as
+// stored). Both remain idempotent by those primitives' own documented
+// contract — an add of a note already linked under any spelling, or a remove
+// of one that is not there, returns src unchanged and reports "unchanged",
+// never an error.
 //
 // replace is the destructive verb and uses SetPropertyList, which rewrites
 // the whole span. An empty list writes "key: []" rather than deleting the
 // key, matching RemoveListValue's own documented choice: "present and empty"
 // and "absent" are different validation findings, and a clear should not
 // quietly become the other one.
-func knowledgeEditRelationListSplice(src []byte, property, relationOp string, wikilinks []string) ([]byte, error) {
+func knowledgeEditRelationListSplice(src []byte, property, relationOp string, wikilinks []string, ix *relationNameIndex) ([]byte, error) {
 	if relationOp == relationOpReplace {
 		return SetPropertyList(property, wikilinks)(src)
 	}
@@ -408,9 +483,13 @@ func knowledgeEditRelationListSplice(src []byte, property, relationOp string, wi
 		var next []byte
 		var err error
 		if relationOp == relationOpAdd {
-			next, err = AddListValue(property, wl)(out)
+			next, err = AddListValueUnless(property, wl, func(existing string) bool {
+				return ix.sameNote(existing, wl)
+			})(out)
 		} else {
-			next, err = RemoveListValue(property, wl)(out)
+			next, err = RemoveListValueWhere(property, func(existing string) bool {
+				return ix.sameNote(existing, wl)
+			})(out)
 		}
 		if err != nil {
 			return nil, err
@@ -429,7 +508,13 @@ func knowledgeEditRelationListSplice(src []byte, property, relationOp string, wi
 // lives. The refusal names relation_op "replace", because a caller who
 // genuinely wants to move a single-slot relation from one target to another
 // has a verb for it and needs to be told which.
-func knowledgeEditRelationScalarSplice(src []byte, typeName, property, relationOp string, wikilinks []string) ([]byte, error) {
+//
+// "Points at the target the caller named" is judged by NOTE (ix.sameNote),
+// not by bytes, for the same reason the list splice judges it that way: a
+// slot stored before D-94's normalisation is spelled differently from the
+// request that names it, and a scalar remove that matched nothing would
+// silently report unchanged (Codex review 2026-09-14 finding 8).
+func knowledgeEditRelationScalarSplice(src []byte, typeName, property, relationOp string, wikilinks []string, ix *relationNameIndex) ([]byte, error) {
 	if len(wikilinks) > 1 {
 		return nil, fmt.Errorf("%w: %s.%s holds one relation, not a list; got %d targets — send one, "+
 			"or declare many: true in %s/%s/%s.yaml",
@@ -440,7 +525,7 @@ func knowledgeEditRelationScalarSplice(src []byte, typeName, property, relationO
 
 	switch relationOp {
 	case relationOpAdd:
-		if present && current != wikilinks[0] {
+		if present && !ix.sameNote(current, wikilinks[0]) {
 			return nil, fmt.Errorf("%w: %s.%s is a single relation and already points at %s (FR-035) — "+
 				"adding a second target is refused. Send relation_op \"replace\" to point it at %s "+
 				"instead, or relation_op \"remove\" to clear it first",
@@ -451,7 +536,7 @@ func knowledgeEditRelationScalarSplice(src []byte, typeName, property, relationO
 		}
 		return SetPropertyScalarChecked(property, wikilinks[0])(src)
 	case relationOpRemove:
-		if !present || current != wikilinks[0] {
+		if !present || !ix.sameNote(current, wikilinks[0]) {
 			return src, nil // not present — defined no-op (Changed: false)
 		}
 		return RemoveProperty(property)(src)

@@ -247,13 +247,22 @@ func TestIsTypeNarrowing_TheEvaluatorKeepsThePromiseTheNarrowingMakes(t *testing
 		if got := renderNumber(t, res); got != "20.6" {
 			t.Errorf("monthly 20.60 = %s, want 20.6 — a monthly cost is carried through unchanged", got)
 		}
-		// And the value crosses the boundary at FR-144's default scale, which
-		// renderNumber deliberately trims away. Asserted here on the raw
-		// rendering so the scale is part of the contract too: a bound narrowed
-		// value must be indistinguishable from a declared number, and a value
-		// that arrived at scale 0 would still pass the assertion above.
-		if raw := res.Values()[0].Number.String(); raw != "20.6000000000" {
-			t.Errorf("monthly 20.60 rendered %q, want %q at FR-144's default scale of 10", raw, "20.6000000000")
+		// D-61 (2026-09-14) superseded the assertion this block used to carry:
+		// the raw rendering was required to be "20.6000000000" so the default
+		// scale of 10 was part of the contract. FR-144's default is now what it
+		// always should have read as — a rounding BOUND, not a padding
+		// instruction — so an exact value crosses at its shortest exact form,
+		// on the Decimal itself, and every door (knowledgefind, base preview)
+		// renders "20.6". A declared scale (root toFixed/round) still keeps
+		// its zeros; see formula_display_scale_test.go.
+		if raw := res.Values()[0].Number.String(); raw != "20.6" {
+			t.Errorf("monthly 20.60 rendered %q, want %q — exact at an undeclared scale trims to its shortest exact form (D-61)", raw, "20.6")
+		}
+		if res.ScaleDeclared {
+			t.Error("no toFixed/round declared a scale here; ScaleDeclared must say so")
+		}
+		if res.Rounded {
+			t.Error("20.60 is exact; it must not be labelled rounded")
 		}
 	})
 

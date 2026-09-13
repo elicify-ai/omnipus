@@ -120,6 +120,12 @@ type FormulaDecl struct {
 	// at (FR-144). It is FormulaDefaultScale unless `toFixed`/`round` at the
 	// root of the expression said otherwise.
 	Scale int32
+	// ScaleDeclared says whether an author DECLARED that scale — the root of
+	// the expression is a `toFixed`/`round` call. The distinction is D-61's:
+	// an undeclared scale is a rounding bound, not a padding instruction, so
+	// an exact value is shown in its shortest exact form; a declared scale is
+	// a request for those decimal places and is rendered exactly as asked.
+	ScaleDeclared bool
 	// Root is the parsed tree. It is not written to disk — FR-141 stores source
 	// — but it is what evaluation walks.
 	Root FormulaNode
