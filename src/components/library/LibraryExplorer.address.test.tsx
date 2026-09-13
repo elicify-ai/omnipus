@@ -155,3 +155,36 @@ describe('LibraryExplorer — addressed navigation (D-108, D-64, D-36)', () => {
     await waitFor(() => expect(screen.getByTestId('library-deeplink-unresolved')).toHaveTextContent(/"ghost.md" was not found/))
   })
 })
+
+// UAT D-122 (2026-09-13): an `.obsidian` mount never said an import was needed.
+describe('LibraryExplorer — D-122 an un-imported Obsidian vault says so', () => {
+  it('shows the import notice for marker=obsidian', async () => {
+    serve({ 'ws-1': { '': [entry('Home.md', 'Home.md')] } })
+    mockedKnowledgeInfo.mockResolvedValue({
+      workspace_id: 'ws-1',
+      root_path: '',
+      is_knowledge_base: true,
+      marker: 'obsidian',
+      collection_id: 'kb_obs',
+    })
+    renderAddressed({ workspaceId: 'ws-1' })
+    const notice = await screen.findByTestId('library-obsidian-not-imported')
+    expect(notice).toHaveTextContent(/not been imported/)
+    expect(notice).toHaveTextContent(/records import-obsidian/)
+  })
+
+  it('shows nothing of the sort for an Omnipus vault (control)', async () => {
+    serve({ 'ws-1': { '': [entry('Home.md', 'Home.md')] } })
+    mockedKnowledgeInfo.mockResolvedValue({
+      workspace_id: 'ws-1',
+      root_path: '',
+      is_knowledge_base: true,
+      marker: 'omnipus_vault',
+      collection_id: 'kb_1',
+    })
+    renderAddressed({ workspaceId: 'ws-1' })
+    await waitFor(() => expect(screen.getByTestId('library-row-Home.md')).toBeInTheDocument())
+    await waitFor(() => expect(mockedKnowledgeInfo).toHaveBeenCalled())
+    expect(screen.queryByTestId('library-obsidian-not-imported')).not.toBeInTheDocument()
+  })
+})

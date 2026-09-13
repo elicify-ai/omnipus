@@ -1028,6 +1028,27 @@ export function LibraryExplorer({
             path={browsedDir}
             {...(!isReservedLibraryDir ? { onCreateNote: openNewNoteDialog } : {})}
           />
+          {/* UAT D-122 (2026-09-13): a folder with `.obsidian/` and no
+              `.omnipus-vault/` is detected and its notes are indexed, but
+              every search reported Records 0 / Views 0 with nothing saying
+              why — the zeros looked like an empty vault rather than an
+              un-imported one. The import is CLI-only today (Appendix B /
+              FR-103), so that is stated rather than hidden. */}
+          {browsedKnowledgeQuery.data?.is_knowledge_base === true &&
+            browsedKnowledgeQuery.data.marker === 'obsidian' && (
+              <div
+                role="status"
+                data-testid="library-obsidian-not-imported"
+                className="mt-2 rounded-md border border-[var(--color-accent)]/30 bg-[var(--color-accent)]/5 px-3 py-2 text-xs leading-relaxed text-[var(--color-muted)]"
+              >
+                This is an Obsidian vault that has not been imported into Omnipus yet. Its notes are
+                indexed and searchable, but record types, records and views stay at zero until the
+                vault is imported — today that is done from the command line with{' '}
+                <span className="font-mono text-[var(--color-secondary)]">omnipus records import-obsidian</span>
+                . Importing writes an <span className="font-mono">.omnipus-vault</span> folder here and never
+                changes the <span className="font-mono">.obsidian</span> one.
+              </div>
+            )}
         </div>
       )}
 
