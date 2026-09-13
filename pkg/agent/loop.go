@@ -754,6 +754,85 @@ const (
 	metadataKeyParentPeerID   = "parent_peer_id"
 )
 
+// Orphan tool-call markup repair — see the choke point in runTurn and
+// providers.DetectOrphanToolCallMarkup for the failure this handles.
+const (
+	// maxOrphanToolMarkupRepairs bounds the re-prompts spent on one turn.
+	// Two is enough to clear a one-off upstream parse failure (the observed
+	// case) without letting a model that cannot produce structured tool calls
+	// at all spend the whole iteration budget getting nowhere.
+	maxOrphanToolMarkupRepairs = 2
+	// orphanToolMarkupRetryReason labels the retry on the event bus so an
+	// operator can tell this apart from an empty-response retry.
+	orphanToolMarkupRetryReason = "orphan_tool_markup"
+	// orphanToolMarkupStage labels the terminal error event/transcript entry.
+	orphanToolMarkupStage = "orphan_tool_markup"
+)
+
+// stripOrphanToolCallMarkup removes residual native tool-call markup from
+// every user-visible text field of an LLM response, returning the first
+// residue found so the caller can log it and decide what the round means.
+//
+// It is a strip, not a parse: Omnipus accepts tool calls from the structured
+// `tool_calls` field and nowhere else, so the residue is discarded rather
+// than interpreted. Reconstructing a call from it would mean trusting a
+// half-delivered payload — exactly the payload whose other half is missing.
+func stripOrphanToolCallMarkup(response *providers.LLMResponse) (providers.OrphanToolMarkup, bool) {
+	if response == nil {
+		return providers.OrphanToolMarkup{}, false
+	}
+	var first providers.OrphanToolMarkup
+	found := false
+	if om, ok := providers.DetectOrphanToolCallMarkup(response.Content); ok {
+		response.Content = om.Prose
+		first, found = om, true
+	}
+	if om, ok := providers.DetectOrphanToolCallMarkup(response.ReasoningContent); ok {
+		response.ReasoningContent = om.Prose
+		if !found {
+			first, found = om, true
+		}
+	}
+	return first, found
+}
+
+// orphanToolMarkupRepairMessage builds the corrective turn sent back to a
+// model whose tool call arrived as text.
+//
+// It deliberately does NOT quote the residue back. The residue is the model's
+// own malformed output; replaying it is a strong prompt to produce the same
+// thing again. The note states the failure, the consequence, and the one
+// action that fixes it.
+//
+// finishReason drives a second sentence when the generation was cut off at
+// the output-token cap — the observed trigger for this fault, where the call
+// was simply too large to finish. Telling the model to make it smaller is the
+// only advice that actually clears that case.
+func orphanToolMarkupRepairMessage(finishReason string) providers.Message {
+	var b strings.Builder
+	b.WriteString("Your previous message did not arrive as a tool call. " +
+		"It arrived as plain text containing raw tool-call markup, so no tool ran and nothing was written or changed. " +
+		"Re-issue that call now using the tool-calling interface — a structured tool call, not text. " +
+		"Do not write tool-call markup, XML tags, or a JSON description of the call into your message body.")
+	if isTruncatedFinishReason(finishReason) {
+		b.WriteString(" Your previous response was also cut off at the output-token limit before the call was complete. " +
+			"Make this call smaller: send shorter arguments, or split the work across several calls.")
+	}
+	return providers.Message{Role: "user", Content: b.String()}
+}
+
+// isTruncatedFinishReason reports whether a finish_reason means the model ran
+// out of output tokens mid-generation. providers/common.normalizeFinishReason
+// rewrites OpenAI's "length" to "truncated"; both spellings are accepted here
+// because not every provider adapter routes through that normaliser.
+func isTruncatedFinishReason(reason string) bool {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "truncated", "length", "max_tokens":
+		return true
+	}
+	return false
+}
+
 // ErrReloadNotConfigured is returned by TriggerReload when no reload function
 // has been registered. This is normal in unit-test environments where the full
 // gateway reload pipeline is not wired. Production always configures the reload
@@ -9433,6 +9512,11 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	var midTurnGuardErr error
 	emptyResponseRetries := 0
 	const maxEmptyResponseRetries = 1
+	// orphanToolMarkupRepairs counts how many times this turn has re-prompted
+	// a model that emitted its tool call as unparseable text (see the strip
+	// choke point below). Bounded so a model that cannot comply ends the turn
+	// with a visible error instead of looping on the user's budget.
+	orphanToolMarkupRepairs := 0
 
 turnLoop:
 	for ts.currentIteration() < ts.agent.MaxIterations || len(pendingMessages) > 0 || func() bool {
@@ -10010,6 +10094,16 @@ turnLoop:
 					ts.stampStreamerTurnID(streamer)
 					ts.stampStreamerParentSpawnCallID(streamer)
 					var lastChunk string
+					// Residual native tool-call markup must never reach the
+					// live view. This is not only a rendering concern: the
+					// gateway streamer PERSISTS what it accumulated from these
+					// Update calls (wsStreamer.Finalize prefers its own buffer
+					// over the turn's final content), so anything forwarded
+					// here also lands in transcript.jsonl. Filtering at this
+					// seam is what keeps the live bubble and the persisted
+					// entry identical — and both clean. See
+					// providers.StreamTextFilter.
+					var streamFilter providers.StreamTextFilter
 					resp, streamErr := sp.ChatStream(providerCtx, messagesForCall, toolDefsForCall, llmModel, llmOpts, func(accumulated string) {
 						// B4: if the turn has been abandoned (stuck-goroutine detach),
 						// suppress further frame emits so a zombie goroutine cannot
@@ -10018,29 +10112,48 @@ turnLoop:
 							abandonedWritesSuppressed.Add(1)
 							return
 						}
-						// Send only the new delta (accumulated minus what we already sent).
+						visible := streamFilter.Visible(accumulated)
+						// Send only the new delta (visible minus what we already sent).
 						//
 						// Defensive: this slice panics with index-out-of-range if a
 						// provider ever emits an accumulated string SHORTER than its
 						// predecessor. The contract is monotonic growth, but a provider
 						// bug, a block reorder, or an SDK revision changing accumulation
 						// semantics would otherwise take down the whole turn. Treat a
-						// non-growing value as "nothing new" and skip it.
-						if len(accumulated) < len(lastChunk) {
+						// non-growing value as "nothing new" and skip it. The filter
+						// upholds the same non-shrinking contract on its own output.
+						if len(visible) < len(lastChunk) {
 							logger.DebugCF("agent", "Streaming callback emitted a shorter accumulated string; ignoring", map[string]any{
 								"previous_len": len(lastChunk),
-								"new_len":      len(accumulated),
+								"new_len":      len(visible),
 							})
 							return
 						}
-						delta := accumulated[len(lastChunk):]
-						lastChunk = accumulated
+						delta := visible[len(lastChunk):]
+						lastChunk = visible
 						if delta != "" {
 							if err := streamer.Update(providerCtx, delta); err != nil {
 								logger.DebugCF("agent", "Streaming update error (client may have disconnected)", map[string]any{"error": err.Error()})
 							}
 						}
 					}, onToolCallProgress)
+					// Reconcile against the provider's final text. Two things
+					// need this: the few bytes the filter holds back mid-stream
+					// in case they start a marker split across SSE chunks, and
+					// a provider that returned content without ever invoking
+					// the callback. Without it those bytes would be dropped
+					// silently — the streamer's buffer is what gets persisted.
+					if streamErr == nil && resp != nil && !ts.abandoned.Load() {
+						finalVisible := resp.Content
+						if om, isOrphan := providers.DetectOrphanToolCallMarkup(finalVisible); isOrphan {
+							finalVisible = om.Prose
+						}
+						if len(finalVisible) > len(lastChunk) && strings.HasPrefix(finalVisible, lastChunk) {
+							if err := streamer.Update(providerCtx, finalVisible[len(lastChunk):]); err != nil {
+								logger.DebugCF("agent", "Streaming tail flush error (client may have disconnected)", map[string]any{"error": err.Error()})
+							}
+						}
+					}
 					// Do NOT finalize here — the turn may continue with tool calls.
 					// Store the streamer so the turn-level code can finalize once,
 					// after the last LLM call, preventing premature "done" frames
@@ -10698,6 +10811,46 @@ turnLoop:
 			}
 		}
 
+		// ── Orphan tool-call markup: the single strip choke point ──
+		//
+		// Some models emit tool calls as XML-ish markup in the completion
+		// TEXT and rely on the hosting provider to parse it back into
+		// `tool_calls`. When that upstream parse does not complete, the
+		// unconsumed remainder is flushed into the text instead — see
+		// providers.DetectOrphanToolCallMarkup for the full dialect and the
+		// live evidence. Two things must happen, and they are separate:
+		//
+		//  1. The residue must never be shown to a user as the assistant's
+		//     own words. That is THIS strip, applied once here so every
+		//     downstream consumer (citations, the transcript writers, the
+		//     assistant history message, the terminal answer) sees text that
+		//     has already been cleaned. The live-stream surface is filtered
+		//     independently at the ChatStream callback above, because the
+		//     gateway streamer persists what it accumulated, not this value.
+		//
+		//  2. A round that produced NO tool calls has to be repaired or
+		//     reported — handled in the no-tool-calls branch below. Silence
+		//     is the defect there, not the malformation.
+		//
+		// ReasoningContent is stripped too: the no-tool-calls branch falls
+		// back to it when Content is empty, so leaving it alone would just
+		// move the leak. Mutating it here is safe — handleReasoning below
+		// receives its own string copy.
+		orphanMarkup, hasOrphanMarkup := stripOrphanToolCallMarkup(response)
+		if hasOrphanMarkup {
+			logger.WarnCF("agent", "LLM emitted unparseable tool-call markup as text; markup suppressed",
+				map[string]any{
+					"agent_id":      ts.agent.ID,
+					"iteration":     iteration,
+					"model":         llmModel,
+					"marker":        orphanMarkup.Marker,
+					"markup_chars":  len(orphanMarkup.Markup),
+					"prose_chars":   len(orphanMarkup.Prose),
+					"tool_calls":    len(response.ToolCalls),
+					"finish_reason": response.FinishReason,
+				})
+		}
+
 		reasoningContent := response.Reasoning
 		if reasoningContent == "" {
 			reasoningContent = response.ReasoningContent
@@ -10765,6 +10918,96 @@ turnLoop:
 			if responseContent == "" && response.ReasoningContent != "" {
 				responseContent = response.ReasoningContent
 			}
+
+			// ── Orphan tool-call markup with NO tool call: repair, or fail loudly ──
+			//
+			// The model tried to call a tool and nothing came back as a
+			// structured call, so this round did no work at all. Ending the
+			// turn here — which is what happened before this branch existed —
+			// presents whatever prose survived the strip as a finished answer
+			// and, when the whole response was markup, presents nothing at
+			// all: a spinner that resolves into silence, with the goal record
+			// left untouched and no error anywhere. That is the defect.
+			//
+			// Repair first: re-prompt with an explicit instruction to use the
+			// tool-calling API, bounded by maxOrphanToolMarkupRepairs so a
+			// model that cannot comply does not burn the turn. The repair note
+			// is appended to the in-flight request only — never to session
+			// history — so a transient protocol fault leaves no residue in the
+			// durable archive, and the residue itself is never echoed back
+			// (that would invite the model to repeat it verbatim).
+			//
+			// A graceful interrupt is the one case that does not repair: the
+			// user asked the turn to wind down, so the stripped response
+			// stands and the empty-response fallback below covers it.
+			if hasOrphanMarkup && len(response.ToolCalls) == 0 {
+				switch {
+				case gracefulTerminal:
+					// Fall through: honour the interrupt, do not re-prompt.
+				case orphanToolMarkupRepairs < maxOrphanToolMarkupRepairs:
+					orphanToolMarkupRepairs++
+					logger.WarnCF("agent", "Tool call arrived as unparseable text; re-prompting the model",
+						map[string]any{
+							"agent_id":      ts.agent.ID,
+							"iteration":     iteration,
+							"model":         llmModel,
+							"marker":        orphanMarkup.Marker,
+							"finish_reason": response.FinishReason,
+							"attempt":       orphanToolMarkupRepairs,
+							"max_attempts":  maxOrphanToolMarkupRepairs,
+						})
+					al.emitEvent(
+						EventKindLLMRetry,
+						ts.eventMeta("runTurn", "turn.llm.retry"),
+						LLMRetryPayload{
+							Attempt:    orphanToolMarkupRepairs,
+							MaxRetries: maxOrphanToolMarkupRepairs,
+							Reason:     orphanToolMarkupRetryReason,
+						},
+					)
+					messages = append(messages, orphanToolMarkupRepairMessage(response.FinishReason))
+					continue
+				default:
+					// Repair budget spent. Fail LOUDLY — a typed error event
+					// for the live client and a typed transcript entry for
+					// replay. CodeToolArgs is the contract's existing
+					// "tool-call argument format error"; the vocabulary is
+					// contract data (contracts/components/schemas/LLMError.yaml),
+					// so this path reuses it rather than inventing a code the
+					// SPA has no catalogue entry for.
+					turnStatus = TurnEndStatusError
+					llm := LLMError{
+						Code:      CodeToolArgs,
+						Message:   UserMessageForCode(CodeToolArgs),
+						Retryable: isRetryable(CodeToolArgs),
+					}
+					logger.WarnCF("agent", "Tool call kept arriving as unparseable text; ending turn with an error",
+						map[string]any{
+							"agent_id":      ts.agent.ID,
+							"iteration":     iteration,
+							"model":         llmModel,
+							"marker":        orphanMarkup.Marker,
+							"finish_reason": response.FinishReason,
+							"attempts":      orphanToolMarkupRepairs,
+						})
+					al.emitEvent(
+						EventKindError,
+						ts.eventMeta("runTurn", "turn.error"),
+						ErrorPayload{
+							Stage:     orphanToolMarkupStage,
+							Code:      string(llm.Code),
+							Message:   llm.Message,
+							ChatID:    ts.opts.ChatID,
+							SessionID: string(ts.routingSessionID),
+						},
+					)
+					ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
+					return turnResult{}, fmt.Errorf(
+						"model emitted unparseable tool-call markup (marker %q, finish_reason %q) after %d repair attempts",
+						orphanMarkup.Marker, response.FinishReason, orphanToolMarkupRepairs)
+				}
+			}
+
 			// FR-7.5/NFR-1: scan the assistant's final answer for references to
 			// memories recalled earlier this turn and emit op:cited events.
 			if citationTracker != nil {
