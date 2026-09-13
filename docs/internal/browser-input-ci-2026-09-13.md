@@ -33,3 +33,10 @@ Bounded source review found no raw-string bypass at the new escaped browser diag
 
 
 The lib-store job progressed past the repaired coverage guard and exposed two concrete browser omissions: Retry lacked the project's explicit `tabIndex`, and the exact client-frame test omitted the ADR-081 `browser_input_offer` contract member. Retry now has `tabIndex={0}`; the test retains exact-set equality and includes the independently defined contract message. The two affected files passed 79 tests, focused lint and independent review. The local Playwright fixture CI step did not execute because the preceding Vitest step failed; local four-case fixture proof remains separate. Final UI build and CI follow-up are pending.
+
+
+## Terminal combined result on bcc192e78
+
+All checks are terminal: **55 succeeded, four failed**. The main PR workflow completed with 39 successful jobs; its two failed checks are lib-store (the two browser omissions corrected in `8f5c39ac5`) and the aggregate CI gate. Go race, contracts, remaining frontend groups, real-Chrome browser tests and all end-to-end groups passed. The other failures are the Linux ARM agent cleanup race and the CodeQL alert gate described above. CodeQL analysis execution succeeded; that is distinct from its failed security findings gate. No canceled or skipped checks are counted as passes.
+
+The final production UI build passed, and Linux binary `8f5c39ac578c459f9635952dac1e6794ddb1a63e` built successfully with SHA256 `aa88493c41c1452dba97af0e9ef038feead72e47afc8f1f62b732572798492ee`. Image deployment completed with installed/running hash verification and preserved machine configuration. The enhanced dedicated live smoke passed in 52.7 seconds, including Enter activation of Retry. Final combined CI follow-up is being submitted; no green result is claimed before it finishes.

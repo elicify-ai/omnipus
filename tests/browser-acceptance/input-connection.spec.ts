@@ -119,7 +119,10 @@ for (const mode of ['websocket', 'dedicated'] as const) {
         await expect(page.getByTestId('browser-input-error')).toBeVisible();
         state = { ...state, held: 0 }; await checkpoint('input-lost-released');
         await page.keyboard.up('ArrowLeft');
-        await page.getByRole('button', { name: 'Retry input', exact: true }).click();
+        const retry = page.getByRole('button', { name: 'Retry input', exact: true });
+        await expect(retry).toHaveAttribute('tabindex', '0');
+        await retry.focus();
+        await retry.press('Enter');
         await expect(page.locator('[data-input-mode="dedicated"]')).toHaveAttribute('data-input-state', 'ready');
       } else {
         await page.keyboard.up('ArrowLeft');
