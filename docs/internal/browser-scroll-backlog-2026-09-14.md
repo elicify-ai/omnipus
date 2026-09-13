@@ -44,6 +44,24 @@ snapping may respond differently to fewer, larger events.
   of 900 intended scroll units and displayed the same Retry input failure.
   The initial assertion sampled the last viewer flush too early (885); final
   evidence confirmed all 900 were sent. The probe now waits for that flush.
-- Updated-candidate live comparison and final binary verification are pending.
+- Amsterdam now runs `f65e743ff3afd5f1051773a39ac8910a25a43809`.
+  Installed and running binary SHA256 both match
+  `32d7360a032c26746d6e4abb3fe51e692dd46d77f030665dcb3de40915168e89`.
+  Region and existing machine configuration were preserved.
+- Live GREEN passed in 23.0 s (26.0 s including runner): 48 dedicated wheel
+  messages represented all 900 units, with median arrival interval 39.8 ms.
+  The queue combined these into 24 completed Chrome dispatches. Median queue
+  wait was 61.4 ms, maximum 87.9 ms, versus 948.3 ms before failure in RED.
+  Chrome dispatch still took a median 89.1 ms; this fixes our waiting backlog,
+  not the target page's deliberate processing work.
+- After the burst, the exact click, text and key-release checks passed; no held
+  key remained and no input/page errors occurred. Gestures stayed exclusively
+  on dedicated channels and the media connection stayed unchanged.
+- Broader normal-URL interaction smoke passed in 36.8 s (37.9 s with runner):
+  exact clicks, Unicode text, scrolling, dragging, tab/resize interaction,
+  held-key release, dedicated input recovery and post-recovery click.
+
+The user's original page and longer sessions still need retesting. This result
+does not resolve the separate historical Chrome dispatch deadline reports.
 
 Only targeted checks are required for this follow-up; this is not a full CI claim.
