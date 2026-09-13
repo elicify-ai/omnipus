@@ -273,7 +273,10 @@ func buildVaultSearchResult(ctx context.Context, env vaultprops.FindEnv, collect
 		recordPaths[recHits[i].Path] = true
 	}
 
-	// NOTES — words over kind=note, minus any path already returned as a record.
+	// NOTES — words over kind=note narrowed to typeless notes at the engine
+	// (Deps.PlainNotesOnly, D-130). The recordPaths exclusion below is now a
+	// belt over those braces: it cannot see a record the records group's
+	// limit cut off, which is exactly why it could not be the only guard.
 	noteResp, noteReady := runVaultSearchFind(ctx, env, query, "", gen.VaultFindRequestKindNote, limit)
 	if noteReady {
 		for i := range noteResp.Rows {
@@ -491,6 +494,14 @@ func runVaultSearchFind(ctx context.Context, env vaultprops.FindEnv, query, reco
 	// reason the view-result endpoint sets it.
 	deps := env.Deps
 	deps.RenderRows = limit
+	// D-130 (UAT 2026-09-13): the NOTES group is the notes that declare no
+	// record type, decided per candidate at the store — not "kind=note minus
+	// whatever the records group happened to return under its limit". See
+	// Deps.PlainNotesOnly for the fifteen mis-filed records that rule
+	// produced at limit 20.
+	if recordType == "" && kind == gen.VaultFindRequestKindNote {
+		deps.PlainNotesOnly = true
+	}
 
 	resp, err := knowledgefind.Find(ctx, deps, req)
 	if err != nil {

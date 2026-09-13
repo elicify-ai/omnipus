@@ -302,6 +302,24 @@ type Deps struct {
 	// the same query, the same totals over the same full evaluated set, the
 	// same cursor when more rows exist than were asked for.
 	RenderRows int
+	// PlainNotesOnly narrows a kind=note query to notes that declare NO
+	// record type — an in-process switch for a caller that partitions its
+	// answer into a "records" group and a "notes" group and must not file a
+	// record under "notes" (UAT 2026-09-13, D-130). It is not on the wire:
+	// the tool's kind=note keeps its documented meaning ("every markdown
+	// note, records included"; kind=record is its strict subset), and no
+	// tool path sets it.
+	//
+	// Why it exists: the gateway's vault search ran one Find per record type
+	// (capped at the caller's limit) and one kind=note Find, then dropped
+	// from the notes group only the paths the RECORDS group had returned.
+	// Every record past a type's limit was therefore absent from the records
+	// group, present in the note query, and shown as a NOTE — fifteen of
+	// them for one query at the limit the SPA always uses. Excluding by
+	// "was it returned as a record" can never be right under a limit;
+	// excluding by "does it declare a type" is decided per candidate at the
+	// store, before any limit applies.
+	PlainNotesOnly bool
 	// Now is the instant `now()` and `today()` are evaluated at, snapshotted
 	// ONCE for the whole response (FR-146). The zero value means "read the
 	// clock when the query starts", which is the same snapshot taken one layer
@@ -816,7 +834,8 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 	}
 
 	cmp := records.Comparator{ResolveRelation: d.Resolve}
-	ev := &evaluation{q: q, cmp: cmp, words: wordPaths, near: nearSet, nearAnchorPath: nearAnchorPath, files: files}
+	ev := &evaluation{q: q, cmp: cmp, words: wordPaths, near: nearSet, nearAnchorPath: nearAnchorPath, files: files,
+		plainNotesOnly: d.PlainNotesOnly}
 
 	// ONE evaluator for the whole scan, and `now` snapshotted ONCE (FR-146's
 	// last clause) so `now()`/`today()` give the same answer for every
@@ -1224,6 +1243,8 @@ type evaluation struct {
 	// Empty when the query carried no `near`, or when ResolveNear could not
 	// place the anchor on disk.
 	nearAnchorPath string
+	// plainNotesOnly is Deps.PlainNotesOnly for this evaluation (D-130).
+	plainNotesOnly bool
 
 	// files assembles FR-130's twelve virtual properties per candidate from the
 	// parent row and the child-table prepasses.
@@ -1269,6 +1290,13 @@ func (e *evaluation) visit(c propindex.Candidate) (propindex.Verdict, error) {
 	// ordinary note (FR-005) and carries no RecordID/RecordType, so the test is
 	// the column itself.
 	if e.q.kind == KindRecord && c.RecordType == "" {
+		return propindex.Rejected, nil
+	}
+	// D-130's inverse, for the in-process caller that asked for it: a
+	// kind=note query under Deps.PlainNotesOnly rejects every note that
+	// declares a record type, so the caller's "notes" partition can never
+	// contain a record whatever limit the records partition ran under.
+	if e.q.kind == KindNote && e.plainNotesOnly && c.RecordType != "" {
 		return propindex.Rejected, nil
 	}
 
