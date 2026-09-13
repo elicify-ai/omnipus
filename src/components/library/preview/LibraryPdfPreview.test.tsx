@@ -1097,3 +1097,84 @@ describe('LibraryPdfPreview — Save', () => {
   })
 })
 
+
+// ── UAT 2026-09-13: D-37 zoom, D-63 signature page default, D-43 dialog width ─
+describe('LibraryPdfPreview — D-37 the reader can magnify a page', () => {
+  it('offers zoom out / reset / zoom in; steps through the fixed ladder; Ctrl+wheel zooms too', async () => {
+    const mod = await import('./LibraryPdfPreview')
+    expect(mod.nextPdfZoom(1, 'in')).toBe(1.25)
+    expect(mod.nextPdfZoom(1, 'out')).toBe(0.75)
+    expect(mod.nextPdfZoom(2, 'in')).toBe(2)
+    expect(mod.nextPdfZoom(0.5, 'out')).toBe(0.5)
+    expect(mod.nextPdfZoom(0.9, 'in')).toBe(1.25) // off-ladder value re-anchors at 100%
+
+    await renderPreview()
+    const pages = await screen.findByTestId('library-pdf-pages')
+    expect(pages).toHaveAttribute('data-zoom', '1')
+    expect(screen.getByTestId('library-pdf-zoom-reset')).toHaveTextContent('100%')
+
+    fireEvent.click(screen.getByTestId('library-pdf-zoom-in'))
+    expect(pages).toHaveAttribute('data-zoom', '1.25')
+    expect(screen.getByTestId('library-pdf-zoom-reset')).toHaveTextContent('125%')
+
+    fireEvent.click(screen.getByTestId('library-pdf-zoom-reset'))
+    expect(pages).toHaveAttribute('data-zoom', '1')
+
+    fireEvent.click(screen.getByTestId('library-pdf-zoom-out'))
+    expect(pages).toHaveAttribute('data-zoom', '0.75')
+
+    // Ctrl+wheel up = in; a plain wheel is scrolling and must not zoom.
+    fireEvent.wheel(pages, { deltaY: -100, ctrlKey: true })
+    expect(pages).toHaveAttribute('data-zoom', '1')
+    fireEvent.wheel(pages, { deltaY: -100 })
+    expect(pages).toHaveAttribute('data-zoom', '1')
+
+    // The ends of the ladder disable the corresponding button.
+    for (let i = 0; i < 6; i++) fireEvent.click(screen.getByTestId('library-pdf-zoom-in'))
+    expect(pages).toHaveAttribute('data-zoom', '2')
+    expect(screen.getByTestId('library-pdf-zoom-in')).toBeDisabled()
+  })
+})
+
+describe('LibraryPdfPreview — D-63 the signature dialog defaults to the page on screen', () => {
+  it('a 3-page document defaults to page 1 (the first visible), not the last page', async () => {
+    h.numPages = 3
+    await renderPreview()
+    await enterEditMode()
+    await waitFor(() => expect(screen.getByTestId('library-pdf-add-signature')).not.toBeDisabled())
+    fireEvent.click(screen.getByTestId('library-pdf-add-signature'))
+    const pageInput = (await screen.findByTestId('library-pdf-signature-page')) as HTMLInputElement
+    expect(pageInput.value).toBe('1')
+    expect(pageInput).toHaveAttribute('max', '3')
+  })
+
+  it('firstVisiblePdfPage picks the first page whose bottom is below the scroll top', async () => {
+    const { firstVisiblePdfPage } = await import('./LibraryPdfPreview')
+    const container = document.createElement('div')
+    const mk = (n: number, top: number, height: number) => {
+      const el = document.createElement('div')
+      el.setAttribute('data-page-number', String(n))
+      Object.defineProperty(el, 'offsetTop', { value: top })
+      Object.defineProperty(el, 'offsetHeight', { value: height })
+      container.appendChild(el)
+    }
+    mk(1, 0, 800)
+    mk(2, 816, 800)
+    mk(3, 1632, 800)
+    Object.defineProperty(container, 'scrollTop', { value: 900, writable: true })
+    expect(firstVisiblePdfPage(container)).toBe(2)
+    expect(firstVisiblePdfPage(document.createElement('div'))).toBe(1)
+  })
+})
+
+describe('LibrarySignaturePad — D-43 the dialog is wide enough for its own canvas', () => {
+  it('uses a max-width that fits the 480px drawing area rather than sm:max-w-md', async () => {
+    await renderPreview()
+    await enterEditMode()
+    await waitFor(() => expect(screen.getByTestId('library-pdf-add-signature')).not.toBeDisabled())
+    fireEvent.click(screen.getByTestId('library-pdf-add-signature'))
+    const dialog = await screen.findByTestId('library-pdf-signature-dialog')
+    expect(dialog.className).toContain('sm:max-w-xl')
+    expect(dialog.className).not.toContain('sm:max-w-md')
+  })
+})
