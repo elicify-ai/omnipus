@@ -41,6 +41,4 @@ export interface ToolApprovalPreviewEntry {
   primaryLabel?: string
   /** 'replace' only — overrides the Deny button's label. The dispatched action is always 'deny' regardless of label. */
   secondaryLabel?: string
-  /** 'replace' only — whether to keep offering Cancel. Defaults to true; request_mount sets this false (see RequestMountApprovalPreview.tsx). */
-  showCancel?: boolean
 }

@@ -5,7 +5,8 @@
 //  2. Modal renders when queue has an entry
 //  3. Approve button calls POST /api/v1/tool-approvals/{id} with action:"approve"
 //  4. Deny button calls POST with action:"deny"
-//  5. Cancel button calls POST with action:"cancel"
+//  5. Close / Escape set the approval aside without any POST (D-90); the
+//     set-aside pill restores it
 //  5b. Always Allow button calls POST with action:"always" (ADR-036 §3.4 gap closure)
 //  6. On 410 response, modal entry is dismissed without a toast
 //  7. On 403 response, shows admin-required toast
@@ -51,6 +52,7 @@ vi.mock('@/lib/authLogout', () => ({
 import * as api from '@/lib/api'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { ToolApprovalModal } from './ToolApprovalModal'
+import { queryClient } from '@/lib/queryClient'
 import type { WsSessionStateFrame } from '@/lib/ws'
 
 // Capture the mock addToast for assertion
@@ -66,7 +68,7 @@ beforeEach(async () => {
 
   // Reset store
   act(() => {
-    useToolApprovalStore.setState({ queue: [] })
+    useToolApprovalStore.setState({ queue: [], setAside: [] })
   })
   vi.clearAllMocks()
   vi.mocked(api.submitToolApproval).mockResolvedValue({
@@ -107,7 +109,9 @@ describe('ToolApprovalModal — rendering', () => {
     expect(screen.getByRole('button', { name: /Approve/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Deny/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Always Allow/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Cancel/i })).toBeInTheDocument()
+    // D-90: no Cancel — it posted {action:"cancel"}, which the agent reads
+    // as "the turn was cancelled", a false statement when a human pressed it.
+    expect(screen.queryByRole('button', { name: /^Cancel$/i })).not.toBeInTheDocument()
   })
 
   it('shows the tool args in the modal', () => {
@@ -224,17 +228,24 @@ describe('ToolApprovalModal — button dispatch', () => {
     })
   })
 
-  it('Cancel button calls submitToolApproval with action:"cancel"', async () => {
+  it('D-90: never posts {action:"cancel"} — the control is gone', () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
     render(<ToolApprovalModal />)
+    expect(screen.queryByRole('button', { name: /^Cancel$/i })).toBeNull()
+    expect(api.submitToolApproval).not.toHaveBeenCalled()
+  })
 
-    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }))
-
-    await waitFor(() => {
-      expect(api.submitToolApproval).toHaveBeenCalledWith('appr-001', 'cancel')
+  it('D-87: names the requesting agent, not its raw id', () => {
+    queryClient.setQueryData(['agents'], [{ id: 'agent-main', name: 'UAT Asker' }])
+    act(() => {
+      useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
+    render(<ToolApprovalModal />)
+    expect(screen.getByText('UAT Asker')).toBeInTheDocument()
+    expect(screen.queryByText(/^agent-main$/)).toBeNull()
+    queryClient.removeQueries({ queryKey: ['agents'] })
   })
 
   // ADR-036 §3.4 gap closure: the retired ExecApprovalBlock's 3-way decision
@@ -332,15 +343,16 @@ describe('ToolApprovalModal — button dispatch', () => {
   })
 })
 
-describe('ToolApprovalModal — a11y safe-default contract (C2)', () => {
-  // This is a SECURITY-CRITICAL control. Two invariants must hold so a stray
-  // keypress can never auto-approve a tool call:
-  //   1. Escape resolves to DENY (the safe default), never approve, never a
-  //      silent dismiss that leaves the agent hanging.
-  //   2. Default keyboard focus lands on the Deny button on open, so a stray
+describe('ToolApprovalModal — a11y safe-default contract (C2) and set-aside (D-90)', () => {
+  // This is a SECURITY-CRITICAL control. Three invariants must hold:
+  //   1. Escape / Close / overlay click NEVER approve and NEVER deny: they set
+  //      the request aside with no request sent (UAT 2026-09-13 D-90 — Close
+  //      used to be recorded as a permanent, un-retryable user denial).
+  //   2. A set-aside approval is not silently hidden: a visible pill restores it.
+  //   3. Default keyboard focus lands on the Deny button on open, so a stray
   //      Enter on open denies rather than approves.
 
-  it('Escape triggers DENY (the safe default), never approve', async () => {
+  it('Escape sets the approval aside: no POST, dialog hidden, pill shown, restore reopens it', async () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
@@ -350,10 +362,37 @@ describe('ToolApprovalModal — a11y safe-default contract (C2)', () => {
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape', code: 'Escape' })
 
     await waitFor(() => {
-      expect(api.submitToolApproval).toHaveBeenCalledWith('appr-001', 'deny')
+      expect(screen.queryByRole('dialog')).toBeNull()
     })
-    // The safe default must NEVER be an approve.
-    expect(api.submitToolApproval).not.toHaveBeenCalledWith('appr-001', 'approve')
+    expect(api.submitToolApproval).not.toHaveBeenCalled()
+    expect(useToolApprovalStore.getState().queue).toHaveLength(1)
+    expect(useToolApprovalStore.getState().setAside).toEqual(['appr-001'])
+
+    const pill = screen.getByTestId('tool-approval-set-aside-pill')
+    expect(pill).toHaveTextContent('1 approval waiting')
+    fireEvent.click(pill.querySelector('button')!)
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+    expect(api.submitToolApproval).not.toHaveBeenCalled()
+  })
+
+  it('a set-aside approval that the server resolves elsewhere disappears from the pill', () => {
+    act(() => {
+      useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL], setAside: ['appr-001'] })
+    })
+    render(<ToolApprovalModal />)
+    expect(screen.getByTestId('tool-approval-set-aside-pill')).toBeInTheDocument()
+    act(() => {
+      useToolApprovalStore.getState().reconcileWithSessionState({
+        type: 'session_state',
+        user_id: 'u',
+        pending_approvals: [],
+        emitted_at: new Date().toISOString(),
+      } as WsSessionStateFrame)
+    })
+    expect(screen.queryByTestId('tool-approval-set-aside-pill')).toBeNull()
+    expect(useToolApprovalStore.getState().setAside).toEqual([])
   })
 
   it('lands default focus on the Deny button when the modal opens', async () => {

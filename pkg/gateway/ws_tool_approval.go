@@ -7,12 +7,13 @@
 // Emits two event types:
 //
 //  1. tool_approval_required (FR-011, FR-082)
-//     Sent to all connected WS clients when an ask-policy tool call is paused.
+//     Sent to the connected WS clients of the account whose agent paused on
+//     an ask-policy tool call (UAT 2026-09-13 D-16; approvalVisibleTo).
 //     Uses expires_in_ms (not expires_at) per OBS-004.
 //
 //  2. session_state (FR-052, FR-073, FR-081)
-//     One-shot per WS connection on every reconnect.
-//     Single-user model: every connection sees every pending approval.
+//     One-shot per WS connection on every reconnect. Carries the pending
+//     approvals visible to the connection's account (approvalVisibleTo).
 
 package gateway
 
@@ -24,9 +25,65 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
+// approvalAudienceOwnerFn, when set, replaces the session-store lookup in
+// approvalOwner. Tests inject it; production leaves it nil.
+type approvalAudienceOwnerFn func(sessionID string) string
+
+// approvalOwner resolves the account an approval belongs to: the Owner
+// stamped on the ACTING session's meta at creation (websocket.go stamps
+// wc.userID, the WS-authenticated identity; a delegated child inherits its
+// parent's Owner, FR-082). Returns "" when the owner cannot be determined —
+// a channel-originated or CLI session, a store that cannot be resolved, a
+// dev-bypass connection that never had an identity — and "" means "everyone
+// may see it": an approval nobody can see is a hung turn, which is worse than
+// an over-broad audience on an install that has no accounts to separate.
+func (h *WSHandler) approvalOwner(sessionID string) string {
+	if h.approvalOwnerFn != nil {
+		return h.approvalOwnerFn(sessionID)
+	}
+	if h.agentLoop == nil || sessionID == "" {
+		return ""
+	}
+	store := h.agentLoop.ResolveSessionStore(sessionID)
+	if store == nil {
+		return ""
+	}
+	meta, err := store.GetMeta(sessionID)
+	if err != nil || meta == nil {
+		return ""
+	}
+	return meta.Owner
+}
+
+// approvalVisibleTo is the audience rule (UAT 2026-09-13 D-16): an approval
+// raised by one account's agent is shown to THAT account's connections only.
+// Before this, every connected client received every approval, so a
+// request_mount for a host path raised in one account rendered as a blocking,
+// approvable modal in every tab of a different signed-in account — and
+// because the dialog's Close was a deny (D-90), an operator setting a
+// foreign prompt aside answered someone else's decision.
+//
+// An owner of "" (unknown) and a connection user of "" (dev-mode bypass, no
+// identity) both widen to "visible": neither side has an account to scope
+// by, and hiding the approval would leave the agent blocked with nobody
+// able to answer.
+func approvalVisibleTo(owner, connUser string) bool {
+	return owner == "" || connUser == "" || owner == connUser
+}
+
+// approvalFrameSendTimeout bounds how long broadcastToolApprovalRequired waits
+// for a connection's send buffer to drain before giving up on it. The frame
+// used to be dropped instantly when the buffer was full ("best-effort"); a
+// dropped approval frame is a modal that never appears while the agent sits
+// blocked for the whole approval window, which is the shape UAT 2026-09-13
+// D-82 reported ("denied with no modal ever shown; only a reload brought it
+// back"). It is treated as a critical frame now, like "done" and "error".
+const approvalFrameSendTimeout = 2 * time.Second
+
 // broadcastToolApprovalRequired sends a tool_approval_required WS frame to
-// every connected WebSocket client (FR-073; single-user model, no per-account
-// scoping).
+// every connected WebSocket client of the account that owns the acting
+// session (FR-073; see approvalVisibleTo for the audience rule and its
+// fallbacks).
 //
 // Wire format: generated.ToolApprovalRequiredFrame (contract-first, pkg/api/generated).
 // Nil-safety: args MUST be an object (never null). The SPA's ToolApprovalModal calls
@@ -65,11 +122,38 @@ func (h *WSHandler) broadcastToolApprovalRequired(entry *approvalEntry) {
 		return
 	}
 
-	// FR-073 scoping is moot under the single-user model — every connected
-	// client is the one account, so every connection receives every approval
-	// broadcast unconditionally (role-based scoping removed).
-	h.broadcastRaw(raw, "ws: tool_approval_required dropped — send buffer full",
-		"approval_id", entry.ApprovalID)
+	owner := h.approvalOwner(entry.SessionID)
+	h.mu.Lock()
+	conns := make([]*wsConn, 0, len(h.sessions))
+	for _, wc := range h.sessions {
+		if approvalVisibleTo(owner, wc.userID) {
+			conns = append(conns, wc)
+		}
+	}
+	h.mu.Unlock()
+	if len(conns) == 0 {
+		slog.Warn("ws: tool_approval_required has no connected audience — the request will wait for a reconnect (session_state) or time out",
+			"approval_id", entry.ApprovalID, "owner", owner, "tool", entry.ToolName)
+	}
+	for _, wc := range conns {
+		go sendApprovalFrame(wc, raw, entry.ApprovalID)
+	}
+}
+
+// sendApprovalFrame delivers one approval frame to one connection, waiting up
+// to approvalFrameSendTimeout for buffer space instead of dropping on a full
+// buffer (D-82). A connection that closes meanwhile is skipped silently; one
+// that stays full past the timeout is logged loudly, because that is the one
+// case left where a human is never asked.
+func sendApprovalFrame(wc *wsConn, raw []byte, approvalID string) {
+	select {
+	case wc.sendCh <- raw:
+	case <-wc.doneCh:
+	case <-time.After(approvalFrameSendTimeout):
+		slog.Warn("ws: tool_approval_required dropped — send buffer full past timeout",
+			"approval_id", approvalID, "user_id", wc.userID)
+		wc.droppedFrames.Add(1)
+	}
 }
 
 // emitSessionState sends the session_state one-shot frame to a single WS connection
@@ -95,10 +179,13 @@ func (h *WSHandler) emitSessionState(wc *wsConn) {
 	if h.approvalRegV2 != nil {
 		allPending := h.approvalRegV2.pendingApprovals()
 
-		// FR-073 scoping is moot under the single-user model — every connected
-		// client is the one account, so every connection sees every pending
-		// approval (role-based scoping removed).
+		// D-16: the reconnect snapshot follows the same audience rule as the
+		// live frame — a tab reconnecting under account B must not re-hydrate
+		// account A's pending approvals as blocking stubs.
 		for _, e := range allPending {
+			if !approvalVisibleTo(h.approvalOwner(e.SessionID), wc.userID) {
+				continue
+			}
 			pendingApprovals = append(pendingApprovals, generated.SessionStatePendingApproval{
 				ApprovalId:  e.ApprovalID,
 				SessionId:   e.SessionID,

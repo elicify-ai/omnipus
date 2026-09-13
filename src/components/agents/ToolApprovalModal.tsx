@@ -8,11 +8,20 @@
 // local timestamp (expiresAt = Date.now() + expires_in_ms) so the countdown
 // is independent of gateway clock skew.
 //
-// Buttons:
+// Buttons (UAT 2026-09-13 D-90: every control that decides is labelled as a
+// decision, and nothing that does not look like a decision is one):
 //   Approve      → POST /api/v1/tool-approvals/{id} {action:"approve"}
 //   Always Allow → POST /api/v1/tool-approvals/{id} {action:"always"}
 //   Deny         → POST /api/v1/tool-approvals/{id} {action:"deny"}
-//   Cancel       → POST /api/v1/tool-approvals/{id} {action:"cancel"}
+//   Close (X) / Escape / overlay click → SET ASIDE. No request is sent; the
+//     approval stays pending on the server and a small non-blocking
+//     "approval waiting" pill offers to bring the dialog back. The countdown
+//     keeps running server-side; letting it expire is the only implicit
+//     outcome, and the agent is told it expired, not that a human said no.
+//   The former Cancel button is gone: it posted {action:"cancel"}, which the
+//   agent reads as "the turn was cancelled while this was open" — a false
+//   statement when a human pressed it — and it sat next to an explicit Deny
+//   that already covers "no".
 //
 // Accessibility (C2 — this is a SECURITY-CRITICAL control):
 //   - Built on the shadcn/Radix Dialog primitive, which provides a focus trap,
@@ -21,12 +30,15 @@
 //   - Default keyboard focus lands on the DENY button — the SAFE default. An
 //     inadvertent Enter keypress on open therefore DENIES the tool call; it
 //     never auto-approves.
-//   - Escape and overlay/outside interaction map to the safe default: they
-//     submit a DENY (when the approval can still be acted on), never an
-//     approval and never a silent dismissal that would leave the agent
-//     hanging. The only exception is the expired state, where the decision is
-//     already made server-side and Escape merely dismisses the notice.
+//   - Escape and overlay/outside interaction never approve and never deny:
+//     they set the request aside (see above). A stray keypress can therefore
+//     neither grant a tool call nor silently issue a permanent denial.
 //   - Every button carries visible text, so each has an accessible name.
+//
+// Audience (D-16): the gateway sends tool_approval_required only to the
+// connections of the account whose agent is asking (pkg/gateway/
+// ws_tool_approval.go, approvalVisibleTo), so this dialog never blocks a
+// different signed-in account on a decision that is not theirs.
 //
 // Error handling:
 //   401 → re-auth toast (user must log in again)
@@ -56,7 +68,7 @@
 //     exec-only flow.
 
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { CheckCircle, XCircle, ProhibitInset, Shield, Lock, WarningCircle } from '@phosphor-icons/react'
+import { CheckCircle, XCircle, Shield, Lock, WarningCircle } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import {
@@ -66,8 +78,8 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
-import { useToolApprovalStore } from '@/store/toolApproval'
-import { submitToolApproval, isApiError } from '@/lib/api'
+import { useToolApprovalStore, selectVisibleApproval } from '@/store/toolApproval'
+import { submitToolApproval, isApiError, fetchAgents } from '@/lib/api'
 import type { Agent } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { forceLogout } from '@/lib/authLogout'
@@ -82,13 +94,28 @@ function useCountdown(expiresAt: number): { remainingMs: number; progressPct: nu
   const [totalMs] = useState(() => Math.max(1, expiresAt - Date.now()))
 
   useEffect(() => {
-    setRemainingMs(Math.max(0, expiresAt - Date.now()))
-    const interval = setInterval(() => {
+    const tick = () => {
       const left = Math.max(0, expiresAt - Date.now())
       setRemainingMs(left)
-      if (left === 0) clearInterval(interval)
+      return left
+    }
+    tick()
+    const interval = setInterval(() => {
+      if (tick() === 0) clearInterval(interval)
     }, 500)
-    return () => clearInterval(interval)
+    // Browsers throttle timers in a background tab to as little as once a
+    // minute, so the displayed countdown lags real time while the tab is
+    // hidden (UAT 2026-09-13 D-16 observed 52 s of countdown over 180 s of
+    // wall-clock). expiresAt is an absolute local timestamp, so one tick on
+    // return to the foreground snaps the display back to the truth.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') tick()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
   }, [expiresAt])
 
   return {
@@ -137,6 +164,7 @@ function ToolApprovalCard({
   sessionId,
 }: ToolApprovalCardProps) {
   const dequeue = useToolApprovalStore((s) => s.dequeue)
+  const setAsideApproval = useToolApprovalStore((s) => s.setAsideApproval)
   const addToast = useUiStore((s) => s.addToast)
   const [submitting, setSubmitting] = useState(false)
   const { remainingMs, progressPct } = useCountdown(expiresAt)
@@ -204,20 +232,20 @@ function ToolApprovalCard({
     [approvalId, dequeue, addToast, submitting],
   )
 
-  // Safe-default handler for Escape / overlay-click / X close. The Dialog
-  // primitive requests a close; we translate that into the SAFE decision:
-  //   - not expired  → submit a DENY (never an approve, never a no-op dismiss
-  //     that would leave the agent hanging on a pending approval).
-  //   - expired      → the decision is already made server-side; just dismiss
+  // Handler for Escape / overlay-click / X close (D-90). The Dialog primitive
+  // requests a close; that is NOT a decision:
+  //   - not expired  → set the approval aside. Nothing is sent; the request
+  //     stays pending and the "approval waiting" pill can bring it back.
+  //   - expired      → the outcome is already fixed server-side; just dismiss
   //     the notice from the local queue.
   const handleDismissRequest = useCallback(() => {
     if (submitting) return
     if (hasExpired) {
       dequeue(approvalId)
     } else {
-      void handleAction('deny')
+      setAsideApproval(approvalId)
     }
-  }, [submitting, hasExpired, dequeue, approvalId, handleAction])
+  }, [submitting, hasExpired, dequeue, setAsideApproval, approvalId])
 
   const argsJson = JSON.stringify(args, null, 2)
   const titleId = `tool-approval-title-${approvalId}`
@@ -247,8 +275,31 @@ function ToolApprovalCard({
   const hideAlwaysAllow = isReconnectStub || (toolName === 'request_mount' && !mountPath)
 
   // ── Per-tool readable-summary registry (Deliverables 1-3) ─────────────────
-  const resolvedAgentName =
-    queryClient.getQueryData<Agent[]>(['agents'])?.find((a) => a.id === agentId)?.name || agentId
+  // Agent display name (D-87): a permission prompt is exactly where the human
+  // needs to know WHICH agent is asking, and a raw UUID is not that. The
+  // ['agents'] cache is usually warm (the sidebar and chat both populate it);
+  // when it is not — this dialog can open on any screen — fetch it once and
+  // re-render. The id remains the fallback so the prompt is never blank.
+  const cachedAgentName = queryClient.getQueryData<Agent[]>(['agents'])?.find((a) => a.id === agentId)?.name
+  const [fetchedAgentName, setFetchedAgentName] = useState<string | undefined>(undefined)
+  useEffect(() => {
+    if (cachedAgentName) return
+    let cancelled = false
+    queryClient
+      .ensureQueryData({ queryKey: ['agents'], queryFn: fetchAgents })
+      .then((agents) => {
+        if (cancelled) return
+        const name = agents.find((a) => a.id === agentId)?.name
+        if (name) setFetchedAgentName(name)
+      })
+      .catch(() => {
+        /* the id fallback below stands */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [agentId, cachedAgentName])
+  const resolvedAgentName = cachedAgentName || fetchedAgentName || agentId
   const previewEntry = TOOL_APPROVAL_PREVIEWS[toolName]
   const replaceEntry = previewEntry?.mode === 'replace' ? previewEntry : undefined
   const previewCtx: ToolApprovalPreviewContext = {
@@ -263,15 +314,14 @@ function ToolApprovalCard({
     : 'Tool Approval Required'
   const primaryLabel = replaceEntry?.primaryLabel ?? 'Approve'
   const secondaryLabel = replaceEntry?.secondaryLabel ?? 'Deny'
-  const showCancelButton = replaceEntry ? (replaceEntry.showCancel ?? true) : true
 
   return (
     <Dialog
       open
       onOpenChange={(next) => {
         // The dialog only ever transitions open→closed here (Escape, overlay
-        // click, or the X button). Route every such close through the safe
-        // default rather than letting Radix dismiss silently.
+        // click, or the X button). Every such close is a set-aside, never a
+        // decision (D-90).
         if (!next) handleDismissRequest()
       }}
     >
@@ -312,8 +362,8 @@ function ToolApprovalCard({
                 'Review the details below before deciding.'
               ) : (
                 <>
-                  Agent <span className="font-mono">{agentId}</span> is requesting permission to run a
-                  tool.
+                  <span className="font-medium text-[var(--color-secondary)]">{resolvedAgentName}</span>{' '}
+                  is requesting permission to run a tool.
                 </>
               )}
             </DialogDescription>
@@ -394,9 +444,9 @@ function ToolApprovalCard({
             approves this call AND records a session-scoped grant, mirroring
             the retired ExecApprovalBlock's "Always Allow" ghost button (same
             Lock icon + muted styling) — see the ADR-036 note atop this file.
-            Cancel stays last and right-aligned (ml-auto) as the least common
-            action. flex-wrap keeps all four usable at phone widths (<768px)
-            without any button clipping. */}
+            There is no Cancel (D-90, see the header). Closing the dialog sets
+            the request aside; the hint below the buttons says so. flex-wrap
+            keeps the buttons usable at phone widths (<768px). */}
         {!hasExpired && (
           <div className="flex flex-wrap gap-2 px-5 py-4 border-t border-[var(--color-border)] bg-[var(--color-surface-2)]">
             {isReconnectStub ? (
@@ -452,18 +502,10 @@ function ToolApprovalCard({
                   Always Allow
                 </Button>
                 )}
-                {showCancelButton && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => handleAction('cancel')}
-                    disabled={submitting}
-                    className="h-8 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] ml-auto"
-                  >
-                    <ProhibitInset size={14} aria-hidden="true" />
-                    Cancel
-                  </Button>
-                )}
+                <p className="basis-full text-[11px] text-[var(--color-muted)] pt-1">
+                  Not ready to decide? Close this dialog to set it aside — nothing is sent until you
+                  choose, and it expires on its own when the countdown ends.
+                </p>
               </>
             )}
           </div>
@@ -486,25 +528,54 @@ function ToolApprovalCard({
   )
 }
 
-// ToolApprovalModal renders the front-of-queue approval, if any.
+// SetAsidePill is the non-blocking indicator shown when every pending
+// approval has been set aside (D-90). It is the only thing on screen that
+// knows those approvals exist, so it must be visible and must reopen them
+// with one click — otherwise "set aside" would just be "silently hidden until
+// it expires".
+function SetAsidePill({ count, onRestore }: { count: number; onRestore: () => void }) {
+  return (
+    <div className="fixed bottom-4 right-4 z-40" data-testid="tool-approval-set-aside-pill">
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={onRestore}
+        className="h-8 text-xs border-[var(--color-warning)]/50 bg-[var(--color-surface-1)] shadow-lg"
+      >
+        <Shield size={14} weight="bold" className="text-[var(--color-warning)]" aria-hidden="true" />
+        {count === 1 ? '1 approval waiting' : `${count} approvals waiting`}
+        <span className="text-[var(--color-muted)]">— review</span>
+      </Button>
+    </div>
+  )
+}
+
+// ToolApprovalModal renders the first approval the user has not set aside; if
+// every pending approval is set aside it renders the non-blocking pill instead.
 export function ToolApprovalModal() {
   const queue = useToolApprovalStore((s) => s.queue)
-  const first = queue[0]
+  const setAside = useToolApprovalStore((s) => s.setAside)
+  const restoreSetAside = useToolApprovalStore((s) => s.restoreSetAside)
+  const visible = selectVisibleApproval({ queue, setAside })
 
-  if (!first) return null
+  if (!visible) {
+    const waiting = queue.filter((a) => setAside.includes(a.approvalId) && a.expiresAt > Date.now())
+    if (waiting.length === 0) return null
+    return <SetAsidePill count={waiting.length} onRestore={restoreSetAside} />
+  }
 
   return (
     <ToolApprovalCard
-      key={first.approvalId}
-      approvalId={first.approvalId}
-      toolName={first.toolName}
-      args={first.args}
-      agentId={first.agentId}
-      expiresAt={first.expiresAt}
-      queueLength={queue.length}
-      toolCallId={first.toolCallId}
-      turnId={first.turnId}
-      sessionId={first.sessionId}
+      key={visible.approvalId}
+      approvalId={visible.approvalId}
+      toolName={visible.toolName}
+      args={visible.args}
+      agentId={visible.agentId}
+      expiresAt={visible.expiresAt}
+      queueLength={queue.length - setAside.length}
+      toolCallId={visible.toolCallId}
+      turnId={visible.turnId}
+      sessionId={visible.sessionId}
     />
   )
 }

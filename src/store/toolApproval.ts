@@ -29,14 +29,31 @@ export interface PendingToolApproval {
 }
 
 interface ToolApprovalStore {
-  /** Ordered queue of pending approvals. The first entry is the currently displayed one. */
+  /** Ordered queue of pending approvals. The first entry not set aside is the currently displayed one. */
   queue: PendingToolApproval[]
+
+  /**
+   * Approval ids the user has SET ASIDE (UAT 2026-09-13 D-90): closed the
+   * dialog without deciding. They stay pending on the server and in `queue`;
+   * the modal simply does not show them until `restoreSetAside` runs. Before
+   * this, the only way to make the dialog go away was a decision, and the
+   * dialog's Close/Escape/overlay-click were all wired to DENY — so a user
+   * who closed the dialog to go and read the note first had issued a
+   * permanent, un-retryable denial with no warning anywhere.
+   */
+  setAside: string[]
 
   /** Add an approval from a WS tool_approval_required frame. */
   enqueue: (frame: WsToolApprovalRequiredFrame) => void
 
-  /** Remove an approval by id (called after approve/deny/cancel resolves). */
+  /** Remove an approval by id (called after approve/deny resolves, or on expiry dismiss). */
   dequeue: (approvalId: string) => void
+
+  /** Hide an approval without deciding it. It remains pending. */
+  setAsideApproval: (approvalId: string) => void
+
+  /** Bring every set-aside approval back into view. */
+  restoreSetAside: () => void
 
   /**
    * Reconcile the queue with a session_state reset frame (FR-052, FR-081).
@@ -50,6 +67,17 @@ interface ToolApprovalStore {
 
 export const useToolApprovalStore = create<ToolApprovalStore>((set) => ({
   queue: [],
+  setAside: [],
+
+  setAsideApproval: (approvalId) => {
+    set((state) =>
+      state.setAside.includes(approvalId) ? state : { setAside: [...state.setAside, approvalId] },
+    )
+  },
+
+  restoreSetAside: () => {
+    set({ setAside: [] })
+  },
 
   enqueue: (frame) => {
     const expiresAt = Date.now() + frame.expires_in_ms
@@ -85,6 +113,7 @@ export const useToolApprovalStore = create<ToolApprovalStore>((set) => ({
   dequeue: (approvalId) => {
     set((state) => ({
       queue: state.queue.filter((a) => a.approvalId !== approvalId),
+      setAside: state.setAside.filter((id) => id !== approvalId),
     }))
   },
 
@@ -147,7 +176,25 @@ export const useToolApprovalStore = create<ToolApprovalStore>((set) => ({
           expiresAt: Date.now() + s.expires_in_ms,
         }))
 
-      return { queue: [...refreshed, ...newStubs] }
+      return {
+        queue: [...refreshed, ...newStubs],
+        // A set-aside id the server no longer reports pending is gone for
+        // good (resolved elsewhere, or expired) — drop it so the "approvals
+        // waiting" indicator never counts a ghost.
+        setAside: state.setAside.filter((id) => liveIds.has(id)),
+      }
     })
   },
 }))
+
+/**
+ * The approval the modal should show: the first queued entry the user has
+ * not set aside. `undefined` when the queue is empty OR every entry is set
+ * aside (in which case the modal renders the non-blocking "waiting" pill).
+ */
+export function selectVisibleApproval(state: {
+  queue: PendingToolApproval[]
+  setAside: string[]
+}): PendingToolApproval | undefined {
+  return state.queue.find((a) => !state.setAside.includes(a.approvalId))
+}
