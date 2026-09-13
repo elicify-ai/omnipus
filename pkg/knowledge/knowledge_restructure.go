@@ -356,6 +356,27 @@ func (t *RestructureTool) execRenameMove(
 // destination `to` (collection-relative, already cleaned) when it is absent.
 // Returns whether it created one. A reserved location (the vault's own
 // control-plane directory) is refused by name, never created.
+//
+// THE GUARD RUNS BEFORE ANYTHING IS CREATED, and the creation is ROOTED
+// (Codex review 2026-09-14 #1). The first version of this step ran
+// os.MkdirAll on the lexical join of root and `dir` and left the symlink
+// question to the renamer, which only looks AFTER the folder exists. With a
+// symlink inside the collection pointing outside it (`Inbox -> /elsewhere`),
+// a move into `Inbox/New/` created `/elsewhere/New` — a directory outside the
+// permitted root — and the rename then refused, leaving that mutation behind.
+//
+// Two layers close it:
+//
+//  1. Every EXISTING ancestor of `dir` is resolved through the same
+//     ResolveContainedNoSymlink the renamer applies to the note (FR-043 and
+//     FR-044): a folder that leaves the collection, or reaches its place only
+//     through a symbolic link — even one that lands back inside — is refused
+//     here, and nothing is created.
+//  2. The mkdir itself goes through os.Root, which refuses to follow any
+//     link out of the root at the kernel-path level. A link swapped in
+//     between the check in (1) and the mkdir therefore cannot place the
+//     folder outside the collection: the worst the race can do is create it
+//     INSIDE the root, where the renamer's own guard still refuses the move.
 func ensureMoveDestinationFolder(root CollectionRoot, to string) (bool, error) {
 	dir := path.Dir(to)
 	if dir == "." || dir == "" {
@@ -364,11 +385,20 @@ func ensureMoveDestinationFolder(root CollectionRoot, to string) (bool, error) {
 	if rerr := authorRefuseReserved(dir + "/x.md"); rerr != nil {
 		return false, rerr
 	}
-	abs := filepath.Join(root.Path(), filepath.FromSlash(dir))
-	if _, statErr := OSLinkFS().Lstat(abs); statErr == nil {
+	fsys := OSLinkFS()
+	abs, err := root.ResolveContainedNoSymlink(fsys, dir)
+	if err != nil {
+		return false, fmt.Errorf("cannot create the destination folder %q: %w", dir, err)
+	}
+	if _, statErr := fsys.Lstat(abs); statErr == nil {
 		return false, nil
 	}
-	if mkErr := os.MkdirAll(abs, noteDirPerm); mkErr != nil {
+	r, err := os.OpenRoot(root.Path())
+	if err != nil {
+		return false, fmt.Errorf("could not open the knowledge base root to create %q: %w", dir, err)
+	}
+	defer r.Close()
+	if mkErr := r.MkdirAll(filepath.FromSlash(dir), noteDirPerm); mkErr != nil {
 		return false, fmt.Errorf("could not create the destination folder %q: %w", dir, mkErr)
 	}
 	return true, nil
