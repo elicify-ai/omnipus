@@ -746,8 +746,8 @@ func ambiguityAfterRename(files []string, from, to string) *AmbiguityReport {
 		post = append(post, f)
 	}
 	key := bareLinkKey(to)
-	preMatches := NewNoteIndex(files).byBase[key]
-	postMatches := NewNoteIndex(post).byBase[key]
+	preMatches := NewNoteIndex(files).basenameCandidates(key)
+	postMatches := NewNoteIndex(post).basenameCandidates(key)
 	if len(postMatches) <= 1 {
 		return nil
 	}

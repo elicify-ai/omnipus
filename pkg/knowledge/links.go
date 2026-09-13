@@ -45,6 +45,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // LinkKind distinguishes the two syntaxes a link can be written in. Both
@@ -721,10 +723,36 @@ type ResolvedLink struct {
 // NoteIndex is the set of paths a link may resolve to, prepared for the
 // resolution order of FR-040. It holds collection-relative paths only, so it
 // cannot be used to address anything outside the collection at all.
+//
+// UNICODE NORMALISATION (UAT 2026-09-13, D-99). Every key — a full path, a
+// basename, a stem — is compared in Unicode NFC (linkKey), and so is every
+// link target at resolution time. macOS names files in NFD ("cafe" + U+0301)
+// while a link typed or generated elsewhere is NFC ("café", U+00E9); the two
+// are indistinguishable on screen and used to resolve differently — one
+// mounted the image, the other said no file matched. The RESOLVED target is
+// always the path's own on-disk bytes, never the normalised key: the key is
+// for comparison only, and a caller opening the file needs the name the
+// filesystem actually has.
+//
+// Two on-disk paths that differ ONLY in normalisation (possible on Linux,
+// where the filesystem compares bytes) share one key. Neither is dropped:
+// both are candidates, the exact-bytes match wins the exact-path stage when
+// the link has one, and otherwise the FR-040 tie-break applies and the
+// ambiguity is reported (FR-041), exactly as for two same-named notes in two
+// folders.
 type NoteIndex struct {
-	paths  map[string]struct{}
+	// paths maps a normalised path key to every on-disk path that shares it,
+	// in tie-break order. Almost always one entry.
+	paths  map[string][]string
 	byBase map[string][]string
 	all    []string
+}
+
+// linkKey is the comparison form of a path, basename, stem or link target:
+// Unicode NFC. Case is deliberately NOT folded here — FR-040 resolution is
+// case-sensitive and this fix does not change that.
+func linkKey(s string) string {
+	return norm.NFC.String(s)
 }
 
 // NewNoteIndex builds the resolution index from collection-relative paths.
@@ -737,19 +765,22 @@ type NoteIndex struct {
 // independent of the order the filesystem happened to list things in.
 func NewNoteIndex(relPaths []string) *NoteIndex {
 	ni := &NoteIndex{
-		paths:  make(map[string]struct{}, len(relPaths)),
+		paths:  make(map[string][]string, len(relPaths)),
 		byBase: make(map[string][]string),
 	}
+	seenExact := make(map[string]struct{}, len(relPaths))
 	seenBase := make(map[string]map[string]struct{})
 	for _, raw := range relPaths {
 		p := normalizeRel(raw)
 		if p == "" || p == "." {
 			continue
 		}
-		if _, dup := ni.paths[p]; dup {
+		if _, dup := seenExact[p]; dup {
 			continue
 		}
-		ni.paths[p] = struct{}{}
+		seenExact[p] = struct{}{}
+		pk := linkKey(p)
+		ni.paths[pk] = append(ni.paths[pk], p)
 		ni.all = append(ni.all, p)
 
 		base := path.Base(p)
@@ -762,6 +793,7 @@ func NewNoteIndex(relPaths []string) *NoteIndex {
 			}
 		}
 		for _, k := range keys {
+			k = linkKey(k)
 			set, ok := seenBase[k]
 			if !ok {
 				set = make(map[string]struct{})
@@ -775,10 +807,37 @@ func NewNoteIndex(relPaths []string) *NoteIndex {
 		}
 	}
 	sort.Strings(ni.all)
+	for k := range ni.paths {
+		sortByTieBreak(ni.paths[k])
+	}
 	for k := range ni.byBase {
 		sortByTieBreak(ni.byBase[k])
 	}
 	return ni
+}
+
+// basenameCandidates returns every indexed path whose basename or stem is
+// `key`, in tie-break order, compared the way Resolve compares (NFC). Nil
+// when none.
+func (ni *NoteIndex) basenameCandidates(key string) []string {
+	return ni.byBase[linkKey(key)]
+}
+
+// exactPath returns the on-disk path an exact collection-relative path
+// resolves to, comparing in NFC. When more than one on-disk path shares the
+// key (a normalisation-only twin), the byte-identical one wins; otherwise
+// the tie-break order's first.
+func (ni *NoteIndex) exactPath(cleaned string) (string, bool) {
+	matches := ni.paths[linkKey(cleaned)]
+	if len(matches) == 0 {
+		return "", false
+	}
+	for _, m := range matches {
+		if m == cleaned {
+			return m, true
+		}
+	}
+	return matches[0], true
 }
 
 // Paths returns every indexed path, sorted.
@@ -788,9 +847,10 @@ func (ni *NoteIndex) Paths() []string {
 	return out
 }
 
-// Has reports whether an exact collection-relative path is indexed.
+// Has reports whether an exact collection-relative path is indexed (compared
+// in NFC, like Resolve).
 func (ni *NoteIndex) Has(relPath string) bool {
-	_, ok := ni.paths[normalizeRel(relPath)]
+	_, ok := ni.exactPath(normalizeRel(relPath))
 	return ok
 }
 
@@ -896,10 +956,10 @@ func (ni *NoteIndex) Resolve(from string, l Link) ResolvedLink {
 	// meant and has no way to discover afterwards that it did not.
 	basenameMatches := []string(nil)
 	if l.Kind == LinkWikilink && !strings.Contains(target, "/") {
-		basenameMatches = ni.byBase[target]
+		basenameMatches = ni.basenameCandidates(target)
 		if len(basenameMatches) == 0 {
 			if stem := trimMarkdownExt(target); stem != target {
-				basenameMatches = ni.byBase[stem]
+				basenameMatches = ni.basenameCandidates(stem)
 			}
 		}
 	}
@@ -916,9 +976,9 @@ func (ni *NoteIndex) Resolve(from string, l Link) ResolvedLink {
 		candidates = append(candidates, cleaned+".md")
 	}
 	for _, c := range candidates {
-		if _, ok := ni.paths[c]; ok {
+		if to, ok := ni.exactPath(c); ok {
 			res.State = ResolveResolved
-			res.To = c
+			res.To = to
 			res.Reason = ReasonNone
 			markAmbiguous(&res)
 			return res
