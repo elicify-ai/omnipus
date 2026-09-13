@@ -308,6 +308,37 @@ export function LibraryExplorer({
     setBrowsedDir((cur) => (cur === selectedDir ? cur : selectedDir))
   }, [selectedDir])
 
+  // UAT D-108 (2026-09-13): `address.folder` used to be read ONCE, as the
+  // mount-time seed above, so a same-route navigation to a different
+  // `folder=` (a pasted link, the back button) changed the URL and nothing
+  // else — the breadcrumb and listing stayed where they were and the address
+  // bar became a quiet lie. A CHANGE in the folder param, with no file
+  // selected to imply a folder instead, is now acted on. It fires only when
+  // the param actually changes: in-app folder navigation never rewrites the
+  // param (goTo reports paths, not folders), so it cannot fight the click.
+  const addressFolder = addressed ? address?.folder : undefined
+  useEffect(() => {
+    if (!addressed || selectedPath !== null || addressFolder === undefined) return
+    setBrowsedDir((cur) => (cur === addressFolder ? cur : addressFolder))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addressFolder])
+
+  // UAT D-64 (2026-09-13): switching workspace BY URL kept the previous
+  // workspace's browsed folder, so the breadcrumb read
+  // "Library › My Workspace › UAT Vault › Projects" for a folder that never
+  // existed there — and the listing query fired for it. In-app workspace
+  // navigation already resets the folder (handleOpenWorkspaceNode); an
+  // addressed change does the same here, to whatever the new address itself
+  // implies — the selected file's folder, the folder param, or the root.
+  // Adjusted DURING render (React's derived-state pattern: state remembers
+  // the workspace it was computed for) rather than in an effect, so the
+  // entries query below never runs even once against the stale folder.
+  const [browsedForWorkspace, setBrowsedForWorkspace] = useState(workspaceId)
+  if (browsedForWorkspace !== workspaceId) {
+    setBrowsedForWorkspace(workspaceId)
+    if (addressed) setBrowsedDir(selectedDir ?? addressFolder ?? '')
+  }
+
   // Always fetched (cheap, small list) — backs the virtual-root listing AND
   // resolves the current workspace's display name for the breadcrumb + the
   // destination picker inside LibraryTransferDialog.
@@ -365,12 +396,26 @@ export function LibraryExplorer({
     workspaceId !== null &&
     selectedDir === browsedDir &&
     entriesQuery.isSuccess
+  // UAT D-36 (2026-09-13): a `path` that names a FOLDER in the listing is not
+  // "not found" — it is right there, one row down. Saying so was a plain
+  // falsehood (the OP lane read it as an encoding bug). Such an address now
+  // OPENS the folder: the browsed folder becomes the path, and the address
+  // drops the path so the URL and the screen agree. No banner is shown for
+  // it, not even for the one render before the effect runs.
+  const deepLinkIsFolder =
+    deepLinkUnresolved && selectedPath !== null && sortedEntries.some((e) => e.is_dir && e.path === selectedPath)
+  useEffect(() => {
+    if (!deepLinkIsFolder || selectedPath === null) return
+    setBrowsedDir(selectedPath)
+    goTo(workspaceId, null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepLinkIsFolder, selectedPath])
   // A dot-prefixed target IS in the folder, just filtered out of the listing.
   // Saying "not found" there would be a plain falsehood, so it gets its own
   // wording and the action that fixes it.
   const deepLinkHiddenFromView =
     deepLinkUnresolved && selectedPath !== null && baseNameOf(selectedPath).startsWith('.') && !includeHidden
-  const deepLinkMessage = !deepLinkUnresolved
+  const deepLinkMessage = !deepLinkUnresolved || deepLinkIsFolder
     ? null
     : deepLinkHiddenFromView
       ? `"${selectedPath}" is a hidden file. Turn on Show hidden to open it.`
