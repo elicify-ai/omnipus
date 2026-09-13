@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/knowledge"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/records/knowledgefind"
 	"github.com/elicify-ai/omnipus/pkg/vaultprops"
@@ -612,8 +613,7 @@ func vaultSearchRecords(ctx context.Context, env vaultprops.FindEnv, query strin
 				// completeness either, for the same reason as above.
 				complete = false
 				if reason == "" {
-					reason = fmt.Sprintf(
-						"records: more %q record hits exist beyond the result limit", rt)
+					reason = vaultSearchRecordsCutReason(rt, limit)
 				}
 				break
 			}
@@ -626,6 +626,19 @@ func vaultSearchRecords(ctx context.Context, env vaultprops.FindEnv, query strin
 		}
 	}
 	return out, complete, reason
+}
+
+// vaultSearchRecordsCutReason is the sentence for a records answer cut by the
+// result limit partway through one record type's own hits (UAT 2026-09-13,
+// D-138). It states what was searched and what was cut, in plain words. The
+// record type is written as "records of type X", never as a quoted word: the
+// old sentence quoted it (`more "decision" record hits exist beyond the
+// result limit`) and readers took the quoted word for a stale query string.
+func vaultSearchRecordsCutReason(recordType string, limit int) string {
+	return fmt.Sprintf(
+		"records: this answer was cut at the result limit (%d) while adding records of type %s; "+
+			"more %s records match this search than are shown — narrow the search to see the rest",
+		limit, recordType, recordType)
 }
 
 // mergeVaultSearchCompleteness folds one kind's verdict into the overall one.
@@ -803,22 +816,60 @@ func vaultSearchSnippet(collectionRoot, relPath, query string) string {
 	if !ok {
 		return ""
 	}
-	lowerBody := strings.ToLower(body)
-	lowerPos := -1
+	// The body is folded the SAME way the matcher folded the query (2026-09-14
+	// leftover, S4 under U-34): lower-case, Unicode NFC, ASCII folding — via
+	// knowledge.FoldSearchText, the text index's own fold. A plain ToLower here
+	// used to leave a hit found by "cafe" in a note spelling "Café" with no
+	// excerpt at all. Folded rune by rune so the offset walk below can map a
+	// folded position back to the original bytes.
+	foldedBody := vaultSearchFoldBody(body)
+	foldedPos := -1
 	for _, term := range vaultSearchQueryTerms(query) {
-		if i := strings.Index(lowerBody, term); i >= 0 {
-			lowerPos = i
+		if i := strings.Index(foldedBody, term); i >= 0 {
+			foldedPos = i
 			break
 		}
 	}
-	if lowerPos < 0 {
+	if foldedPos < 0 {
 		return ""
 	}
-	// strings.ToLower can change byte length (e.g. U+0130 → "i̇"), so a byte
-	// offset into lowerBody is NOT a valid offset into body. Map it back to the
-	// original bytes; otherwise the window is misaligned and, when folding
-	// expands text before the match, pos can exceed len(body) and panic.
-	return vaultSearchWindow(body, vaultSearchOrigOffset(body, lowerPos))
+	// Folding changes byte length (U+0130 → "i̇" grows, "é" → "e" shrinks), so
+	// a byte offset into foldedBody is NOT a valid offset into body. Map it
+	// back to the original bytes; otherwise the window is misaligned and, when
+	// folding expands text before the match, pos can exceed len(body) and
+	// panic.
+	return vaultSearchWindow(body, vaultSearchOrigOffset(body, foldedPos))
+}
+
+// vaultSearchFoldRune folds ONE rune the way the text index folds text. The
+// ASCII fast path (F9) is kept: an ASCII byte folds to exactly one ASCII byte,
+// so no allocation is paid for the common case.
+func vaultSearchFoldRune(r rune) string {
+	if r < utf8.RuneSelf {
+		if 'A' <= r && r <= 'Z' {
+			r += 'a' - 'A'
+		}
+		return string(r)
+	}
+	return knowledge.FoldSearchText(string(r))
+}
+
+// vaultSearchFoldBody folds body rune by rune with vaultSearchFoldRune, so
+// its result is byte-for-byte what vaultSearchOrigOffset's walk reproduces.
+func vaultSearchFoldBody(body string) string {
+	var b strings.Builder
+	b.Grow(len(body))
+	for _, r := range body {
+		if r < utf8.RuneSelf {
+			if 'A' <= r && r <= 'Z' {
+				r += 'a' - 'A'
+			}
+			b.WriteByte(byte(r))
+			continue
+		}
+		b.WriteString(vaultSearchFoldRune(r))
+	}
+	return b.String()
 }
 
 // vaultSearchReadNoteHead reads up to the scan cap of the note, refusing any
@@ -861,18 +912,21 @@ func vaultSearchReadNoteHead(collectionRoot, relPath string) (string, bool) {
 	return string(buf[:n]), true
 }
 
-// vaultSearchQueryTerms lowercases and splits the query into terms, longest
-// first, so the most specific term anchors the snippet. Terms are delimited by
-// any character that is not a letter, digit, '_' or '-' — using the full Unicode
-// letter/digit classes, so a CJK, Cyrillic or accented query still yields terms
-// (an ASCII-only class silently dropped them, leaving those hits snippet-less).
+// vaultSearchQueryTerms splits the query into terms and folds each one the
+// way the matcher does (vaultSearchFoldBody — lower-case, NFC, ASCII fold),
+// longest first, so the most specific term anchors the snippet. Terms are
+// delimited by any character that is not a letter, digit, '_' or '-' — using
+// the full Unicode letter/digit classes, so a CJK, Cyrillic or accented query
+// still yields terms (an ASCII-only class silently dropped them, leaving those
+// hits snippet-less).
 func vaultSearchQueryTerms(query string) []string {
-	fields := strings.FieldsFunc(strings.ToLower(query), func(r rune) bool {
-		return r != '_' && r != '-' && !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	fields := strings.FieldsFunc(query, func(r rune) bool {
+		return r != '_' && r != '-' && !unicode.IsLetter(r) && !unicode.IsDigit(r) && !unicode.Is(unicode.Mn, r)
 	})
 	seen := map[string]bool{}
 	var out []string
-	for _, f := range fields {
+	for _, raw := range fields {
+		f := vaultSearchFoldBody(raw)
 		if f == "" || seen[f] {
 			continue
 		}
@@ -883,12 +937,12 @@ func vaultSearchQueryTerms(query string) []string {
 	return out
 }
 
-// vaultSearchOrigOffset maps a byte offset in strings.ToLower(body) back to the
-// corresponding byte offset in body. Case-folding is rune→runes and can change
-// byte length, so the two strings do not share offsets; this walks body once,
-// accumulating each rune's folded length until it reaches lowerPos. The result
-// is always a valid index into body (≤ len(body)), so the caller's window can
-// never slice out of range.
+// vaultSearchOrigOffset maps a byte offset in vaultSearchFoldBody(body) back
+// to the corresponding byte offset in body. Folding is rune→runes and can
+// change byte length, so the two strings do not share offsets; this walks body
+// once, accumulating each rune's folded length until it reaches lowerPos. The
+// result is always a valid index into body (≤ len(body)), so the caller's
+// window can never slice out of range.
 //
 // F9 (2026-09-08 code review, performance): strings.ToLower can only ever
 // change a rune's BYTE LENGTH for a non-ASCII rune — every ASCII byte folds
@@ -913,7 +967,7 @@ func vaultSearchOrigOffset(body string, lowerPos int) int {
 			lo++
 			continue
 		}
-		lo += len(strings.ToLower(string(r)))
+		lo += len(vaultSearchFoldRune(r))
 	}
 	return len(body)
 }
