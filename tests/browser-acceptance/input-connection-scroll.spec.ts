@@ -20,6 +20,7 @@ const difference = (a: number[], b: number[]) => a.reduce((sum, v, i) => sum + M
 for (const mode of ['websocket', 'dedicated'] as const) test(`${mode}: real documentation page scrolls down and returns through the stated input route`, async ({ page }, info) => {
   const errors: string[] = [], checkpoints: string[] = [];
   let downDifference: number | undefined, returnedDifference: number | undefined;
+  let downVisibleChangeMs: number | undefined, returnToInitialPictureMs: number | undefined;
   page.on('pageerror', error => errors.push(error.message));
   await instrumentRoutes(page);
   await page.addInitScript(() => {
@@ -74,14 +75,19 @@ for (const mode of ['websocket', 'dedicated'] as const) test(`${mode}: real docu
     const bounds = await browserLiveVideo(page).boundingBox();
     if (!bounds) throw Error('Visible live-video bounds required');
     await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+    const downStarted = performance.now();
     await page.mouse.wheel(0, 900); await page.mouse.wheel(0, 900);
     // Luma difference distinguishes a material streamed-picture change from codec noise.
-    await expect.poll(async () => difference(original, await sample(page))).toBeGreaterThan(5);
+    await expect.poll(async () => difference(original, await sample(page)), { intervals: [25, 50, 100] }).toBeGreaterThan(5);
+    downVisibleChangeMs = performance.now() - downStarted;
     downDifference = difference(original, await sample(page));
     await browserLiveVideo(page).screenshot({ path: info.outputPath('landing-down.png') });
     checkpoints.push('streamed-content-changed-down');
-    await ready(); await page.mouse.wheel(0, -900); await page.mouse.wheel(0, -900);
-    await expect.poll(async () => difference(original, await sample(page))).toBeLessThan(Math.min(5, downDifference / 2));
+    await ready();
+    const returnStarted = performance.now();
+    await page.mouse.wheel(0, -900); await page.mouse.wheel(0, -900);
+    await expect.poll(async () => difference(original, await sample(page)), { intervals: [25, 50, 100] }).toBeLessThan(Math.min(5, downDifference / 2));
+    returnToInitialPictureMs = performance.now() - returnStarted;
     returnedDifference = difference(original, await sample(page));
     await browserLiveVideo(page).screenshot({ path: info.outputPath('landing-returned.png') });
     checkpoints.push('streamed-content-returned');
@@ -91,12 +97,13 @@ for (const mode of ['websocket', 'dedicated'] as const) test(`${mode}: real docu
     expect(wheels.filter(w => w.y > 0).reduce((sum, w) => sum + w.y, 0)).toBe(1800);
     expect(wheels.filter(w => w.y < 0).reduce((sum, w) => sum + w.y, 0)).toBe(-1800);
     expect((await routeEvidence(page)).sameMedia).toBe(true); expect(errors).toEqual([]);
+    expect(downVisibleChangeMs).toBeGreaterThan(0); expect(returnToInitialPictureMs).toBeGreaterThan(0);
   } finally {
     await fs.mkdir(info.outputDir, { recursive: true });
     const wheels = await page.evaluate(() => (window as unknown as LandingWindow).__landingProof).catch(() => null);
     const routes = await routeEvidence(page).catch(() => null);
     let cleanupError: string | null = null;
     try { await page.getByRole('button', { name: 'Close live browser panel', exact: true }).click({ timeout: 5000 }); } catch { cleanupError = 'Panel close failed; context teardown follows'; }
-    await fs.writeFile(info.outputPath('landing-evidence.json'), JSON.stringify({ mode, target, provenance: JSON.parse(await fs.readFile(process.env.BROWSER_INPUT_PROVENANCE!, 'utf8')), checkpoints, errors, cleanupError, wheels, routes, downDifference, returnedDifference, limits: ['Visual scroll-and-return correctness only; screenshots require review.', 'Outgoing wheel totals do not prove an exact remote scroll offset because page bounds clamp scrolling.', 'Luma threshold is a visual-change heuristic, not OCR or DOM confirmation.', 'No interaction timing reported; navigation/load excluded entirely.'] }, null, 2));
+    await fs.writeFile(info.outputPath('landing-evidence.json'), JSON.stringify({ mode, target, provenance: JSON.parse(await fs.readFile(process.env.BROWSER_INPUT_PROVENANCE!, 'utf8')), checkpoints, errors, cleanupError, wheels, routes, downDifference, returnedDifference, scrollFeedback: { downVisibleChangeMs, returnToInitialPictureMs, clock: 'runner performance.now', pollIntervalsMs: [25, 50, 100] }, limits: ['Visual scroll-and-return feedback; screenshots require review.', 'Outgoing wheel totals do not prove an exact remote scroll offset because page bounds clamp scrolling.', 'Luma threshold is a visual-change heuristic, not OCR or DOM confirmation.', 'Timing starts after navigation, picture readiness and pointer placement; it includes two wheel commands, viewer/runner overhead and sampled-image polling.', 'These are observed visual-feedback/catch-up durations, not pure transport latency, exact scroll-offset completion or a statistical performance gate.'] }, null, 2));
   }
 });
