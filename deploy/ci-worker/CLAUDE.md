@@ -204,8 +204,10 @@ Three things to know before trusting it:
    payload instead of writing it. Use `fly ssh sftp put deploy/ci-worker/runci.sh
    /cache/runci.sh --app <app>` then `chmod +x` over the console. (Found when first provisioning
    this worker.)
-3. **`OPENROUTER_API_KEY_B`/`_C` are not set on it** (only slot `a`), so all nine LLM shards
-   share one key. What that looks like is NOT 429s (zero were logged on 2026-09-12) but
+3. **Key slots.** All three (`OPENROUTER_API_KEY`, `_B`, `_C`) are set since 2026-09-13,
+   distinct keys, so the shard plan's `key_slot` spread works here as on `ci-omnipus`. For the
+   first day it ran on slot `a` alone, and all nine LLM shards shared one key. What that
+   looks like is NOT 429s (zero were logged on 2026-09-12) but
    **slow completions**: judge calls of ~80 s, a supervisor re-plan turn of 3 min, a
    goal test taking 5+ min in the matrix and 2 min when run alone. The tests with the
    tightest real-time windows lose the race first — `Conformance_t3b_TargetedRetryOnlyE2E`
