@@ -6,12 +6,14 @@
 package knowledgefind
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/records"
+	"github.com/elicify-ai/omnipus/pkg/records/propindex"
 )
 
 // renderRow projects one survivor into the wire row.
@@ -50,12 +52,11 @@ func renderRow(q *query, s survivor) generated.VaultFindRow {
 	// related record is borrowed onto this row. This layer holds the relation
 	// VALUE — the related record's wikilink identity — which it renders as a
 	// borrowed line (`bed [[Greenhouse]]:`), marked as borrowed and never
-	// merged into this record's own columns above. It does NOT fetch the
-	// related record's other fields as borrowed cells: reading an arbitrary
-	// related record's columns needs a value reader this package is not wired
-	// with (Deps.Resolve carries a record IDENTITY, not the related record's
-	// values), so borrowing the identity is what is available here — and it is
-	// rendered rather than silently dropped, which is the whole of D2's rule.
+	// merged into this record's own columns above. The related record's OWN
+	// declared columns are filled in afterwards by joinBorrower (assemble.go
+	// calls it per page row), which has the store and the resolver this
+	// function does not — see joinBorrower for why that used to be missing
+	// (UAT 2026-09-13, D-09).
 	for _, jp := range q.join {
 		pv, ok := s.values[jp]
 		if !ok || pv.State == records.StateAbsent {
@@ -607,4 +608,131 @@ func pathsOf(rows []survivor) []string {
 		out = append(out, s.cand.Path)
 	}
 	return out
+}
+
+// ---------------------------------------------------------------------------
+// BORROWED COLUMNS (UAT 2026-09-13, D-09)
+//
+// `join:["owner"]` answered "COMPLETE: yes" with an `owner [[Name]]:` marker
+// and a trailing colon, and nothing after it — no column of the owner was
+// ever borrowed, while `explain` claimed "columns borrowed through the
+// relation owner". renderRow could not do better: it has the survivor's own
+// values and nothing else. The target record's values live in the same
+// properties store the query is already reading, so this borrows them from
+// there: resolve the wikilink to a path (Deps.ResolveNear, the same
+// wikilink->file resolution the record path uses), stream that one
+// candidate, decode its DECLARED properties with its own type's schema, and
+// render them exactly the way the row's own cells are rendered. Relation and
+// person properties of the target are not borrowed a second level down —
+// FR-124 borrows one hop, and a nested borrow would be a second join the
+// caller did not ask for.
+//
+// A target that cannot be resolved, or that is not a record, keeps the bare
+// marker: the identity is still rendered (that is D2's rule) and the reason
+// it carries no columns is reported once per target as a dangling_relation
+// problem, never silently.
+// ---------------------------------------------------------------------------
+
+type joinBorrower struct {
+	ctx   context.Context
+	d     Deps
+	files *fileMetaSource
+	cache map[string]borrowedTarget
+}
+
+type borrowedTarget struct {
+	cells   []generated.VaultFindCell
+	problem *generated.RecordProblem
+}
+
+func newJoinBorrower(ctx context.Context, d Deps, files *fileMetaSource) *joinBorrower {
+	return &joinBorrower{ctx: ctx, d: d, files: files, cache: map[string]borrowedTarget{}}
+}
+
+// fill borrows the target's columns onto every join marker of one row and
+// returns any problems that explain a marker left bare (deduplicated by the
+// caller's recordProblems).
+func (b *joinBorrower) fill(row *generated.VaultFindRow) []generated.RecordProblem {
+	if b == nil || len(row.Joins) == 0 {
+		return nil
+	}
+	var ps []generated.RecordProblem
+	for i := range row.Joins {
+		t := b.lookup(row.Joins[i].Relation, row.Joins[i].Target)
+		if len(t.cells) > 0 {
+			row.Joins[i].Cells = append([]generated.VaultFindCell{}, t.cells...)
+		}
+		if t.problem != nil {
+			ps = append(ps, *t.problem)
+		}
+	}
+	return ps
+}
+
+func (b *joinBorrower) lookup(relation, target string) borrowedTarget {
+	key := relation + "\x00" + target
+	if t, ok := b.cache[key]; ok {
+		return t
+	}
+	t := b.borrow(relation, target)
+	b.cache[key] = t
+	return t
+}
+
+func (b *joinBorrower) borrow(relation, target string) borrowedTarget {
+	bare := func(reason string) borrowedTarget {
+		p := problem(generated.DanglingRelation,
+			fmt.Sprintf("join %s: %s — %s, so no columns could be borrowed through it", relation, target, reason),
+			"fix the relation target, or drop it from join")
+		r := relation
+		p.Property = &r
+		return borrowedTarget{problem: &p}
+	}
+	if b.d.Store == nil || b.d.ResolveNear == nil {
+		return bare("the properties index is not open")
+	}
+	path, ok := b.d.ResolveNear(target)
+	if !ok || path == "" {
+		return bare("no note in this knowledge base matches the link")
+	}
+	var found *propindex.Candidate
+	err := b.d.Store.Candidates(b.ctx, propindex.Selector{PathPrefix: path}, func(c propindex.Candidate) (propindex.Verdict, error) {
+		if c.Path == path && found == nil {
+			cc := c
+			found = &cc
+		}
+		return propindex.Rejected, nil
+	})
+	if err != nil {
+		return bare("reading it from the properties index failed: " + err.Error())
+	}
+	if found == nil {
+		return bare("the properties index holds no row for " + path)
+	}
+	if found.RecordType == "" {
+		return bare(path + " is an ordinary note, not a record, so it has no declared columns")
+	}
+	var schema *records.Schema
+	if b.d.Schemas != nil {
+		schema, _ = b.d.Schemas.Get(found.RecordType)
+	}
+	if schema == nil {
+		return bare("no schema is loaded for its record type " + found.RecordType)
+	}
+	cand := newCandidate(*found, schema, b.files.meta(*found), nil)
+	cells := make([]generated.VaultFindCell, 0, len(schema.PropertyOrder))
+	for _, name := range schema.PropertyOrder {
+		prop, ok := schema.Property(name)
+		if !ok || prop.Type == records.TypeRelation || prop.Type == records.TypePerson {
+			continue
+		}
+		pv, err := cand.value(prop)
+		if err != nil || pv.State != records.StatePresent {
+			continue
+		}
+		cell := generated.VaultFindCell{Property: prop.Name, Value: renderValue(pv)}
+		applyCellMetadata(&cell, prop)
+		cells = append(cells, cell)
+	}
+	return borrowedTarget{cells: cells}
 }

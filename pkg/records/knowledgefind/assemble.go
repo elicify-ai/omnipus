@@ -303,8 +303,17 @@ func (e *evaluation) assemble(ctx context.Context, d Deps, echo string) generate
 
 	rows := make([]generated.VaultFindRow, 0, len(page))
 	agreeing := 0
+	var borrower *joinBorrower
+	if len(q.join) > 0 {
+		borrower = newJoinBorrower(ctx, d, e.files)
+	}
 	for _, s := range page {
 		row := renderRow(q, s)
+		if borrower != nil {
+			if ps := borrower.fill(&row); len(ps) > 0 {
+				e.recordProblems(ps)
+			}
+		}
 
 		// The text hash comes from the word-search hit when there was one, and
 		// is LOOKED UP otherwise. A typed query returns rows whose two indexes
