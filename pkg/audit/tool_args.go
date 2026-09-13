@@ -6,6 +6,8 @@ package audit
 
 import (
 	"fmt"
+	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -22,7 +24,8 @@ import (
 // salientToolArgKeys is the closed allowlist of argument keys copied into a
 // tool_call audit entry. A key is on this list because it answers "what did
 // the call touch" — a location, an identity or an operation — and never
-// because it carries the payload. Free-text keys (content, text, body,
+// because it carries the payload. A URL-shaped value under ANY of these keys
+// is logged without its userinfo, query string and fragment (salientString). Free-text keys (content, text, body,
 // value, message, command, query) are deliberately absent: bash already
 // audits its command on its own exec event, and everything else is content.
 var salientToolArgKeys = []string{
@@ -87,7 +90,9 @@ func SalientToolArgs(_ string, args map[string]any) map[string]any {
 		if strs, ok := v.([]string); ok {
 			items := make([]any, 0, len(strs))
 			for _, s := range strs {
-				items = append(items, truncateSalient(s))
+				if sv, ok := salientString(s); ok {
+					items = append(items, sv)
+				}
 				if len(items) == salientToolArgMaxListLen {
 					break
 				}
@@ -105,16 +110,52 @@ func SalientToolArgs(_ string, args map[string]any) map[string]any {
 
 // salientScalar accepts strings, numbers and booleans; anything structured
 // is refused so a nested object never reaches the audit log through a
-// location-shaped key.
+// location-shaped key. A string that is a URL is reduced to its
+// credential-free form first (salientString).
 func salientScalar(v any) (any, bool) {
 	switch x := v.(type) {
 	case string:
-		return truncateSalient(x), true
+		return salientString(x)
 	case bool, int, int32, int64, float32, float64:
 		return x, true
 	default:
 		return nil, false
 	}
+}
+
+// salientURLPattern recognises a string that starts like an absolute URL
+// (scheme followed by "://"). A plain path such as "notes/a.md?x=1" does
+// not match and is kept as written — the question mark in a filename is not
+// a query string.
+var salientURLPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.\-]*://`)
+
+// salientString prepares one string value for the audit entry. Codex review
+// 2026-09-14 finding #10: the allowlist copies `url` (and any other
+// location-shaped key that may hold a URL) into a DURABLE record, and a URL
+// routinely carries its credential in the query string
+// (?access_token=…, a signed S3 URL's X-Amz-Signature=…) or in the
+// authority (user:password@host). The redactor only looks at KEY names, so
+// none of that was caught. Every URL-shaped value is therefore reduced to
+// scheme + host + path before it is logged: userinfo, query and fragment
+// are dropped. That keeps what the call touched (which host, which
+// resource) and loses only the part that could authenticate someone else.
+// A URL that does not parse cannot be sanitised and is dropped outright
+// (ok=false) rather than logged as-is.
+func salientString(s string) (string, bool) {
+	s = strings.TrimSpace(s)
+	if salientURLPattern.MatchString(s) {
+		u, err := url.Parse(s)
+		if err != nil {
+			return "", false
+		}
+		u.User = nil
+		u.RawQuery = ""
+		u.ForceQuery = false
+		u.Fragment = ""
+		u.RawFragment = ""
+		s = u.String()
+	}
+	return truncateSalient(s), true
 }
 
 func truncateSalient(s string) string {
