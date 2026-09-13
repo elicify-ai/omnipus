@@ -31,6 +31,52 @@ async function instrumentFault(page: Page, stage: Stage) {
     const sent: FrameIdentity[] = [], received: FrameIdentity[] = [];
     const events: LifecycleEvent[] = [];
     const record = (pc: RTCPeerConnection, event: string, detail?: string) => events.push({ atMs: performance.now(), event, peer: peers.findIndex(row => row.pc === pc), detail });
+    const transportSamples: Array<{
+      peer: number; atMs: number; eventLoopLagMs: number; pending: boolean;
+      durationMs?: number; error?: string; dtlsState?: string;
+      selectedPath?: { state?: string; rttSeconds?: number; localType?: string; remoteType?: string; protocol?: string };
+    }> = [];
+    const observeInputTransport = (pc: RTCPeerConnection, channel: RTCDataChannel) => {
+      const peer = peers.findIndex(row => row.pc === pc);
+      let busy = false, stopped = false, due = performance.now() + 250;
+      const stop = () => {
+        if (stopped) return;
+        stopped = true;
+        clearInterval(timer); clearTimeout(lifetime);
+        window.removeEventListener('pagehide', stop);
+        channel.removeEventListener('close', stop);
+        record(pc, 'transport-sampling-stopped');
+      };
+      const timer = setInterval(() => {
+        const atMs = performance.now();
+        const eventLoopLagMs = Math.max(0, atMs - due);
+        due = atMs + 250;
+        if (pc.connectionState === 'closed') { stop(); return; }
+        if (busy) { record(pc, 'transport-stats-still-pending'); return; }
+        busy = true;
+        const sample: (typeof transportSamples)[number] = { peer, atMs, eventLoopLagMs, pending: true };
+        transportSamples.push(sample);
+        void pc.getStats().then(report => {
+          report.forEach(row => {
+            if (row.type !== 'transport') return;
+            sample.dtlsState = row.dtlsState;
+            const pair = row.selectedCandidatePairId ? report.get(row.selectedCandidatePairId) : undefined;
+            if (!pair) return;
+            const local = report.get(pair.localCandidateId), remote = report.get(pair.remoteCandidateId);
+            sample.selectedPath = { state: pair.state, rttSeconds: pair.currentRoundTripTime, localType: local?.candidateType, remoteType: remote?.candidateType, protocol: local?.protocol };
+          });
+        }).catch(error => {
+          sample.error = error instanceof Error ? error.name : 'unknown getStats rejection';
+        }).finally(() => {
+          sample.durationMs = performance.now() - atMs;
+          sample.pending = false;
+          busy = false;
+        });
+      }, 250);
+      const lifetime = setTimeout(stop, 90_000);
+      window.addEventListener('pagehide', stop, { once: true });
+      channel.addEventListener('close', stop, { once: true });
+    };
     const identity = (data: unknown): FrameIdentity | null => {
       if (typeof data !== 'string') return null;
       let f; try { f = JSON.parse(data); } catch { return null; }
@@ -38,7 +84,7 @@ async function instrumentFault(page: Page, stage: Stage) {
     };
     const probe: FinalProbe = {
       held: false, sent, received, events,
-      snapshot: () => ({ atMs: performance.now(), peers: peers.map(({ pc, channels }, peer) => ({ peer, state: pc.connectionState, iceState: pc.iceConnectionState, signalingState: pc.signalingState, channels: channels.map(ch => ({ label: ch.label, state: ch.readyState })) })) }),
+      snapshot: () => ({ atMs: performance.now(), transportSamples, transportSampling: { intervalMs: 250, maximumLifetimeMs: 90_000, clock: 'viewer performance.now', rttUnit: 'seconds' }, peers: peers.map(({ pc, channels }, peer) => ({ peer, state: pc.connectionState, iceState: pc.iceConnectionState, signalingState: pc.signalingState, channels: channels.map(ch => ({ label: ch.label, state: ch.readyState })) })) }),
       arm() { armed = true; faultTarget.peer = null; }, release: () => release(),
       bindInput() {
         const active = peers.filter(row => row.channels.some(ch => ch.label === 'input-reliable') && row.pc.connectionState === 'connected');
@@ -67,6 +113,7 @@ async function instrumentFault(page: Page, stage: Stage) {
         peers.find(row => row.pc === this)!.channels.push(channel);
         record(this, 'channel-created', label);
         for (const event of ['open', 'error', 'close']) channel.addEventListener(event, () => record(this, `channel-${event}`, label));
+        if (label === 'input-reliable') observeInputTransport(this, channel);
         if (label === 'input-reliable' && faultTarget.peer === null) faultTarget.peer = this;
         return channel;
       }

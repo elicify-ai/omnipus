@@ -22,3 +22,11 @@ Amsterdam now runs verified runtime `eb3206c03`, including the diagnostic-field 
 [Runtime evidence](https://github.com/elicify-ai/omnipus/blob/browser-improvements/docs/internal/browser-input-candidate-2026-09-13.md).
 
 Raw CI and focused-check logs: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/.local/browser-input-final-validation/`. Controlled Linux artifacts: `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/browser-input-controlled-linux/`.
+
+
+## Combined follow-up in progress
+
+Checks on `bcc192e78b7ee15b5b361a36b459f36cef979075` are still running/queued. The Linux ARM cross-platform job failed in `TestLoopCommand_Stop_Interval_EmitsSchemaValidStoppedFrame` during temporary `media` directory cleanup in `pkg/agent`; no failure of its schema assertion was reported. This is a different test and path from the corrected security harness. This separate production agent-lifecycle issue remains outside the compact browser experiment work queue; no such source change was made. CodeQL remains failed (195 high, 299 medium, one warning and one note); remaining browser annotations are undergoing bounded source assessment, with no suppression. Terminal totals are pending.
+
+
+Bounded source review found no raw-string bypass at the new escaped browser diagnostic sites. `browserLogValue` keeps control characters, quotes and backslashes escaped through the existing console formatter. Persisting annotations are consistent with an unmodeled sanitizer, although annotation JSON cannot prove the CodeQL model. Older raw relay and schema-error logging remain real separate concerns: both existed unchanged in `release/v0.1.1` (relay commit `9fd6c3c1df`, schema commit `32fb66c2d8`). They are not silently marked fixed. No security-check suppression or global logger change was made.
