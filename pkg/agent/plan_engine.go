@@ -412,6 +412,40 @@ type PlanEngine struct {
 	// all mean the judge is reachable and the park history is spent.
 	judgeUnavailableParks map[string]*judgeUnavailablePark
 
+	// memberExecuting reports whether the TaskExecutor currently holds a
+	// dispatch slot for a member task id — i.e. whether a goroutine is running
+	// it right now, or is about to (a reserved slot). It is the engine's only
+	// way to tell a member that is WORKING from a member that merely SAYS it is
+	// (Status == in_progress on disk), and it is what planStallReason's
+	// stranded-member term is built on. See strandedSince.
+	//
+	// Nil in every struct-literal test engine and on a boot that passes no task
+	// executor; a nil reader is treated as "cannot tell", which suppresses the
+	// stranded-member term entirely and leaves stall diagnosis exactly as it
+	// was before it existed.
+	memberExecuting func(taskID string) bool
+
+	// strandedSince records, per member task id, the first tick at which the
+	// member was observed in_progress with NO dispatch slot, plus the most
+	// recent tick at which it was observed at all (used only to evict entries
+	// for members nobody is looking at any more, so the map cannot grow with
+	// deleted plans).
+	//
+	// WHY A DWELL AT ALL, given the slot test is binary: there are narrow, real
+	// windows in which a member is legitimately in_progress with no slot yet —
+	// executeTask writes next->in_progress via ClaimForRun BEFORE inserting the
+	// slot (createTaskSessionSync, an fsync-bound session mint, sits between the
+	// two), StartTaskNow's REST caller PATCHes in_progress before calling it at
+	// all, and a fresh boot has an empty slot map until reconciliation runs. The
+	// dwell exists to outlast those windows and NOTHING ELSE. It is deliberately
+	// not a slowness judgement: a member that is genuinely working holds its
+	// slot for the whole run (the slot is deleted in runTask's OUTERMOST defer,
+	// after adjudication and after any redispatch), so a 40-minute member never
+	// accumulates a single stranded observation no matter how long it takes.
+	//
+	// In-memory only, same lazy-init + mu posture as the maps above.
+	strandedSince map[string]strandedMemberObservation
+
 	// planDecisionMu serializes every plan-mutating decision (dispatch,
 	// judge-round start, idle-expiry) process-wide. It is coarse (one lock
 	// for all plans, not per-plan) — a deliberate simplicity trade-off: the
@@ -497,6 +531,9 @@ func NewPlanEngine(al *AgentLoop, planStore *plan.Store, taskStore *task.Store, 
 	// never dispatches) now get a TRUE nil interface, so those guards work.
 	if taskExecutor != nil {
 		pe.dispatcher = taskExecutor
+		pe.memberExecuting = func(taskID string) bool {
+			return taskExecutorHoldsDispatchSlot(taskExecutor, taskID)
+		}
 	}
 	if al != nil {
 		pe.notifier = al.asyncNotifier
@@ -1640,14 +1677,36 @@ func allMembersTerminal(tasks []task.Task) bool {
 // mistaken for a stall note.
 const stallHandoverNotePrefix = "[stalled] "
 
+// stallHandoverNote builds the persisted stall-note form of reason: the
+// prefix above, CLAMPED to exactly what the store will keep.
+//
+// The clamp is not optional decoration, and it is here — at the one place both
+// stall writers build the value — rather than repeated at each of them. Both
+// writers DEDUPE against the persisted value (`p.HandoverText == note`) and
+// then mirror it into the in-memory plan (`p.HandoverText = note`). pkg/plan's
+// Store.write clamps unconditionally on the way to disk, so a writer that
+// builds a raw over-bound note compares a raw string against a clamped one,
+// never matches, and therefore re-writes the plan AND re-wakes the supervisor
+// on EVERY TICK instead of once — and leaves p.HandoverText holding a value
+// disk disagrees with. plan.ClampHandoverText is idempotent, so the write
+// path clamping again is a no-op.
+//
+// The stale-note CLEARING path is unaffected: it matches on
+// strings.HasPrefix(p.HandoverText, stallHandoverNotePrefix), and the clamp is
+// head-preserving, so the prefix survives by construction.
+func stallHandoverNote(reason string) string {
+	return plan.ClampHandoverText(stallHandoverNotePrefix + reason)
+}
+
 // planStallReason inspects a RUNNING, dispatchable plan's freshest member
 // snapshot (taken by the caller AFTER this pass's own inbox-promotion and
 // blocked-cascade attempts, immediately before dispatch) and reports a
 // plain-language reason the plan is stuck, or "" when it is not. "Stuck"
 // here means: the DAG is NOT all-terminal (the caller checks
 // allMembersTerminal first — a genuinely finished DAG goes to the plan
-// judge, not here) AND no member is currently dispatchable (`next`) or in
-// flight (`in_progress`) — i.e. this pass's dispatchReadyMembers call is
+// judge, not here) AND no member is currently dispatchable (`next`) or
+// GENUINELY in flight (`in_progress` AND something is executing it — see the
+// third stall shape below) — i.e. this pass's dispatchReadyMembers call is
 // guaranteed to have been a complete no-op.
 //
 // This is the "ALSO: THE SILENT PART IS ITS OWN BUG" half of round-1 UAT
@@ -1659,23 +1718,66 @@ const stallHandoverNotePrefix = "[stalled] "
 // point of failure). Either is a genuine "no progress possible without help"
 // condition, and must not render as an indefinitely-spinning "Running" chip
 // with nothing to explain why.
-func planStallReason(tasks []task.Task) string {
-	var blockedIDs, inboxIDs []string
+//
+// THE THIRD STALL SHAPE (UAT wedge fix): a member that is `in_progress` on
+// disk while NOTHING IS EXECUTING IT. Until this, `in_progress` was read as
+// "in flight" unconditionally, so the most eternal stall the system can
+// produce was the one shape this function was guaranteed to miss.
+//
+// It is a real, reachable state, not a hypothetical. task_executor.go has five
+// documented paths that end a member's run goroutine WITHOUT a terminal write
+// and WITHOUT a redispatch — adjudicateClaim's judge-unregistered,
+// DoD-unreadable, judge-Unavailable and verdict-no-longer-applicable branches,
+// and consumeAttemptOrExhaust's CAS-conflict branch — each of which says in
+// its own comment that the task is "left in_progress with its run still open"
+// and that "boot reconciliation is the accepted backstop if the retry never
+// comes. There is no dedicated in-process reaper." For a PLAN member that is
+// not a backstop at all: the plan goes on rendering "Running 5/6" for as long
+// as the process lives, its own LastActivityAt frozen at the last dispatch,
+// and its only terminator is the multi-day idle-expiry calendar brake.
+//
+// The test is the TaskExecutor's own dispatch-slot map, not a timer: a member
+// holds its slot for the entire run — it is deleted in runTask's OUTERMOST
+// defer, after adjudication and after any redispatch — so a legitimately slow
+// member (the UAT's 40-minute one) is never once observed stranded, however
+// long it takes. See strandedSince for the dwell, which exists purely to
+// outlast the narrow claim-before-slot and cold-boot windows.
+//
+// A stranded member does not make a plan stalled on its own: if any OTHER
+// member is dispatchable or genuinely in flight, the plan can still make
+// progress and is reported as running, exactly as before. What changes is that
+// a stranded member no longer COUNTS as in-flight, so the "Running 5/6" case —
+// where the stranded member is the only non-terminal one left — is now
+// diagnosed instead of spun on.
+func (pe *PlanEngine) planStallReason(tasks []task.Task, now time.Time) string {
+	stranded := pe.observeStrandedMembers(tasks, now)
+
+	var blockedIDs, inboxIDs, strandedIDs []string
 	for i := range tasks {
 		switch tasks[i].Status {
-		case task.StatusNext, task.StatusInProgress:
-			return "" // something is dispatchable or already running - not stalled
+		case task.StatusNext:
+			return "" // something is dispatchable - not stalled
+		case task.StatusInProgress:
+			if !stranded[tasks[i].ID] {
+				return "" // genuinely in flight - not stalled
+			}
+			strandedIDs = append(strandedIDs, tasks[i].ID)
 		case task.StatusBlocked:
 			blockedIDs = append(blockedIDs, tasks[i].ID)
 		case task.StatusInbox:
 			inboxIDs = append(inboxIDs, tasks[i].ID)
 		}
 	}
-	if len(blockedIDs) == 0 && len(inboxIDs) == 0 {
+	if len(blockedIDs) == 0 && len(inboxIDs) == 0 && len(strandedIDs) == 0 {
 		return "" // no non-terminal, non-dispatchable member found
 	}
 	var sb strings.Builder
 	sb.WriteString("This plan has no dispatchable or in-flight members, so it cannot make progress right now.")
+	if len(strandedIDs) > 0 {
+		fmt.Fprintf(&sb, " %d member(s) are recorded as in_progress but no run is executing them — "+
+			"their run ended without writing an outcome, so nothing will move them again: %s.",
+			len(strandedIDs), strings.Join(strandedIDs, ", "))
+	}
 	if len(blockedIDs) > 0 {
 		fmt.Fprintf(&sb, " %d member(s) are blocked on an unmet dependency this plan cannot itself resolve: %s.",
 			len(blockedIDs), strings.Join(blockedIDs, ", "))
@@ -1686,6 +1788,119 @@ func planStallReason(tasks []task.Task) string {
 	}
 	sb.WriteString(" A correction (adjust dependencies, or Stop and re-author) is needed to unstick it.")
 	return sb.String()
+}
+
+// planMemberStrandedGrace is how long a member must be CONTINUOUSLY observed
+// in_progress-with-no-dispatch-slot before planStallReason counts it as
+// stranded. It is a race guard, not a patience setting — see strandedSince for
+// the three windows it exists to outlast, and for why it cannot false-positive
+// on a slow member no matter how slow that member is.
+//
+// Sized at four production ticks (defaultPlanEngineTickInterval = 30 s), which
+// is orders of magnitude longer than the widest of those windows (one
+// fsync-bound session mint) while still turning an eternal stall into a
+// two-minute one.
+const planMemberStrandedGrace = 2 * time.Minute
+
+// strandedMemberEvictAfter bounds strandedSince: an entry nothing has observed
+// for this long belongs to a member whose plan is gone, terminal, or no longer
+// swept, and is dropped. Generous relative to the grace so a genuinely
+// stranded member that IS still being observed every tick is never evicted out
+// from under its own diagnosis.
+const strandedMemberEvictAfter = time.Hour
+
+// strandedMemberObservation is one member's stranded-observation window: when
+// the current unbroken run of "in_progress with no dispatch slot" started, and
+// when it was last confirmed. Any observation WITH a slot deletes the entry
+// outright, so `first` is always the start of an unbroken run.
+type strandedMemberObservation struct {
+	first    time.Time
+	lastSeen time.Time
+}
+
+// observeStrandedMembers advances the stranded-observation clock for every
+// in_progress member in tasks and returns the set that has been stranded for
+// longer than planMemberStrandedGrace.
+//
+// Returns an empty set when memberExecuting is unwired (a struct-literal test
+// engine, or a boot with no task executor): "cannot tell" must never read as
+// "stranded", so the whole term disappears and stall diagnosis behaves exactly
+// as it did before it existed.
+//
+// Caller holds planDecisionMu; this takes pe.mu underneath it, the same
+// ordering every other in-memory map on this engine uses. The memberExecuting
+// reader is called BEFORE pe.mu is taken — it locks the TaskExecutor's own
+// mutex, and no lock ordering between the two is established anywhere else.
+func (pe *PlanEngine) observeStrandedMembers(tasks []task.Task, now time.Time) map[string]bool {
+	stranded := map[string]bool{}
+	pe.mu.Lock()
+	reader := pe.memberExecuting
+	pe.mu.Unlock()
+	if reader == nil {
+		return stranded
+	}
+
+	type probe struct {
+		id        string
+		executing bool
+	}
+	probes := make([]probe, 0, len(tasks))
+	for i := range tasks {
+		if tasks[i].Status != task.StatusInProgress || tasks[i].ID == "" {
+			continue
+		}
+		probes = append(probes, probe{id: tasks[i].ID, executing: reader(tasks[i].ID)})
+	}
+
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	if pe.strandedSince == nil {
+		pe.strandedSince = make(map[string]strandedMemberObservation)
+	}
+	for _, p := range probes {
+		if p.executing {
+			// A slot exists: the run is alive (or about to be). Any prior
+			// stranded run is over and must not be resumed later from its old
+			// start time.
+			delete(pe.strandedSince, p.id)
+			continue
+		}
+		obs, ok := pe.strandedSince[p.id]
+		if !ok || now.Before(obs.first) {
+			pe.strandedSince[p.id] = strandedMemberObservation{first: now, lastSeen: now}
+			continue
+		}
+		obs.lastSeen = now
+		pe.strandedSince[p.id] = obs
+		if now.Sub(obs.first) >= planMemberStrandedGrace {
+			stranded[p.id] = true
+		}
+	}
+	for id, obs := range pe.strandedSince {
+		if now.Sub(obs.lastSeen) >= strandedMemberEvictAfter {
+			delete(pe.strandedSince, id)
+		}
+	}
+	return stranded
+}
+
+// taskExecutorHoldsDispatchSlot reports whether te currently holds a dispatch
+// slot for taskID — a reserved slot (claimed, goroutine not yet launched) or a
+// live one (goroutine running). It is the raw read behind
+// PlanEngine.memberExecuting.
+//
+// It lives here rather than on TaskExecutor because it is this file's
+// question, and te.running's critical sections are all leaf sections (a map
+// read or write and nothing else, never a call out), so taking te.mu from
+// under planDecisionMu introduces no lock-ordering hazard.
+func taskExecutorHoldsDispatchSlot(te *TaskExecutor, taskID string) bool {
+	if te == nil || taskID == "" {
+		return false
+	}
+	te.mu.Lock()
+	defer te.mu.Unlock()
+	_, ok := te.running[taskID]
+	return ok
 }
 
 // surfaceStallIfAny persists planStallReason's verdict onto p.HandoverText
@@ -1736,7 +1951,7 @@ func (pe *PlanEngine) surfaceStallIfAny(p *plan.Plan, tasks []task.Task) {
 		return
 	}
 
-	reason := planStallReason(tasks)
+	reason := pe.planStallReason(tasks, pe.clock.Now())
 	if reason == "" {
 		if strings.HasPrefix(p.HandoverText, stallHandoverNotePrefix) || p.EffectivePlanPhase() == plan.PhaseStalled {
 			cleared := ""
@@ -1753,7 +1968,7 @@ func (pe *PlanEngine) surfaceStallIfAny(p *plan.Plan, tasks []task.Task) {
 		}
 		return
 	}
-	note := stallHandoverNotePrefix + reason
+	note := stallHandoverNote(reason)
 	if p.HandoverText == note && p.EffectivePlanPhase() == plan.PhaseStalled {
 		// Already surfaced this exact condition — no repeat FIRST wake. The
 		// re-wake for a stalled plan whose adjudication turn produced nothing
@@ -1837,7 +2052,7 @@ func (pe *PlanEngine) surfaceJudgeUnavailableStall(p *plan.Plan, streak int, jud
 			"was consumed by these attempts. A correction, or Stop, is needed — retrying on its own has "+
 			"already been tried %d times.",
 		streak, judgeUnavailableReasonText(judgeReason), streak)
-	note := stallHandoverNotePrefix + reason
+	note := stallHandoverNote(reason)
 
 	stalled := plan.PhaseStalled
 	// Captured BEFORE the phase write, same rule as surfaceStallIfAny: a plan
@@ -3376,6 +3591,52 @@ func supervisionUnitForPlan(planID string) string { return "supervision:" + plan
 //
 // Caller must hold planDecisionMu.
 func (pe *PlanEngine) wakeSupervisor(p *plan.Plan, content, sourceKind string, newPark bool) {
+	// BOUND THE WAKE PROMPT HERE, and only here.
+	//
+	// Four builders feed this function (buildStallWakeText,
+	// buildJudgeUnavailableWakeText, buildDoDUnmetWakeText,
+	// buildSupervisionRetryWakeText) and three of them embed text of arbitrary
+	// length that no bound has ever applied to: a provider error body
+	// (judgeUnavailableReasonText), the plan judge's own steering, and a
+	// per-member target block unbounded in member count. That text never
+	// touches the plan store, so pkg/plan's Store.write clamp — the fix for the
+	// identical exposure on the persisted handover — does not cover it. This is
+	// the same context-budget hazard arriving by a second route.
+	//
+	// One call at the chokepoint every wake must pass through, rather than one
+	// per builder: a clamp a builder can forget is not a bound. A new wake
+	// builder added later is covered without being told.
+	//
+	// SAME BOUND AS THE HANDOVER, deliberately. plan.ClampHandoverText's limit
+	// is an AGENT CONTEXT BUDGET (it is not a wire limit — handover_text
+	// appears nowhere in contracts/ — and not a store limit), and this prompt
+	// is the very context it was chosen to defend: HandoverText's own budget
+	// exists because it gets re-embedded verbatim into THIS string. Giving the
+	// wake its own, larger number would be a second magic constant with no
+	// measurement behind it, and would let a wake blow a budget the note it
+	// derives from already respects.
+	//
+	// ⚠ THE TARGET BLOCK IS EXEMPT, AND THAT EXEMPTION IS LOAD-BEARING. A flat
+	// plan.ClampHandoverText(content) here would be a regression, not a fix:
+	// ClampHandoverText is HEAD-preserving, every wake builder puts the
+	// supervision target block at the TAIL, and that block is where `plan_id:`
+	// lives (buildSupervisionTargetsText). PlanSupervisor is seeded exactly one
+	// tool — plan_correct — which cannot be called without a plan_id, and it
+	// has no other way to resolve one. Clamping the tail off therefore produces
+	// a wake asking for a correction the agent is structurally incapable of
+	// issuing, while still burning an attempt off the supervision budget: that
+	// is ADR-055 fix-wave finding 2, verbatim, and
+	// TestSupervisionWakes_CarryEverythingPlanCorrectNeeds exists because it
+	// already happened once.
+	//
+	// The exemption costs nothing, because the tail is the part that was never
+	// unbounded: the member list is capped at supervisionTargetsMaxMembers with
+	// each title cut to supervisionTargetTitleLimit runes. Everything that is
+	// genuinely unbounded — the provider error body, the judge's steering, the
+	// stall reason's member enumeration — is in the HEAD, which is exactly what
+	// clampWakePrompt bounds.
+	content = clampWakePrompt(content)
+
 	// FR-046b-adjacent brake (G3 fix wave, finding 5). See
 	// correctionBudgetSpent: without this, the stall -> correct -> run -> stall
 	// cycle has NO terminal state at all.
@@ -3944,13 +4205,73 @@ const supervisionTargetTitleLimit = 80
 // prompt.
 const supervisionTargetsMaxMembers = 50
 
+// supervisionTargetsMarker opens every supervision target block. It is a
+// shared constant rather than a literal in one place and a matcher in another
+// because two things depend on it agreeing exactly: buildSupervisionTargetsText
+// writes it, and clampWakePrompt finds it to decide where a wake prompt stops
+// being clampable diagnosis and starts being the block PlanSupervisor cannot
+// act without. Drift between the two would silently re-enable the clamp over
+// the target block.
+const supervisionTargetsMarker = "plan_id: "
+
+// clampWakePrompt bounds the DIAGNOSIS half of a supervision wake prompt and
+// leaves the target block untouched. See wakeSupervisor for why the split
+// exists and why a flat head-preserving clamp over the whole prompt would be a
+// regression.
+//
+// The split is taken at the LAST target-block marker, not the first: the
+// diagnosis half is provider- or judge-authored text that may legitimately
+// contain anything, including a line that looks like a marker. The real block
+// is always the last one, because only the engine's own builders append it.
+//
+// A prompt with no target block at all (no current builder produces one, but
+// nothing structurally prevents it) is clamped whole — a bound that applies is
+// better than one that is skipped because the shape was unfamiliar.
+func clampWakePrompt(s string) string {
+	head, tail := splitAtSupervisionTargets(s)
+	if tail == "" {
+		return plan.ClampHandoverText(s)
+	}
+	clampedHead := plan.ClampHandoverText(head)
+	// The marker ClampHandoverText appends ends with "]" and no newline, while
+	// tail begins at a line start by construction. Without this the two are
+	// glued into one line reading "...clamped: N of M ...]plan_id: p-42", and
+	// every reader that parses the block LINE-WISE — which is how an agent
+	// reads it, and how wakePlanID/wakeMemberID model that — stops finding the
+	// plan id. Preserving the whole block is pointless if it is unreadable.
+	//
+	// The guard is conditional so an in-bounds prompt (the overwhelming
+	// majority) is returned byte-identical: head already ends with the newline
+	// the split cut on, or is empty when the block opens the prompt.
+	if clampedHead != "" && !strings.HasSuffix(clampedHead, "\n") {
+		clampedHead += "\n"
+	}
+	return clampedHead + tail
+}
+
+// splitAtSupervisionTargets splits s immediately before the last line that
+// opens a supervision target block. Returns (s, "") when there is none.
+func splitAtSupervisionTargets(s string) (head, tail string) {
+	idx := -1
+	if strings.HasPrefix(s, supervisionTargetsMarker) {
+		idx = 0
+	}
+	if i := strings.LastIndex(s, "\n"+supervisionTargetsMarker); i >= 0 {
+		idx = i + 1
+	}
+	if idx < 0 {
+		return s, ""
+	}
+	return s[:idx], s[idx:]
+}
+
 // buildSupervisionTargetsText renders the machine-actionable identity block
 // described above. planID is always emitted, even with no members, because
 // plan_id is required for EVERY verb — including abandon, which names no
 // member at all.
 func buildSupervisionTargetsText(planID string, tasks []task.Task) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "plan_id: %s\n", planID)
+	fmt.Fprintf(&sb, "%s%s\n", supervisionTargetsMarker, planID)
 	if len(tasks) == 0 {
 		sb.WriteString("Members: (none)\n")
 		return sb.String()

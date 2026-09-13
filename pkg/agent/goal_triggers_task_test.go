@@ -500,7 +500,7 @@ func TestKeeperSuppressionsApplyToTasks(t *testing.T) {
 		},
 		{
 			name:   "a live turn suppresses the keeper and re-arms the activity clock",
-			matrix: "GOAL-FR-016 #5 / JUDGE-FR-096 #5 (goalHasLiveTurn) / S-07",
+			matrix: "GOAL-FR-016 #5 / JUDGE-FR-096 #5 (goalLiveTurnWorkFingerprint) / S-07",
 			arrange: func(t *testing.T, h *taskKeeperHarness) func() {
 				ts := &turnState{
 					turnID:              "turn-task-live",

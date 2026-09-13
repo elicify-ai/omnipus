@@ -29,6 +29,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -130,6 +131,31 @@ const goalBareClaimCostThreshold = 2
 // recordless to recorded, so the recorded-ladder's counter must start
 // fresh).
 const goalZeroOutputPushMax = 2
+
+// goalLiveTurnStallGrace is how long a REGISTERED turn may show no work at
+// all before the keeper stops treating its mere registration as evidence of
+// activity (see maybeSettleGoalIdle's live-turn branch for the defect this
+// closes). A var so tests pin it without a real wait.
+//
+// WHY A FALSE "no work" VERDICT HERE IS CHEAP, which is what makes this
+// bound safe to set aggressively. Crossing it changes exactly one thing: the
+// keeper stops re-arming the goal record's LastActivityAt. It does NOT judge,
+// push, nudge, cancel, fail or otherwise touch the goal — every one of those
+// paths still returns at the same `return` it always did. The only mechanism
+// that reads a stale LastActivityAt is the MULTI-DAY idle-expiry sweep
+// (goalIdleExpirySweep), which needs cfg.EffectiveIdleExpiryDays (7 by
+// default) of continuous staleness before it acts. So a legitimately slow
+// turn that is genuinely quiet for an hour inside one long tool call simply
+// has its goal clock frozen for that hour and then re-armed by its own
+// completion (checkGoalLoopAfterTurn's bumpGoalActivityOnTurn) — no
+// observable consequence whatsoever. The 37-minute-but-healthy member the
+// UAT recorded is in exactly that position.
+//
+// The converse is not cheap, which is why the bound exists at all: while the
+// keeper re-arms on registration alone, a goal whose turn is wedged can NEVER
+// idle-expire, because the clock the expiry sweep measures is pushed forward
+// every tick by the wedge itself.
+var goalLiveTurnStallGrace = 5 * time.Minute //nolint:gochecknoglobals
 
 // goalIdleSettleSourceKind / goalClaimDeferredSourceKind are the two
 // AsyncNotifyEvent.SourceKind values dispatchGoalAsyncFollowUp's callers
@@ -275,6 +301,17 @@ type goalTriggerState struct {
 	// short, since the goal just activated) transcript once.
 	claimScanWatermarks map[string]time.Time
 
+	// liveTurnWork is the keeper's per-goal-id memory of what the session's
+	// live turn(s) were DOING the last time it looked: a work fingerprint
+	// (goalLiveTurnWorkFingerprint) plus the time that fingerprint was first
+	// observed. It is what lets the live-turn suppression tell a turn that is
+	// working from a turn that is merely registered — see maybeSettleGoalIdle.
+	//
+	// In-memory only, like every other map on this singleton: a restart
+	// re-baselines, which is correct — a restart also drops activeTurnStates,
+	// so there is no registered turn left to have an opinion about.
+	liveTurnWork map[string]goalLiveTurnWork
+
 	// sessionStoreResolver is FR-031's session-store seam for routeFor's
 	// persisted-routing rehydration. routeFor is called as a bare
 	// goalTriggers().routeFor(sessionID) — no *AgentLoop receiver, by
@@ -302,6 +339,17 @@ var goalTriggersSingleton = &goalTriggerState{
 	outputWatermarks:    make(map[string]time.Time),
 	blocked:             make(map[string]bool),
 	claimScanWatermarks: make(map[string]time.Time),
+	liveTurnWork:        make(map[string]goalLiveTurnWork),
+}
+
+// goalLiveTurnWork is one observation of what a goal's live turn(s) were
+// doing: the fingerprint itself, and the time that exact fingerprint was
+// FIRST seen. now.Sub(since) is therefore "how long this session's turns have
+// produced no observable work", which is the quantity the live-turn
+// suppression needs and the one `goalHasLiveTurn` alone cannot supply.
+type goalLiveTurnWork struct {
+	fingerprint string
+	since       time.Time
 }
 
 // goalTriggers returns the package-wide goalTriggerState singleton. The idle
@@ -329,6 +377,7 @@ func resetGoalTriggerStateForTest() {
 	s.outputWatermarks = make(map[string]time.Time)
 	s.blocked = make(map[string]bool)
 	s.claimScanWatermarks = make(map[string]time.Time)
+	s.liveTurnWork = make(map[string]goalLiveTurnWork)
 	s.sessionStoreResolver = nil
 }
 
@@ -422,6 +471,7 @@ func (al *AgentLoop) clearGoalTriggerState(sessionID, goalID string) {
 		delete(s.outputWatermarks, goalID)
 		delete(s.blocked, goalID)
 		delete(s.claimScanWatermarks, goalID)
+		delete(s.liveTurnWork, goalID)
 	}
 	delete(s.routing, sessionID)
 	delete(s.diffBoundaryHash, sessionID)
@@ -1052,12 +1102,64 @@ func (al *AgentLoop) maybeSettleGoalIdle(now time.Time, store *session.UnifiedSt
 	// (and the D6c nudge ladder, which shares this same gate) is suppressed
 	// while one exists; the window re-arms so the NEXT check waits a full
 	// quiet window rather than re-testing every tick.
-	if al.goalHasLiveTurn(sessionID) {
-		logger.InfoCF("agent", "goal idle settle: suppressed, turn in flight",
-			map[string]any{"session_id": sessionID, "goal_id": rec.GoalID})
-		bumpGoalRecordActivity(rec.GoalID, now.UTC())
+	//
+	// THE RE-ARM IS CONDITIONAL ON WORK, not on registration (UAT wedge fix).
+	// The bump below writes the goal record's LastActivityAt — the very clock
+	// goalIdleExpirySweep measures, and under operator decision D-A the sole
+	// remaining terminator of a quiet goal. Re-arming it on the mere EXISTENCE
+	// of a registered turn means a turn that is registered but wedged disarms
+	// that terminator on every tick, forever: the goal cannot expire, cannot be
+	// judged (D13 retired the claimless path), cannot be pushed (this branch
+	// returns first), and says nothing but one repeating INFO line. Silence was
+	// the defect, and this branch was manufacturing the evidence that kept it
+	// silent.
+	//
+	// So the branch now asks what the turn is DOING
+	// (goalLiveTurnWorkFingerprint) rather than only whether it exists. While
+	// the fingerprint keeps changing, behaviour is byte-identical to before:
+	// suppress and re-arm. Once it has been frozen for goalLiveTurnStallGrace,
+	// the suppression STILL holds — the keeper takes no action against a turn
+	// it cannot see inside — but it stops pushing the terminator clock forward,
+	// so the goal's staleness becomes real and the multi-day expiry sweep can
+	// finally reach it. Nothing here judges, pushes, nudges or cancels: D13's
+	// "a quiet goal is never judged without a claim" is untouched, and this
+	// branch's `return` is the same one it always had.
+	if live, fp := al.goalLiveTurnWorkFingerprint(sessionID); live {
+		frozenFor := al.observeGoalLiveTurnWork(rec.GoalID, fp, now)
+		if frozenFor < goalLiveTurnStallGrace {
+			logger.InfoCF("agent", "goal idle settle: suppressed, turn in flight",
+				map[string]any{"session_id": sessionID, "goal_id": rec.GoalID})
+			bumpGoalRecordActivity(rec.GoalID, now.UTC())
+			return
+		}
+		// The operator-visible half of the fix: a turn that holds the
+		// suppression open while producing nothing is named, with how long it
+		// has been like that and how long the goal's own clock has been stale.
+		// This is the only place in the system that can say it — the plan sees
+		// a member that is legitimately in_progress with a live dispatch slot,
+		// and the turn itself is, by construction, not reporting.
+		logger.WarnCF("agent",
+			"goal idle settle: a turn is registered for this goal but has produced no observable work for longer "+
+				"than the stall grace — the keeper is NOT re-arming the goal's activity clock, so the idle-expiry "+
+				"sweep can reach it (no verdict, no push, no cancel is taken here)",
+			map[string]any{
+				"session_id":     sessionID,
+				"goal_id":        rec.GoalID,
+				"no_work_for":    frozenFor.String(),
+				"stall_grace":    goalLiveTurnStallGrace.String(),
+				"goal_quiet_for": now.Sub(last).String(),
+				"last_activity":  last.UTC().Format(time.RFC3339),
+				// Counted off the fingerprint rather than re-scanning
+				// activeTurnStates: one turn signature per "|"-joined segment,
+				// so this is the exact set the verdict above was made against
+				// rather than a second, possibly-different sample.
+				"live_turn_count": strings.Count(fp, "|") + 1,
+			})
 		return
 	}
+	// No live turn at all: drop any stale work observation so the NEXT turn on
+	// this goal measures its own no-work clock from its own first sighting.
+	al.clearGoalLiveTurnWork(rec.GoalID)
 
 	agentInst := resolveGoalAgent(al, s)
 	if agentInst == nil {
@@ -1435,9 +1537,17 @@ func (al *AgentLoop) goalHasParkedCard(sessionID string) bool {
 	return ok
 }
 
-// goalHasLiveTurn is D6a's FR-013 in-flight-suppression predicate: reports
-// whether a LIVE turn exists for sessionID — its own root turn OR any
-// delegated descendant.
+// goalLiveTurnWorkFingerprint is D6a's FR-013 in-flight-suppression
+// predicate, and the one thing that predicate could never answer before: not
+// just "is a turn registered for sessionID" but "what is that turn actually
+// doing". It returns whether any live turn exists — sessionID's own root turn
+// OR any delegated descendant — and, when one does, a fingerprint of the WORK
+// those turns have done so far.
+//
+// It REPLACES the former goalHasLiveTurn outright rather than wrapping it: a
+// bare "is one registered" answer has exactly one consumer, which now needs
+// both halves, and a delegating one-liner kept alongside would be the same
+// predicate under two names with only one of them safe to use.
 //
 // MECHANISM (deviation from the ADR's literal "transcriptSessionID" wording,
 // reported per the lane brief): resolved via collectDescendantTurnIDs
@@ -1452,12 +1562,122 @@ func (al *AgentLoop) goalHasParkedCard(sessionID string) bool {
 // routingSessionID doc comment) — precisely "root turn or delegated
 // descendant" in one match. This is the SAME mechanism ADR-057's chat-wide
 // Stop cascade uses for an identical "reach the whole subtree" need.
-func (al *AgentLoop) goalHasLiveTurn(sessionID string) bool {
+//
+// THE DEFECT THIS EXISTS TO CLOSE. maybeSettleGoalIdle's live-turn branch
+// treats a registered turn as activity and re-arms the goal record's
+// LastActivityAt on every tick. That clock is not a display field: it is what
+// goalIdleExpirySweep (goal_loop.go) measures, and under operator decision D-A
+// that sweep is the SOLE remaining terminator of a quiet goal. So the branch
+// re-arms the goal's only terminator using "a turn is registered" as its
+// evidence — and a turn that is registered but WEDGED (its goroutine blocked
+// forever, or blocked on something that will never return) satisfies that
+// evidence test for as long as the process lives. The result is a goal that
+// can never expire, never be judged, never be pushed and never be reported:
+// the plan renders "Running 5/6" indefinitely, the task stays in_progress, and
+// the single INFO line the keeper emits every tick says "suppressed, turn in
+// flight" — which is true, and says nothing.
+//
+// WHAT COUNTS AS WORK, and why none of it is a heartbeat. Every term below is
+// a counter the turn already advances as a side effect of doing real work; not
+// one of them is a liveness ping, and nothing new is written anywhere to feed
+// this function:
+//
+//   - the SET of live turn ids itself — a delegate spawning or finishing is
+//     progress (and turnIDs are sorted so map-iteration order cannot make a
+//     static tree look like a changing one);
+//   - iteration — the agent loop's LLM-round counter (loop.go);
+//   - turnTokens — tokens billed to the turn, which moves on every completed
+//     provider call even when the round count does not;
+//   - len(childTurnIDs) — sub-turns spawned;
+//   - phase — the turn's own lifecycle position;
+//   - the tool-call-argument progress stamp (G1's recordToolCallProgress,
+//     turn.go), which advances per SSE delta while a tool call streams.
+//
+// The fingerprint is compared, never interpreted: callers only ask whether it
+// CHANGED between two observations, so adding a term here can only ever make
+// the predicate more generous (more things count as work), never less.
+//
+// KNOWN AND ACCEPTED LIMIT: a turn blocked inside one genuinely long tool call
+// advances none of these either — turn.go's clearToolCallProgress documents
+// that exact case ("the worker is not generating anything; it is stuck in tool
+// execution"). At the turn level a 40-minute `bash` and a wedge are the same
+// observation, and this function does not pretend otherwise. That is precisely
+// why its only consumer stops RE-ARMING a multi-day clock rather than taking
+// any action against the turn — see goalLiveTurnStallGrace.
+func (al *AgentLoop) goalLiveTurnWorkFingerprint(sessionID string) (bool, string) {
 	ids := al.collectDescendantTurnIDs(sessionID)
 	if len(ids) == 0 {
-		return false
+		return false, ""
 	}
-	return len(al.liveTurnStatesAmong(ids)) > 0
+	live := al.liveTurnStatesAmong(ids)
+	if len(live) == 0 {
+		return false, ""
+	}
+	sigs := make([]string, 0, len(live))
+	for _, ts := range live {
+		sigs = append(sigs, turnWorkSignature(ts))
+	}
+	sort.Strings(sigs)
+	return true, strings.Join(sigs, "|")
+}
+
+// turnWorkSignature renders one turn's work counters (see
+// goalLiveTurnWorkFingerprint for what each term is and why it qualifies).
+// Read under ts.mu like every other cross-goroutine reader of these fields;
+// the tool-call-argument stamp is its own atomic and needs no lock, but is
+// read inside the same section so the whole signature is one snapshot.
+func turnWorkSignature(ts *turnState) string {
+	if ts == nil {
+		return ""
+	}
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return fmt.Sprintf("%s/%d/%d/%d/%s/%d",
+		ts.turnID,
+		ts.iteration,
+		ts.turnTokens,
+		len(ts.childTurnIDs),
+		ts.phase,
+		ts.toolCallProgress.lastActivityUnixNano.Load(),
+	)
+}
+
+// observeGoalLiveTurnWork records fingerprint fp for goalID at now and returns
+// how long that EXACT fingerprint has been unchanged. A first observation, or
+// any change, resets the clock and returns 0 — so a turn that has just been
+// registered, or has just done something, always reads as working.
+func (al *AgentLoop) observeGoalLiveTurnWork(goalID, fp string, now time.Time) time.Duration {
+	if goalID == "" {
+		return 0
+	}
+	s := goalTriggers()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.liveTurnWork == nil {
+		s.liveTurnWork = make(map[string]goalLiveTurnWork)
+	}
+	prev, ok := s.liveTurnWork[goalID]
+	if !ok || prev.fingerprint != fp {
+		s.liveTurnWork[goalID] = goalLiveTurnWork{fingerprint: fp, since: now}
+		return 0
+	}
+	if now.Before(prev.since) {
+		return 0
+	}
+	return now.Sub(prev.since)
+}
+
+// clearGoalLiveTurnWork drops goalID's work observation, so the next live turn
+// for this goal starts its no-work clock from scratch rather than inheriting a
+// previous turn's. Called whenever the keeper observes no live turn at all.
+func (al *AgentLoop) clearGoalLiveTurnWork(goalID string) {
+	if goalID == "" {
+		return
+	}
+	s := goalTriggers()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.liveTurnWork, goalID)
 }
 
 // goalDescendantSessionIDs returns rootID plus every session in all whose

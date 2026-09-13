@@ -136,7 +136,7 @@ func TestIdleSettlement_InFlightSuppression(t *testing.T) {
 // SAME suppression when only a delegated CHILD turn is live (own root turn
 // absent) — a goal whose agent is waiting on a delegate is working, not
 // idle (D6a). The child's routingSessionID is inherited from the chat root
-// (ADR-057), which is the mechanism goalHasLiveTurn relies on — NOT its
+// (ADR-057), which is the mechanism goalLiveTurnWorkFingerprint relies on — NOT its
 // transcriptSessionID, which is its own distinct id post-ADR-057 D2/FR-011.
 func TestIdleSettlement_InFlightSuppression_DelegatedDescendant(t *testing.T) {
 	resetGoalTriggerStateForTest()
