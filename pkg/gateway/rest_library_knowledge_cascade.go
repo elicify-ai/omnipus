@@ -61,29 +61,30 @@ func relWithinCollection(collRel, rel string) string {
 }
 
 // libraryNoteInCollection answers "which knowledge base governs this note?"
-// for a workspace-relative path, or nil when the path is not a markdown note
-// inside one. An error means the answer could not be established — the
-// caller must not fall back to plain filesystem semantics on it, because
-// "could not tell" is not "not a knowledge base".
-func (a *restAPI) libraryNoteInCollection(root *library.Root, rel string) (*libraryCollectionNote, error) {
+// for a workspace-relative path. `governed` is false when the path is not a
+// markdown note inside one (a definite answer, with no note to return). An
+// error means the answer could not be established — the caller must not
+// fall back to plain filesystem semantics on it, because "could not tell"
+// is not "not a knowledge base".
+func (a *restAPI) libraryNoteInCollection(root *library.Root, rel string) (note *libraryCollectionNote, governed bool, err error) {
 	if !knowledge.IsMarkdownPath(rel) {
-		return nil, nil
+		return nil, false, nil
 	}
 	collRel, found := enclosingCollectionRel(root, rel)
 	if !found {
-		return nil, nil
+		return nil, false, nil
 	}
 	col, err := knowledge.OpenCollection(root.HostPath(collRel))
 	if err != nil {
-		return nil, fmt.Errorf("open enclosing knowledge base %q: %w", collRel, err)
+		return nil, false, fmt.Errorf("open enclosing knowledge base %q: %w", collRel, err)
 	}
 	lockDir, err := knowledge.LockDirFor(a.homePath, col.Root())
 	if err != nil {
-		return nil, fmt.Errorf("resolve write lock directory for %q: %w", collRel, err)
+		return nil, false, fmt.Errorf("resolve write lock directory for %q: %w", collRel, err)
 	}
 	croot, err := knowledge.NewCollectionRoot(knowledge.OSLinkFS(), col.Root())
 	if err != nil {
-		return nil, fmt.Errorf("resolve knowledge base root for %q: %w", collRel, err)
+		return nil, false, fmt.Errorf("resolve knowledge base root for %q: %w", collRel, err)
 	}
 	return &libraryCollectionNote{
 		collRel:  collRel,
@@ -91,7 +92,7 @@ func (a *restAPI) libraryNoteInCollection(root *library.Root, rel string) (*libr
 		root:     croot,
 		relInCol: relWithinCollection(collRel, rel),
 		lock:     knowledge.NoteLockConfig{CollectionRoot: col.Root(), LockDir: lockDir},
-	}, nil
+	}, true, nil
 }
 
 // sameCollectionDestination reports whether toRel (workspace-relative) lands

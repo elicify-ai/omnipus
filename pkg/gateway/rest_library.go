@@ -767,12 +767,12 @@ func (a *restAPI) handleLibraryEntryDelete(w http.ResponseWriter, r *http.Reques
 	// UAT #701 / D-123: a note inside a knowledge base goes to that
 	// knowledge base's trash (restorable), the way the agent door deletes —
 	// see rest_library_knowledge_cascade.go.
-	note, noteErr := a.libraryNoteInCollection(root, rel)
+	note, governed, noteErr := a.libraryNoteInCollection(root, rel)
 	if noteErr != nil {
 		mapLibraryErr(w, "delete entry", workspaceID, noteErr)
 		return
 	}
-	if note != nil {
+	if governed {
 		a.trashNoteInCollection(w, r, workspaceID, note, rel)
 		return
 	}
@@ -1679,12 +1679,12 @@ func (a *restAPI) handleLibraryRename(w http.ResponseWriter, r *http.Request, wo
 	// UAT #701 / D-123: a note renamed within its knowledge base has every
 	// inbound wikilink rewritten, the way the agent door renames — see
 	// rest_library_knowledge_cascade.go.
-	note, noteErr := a.libraryNoteInCollection(root, fromRel)
+	note, governed, noteErr := a.libraryNoteInCollection(root, fromRel)
 	if noteErr != nil {
 		mapLibraryErr(w, "rename", workspaceID, noteErr)
 		return
 	}
-	if note != nil && sameCollectionDestination(root, note, toRel) {
+	if governed && sameCollectionDestination(root, note, toRel) {
 		a.renameNoteInCollection(w, r, "rename", workspaceID, root, note, fromRel, toRel)
 		return
 	}
@@ -1842,12 +1842,12 @@ func (a *restAPI) handleLibraryTransfer(w http.ResponseWriter, r *http.Request, 
 	// real departure the link graph cannot follow, so both keep the plain
 	// filesystem semantics.
 	if mode == transferModeMove && sameWorkspace {
-		note, noteErr := a.libraryNoteInCollection(fromRoot, fromRel)
+		note, governed, noteErr := a.libraryNoteInCollection(fromRoot, fromRel)
 		if noteErr != nil {
 			mapLibraryErr(w, string(mode), req.FromWorkspaceId, noteErr)
 			return
 		}
-		if note != nil && sameCollectionDestination(fromRoot, note, toRel) {
+		if governed && sameCollectionDestination(fromRoot, note, toRel) {
 			a.renameNoteInCollection(w, r, string(mode), req.FromWorkspaceId, fromRoot, note, fromRel, toRel)
 			return
 		}
