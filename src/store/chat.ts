@@ -4235,6 +4235,17 @@ export const useChatStore = create<ChatStore>((set, get) => {
               maybeDrainNext()
               break
             }
+            // ADR-087 D2 (finding #10) — live-path counterpart of the
+            // `replayTruncated`/`replayTruncationReason` pair computed for
+            // 'replay_message' above. Same `normalizeTruncationReason`
+            // legacy-default rule, same wire shape, different carrier
+            // (DoneStats instead of ReplayMessageFrame) so a turn truncated
+            // while the user is watching renders the suffix immediately.
+            const doneTruncated = doneStats?.truncated === true
+            const doneTruncationReason = normalizeTruncationReason(
+              doneStats?.truncated,
+              doneStats?.truncation_reason,
+            )
             withBucket(sid, (b) => {
               return produce(b, (draft) => {
                 const lastMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
@@ -4289,6 +4300,21 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   // left `true` on a message with no next token coming — a
                   // representable-but-meaningless state for a finalized bubble.
                   m.pendingTextBoundary = false
+                  // ADR-087 D2 (finding #10): the live `done` frame carries the
+                  // same truncation signal ReplayMessageFrame carries on
+                  // reattach (DoneStats.truncated/truncation_reason mirror
+                  // Message.truncated/truncation_reason). Stamp it on the
+                  // bubble the turn actually finished on (lastMsgId) so a
+                  // turn cut off at the output limit — or cancelled — renders
+                  // its suffix immediately, without waiting for a reload or a
+                  // reconnect to replay it in. Only lastMsgId: the other
+                  // still-streaming bubbles this sweep also finalizes (the
+                  // mid-turn-steer defense-in-depth case above) are not the
+                  // entry the backend actually marked truncated.
+                  if (id === lastMsgId && doneTruncated) {
+                    m.truncated = true
+                    m.truncationReason = doneTruncationReason
+                  }
                 }
                 // Bake any pending tool calls into the last assistant message so
                 // VirtualAssistantMessageRow can render them from message.tool_calls.

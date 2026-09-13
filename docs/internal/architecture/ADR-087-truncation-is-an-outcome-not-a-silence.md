@@ -143,9 +143,25 @@ the same request truncates identically.
   both gain `truncated` + `truncation_reason`. The `ReplayMessageFrame` edit MUST land in the
   **inline generating copy** in `contracts/asyncapi.yaml:2800` (its `additionalProperties: false`
   at `:2813`), not only `contracts/components/schemas/ReplayMessageFrame.yaml`.
-- **`DoneStats` is NOT extended.** The SPA reads no `DoneStats` field today; the live bubble picks
-  the notice up on reattach via replay. Dropping it also removes the turn-scope hazard (a per-turn
-  flag on a per-call event).
+- **`DoneStats` is NOT extended** — *reversed, see below.* The original reasoning: the SPA reads
+  no `DoneStats` field today; the live bubble picks the notice up on reattach via replay. Dropping
+  it also removes the turn-scope hazard (a per-turn flag on a per-call event).
+  **Reversal (finding #10, code review of this ADR's implementation):** "picks it up on reattach"
+  meant a turn truncated *while the user is actively watching* rendered no notice until a reload
+  or reconnect — the live bubble just stops mid-sentence (D4b) or sits empty (D4a) with no visual
+  distinction from a still-in-progress or a genuinely complete turn. That is user-visible on every
+  truncation, not an edge case, and the live path had no test coverage. `DoneStats` gains
+  `truncated` (boolean, optional, present only when true) and `truncation_reason` (enum
+  `cancelled` | `max_output_tokens`, optional) — mirrors `Message.truncation_reason` verbatim, for
+  the live `done` frame only. The turn-scope hazard this was meant to avoid does not apply here:
+  `DoneStats` is per-call in general (the replay-terminator `done` vs. the turn's own `done`, see
+  `store/chat.ts`'s `isReplayTerminatorDone` split), but `truncated`/`truncation_reason` are only
+  ever set on the turn's own terminal `done` — the same one `tokens`/`cost` are stamped on — never
+  on the replay-terminator `done`, so there is no ambiguity about which call the flag describes.
+  The SPA reducer (`case 'done'` in `store/chat.ts`) stamps the finishing assistant bubble from
+  `stats.truncated`/`stats.truncation_reason` using the same `normalizeTruncationReason` legacy-
+  default helper the replay path already used, so cold-load, replay, and live now derive the
+  identical value from the identical wire shape via one shared rule.
 - **Replay must emit annotated empty entries (Codex C8).** `replay.go:352` gates on
   `entry.Content != ""`; an entry with `Truncated && Content == ""` must pass through, and the SPA
   must render a suffix with no body.
@@ -318,7 +334,12 @@ three sites reaches the same branch.**
 ## 6. Non-goals
 
 Changing default `max_tokens`; the anthropic outbound exception; live retry visibility; a
-setting for auto-continue; extending `DoneStats`.
+setting for auto-continue.
+
+~~extending `DoneStats`~~ — **reversed by finding #10** (code review of this ADR's
+implementation, 2026-09-14): the live `done` frame now carries `truncated`/`truncation_reason`
+too, so a turn cut off while the user is actively watching renders the notice immediately instead
+of only after a reload/reconnect replays it back in. See D2.
 
 ## 7. Test obligations
 
