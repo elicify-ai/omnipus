@@ -765,3 +765,35 @@ describe('ToolApprovalModal — Always Allow for request_mount', () => {
     expect(screen.getByRole('button', { name: /Don't add/i })).toBeInTheDocument()
   })
 })
+
+describe('ToolApprovalModal — expiry is a timeout, not a user decision (UAT 2026-09-13 D-80)', () => {
+  // D-80: an approval that ran out unanswered reached the agent as
+  // `"reason":"user"`. The gateway itself reports "timeout" on expiry, so the
+  // only way a human gets blamed is the SPA posting a deny on the human's
+  // behalf. Nothing may be posted when the countdown ends, and dismissing an
+  // expired notice must not post either.
+  it('posts nothing when the countdown reaches zero, and dismissing the expired notice posts nothing', async () => {
+    act(() => {
+      useToolApprovalStore.setState({ queue: [{ ...SAMPLE_APPROVAL, expiresAt: Date.now() + 150 }] })
+    })
+    render(<ToolApprovalModal />)
+
+    await waitFor(
+      () => {
+        expect(screen.getByText(/Approval expired unanswered/)).toBeInTheDocument()
+      },
+      { timeout: 4000 },
+    )
+    expect(screen.getByText(/a timeout, not a denial by you/)).toBeInTheDocument()
+    expect(api.submitToolApproval).not.toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: /^Deny$/ })).toBeNull()
+
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape', code: 'Escape' })
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull()
+    })
+    expect(api.submitToolApproval).not.toHaveBeenCalled()
+    expect(useToolApprovalStore.getState().queue).toHaveLength(0)
+    expect(useToolApprovalStore.getState().setAside).toEqual([])
+  })
+})

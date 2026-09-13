@@ -488,7 +488,7 @@ describe('ToolApprovalModal — reconnect gap, end-to-end (store fix + modal ren
 
     render(<ToolApprovalModal />)
 
-    expect(screen.getByText('Approval expired — the agent will receive a denial.')).toBeInTheDocument()
+    expect(screen.getByText(/Approval expired unanswered — the agent is told nobody answered/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Deny/i })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Dismiss/i })).toBeInTheDocument()
   })

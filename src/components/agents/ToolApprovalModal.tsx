@@ -420,7 +420,7 @@ function ToolApprovalCard({
           {hasExpired ? (
             <p className="text-xs text-[var(--color-error)] flex items-center gap-1">
               <XCircle size={13} weight="fill" aria-hidden="true" />
-              Approval expired — the agent will receive a denial.
+              Approval expired unanswered — the agent is told nobody answered (a timeout, not a denial by you).
             </p>
           ) : (
             <>
