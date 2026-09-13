@@ -118,14 +118,18 @@ const EDIT_CONTEXT = { workspaceId: 'ws-1', recordType: 'company' }
 // cell, and a declared-but-unsupported type (integer) are NOT.
 
 describe('isEditableCell (ADR-083 §4.6 gate)', () => {
-  it('is true for an ordinary enum/date/text cell, and false for an undescribed cell or a declared-but-unsupported type', () => {
+  it('is true for an ordinary enum/date/text/integer/decimal/checkbox cell, and false for an undescribed cell or a relation type', () => {
     expect(isEditableCell({ property: 'status', value: 'active', type: 'enum', values: STATUS_VALUES })).toBe(true)
     expect(isEditableCell({ property: 'due', value: '2026-05-05', type: 'date' })).toBe(true)
     expect(isEditableCell({ property: 'notes', value: 'x', type: 'text' })).toBe(true)
+    // UAT #700 (2026-09-13): the three scalar types that had no control.
+    expect(isEditableCell({ property: 'count', value: '3', type: 'integer' })).toBe(true)
+    expect(isEditableCell({ property: 'budget', value: '3.50', type: 'decimal' })).toBe(true)
+    expect(isEditableCell({ property: 'done', value: 'true', type: 'checkbox' })).toBe(true)
 
     expect(isEditableCell({ property: 'legacy', value: 'x' })).toBe(false)
-    expect(isEditableCell({ property: 'count', value: '3', type: 'integer' })).toBe(false)
-    expect(isEditableCell({ property: 'done', value: 'true', type: 'checkbox' })).toBe(false)
+    expect(isEditableCell({ property: 'owner', value: '[[Ada]]', type: 'person' })).toBe(false)
+    expect(isEditableCell({ property: 'company', value: '[[Acme]]', type: 'relation' })).toBe(false)
   })
 
   it('is false for `derived` and for `relation`, EVEN on an otherwise-editable declared type — proving those two flags gate independently of `type`', () => {
@@ -201,7 +205,10 @@ describe('RecordFieldEditor — writes', () => {
     render(<TablePart part={tablePart()} rows={[makeRow()]} editContext={EDIT_CONTEXT} />)
 
     const select = screen.getByTestId('viewpart-cell-editor-enum') as HTMLSelectElement
+    // UAT D-71 (2026-09-13): a blank entry comes first so the value can be
+    // cleared; the declared values follow in declared order.
     expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual([
+      '—',
       'Prospect',
       'Active',
       'Churned',

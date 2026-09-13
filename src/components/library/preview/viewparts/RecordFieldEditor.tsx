@@ -182,6 +182,14 @@ function buildRecordValue(type: EditableCellType, raw: string): RecordValue {
       return { type: 'date', date: raw }
     case 'text':
       return { type: 'text', text: raw }
+    case 'integer':
+      // The exact digits as typed — RecordValue.integer is a STRING on the
+      // wire (FR-020b: never a float in either direction).
+      return { type: 'integer', integer: raw.trim() }
+    case 'decimal':
+      return { type: 'decimal', decimal: raw.trim() }
+    case 'checkbox':
+      return { type: 'checkbox', checkbox: raw === 'true' }
     default: {
       const unhandled: never = type
       throw new Error(`RecordFieldEditor: no write shape for cell type ${String(unhandled)}`)
@@ -191,6 +199,17 @@ function buildRecordValue(type: EditableCellType, raw: string): RecordValue {
 
 function stop(event: MouseEvent): void {
   event.stopPropagation()
+}
+
+/** Why a schema-described cell has no editor here — shown as the inert
+ *  cell's tooltip (D-113) so the missing control is explained, not hidden. */
+export function inertCellReason(cell: VaultFindCell): string {
+  if (cell.derived === true) return 'Computed value — it is derived from other properties and cannot be edited.'
+  if (cell.relation === true || cell.type === 'relation' || cell.type === 'person') {
+    return 'Relation — change it through the agent; a picker is not available here yet.'
+  }
+  if (cell.many === true) return 'List value — change it through the agent; editing a list here is not supported.'
+  return 'This value cannot be edited here.'
 }
 
 /**
@@ -256,7 +275,31 @@ export function EditableCell({
     setVersionToken(row.version_token)
   }, [cell.value, row.version_token])
 
-  if (target === undefined) return <>{renderValue(value)}</>
+  if (target === undefined) {
+    // UAT D-113 (2026-09-13): a cell the schema DESCRIBES but this surface
+    // cannot edit (a relation/person, a derived value, a list) used to look
+    // and behave like its editable neighbours — `cursor: pointer` inherited
+    // from the row, and a click that NAVIGATED OUT of the table to the note
+    // reader. On an editing surface it now reads as inert (default cursor,
+    // a title saying why) and swallows the click; the row's own Open
+    // button remains the way to the note. A surface with no edit context
+    // at all is left exactly as before: nothing there is editable, so the
+    // row click is the only affordance and must keep working.
+    if (context !== undefined && cell.type !== undefined) {
+      return (
+        <span
+          className="cursor-default"
+          title={inertCellReason(cell)}
+          data-testid="viewpart-cell-inert"
+          onMouseDown={stop}
+          onClick={stop}
+        >
+          {renderValue(value)}
+        </span>
+      )
+    }
+    return <>{renderValue(value)}</>
+  }
 
   async function commit(raw: string): Promise<void> {
     if (target === undefined) return
@@ -412,6 +455,10 @@ export function EditableCell({
           aria-label={`Edit ${cell.property}`}
           className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[12px] text-[var(--color-secondary)] disabled:opacity-60"
         >
+          {/* UAT D-71 (2026-09-13): a blank entry, so a value can be TAKEN
+              AWAY as well as set. Choosing it sends `values: []` — the same
+              clear the text editor already performs on an empty string. */}
+          <option value="">—</option>
           {(cell.values ?? []).map((v) => (
             <option key={v.value} value={v.value}>
               {v.label ?? v.value}
@@ -425,6 +472,38 @@ export function EditableCell({
             <option value={value}>{value}</option>
           )}
         </select>
+        {saving && <SpinnerGap size={12} className="animate-spin text-[var(--color-muted)]" />}
+        {error !== undefined && (
+          <span role="alert" data-testid="viewpart-cell-error" className="text-[11px] text-[var(--color-warning)]">
+            {error}
+          </span>
+        )}
+      </span>
+    )
+  }
+
+  if (cell.type === 'checkbox') {
+    // UAT #700 (2026-09-13): a real checkbox, always live like the enum
+    // select. `value` is the wire spelling ('true' / 'false' / '' absent);
+    // an absent value renders unchecked and a first tick writes `true`.
+    return (
+      <span className="inline-flex items-center gap-1.5">
+        <input
+          tabIndex={0}
+          type="checkbox"
+          checked={value === 'true'}
+          disabled={saving}
+          onMouseDown={stop}
+          onClick={stop}
+          onChange={(event) => {
+            const next = event.target.checked ? 'true' : 'false'
+            setDraft(next)
+            void commit(next)
+          }}
+          data-testid="viewpart-cell-editor-checkbox"
+          aria-label={`Edit ${cell.property}`}
+          className="h-3.5 w-3.5 accent-[var(--color-accent)] disabled:opacity-60"
+        />
         {saving && <SpinnerGap size={12} className="animate-spin text-[var(--color-muted)]" />}
         {error !== undefined && (
           <span role="alert" data-testid="viewpart-cell-error" className="text-[11px] text-[var(--color-warning)]">
@@ -479,6 +558,12 @@ export function EditableCell({
       <input
         tabIndex={0}
         type={cell.type === 'date' ? 'date' : 'text'}
+        // #700: integer / decimal use a TEXT input with a numeric keyboard
+        // hint rather than type="number" — the browser's number input drops
+        // trailing zeros, rejects some locales' separators and would turn
+        // the exact-digits contract (FR-020b) into a float on the way out.
+        inputMode={cell.type === 'integer' ? 'numeric' : cell.type === 'decimal' ? 'decimal' : undefined}
+        pattern={cell.type === 'integer' ? '-?[0-9]*' : undefined}
         value={draft}
         autoFocus
         disabled={saving}
