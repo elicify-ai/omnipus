@@ -20,6 +20,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/knowledge"
+	"github.com/elicify-ai/omnipus/pkg/records"
 	"github.com/elicify-ai/omnipus/pkg/records/knowledgefind"
 	"github.com/elicify-ai/omnipus/pkg/records/propindex"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -368,9 +369,27 @@ func convertIndexHits(hits []knowledge.IndexHit) []knowledgefind.TextHit {
 		// of the SAME Search call.
 		out = append(out, knowledgefind.TextHit{
 			Path: h.Path, SourceHash: h.SourceHash, Score: h.Score, Kind: string(h.Kind),
+			// KB-7a's per-hit tier flag. Dropping it here (as this conversion
+			// used to) is what left knowledge_find unable to say that an
+			// answer came from the OR-ranked fallback (UAT 2026-09-13, D-07).
+			Relaxed: h.FallbackMode,
 		})
 	}
 	return out
+}
+
+// TermDocumentCounts implements knowledgefind.TextTermCounter: the per-word
+// breakdown a relaxed (fallback-tier) answer is declared with (D-07).
+func (s *findTextSearcher) TermDocumentCounts(_ context.Context, words string) ([]generated.VaultTermCount, error) {
+	counts, err := s.ix.TermDocumentCounts(words)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]generated.VaultTermCount, 0, len(counts))
+	for _, c := range counts {
+		out = append(out, generated.VaultTermCount{Term: c.Term, Documents: c.Documents})
+	}
+	return out, nil
 }
 
 func (s *findTextSearcher) NearestTerms(_ context.Context, words string, limit int) ([]generated.VaultTermCount, error) {
@@ -500,27 +519,96 @@ func (s *findTextSearcher) Populated(_ context.Context) (bool, error) {
 	return manifest.Len() == len(scan.Entries), nil
 }
 
-// openFindStore opens the properties index for one collection, best-effort.
-// Every failure mode is non-fatal here on purpose (see buildDeps' comment):
-// no SQLite on this platform, the index never built, or a path error all
-// return (nil, nil) so the caller proceeds with Store=nil and Find() itself
-// decides, per query, whether that dependency was actually needed.
-func openFindStore(ctx context.Context, home, collectionRoot string) (propindex.Store, func() error) {
+// openFindStore opens the properties index for one collection, and REPAIRS
+// it in place when it is not usable (UAT 2026-09-13, D-02).
+//
+// It returns the store and its closer, or (nil, nil, reason) where reason
+// says — in words a refusal can quote — why no usable store could be
+// produced. On a build with no properties index at all the reason is empty:
+// that is a platform posture, not a fault, and Find() applies its own
+// carve-outs for it.
+//
+// WHY IT SELF-HEALS. The usability test below (openUsableFindStore) is
+// strict on purpose — a store holding fewer rows than there are files on disk
+// answers a typed query with a confident, silently partial result, which is
+// the one outcome this whole surface exists to prevent. But strict-and-
+// refuse, on its own, produced the UAT's worst finding: ANY drift between the
+// store and the disk closed the index for every caller until the next
+// lifecycle reconcile happened to run. A note written by `write_file`, an
+// import rewriting notes on the host side, a second knowledge base's folder
+// removed, a stray `.trash-staging.txt` — each left the row count one off,
+// and from then on every `knowledge_find` and every saved view answered
+// "the properties index is not open" while the remedy the message named
+// (`knowledge_describe check_integrity`) rebuilt nothing. Only a gateway
+// restart, or ~160 s of luck with the watcher, recovered it.
+//
+// The drift is real and the refusal was honest; the missing piece was the
+// REPAIR. Sync (sync.go) is the one operation that establishes coverage —
+// it is incremental (unchanged notes are skipped by hash), idempotent, and
+// safe to run beside the lifecycle's own reconcile (both go through SQLite's
+// own locking under WAL). So an unusable store is synced right here, once,
+// and re-checked; a query then reads a store that matches the disk instead of
+// being refused for a mismatch nothing was going to fix.
+func openFindStore(ctx context.Context, home, collectionRoot string) (propindex.Store, func() error, string) {
 	path, err := knowledge.PropertiesIndexPath(home, collectionRoot)
 	if err != nil {
 		slog.Debug("vaultprops: knowledge_find: properties index path unavailable", "error", err)
-		return nil, nil
+		return nil, nil, "its location could not be resolved: " + err.Error()
 	}
+	store, reason := openUsableFindStore(ctx, path, collectionRoot, nil)
+	if store != nil {
+		return store, store.Close, ""
+	}
+	if !records.PropertyIndexAvailable {
+		// No SQLite on this build: nothing to repair, and Find() names the
+		// platform carve-out itself.
+		return nil, nil, ""
+	}
+
+	stats, serr := Sync(ctx, home, collectionRoot, SyncOptions{})
+	if serr != nil {
+		slog.Warn("vaultprops: knowledge_find: the properties index was unusable and rebuilding it failed",
+			"path", path, "collection_root", collectionRoot, "why_unusable", reason, "error", serr)
+		return nil, nil, "rebuilding it failed: " + serr.Error()
+	}
+	slog.Info("vaultprops: knowledge_find: the properties index was out of step with the collection and was brought up to date",
+		"path", path, "collection_root", collectionRoot, "why", reason,
+		"scanned", stats.Scanned, "indexed", stats.Indexed, "unchanged", stats.Unchanged,
+		"removed", stats.Removed, "problems", len(stats.Problems))
+	store, reason = openUsableFindStore(ctx, path, collectionRoot, &stats)
+	if store != nil {
+		return store, store.Close, ""
+	}
+	slog.Warn("vaultprops: knowledge_find: the properties index is still unusable after being rebuilt",
+		"path", path, "collection_root", collectionRoot, "why", reason)
+	return nil, nil, "after rebuilding it, " + reason
+}
+
+// openUsableFindStore opens the store at path and applies the usability
+// tests, returning either a store the caller may query or the reason it
+// may not. `synced`, when non-nil, is the result of the Sync that just ran:
+// coverage is then judged against what that sync could account for (every
+// scanned file minus the ones it reported unreadable), because a file Sync
+// itself could not read will never have a row and must not keep the whole
+// index closed; and a collection Sync found EMPTY is a usable, empty store
+// rather than "not built yet".
+func openUsableFindStore(ctx context.Context, path, collectionRoot string, synced *SyncStats) (propindex.Store, string) {
 	if _, statErr := os.Stat(path); statErr != nil {
 		// Never indexed (or platform without SQLite never created the file).
 		// Not logged at Warn: this is the ordinary state of a collection
-		// nobody has run check_integrity/indexing against yet.
-		return nil, nil
+		// nobody has run a sync against yet.
+		return nil, "it has not been built yet"
 	}
 	store, err := propindex.Open(ctx, path, propindex.Options{})
 	if err != nil {
 		slog.Debug("vaultprops: knowledge_find: properties index could not be opened", "path", path, "error", err)
-		return nil, nil
+		return nil, "it could not be opened: " + err.Error()
+	}
+	closeUnusable := func(why string) (propindex.Store, string) {
+		if cerr := store.Close(); cerr != nil {
+			slog.Warn("vaultprops: knowledge_find: closing an unusable properties index failed", "path", path, "error", cerr)
+		}
+		return nil, why
 	}
 	// NeedsFullIndex() ALONE stopped being sufficient the moment
 	// author.go's instant-indexing path could write to this store, for the
@@ -545,22 +633,16 @@ func openFindStore(ctx context.Context, home, collectionRoot string) (propindex.
 	// with no words= answered "COMPLETE: yes — 0 records matched" over a
 	// store holding 1 of 4 deals.
 	//
-	// The fix asks the SAME question Populated() asks, translated to this
-	// store's own shape: does the number of paths the store actually holds
-	// match a fresh stat-only scan of what is on disk right now? A store
-	// seeded by nothing but single-path instant writes fails that
-	// comparison and is correctly treated as not (yet) usable for a typed
-	// query, exactly like NeedsFullIndex() already would have reported had
-	// the count still been zero. A store a real sync produced — however
-	// many rows it holds, including zero for a genuinely empty collection —
-	// passes it.
-	if store.NeedsFullIndex() {
-		if cerr := store.Close(); cerr != nil {
-			slog.Warn("vaultprops: knowledge_find: closing an unusable properties index failed", "path", path, "error", cerr)
-		}
-		return nil, nil
+	// The coverage test asks the SAME question Populated() asks, translated
+	// to this store's own shape: does the number of paths the store actually
+	// holds match a fresh stat-only scan of what is on disk right now? A
+	// store seeded by nothing but single-path instant writes fails that
+	// comparison and is repaired by openFindStore's Sync before it is used
+	// for a typed query.
+	if store.NeedsFullIndex() && !(synced != nil && synced.Scanned == 0) {
+		return closeUnusable("it holds no files yet")
 	}
-	covered, coverErr := propertiesStoreCoversCollection(ctx, store, collectionRoot)
+	rowCount, expected, coverErr := propertiesStoreCoverage(ctx, store, collectionRoot, synced)
 	if coverErr != nil {
 		// "I could not confirm coverage" gets the same treatment as "I know
 		// it is not covered" — a zero-hit answer this layer cannot verify
@@ -568,44 +650,61 @@ func openFindStore(ctx context.Context, home, collectionRoot string) (propindex.
 		// reason is logged, not swallowed.
 		slog.Warn("vaultprops: knowledge_find: could not verify properties index coverage; "+
 			"treating it as unusable for this call", "path", path, "collection_root", collectionRoot, "error", coverErr)
-		covered = false
+		return closeUnusable("its coverage could not be verified: " + coverErr.Error())
 	}
-	if !covered {
-		if cerr := store.Close(); cerr != nil {
-			slog.Warn("vaultprops: knowledge_find: closing an incompletely-covering properties index failed",
-				"path", path, "error", cerr)
-		}
-		return nil, nil
+	if rowCount != expected {
+		return closeUnusable(fmt.Sprintf("it holds %d of the %d files on disk", rowCount, expected))
 	}
-	return store, store.Close
+	return store, ""
 }
 
-// propertiesStoreCoversCollection compares the number of paths the
-// properties store currently holds against a fresh, stat-only
+// propertiesStoreCoverage counts the paths the properties store currently
+// holds and the number it is expected to hold: a fresh, stat-only
 // knowledge.Scan of the collection — the same inventory function
 // findTextSearcher.Populated compares the text-index manifest against, and
 // for the identical reason: it is the one count that means "this store was
 // actually built against everything on disk right now", independent of how
 // each row got there (a full vaultprops.Sync, or however many single-path
-// instant writes).
+// instant writes). When `synced` is given, the expectation is that sync's
+// own accounting instead (scanned minus unreadable), so a permanently
+// unreadable file cannot hold the index closed forever.
 //
 // AllPaths is used rather than a raw COUNT(*), because AllPaths is the
 // store's own documented "every path currently held" walk (store.go); a
 // second, parallel counting query would be a second idea of what "every
 // row" means to drift out of sync with the first.
-func propertiesStoreCoversCollection(ctx context.Context, store propindex.Store, collectionRoot string) (bool, error) {
-	rowCount := 0
+func propertiesStoreCoverage(ctx context.Context, store propindex.Store, collectionRoot string, synced *SyncStats) (rowCount, expected int, err error) {
 	if err := store.AllPaths(ctx, func(propindex.IndexedNote) error {
 		rowCount++
 		return nil
 	}); err != nil {
-		return false, fmt.Errorf("walking the properties index: %w", err)
+		return 0, 0, fmt.Errorf("walking the properties index: %w", err)
+	}
+	if synced != nil {
+		expected = synced.Scanned
+		for _, p := range synced.Problems {
+			if p.Reason == "unreadable" {
+				expected--
+			}
+		}
+		return rowCount, expected, nil
 	}
 	scan, err := knowledge.Scan(collectionRoot)
 	if err != nil {
-		return false, fmt.Errorf("scanning the collection: %w", err)
+		return 0, 0, fmt.Errorf("scanning the collection: %w", err)
 	}
-	return rowCount == len(scan.Entries), nil
+	return rowCount, len(scan.Entries), nil
+}
+
+// propertiesStoreCoversCollection is the boolean form of
+// propertiesStoreCoverage against a fresh scan, kept for callers and tests
+// that only need the verdict.
+func propertiesStoreCoversCollection(ctx context.Context, store propindex.Store, collectionRoot string) (bool, error) {
+	rows, expected, err := propertiesStoreCoverage(ctx, store, collectionRoot, nil)
+	if err != nil {
+		return false, err
+	}
+	return rows == expected, nil
 }
 
 // joinFindScopeNames renders a workspace's addressable collection names for

@@ -36,6 +36,14 @@ type TextHit struct {
 	// backward compatibility, since every text-only caller before attachment
 	// support was note-only.
 	Kind string
+	// Relaxed is KB-7a's per-hit disclosure carried through from the text
+	// index (knowledge.IndexHit.FallbackMode): true when the strict "every
+	// word present somewhere in the file" tier found nothing and this hit
+	// came from the looser OR-ranked, typo-tolerant fallback instead — so it
+	// may satisfy only SOME of the query's words, or a near spelling of one.
+	// findRecords turns it into a named problem (text_search_relaxed) so the
+	// answer can never read as an exact match (UAT 2026-09-13, D-07 / D-01).
+	Relaxed bool
 }
 
 // TextSearcher is the bleve half. It is an interface rather than a concrete
@@ -122,6 +130,20 @@ type TextIndexFreshness struct {
 	NewFiles     int
 	ChangedFiles int
 	RemovedFiles int
+}
+
+// TextTermCounter is the OPTIONAL per-word breakdown a TextSearcher can
+// offer so a relaxed answer is declared concretely (UAT 2026-09-13, D-07).
+//
+// When the text index had to fall back from "every word present" to
+// "any word, or a near spelling" (TextHit.Relaxed), the honest disclosure
+// is not merely "loosened" but WHICH words were found and which were not:
+// `Collision zzqqxx` → "Collision: 1, zzqqxx: 0". A searcher that cannot
+// count per word still gets the relaxation declared, without the numbers.
+type TextTermCounter interface {
+	// TermDocumentCounts reports, in query order, how many indexed files
+	// contain each word of `words` on its own.
+	TermDocumentCounts(ctx context.Context, words string) ([]generated.VaultTermCount, error)
 }
 
 // TextFreshnessReporter is an OPTIONAL capability a TextSearcher may implement
@@ -251,6 +273,13 @@ type Deps struct {
 	// Epoch is the properties index's generation counter, which a cursor is
 	// issued against.
 	Epoch int64
+	// StoreUnavailableReason, when Store is nil on a build that HAS a
+	// properties index, says why the caller could not open one — so the
+	// refusal names the actual cause instead of prescribing a remedy that
+	// may not apply (UAT 2026-09-13, D-02: "run knowledge_describe
+	// check_integrity" never re-opened anything). Empty when Store is set,
+	// or on a build with no properties index at all.
+	StoreUnavailableReason string
 	// RenderRows lifts the two bounds that exist for a LANGUAGE-MODEL reader,
 	// for an IN-PROCESS RENDERER that is not one. Zero — the default — changes
 	// nothing, and no tool path sets it.
@@ -553,6 +582,9 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 	// below returns when there is no typed half to intersect with.
 	var wordHits []TextHit
 	var wordsTruncated bool
+	// relaxedProblem is non-nil when the text index answered from its
+	// OR-ranked fallback tier (TextHit.Relaxed) — see relaxedWordsProblem.
+	var relaxedProblem *generated.RecordProblem
 	if q.words != "" {
 		// FIX F6 (code review A): ask for ONE MORE than the fanout. A real
 		// text index has no way to say "there were more" other than by
@@ -599,6 +631,7 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 		for _, h := range hits {
 			wordPaths[h.Path] = h
 		}
+		relaxedProblem = relaxedWordsProblem(ctx, d, q, hits)
 		// A genuine zero-hit answer — the vocabulary check, NearestTerms,
 		// "did you mean" — is refused to a TRUNCATED query: those exist to
 		// tell the caller their spelling found nothing in a corpus this layer
@@ -630,7 +663,7 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 			// not answer a confident zero because textOnlyServable was
 			// never consulted for it.
 			if d.Store == nil && !q.textOnlyServable() {
-				ref := propertiesIndexUnavailableRefusal()
+				ref := propertiesIndexUnavailableRefusal(d)
 				return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
 			}
 			// R1 (docs/internal/design/knowledge-tools-remediation.md):
@@ -684,9 +717,9 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 		// query has none, so the caller received a generic "the properties
 		// index is not open" for a question bleve alone could answer.
 		if q.textOnlyServable() {
-			return textOnlyResponse(d, q, echo, wordHits, wordsTruncated), nil
+			return textOnlyResponse(d, q, echo, wordHits, wordsTruncated, relaxedProblem), nil
 		}
-		ref := propertiesIndexUnavailableRefusal()
+		ref := propertiesIndexUnavailableRefusal(d)
 		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
 	}
 
@@ -748,6 +781,9 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 	// single-problem response built directly from `ref`, bypassing e.problems
 	// entirely — but a refusal already carries Complete:false and its own
 	// named cause, so it is not the silent-success shape F6 is about.)
+	if relaxedProblem != nil {
+		ev.recordProblems([]generated.RecordProblem{*relaxedProblem})
+	}
 	if wordsTruncated {
 		ev.recordProblems([]generated.RecordProblem{problem(generated.TextSearchTruncated,
 			fmt.Sprintf("the text index holds more than %s matches for %q; "+
@@ -849,10 +885,59 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 // independently, and only the second one actually ran early enough to catch a
 // query whose word half missed — the verdict must not depend on that, so both
 // call sites now share one source of truth.
-func propertiesIndexUnavailableRefusal() *RefusalError {
-	return refuse(problem(generated.IndexUnavailable,
-		"the properties index is not open, so no record can be read",
-		"re-open the knowledge base; run knowledge_describe check_integrity to see the index state"), nil)
+func propertiesIndexUnavailableRefusal(d Deps) *RefusalError {
+	reason := "the properties index is not open, so no record can be read"
+	fix := "the index rebuilds itself on the next query; if this persists, check the gateway log " +
+		"and run knowledge_describe check_integrity to see the index state"
+	if why := strings.TrimSpace(d.StoreUnavailableReason); why != "" {
+		reason = "the properties index is not open (" + why + "), so no record can be read"
+	}
+	return refuse(problem(generated.IndexUnavailable, reason, fix), nil)
+}
+
+// relaxedWordsProblem is the DECLARATION of a loosened text match (UAT
+// 2026-09-13, D-07 and the false-positive half of D-01).
+//
+// The text index tries "every word present somewhere in the file" first and,
+// only when that finds nothing, an OR-ranked, typo-tolerant tier (KB-7a,
+// pkg/knowledge/index.go's searchRaw). That fallback stayed SILENT at this
+// door: `words: "Collision zzqqxx"` — one word present, one absent from the
+// whole vault — rendered "COMPLETE: yes — 1 of 1 shown" with the phrase
+// echoed verbatim, and `words: "bashwrittenmarker3"` returned the note
+// holding "bashwrittenmarker2" as an exact hit. A reader of either concluded
+// every word was found.
+//
+// The fix is not to remove the fallback — a near match is often the useful
+// answer — but to make it IMPOSSIBLE to mistake for an exact one: a named
+// problem, which finishVerdict turns into COMPLETE: no with the reason, and
+// where the searcher can count per word, the concrete breakdown ("Collision:
+// 1, zzqqxx: 0") so the caller sees which word failed. nil when the hits are
+// exact, or when there are none (a zero-hit answer has nothing to declare).
+func relaxedWordsProblem(ctx context.Context, d Deps, q *query, hits []TextHit) *generated.RecordProblem {
+	if len(hits) == 0 || !hits[0].Relaxed {
+		return nil
+	}
+	var reason string
+	if len(strings.Fields(q.words)) > 1 {
+		reason = fmt.Sprintf("no indexed file contains every word of %q; the rows shown match only some of "+
+			"the words, or a near spelling of one", q.words)
+	} else {
+		reason = fmt.Sprintf("no indexed file contains %q; the rows shown match a near spelling of it", q.words)
+	}
+	if tc, ok := d.Text.(TextTermCounter); ok {
+		counts, err := tc.TermDocumentCounts(ctx, q.words)
+		if err == nil && len(counts) > 0 {
+			parts := make([]string, 0, len(counts))
+			for _, c := range counts {
+				parts = append(parts, fmt.Sprintf("%s: %d", c.Term, c.Documents))
+			}
+			reason += " — files containing each word on its own: " + strings.Join(parts, ", ")
+		}
+	}
+	p := problem(generated.TextSearchRelaxed, reason,
+		"treat these rows as near matches, not as files containing all the words; "+
+			"respell or drop a word to search exactly, or narrow with a typed `filter`")
+	return &p
 }
 
 // checkTextIndexPopulated refuses a words-carrying, zero-hit query whose text
@@ -1332,8 +1417,29 @@ func (q *query) textOnlyServable() bool {
 		len(q.selectCols) != 0 {
 		return false
 	}
-	return q.kind == KindNote || (q.kind == KindAttachment && records.PropertyIndexAvailable)
+	// FAIL CLOSED ON A BUILD THAT HAS A PROPERTIES INDEX (UAT 2026-09-13,
+	// D-01). A nil Store on such a build is a FAULT — the index could not be
+	// opened or rebuilt — never a platform posture, and the UAT showed what
+	// answering from the text index alone in that state produces: a
+	// confident "COMPLETE: yes" with the INDEX line silently missing, while
+	// the identical query with a `type` was honestly refused. The two doors
+	// must agree: on a SQLite build every non-explain query needs the store,
+	// exactly as the d.Store == nil gate says, and the words-only case is not
+	// exempt. The carve-out below is the platform one only: a build with no
+	// properties index at all still answers plain words over notes (the
+	// propindex_stub posture), and still refuses attachments by name
+	// (MV-9).
+	if propertyIndexAvailable {
+		return false
+	}
+	return q.kind == KindNote
 }
+
+// propertyIndexAvailable mirrors records.PropertyIndexAvailable (a build-time
+// constant). It is a variable only so a test on a SQLite build can exercise
+// the propindex-less platform posture textOnlyServable keeps for builds that
+// cannot have a properties index at all; production never assigns it.
+var propertyIndexAvailable = records.PropertyIndexAvailable
 
 // textOnlyResponse answers a words-only query out of the text index.
 //
@@ -1342,7 +1448,7 @@ func (q *query) textOnlyServable() bool {
 // indexes" would be a freshness claim with nothing behind it, and a false
 // reassurance is worse than a missing line. And it renders NO cells: a column
 // is a decoded property value, and there are no property rows here.
-func textOnlyResponse(d Deps, q *query, echo string, hits []TextHit, truncated bool) generated.VaultFindResponse {
+func textOnlyResponse(d Deps, q *query, echo string, hits []TextHit, truncated bool, relaxed *generated.RecordProblem) generated.VaultFindResponse {
 	// FR-060's workspace scope is the caller's, already resolved, and it is
 	// applied again here rather than trusted: TextSearcher.Search states that
 	// it answers "within the caller's already-resolved scope", and a prefix
@@ -1405,6 +1511,9 @@ func textOnlyResponse(d Deps, q *query, echo string, hits []TextHit, truncated b
 	}
 
 	problems := []generated.RecordProblem{}
+	if relaxed != nil {
+		problems = append(problems, *relaxed)
+	}
 	if truncated {
 		problems = append(problems, problem(generated.TextSearchTruncated,
 			fmt.Sprintf("the text index holds more than %s matches for %q; only the top-ranked %s were returned",

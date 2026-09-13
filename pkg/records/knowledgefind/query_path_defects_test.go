@@ -638,6 +638,7 @@ func TestWordsOnly_IsAnsweredWithoutThePropertiesIndex(t *testing.T) {
 
 	d := f.deps()
 	d.Store = nil // the shape of a build where the index cannot exist at all
+	asPropindexLessBuild(t)
 
 	words := "monstera"
 	resp, err := Find(context.Background(), d, generated.VaultFindRequest{Words: &words})

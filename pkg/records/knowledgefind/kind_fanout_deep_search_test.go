@@ -134,7 +134,7 @@ func TestKindNarrowedDeepReask_CannotProveExhaustionAtSearcherCeiling(t *testing
 
 	f := newFixture(t)
 	d := f.deps()
-	d.Store = nil // the properties index is absent — the text-only fallback
+	seedStoreFromTextHits(t, f, text.hits) // the production shape: store open (D-01)
 	d.Text = text
 
 	// No withLimit: DefaultLimit (50) keeps textFanout(50) == 1,000, well

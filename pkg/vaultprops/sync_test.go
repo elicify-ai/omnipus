@@ -120,18 +120,25 @@ func TestSync_FillsThePropertiesIndexSoKnowledgeFindStopsRefusing(t *testing.T) 
 		"Notes/loose.md":                    "# Just a note\nNo frontmatter here.\n",
 	})
 
-	// BEFORE: nothing has ever indexed this collection's properties.
+	// BEFORE: nothing has ever indexed this collection's properties. UAT
+	// 2026-09-13 D-02: knowledge_find no longer refuses that state — it
+	// builds the index on demand through the same Sync this test then runs
+	// explicitly. The refusal once asserted here is gone by design; what must
+	// hold is that the very first answer is already correct.
 	before := findViaTool(t, home, root, map[string]any{"type": "plant"})
-	if !strings.Contains(before, "properties index is not open") {
-		t.Fatalf("expected the documented refusal before Sync ever ran, got:\n%s", before)
+	if strings.Contains(before, "properties index is not open") {
+		t.Fatalf("knowledge_find must build the missing properties index on demand, got:\n%s", before)
+	}
+	if !strings.Contains(before, "PL-0001") {
+		t.Fatalf("the on-demand build did not surface the record:\n%s", before)
 	}
 
 	stats, err := Sync(context.Background(), home, root, SyncOptions{})
 	if err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
-	if stats.Indexed == 0 {
-		t.Fatalf("Sync reported zero notes indexed: %+v", stats)
+	if stats.Unchanged == 0 {
+		t.Fatalf("Sync after the on-demand build should find the notes already indexed: %+v", stats)
 	}
 
 	// AFTER: the same call, same arguments, now returns the record.

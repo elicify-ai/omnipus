@@ -76,8 +76,8 @@ func TestKindCrowdedFanout_AttachmentSurvivesNoteDomination(t *testing.T) {
 
 	f := newFixture(t)
 	d := f.deps()
-	d.Store = nil // the properties index is absent — the text-only fallback
 	seedKindCrowdedCorpus(f, numNotes, numAttachments)
+	seedStoreFromTextHits(t, f, f.text.hits) // the production shape: store open (D-01)
 
 	resp, err := Find(context.Background(), d, req(
 		withWords("report"), withKind(KindAttachment),
@@ -152,7 +152,6 @@ func TestKindCrowdedFanout_NoteSurvivesAttachmentDomination(t *testing.T) {
 
 	f := newFixture(t)
 	d := f.deps()
-	d.Store = nil
 	// seedKindCrowdedCorpus always orders notes ahead of attachments, so this
 	// direction (attachments dominating) builds the `only` list by hand
 	// instead, with attachments occupying the front of the ranking.
@@ -168,6 +167,7 @@ func TestKindCrowdedFanout_NoteSurvivesAttachmentDomination(t *testing.T) {
 		only = append(only, p)
 	}
 	f.text.only = only
+	seedStoreFromTextHits(t, f, f.text.hits) // the production shape: store open (D-01)
 
 	resp, err := Find(context.Background(), d, req(
 		withWords("report"), withKind(KindNote),

@@ -43,6 +43,7 @@ properties:
       - page_size_clamped
       - scope_truncated
       - text_search_truncated
+      - text_search_relaxed
       - aggregate_refused
       - index_unavailable
       - evaluation_bound_exceeded
@@ -138,6 +139,19 @@ properties:
       evaluation_bound_exceeded, not by this fanout), so replacing or
       narrowing `words` with an equivalent typed condition on a declared
       property is not answered by this same bound.
+      "text_search_relaxed" — UAT 2026-09-13, D-07 / D-01. The text index
+      answers `words` in two tiers: strict first (every word present somewhere
+      in the file), and only when that finds nothing an OR-ranked, typo-
+      tolerant fallback where a hit may satisfy only SOME of the words, or a
+      near spelling of one. The fallback used to be silent at this door:
+      `words: "Collision zzqqxx"` (one word absent from the whole vault)
+      answered "COMPLETE: yes — 1 of 1 shown", and a single misspelled word
+      returned its edit-distance-1 neighbour as an exact hit. Reported, with
+      Complete: false, whenever the fallback tier answered; where the searcher
+      can count per word the reason carries the breakdown ("Collision: 1,
+      zzqqxx: 0") so the caller sees which word was not found. The rows are
+      still returned — a near match is often the useful answer — but they can
+      no longer be mistaken for files containing every word.
       "aggregate_refused" — no aggregate is returned over a refused candidate
       set; it is never partial (FR-066).
       "index_unavailable" — the index predates record support and cannot hold

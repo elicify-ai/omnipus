@@ -149,14 +149,23 @@ func TestF9B_TypedOnly_OneWriteToNeverSweptCollectionMustNotFakeCompleteCoverage
 	})
 	require.NotNil(t, findRes)
 
-	if !findRes.IsError {
-		t.Fatalf("FINDING B: a type=deal query over a collection where only the ONE note just created "+
-			"(of four total deals) has ever reached the properties index answered success instead of "+
-			"refusing, silently omitting the three untouched prospect deals.\ngot: %s", findRes.ForLLM)
+	// UAT 2026-09-13 D-02: a store that covers only part of the collection is
+	// no longer REFUSED — it is brought up to date by the query itself
+	// (openFindStore's self-heal) and then answered over the whole
+	// collection. The requirement this test guards is unchanged: the three
+	// untouched prospect deals must never be silently omitted.
+	require.False(t, findRes.IsError,
+		"the query must repair the partially-covering store and answer, not refuse:\n%s", findRes.ForLLM)
+	for _, path := range []string{"one.md", "two.md", "three.md"} {
+		require.Contains(t, findRes.ForLLM, path,
+			"FINDING B: an untouched prospect deal was silently omitted\ngot: %s", findRes.ForLLM)
 	}
-	require.Contains(t, findRes.ForLLM, "the properties index is not open",
-		"expected the documented 'properties index is not open' refusal, not a different error\ngot: %s", findRes.ForLLM)
-	t.Logf("confirmed fixed: refused rather than answering over partial coverage:\n%s", findRes.ForLLM)
+	require.NotContains(t, findRes.ForLLM, "New.md", "the won deal must not match status=prospect")
+	// This test never builds the TEXT index, so the answer honestly reports
+	// each row's freshness as unknown (COMPLETE: no, per-row problems) — that
+	// disclosure is correct and is not the silent omission FINDING B was.
+	require.NotContains(t, findRes.ForLLM, "REFUSED")
+	t.Logf("confirmed fixed: the drifted store was repaired and the answer covers every deal:\n%s", findRes.ForLLM)
 }
 
 // TestF9B_TypedOnly_WordMissMustNotBypassPropertiesIndexRefusal is F1's own
@@ -238,12 +247,16 @@ func TestF9B_TypedOnly_WordMissMustNotBypassPropertiesIndexRefusal(t *testing.T)
 	})
 	require.NotNil(t, findRes)
 
-	if !findRes.IsError {
-		t.Fatalf("F1: a type=deal/status=prospect query whose `words` matched nothing answered SUCCESS "+
-			"instead of refusing, even though the properties index was never opened for this collection. "+
-			"The verdict must not depend on whether the word half happened to match.\ngot: %s", findRes.ForLLM)
-	}
-	require.Contains(t, findRes.ForLLM, "the properties index is not open",
-		"expected the documented 'properties index is not open' refusal, not a different error\ngot: %s", findRes.ForLLM)
-	t.Logf("confirmed fixed: word-miss still refuses rather than answering with no properties index open:\n%s", findRes.ForLLM)
+	// UAT 2026-09-13 D-02: a never-built properties index is built by the
+	// query itself, so the word-miss is now answered as an honest, complete
+	// zero over a store that covers the whole collection. F1's principle is
+	// intact: the verdict does not depend on whether the word half matched —
+	// both halves now see the same, repaired store.
+	require.False(t, findRes.IsError,
+		"the query must build the missing store and answer, not refuse:\n%s", findRes.ForLLM)
+	require.NotContains(t, findRes.ForLLM, "the properties index is not open")
+	require.Contains(t, findRes.ForLLM, "0 records matched", findRes.ForLLM)
+	_, statAfter := os.Stat(propsPath)
+	require.NoError(t, statAfter, "the query must have built the properties index on demand")
+	t.Logf("confirmed: word-miss answered an honest zero over an on-demand-built store:\n%s", findRes.ForLLM)
 }

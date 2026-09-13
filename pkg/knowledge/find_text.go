@@ -172,3 +172,56 @@ func prefixTermCounts(reader bleveIndexAPI.IndexReader, field, prefix string, li
 	}
 	return out, nil
 }
+
+// TermDocumentCounts reports, for every word of a free-text query, how many
+// distinct files the index holds that contain that word on its own — the
+// per-term breakdown a caller needs to DECLARE a relaxed (OR-ranked) answer
+// rather than present it as an exact one (UAT 2026-09-13, D-07 / D-01).
+//
+// WHY IT EXISTS. searchRaw tries a strict AND tier first and, when that
+// finds nothing, silently falls back to an OR-ranked, typo-tolerant tier
+// (KB-7a). The fallback is a deliberate design, but the UAT showed its
+// silence is not: `words: "Collision zzqqxx"` — one word present, one
+// absent from the whole vault — answered "COMPLETE: yes — 1 of 1 shown",
+// and a single-word query answered a near-spelling (edit-distance 1) match
+// as if it were exact. A caller reading either concluded every term was
+// found. The hit-level FallbackMode flag says WHICH tier answered; this
+// says what each word contributed, so the disclosure can be concrete
+// ("Collision: 1, zzqqxx: 0") instead of a bare "loosened".
+//
+// Each term is counted with the SAME per-term disjunction buildAndQuery
+// uses for one term (exact match across every text field plus the prose
+// prefix pass), so the numbers are the AND tier's own per-term view — never
+// a fuzzy count, which would restate the relaxation it is meant to expose.
+// A count is the number of FILES (segments collapsed), not segments, so it
+// matches what the caller sees as rows.
+//
+// The order is the query's own token order, deduplicated, and a query that
+// tokenizes to nothing returns (nil, nil).
+func (ix *Index) TermDocumentCounts(query string) ([]TermCount, error) {
+	if ix == nil {
+		return nil, fmt.Errorf("knowledge: TermDocumentCounts called with no index open")
+	}
+	terms := prefixSearchTokens(query)
+	if len(terms) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]bool, len(terms))
+	out := make([]TermCount, 0, len(terms))
+	for _, term := range terms {
+		if seen[term] {
+			continue
+		}
+		seen[term] = true
+		// indexSearchMaxFetch is the same raw-hit ceiling SearchFiltered
+		// works under; a term present in more files than that is reported
+		// at the ceiling, which still says "present" — the only fact the
+		// disclosure needs to be exact about is zero versus non-zero.
+		hits, _, err := ix.runSearch(buildAndQuery([]string{term}), indexSearchMaxFetch, term)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, TermCount{Term: term, Documents: len(collapseSegmentHits(hits))})
+	}
+	return out, nil
+}

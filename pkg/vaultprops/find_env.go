@@ -132,7 +132,7 @@ func OpenFindEnv(ctx context.Context, home string, col knowledge.ScopedCollectio
 	// Store.UpsertNote directly rather than going through it. That is a real
 	// observation about IndexNote's reachability and nothing more; it does
 	// not mean the index goes unwritten.
-	store, closeStore := openFindStore(ctx, home, col.Root)
+	store, closeStore, storeReason := openFindStore(ctx, home, col.Root)
 	if closeStore != nil {
 		closers = append(closers, closeStore)
 	}
@@ -179,6 +179,8 @@ func OpenFindEnv(ctx context.Context, home string, col knowledge.ScopedCollectio
 			Resolve:     resolve,
 			ResolveNear: resolveNear,
 			Epoch:       epoch,
+
+			StoreUnavailableReason: storeReason,
 		},
 		Schemas:      schemas,
 		SchemaReport: schemaReport,
