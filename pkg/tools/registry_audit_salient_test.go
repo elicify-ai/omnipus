@@ -25,8 +25,8 @@ func TestToolRegistry_AuditCarriesSalientArgsAndSession(t *testing.T) {
 	reg := NewToolRegistry()
 	reg.SetAuditLogger(logger)
 	reg.Register(&mockRegistryTool{
-		name:   "stub_edit_tool",
-		desc:   "stub",
+		name: "stub_edit_tool",
+		desc: "stub",
 		params: map[string]any{"type": "object", "properties": map[string]any{
 			"op": map[string]any{"type": "string"}, "path": map[string]any{"type": "string"},
 			"property": map[string]any{"type": "string"}, "value": map[string]any{"type": "string"},
