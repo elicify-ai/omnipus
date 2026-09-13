@@ -803,6 +803,40 @@ const (
 // to promote (the same reasoning the correction caps above are held to).
 const MaxConsecutiveJudgeUnavailable = 3
 
+// MaxJudgeUnavailableParkAttempts caps how many times in a row the engine will
+// re-attempt the PhaseStalled park above before giving up on parking and
+// ending the plan at failed(supervision_unavailable) instead.
+//
+// WHY THIS SECOND BOUND EXISTS (H1 review finding against the first fix).
+// MaxConsecutiveJudgeUnavailable is only enforceable if the park it triggers
+// actually takes effect. The park is a store WRITE, and a write can fail — a
+// full disk, an unwritable data directory, a corrupt plan file, a rejected
+// patch. When it did, the engine logged an ERROR and returned with the plan
+// still phased `judging`; processPlan's crash-resume arm then started another
+// judge round on the very next tick, the streak climbed to 4, 5, 6..., and the
+// original unbounded loop resumed verbatim — one ERROR line per iteration and
+// no terminal state, which is the exact behaviour the first bound was added to
+// end. The hold-back gate could not stop it, because it also required the
+// phase the failed write never set.
+//
+// So the park is now re-attempted from processPlan itself, and THAT retry is
+// what this constant bounds. The counter measures the park not TAKING EFFECT
+// (the engine finding the plan still at `judging` while its streak is at the
+// bound), not the Update call returning an error — so it also covers a park
+// that is written successfully and then reverted by something else, which no
+// error-counting version could see.
+//
+// Past the bound the plan is failed closed rather than parked again: a park
+// that cannot be persisted cannot be seen by the adjudicator, cannot be
+// corrected and cannot terminate, so it is not a park at all. The terminal
+// write IS retried until it lands (never the judge round) — an engine whose
+// store accepts no write has no better move, and in the meantime no judge
+// round runs, no LLM call is made and the streak cannot grow.
+//
+// Three is the same compromise value, for the same reason, as the constant
+// above: past a transient failure, short of an invisible window.
+const MaxJudgeUnavailableParkAttempts = 3
+
 // CorrectionCaller is the authenticated principal issuing a correction
 // (sec-MAJOR-2). Whoever consumes it decides what authority the identity
 // carries — the engine gates on the plan's durable owner linkage

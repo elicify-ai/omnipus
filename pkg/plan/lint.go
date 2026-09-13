@@ -155,25 +155,12 @@ func Lint(p *Plan, members []task.Task) *LintError {
 	// LintEmptyPlan's doc comment for why passing here was a total bypass of
 	// this entire file.
 	if len(members) == 0 {
-		v := LintViolation{
-			Kind: LintEmptyPlan,
-			Reason: fmt.Sprintf(
-				"plan %q has no member tasks; a plan must have at least one member task before it can be "+
-					"approved or corrected — an empty plan cannot satisfy its Definition of Done, and "+
-					"approving one would let members added later (e.g. by a supervision correction) skip "+
-					"the write-set and join-point checks entirely",
-				p.ID),
-		}
+		v := emptyPlanViolation(p.ID)
 		logCorrectionEvent(v.toCorrectionEvent(p.ID))
 		return &LintError{PlanID: p.ID, Violations: []LintViolation{v}}
 	}
 
-	idx := membersByID(members)
-	ancestors := ancestorSets(members, idx)
-
-	violations := lintOverlaps(members, ancestors)
-	violations = append(violations, lintJoinlessConvergence(members, idx, ancestors)...)
-
+	violations := lintViolations(members)
 	if len(violations) == 0 {
 		return nil
 	}
@@ -184,9 +171,39 @@ func Lint(p *Plan, members []task.Task) *LintError {
 	return &LintError{PlanID: p.ID, Violations: violations}
 }
 
-// LintCorrection applies Lint to the member set a correction WOULD produce if
-// committed — the plan's current members, plus req's tail members, with req's
-// tail edges applied as BlockedBy dependencies.
+// lintViolations is the pure pairwise core shared by Lint and LintCorrection:
+// every violation in a NON-EMPTY member set, computed and returned, with
+// nothing logged and no *LintError built. LintCorrection needs it precisely
+// because it runs the checks TWICE (once on the plan as it stands, once on the
+// set the correction would produce) and must not raise a CorrectionEvent for
+// the baseline pass.
+func lintViolations(members []task.Task) []LintViolation {
+	idx := membersByID(members)
+	ancestors := ancestorSets(members, idx)
+	violations := lintOverlaps(members, ancestors)
+	return append(violations, lintJoinlessConvergence(members, idx, ancestors)...)
+}
+
+// emptyPlanViolation builds the LintEmptyPlan arity violation for planID. It
+// is shared by Lint and LintCorrection so the two paths cannot drift into
+// saying different things about the same condition.
+func emptyPlanViolation(planID string) LintViolation {
+	return LintViolation{
+		Kind: LintEmptyPlan,
+		Reason: fmt.Sprintf(
+			"plan %q has no member tasks; a plan must have at least one member task before it can be "+
+				"approved or corrected — an empty plan cannot satisfy its Definition of Done, and "+
+				"approving one would let members added later (e.g. by a supervision correction) skip "+
+				"the write-set and join-point checks entirely",
+			planID),
+	}
+}
+
+// LintCorrection applies Lint's checks to the member set a correction WOULD
+// produce if committed — the plan's current members, plus req's tail members,
+// with req's tail edges applied as BlockedBy dependencies — and rejects the
+// correction for the violations it INTRODUCES, not for the ones the plan was
+// already carrying (see "WHAT THIS LINT IS FOR" below).
 //
 // WHY THIS EXISTS (UAT defect A, second half). Lint had exactly two call
 // sites, both at APPROVE. A PlanSupervisor correction (plan_correct) adds
@@ -223,8 +240,152 @@ func Lint(p *Plan, members []task.Task) *LintError {
 // auto-resets live-round failed members back to `next` right after a
 // correction commits (autoResetLiveRoundFailedMembers), so they DO run again
 // and their write-sets can still race.
+//
+// WHAT THIS LINT IS FOR, AND WHAT IT MUST NOT DO (H2 review finding against
+// the first version, which was a bare `Lint(p, projectCorrectedMembers(...))`).
+// A correction lint exists to stop a correction from INTRODUCING a violation.
+// Linting the whole projected set instead rejected a correction for violations
+// the plan was ALREADY carrying, and that turns out to be self-defeating:
+//
+//   - A running plan carrying a pre-existing join-less convergence (member
+//     `gamma`, is_join=false, converging two parallel members) parks at
+//     PhaseStalled. The whole point of parking there — stated in the engine's
+//     own surfaceJudgeUnavailableStall — is that PhaseStalled is a phase where
+//     plan_correct IS accepted, so the park "unlocks the mechanism the bug had
+//     locked out". The adjudicator then appends a fix member `delta`; the lint
+//     projects {alpha,beta,gamma,delta}, trips on `gamma`, and rejects a
+//     correction that never mentioned gamma.
+//   - There is no way out. A correction cannot edit an existing member
+//     (supersede requires the target be `done`), so gamma's violation cannot
+//     be repaired by any correction. Every retry fails identically, the
+//     bounded supervision ladder exhausts, and the plan ends
+//     failed(supervision_unavailable) — unfixable by the one mechanism that
+//     was supposed to fix it.
+//
+// So the rule is a DIFF: lint the set the correction would produce, lint the
+// plan as it stands today, and reject only the violations the correction
+// ADDS. A pre-existing violation is still surfaced (logCarriedViolations) —
+// it is never silently forgiven — but it does not block a correction that did
+// not cause it.
+//
+// WHY THIS CANNOT BE USED TO LAUNDER A VIOLATION. A violation is suppressed
+// only when the baseline contains one with an IDENTICAL fingerprint: same
+// kind, same member id set, same overlapping paths (violationFingerprint).
+// That leaves no room to smuggle one in:
+//
+//  1. Every member a correction adds is a NEW id (tail member ids are minted
+//     fresh and validateCorrectionTailMembers rejects one that collides with
+//     an existing member), so any violation naming a tail member has a
+//     fingerprint the baseline cannot contain. The live defect this file was
+//     written for — the appended join-less `epsilon` — is exactly this case
+//     and is still rejected.
+//  2. A violation naming only PRE-EXISTING members cannot be newly created by
+//     a correction's additions. Corrections only ever ADD BlockedBy edges, and
+//     adding edges only ever makes more pairs ORDERED; `isOrdered` is
+//     monotonic under edge addition, so an existing pair can lose its
+//     parallelism (violation disappears) but never gain it. Existing members'
+//     write_sets, IsJoin and Criteria are copied verbatim by the projection
+//     and are not editable by any correction verb.
+//  3. The one correction effect that CAN remove ordering — dropping the
+//     superseded member, which orphans the edges through it — is deliberately
+//     EXCLUDED from the baseline (the baseline keeps that member). So if
+//     superseding X makes two survivors newly parallel and newly overlapping,
+//     that violation is absent from the baseline, counts as introduced, and
+//     is rejected.
+//  4. The empty-plan arity violation is never suppressed. It is a property of
+//     the RESULT rather than a pairwise invariant, and "the plan was already
+//     empty" is not a reason to accept a correction that leaves it empty.
 func LintCorrection(p *Plan, members []task.Task, req CorrectionRequest) *LintError {
-	return Lint(p, projectCorrectedMembers(members, req))
+	// Same nil-safety contract as Lint: p labels messages/events only.
+	if p == nil {
+		return nil
+	}
+
+	projected := projectCorrectedMembers(members, req)
+	if len(projected) == 0 {
+		v := emptyPlanViolation(p.ID)
+		logCorrectionEvent(v.toCorrectionEvent(p.ID))
+		return &LintError{PlanID: p.ID, Violations: []LintViolation{v}}
+	}
+
+	after := lintViolations(projected)
+	if len(after) == 0 {
+		return nil
+	}
+
+	// The baseline is the plan AS IT STANDS: the same "what can still run"
+	// adjustment the projection applies to done members (so a violation means
+	// the same thing on both sides), but nothing this correction does — no
+	// tail members, no tail edges, and the superseded member still present.
+	carried := violationFingerprints(lintViolations(projectCorrectedMembers(members, CorrectionRequest{})))
+
+	introduced := make([]LintViolation, 0, len(after))
+	preExisting := make([]LintViolation, 0, len(after))
+	for _, v := range after {
+		if carried[violationFingerprint(v)] {
+			preExisting = append(preExisting, v)
+			continue
+		}
+		introduced = append(introduced, v)
+	}
+
+	if len(preExisting) > 0 {
+		logCarriedViolations(p.ID, preExisting)
+	}
+	if len(introduced) == 0 {
+		return nil
+	}
+	for _, v := range introduced {
+		logCorrectionEvent(v.toCorrectionEvent(p.ID))
+	}
+	return &LintError{PlanID: p.ID, Violations: introduced}
+}
+
+// violationFingerprint is the identity under which LintCorrection decides
+// whether a violation is the SAME one the plan already carried. Kind, member
+// id set and overlapping paths — sorted, so neither member order within a
+// violation nor member order within the projected slice can change it.
+//
+// Reason is deliberately NOT part of the fingerprint. A join-less violation's
+// Reason enumerates the converging predecessors, so including it would treat
+// "already-broken member gains one more predecessor" as a brand-new violation
+// and reject the correction. That buys no safety — the member is ALREADY an
+// unguarded convergence point and no correction verb can repair it — while
+// costing exactly the fixability this diff exists to restore.
+func violationFingerprint(v LintViolation) string {
+	ids := append([]string(nil), v.MemberIDs...)
+	sort.Strings(ids)
+	paths := append([]string(nil), v.Paths...)
+	sort.Strings(paths)
+	return string(v.Kind) + "\x00" + strings.Join(ids, ",") + "\x00" + strings.Join(paths, ",")
+}
+
+// violationFingerprints indexes a violation list by fingerprint.
+func violationFingerprints(violations []LintViolation) map[string]bool {
+	out := make(map[string]bool, len(violations))
+	for _, v := range violations {
+		out[violationFingerprint(v)] = true
+	}
+	return out
+}
+
+// logCarriedViolations surfaces the violations a correction was NOT blamed for
+// — the ones the plan was already carrying. FR-157's "surfaced, never silent"
+// still applies to them: they are real problems with the plan, and the only
+// thing the diff changes is who is held responsible for them. They are
+// deliberately NOT raised as CorrectionEvents: a CorrectionEvent is the
+// prompt that a correction is NEEDED, and re-raising one on every subsequent
+// correction would make the same unrepairable finding look like a fresh
+// event each time.
+func logCarriedViolations(planID string, violations []LintViolation) {
+	ids := make([]string, 0, len(violations))
+	kinds := make([]string, 0, len(violations))
+	for _, v := range violations {
+		ids = append(ids, v.MemberIDs...)
+		kinds = append(kinds, string(v.Kind))
+	}
+	slog.Warn("plan: correction lint found pre-existing violations it did not attribute to this correction",
+		"plan_id", planID, "kinds", kinds, "member_ids", ids, "count", len(violations))
 }
 
 // projectCorrectedMembers builds LintCorrection's projected member set. It is

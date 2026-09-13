@@ -58,8 +58,15 @@ func liveDAG() []task.Task {
 // Approve would have refused that member outright. The correction path
 // accepted it without a murmur, because it ran no lint at all.
 //
-// Fails against the pre-fix engine, where validateCorrection ended at
-// validateCorrectionTailEdges and never called into this package.
+// SCOPE OF THIS TEST (H3 review finding — the comment here previously claimed
+// more than the test does). It exercises the pure function in this package and
+// nothing else: it says what LintCorrection decides, not that anything calls
+// it. The ENGINE WIRING — that pkg/agent's validateCorrection actually invokes
+// LintCorrection and refuses the correction on its verdict — is a separate
+// claim and is pinned separately, by
+// TestAppendCorrection_RejectsTailMemberThatFailsPlanLint in
+// pkg/agent/plan_engine_correction_lint_test.go. Deleting the lint call from
+// validateCorrection leaves every test in THIS file green.
 func TestLintCorrection_RejectsJoinlessTailMember(t *testing.T) {
 	p := &Plan{ID: "plan-a13"}
 	members := liveDAG()
@@ -255,5 +262,213 @@ func TestProjectCorrectedMembers_AppliesEdgeDirection(t *testing.T) {
 	}
 	if got := byID["a"].BlockedBy; len(got) != 0 {
 		t.Fatalf("edge a->b must not touch a's BlockedBy, got %v", got)
+	}
+}
+
+// --- Pre-existing violations must not lock a plan out of corrections -------
+//
+// (H2 review finding against the first version of this file's subject, which
+// was `return Lint(p, projectCorrectedMembers(members, req))` — a lint of the
+// WHOLE projected set, which rejected a correction for violations the plan was
+// already carrying and could not repair.)
+
+// brokenDAG is a plan carrying a PRE-EXISTING join-less convergence: gamma
+// depends on alpha and beta, which are mutually parallel, and gamma is not an
+// authored join member. Approve would have refused this plan; a plan created
+// before the lint existed, or populated through the unlinted third writer
+// (POST /tasks with a plan_id), carries it anyway.
+//
+// Every member is `next` rather than `done` so the projection's done-member
+// exemption cannot be what makes a case pass.
+func brokenDAG() []task.Task {
+	alpha := planMember("alpha", task.StatusNext, nil, []string{"out/alpha.md"})
+	beta := planMember("beta", task.StatusNext, nil, []string{"out/beta.md"})
+	gamma := planMember("gamma", task.StatusNext, []string{"alpha", "beta"}, []string{"out/gamma.md"})
+	gamma.IsJoin = false
+	return []task.Task{alpha, beta, gamma}
+}
+
+// TestLintCorrection_PreExistingViolationIsNotAttributedToTheCorrection is the
+// H2 regression test.
+//
+// A plan carrying a pre-existing join-less convergence parks at PhaseStalled —
+// a phase chosen precisely because plan_correct is accepted there, so the park
+// "unlocks the mechanism the bug had locked out". Linting the whole projected
+// set then re-locked it: the correction was rejected for `gamma`, a member it
+// never mentioned, and since no correction verb can repair an existing member
+// (supersede requires the target be `done`), every retry failed identically
+// until the supervision ladder exhausted and the plan ended
+// failed(supervision_unavailable).
+func TestLintCorrection_PreExistingViolationIsNotAttributedToTheCorrection(t *testing.T) {
+	p := &Plan{ID: "plan-broken"}
+	members := brokenDAG()
+
+	// Precondition, asserted rather than assumed: the plan really is carrying
+	// a violation. Without this the test could pass on a clean DAG and prove
+	// nothing at all.
+	base := Lint(p, members)
+	if base == nil || len(base.Violations) != 1 || base.Violations[0].Kind != LintJoinless {
+		t.Fatalf("precondition: this plan must carry exactly one pre-existing join_less_convergence "+
+			"violation, got %v", base)
+	}
+	if got := base.Violations[0].MemberIDs; len(got) != 1 || got[0] != "gamma" {
+		t.Fatalf("precondition: the pre-existing violation must name gamma, got %v", got)
+	}
+
+	// The fix correction: append delta, which introduces nothing. It writes
+	// its own file and converges nothing.
+	delta := planMember("delta", task.StatusInbox, nil, []string{"out/delta.md"})
+	req := CorrectionRequest{
+		Verb:        RevisionAppend,
+		TailMembers: []task.Task{delta},
+		TailEdges:   []IntentEdge{{FromTaskID: "gamma", ToTaskID: "delta"}},
+	}
+
+	if lerr := LintCorrection(p, members, req); lerr != nil {
+		t.Fatalf("a correction that introduces NO new violation must be accepted on a plan that "+
+			"already carries one — rejecting it names a member the correction never mentions and "+
+			"leaves the plan unfixable by the only mechanism that could fix it; got: %v", lerr)
+	}
+}
+
+// TestLintCorrection_StillRejectsANewViolationOnAnAlreadyBrokenPlan is the
+// other half of the H2 rule, and the one that stops it from degenerating into
+// "a broken plan accepts anything". The SAME plan, a correction that adds a
+// second join-less convergence of its own: still rejected, and blamed on the
+// member that actually caused it.
+func TestLintCorrection_StillRejectsANewViolationOnAnAlreadyBrokenPlan(t *testing.T) {
+	p := &Plan{ID: "plan-broken"}
+
+	epsilon := planMember("epsilon", task.StatusInbox, nil, nil)
+	epsilon.IsJoin = false
+	req := CorrectionRequest{
+		Verb:        RevisionAppend,
+		TailMembers: []task.Task{epsilon},
+		TailEdges: []IntentEdge{
+			{FromTaskID: "alpha", ToTaskID: "epsilon"},
+			{FromTaskID: "beta", ToTaskID: "epsilon"},
+		},
+	}
+
+	lerr := LintCorrection(p, brokenDAG(), req)
+	if lerr == nil {
+		t.Fatal("a correction that introduces a NEW join_less_convergence must still be rejected, " +
+			"even on a plan that already carries one — otherwise one pre-existing violation would " +
+			"disable the check for every correction that follows it")
+	}
+	if len(lerr.Violations) != 1 {
+		t.Fatalf("expected exactly 1 violation (the introduced one), got %d: %+v",
+			len(lerr.Violations), lerr.Violations)
+	}
+	v := lerr.Violations[0]
+	if v.Kind != LintJoinless {
+		t.Fatalf("violation kind = %q, want %q", v.Kind, LintJoinless)
+	}
+	if len(v.MemberIDs) != 1 || v.MemberIDs[0] != "epsilon" {
+		t.Fatalf("the rejection must name the member the CORRECTION added, not the pre-existing "+
+			"one; got MemberIDs=%v", v.MemberIDs)
+	}
+}
+
+// TestLintCorrection_CannotLaunderANewOverlapBehindAPreExistingOne is the
+// anti-gaming test for the write-set half. A plan already has a parallel
+// overlap between alpha and beta on the same path; a correction adds a third
+// member writing that same path. Each new colliding PAIR is its own violation
+// with its own fingerprint, so none of them can hide behind the existing one.
+func TestLintCorrection_CannotLaunderANewOverlapBehindAPreExistingOne(t *testing.T) {
+	p := &Plan{ID: "plan-overlap"}
+	members := []task.Task{
+		planMember("alpha", task.StatusNext, nil, []string{"out/shared.md"}),
+		planMember("beta", task.StatusNext, nil, []string{"out/shared.md"}),
+	}
+	if base := Lint(p, members); base == nil || base.Violations[0].Kind != LintOverlap {
+		t.Fatalf("precondition: this plan must already carry a write_set_overlap violation, got %v", base)
+	}
+
+	tail := planMember("gamma", task.StatusInbox, nil, []string{"out/shared.md"})
+	req := CorrectionRequest{Verb: RevisionAppend, TailMembers: []task.Task{tail}}
+
+	lerr := LintCorrection(p, members, req)
+	if lerr == nil {
+		t.Fatal("a tail member writing a path two existing parallel members already collide on must " +
+			"be rejected — the pre-existing collision excuses alpha and beta, never the new member")
+	}
+	for _, v := range lerr.Violations {
+		if len(v.MemberIDs) == 2 && v.MemberIDs[0] == "alpha" && v.MemberIDs[1] == "beta" {
+			t.Fatalf("the pre-existing alpha/beta overlap must NOT be reported as this correction's "+
+				"fault; got violations %+v", lerr.Violations)
+		}
+		found := false
+		for _, id := range v.MemberIDs {
+			if id == "gamma" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("every reported violation must name the added member gamma; got %+v", v)
+		}
+	}
+	if len(lerr.Violations) != 2 {
+		t.Fatalf("expected both new pairs (alpha,gamma) and (beta,gamma) to be reported, got %d: %+v",
+			len(lerr.Violations), lerr.Violations)
+	}
+}
+
+// TestLintCorrection_SupersedeThatUnordersTwoMembersIsRejected is the anti-
+// gaming test for the one correction effect that can REMOVE ordering rather
+// than add it.
+//
+// Edges are only ever added by a correction, so an existing pair can lose its
+// parallelism but never gain it — with exactly one exception: dropping the
+// superseded member orphans the edges that ran THROUGH it. Here alpha and beta
+// both write out/x.md and are ordered only via the done member `mid`. Nothing
+// is wrong with the plan as it stands. Superseding `mid` un-orders them, and
+// that overlap is the correction's doing — so the baseline must keep `mid`,
+// or the projection would excuse the violation it just created.
+func TestLintCorrection_SupersedeThatUnordersTwoMembersIsRejected(t *testing.T) {
+	p := &Plan{ID: "plan-supersede"}
+	members := []task.Task{
+		planMember("alpha", task.StatusNext, nil, []string{"out/x.md"}),
+		planMember("mid", task.StatusDone, []string{"alpha"}, nil),
+		planMember("beta", task.StatusNext, []string{"mid"}, []string{"out/x.md"}),
+	}
+	if base := Lint(p, members); base != nil {
+		t.Fatalf("precondition: the plan as it stands must be CLEAN (alpha and beta are ordered "+
+			"through mid), got %v", base)
+	}
+
+	replacement := planMember("mid-prime", task.StatusInbox, nil, nil)
+	req := CorrectionRequest{
+		Verb:               RevisionSupersede,
+		SupersededMemberID: "mid",
+		TailMembers:        []task.Task{replacement},
+	}
+
+	lerr := LintCorrection(p, members, req)
+	if lerr == nil {
+		t.Fatal("superseding the member that ORDERED two overlapping write_sets leaves them parallel " +
+			"and colliding; that violation is introduced by the correction and must be rejected")
+	}
+	if lerr.Violations[0].Kind != LintOverlap {
+		t.Fatalf("kind = %q, want %q", lerr.Violations[0].Kind, LintOverlap)
+	}
+}
+
+// TestLintCorrection_EmptyResultIsRejectedEvenOnAnAlreadyEmptyPlan pins the
+// one violation the pre-existing-violation diff never forgives. The empty-plan
+// check is an ARITY PRECONDITION on the RESULT, not a pairwise invariant, and
+// "the plan was already empty" is no reason to accept a correction that leaves
+// it empty — which would be the one shape of laundering the diff could
+// otherwise permit.
+func TestLintCorrection_EmptyResultIsRejectedEvenOnAnAlreadyEmptyPlan(t *testing.T) {
+	p := &Plan{ID: "plan-empty"}
+
+	lerr := LintCorrection(p, nil, CorrectionRequest{Verb: RevisionAppend})
+	if lerr == nil {
+		t.Fatal("a correction that leaves a plan with zero members must be rejected — the arity " +
+			"precondition is never suppressed as pre-existing")
+	}
+	if lerr.Violations[0].Kind != LintEmptyPlan {
+		t.Fatalf("kind = %q, want %q", lerr.Violations[0].Kind, LintEmptyPlan)
 	}
 }

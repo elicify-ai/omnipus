@@ -399,6 +399,19 @@ type PlanEngine struct {
 	// survive. Same lazy-init + mu pattern as the maps above.
 	judgeUnavailableStreak map[string]int
 
+	// judgeUnavailableParks records, per plan id, a judge-unavailability park
+	// that has been DECIDED (the streak above reached
+	// plan.MaxConsecutiveJudgeUnavailable) but may not have TAKEN EFFECT on
+	// disk — see judgeUnavailablePark's own doc comment, and
+	// plan.MaxJudgeUnavailableParkAttempts for why a decided-but-ineffective
+	// park is the hole that made the streak bound unenforceable.
+	//
+	// Same in-memory posture and lazy-init + mu pattern as the maps above,
+	// and cleared by exactly the same events (clearJudgeUnavailableStreak
+	// deletes both): a real verdict, a fresh admission, or a new generation
+	// all mean the judge is reachable and the park history is spent.
+	judgeUnavailableParks map[string]*judgeUnavailablePark
+
 	// planDecisionMu serializes every plan-mutating decision (dispatch,
 	// judge-round start, idle-expiry) process-wide. It is coarse (one lock
 	// for all plans, not per-plan) — a deliberate simplicity trade-off: the
@@ -722,10 +735,76 @@ func (pe *PlanEngine) judgeUnavailableParked(planID string) bool {
 // whenever a judge round produces a REAL verdict (met or unmet) and whenever
 // the plan (re)enters running, so the counter only ever measures the CURRENT
 // unbroken run of unavailability.
+//
+// It drops the park record with it: every caller is an event that proves the
+// judge is reachable (a real verdict) or that this is a fresh life for the
+// plan id (admission, new generation), and in both cases a park decided under
+// the previous run — including its unspent retry budget — must not carry
+// over.
 func (pe *PlanEngine) clearJudgeUnavailableStreak(planID string) {
 	pe.mu.Lock()
 	defer pe.mu.Unlock()
 	delete(pe.judgeUnavailableStreak, planID)
+	delete(pe.judgeUnavailableParks, planID)
+}
+
+// judgeUnavailablePark is the in-memory record of a judge-unavailability park
+// that has been DECIDED for a plan. It exists because the decision and its
+// persistence are two different things: surfaceJudgeUnavailableStall decides
+// the park in memory (where the streak lives) and then writes it to the plan
+// store, and that write can fail. The record is what lets processPlan notice
+// on a later tick that the park never took effect, re-attempt it, and — past
+// plan.MaxJudgeUnavailableParkAttempts — end the plan instead of re-entering
+// the judge round the bound exists to stop.
+type judgeUnavailablePark struct {
+	// reason is the judge's own last failure reason, kept so a re-attempted
+	// park reproduces the SAME handover note the first attempt would have
+	// written rather than degrading to a vaguer one.
+	reason string
+	// attempts counts consecutive re-park attempts made from processPlan
+	// since the last time the judge was reachable. It is NOT a count of
+	// failed store writes: it counts the engine finding this plan still at
+	// PhaseJudging while its streak is at the bound, which is the observable
+	// "the park did not take effect" — true whether the write errored or the
+	// phase was written and then reverted by something else.
+	attempts int
+}
+
+// recordJudgeUnavailablePark remembers (or refreshes) the judge failure reason
+// for planID's park without touching its retry budget. Called at the top of
+// every park attempt, so the reason a re-attempt renders is always the most
+// recent one the judge actually reported.
+func (pe *PlanEngine) recordJudgeUnavailablePark(planID, reason string) {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	if pe.judgeUnavailableParks == nil {
+		pe.judgeUnavailableParks = make(map[string]*judgeUnavailablePark)
+	}
+	if existing, ok := pe.judgeUnavailableParks[planID]; ok {
+		existing.reason = reason
+		return
+	}
+	pe.judgeUnavailableParks[planID] = &judgeUnavailablePark{reason: reason}
+}
+
+// bumpJudgeUnavailableParkAttempt records one more re-park attempt for planID
+// and returns the plan's current unavailability streak, the judge reason to
+// render, and the new attempt count. Lazily creates the record (an empty
+// reason renders as "no reason reported" via judgeUnavailableReasonText), so a
+// caller never has to handle a missing one.
+func (pe *PlanEngine) bumpJudgeUnavailableParkAttempt(planID string) (streak int, reason string, attempts int) {
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	if pe.judgeUnavailableParks == nil {
+		pe.judgeUnavailableParks = make(map[string]*judgeUnavailablePark)
+	}
+	rec, ok := pe.judgeUnavailableParks[planID]
+	if !ok {
+		rec = &judgeUnavailablePark{}
+		pe.judgeUnavailableParks[planID] = rec
+	}
+	rec.attempts++
+	return pe.judgeUnavailableStreak[planID], rec.reason, rec.attempts
 }
 
 // postUnmetMemberIDs returns the set of members whose artifacts were completed
@@ -1165,6 +1244,23 @@ func (pe *PlanEngine) processPlan(ctx context.Context, planID string) {
 		if inFlight {
 			return // a goroutine is already adjudicating this round
 		}
+		// UAT defect B, H1: a plan whose unavailability streak is AT the bound
+		// must never start another judge round — and finding one here, at
+		// `judging` with no goroutine watching it, means the park that was
+		// supposed to stop exactly that did not take effect (its store write
+		// failed, or the phase it wrote was reverted). The resume below would
+		// start round N+1, the round would be abandoned too, the streak would
+		// climb past a bound that can no longer bite, and the original
+		// unbounded oscillation would resume verbatim — which is precisely
+		// what the first version of this fix left in place, because its
+		// hold-back gate also required the phase the failed write never set.
+		//
+		// Re-attempt the PARK instead of the ROUND, bounded and terminal-ward:
+		// see reparkJudgeUnavailablePlanLocked.
+		if pe.judgeUnavailableParked(p.ID) {
+			pe.reparkJudgeUnavailablePlanLocked(p)
+			return
+		}
 		// plan_phase=judging with no in-flight goroutine in THIS process can
 		// only mean a prior process died mid-round (FR-062 boot case) — no
 		// round was actually consumed (JudgeCriteria's own "0 rounds on
@@ -1252,6 +1348,19 @@ func (pe *PlanEngine) processPlan(ctx context.Context, planID string) {
 		// Gating on the phase alone wedges exactly that plan forever — caught
 		// by TestSupervisionWake_NewConditionWakesAgainAfterFirstTurnCompletes,
 		// which is a regression anchor for this line.
+		//
+		// ⚠ THE PHASE CONDITION IS LOAD-BEARING TOO — do not simplify this to
+		// `judgeUnavailableParked(planID)` alone either (the H1 review
+		// suggested it; this is why it was not taken). The streak is
+		// deliberately NOT reset by a correction — only a real verdict clears
+		// it — so a parked plan that the adjudicator corrects arrives back
+		// here all-terminal, at `dispatching`, still parked. Dropping the
+		// phase clause would hold its judge round back forever and make the
+		// correction path incapable of ever rescuing the plan, which is the
+		// one recovery route the park exists to open. The genuinely
+		// unenforceable case the H1 finding names — a park whose write failed,
+		// leaving the phase at `judging` — is intercepted upstream in this
+		// same function's phase switch, before the plan can reach here.
 		//
 		// The unmet-verdict park (awaiting_supervision) is deliberately not
 		// covered here either: it has its own, already-working brake in
@@ -1716,6 +1825,11 @@ func (pe *PlanEngine) surfaceStallIfAny(p *plan.Plan, tasks []task.Task) {
 // as our own stall note and clears it once the plan is genuinely unstuck,
 // exactly as it does for the blocked/inbox stall it already owns.
 func (pe *PlanEngine) surfaceJudgeUnavailableStall(p *plan.Plan, streak int, judgeReason string) {
+	// Recorded BEFORE the write, so a park whose write fails is still known to
+	// have been DECIDED — that record is what processPlan's phase switch uses
+	// to re-attempt it instead of starting another judge round (H1).
+	pe.recordJudgeUnavailablePark(p.ID, judgeReason)
+
 	reason := fmt.Sprintf(
 		"The plan judge could not be reached on %d consecutive attempts, so this plan's Definition of "+
 			"Done cannot be adjudicated right now. Every member has finished, but without a judge "+
@@ -1734,8 +1848,16 @@ func (pe *PlanEngine) surfaceJudgeUnavailableStall(p *plan.Plan, streak int, jud
 		// Loud, and NOT swallowed into a silent retry: if the park cannot be
 		// persisted the plan stays at `judging` with no goroutine watching
 		// it, which is the wedged state this whole function exists to end.
+		//
+		// H1: it is no longer left there either. The park record written above
+		// survives this failure, so processPlan's phase switch intercepts the
+		// plan on its next tick and re-attempts THIS park rather than
+		// resuming a judge round — bounded by
+		// plan.MaxJudgeUnavailableParkAttempts, terminal past it. Returning
+		// here (rather than falling through to the wake) stays correct: there
+		// is no park to issue a supervision receipt for.
 		logger.ErrorCF("plan_engine",
-			"could not park plan at stalled after repeated judge unavailability; plan may remain wedged at judging",
+			"could not park plan at stalled after repeated judge unavailability; the park will be re-attempted and the plan failed closed if it will not persist",
 			map[string]any{"plan_id": p.ID, "streak": streak, "error": err.Error()})
 		return
 	}
@@ -1750,6 +1872,76 @@ func (pe *PlanEngine) surfaceJudgeUnavailableStall(p *plan.Plan, streak int, jud
 		})
 
 	pe.wakeSupervisor(p, buildJudgeUnavailableWakeText(p, streak, judgeReason), "plan_stalled", newPark)
+}
+
+// reparkJudgeUnavailablePlanLocked handles a plan found at PhaseJudging with
+// its judge-unavailability streak already at the bound — i.e. a park that was
+// decided but did not take effect. Caller must hold planDecisionMu
+// (processPlan holds it across this call).
+//
+// It is the enforcement half of plan.MaxConsecutiveJudgeUnavailable (H1). The
+// bound itself is only a number; what makes it binding is that this function,
+// not beginPlanJudgeRound, is what runs on such a plan. Whatever happens here,
+// no judge round starts and no streak grows.
+//
+// The ladder, in order:
+//
+//  1. Up to plan.MaxJudgeUnavailableParkAttempts times, re-attempt the park.
+//     A park write can fail transiently (a momentarily full disk, a locked
+//     data directory), and a plan whose members all finished successfully must
+//     not be destroyed over one such failure.
+//  2. Past that, stop trying to park and END the plan at
+//     failed(supervision_unavailable). A park that will not persist is not a
+//     park: the adjudicator cannot see it, plan_correct cannot act on it, and
+//     the bounded FR-021/FR-022 ladder it was supposed to hand the plan to is
+//     never armed. supervision_unavailable is the honest name for that — the
+//     same terminal that ladder itself reaches when no adjudicator ever
+//     answers (FR-022) — and it needs no new wire value.
+//
+// The terminal write is the ONE thing that keeps being retried if it too
+// fails: each later tick lands back at step 2 and tries again. That is
+// deliberate. An engine whose plan store accepts no write at all has no better
+// move than to keep trying to record the ending, and it costs nothing that
+// matters — no judge round, no LLM call, no streak growth, no member dispatch.
+func (pe *PlanEngine) reparkJudgeUnavailablePlanLocked(p *plan.Plan) {
+	streak, judgeReason, attempts := pe.bumpJudgeUnavailableParkAttempt(p.ID)
+
+	if attempts > plan.MaxJudgeUnavailableParkAttempts {
+		logger.ErrorCF("plan_engine",
+			"judge-unavailability park would not persist; failing the plan closed instead of re-judging it",
+			map[string]any{
+				"plan_id": p.ID, "streak": streak, "park_attempts": attempts - 1,
+				"bound": plan.MaxJudgeUnavailableParkAttempts, "reason": judgeReason,
+			})
+		pe.failPlanLocked(p.ID, plan.FailedReasonSupervisionUnavailable,
+			buildUnparkableJudgeUnavailableHandover(p, streak, judgeReason))
+		return
+	}
+
+	logger.WarnCF("plan_engine",
+		"plan still at judging after a judge-unavailability park; re-attempting the park instead of starting another judge round",
+		map[string]any{
+			"plan_id": p.ID, "streak": streak, "park_attempt": attempts,
+			"bound": plan.MaxJudgeUnavailableParkAttempts, "reason": judgeReason,
+		})
+	pe.surfaceJudgeUnavailableStall(p, streak, judgeReason)
+}
+
+// buildUnparkableJudgeUnavailableHandover explains the one terminal a user
+// should almost never see: the plan judge was unreachable, AND the engine
+// could not even record that fact on the plan. It states both facts plainly,
+// because the second one means the plan record the reader is looking at may
+// not reflect what actually happened, and it names the members' work as
+// intact — an adjudication failure is not a work failure.
+func buildUnparkableJudgeUnavailableHandover(p *plan.Plan, streak int, judgeReason string) string {
+	return fmt.Sprintf(
+		"Plan %q ended without a Definition-of-Done verdict. Two things went wrong: the plan judge "+
+			"could not be reached on %d consecutive attempts (last failure: %s), and the attempt to "+
+			"park this plan for an adjudicator could not be saved %d times in a row, so the plan could "+
+			"neither be judged nor handed over. Every member finished — their work is intact and "+
+			"unchanged. Check the plan store for write errors (disk space and permissions on the "+
+			"plans directory), then start a new plan to re-adjudicate the same Definition of Done.",
+		p.Title, streak, judgeUnavailableReasonText(judgeReason), plan.MaxJudgeUnavailableParkAttempts)
 }
 
 // judgeUnavailableReasonText renders the judge's own failure reason for a
