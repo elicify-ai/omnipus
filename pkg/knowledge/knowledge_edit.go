@@ -278,7 +278,11 @@ func (t *EditTool) Parameters() map[string]any {
 			"property": map[string]any{
 				"type": "string",
 				"description": "set_property: the property name, e.g. 'status'. relation: the " +
-					"relation or person property to change, e.g. 'company'.",
+					"relation or person property to change, e.g. 'company'. Setting 'type' on a " +
+					"plain note PROMOTES it to a record of that type and mints its id; a note that " +
+					"is already a record cannot have its type changed here (its id belongs to its " +
+					"own type's sequence) — create a record of the new type with op 'create' and " +
+					"trash the old note with knowledge_restructure instead.",
 			},
 			"value": map[string]any{
 				"description": "set_property: the property's new value — a single value, or a " +
@@ -795,6 +799,15 @@ func (t *EditTool) execSetProperty(ctx context.Context, target mutationTarget, a
 		// before this closure runs. So the split has to happen INSIDE the
 		// closure, against the `src` EditNote hands it, not out here.
 		edit = func(src []byte) ([]byte, error) {
+			// The cross-type refusal, decided against the bytes under the
+			// lock — see mintPromotionID. `values[0]` is the whole value
+			// here: the promotion branch above only runs for a scalar.
+			if property == records.RecordTypeKey && !isList {
+				cur := records.ParseRecord(rel, src)
+				if rerr := knowledgeEditRefuseTypeChange(rel, cur.TypeName(), cur.ID(), values[0], ""); rerr != nil {
+					return nil, rerr
+				}
+			}
 			splitValues, splitIsList := knowledgeEditAutoSplitCommaList(set, src, property, values, isList)
 			// knowledgeEditRelationRefused: set_property is the door FR-045
 			// closes — a caller sending the value it wants the property to
@@ -837,13 +850,30 @@ func (t *EditTool) execSetProperty(ctx context.Context, target mutationTarget, a
 // mintPromotionID mints the identifier a note will need if this set_property
 // of `type` turns it into a record (D-28). It returns "" — and no error — in
 // every case where no minting is due: the note cannot be read at all (the
-// write's own path will refuse it properly), it already carries an id, or
-// the type names no schema in this collection.
+// write's own path will refuse it properly), it already carries an id that
+// may stay, or the type names no schema in this collection.
+//
+// It also decides the two cases where an EXISTING id must not simply be
+// carried along (Codex review 2026-09-14 #3 — "changing record type can
+// create duplicate identities"):
+//
+//   - The note is already a record of ANOTHER type. Refused, always. An
+//     identifier belongs to its own type's sequence — two prefix-less types
+//     each legitimately hold "0001" — and whatever addresses this record by
+//     (type, id) would silently point at a different note, or at two. The
+//     safer disposition the reviewer offered is taken: refuse and name the
+//     way forward, rather than re-mint and leave references dangling.
+//   - The note is a PLAIN note that already carries an `id:` (an import,
+//     say). Not a type change, but the id it brings must be free in the
+//     destination type; if a record there holds it, the promotion is refused
+//     naming that holder. A free id is kept as written — nothing is minted
+//     over an author's own identifier.
+//
+// The cross-type refusal is re-checked inside the locked edit closure
+// against the bytes actually being written (knowledgeEditRefuseTypeChange),
+// so a type that appears between this pre-read and the lock is caught too.
 func (t *EditTool) mintPromotionID(target mutationTarget, rel, typeName string, set *records.SchemaSet) (string, error) {
-	sc, ok := set.Get(strings.TrimSpace(typeName))
-	if !ok {
-		return "", nil
-	}
+	typeName = strings.TrimSpace(typeName)
 	root, err := NewCollectionRoot(OSLinkFS(), target.collection.Root())
 	if err != nil {
 		return "", nil //nolint:nilerr // the write path refuses this itself
@@ -856,7 +886,33 @@ func (t *EditTool) mintPromotionID(target mutationTarget, rel, typeName string, 
 	if err != nil {
 		return "", nil //nolint:nilerr // likewise
 	}
-	if records.ParseRecord("", current).ID() != "" {
+	rec := records.ParseRecord(rel, current)
+	if id := rec.ID(); id != "" {
+		// Who holds this id in the destination type right now, if anyone —
+		// named in either refusal so the caller sees the collision, not a
+		// rule. Only known when the destination is a declared type.
+		holder := ""
+		if sc, ok := set.Get(typeName); ok {
+			live, lerr := liveRecordIdentifiers(target.collection.Root(), sc)
+			if lerr != nil {
+				return "", fmt.Errorf("checking record type %q for identifier %s: %w", typeName, id, lerr)
+			}
+			if h, taken := live[id]; taken && h != rel {
+				holder = h
+			}
+		}
+		if rerr := knowledgeEditRefuseTypeChange(rel, rec.TypeName(), id, typeName, holder); rerr != nil {
+			return "", rerr
+		}
+		if holder != "" {
+			return "", fmt.Errorf("%s already carries id %s, and %s %s is held by %s — making it a %s record would give two records one identity. "+
+				"Remove the id with set_property value: null first (a fresh %s identifier is then minted), or keep the note as it is",
+				rel, id, typeName, id, holder, typeName, typeName)
+		}
+		return "", nil
+	}
+	sc, ok := set.Get(typeName)
+	if !ok {
 		return "", nil
 	}
 	ids, _, merr := MintRecordIDs(target.lock, target.collection.Root(), sc, 1)
@@ -867,6 +923,34 @@ func (t *EditTool) mintPromotionID(target mutationTarget, rel, typeName string, 
 		return "", fmt.Errorf("minting an identifier for record type %q produced %d, wanted 1", sc.Type, len(ids))
 	}
 	return ids[0], nil
+}
+
+// knowledgeEditRefuseTypeChange is the cross-type rule mintPromotionID's doc
+// comment states, as one decision shared by the pre-lock read and the locked
+// closure: a note that is already a record (a non-empty `type` AND an `id`)
+// may not have its `type` changed to a different one through set_property.
+// Same type, no id, or no current type → nil (not a type change).
+//
+// holder, when known, is the note that ALREADY carries this id in the new
+// type — a concrete collision to name rather than a hypothetical one. Empty
+// when none does today or when the caller could not look (the locked
+// closure passes ""; it re-decides the rule, not the lookup).
+func knowledgeEditRefuseTypeChange(rel, currentType, id, newType, holder string) error {
+	currentType = strings.TrimSpace(currentType)
+	newType = strings.TrimSpace(newType)
+	if id == "" || currentType == "" || currentType == newType {
+		return nil
+	}
+	collision := fmt.Sprintf("%s %s could duplicate a %s record's identity", newType, id, newType)
+	if holder != "" {
+		collision = fmt.Sprintf("%s %s is already held by %s", newType, id, holder)
+	}
+	return fmt.Errorf("%s is already a %s record (id %s); changing its type to %s is refused — "+
+		"an identifier belongs to its own type's sequence: %s, "+
+		"and whatever addresses this note as %s %s would point at the wrong record. "+
+		"To re-home it, create a %s record with op \"create\" (a fresh %s identifier is minted for it) and "+
+		"trash this note with knowledge_restructure; to retire the type itself use knowledge_configure delete_record_type",
+		rel, currentType, id, newType, collision, currentType, id, newType, newType)
 }
 
 // knowledgeEditUndeclaredKeys lists, after a write, the frontmatter keys the
