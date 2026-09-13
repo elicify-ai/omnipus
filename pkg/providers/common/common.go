@@ -299,7 +299,13 @@ func ParseResponse(body io.Reader) (*LLMResponse, error) {
 			name = tc.Function.Name
 			decodedArgs, err := DecodeToolCallArguments(tc.Function.Arguments, name)
 			if err != nil {
-				return nil, err
+				// The refused attempt's finish reason and billed usage are
+				// both already in hand at this scope (choice.FinishReason,
+				// apiResponse.Usage) — attach them so the caller's
+				// classifier (and cost accounting) sees real evidence
+				// instead of having to guess from the fragment alone
+				// (ADR-087 D3.9 / D5).
+				return nil, AttachToolArgumentsEvidence(err, choice.FinishReason, apiResponse.Usage.ToUsageInfo())
 			}
 			arguments = decodedArgs
 		}
@@ -352,15 +358,20 @@ func normalizeFinishReason(reason string) string {
 // they are the visible end of a response that was cut off, and the only
 // honest reading is that the model never finished saying what it wanted done.
 //
-// Why we cannot lean on finish_reason to tell us that instead: on the
-// tool-call path it is not trustworthy. vLLM's streaming handler marks a
-// choice as having produced tool calls the moment any delta carries one, with
-// no check that the call is complete, and then reports "tool_calls" in place
-// of the engine's real "length" — so a truncated call affirmatively claims to
-// be finished (vllm#47903, open; the proposed fix vllm#47963 has sat
+// Why we don't rely on finish_reason alone (ADR-087 D7): on the primary
+// transports this project talks to — OpenAI-compatible and
+// Anthropic-compatible endpoints — finish_reason (respectively stop_reason)
+// IS reliable, and is wired up as real truncation evidence rather than
+// ignored (see ToolArgumentsError.Truncated below). But a minority of
+// OpenAI-compatible servers get the field wrong specifically on the
+// tool-call path: vLLM's streaming handler has marked a choice as having
+// produced tool calls the moment any delta carries one, with no check that
+// the call is complete, reporting "tool_calls" in place of the engine's
+// real "length" (vllm#47903, open; the proposed fix vllm#47963 has sat
 // unreviewed, and the merged non-streaming fix is gated behind a flag the
-// Hermes path does not set). Parsing the arguments is the cheap, local check
-// that does not depend on an upstream field the upstream itself overwrites.
+// Hermes path does not set). Parsing the arguments is cheap, local
+// insurance against that minority — it costs nothing when finish_reason is
+// right, and it is what catches the fragment when finish_reason is wrong.
 //
 // What went wrong before this was an error: every decode site substituted a
 // stand-in — a `raw` key holding the fragment, or an empty map — and
@@ -443,11 +454,14 @@ func DecodeToolCallArguments(raw json.RawMessage, name string) (map[string]any, 
 	default:
 		// Valid JSON, wrong shape: a bare number, array or boolean where an
 		// object belongs. Not dispatchable as named parameters, so it fails
-		// exactly like a fragment does.
-		return nil, NewToolArgumentsError(fmt.Errorf(
+		// exactly like a fragment does. This shape is NEVER truncation —
+		// json.Unmarshal above already succeeded, so there is no prefix to
+		// have been cut off; only finish-reason evidence attached later
+		// (AttachToolArgumentsEvidence) can mark it Truncated (ADR-087 D5).
+		return nil, NewToolArgumentsError(name, fmt.Errorf(
 			"%w: tool %q: arguments decoded to %T, want a JSON object: %s",
 			ErrToolArgumentsUndecodable, name, decoded, quoteUndecodableArguments(string(raw)),
-		))
+		), false)
 	}
 }
 
@@ -457,36 +471,182 @@ func undecodableArgumentsError(name, payload string, cause error) error {
 	// Both the sentinel and the underlying JSON cause are wrapped with %w, so
 	// errors.Is matches ErrToolArgumentsUndecodable AND a caller that cares
 	// can still reach the *json.SyntaxError underneath.
-	return NewToolArgumentsError(fmt.Errorf(
+	return NewToolArgumentsError(name, fmt.Errorf(
 		"%w: tool %q: %w: %s",
 		ErrToolArgumentsUndecodable, name, cause, quoteUndecodableArguments(payload),
-	))
+	), isEOFShapedToolArgumentsFragment(payload))
 }
 
-// NewToolArgumentsError wraps an undecodable-arguments cause as a
-// *ProviderError so the agent loop's classifier can see it.
+// ToolArgumentsError reports a tool call whose `arguments` payload was
+// refused by DecodeToolCallArguments, distinguishing genuine truncation
+// (the response was cut off before the call finished) from a well-formed
+// payload of the wrong shape (ADR-087 D5) — ErrToolArgumentsUndecodable
+// alone does not prove truncation, since it also fires for valid JSON like
+// `42`, `true`, or `[1,2,3]` (TestDecodeToolCallArguments_NonObjectRefused).
 //
-// The wrapping is load-bearing, not decoration. pkg/agent's
-// errorToProviderError synthesises an EMPTY *ProviderError for any error that
-// is not already one, and classifyByProviderError then classifies on that
-// empty Body — so a bare fmt.Errorf, however well worded, reaches the user as
-// the generic "something went wrong" copy. Putting the message in Body with
-// Status 0 routes it to classifyByMessage, which finds the pinned
-// "invalid tool arguments" substring and applies the CodeToolArgs copy.
-//
-// Status is deliberately 0: no HTTP request failed. The upstream returned a
-// perfectly good 200 whose CONTENT was cut off, and claiming a status code
-// would send the classifier down the HTTP ladder for a fault that has none.
-//
-// Callers in other provider packages (bedrock's Smithy-document path, and any
-// future non-JSON transport) use this so their refusal classifies identically
-// to the JSON ones.
-func NewToolArgumentsError(cause error) *ProviderError {
-	return &ProviderError{
-		Status: 0,
-		Body:   cause.Error(),
-		Err:    cause,
+// This is the fixed D→C interface WP D ships for pkg/agent's
+// TranslateTurnError to classify on (ADR-087 §9): Cause wraps
+// ErrToolArgumentsUndecodable, Truncated gates CodeToolCallTruncated vs
+// CodeToolArgs. Shape is not negotiable — see the ADR.
+type ToolArgumentsError struct {
+	// Cause wraps ErrToolArgumentsUndecodable (and, for a decode failure,
+	// the underlying JSON error) — see undecodableArgumentsError and the
+	// non-object branch of DecodeToolCallArguments.
+	Cause error
+	// ToolName is the tool the undecodable arguments belonged to.
+	ToolName string
+	// FinishReason is the finish/stop reason as received from the provider
+	// for the refused attempt, unnormalized, "" if unknown. Populated by
+	// AttachToolArgumentsEvidence — DecodeToolCallArguments itself has no
+	// visibility into it.
+	FinishReason string
+	// Truncated is true only when the evidence supports truncation: the
+	// finish reason is length/max_tokens/truncated, OR the refused fragment
+	// is the unclosed prefix of a JSON object. NEVER true for well-formed
+	// JSON of the wrong shape absent finish-reason evidence.
+	Truncated bool
+	// Usage is the refused attempt's billed usage, when the provider
+	// returned one. The provider already charged for these tokens even
+	// though the call was refused; the caller debits them once.
+	Usage *UsageInfo
+}
+
+// Error implements error. It returns Cause's text unchanged — this is the
+// same message DecodeToolCallArguments callers saw before this type
+// existed (tool name + quoted fragment), so no classifier substring match
+// anywhere in the codebase shifts as a side effect of this type's
+// introduction.
+func (e *ToolArgumentsError) Error() string {
+	if e == nil {
+		return "<nil ToolArgumentsError>"
 	}
+	if e.Cause != nil {
+		return e.Cause.Error()
+	}
+	return ErrToolArgumentsUndecodable.Error()
+}
+
+// Unwrap exposes Cause to errors.Is / errors.As chain walks, so
+// errors.Is(err, ErrToolArgumentsUndecodable) keeps working exactly as it
+// did when DecodeToolCallArguments returned a bare wrapped error.
+func (e *ToolArgumentsError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+// As implements the errors.As extension point (see the standard library's
+// errors.As documentation) so a *ToolArgumentsError still satisfies every
+// existing consumer that walks an error chain looking for a *ProviderError
+// — pkg/agent's errorToProviderError chief among them. Status reads 0 (no
+// HTTP request failed: the upstream returned a healthy response whose
+// content was cut off) and Body carries the pinned "invalid tool arguments"
+// substring, exactly the shape NewToolArgumentsError produced before this
+// type existed — TestToolArgumentsErrorClassifiesAsToolArgs pins both.
+// This keeps that whole classification path working without this type
+// embedding a *ProviderError instance, which would have given it two
+// independent "what actually happened" stories to keep in sync.
+func (e *ToolArgumentsError) As(target any) bool {
+	if e == nil {
+		return false
+	}
+	if pp, ok := target.(**ProviderError); ok {
+		*pp = &ProviderError{
+			Status: 0,
+			Body:   e.Error(),
+			Err:    e,
+		}
+		return true
+	}
+	return false
+}
+
+// NewToolArgumentsError builds the typed refusal DecodeToolCallArguments (and
+// ParseResponse's non-object branch) returns for an undecodable `arguments`
+// payload. truncated must be the caller's best local judgement from the
+// fragment shape alone — AttachToolArgumentsEvidence layers finish-reason
+// evidence on afterward, once the caller has it.
+func NewToolArgumentsError(name string, cause error, truncated bool) *ToolArgumentsError {
+	return &ToolArgumentsError{
+		Cause:     cause,
+		ToolName:  name,
+		Truncated: truncated,
+	}
+}
+
+// isEOFShapedToolArgumentsFragment reports whether payload looks like an
+// object literal whose closing brace never arrived — the shape a
+// generation leaves behind when it is cut off mid tool-call (`{"query`,
+// the bare `{` llama.cpp shape, `{"path":"a.txt","content":"hello`), as
+// opposed to well-formed JSON of the wrong type. Only ever called on a
+// payload that already failed json.Unmarshal (undecodableArgumentsError's
+// caller), so "never closes" — an unterminated string or an unbalanced
+// brace count — is the only thing left to establish (ADR-087 D5).
+func isEOFShapedToolArgumentsFragment(payload string) bool {
+	trimmed := strings.TrimSpace(payload)
+	if !strings.HasPrefix(trimmed, "{") {
+		return false
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	for _, r := range trimmed {
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case r == '\\':
+				escaped = true
+			case r == '"':
+				inString = false
+			}
+			continue
+		}
+		switch r {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+		}
+	}
+	return inString || depth > 0
+}
+
+// isTruncationFinishReason reports whether reason (raw, as received from
+// the provider — "length", "max_tokens", or the post-normalizeFinishReason
+// spelling "truncated") is evidence the generation was cut off at the
+// output-token cap. Matching is case-insensitive; every other value
+// (including "" / unknown) is not truncation evidence by itself.
+func isTruncationFinishReason(reason string) bool {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "length", "max_tokens", "truncated":
+		return true
+	}
+	return false
+}
+
+// AttachToolArgumentsEvidence enriches any *ToolArgumentsError reachable in
+// err's chain with the finish reason and billed usage of the refused
+// attempt, and folds finish-reason evidence into Truncated (ADR-087 D5: the
+// finish reason wins even over a well-formed-shaped fragment — it is never
+// used to downgrade an already-true Truncated). Returns err unchanged
+// (including nil, and including an err with no *ToolArgumentsError in its
+// chain) so callers can call this unconditionally on every decode-failure
+// return without a type check first.
+func AttachToolArgumentsEvidence(err error, finishReason string, usage *UsageInfo) error {
+	var tae *ToolArgumentsError
+	if !errors.As(err, &tae) {
+		return err
+	}
+	tae.FinishReason = finishReason
+	tae.Usage = usage
+	if isTruncationFinishReason(finishReason) {
+		tae.Truncated = true
+	}
+	return err
 }
 
 // quoteUndecodableArguments renders a payload for an error message, capped at

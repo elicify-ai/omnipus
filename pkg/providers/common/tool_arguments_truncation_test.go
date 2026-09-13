@@ -316,6 +316,48 @@ func TestParseResponse_RefusesResponseWithTruncatedToolCall(t *testing.T) {
 	}
 }
 
+// TestToolArgumentsError_TruncatedOnlyWithEvidence pins the ADR-087 D5
+// Truncated rule directly: true iff the finish reason is one of
+// length/max_tokens/truncated, OR the refused fragment is the unclosed
+// prefix of a JSON object — and a well-formed non-object (`42`, `true`,
+// `[1]`) is NEVER truncated by shape alone, though an explicit truncating
+// finish reason still wins over it (the finish reason is real evidence the
+// generation was cut off; the model's LAST thing said just happened to
+// still be valid JSON).
+func TestToolArgumentsError_TruncatedOnlyWithEvidence(t *testing.T) {
+	cases := []struct {
+		name          string
+		finishReason  string
+		fragment      string
+		wantTruncated bool
+	}{
+		{"finish length + EOF-shaped fragment", "length", `{"q`, true},
+		{"finish stop + EOF-shaped fragment: shape alone is enough", "stop", `{"q`, true},
+		{"finish stop + well-formed non-object: never truncated by shape", "stop", `42`, false},
+		{"finish length + well-formed non-object: finish reason wins", "length", `42`, true},
+		{"finish tool_calls + bare open brace: shape alone is enough", "tool_calls", `{`, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := DecodeToolCallArguments(json.RawMessage(tc.fragment), "write_file")
+			if err == nil {
+				t.Fatalf("payload %q was accepted, want a refusal to evaluate", tc.fragment)
+			}
+			err = AttachToolArgumentsEvidence(err, tc.finishReason, nil)
+
+			var tae *ToolArgumentsError
+			if !errors.As(err, &tae) {
+				t.Fatalf("error is not a *ToolArgumentsError: %v", err)
+			}
+			if tae.Truncated != tc.wantTruncated {
+				t.Errorf("Truncated = %v, want %v (finish_reason=%q fragment=%q)",
+					tae.Truncated, tc.wantTruncated, tc.finishReason, tc.fragment)
+			}
+		})
+	}
+}
+
 // TestParseResponse_AcceptsZeroParameterToolCall is the companion guard: the
 // same entry point must still accept a reply whose tool call legitimately
 // carries no arguments, including the `null` spelling some providers emit.

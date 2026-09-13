@@ -413,7 +413,14 @@ func parseStreamResponse(
 			json.RawMessage(acc.argsJSON.String()), acc.name,
 		)
 		if err != nil {
-			return nil, err
+			// finishReason and usage are both already captured off the
+			// stream at this point (the loop above collects every chunk
+			// before tool-call assembly runs) — attach them to the refusal
+			// so the caller's classifier can tell truncation from a
+			// well-formed wrong-shaped payload, and so the refused
+			// attempt's billed usage isn't silently discarded (ADR-087
+			// D3.9 / D5).
+			return nil, common.AttachToolArgumentsEvidence(err, finishReason, usage)
 		}
 		toolCalls = append(toolCalls, ToolCall{
 			ID:        acc.id,

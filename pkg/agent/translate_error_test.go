@@ -530,6 +530,65 @@ func TestTranslateTurnError_ProviderNeedsSignIn(t *testing.T) {
 		"FR-046 requires attribution user, not config, for this producer")
 }
 
+// TestTranslateTurnError_ToolCallTruncatedVsToolArgs is the ADR-087 D5
+// regression: a *common.ToolArgumentsError reachable in err's chain must
+// classify on ITS Truncated field, not on the bare
+// common.ErrToolArgumentsUndecodable sentinel alone — that sentinel fires
+// for both a genuine truncation and a well-formed wrong-shaped payload
+// (`42`), and conflating them mislabels the second as cut off.
+func TestTranslateTurnError_ToolCallTruncatedVsToolArgs(t *testing.T) {
+	t.Run("truncation evidence present -> tool_call_truncated", func(t *testing.T) {
+		tae := &common.ToolArgumentsError{
+			Cause: fmt.Errorf("%w: tool %q: %s",
+				common.ErrToolArgumentsUndecodable, "write_file", `{"query`),
+			ToolName:     "write_file",
+			FinishReason: "length",
+			Truncated:    true,
+		}
+
+		llm := TranslateTurnError(tae)
+		assert.Equal(t, CodeToolCallTruncated, llm.Code,
+			"Truncated=true must classify as tool_call_truncated, not tool_args")
+		assert.False(t, llm.Retryable,
+			"the identical request truncates identically; no retry advice")
+		assert.Equal(t, UserMessageForCode(CodeToolCallTruncated), llm.Message)
+	})
+
+	t.Run("no truncation evidence -> tool_args", func(t *testing.T) {
+		tae := &common.ToolArgumentsError{
+			Cause: fmt.Errorf("%w: tool %q: arguments decoded to float64, want a JSON object",
+				common.ErrToolArgumentsUndecodable, "write_file"),
+			ToolName:  "write_file",
+			Truncated: false,
+		}
+
+		llm := TranslateTurnError(tae)
+		assert.Equal(t, CodeToolArgs, llm.Code,
+			"Truncated=false (e.g. a well-formed non-object like 42) must stay tool_args")
+		assert.False(t, llm.Retryable)
+	})
+}
+
+// TestTranslateTurnError_FallbackPreservesHTTPStatus is the ADR-087 Codex C6
+// regression: TranslateTurnError's fallback used to be
+// TranslateLLMError(nil, err.Error()) — discarding any structured provider
+// data reachable in err's chain and forcing every fallback through the
+// message-substring classifier alone. A *common.ProviderError carrying a
+// real HTTP status (401, unauthorized) has no matching substring pattern,
+// so it fell to CodeUnknown instead of CodeProviderAuthFailed. The fix
+// threads err through errorToProviderError first, matching the same
+// pattern already used at the two production call sites in loop.go.
+func TestTranslateTurnError_FallbackPreservesHTTPStatus(t *testing.T) {
+	pe := makeProviderErr(401, `{"error":"invalid api key"}`)
+
+	llm := TranslateTurnError(pe)
+	assert.Equal(t, CodeProviderAuthFailed, llm.Code,
+		"a 401 reachable in the chain must still classify as provider_auth_failed, "+
+			"not fall to unknown just because TranslateTurnError saw it as a bare error value")
+	assert.False(t, llm.Retryable,
+		"the same credentials fail identically on retry")
+}
+
 // TestUserMessageForCode_NoLegacyAIServiceCopy locks the brand-tone
 // regression: none of the userMessages entries may use "The AI service"
 // prose. The product is Omnipus; the failure is upstream. See

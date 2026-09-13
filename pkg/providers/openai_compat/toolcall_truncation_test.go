@@ -7,6 +7,7 @@ package openai_compat
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -97,6 +98,51 @@ func TestParseStreamResponse_NoStandInKeyReachesDispatch(t *testing.T) {
 					tc.Name, key, tc.Arguments[key])
 			}
 		}
+	}
+}
+
+// TestToolArgumentsError_CarriesUsage is the ADR-087 D3.9 regression: the
+// refused attempt was billed by the provider (a real SSE usage chunk rode
+// alongside the truncating finish_reason frame, as OpenAI-compatible
+// endpoints with stream_options.include_usage do), and that usage must
+// reach the caller on the error instead of being silently discarded —
+// before this, parseStreamResponse's decode-failure `return nil, err` threw
+// both the usage and the finish reason away.
+func TestToolArgumentsError_CarriesUsage(t *testing.T) {
+	var b strings.Builder
+	fmt.Fprintf(&b, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":%q,"arguments":""}}]}}]}`+"\n\n",
+		"write_file")
+	fmt.Fprintf(&b, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":%q}}]}}]}`+"\n\n",
+		`{"query`)
+	b.WriteString(`data: {"choices":[{"delta":{},"finish_reason":"length"}],"usage":{"prompt_tokens":100,"completion_tokens":50,"total_tokens":150}}` + "\n\n")
+	b.WriteString("data: [DONE]\n\n")
+
+	resp, err := parseStreamResponse(t.Context(), strings.NewReader(b.String()), nil, nil)
+	if err == nil {
+		t.Fatalf("expected the truncated call to be refused, got response: %+v", resp)
+	}
+
+	var tae *common.ToolArgumentsError
+	if !errors.As(err, &tae) {
+		t.Fatalf("error is not a *common.ToolArgumentsError: %v", err)
+	}
+	if tae.FinishReason != "length" {
+		t.Errorf("FinishReason = %q, want %q", tae.FinishReason, "length")
+	}
+	if !tae.Truncated {
+		t.Error("Truncated = false, want true (finish_reason=length)")
+	}
+	if tae.Usage == nil {
+		t.Fatal("Usage = nil, want the refused attempt's billed usage")
+	}
+	if tae.Usage.PromptTokens != 100 {
+		t.Errorf("Usage.PromptTokens = %d, want 100", tae.Usage.PromptTokens)
+	}
+	if tae.Usage.CompletionTokens != 50 {
+		t.Errorf("Usage.CompletionTokens = %d, want 50", tae.Usage.CompletionTokens)
+	}
+	if tae.Usage.TotalTokens != 150 {
+		t.Errorf("Usage.TotalTokens = %d, want 150", tae.Usage.TotalTokens)
 	}
 }
 

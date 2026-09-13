@@ -95,6 +95,18 @@ const (
 	// detector, the status-code path is the PRIMARY gate.
 	CodeToolArgs LLMErrorCode = "tool_args"
 
+	// CodeToolCallTruncated (ADR-087 D5): a tool call's arguments could not
+	// be decoded AND the evidence says why — the generation was cut off at
+	// the output-token cap before the call finished, not the model naming
+	// its arguments wrong. Distinct from CodeToolArgs, which stays for a
+	// genuinely malformed/wrong-shaped payload (e.g. `42` where an object
+	// belongs) with no truncation evidence behind it. Both codes share the
+	// same underlying sentinel (common.ErrToolArgumentsUndecodable) —
+	// common.ToolArgumentsError.Truncated is what tells them apart; see
+	// TranslateTurnError's *common.ToolArgumentsError branch. Attribution
+	// `model`, not retryable: the identical request truncates identically.
+	CodeToolCallTruncated LLMErrorCode = "tool_call_truncated"
+
 	// CodeSchema: JSON-schema validation error (FR-018 / ADR-051 Rev 4).
 	// Pinned body substring: "schema validation". Excluded from the
 	// outcome-based strip-retry fallback for the same reason as
@@ -793,7 +805,46 @@ func TranslateTurnError(err error) LLMError {
 			Detail:    buildDetail(nil, err.Error()),
 		}
 	}
-	return TranslateLLMError(nil, err.Error())
+	// ADR-087 D5: a *common.ToolArgumentsError in the chain carries real
+	// truncation evidence (finish reason and/or fragment shape) that a bare
+	// errors.Is(err, common.ErrToolArgumentsUndecodable) check cannot see —
+	// that sentinel alone does not prove truncation (it also fires for
+	// well-formed JSON of the wrong shape, e.g. `42`). Check this BEFORE
+	// falling through to the substring classifier so the two faults stay
+	// distinguishable even when this error reached us as a Go value rather
+	// than as a *ProviderError.
+	var tae *common.ToolArgumentsError
+	if errors.As(err, &tae) {
+		code := CodeToolArgs
+		if tae.Truncated {
+			code = CodeToolCallTruncated
+		}
+		return LLMError{
+			Code:      code,
+			Message:   defaultUserMessage(code),
+			Retryable: isRetryable(code),
+			Detail:    buildDetail(nil, err.Error()),
+		}
+	}
+	// Fallback: classify by whatever structured provider data (status/body)
+	// is reachable in err's chain, not just its stringified message.
+	// errorToProviderError walks the chain for a *ProviderError/FailoverError
+	// so a 401/413 buried in err still classifies as auth/too-large instead
+	// of falling through to CodeUnknown (ADR-087 Codex C6) — the prior
+	// TranslateLLMError(nil, err.Error()) here discarded that structure.
+	pe := errorToProviderError(err)
+	if pe != nil && pe.Status == 0 && pe.Body == "" {
+		// errorToProviderError's synthetic "nothing structured found" pe
+		// (Status 0, Body ""). classifyByProviderError prefers a non-nil
+		// pe's Body over the message argument even when that Body is
+		// empty, which would silently defeat the substring classifier for
+		// every plain-text error (e.g. "rate limit exceeded") that carries
+		// no *ProviderError/*FailoverError in its chain. Drop back to nil
+		// so classification falls through to message exactly as it did
+		// before this fallback started threading pe through.
+		pe = nil
+	}
+	return TranslateLLMError(pe, err.Error())
 }
 
 // Typed turn-exit sentinels (ADR-066 D7, FR-034). runTurn's formerly silent
@@ -858,6 +909,9 @@ func isRetryable(code LLMErrorCode) bool {
 	case CodeRateLimited, CodeNetwork, CodeTurnTimedOut:
 		return true
 	}
+	// CodeToolCallTruncated falls through to false with everything else:
+	// the same request truncates identically on retry (ADR-087 D1's
+	// rationale for "no retry advice" applies here too).
 	return false
 }
 
