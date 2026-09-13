@@ -1,9 +1,19 @@
 import { Checkbox } from '@/components/ui/checkbox'
+import { Label } from '@/components/ui/label'
+import { WriteSetInput } from '@/components/workspaces/WriteSetInput'
 
-// Shared copy + the join control for the two PLAN-MEMBER fields (`write_set`
-// and `is_join`, ADR-053 §Contract Surface / US-11 G-16), so the Create Task
-// form and the Task detail panel cannot drift apart on the wording of a
-// setting whose whole job is to make a refusal actionable.
+// The two PLAN-MEMBER fields (`write_set` and `is_join`, ADR-053 §Contract
+// Surface / US-11 G-16), each as a WHOLE field — label, control and helper
+// line together — so the Create Task form and the Task detail panel cannot
+// drift apart on a setting whose whole job is to make a refusal actionable.
+//
+// Both call sites render `WriteSetField` and `JoinMemberCheckbox`; neither
+// re-assembles a label and a help line by hand. The bare `WRITE_SET_*`
+// constants stay exported because the components below are their only
+// consumers and a test may want to assert on the exact copy, NOT as a
+// licence to hand-build the field a third time — an earlier version of this
+// file exported only the constants, and the two call sites had already
+// drifted apart on markup and spacing by the time anyone looked.
 //
 // Both fields are meaningful ONLY on a task that belongs to a plan
 // (Task.yaml: "Meaningful only when `plan_id` is set; ignored on a standalone
@@ -28,6 +38,48 @@ export const JOIN_LABEL = 'This task merges parallel work into one result'
 /** Helper line under the join checkbox — states the rule it feeds. */
 export const JOIN_HELP =
   'Tick this when two or more tasks that run in parallel feed into this one. A plan refuses to start when parallel work converges on a task that is not marked as the merge point.'
+
+/**
+ * The `write_set` field: its label, the path editor, and the helper line that
+ * states the rule the paths feed — one component, so the two call sites get
+ * the same field rather than the same two strings.
+ *
+ * `labelStyle` is the ONE thing that legitimately differs between them, and
+ * it is presentation only: the Create Task form labels every field with a
+ * sentence-case `<Label>`, while the detail panel's whole column uses an
+ * uppercase micro-label (its local `Field` wrapper). The label TEXT, the
+ * help TEXT, the control and the `htmlFor` pairing are identical either way.
+ */
+export function WriteSetField({
+  id,
+  paths,
+  onChange,
+  labelStyle = 'form',
+}: {
+  id: string
+  paths: string[]
+  onChange: (paths: string[]) => void
+  labelStyle?: 'form' | 'section'
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      {labelStyle === 'section' ? (
+        <label
+          htmlFor={id}
+          className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]"
+        >
+          {WRITE_SET_LABEL}
+        </label>
+      ) : (
+        <Label htmlFor={id} className="text-[var(--color-secondary)]">
+          {WRITE_SET_LABEL}
+        </Label>
+      )}
+      <WriteSetInput id={id} paths={paths} onChange={onChange} />
+      <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">{WRITE_SET_HELP}</p>
+    </div>
+  )
+}
 
 /**
  * The `is_join` control: a checkbox whose visible label is the sentence

@@ -36,6 +36,24 @@ const uatDuplicateSentence = "Running the script prints the exact line: Hello, U
 // newGoalLifecycleTools builds the three task tools over one isolated home, so
 // goalStoreForTasks (which derives the goal root from the task store's PARENT
 // directory) lands inside the test's own temp dir rather than beside it.
+// goalLifecycleTools is the struct form of newGoalLifecycleTools. It exists so
+// a test that needs only two of the five values can name those two instead of
+// spelling three blank identifiers — which golangci-lint's dogsled linter
+// rejects (it fired on this file and failed the lint gate).
+type goalLifecycleTools struct {
+	create    *TaskCreateTool
+	update    *TaskUpdateTool
+	del       *TaskDeleteTool
+	taskStore *task.Store
+	goalStore *goal.Store
+}
+
+func newGoalLifecycleTools2(t *testing.T) goalLifecycleTools {
+	t.Helper()
+	create, update, del, taskStore, goalStore := newGoalLifecycleTools(t)
+	return goalLifecycleTools{create: create, update: update, del: del, taskStore: taskStore, goalStore: goalStore}
+}
+
 func newGoalLifecycleTools(t *testing.T) (*TaskCreateTool, *TaskUpdateTool, *TaskDeleteTool, *task.Store, *goal.Store) {
 	t.Helper()
 	home := t.TempDir()
@@ -79,7 +97,8 @@ func createGoalLifecycleTask(t *testing.T, tool *TaskCreateTool, store *task.Sto
 // half was implemented.
 func TestTaskCreateRefusesDoDIdenticalToCriteria_GOALFR021(t *testing.T) {
 	t.Parallel()
-	create, _, _, store, _ := newGoalLifecycleTools(t)
+	tools := newGoalLifecycleTools2(t)
+	create, store := tools.create, tools.taskStore
 
 	res := create.Execute(goalLifecycleCtx(), map[string]any{
 		"title":    "UAT-T2",
@@ -105,7 +124,8 @@ func TestTaskCreateRefusesDoDIdenticalToCriteria_GOALFR021(t *testing.T) {
 // other side: the rule must not refuse a legitimate near-paraphrase.
 func TestTaskCreateAcceptsAGenuinelyDifferentDoD_GOALFR021(t *testing.T) {
 	t.Parallel()
-	create, _, _, store, _ := newGoalLifecycleTools(t)
+	tools := newGoalLifecycleTools2(t)
+	create, store := tools.create, tools.taskStore
 	createGoalLifecycleTask(t, create, store, uatDuplicateSentence,
 		"the script is committed and prints the greeting line")
 }

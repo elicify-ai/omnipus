@@ -23,6 +23,18 @@
 // gracefully without the statement block in that case, exactly as it
 // already did for "legacy/ambiguous" frames pre-ADR-081.
 //
+// ONE SENTENCE, ONE LINE (UAT defect C). `definition` (the restatement) and
+// `condition` (the text the goal was set with) are different fields that
+// usually carry the SAME sentence — always so on the `set_goal` path, where
+// `buildFrameFromSetGoalResult` fills both from the one sentence the result
+// carries. The card renders that sentence exactly once: a single lead line
+// tagged `goal-echo-statement`, whose inner span is tagged
+// `goal-echo-condition` when the two coincide, so the line is addressable
+// under both names without existing anywhere twice. A `goal-echo-condition`
+// line of its own appears only when the raw text genuinely differs (then
+// captioned "Set as"), or when there is no restatement at all (then it is
+// the lead line).
+//
 // The criteria breakdown arrives on the goal_status frame's optional
 // `criteria` field (ADR-074 D5.2). Rendering is plain-language-FIRST: each
 // row leads with the criterion text; a technical payload (machine-check
@@ -148,6 +160,13 @@ function GoalAccordionSection({
  * comes back as that same sentence — and the card printed it twice, once as
  * the statement and once as the condition.
  *
+ * They also coincide BY CONSTRUCTION on the card's primary path:
+ * `buildFrameFromSetGoalResult` (SetGoalToolUI.tsx) builds every frame with
+ * `condition: result.definition, definition: result.definition`, because a
+ * `set_goal` result carries one sentence, not two. So "the two are the same
+ * sentence" is not an edge case here — it is what every tool-authored goal
+ * card looks like.
+ *
  * Comparing loosely rather than with `===` is deliberate: a restatement that
  * differs from the raw text only by adding a full stop, fixing capitalisation
  * or normalising a double space is still the same sentence to a reader, and
@@ -174,7 +193,16 @@ export function GoalEchoCard({ frame, showProgress = true }: GoalEchoCardProps) 
   // With no statement, the condition is all there is and stays the lead line.
   const statement = frame.definition?.trim() ? frame.definition : ''
   const condition = frame.condition?.trim() ? frame.condition : ''
-  const showCondition = condition !== '' && !(statement !== '' && isSameGoalSentence(statement, condition))
+  // The common case (and the ONLY case on the `set_goal` path): both fields
+  // carry the same sentence. One line is then the whole truth — it is the
+  // statement AND it is what the goal was set as — so it renders once,
+  // carrying both identities, and no "Set as" caption (there is no second
+  // thing to caption).
+  const sameSentence = statement !== '' && condition !== '' && isSameGoalSentence(statement, condition)
+  // A second, captioned line only when the raw text genuinely says something
+  // the restatement does not (e.g. a marker token, or a loose ask restated
+  // into a precise one).
+  const showSecondaryCondition = statement !== '' && condition !== '' && !sameSentence
 
   return (
     <div
@@ -195,41 +223,52 @@ export function GoalEchoCard({ frame, showProgress = true }: GoalEchoCardProps) 
           the request restated close to the setter's own words, rendered as
           the LEAD line above the compiled condition. Additive-optional: not
           present on marker-path/legacy/ambiguous frames (ADR-081 round-2
-          B-3) — rendered gracefully absent, no placeholder. */}
+          B-3) — rendered gracefully absent, no placeholder.
+
+          When the restatement and the raw condition are the SAME sentence
+          (see `sameSentence`), this one line is both of them, and says so:
+          the inner span carries `goal-echo-condition` so the line is
+          addressable as the condition — by a reader of the DOM, and by
+          tests/e2e/goal-work-first.spec.ts, which asserts that a rendered
+          record card always exposes its condition. Nesting rather than a
+          second element is the point: there is exactly ONE sentence in the
+          DOM, so the card cannot print it twice, and `goal-echo-statement`'s
+          own textContent stays exactly that sentence. */}
       {statement !== '' && (
         <p
           className="text-[var(--color-secondary)] break-words font-medium"
           data-testid="goal-echo-statement"
         >
-          {statement}
+          {sameSentence ? <span data-testid="goal-echo-condition">{statement}</span> : statement}
         </p>
       )}
 
-      {/* Condition — the raw text the goal was SET with. Suppressed entirely
-          when the statement above already says the same sentence (the common
-          case: the compiler is told to stay close to the setter's own words,
-          so a goal set as one clean sentence came back restated as itself and
-          the card printed it twice). When both are shown they are genuinely
-          different things, so the secondary one is captioned and de-emphasised
-          rather than left as a second anonymous sentence. */}
-      {showCondition && (
+      {/* No restatement at all (marker-path/legacy/ambiguous frames): the raw
+          condition is all there is, so it becomes the lead line itself —
+          uncaptioned, since nothing sits above it to distinguish it from. */}
+      {statement === '' && condition !== '' && (
+        <p
+          className="text-[var(--color-secondary)] break-words font-medium"
+          data-testid="goal-echo-condition"
+        >
+          {condition}
+        </p>
+      )}
+
+      {/* Condition as a SECONDARY line — only when the raw text the goal was
+          set with genuinely says something the restatement above does not
+          (a marker token, or a loose ask restated into a precise one). Two
+          anonymous sentences is what made the old duplicate hard to read, so
+          this one is captioned and de-emphasised. */}
+      {showSecondaryCondition && (
         <>
-          {statement !== '' && (
-            <p
-              className="mt-1.5 font-mono text-[10px] uppercase tracking-widest text-[var(--color-muted)]"
-              data-testid="goal-echo-condition-caption"
-            >
-              Set as
-            </p>
-          )}
           <p
-            className={
-              statement !== ''
-                ? 'text-[var(--color-muted)] break-words'
-                : 'text-[var(--color-secondary)] break-words'
-            }
-            data-testid="goal-echo-condition"
+            className="mt-1.5 font-mono text-[10px] uppercase tracking-widest text-[var(--color-muted)]"
+            data-testid="goal-echo-condition-caption"
           >
+            Set as
+          </p>
+          <p className="text-[var(--color-muted)] break-words" data-testid="goal-echo-condition">
             {condition}
           </p>
         </>

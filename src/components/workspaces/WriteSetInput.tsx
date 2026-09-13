@@ -28,7 +28,22 @@ interface WriteSetInputProps {
  *     free-form labels.
  *
  * Validation is delegated to the pure `validateWriteSetPath`; see that module
- * for why each of its three rejections exists.
+ * for why each of its rejections exists.
+ *
+ * KNOWN DUPLICATION (not extracted — read before "just refactoring" it):
+ * this component and `TagInput` share their whole skeleton — the
+ * draft/error `useState` pair, `commit`, `remove`, the Enter handler, the
+ * Input+Add-button row, the inline error line and the chip wrapper. The only
+ * real differences are the validator, the chip classes, `maxLength`, the
+ * chip's aria-label noun, and whether a rejected draft is kept in the box.
+ * A shared `ChipListInput` parameterised on exactly those five things would
+ * be the right shape, and every fix made here (duplicate-safe keys and
+ * index-based removal, below) has to be made twice until it exists.
+ * It was NOT done here because the extraction is only worth anything if
+ * BOTH components adopt it, and `TagInput` — with its own test file and
+ * five other call sites — was outside this change's write set. Doing half
+ * of it (a `ChipListInput` used by this component alone) would add a layer
+ * without removing a single line of duplication.
  */
 export function WriteSetInput({
   paths,
@@ -54,8 +69,15 @@ export function WriteSetInput({
     onChange([...paths, result.value])
   }
 
-  function remove(path: string) {
-    onChange(paths.filter((p) => p !== path))
+  // Remove by POSITION, never by value. `validateWriteSetPath` stops a human
+  // adding the same path twice, but nothing stops a duplicate ARRIVING: the
+  // task store assigns `write_set` verbatim (pkg/task/store.go) and the REST
+  // handler passes the array straight through (pkg/gateway/rest_tasks.go), so
+  // `create_plan` — or any non-SPA client — can persist
+  // ['pkg/a.go', 'pkg/a.go']. Filtering by value would delete BOTH copies and
+  // PATCH a write set the operator never asked for.
+  function remove(index: number) {
+    onChange(paths.filter((_, i) => i !== index))
   }
 
   return (
@@ -92,9 +114,12 @@ export function WriteSetInput({
       {error && <p className="text-xs text-[var(--color-error)]">{error}</p>}
       {paths.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mt-1">
-          {paths.map((path) => (
+          {paths.map((path, index) => (
             <span
-              key={path}
+              // Position-qualified: a write set can legitimately arrive from
+              // the server with the same path twice (see `remove` above), and
+              // a bare `key={path}` would then hand React two identical keys.
+              key={`${index}:${path}`}
               data-testid="write-set-chip"
               className="inline-flex items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-0.5 font-mono text-[10px] text-[var(--color-secondary)] max-w-[200px]"
               title={path}
@@ -106,7 +131,7 @@ export function WriteSetInput({
               <span className="truncate">{path}</span>
               <button tabIndex={0}
                 type="button"
-                onClick={() => remove(path)}
+                onClick={() => remove(index)}
                 aria-label={`Remove path ${path}`}
                 className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors"
               >

@@ -15,6 +15,15 @@ import { Target } from '@phosphor-icons/react'
  * "this message set a goal". It does not say the goal is active, met,
  * cleared or compiled — none of which survive in the transcript — so it
  * cannot go stale or contradict the live pill when one is present.
+ *
+ * It takes no props, and deliberately does NOT repeat the goal's intent:
+ * the message bubble it sits directly above already renders the user's
+ * `/goal ship the release` text verbatim, so printing the intent here too
+ * would put the same sentence on screen twice, one line apart — the very
+ * defect just fixed one component over in GoalEchoCard (UAT defect C). The
+ * marker's whole job is to make the bubble below it recognisable as a goal;
+ * the bubble says what the goal was. `messageSetsGoal` therefore answers
+ * yes/no rather than returning an intent string nothing renders.
  */
 export function GoalCommandMarker() {
   return (

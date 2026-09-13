@@ -42,8 +42,7 @@ import { useWorkspaceTeamIds } from '@/hooks/useWorkspaceTeamIds'
 import { cn } from '@/lib/utils'
 import { PRIORITY_BADGE } from './TaskCard'
 import { TagInput } from './TagInput'
-import { WriteSetInput } from './WriteSetInput'
-import { JoinMemberCheckbox, WRITE_SET_HELP, WRITE_SET_LABEL } from './PlanMemberFields'
+import { JoinMemberCheckbox, WriteSetField } from './PlanMemberFields'
 import { AcceptanceCriteriaEditor } from './AcceptanceCriteriaEditor'
 import { DefinitionOfDoneEditor } from './DefinitionOfDoneEditor'
 import { datetimeLocalToIso, datetimeLocalToDate, dateToDatetimeLocal } from './taskFormFields'
@@ -529,17 +528,11 @@ export function CreateTaskSlideOver({
                 Plan member
               </p>
 
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="ct-write-set" className="text-[var(--color-secondary)]">
-                  {WRITE_SET_LABEL}
-                </Label>
-                <WriteSetInput
-                  id="ct-write-set"
-                  paths={form.writeSet}
-                  onChange={(writeSet) => setForm((s) => ({ ...s, writeSet }))}
-                />
-                <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">{WRITE_SET_HELP}</p>
-              </div>
+              <WriteSetField
+                id="ct-write-set"
+                paths={form.writeSet}
+                onChange={(writeSet) => setForm((s) => ({ ...s, writeSet }))}
+              />
 
               <JoinMemberCheckbox
                 id="ct-is-join"

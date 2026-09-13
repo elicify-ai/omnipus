@@ -24,12 +24,7 @@ import {
 } from '@/lib/api'
 import type { Task, TaskUpdateRequest, AcceptanceCriterion } from '@/lib/api'
 import { TagInput } from '@/components/workspaces/TagInput'
-import { WriteSetInput } from '@/components/workspaces/WriteSetInput'
-import {
-  JoinMemberCheckbox,
-  WRITE_SET_HELP,
-  WRITE_SET_LABEL,
-} from '@/components/workspaces/PlanMemberFields'
+import { JoinMemberCheckbox, WriteSetField } from '@/components/workspaces/PlanMemberFields'
 import { AcceptanceCriteriaEditor } from '@/components/workspaces/AcceptanceCriteriaEditor'
 import { DefinitionOfDoneEditor } from '@/components/workspaces/DefinitionOfDoneEditor'
 import { CriteriaVerdictList } from '@/components/workspaces/CriteriaVerdictList'
@@ -291,15 +286,94 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     }, 500)
   }
 
+  // ── Plan-member fields: locally-held, optimistic ────────────────────────────
+  //
+  // `doUpdate` (below) is NOT optimistic — it only sets the save indicator in
+  // `onMutate`, and the new value reaches this component solely through the
+  // `invalidateQueries` in `onSuccess`. Driving the two plan-member controls
+  // straight off the server-round-tripped `task` therefore loses edits, and
+  // hides the ones it does not lose:
+  //
+  //   - write_set (DATA LOSS): type path A → Add → PATCH in flight → type
+  //     path B → Add. The second commit still sees the PRE-PATCH array, so it
+  //     PATCHes [B] alone — and `TaskUpdateRequest.yaml` makes `write_set` a
+  //     full REPLACEMENT, so path A is deleted while the indicator says
+  //     "Saved". A write set is a multi-entry list; adding two paths in a row
+  //     is the normal motion, not an edge case.
+  //   - is_join: a fully-controlled Radix checkbox keeps no internal state, so
+  //     on a slow link the box does not move when clicked. The operator clicks
+  //     again, firing a second PATCH that flips it straight back.
+  //
+  // So both are held here, seeded from the task and re-seeded whenever the
+  // SERVER value actually changes, with a refused PATCH rolled back to the
+  // server's own value alongside the stated reason.
+  const [writeSetDraft, setWriteSetDraft] = useState<string[]>(task?.write_set ?? [])
+  const [isJoinDraft, setIsJoinDraft] = useState<boolean>(task?.is_join ?? false)
+  // How many of OUR OWN plan-member PATCHes are still in flight. While any is,
+  // a refetch that has not yet observed them must not overwrite the draft with
+  // the pre-PATCH value it still holds.
+  const planMemberInFlight = useRef(0)
+  const planMemberTaskIdRef = useRef<string | null>(task?.id ?? null)
+  // The server's own current values, for the rollback path.
+  const planMemberServerRef = useRef<{ writeSet: string[]; isJoin: boolean }>({
+    writeSet: task?.write_set ?? [],
+    isJoin: task?.is_join ?? false,
+  })
+
+  /**
+   * Is this PATCH body one of the two plan-member controls'?
+   *
+   * The bookkeeping this gates lives on the MUTATION-level callbacks rather
+   * than `mutate()`'s per-call ones, and that is not a style choice:
+   * `MutationObserver.mutate` detaches the observer from the previous mutation
+   * before starting the next one, so a superseded call's per-call
+   * `onError`/`onSettled` NEVER FIRE. Two plan-member edits in a row is
+   * exactly the case this code exists for, so a per-call `onSettled` would
+   * leave the in-flight count stuck above zero and the panel would stop
+   * adopting server-side changes for the rest of the task's life.
+   */
+  function isPlanMemberPatch(data: TaskUpdateRequest): boolean {
+    return 'write_set' in data || 'is_join' in data
+  }
+
+  // One signature covering identity AND both server-side values, so the effect
+  // below depends on a primitive that changes only when something really
+  // changed — `task.write_set` is a fresh array on every refetch, identical
+  // contents or not.
+  const planMemberServerState = JSON.stringify({
+    id: task?.id ?? null,
+    write_set: task?.write_set ?? [],
+    is_join: task?.is_join ?? false,
+  })
+  useEffect(() => {
+    const server = JSON.parse(planMemberServerState) as {
+      id: string | null
+      write_set: string[]
+      is_join: boolean
+    }
+    planMemberServerRef.current = { writeSet: server.write_set, isJoin: server.is_join }
+    if (server.id !== planMemberTaskIdRef.current) {
+      // A different task: adopt its values unconditionally and drop any
+      // in-flight bookkeeping, which belonged to the task we just left.
+      planMemberTaskIdRef.current = server.id
+      planMemberInFlight.current = 0
+    } else if (planMemberInFlight.current > 0) {
+      return
+    }
+    setWriteSetDraft(server.write_set)
+    setIsJoinDraft(server.is_join)
+  }, [planMemberServerState])
+
   const { mutate: doUpdate } = useMutation({
     mutationFn: (data: TaskUpdateRequest) => {
       if (!task) return Promise.reject(new Error('No task selected'))
       return updateTask(task.id, data)
     },
-    onMutate: () => {
+    onMutate: (variables) => {
       if (savedFadeRef.current) clearTimeout(savedFadeRef.current)
       setSaveError(undefined)
       setSaveStatus('saving')
+      if (isPlanMemberPatch(variables)) planMemberInFlight.current += 1
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
@@ -307,13 +381,40 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       setSaveStatus('saved')
       savedFadeRef.current = setTimeout(() => setSaveStatus((s) => (s === 'saved' ? 'idle' : s)), 2000)
     },
-    onError: (err: unknown) => {
+    onError: (err: unknown, variables) => {
       const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to update task'
       setSaveStatus('error')
       setSaveError(msg)
       addToast({ message: msg, variant: 'error' })
+      // A refused plan-member edit rolls its control back to what the server
+      // actually holds — the PATCH failed, so `task` is still the truth — and
+      // the reason is already on screen (indicator + toast). Rolling back
+      // WITHOUT a stated reason is what makes a control read as broken rather
+      // than refused, so the two always travel together.
+      if (isPlanMemberPatch(variables)) {
+        setWriteSetDraft(planMemberServerRef.current.writeSet)
+        setIsJoinDraft(planMemberServerRef.current.isJoin)
+      }
+    },
+    onSettled: (_data, _err, variables) => {
+      if (isPlanMemberPatch(variables)) {
+        planMemberInFlight.current = Math.max(0, planMemberInFlight.current - 1)
+      }
     },
   })
+
+  // The two plan-member controls: move the draft NOW, PATCH the whole
+  // replacement value computed from that same draft. Rollback and in-flight
+  // bookkeeping live in the mutation's own callbacks above.
+  function handleWriteSetChange(next: string[]) {
+    setWriteSetDraft(next)
+    doUpdate({ write_set: next })
+  }
+
+  function handleIsJoinChange(next: boolean) {
+    setIsJoinDraft(next)
+    doUpdate({ is_join: next })
+  }
 
   // Todos checklist — see TaskChecklistField (shared with the calendar's
   // recurring-task edit slide-over) for the setTaskTodos mutation + handlers.
@@ -722,24 +823,25 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           both are explicitly ignored on a standalone task (Task.yaml), so
           offering them there would be a control with no effect. Each saves
           on change through the same `doUpdate` PATCH every other field on
-          this panel uses, so the autosave indicator covers them too. */}
+          this panel uses, so the autosave indicator covers them too — but
+          through an OPTIMISTIC draft, because that PATCH is not optimistic
+          itself; see the plan-member draft block above for what breaks
+          without it. Both fields are rendered by the shared components in
+          PlanMemberFields, never re-assembled from the copy constants. */}
       {task.plan_id && (
         <>
-          <Field label={WRITE_SET_LABEL}>
-            <WriteSetInput
-              paths={task.write_set ?? []}
-              onChange={(write_set) => doUpdate({ write_set })}
-            />
-            <p className="text-[11px] text-[var(--color-muted)] leading-relaxed mt-1.5">
-              {WRITE_SET_HELP}
-            </p>
-          </Field>
+          <WriteSetField
+            id="td-write-set"
+            labelStyle="section"
+            paths={writeSetDraft}
+            onChange={handleWriteSetChange}
+          />
 
           <Field label="Parallel work">
             <JoinMemberCheckbox
               id="td-is-join"
-              checked={task.is_join ?? false}
-              onCheckedChange={(is_join) => doUpdate({ is_join })}
+              checked={isJoinDraft}
+              onCheckedChange={handleIsJoinChange}
             />
           </Field>
         </>
