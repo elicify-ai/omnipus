@@ -5001,6 +5001,8 @@ export interface components {
              * @example 1
              */
             unloadable_count: number;
+            /** @description The rejections behind `unloadable_count`, one per rejection (a duplicate-name conflict is ONE entry naming several files, so this list can be shorter than the count) — name, files, code and reason (UAT 2026-09-13 D-70). Present exactly when `is_knowledge_base` is true; empty when nothing failed. */
+            unloadable?: components["schemas"]["KnowledgeBaseUnloadableView"][];
         };
         /**
          * KnowledgeBaseView
@@ -5035,6 +5037,35 @@ export interface components {
              * @example the view is stored disabled because an expression in its filter could not be translated — write the filter directly to run it
              */
             unservable_reason?: string;
+        };
+        /**
+         * KnowledgeBaseUnloadableView
+         * @description One view file that names a `.base` as its `source` but FAILED TO LOAD — malformed YAML, an unknown key, a property the record type no longer declares — reported by name and reason (UAT 2026-09-13 D-70).
+         *     `unloadable_count` alone told a reader "2 views from this file could not be loaded" and nothing else: which two analyses were missing, and why, was known to the server (records.ViewRejection carries the name, the file paths, the code and the reason) and withheld. This entry surfaces exactly that record, so the preview can name the missing tabs and state the operator's remedy in the same words knowledge_describe would use.
+         */
+        KnowledgeBaseUnloadableView: {
+            /**
+             * @description The view's declared name, when the file was readable enough to hold one. Absent for a file so broken that no `name:` key could be read.
+             * @example projects--active-projects
+             */
+            name?: string;
+            /**
+             * @description Every file involved, vault-relative. A duplicate-name conflict names both files, for the reason FR-003 gives for schemas.
+             * @example [
+             *       ".omnipus-vault/views/projects--active-projects.yaml"
+             *     ]
+             */
+            paths: string[];
+            /**
+             * @description The loader's rejection code, verbatim (e.g. `view_unknown_property`).
+             * @example view_unknown_property
+             */
+            code: string;
+            /**
+             * @description Why the view could not be loaded, in the operator's own vocabulary.
+             * @example view "projects--active-projects" names property "priority" in properties, which record type "project" does not declare; declared: budget, owner, start, status
+             */
+            reason: string;
         };
         /**
          * KnowledgeOutline
@@ -6114,6 +6145,22 @@ export interface components {
              * @example invoice
              */
             type?: string;
+            /**
+             * @description The vault-relative path of the `.base` file this view was imported from — the saved view's own `source:` key, echoed verbatim (UAT 2026-09-13 D-136). Absent for a view authored directly (no `.base` behind it). Provenance for a surface that reaches a view by name alone (a search hit) and must be able to say which file it lives in and offer to open it.
+             * @example Projects.base
+             */
+            source?: string;
+            /**
+             * @description The view's own per-property PRESENTATION map (ViewDef.property_config — the `.base` file's top-level `properties:` block), echoed verbatim so a renderer can print a declared `display_name` as the column heading instead of the machine key (UAT 2026-09-13 D-35). Keyed by property name. Pure presentation: the engine never read it to produce `rows`, and a display name is never usable in a filter, sort or grouping. Absent when the view declares none.
+             * @example {
+             *       "formula.days_open": {
+             *         "display_name": "Days Open"
+             *       }
+             *     }
+             */
+            property_config?: {
+                [key: string]: components["schemas"]["ViewPropertyConfig"];
+            };
             /** @description Present exactly when the view could not be answered; `parts` and `rows` are then empty and `complete` is false. */
             refusal?: components["schemas"]["ViewResultRefusal"];
             /** @description The resolved part stack in render order — the view's own `parts`, or the single part a legacy `layout`-only view maps to (a no-parts view still serves as one table part). Always present — an empty array, never null; empty exactly when `refusal` is set. */
@@ -22536,6 +22583,7 @@ export type KnowledgeGraphEdge = components["schemas"]["KnowledgeGraphEdge"];
 export type KnowledgeGraphSkip = components["schemas"]["KnowledgeGraphSkip"];
 export type KnowledgeBaseViews = components["schemas"]["KnowledgeBaseViews"];
 export type KnowledgeBaseView = components["schemas"]["KnowledgeBaseView"];
+export type KnowledgeBaseUnloadableView = components["schemas"]["KnowledgeBaseUnloadableView"];
 export type KnowledgeOutline = components["schemas"]["KnowledgeOutline"];
 export type KnowledgeOutlineHeading = components["schemas"]["KnowledgeOutlineHeading"];
 export type KnowledgeConflictError = components["schemas"]["KnowledgeConflictError"];

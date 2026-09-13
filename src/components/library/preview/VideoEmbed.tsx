@@ -122,12 +122,37 @@ export interface VideoEmbedProps {
    *  fetching one is itself a contact with the provider, exactly what
    *  click-to-play exists to prevent). */
   title?: string
+  /** UAT D-41: true when the author wrote a plain `[text](url)` LINK rather
+   *  than `![](url)` embed notation. A refused host then degrades to the
+   *  link the author actually wrote (plus a short note), never to a
+   *  refused-video box that misrepresents what was on the page. */
+  authoredAsLink?: boolean
 }
 
 const PANEL_BASE =
   'flex w-full flex-col items-center justify-center gap-2 rounded-md border p-6 text-center text-xs'
 
-export function VideoEmbed({ url, title }: VideoEmbedProps) {
+/** UAT D-41: the plain link an author wrote, restored when its host is not
+ *  permitted for playback here — with the reason beside it, never hidden. */
+function RefusedLinkFallback({ url, title, note }: { url: string; title?: string; note: string }) {
+  return (
+    <span data-testid="video-embed" data-state="refused-link" className="inline">
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        tabIndex={0}
+        data-testid="video-embed-refused-link"
+        className="text-[var(--color-accent)] underline underline-offset-2"
+      >
+        {title && title.trim() !== '' ? title : url}
+      </a>
+      <span className="ml-1 text-[11px] text-[var(--color-muted)]">({note})</span>
+    </span>
+  )
+}
+
+export function VideoEmbed({ url, title, authoredAsLink = false }: VideoEmbedProps) {
   const appStateQuery = useQuery({
     queryKey: ['app-state'],
     queryFn: fetchAppState,
@@ -183,6 +208,22 @@ export function VideoEmbed({ url, title }: VideoEmbedProps) {
     // 4) — say so plainly, and say something DIFFERENT from the "this host
     // specifically is not allowed" refusal below, so a reader (and a test)
     // can tell the two apart.
+    // UAT D-41: a LINK-authored video keeps being the link it was.
+    if (authoredAsLink) {
+      return (
+        <RefusedLinkFallback
+          url={url}
+          {...(title === undefined ? {} : { title })}
+          note={
+            hosts.length === 0
+              ? 'video playback is not enabled on this deployment'
+              : parsed.host
+                ? `video playback from "${parsed.host}" is not allowed here`
+                : 'video playback is not allowed for this link'
+          }
+        />
+      )
+    }
     if (hosts.length === 0) {
       return (
         <div

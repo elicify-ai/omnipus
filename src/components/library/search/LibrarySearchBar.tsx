@@ -80,10 +80,14 @@ import { ViewPartsRenderer } from '../preview/viewparts/ViewPartsRenderer'
 // wikilinkNotation.ts because the `query` fence inside a note shows excerpts
 // from the same engine's same field and needs the identical fix.
 import { stripWikilinkNotation } from '../preview/wikilinkNotation'
-import { collectionPathToWorkspacePath } from '../knowledge/KnowledgeBacklinks'
+// UAT D-129: one accent-folding rule for every client-side comparison, so
+// the bar never disagrees with the engine about which words a hit matched.
+import { foldForMatch, foldedMatchRanges } from './foldForMatch'
+import { collectionPathToWorkspacePath, libraryNoteHref } from '../knowledge/KnowledgeBacklinks'
 import { LibraryErrorBanner } from '../LibraryErrorBanner'
 import {
   useVaultSearch,
+  VAULT_SEARCH_QUERY_MAX_CHARS,
   type LoadCollectionInfoFn,
   type VaultSearchFn,
   type VaultSearchKind,
@@ -218,8 +222,10 @@ function countBadge(n: number, more = false) {
 function vaultCoverage(query: string, hit: VaultSearchNoteHit): { term: string; found: boolean }[] {
   const words = Array.from(new Set(query.split(/\s+/).filter((w) => w.length > 0)))
   if (words.length < 2) return []
-  const haystack = `${hit.title ?? ''} ${hit.path} ${hit.snippet ?? ''}`.toLowerCase()
-  return words.map((term) => ({ term, found: haystack.includes(term.toLowerCase()) }))
+  // UAT D-129: one folding rule (foldForMatch) — `cafe` covers "Café", and
+  // an NFC and an NFD spelling of the same word cover each other.
+  const haystack = foldForMatch(`${hit.title ?? ''} ${hit.path} ${hit.snippet ?? ''}`)
+  return words.map((term) => ({ term, found: haystack.includes(foldForMatch(term)) }))
 }
 
 function CoverageChips({ coverage }: { coverage: { term: string; found: boolean }[] }) {
@@ -326,10 +332,11 @@ function orderCellsForDisplay(
   const words = query
     .split(/\s+/)
     .filter((w) => w.length > 0)
-    .map((w) => w.toLowerCase())
+    .map(foldForMatch)
   if (words.length === 0) return cells
+  // UAT D-129: folded on both sides, so `zurich` credits a "Zürich" cell.
   const isMatch = (cell: VaultSearchRecordHit['cells'][number]) =>
-    words.some((w) => cell.value.toLowerCase().includes(w) || cell.property.toLowerCase().includes(w))
+    words.some((w) => foldForMatch(cell.value).includes(w) || foldForMatch(cell.property).includes(w))
   const matched = cells.filter(isMatch)
   const unmatched = cells.filter((c) => !isMatch(c))
   return [...matched, ...unmatched]
@@ -337,14 +344,19 @@ function orderCellsForDisplay(
 
 function RecordRow({ hit, query, onOpen }: { hit: VaultSearchRecordHit; query: string; onOpen: () => void }) {
   const orderedCells = orderCellsForDisplay(hit.cells, query)
-  const shownCells = orderedCells.slice(0, 4)
+  // UAT D-137: the "+N more" affordance looked expandable but sat inside
+  // the row's open button, so clicking it opened the note. It is now its
+  // own control, a SIBLING of the open button (a button may not nest one),
+  // that reveals the withheld cells in place.
+  const [expanded, setExpanded] = useState(false)
+  const shownCells = expanded ? orderedCells : orderedCells.slice(0, 4)
   // Finding S2: silently slicing to 4 left a 7-property record showing four
   // cells NONE of which contain the search term, with nothing saying a cell
   // was withheld — a real match that reads as a non-match. Say how many were
   // left out.
   const withheldCount = hit.cells.length - shownCells.length
   return (
-    <li>
+    <li className="flex flex-col">
       <button
         type="button"
         tabIndex={0}
@@ -373,18 +385,21 @@ function RecordRow({ hit, query, onOpen }: { hit: VaultSearchRecordHit; query: s
                 {stripWikilinkNotation(cell.value)}
               </span>
             ))}
-            {withheldCount > 0 && (
-              <Badge
-                variant="secondary"
-                data-testid="vault-search-record-cells-more"
-                className="px-1.5 py-0 text-[10px] leading-4"
-              >
-                +{withheldCount} more
-              </Badge>
-            )}
           </span>
         )}
       </button>
+      {(withheldCount > 0 || expanded) && (
+        <button
+          type="button"
+          tabIndex={0}
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          data-testid="vault-search-record-cells-more"
+          className="self-start rounded px-2 pb-1 text-[10px] leading-4 text-[var(--color-muted)] underline-offset-2 hover:underline"
+        >
+          {expanded ? 'Show fewer properties' : `+${withheldCount} more ${withheldCount === 1 ? 'property' : 'properties'}`}
+        </button>
+      )}
     </li>
   )
 }
@@ -425,25 +440,27 @@ function ViewRow({ hit, onOpen }: { hit: VaultSearchViewHit; onOpen: () => void 
  *  accent (`--color-accent`), not yellow — the founder asked for yellow,
  *  but yellow reads as "warning" elsewhere in this palette; flagged in the
  *  defect writeup as reversible. */
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
 function highlightQuery(text: string, query: string): ReactNode {
   const words = query.split(/\s+/).filter((w) => w.length > 0)
   if (words.length === 0) return text
-  const pattern = new RegExp(`(${words.map(escapeRegExp).join('|')})`, 'gi')
-  const parts = text.split(pattern)
-  if (parts.length <= 1) return text
-  return parts.map((part, i) =>
-    i % 2 === 1 ? (
+  // UAT D-129: the match is found on the accent-folded text and the
+  // highlight is sliced from the ORIGINAL, so `cafe` lights up "Café" as
+  // the reader sees it, accent and all.
+  const ranges = foldedMatchRanges(text, words)
+  if (ranges.length === 0) return text
+  const out: ReactNode[] = []
+  let cursor = 0
+  ranges.forEach(([start, end], i) => {
+    if (start > cursor) out.push(text.slice(cursor, start))
+    out.push(
       <span key={i} className="rounded-sm bg-[var(--color-accent)]/25 text-[var(--color-accent)]">
-        {part}
-      </span>
-    ) : (
-      part
-    ),
-  )
+        {text.slice(start, end)}
+      </span>,
+    )
+    cursor = end
+  })
+  if (cursor < text.length) out.push(text.slice(cursor))
+  return out
 }
 
 /** One FileSearchHit — a NAME match (path only) or a CONTENT match (path,
@@ -590,6 +607,12 @@ export function LibrarySearchBar({
 }: LibrarySearchBarProps) {
   const [text, setText] = useState('')
   const [filter, setFilter] = useState<VaultSearchKind>('all')
+  // UAT D-132: an over-long query is refused HERE with a sentence and never
+  // becomes a request — before, the generated client's own Zod check threw
+  // and its raw issue list was rendered verbatim as the error.
+  const queryLength = text.trim().length
+  const queryTooLong = queryLength > VAULT_SEARCH_QUERY_MAX_CHARS
+  const hookQuery = queryTooLong ? '' : text
   const [openView, setOpenView] = useState<{ view: string; label: string } | null>(null)
   const inputId = useId()
 
@@ -599,6 +622,8 @@ export function LibrarySearchBar({
     isResolvingCollection,
     collectionId,
     collectionRootPath,
+    collectionDisplayName,
+    isInsideCollection,
     error: vaultError,
     response,
     counts,
@@ -610,7 +635,7 @@ export function LibrarySearchBar({
   } = useVaultSearch({
     workspaceId,
     folderPath,
-    query: text,
+    query: hookQuery,
     ...(limit === undefined ? {} : { limit }),
     ...(debounceMs === undefined ? {} : { debounceMs }),
     ...(searchFn === undefined ? {} : { searchFn }),
@@ -651,7 +676,7 @@ export function LibrarySearchBar({
   } = useFileSearch({
     workspaceId,
     folderPath,
-    query: text,
+    query: hookQuery,
     enabled: isFilesMode,
     ...(debounceMs === undefined ? {} : { debounceMs }),
     ...(searchFilesFn === undefined ? {} : { searchFn: searchFilesFn }),
@@ -706,8 +731,8 @@ export function LibrarySearchBar({
       : isResolvingCollection
         ? 'Checking this folder…'
         : isVaultMode
-          ? 'Search notes, records, views'
-          : 'Search files and folders'
+          ? 'Search notes, records, views, attachments'
+          : 'Search file and folder names'
   const ariaLabel = isVaultMode ? 'Search this knowledge base' : isFilesMode ? 'Search this folder' : 'Search'
 
   function openNote(path: string) {
@@ -798,12 +823,50 @@ export function LibrarySearchBar({
         )}
       </div>
 
+      {queryTooLong && (
+        <p role="alert" data-testid="library-search-query-too-long" className="text-xs leading-snug text-[var(--color-error)]">
+          Search text is limited to {VAULT_SEARCH_QUERY_MAX_CHARS.toLocaleString('en-US')} characters — yours is{' '}
+          {queryLength.toLocaleString('en-US')}. Shorten it to search.
+        </p>
+      )}
+
       {(!isActive || disabled) && children}
 
       {isActive && !disabled && (
         <div data-testid="library-search-active" className="flex flex-col gap-2">
           {error && (
             <LibraryErrorBanner message={error.message || 'Search failed.'} testId="library-search-error" />
+          )}
+
+          {/* UAT D-133 — the bar never changes what it searches without
+              saying so. Inside a vault it searches the WHOLE knowledge base
+              (the browsed folder is only where the reader happens to be);
+              outside one it matches file and folder names, not note
+              contents, and says which folder. */}
+          {!error && (isVaultMode || isFilesMode) && (
+            <p data-testid="library-search-mode" className="px-2 text-[11px] leading-snug text-[var(--color-muted)]">
+              {isVaultMode
+                ? isInsideCollection
+                  ? `Searching the whole knowledge base${collectionDisplayName ? ` “${collectionDisplayName}”` : ''} — this folder is inside it.`
+                  : `Searching this knowledge base${collectionDisplayName ? ` “${collectionDisplayName}”` : ''}.`
+                : `Searching file and folder names under “${folderPath === '' ? 'the workspace root' : folderPath}” — not note contents. This folder is not inside a knowledge base.`}
+            </p>
+          )}
+
+          {/* UAT D-130 (bar half) — a kind at the per-kind cap is a LOWER
+              bound, stated as a sentence next to the results rather than
+              only as a "+" on a tab badge. */}
+          {!error && isVaultMode && response && (
+            (() => {
+              const capped = (['notes', 'records', 'views', 'attachments'] as const).filter((k) => kindAtLimit(k))
+              if (capped.length === 0) return null
+              return (
+                <p data-testid="library-search-kind-cap" className="px-2 text-[11px] leading-snug text-[var(--color-muted)]">
+                  Showing the first {effectiveLimit} {capped.join(', ')} — the search returns at most {effectiveLimit} per
+                  kind, so more may exist. Narrow the search to see the rest.
+                </p>
+              )
+            })()
           )}
 
           {!error && isVaultMode && (
@@ -1100,7 +1163,32 @@ export function LibrarySearchBar({
         <DialogContent className="max-w-3xl" data-testid="library-search-view-dialog">
           <DialogHeader>
             <DialogTitle>{openView?.label}</DialogTitle>
-            <DialogDescription>Saved view</DialogDescription>
+            <DialogDescription>
+              {/* UAT D-136: name the file the view lives in and offer to open
+                  it — the view is reachable as a tab there. */}
+              {viewResultQuery.data?.source !== undefined ? (
+                <span data-testid="library-search-view-source">
+                  Saved view from{' '}
+                  <button
+                    type="button"
+                    tabIndex={0}
+                    data-testid="library-search-view-source-open"
+                    onClick={() => {
+                      const src = viewResultQuery.data?.source
+                      if (src !== undefined) {
+                        openNote(src)
+                        setOpenView(null)
+                      }
+                    }}
+                    className="underline underline-offset-2 hover:text-[var(--color-secondary)]"
+                  >
+                    {viewResultQuery.data.source}
+                  </button>
+                </span>
+              ) : (
+                'Saved view'
+              )}
+            </DialogDescription>
           </DialogHeader>
           {viewResultQuery.isPending && (
             <div role="status" className="flex items-center gap-2 py-6 text-sm text-[var(--color-muted)]">
@@ -1118,7 +1206,24 @@ export function LibrarySearchBar({
               testId="library-search-view-error"
             />
           )}
-          {viewResultQuery.data && <ViewPartsRenderer result={viewResultQuery.data} />}
+          {/* UAT D-72: the SAME row-open and relation-cell link wiring the
+              base preview has, so a `[[Sofia Marchetti]]` cell is a real
+              link here too instead of raw brackets. */}
+          {viewResultQuery.data && (
+            <ViewPartsRenderer
+              result={viewResultQuery.data}
+              onOpenPath={(p) => {
+                openNote(p)
+                setOpenView(null)
+              }}
+              {...(workspaceId !== null && collectionRootPath !== undefined
+                ? {
+                    linkHref: (p: string) =>
+                      libraryNoteHref(workspaceId, collectionPathToWorkspacePath(collectionRootPath, p)),
+                  }
+                : {})}
+            />
+          )}
         </DialogContent>
       </Dialog>
     </div>

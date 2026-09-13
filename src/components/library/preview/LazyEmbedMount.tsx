@@ -118,6 +118,34 @@ export function UnmountedEmbedsNotice() {
   )
 }
 
+/** UAT D-131 — the scroll container an embed's viewport actually is.
+ *
+ *  An IntersectionObserver with no `root` measures against the BROWSER
+ *  viewport, and `rootMargin` widens only that. The knowledge reader
+ *  scrolls inside an `overflow: auto` pane, and an element clipped by a
+ *  scrolling ancestor is "not intersecting" no matter how wide the root
+ *  margin is — so the 600 px mount margin and the 1800 px unmount margin
+ *  never applied there: only embeds physically inside the pane's visible
+ *  box were mounted at any instant, and each one was unmounted the moment
+ *  it left that box. With 448 px reserved per base-view embed and a
+ *  ~850 px pane, that is the "never more than two views render, whatever
+ *  the note declares" a dashboard reader saw. Observing against the
+ *  nearest scrollable ancestor makes the margins mean what the module doc
+ *  says they mean. Returns null (the viewport) when no ancestor scrolls,
+ *  which is the pre-existing behaviour for a page that scrolls as a whole.
+ *
+ *  Exported as a test seam. */
+export function findScrollableAncestor(el: Element): Element | null {
+  let node: Element | null = el.parentElement
+  while (node && node !== document.body && node !== document.documentElement) {
+    const style = getComputedStyle(node)
+    const overflow = `${style.overflowY} ${style.overflow}`
+    if (/(auto|scroll|overlay)/.test(overflow)) return node
+    node = node.parentElement
+  }
+  return null
+}
+
 /** How far outside the viewport, in pixels, mounting begins. */
 export const DEFAULT_MOUNT_MARGIN_PX = 600
 
@@ -175,18 +203,20 @@ export function LazyEmbedMount({
     const el = ref.current
     if (!el) return
 
+    // UAT D-131 — see findScrollableAncestor's own doc.
+    const root = findScrollableAncestor(el)
     const mountObserver = new IntersectionObserver(
       (entries) => {
         if (entries[entries.length - 1]?.isIntersecting) setMounted(true)
       },
-      { rootMargin: `${mountMarginPx}px` },
+      { root, rootMargin: `${mountMarginPx}px` },
     )
     const unmountObserver = new IntersectionObserver(
       (entries) => {
         const entry = entries[entries.length - 1]
         if (entry && !entry.isIntersecting) setMounted(false)
       },
-      { rootMargin: `${unmountMarginPx}px` },
+      { root, rootMargin: `${unmountMarginPx}px` },
     )
     mountObserver.observe(el)
     unmountObserver.observe(el)

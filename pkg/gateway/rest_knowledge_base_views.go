@@ -104,6 +104,7 @@ func (a *restAPI) handleKnowledgeBaseViews(w http.ResponseWriter, r *http.Reques
 		Views:           []gen.KnowledgeBaseView{},
 		UnloadableCount: 0,
 	}
+	unloadable := []gen.KnowledgeBaseUnloadableView{}
 
 	col, inKB := a.collectionContaining(workspaceID, root.HostPath(rel))
 	if !inKB {
@@ -186,11 +187,25 @@ func (a *restAPI) handleKnowledgeBaseViews(w http.ResponseWriter, r *http.Reques
 	// showing fewer tabs than the base has views is the same silent loss this
 	// whole surface exists to end. Count the FILES, so a duplicate-name
 	// conflict (one rejection naming several files) is not reported as one.
+	// UAT D-70: the count alone said "2 views could not be loaded" and
+	// withheld WHICH two and WHY, although the loader's rejection carries
+	// the name, the files, the code and the reason. Each is surfaced.
 	for _, rej := range report.Rejections {
 		if rej.Source == source {
 			out.UnloadableCount += len(rej.Paths)
+			entry := gen.KnowledgeBaseUnloadableView{
+				Paths:  append([]string(nil), rej.Paths...),
+				Code:   string(rej.Code),
+				Reason: rej.Reason,
+			}
+			if rej.Name != "" {
+				name := rej.Name
+				entry.Name = &name
+			}
+			unloadable = append(unloadable, entry)
 		}
 	}
+	out.Unloadable = &unloadable
 
 	jsonOK(w, out)
 }

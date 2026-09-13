@@ -256,12 +256,20 @@ function edgeMatchesEmbedKey(
   target: string,
   heading: string | undefined,
   block: string | undefined,
+  page?: number,
 ): boolean {
   if (edge.embed !== true) return false
   const targetMatches =
     edge.link_text === target || edge.to_path === target || basenameOf(edge.to_path) === target
   if (!targetMatches) return false
-  if ((edge.heading ?? undefined) !== (heading ?? undefined)) return false
+  // UAT D-39: the link graph (`pkg/knowledge/links.go`) knows no page
+  // fragment — it records `#page=2` as the heading "page=2" — while the
+  // reader's parser splits it out as `page`. The two spellings name the
+  // same fragment, so they are compared as one; before this, every
+  // `#page=N` pdf embed matched no edge and was drawn "could not be
+  // checked: no reason available".
+  const expectedHeading = heading ?? (page !== undefined ? `page=${page}` : undefined)
+  if ((edge.heading ?? undefined) !== expectedHeading) return false
   if ((edge.block ?? undefined) !== (block ?? undefined)) return false
   return true
 }
@@ -271,8 +279,9 @@ function findMatchingEmbedEdges(
   target: string,
   heading: string | undefined,
   block: string | undefined,
+  page?: number,
 ): KnowledgeGraphEdge[] {
-  return graph.edges.filter((e) => edgeMatchesEmbedKey(e, target, heading, block))
+  return graph.edges.filter((e) => edgeMatchesEmbedKey(e, target, heading, block, page))
 }
 
 /** ADR-083 EMB-039: `heading_found` is meaningful ONLY for a markdown target
@@ -306,8 +315,9 @@ function resolveEmbedAgainstGraph(
   downloadUrl: (workspacePath: string) => string,
   workspaceId: string,
   outlineForMissingHeading: (collectionPath: string) => string[] | undefined,
+  page?: number,
 ): EmbedResolution {
-  const matches = findMatchingEmbedEdges(graph, target, heading, block)
+  const matches = findMatchingEmbedEdges(graph, target, heading, block, page)
 
   const truncatedCaveat = graph.truncated
     ? 'this answer was truncated before the walk finished, so absence is not proven'
@@ -638,7 +648,7 @@ export function KnowledgeNoteView({
   // `indeterminate`, and an absent function cannot report which.
   const resolveEmbedUrl = useMemo(() => {
     if (collectionId === undefined) return undefined
-    return (target: string, heading?: string, block?: string): EmbedResolution => {
+    return (target: string, heading?: string, block?: string, page?: number): EmbedResolution => {
       if (rootStatus === 'unavailable') {
         return {
           state: 'graph_unavailable',
@@ -670,6 +680,7 @@ export function KnowledgeNoteView({
         (p) => toAbsoluteEmbedUrl(libraryDownloadUrl(workspaceId, p)),
         workspaceId,
         outlineForMissingHeading,
+        page,
       )
     }
   }, [

@@ -277,6 +277,7 @@ type KnowledgeBaseViews = {
   source?: string | undefined;
   views: Array<KnowledgeBaseView>;
   unloadable_count: number;
+  unloadable?: Array<KnowledgeBaseUnloadableView> | undefined;
 };
 type KnowledgeBaseView = {
   name: string;
@@ -284,6 +285,12 @@ type KnowledgeBaseView = {
   kind?: string | undefined;
   unservable?: boolean | undefined;
   unservable_reason?: string | undefined;
+};
+type KnowledgeBaseUnloadableView = {
+  name?: string | undefined;
+  paths: Array<string>;
+  code: string;
+  reason: string;
 };
 type KnowledgeOutline = {
   path: string;
@@ -581,6 +588,8 @@ type ViewResult = {
   label: string;
   kind?: string | undefined;
   type?: string | undefined;
+  source?: string | undefined;
+  property_config?: {} | undefined;
   refusal?: ViewResultRefusal | undefined;
   parts: Array<ViewResultPart>;
   rows: Array<VaultFindRow>;
@@ -590,6 +599,9 @@ type ViewResult = {
   aggregates?: Array<VaultFindTotal> | undefined;
   problems: Array<RecordProblem>;
 };
+type ViewPropertyConfig = Partial<{
+  display_name: string;
+}>;
 type ViewResultRefusal = {
   code: string;
   reason: string;
@@ -755,9 +767,6 @@ type ViewDef = {
   source?: string | undefined;
   untranslated?: Array<string> | undefined;
 };
-type ViewPropertyConfig = Partial<{
-  display_name: string;
-}>;
 type VaultFindRequest = Partial<{
   words: string;
   type: string;
@@ -4666,6 +4675,13 @@ export const KnowledgeBaseView: z.ZodType<KnowledgeBaseView> = z.object({
   unservable: z.boolean().optional(),
   unservable_reason: z.string().min(1).optional(),
 });
+export const KnowledgeBaseUnloadableView: z.ZodType<KnowledgeBaseUnloadableView> =
+  z.object({
+    name: z.string().optional(),
+    paths: z.array(z.string().min(1)),
+    code: z.string().min(1),
+    reason: z.string().min(1),
+  });
 export const KnowledgeBaseViews: z.ZodType<KnowledgeBaseViews> = z.object({
   base_path: z.string().min(1),
   is_knowledge_base: z.boolean(),
@@ -4674,7 +4690,11 @@ export const KnowledgeBaseViews: z.ZodType<KnowledgeBaseViews> = z.object({
   source: z.string().min(1).optional(),
   views: z.array(KnowledgeBaseView),
   unloadable_count: z.number().int().gte(0),
+  unloadable: z.array(KnowledgeBaseUnloadableView).optional(),
 });
+export const ViewPropertyConfig: z.ZodType<ViewPropertyConfig> = z
+  .object({ display_name: z.string().min(1) })
+  .partial();
 export const ViewResultRefusal: z.ZodType<ViewResultRefusal> = z.object({
   code: z.string().min(1),
   reason: z.string().min(1),
@@ -4882,6 +4902,8 @@ export const ViewResult: z.ZodType<ViewResult> = z.object({
   label: z.string(),
   kind: z.string().optional(),
   type: z.string().optional(),
+  source: z.string().min(1).optional(),
+  property_config: z.record(ViewPropertyConfig).optional(),
   refusal: ViewResultRefusal.optional(),
   parts: z.array(ViewResultPart),
   rows: z.array(VaultFindRow),
@@ -5336,9 +5358,6 @@ export const RelationWriteRequest = z.object({
   op: z.enum(["add", "remove", "replace"]),
   targets: z.array(z.string().min(1)),
 });
-export const ViewPropertyConfig: z.ZodType<ViewPropertyConfig> = z
-  .object({ display_name: z.string().min(1) })
-  .partial();
 export const VaultFilterNode: z.ZodType<VaultFilterNode> = z.lazy(() =>
   z
     .object({

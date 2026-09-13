@@ -508,9 +508,12 @@ describe('ColumnsPart', () => {
     ]
     render(<ColumnsPart part={part} rows={rows} />)
     const cols = screen.getAllByTestId('viewpart-board-column')
-    expect(cols).toHaveLength(3) // Sent, Overdue, Not set
-    expect(cols[0]?.textContent).toContain('Sent')
-    expect(within(cols[0] as HTMLElement).getAllByTestId('viewpart-board-card')).toHaveLength(2)
+    // UAT D-76: columns are ordered as text (Overdue, Sent), "Not set" last
+    // — no longer whichever value a row happened to carry first.
+    expect(cols).toHaveLength(3) // Overdue, Sent, Not set
+    expect(cols[0]?.textContent).toContain('Overdue')
+    expect(cols[1]?.textContent).toContain('Sent')
+    expect(within(cols[1] as HTMLElement).getAllByTestId('viewpart-board-card')).toHaveLength(2) // the two Sent rows
     expect(cols[2]?.textContent).toContain('Not set')
     // Read-only: no draggable attribute, no button role on cards.
     expect(screen.queryAllByRole('button')).toHaveLength(0)

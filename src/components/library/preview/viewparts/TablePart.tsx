@@ -15,7 +15,7 @@
 // listed.
 
 import type { ReactNode } from 'react'
-import type { VaultFindRow, ViewResultPart } from '@/lib/api/generated/openapi-types'
+import type { VaultFindRow, ViewResult, ViewResultPart } from '@/lib/api/generated/openapi-types'
 import {
   cellValue,
   findCell,
@@ -69,6 +69,27 @@ function columnLabel(property: string): string {
   return property === FILE_NAME_PROPERTY ? 'Name' : property.replace(/^file\./, '')
 }
 
+/** UAT D-74: a row with no record `id` gets no editor in an otherwise
+ *  editable grid (RecordFieldEditor's `resolveEditTarget` needs the id to
+ *  address a write), and nothing on screen said why. This mark, on the
+ *  row's primary cell only and only when the grid IS editable, states the
+ *  one missing ingredient in plain words. */
+export const NO_RECORD_ID_REASON =
+  'Not editable: this note carries no record id, so its cells cannot be written back'
+
+function NoRecordIdMark() {
+  return (
+    <span
+      data-testid="viewpart-row-no-id"
+      title={NO_RECORD_ID_REASON}
+      aria-label={NO_RECORD_ID_REASON}
+      className="ml-1.5 rounded border border-[var(--color-border)] px-1 text-[9px] uppercase tracking-wide text-[var(--color-muted)]"
+    >
+      no id
+    </span>
+  )
+}
+
 function numericProperties(part: ViewResultPart): Set<string> {
   const set = new Set<string>()
   if (part.source.number !== undefined && part.source.number !== '') set.add(part.source.number)
@@ -118,7 +139,13 @@ function Cell({
         {primary && onOpenPath ? (
           <RowOpenButton rowTitle={row.title} onOpen={() => onOpenPath(row.path)} className="block w-full truncate text-left">
             {value}
+            {editContext !== undefined && row.id === undefined && <NoRecordIdMark />}
           </RowOpenButton>
+        ) : primary && editContext !== undefined && row.id === undefined ? (
+          <>
+            {renderCellValue(value)}
+            <NoRecordIdMark />
+          </>
         ) : cell !== undefined ? (
           <EditableCell context={editContext} row={row} cell={cell} renderValue={renderCellValue} />
         ) : (
@@ -206,6 +233,7 @@ export function TablePart({
   onOpenPath,
   cellLinks,
   editContext,
+  labels,
 }: {
   part: ViewResultPart
   rows: VaultFindRow[]
@@ -217,6 +245,9 @@ export function TablePart({
   /** Enables ADR-083 D8 inline record-field editing. Absent renders every
    *  cell exactly as before — plain text, never an editor. */
   editContext?: RecordEditContext
+  /** UAT D-35: the view's own `property_config` — a declared `display_name`
+   *  is printed as the column heading instead of the machine key. */
+  labels?: ViewResult['property_config']
 }) {
   // code-review finding #3(b): `part.columns ?? [FILE_NAME_PROPERTY]` only
   // caught `undefined` — a part that "declares no properties" as the EMPTY
@@ -255,7 +286,7 @@ export function TablePart({
                     numeric.has(property) ? 'text-right' : 'text-left'
                   }`}
                 >
-                  {columnLabel(property)}
+                  {labels?.[property]?.display_name ?? columnLabel(property)}
                 </th>
               ))}
             </tr>

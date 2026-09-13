@@ -111,8 +111,17 @@ describe('a markdown IMAGE naming a video is recognised the same way, and a wiki
 })
 
 describe('a video destination degrades honestly when it cannot play, rather than silently becoming a plain link', () => {
-  it('shows the refusal text naming the disallowed host for a video-shaped link on a host that is not on the allow-list', async () => {
+  it('UAT D-41: a video-shaped LINK on a host that is not on the allow-list stays the link the author wrote, with the refusal named beside it', async () => {
     renderNote(`[Sketchy](https://evil.example.com/embed/${VIDEO_ID})`)
+    await waitFor(() => expect(screen.getByTestId('video-embed')).toHaveAttribute('data-state', 'refused-link'))
+    const link = screen.getByTestId('video-embed-refused-link')
+    expect(link).toHaveAttribute('href', `https://evil.example.com/embed/${VIDEO_ID}`)
+    expect(link.textContent).toBe('Sketchy')
+    expect(screen.getByTestId('video-embed').textContent).toContain('evil.example.com')
+  })
+
+  it('UAT D-41: a video-shaped EMBED (`![]()`) on a disallowed host still gets the refusal box', async () => {
+    renderNote(`![Sketchy](https://evil.example.com/embed/${VIDEO_ID})`)
     await waitFor(() => expect(screen.getByTestId('video-embed')).toHaveAttribute('data-state', 'refused'))
   })
 })

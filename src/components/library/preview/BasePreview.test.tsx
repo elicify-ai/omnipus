@@ -23,7 +23,7 @@
 // syntax highlighting.
 
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query'
 import type {
   KnowledgeBaseViews,
@@ -568,5 +568,156 @@ describe('BasePreview — tabs over the views the server says this base owns', (
       expect(clickSpy).toHaveBeenCalledTimes(1)
       vi.restoreAllMocks()
     })
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UAT 2026-09-13 — D-70 (unloadable views named) and D-78 (duplicate labels,
+// default tab)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('UAT D-70 — the unloadable notice names each missing view and its reason', () => {
+  it('lists the view name and the loader reason beneath the count', async () => {
+    renderBase({
+      loadBaseViews: vi.fn().mockResolvedValue(
+        baseViews({
+          unloadable_count: 2,
+          unloadable: [
+            {
+              name: 'projects--active-projects',
+              paths: ['.omnipus-vault/views/projects--active-projects.yaml'],
+              code: 'view_unknown_property',
+              reason: 'view "projects--active-projects" names property "priority" in properties, which record type "project" does not declare',
+            },
+            {
+              paths: ['.omnipus-vault/views/broken.yaml'],
+              code: 'view_malformed',
+              reason: 'yaml: line 3: could not find expected key',
+            },
+          ],
+        }),
+      ),
+    })
+    const notice = await screen.findByTestId('base-preview-unloadable')
+    // DIES ON the old notice: only "2 views ... could not be loaded".
+    const entries = within(notice).getAllByTestId('base-preview-unloadable-entry')
+    expect(entries).toHaveLength(2)
+    expect(entries[0]?.textContent).toContain('projects--active-projects')
+    expect(entries[0]?.textContent).toContain('does not declare')
+    expect(entries[1]?.textContent).toContain('broken.yaml')
+    expect(entries[1]?.textContent).toContain('could not find expected key')
+  })
+})
+
+describe('UAT D-78 — two views sharing a label are told apart, and the default tab is servable', () => {
+  const twins = [
+    {
+      name: 'projects--all-projects',
+      label: 'All Projects',
+      unservable: true,
+      unservable_reason: 'sort direction "descending" is not one the query grammar accepts',
+    },
+    { name: 'All Projects', label: 'All Projects' },
+  ]
+
+  it('suffixes a duplicated label with the view name on each tab', async () => {
+    renderBase({ loadBaseViews: vi.fn().mockResolvedValue(baseViews({ views: twins })) })
+    const tablist = await screen.findByTestId('base-preview-tablist')
+    // DIES ON the old tablist: both tabs read exactly "All Projects".
+    expect(within(tablist).getByTestId('base-view-tab-projects--all-projects').textContent).toContain(
+      'All Projects (projects--all-projects)',
+    )
+    expect(within(tablist).getByTestId('base-view-tab-All Projects').textContent).toContain('All Projects (All Projects)')
+  })
+
+  it('lands on the first SERVABLE view, not on an unservable twin that sorts first', async () => {
+    const loadViewResult = vi.fn().mockResolvedValue(result())
+    renderBase({ loadBaseViews: vi.fn().mockResolvedValue(baseViews({ views: twins })), loadViewResult })
+    await screen.findByTestId('base-preview-tablist')
+    // DIES ON the old default (`views[0]`): the broken twin was selected.
+    await waitFor(() =>
+      expect(screen.getByTestId('base-view-tab-All Projects').getAttribute('aria-selected')).toBe('true'),
+    )
+    await waitFor(() => expect(loadViewResult.mock.calls.some((c) => c[2] === 'All Projects')).toBe(true))
+    expect(loadViewResult.mock.calls.some((c) => c[2] === 'projects--all-projects')).toBe(false)
+  })
+
+  it('leaves a lone label untouched', async () => {
+    renderBase()
+    const tablist = await screen.findByTestId('base-preview-tablist')
+    expect(within(tablist).getByTestId('base-view-tab-invoices--outstanding').textContent).not.toContain('(')
+  })
+})
+
+// ── UAT 2026-09-13 D-135 — link-graph fan-out and hidden 429s ───────────────
+import { rowCarriesWikilink, withLinkGraphSlot, linkGraphInFlightCount, LINK_GRAPH_MAX_IN_FLIGHT } from './BasePreview'
+import { ApiError } from '@/lib/api-error'
+
+describe('UAT D-135 — a base view no longer fires one graph request per row', () => {
+  it('rowCarriesWikilink: only a row with a [[wikilink]] cell needs the link graph', () => {
+    expect(rowCarriesWikilink({ cells: [{ value: '[[Korn Ferry]]' }] })).toBe(true)
+    expect(rowCarriesWikilink({ cells: [{ value: 'plain' }, { value: '42' }] })).toBe(false)
+    expect(rowCarriesWikilink({ cells: [] })).toBe(false)
+    expect(rowCarriesWikilink({})).toBe(false)
+  })
+
+  it('issues a graph request for the wikilink-bearing row ONLY, not for every row', async () => {
+    const loadGraph = vi.fn().mockResolvedValue(graph())
+    renderBase({
+      loadGraph,
+      loadViewResult: vi.fn().mockResolvedValue(
+        result({
+          parts: [{ part: 'table', source: { part: 'table' }, columns: ['file.name', 'client'] }],
+          rows: [
+            { path: 'a.md', title: 'INV-A', cells: [{ property: 'client', value: '[[Korn Ferry]]' }], joins: [] },
+            { path: 'b.md', title: 'INV-B', cells: [{ property: 'client', value: 'Acme' }], joins: [] },
+            { path: 'c.md', title: 'INV-C', cells: [{ property: 'client', value: 'Bolt' }], joins: [] },
+          ],
+        }),
+      ),
+    })
+    await screen.findByTestId('viewpart-table')
+    await waitFor(() => expect(loadGraph).toHaveBeenCalledWith(expect.objectContaining({ path: 'a.md' })))
+    // DIES ON the old code: three rows → three requests, b.md and c.md included.
+    expect(loadGraph).toHaveBeenCalledTimes(1)
+  })
+
+  it(`withLinkGraphSlot: never more than ${LINK_GRAPH_MAX_IN_FLIGHT} link-graph requests on the wire at once`, async () => {
+    const resolvers: Array<() => void> = []
+    const runs = Array.from({ length: 7 }, () =>
+      withLinkGraphSlot(() => new Promise<void>((resolve) => resolvers.push(resolve))),
+    )
+    await Promise.resolve()
+    // DIES ON the old code, which had no limiter at all (7 in flight).
+    expect(linkGraphInFlightCount()).toBe(LINK_GRAPH_MAX_IN_FLIGHT)
+    expect(resolvers).toHaveLength(LINK_GRAPH_MAX_IN_FLIGHT)
+    resolvers.shift()?.()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(linkGraphInFlightCount()).toBe(LINK_GRAPH_MAX_IN_FLIGHT)
+    expect(resolvers).toHaveLength(LINK_GRAPH_MAX_IN_FLIGHT + 1 - 1)
+    while (resolvers.length > 0) {
+      resolvers.shift()?.()
+      await Promise.resolve()
+      await Promise.resolve()
+    }
+    await Promise.all(runs)
+    expect(linkGraphInFlightCount()).toBe(0)
+  })
+
+  it('names a gateway rate limit (HTTP 429) in the degraded-links banner instead of hiding it', async () => {
+    const loadGraph = vi.fn().mockRejectedValue(new ApiError(429, 'Too many requests'))
+    renderBase({
+      loadGraph,
+      loadViewResult: vi.fn().mockResolvedValue(
+        result({
+          parts: [{ part: 'table', source: { part: 'table' }, columns: ['file.name', 'client'] }],
+          rows: [{ path: 'a.md', title: 'INV-A', cells: [{ property: 'client', value: '[[Korn Ferry]]' }], joins: [] }],
+        }),
+      ),
+    })
+    const banner = await screen.findByTestId('base-preview-link-graph-degraded')
+    // DIES ON the old code: the banner never distinguished a 429.
+    expect(within(banner).getByTestId('base-preview-link-graph-rate-limited').textContent).toMatch(/429/)
   })
 })

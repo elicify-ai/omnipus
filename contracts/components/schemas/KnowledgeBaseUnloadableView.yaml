@@ -1,0 +1,44 @@
+title: KnowledgeBaseUnloadableView
+description: >
+  One view file that names a `.base` as its `source` but FAILED TO LOAD —
+  malformed YAML, an unknown key, a property the record type no longer
+  declares — reported by name and reason (UAT 2026-09-13 D-70).
+
+  `unloadable_count` alone told a reader "2 views from this file could not
+  be loaded" and nothing else: which two analyses were missing, and why,
+  was known to the server (records.ViewRejection carries the name, the
+  file paths, the code and the reason) and withheld. This entry surfaces
+  exactly that record, so the preview can name the missing tabs and state
+  the operator's remedy in the same words knowledge_describe would use.
+type: object
+additionalProperties: false
+required:
+  - paths
+  - code
+  - reason
+properties:
+  name:
+    type: string
+    description: >
+      The view's declared name, when the file was readable enough to hold
+      one. Absent for a file so broken that no `name:` key could be read.
+    example: "projects--active-projects"
+  paths:
+    type: array
+    description: >
+      Every file involved, vault-relative. A duplicate-name conflict names
+      both files, for the reason FR-003 gives for schemas.
+    items:
+      type: string
+      minLength: 1
+    example: [".omnipus-vault/views/projects--active-projects.yaml"]
+  code:
+    type: string
+    minLength: 1
+    description: The loader's rejection code, verbatim (e.g. `view_unknown_property`).
+    example: "view_unknown_property"
+  reason:
+    type: string
+    minLength: 1
+    description: Why the view could not be loaded, in the operator's own vocabulary.
+    example: 'view "projects--active-projects" names property "priority" in properties, which record type "project" does not declare; declared: budget, owner, start, status'

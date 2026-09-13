@@ -26,8 +26,10 @@ import { formatNumberText } from './viewResultData'
 import { ExcludedLine } from './PartChrome'
 
 const WIDTH = 560
-const HEIGHT = 180
-const PAD = { top: 12, right: 12, bottom: 24, left: 56 }
+// UAT D-73: ten more pixels below the plot for tick labels AND an axis
+// title; the plot itself keeps its 144 px height (HEIGHT − top − bottom).
+const HEIGHT = 190
+const PAD = { top: 12, right: 12, bottom: 34, left: 56 }
 
 // Token-based series palette: accent first, then the semantic hues — no new
 // colors (brand rule), distinct enough at two-to-four series.
@@ -42,6 +44,23 @@ const SERIES_COLORS = [
 function numeric(v: string): number {
   const n = Number(v)
   return Number.isFinite(n) ? n : 0
+}
+
+/** UAT D-73: a point key that reads as an ISO date — `YYYY`, `YYYY-MM`,
+ *  `YYYY-MM-DD`, optionally with a `T`/space time — as UTC milliseconds, or
+ *  undefined for anything else. When EVERY key of a chart parses, the x
+ *  axis is a TIME axis, so a fortnight and a quarter take proportionate
+ *  widths instead of one slot each. Exported as a test seam. */
+export function chartKeyTime(key: string): number | undefined {
+  const m = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?$/.exec(key.trim())
+  if (m === null) return undefined
+  const num = (s: string | undefined, fallback: number) => (s === undefined ? fallback : Number(s))
+  const t = Date.UTC(num(m[1], 0), num(m[2], 1) - 1, num(m[3], 1), num(m[4], 0), num(m[5], 0), num(m[6], 0))
+  return Number.isFinite(t) ? t : undefined
+}
+
+function isoDay(t: number): string {
+  return new Date(t).toISOString().slice(0, 10)
 }
 
 export function ChartPart({ part }: { part: ViewResultPart }) {
@@ -70,8 +89,29 @@ export function ChartPart({ part }: { part: ViewResultPart }) {
 
   const plotW = WIDTH - PAD.left - PAD.right
   const plotH = HEIGHT - PAD.top - PAD.bottom
-  const x = (key: string) =>
-    PAD.left + (allKeys.length === 1 ? plotW / 2 : (allKeys.indexOf(key) / (allKeys.length - 1)) * plotW)
+  // UAT D-73: temporal when every key is a date and they span real time;
+  // otherwise the keys are categories and sit one slot apart as before.
+  const keyTimes = allKeys.map(chartKeyTime).filter((t): t is number => t !== undefined)
+  const tMin = keyTimes.length > 0 ? Math.min(...keyTimes) : 0
+  const tMax = keyTimes.length > 0 ? Math.max(...keyTimes) : 0
+  const temporal = allKeys.length > 1 && keyTimes.length === allKeys.length && tMin < tMax
+  const x = (key: string) => {
+    if (allKeys.length === 1) return PAD.left + plotW / 2
+    if (temporal) return PAD.left + (((chartKeyTime(key) ?? tMin) - tMin) / (tMax - tMin)) * plotW
+    return PAD.left + (allKeys.indexOf(key) / (allKeys.length - 1)) * plotW
+  }
+  // Ticks: on a time axis, five evenly spaced dates (the extremes plus three
+  // between them); on a category axis, the first and last key as before.
+  const firstKey = allKeys[0] ?? ''
+  const lastKey = allKeys[allKeys.length - 1] ?? ''
+  const xTicks: { x: number; label: string }[] = temporal
+    ? [0, 0.25, 0.5, 0.75, 1].map((f) => ({ x: PAD.left + f * plotW, label: isoDay(tMin + f * (tMax - tMin)) }))
+    : allKeys.length > 1
+      ? [
+          { x: PAD.left, label: firstKey },
+          { x: WIDTH - PAD.right, label: lastKey },
+        ]
+      : [{ x: PAD.left, label: firstKey }]
   const y = (v: number) => PAD.top + plotH - ((v - domainMin) / span) * plotH
   // Zero is always inside [domainMin, domainMax] by construction, so every
   // bar/point can anchor on a real zero baseline instead of always the
@@ -123,12 +163,53 @@ export function ChartPart({ part }: { part: ViewResultPart }) {
               0
             </text>
           )}
-          <text x={PAD.left} y={HEIGHT - 8} textAnchor="start" fontSize="9" fill="var(--color-muted)">
-            {allKeys[0]}
-          </text>
-          {allKeys.length > 1 && (
-            <text x={WIDTH - PAD.right} y={HEIGHT - 8} textAnchor="end" fontSize="9" fill="var(--color-muted)">
-              {allKeys[allKeys.length - 1]}
+          {xTicks.map((tick, i) => (
+            <g key={`${tick.label}-${i}`}>
+              {temporal && (
+                <line
+                  x1={tick.x}
+                  y1={PAD.top + plotH}
+                  x2={tick.x}
+                  y2={PAD.top + plotH + 3}
+                  stroke="var(--color-border)"
+                  data-testid="viewpart-chart-x-tick"
+                />
+              )}
+              <text
+                x={tick.x}
+                y={PAD.top + plotH + 12}
+                textAnchor={i === 0 ? 'start' : i === xTicks.length - 1 ? 'end' : 'middle'}
+                fontSize="9"
+                fill="var(--color-muted)"
+                data-testid="viewpart-chart-x-label"
+              >
+                {tick.label}
+              </text>
+            </g>
+          ))}
+          {/* UAT D-73: axis titles — the property each axis plots. */}
+          {part.source.date !== undefined && (
+            <text
+              x={PAD.left + plotW / 2}
+              y={HEIGHT - 2}
+              textAnchor="middle"
+              fontSize="9"
+              fill="var(--color-muted)"
+              data-testid="viewpart-chart-x-title"
+            >
+              {part.source.date}
+              {temporal ? '' : ' (categories)'}
+            </text>
+          )}
+          {part.source.number !== undefined && (
+            <text
+              transform={`translate(9 ${PAD.top + plotH / 2}) rotate(-90)`}
+              textAnchor="middle"
+              fontSize="9"
+              fill="var(--color-muted)"
+              data-testid="viewpart-chart-y-title"
+            >
+              {part.source.number}
             </text>
           )}
           {series.map((s, si) => {

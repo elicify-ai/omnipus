@@ -50,6 +50,32 @@ properties:
     type: string
     description: The record type the view queries. Absent for an untyped view.
     example: invoice
+  source:
+    type: string
+    minLength: 1
+    description: >
+      The vault-relative path of the `.base` file this view was imported
+      from — the saved view's own `source:` key, echoed verbatim (UAT
+      2026-09-13 D-136). Absent for a view authored directly (no `.base`
+      behind it). Provenance for a surface that reaches a view by name
+      alone (a search hit) and must be able to say which file it lives in
+      and offer to open it.
+    example: "Projects.base"
+  property_config:
+    type: object
+    description: >
+      The view's own per-property PRESENTATION map (ViewDef.property_config —
+      the `.base` file's top-level `properties:` block), echoed verbatim so a
+      renderer can print a declared `display_name` as the column heading
+      instead of the machine key (UAT 2026-09-13 D-35). Keyed by property
+      name. Pure presentation: the engine never read it to produce `rows`,
+      and a display name is never usable in a filter, sort or grouping.
+      Absent when the view declares none.
+    additionalProperties:
+      $ref: "./ViewPropertyConfig.yaml"
+      x-go-type: ViewPropertyConfig
+    example:
+      formula.days_open: { display_name: "Days Open" }
   refusal:
     description: >
       Present exactly when the view could not be answered; `parts` and `rows`

@@ -310,6 +310,8 @@ components:
       $ref: ./components/schemas/KnowledgeBaseViews.yaml
     KnowledgeBaseView:
       $ref: ./components/schemas/KnowledgeBaseView.yaml
+    KnowledgeBaseUnloadableView:
+      $ref: ./components/schemas/KnowledgeBaseUnloadableView.yaml
     KnowledgeOutline:
       $ref: ./components/schemas/KnowledgeOutline.yaml
     KnowledgeOutlineHeading:

@@ -35,7 +35,7 @@
 // into a cache entry nobody is reading any more.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQueries, useQuery } from '@tanstack/react-query'
 import { fetchKnowledgeBaseInfo, searchVault } from '@/lib/api'
 import type { components } from '@/lib/api/generated/openapi-types'
 
@@ -50,6 +50,30 @@ export type KnowledgeBaseInfo = components['schemas']['KnowledgeBaseInfo']
 /** Debounce before a keystroke becomes a request — same figure as
  *  useKnowledgeSearch's, for the same reason (a typed word is one request). */
 export const VAULT_SEARCH_DEBOUNCE_MS = 250
+
+/** The wire limit on a search query (VaultSearchRequest.query maxLength 1024,
+ *  mirrored by FileSearchRequest). Checked BEFORE a request is built so an
+ *  over-long query is refused with a sentence, never with the raw Zod issue
+ *  list the generated client throws (UAT D-132). */
+export const VAULT_SEARCH_QUERY_MAX_CHARS = 1024
+
+/** UAT D-133 — the folder itself and every ancestor up to the workspace
+ *  root, nearest first: `a/b/c` → `['a/b/c', 'a/b', 'a', '']`. A subfolder of
+ *  a vault is inside that vault's collection, and the base-info endpoint
+ *  answers only for the exact folder asked about, so the bar has to ask up
+ *  the chain — the same walk KnowledgeNoteView does for a note. */
+export function folderAndAncestors(folderPath: string): string[] {
+  const clean = folderPath.replace(/^\/+|\/+$/g, '')
+  const out: string[] = []
+  let cur = clean
+  while (cur !== '') {
+    out.push(cur)
+    const i = cur.lastIndexOf('/')
+    cur = i === -1 ? '' : cur.slice(0, i)
+  }
+  out.push('')
+  return out
+}
 
 /** The segmented filter's five positions (library-b-c-design-2026-09-07 §C1;
  *  `attachments` added by unified-search-and-grep-spec.md US-1/MV-9 — the
@@ -194,6 +218,12 @@ export interface UseVaultSearchResult {
    *  vault at all — either way there is nothing to search, and the input
    *  should render disabled. */
   collectionId: string | undefined
+  /** The vault's own display name, when the server reports one. */
+  collectionDisplayName: string | undefined
+  /** UAT D-133: true when the browsed folder is INSIDE the collection rather
+   *  than its root — the bar states that the whole knowledge base is being
+   *  searched, not just this folder. */
+  isInsideCollection: boolean
   /** The vault's root, workspace-relative — needed to translate a hit's
    *  collection-relative path back into a workspace path the Library address
    *  model understands (mirrors KnowledgePanel's collectionPathToWorkspacePath
@@ -256,31 +286,65 @@ export function useVaultSearch(options: UseVaultSearchOptions): UseVaultSearchRe
     return () => clearTimeout(t)
   }, [trimmed, debounceMs])
 
-  const infoQuery = useQuery({
-    queryKey: vaultSearchQueryKeys.collectionInfo(workspaceId ?? '', folderPath),
-    queryFn: () => loadCollectionInfo(workspaceId as string, folderPath),
-    enabled: workspaceId !== null,
-    // Detection is a marker stat, not a moving value — matches KnowledgePanel's
-    // own reasoning for the same query.
-    refetchOnWindowFocus: false,
-    retry: false,
+  // UAT D-133 — detection walks UP from the browsed folder. Before this,
+  // only the exact folder was asked, and one folder inside a vault silently
+  // turned the bar into a filename search with a different placeholder and
+  // no statement. The same query key shape KnowledgePanel uses, per folder,
+  // so the exact-folder entry is still shared with that panel's cache.
+  const chain = useMemo(() => folderAndAncestors(folderPath), [folderPath])
+  const infoQueries = useQueries({
+    queries: chain.map((dir) => ({
+      queryKey: vaultSearchQueryKeys.collectionInfo(workspaceId ?? '', dir),
+      queryFn: () => loadCollectionInfo(workspaceId as string, dir),
+      enabled: workspaceId !== null,
+      // Detection is a marker stat, not a moving value — matches
+      // KnowledgePanel's own reasoning for the same query.
+      refetchOnWindowFocus: false,
+      retry: false,
+    })),
   })
 
-  const info = infoQuery.data
-  const collectionId =
-    info && info.is_knowledge_base && info.detection_error === undefined ? info.collection_id : undefined
+  // Nearest folder up the chain that IS a knowledge base. The exact folder
+  // is index 0, so a vault root still resolves to itself.
+  let matchIndex = -1
+  for (let i = 0; i < chain.length; i++) {
+    const d = infoQueries[i]?.data
+    if (d && d.is_knowledge_base && d.detection_error === undefined) {
+      matchIndex = i
+      break
+    }
+  }
+  const info = matchIndex === -1 ? undefined : infoQueries[matchIndex]?.data
+  const collectionId = info?.collection_id
   const collectionRootPath = collectionId !== undefined ? info?.root_path : undefined
-  const isResolvingCollection = workspaceId !== null && infoQuery.isPending
+  const collectionDisplayName = collectionId !== undefined ? info?.display_name : undefined
+  const isInsideCollection = collectionId !== undefined && matchIndex > 0
+  // Still resolving while no vault has been found AND some level of the
+  // chain has not answered yet — the first vault found ends the wait, so a
+  // deep folder inside a vault is not held hostage to the levels above it.
+  const isResolvingCollection =
+    workspaceId !== null && matchIndex === -1 && infoQueries.some((q) => q.isPending)
 
   // Finding F-I: detection can fail two different ways — the info REQUEST
   // itself errors (infoQuery.error), or the request succeeds but detection
   // could not complete for this folder (info.detection_error, E-9). Both
   // must surface; neither did before this fix, which is exactly how a
   // knowledge base with a genuine detection failure silently became "just
-  // an ordinary folder" to this bar.
-  const detectionError =
-    info?.detection_error?.message ??
-    (infoQuery.error instanceof Error ? infoQuery.error.message : undefined)
+  // an ordinary folder" to this bar. With the ancestor walk (D-133) the
+  // same rule applies to EVERY level asked: a failure anywhere up the chain
+  // means "not inside a vault" was never established, so it is reported
+  // rather than downgraded — unless a vault was found below the failure,
+  // in which case that vault is the answer and the failure is moot.
+  let detectionError: string | undefined
+  if (matchIndex === -1) {
+    for (const q of infoQueries) {
+      const msg = q.data?.detection_error?.message ?? (q.error instanceof Error ? q.error.message : undefined)
+      if (msg !== undefined) {
+        detectionError = msg
+        break
+      }
+    }
+  }
 
   const active = collectionId !== undefined && debouncedQuery !== ''
 
@@ -332,6 +396,8 @@ export function useVaultSearch(options: UseVaultSearchOptions): UseVaultSearchRe
     isResolvingCollection,
     collectionId,
     collectionRootPath,
+    collectionDisplayName,
+    isInsideCollection,
     error: active ? ((result.error as Error | null) ?? null) : null,
     response,
     counts,

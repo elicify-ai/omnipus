@@ -26,12 +26,15 @@ interface ObserverInstance {
    *  which the earlier constructor signature below made impossible to catch
    *  — it never even received the `options` argument). */
   rootMargin: string
+  /** The `root` this instance was constructed with (UAT D-131): null is the
+   *  browser viewport; an Element is the scroll pane the reader lives in. */
+  root: Element | Document | null
 }
 
 let observerInstances: ObserverInstance[] = []
 
 class FakeIntersectionObserver implements IntersectionObserver {
-  readonly root = null
+  readonly root: Element | Document | null
   readonly rootMargin: string
   readonly scrollMargin = ''
   readonly thresholds: ReadonlyArray<number> = []
@@ -39,7 +42,14 @@ class FakeIntersectionObserver implements IntersectionObserver {
 
   constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
     this.rootMargin = options?.rootMargin ?? ''
-    this.instance = { callback, observedElements: [], disconnected: false, rootMargin: this.rootMargin }
+    this.root = options?.root ?? null
+    this.instance = {
+      callback,
+      observedElements: [],
+      disconnected: false,
+      rootMargin: this.rootMargin,
+      root: this.root,
+    }
     observerInstances.push(this.instance)
   }
   observe(el: Element) {
@@ -87,6 +97,44 @@ afterEach(() => {
 function Child() {
   return <div data-testid="embed-child">real content</div>
 }
+
+describe('LazyEmbedMount — UAT D-131: the observers measure against the scroll pane the embed lives in, not the window', () => {
+  // DIES ON: constructing the observers with no `root`. Inside an
+  // `overflow: auto` pane, a rootless observer treats everything clipped by
+  // the pane as "not intersecting" regardless of rootMargin — so only the
+  // embeds physically inside the pane's visible box ever mounted, and each
+  // unmounted the instant it scrolled out: "never more than two views".
+  it('passes the nearest scrollable ancestor as both observers’ root', () => {
+    render(
+      <div data-testid="outer">
+        <div data-testid="pane" style={{ overflowY: 'auto', height: 400 }}>
+          <div>
+            <LazyEmbedMount reservedHeight={240}>
+              <Child />
+            </LazyEmbedMount>
+          </div>
+        </div>
+      </div>,
+    )
+    const pane = screen.getByTestId('pane')
+    expect(observerInstances).toHaveLength(2)
+    expect(observerInstances[0]?.root).toBe(pane)
+    expect(observerInstances[1]?.root).toBe(pane)
+  })
+
+  it('falls back to the window (root null) when no ancestor scrolls', () => {
+    render(
+      <div>
+        <LazyEmbedMount reservedHeight={240}>
+          <Child />
+        </LazyEmbedMount>
+      </div>,
+    )
+    expect(observerInstances).toHaveLength(2)
+    expect(observerInstances[0]?.root).toBeNull()
+    expect(observerInstances[1]?.root).toBeNull()
+  })
+})
 
 describe('LazyEmbedMount — reserved height before mounting (EMB-066)', () => {
   it('reserves the given height and renders no children before the near observer ever reports intersecting', () => {

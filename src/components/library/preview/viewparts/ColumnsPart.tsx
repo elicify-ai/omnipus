@@ -44,6 +44,11 @@ function columnsFromChoiceCells(part: ViewResultPart, rows: VaultFindRow[]): Col
     }
     buckets.get(v)?.push(row)
   }
+  // UAT D-76: first-seen order (whichever row happened to come first) read
+  // as if it meant something. Columns follow the same rule the engine's own
+  // grouping documents for enums — ordered as TEXT — with the "not set"
+  // column always last.
+  order.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
   const out: Column[] = order.map((key) => ({ key, absent: false, rows: buckets.get(key) ?? [] }))
   if (absentRows.length > 0) out.push({ key: '', absent: true, rows: absentRows })
   return out
@@ -60,12 +65,18 @@ function Card({
 }) {
   const numberProperty = part.source.number
   const amount = numberProperty === undefined ? '' : cellValue(row, numberProperty)
+  // UAT D-77: `truncate` on an inline span inside a block button clipped
+  // nothing — a 203-character title ran straight through the next column.
+  // The title is a shrinkable flex item that wraps at word boundaries and
+  // breaks an unbroken run, so the card always stays inside its column.
   const content = (
-    <>
-      <span className="truncate">{row.title}</span>
-      {amount !== '' && <span className="ml-1 text-[var(--color-muted)]">· {amount}</span>}
+    <span className="flex min-w-0 items-baseline gap-1">
+      <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]" data-testid="viewpart-board-card-title">
+        {row.title}
+      </span>
+      {amount !== '' && <span className="shrink-0 text-[var(--color-muted)]">· {amount}</span>}
       {rowExcludedFromTotals(row, part) && <ExcludedRowMark />}
-    </>
+    </span>
   )
   if (onOpenPath) {
     return (

@@ -357,7 +357,7 @@ describe('LibrarySearchBar — a plain folder gets Files search, not the old dis
     await waitFor(() =>
       expect(screen.getByTestId('library-search-input')).toHaveAttribute(
         'placeholder',
-        'Search files and folders',
+        'Search file and folder names',
       ),
     )
     expect(screen.getByTestId('library-search-input')).not.toBeDisabled()
@@ -1147,8 +1147,10 @@ describe('LibrarySearchBar — record hits: withheld cells are disclosed (findin
     // The 7th cell is the one that actually matched "widget" — it must be
     // shown, not silently dropped by a naive first-4 slice.
     expect(within(hit).getByText(/widget-42/)).toBeInTheDocument()
-    // 7 cells total, 4 shown — 3 withheld.
-    expect(within(hit).getByTestId('vault-search-record-cells-more')).toHaveTextContent('+3 more')
+    // 7 cells total, 4 shown — 3 withheld. UAT D-137: the control is a
+    // SIBLING of the open button (not inside it), so it is looked up on the
+    // row, not within the hit.
+    expect(screen.getByTestId('vault-search-record-cells-more')).toHaveTextContent('+3 more')
   })
 
   it('renders no withheld-count indicator when every cell already fits', async () => {
@@ -1262,5 +1264,276 @@ describe('LibrarySearchBar — files kind: empty-state copy keys to the query th
     expect(searchFilesFn).toHaveBeenCalledTimes(1)
     expect(screen.getByTestId('library-search-empty').textContent ?? '').toMatch(/foo/)
     expect(screen.getByTestId('library-search-empty').textContent ?? '').not.toMatch(/bar/)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UAT 2026-09-13 — D-130 (bar half), D-132, D-133, D-137
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('UAT D-132 — an over-long query is refused with a sentence, never a raw validation dump', () => {
+  it('states the limit and the typed length, and issues no request', async () => {
+    const searchFn: VaultSearchFn = vi.fn().mockResolvedValue(response())
+    renderBar({ res: searchFn })
+    await waitFor(() => expect(screen.getByTestId('library-search-input')).not.toBeDisabled())
+    type('x'.repeat(4000))
+    const alert = await screen.findByTestId('library-search-query-too-long')
+    expect(alert.textContent).toContain('1,024 characters')
+    expect(alert.textContent).toContain('4,000')
+    // DIES ON the old bar: the generated client threw a ZodError whose
+    // `[ { "code": "too_big", ... } ]` message rendered in the error banner.
+    expect(document.body.textContent).not.toContain('too_big')
+    await new Promise((r) => setTimeout(r, 30))
+    expect(searchFn).not.toHaveBeenCalled()
+  })
+
+  it('accepts exactly 1,024 characters (the limit is inclusive)', async () => {
+    const searchFn: VaultSearchFn = vi.fn().mockResolvedValue(response())
+    renderBar({ res: searchFn })
+    await waitFor(() => expect(screen.getByTestId('library-search-input')).not.toBeDisabled())
+    type('y'.repeat(1024))
+    await waitFor(() => expect(searchFn).toHaveBeenCalled())
+    expect(screen.queryByTestId('library-search-query-too-long')).not.toBeInTheDocument()
+  })
+})
+
+describe('UAT D-133 — one folder down, the bar is still knowledge search, and says what it searches', () => {
+  it('resolves the vault from an ANCESTOR folder and states that the whole knowledge base is searched', async () => {
+    const loadCollectionInfo: LoadCollectionInfoFn = vi.fn(async (_ws: string, path: string) =>
+      path === 'vault'
+        ? vaultInfo({ display_name: 'UAT Vault' })
+        : plainFolderInfo({ root_path: path === '' ? '.' : path }),
+    )
+    const searchFn: VaultSearchFn = vi.fn().mockResolvedValue(
+      response({ notes: [{ path: 'Projects/a.md', title: 'Northbridge' }] }),
+    )
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={client}>
+        <LibrarySearchBar
+          workspaceId="ws-1"
+          folderPath="vault/Projects"
+          onOpenNote={vi.fn()}
+          debounceMs={5}
+          searchFn={searchFn}
+          searchFilesFn={vi.fn().mockResolvedValue(filesResponse())}
+          loadCollectionInfo={loadCollectionInfo}
+        >
+          <div />
+        </LibrarySearchBar>
+      </QueryClientProvider>,
+    )
+    // DIES ON the old hook: only the exact folder was asked, `vault/Projects`
+    // is not itself a vault, so the bar became a filename search.
+    await waitFor(() =>
+      expect(screen.getByTestId('library-search-input')).toHaveAttribute('placeholder', 'Search notes, records, views, attachments'),
+    )
+    type('Northbridge')
+    await screen.findByTestId('vault-search-note-hit')
+    expect(searchFn).toHaveBeenCalled()
+    const mode = screen.getByTestId('library-search-mode')
+    expect(mode.textContent).toContain('whole knowledge base')
+    expect(mode.textContent).toContain('UAT Vault')
+    expect(mode.textContent).toContain('this folder is inside it')
+  })
+
+  it('states plainly that a folder outside any vault gets a file-and-folder NAME search', async () => {
+    renderBar({ info: plainFolderInfo(), filesRes: filesResponse() })
+    await waitFor(() => expect(screen.getByTestId('library-search-input')).not.toBeDisabled())
+    type('notes')
+    const mode = await screen.findByTestId('library-search-mode')
+    expect(mode.textContent).toContain('file and folder names')
+    expect(mode.textContent).toContain('not note contents')
+  })
+})
+
+describe('UAT D-137 — the "+N more" control reveals the withheld cells instead of opening the note', () => {
+  it('expands in place and does not call onOpen', async () => {
+    const onOpenNote = vi.fn()
+    renderBar({
+      onOpenNote,
+      res: response({
+        records: [
+          {
+            path: 'crm/acme.md',
+            title: 'Acme Corp',
+            cells: [
+              { property: 'status', value: 'open' },
+              { property: 'owner', value: 'Ada' },
+              { property: 'region', value: 'EU' },
+              { property: 'tier', value: 'gold' },
+              { property: 'contact', value: 'ops@acme.test' },
+              { property: 'sku', value: 'widget-42' },
+            ],
+          },
+        ],
+      }),
+    })
+    // "corp" matches the title only, so no cell is promoted into the
+    // visible four by orderCellsForDisplay and the last two are withheld.
+    type('corp')
+    const more = await screen.findByTestId('vault-search-record-cells-more')
+    expect(more).toHaveTextContent('+2 more')
+    expect(screen.queryByText(/ops@acme.test/)).not.toBeInTheDocument()
+    fireEvent.click(more)
+    // DIES ON the old row: the badge sat inside the open button, so this
+    // click opened the note and revealed nothing.
+    expect(onOpenNote).not.toHaveBeenCalled()
+    expect(screen.getByText(/ops@acme.test/)).toBeInTheDocument()
+    expect(screen.getByTestId('vault-search-record-cells-more')).toHaveTextContent('Show fewer')
+  })
+
+  it('names attachments in the vault placeholder, since an Attachments tab sits beneath it', async () => {
+    renderBar()
+    await waitFor(() =>
+      expect(screen.getByTestId('library-search-input')).toHaveAttribute('placeholder', 'Search notes, records, views, attachments'),
+    )
+  })
+})
+
+describe('UAT D-130 (bar half) — a kind at the per-kind cap is stated as a lower bound in a sentence', () => {
+  it('names every capped kind and the cap', async () => {
+    const notes = Array.from({ length: 20 }, (_, i) => ({ path: `n${i}.md`, title: `Note ${i}` }))
+    renderBar({ res: response({ notes, notes_capped_at_limit: true }) })
+    type('mermaid')
+    const line = await screen.findByTestId('library-search-kind-cap')
+    expect(line.textContent).toContain('first 20 notes')
+    expect(line.textContent).toContain('at most 20 per kind')
+  })
+
+  it('renders no cap sentence when no kind reached the cap', async () => {
+    renderBar({ res: response({ notes: [{ path: 'a.md', title: 'A' }] }) })
+    type('a')
+    await screen.findByTestId('vault-search-note-hit')
+    expect(screen.queryByTestId('library-search-kind-cap')).not.toBeInTheDocument()
+  })
+})
+
+describe('UAT D-72 / D-136 — the saved-view dialog links relation cells and names its source file', () => {
+  it('renders a relation cell as a real link, with the brackets stripped', async () => {
+    const loadViewResult = vi.fn().mockResolvedValue(
+      viewResult({
+        parts: [{ part: 'table', source: { part: 'table' }, columns: ['file.name', 'owner'] }],
+        rows: [
+          {
+            path: 'Projects/a.md',
+            title: 'Core Platform Migration',
+            cells: [{ property: 'owner', value: '[[Sofia Marchetti]]', relation: true }],
+            joins: [],
+          },
+        ],
+      }),
+    )
+    renderBar({ res: response({ views: [{ view: 'open-deals', label: 'Open deals' }] }), loadViewResult })
+    type('deals')
+    await waitFor(() => expect(screen.getByText('Open deals')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('vault-search-view-hit'))
+    const dialog = await screen.findByTestId('library-search-view-dialog')
+    // DIES ON the old dialog: ViewPartsRenderer got no link wiring, so the
+    // cell read "[[Sofia Marchetti]]" as literal text with no link element.
+    await waitFor(() => expect(within(dialog).getByTestId('viewpart-cell-link')).toBeInTheDocument())
+    expect(within(dialog).queryByText('[[Sofia Marchetti]]')).not.toBeInTheDocument()
+    // Unverified (the dialog has no collection-wide resolver, so the link
+    // carries the sr-only "not verified" note) — but a LINK, named after
+    // the target, never the raw notation.
+    expect(within(dialog).getByTestId('viewpart-cell-link').textContent).toContain('Sofia Marchetti')
+    expect(within(dialog).getByTestId('viewpart-cell-link').textContent).not.toContain('[[')
+  })
+
+  it('names the .base file the view came from and opens it on request', async () => {
+    const onOpenNote = vi.fn()
+    const loadViewResult = vi.fn().mockResolvedValue(viewResult({ source: 'Projects.base' }))
+    renderBar({ res: response({ views: [{ view: 'open-deals', label: 'Open deals' }] }), loadViewResult, onOpenNote })
+    type('deals')
+    await waitFor(() => expect(screen.getByText('Open deals')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('vault-search-view-hit'))
+    const src = await screen.findByTestId('library-search-view-source')
+    // DIES ON the old dialog: the description read only "Saved view".
+    expect(src.textContent).toContain('Projects.base')
+    fireEvent.click(screen.getByTestId('library-search-view-source-open'))
+    expect(onOpenNote).toHaveBeenCalledWith('vault/Projects.base')
+  })
+
+  it('still says "Saved view" for an authored view with no source', async () => {
+    const loadViewResult = vi.fn().mockResolvedValue(viewResult())
+    renderBar({ res: response({ views: [{ view: 'open-deals', label: 'Open deals' }] }), loadViewResult })
+    type('deals')
+    await waitFor(() => expect(screen.getByText('Open deals')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('vault-search-view-hit'))
+    await screen.findByTestId('library-search-view-dialog')
+    await waitFor(() => expect(screen.getByText('Saved view')).toBeInTheDocument())
+    expect(screen.queryByTestId('library-search-view-source')).not.toBeInTheDocument()
+  })
+})
+
+describe('UAT D-129 (web half) — client-side matching folds accents like the engine', () => {
+  const NFD_CAFE = 'café' // "café" as e + combining acute (NFD)
+
+  it('coverage chips credit `cafe` against a "Café" hit instead of contradicting the engine', async () => {
+    renderBar({
+      res: response({
+        notes: [{ path: 'menus/cafe.md', title: 'Café menu', snippet: 'Zürich résumé' }],
+      }),
+    })
+    type('cafe zurich resume')
+    await waitFor(() => expect(screen.getByTestId('vault-search-note-hit')).toBeInTheDocument())
+    // DIES ON the old code: `cafe`, `zurich` and `resume` all read as "not
+    // covered" because the haystack was only lower-cased, never folded.
+    expect(screen.getAllByTestId('vault-search-coverage-hit')).toHaveLength(3)
+    expect(screen.queryAllByTestId('vault-search-coverage-miss')).toHaveLength(0)
+  })
+
+  it('the NFC and the NFD spelling of café cover each other', async () => {
+    renderBar({
+      res: response({
+        notes: [{ path: `${NFD_CAFE} (1).png`, title: `${NFD_CAFE} (1).png` }],
+      }),
+    })
+    type('café menu') // typed as NFC
+    await waitFor(() => expect(screen.getByTestId('vault-search-note-hit')).toBeInTheDocument())
+    const chips = screen.getAllByTestId(/vault-search-coverage-(hit|miss)/)
+    const cafeChip = chips.find((c) => c.textContent?.includes('café'))
+    expect(cafeChip).toBeDefined()
+    // DIES ON the old code: "café" (NFC) is not a substring of "café" (NFD).
+    expect(cafeChip?.getAttribute('data-testid')).toBe('vault-search-coverage-hit')
+  })
+
+  it('highlights the accented word as the reader sees it when the query has no accent', async () => {
+    renderBar({ res: response({ notes: [{ path: 'menus/cafe.md', title: 'Café menu' }] }) })
+    type('cafe')
+    const hit = await screen.findByTestId('vault-search-note-hit')
+    // DIES ON the old code: the regex `/cafe/gi` never matched "Café", so
+    // nothing was highlighted.
+    const mark = hit.querySelector('span[class*="color-accent"]')
+    expect(mark).not.toBeNull()
+    expect(mark?.textContent).toBe('Café')
+  })
+
+  it('orders a "Zürich" cell first for the query `zurich` instead of withholding it', async () => {
+    renderBar({
+      res: response({
+        records: [
+          {
+            path: 'crm/acme.md',
+            title: 'Acme',
+            record_type: 'company',
+            cells: [
+              { property: 'status', value: 'open' },
+              { property: 'owner', value: 'Sofia' },
+              { property: 'tier', value: 'gold' },
+              { property: 'since', value: '2021' },
+              { property: 'city', value: 'Zürich' },
+            ],
+          },
+        ],
+      }),
+    })
+    type('zurich')
+    const hit = await screen.findByTestId('vault-search-record-hit')
+    // DIES ON the old code: the one cell that explains the hit was the
+    // fifth, unmatched under a bare lower-case compare, and so withheld
+    // behind "+1 more".
+    expect(within(hit).getByText('Zürich')).toBeInTheDocument()
+    expect(within(hit).queryByText('2021')).toBeNull()
   })
 })

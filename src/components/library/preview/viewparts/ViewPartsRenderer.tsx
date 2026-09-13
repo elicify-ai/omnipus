@@ -43,6 +43,7 @@ function renderPart(
   onOpenPath?: (path: string) => void,
   cellLinks?: ViewCellLinkResolver,
   editContext?: RecordEditContext,
+  labels?: ViewResult['property_config'],
 ) {
   switch (part.part) {
     case 'table':
@@ -53,6 +54,7 @@ function renderPart(
           {...(onOpenPath ? { onOpenPath } : {})}
           {...(cellLinks ? { cellLinks } : {})}
           {...(editContext ? { editContext } : {})}
+          {...(labels ? { labels } : {})}
         />
       )
     case 'list':
@@ -208,9 +210,33 @@ export function ViewPartsRenderer({
           className="border-b border-[var(--color-border)] last:border-b-0"
           data-testid={`view-part-${part.part}`}
         >
-          {renderPart(part, result.rows, resolveImageUrl, onOpenPath, cellLinks, editContext)}
+          {renderPart(part, result.rows, resolveImageUrl, onOpenPath, cellLinks, editContext, result.property_config)}
         </div>
       ))}
+      {result.aggregates !== undefined && result.aggregates.length > 0 && (
+        // UAT D-68 — a `.base` `summaries:` block (imported as the view's
+        // own `aggregates:`) is computed and returned by the server, and
+        // used to be dropped on the floor here unless the author had ALSO
+        // spelled it as a `figures` part. Drawn as a footer, each total in
+        // the same sentence as its scope (FR-125a).
+        <div
+          className="flex flex-col gap-0.5 border-t border-[var(--color-border)] px-3 py-2"
+          data-testid="view-aggregates"
+        >
+          {result.aggregates.map((t, i) => (
+            <p
+              key={`${t.label}|${t.unit ?? ' '}|${i}`}
+              className="text-[11px] leading-snug text-[var(--color-secondary)]"
+              data-testid="view-aggregate"
+            >
+              <span className="text-[10px] uppercase tracking-[0.07em] text-[var(--color-muted)]">{t.label}</span>{' '}
+              <span className="font-mono tabular-nums">{t.value}</span>
+              {t.unit !== undefined && <span className="ml-1 text-[var(--color-muted)]">{t.unit}</span>}
+              <span className="ml-1.5 text-[var(--color-muted)]">{t.scope}</span>
+            </p>
+          ))}
+        </div>
+      )}
       {result.problems.length > 0 && (
         <div className="px-3 py-1.5" data-testid="view-problems">
           {result.problems.map((p, i) => (

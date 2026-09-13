@@ -12306,6 +12306,22 @@ type KnowledgeBaseInfoDetectionErrorCode string
 // KnowledgeBaseInfoMarker Which marker directory established the result. "omnipus_vault" is .omnipus-vault/, "obsidian" is .obsidian/, "none" accompanies is_knowledge_base=false. When both markers are present the Omnipus one is reported.
 type KnowledgeBaseInfoMarker string
 
+// KnowledgeBaseUnloadableView One view file that names a `.base` as its `source` but FAILED TO LOAD — malformed YAML, an unknown key, a property the record type no longer declares — reported by name and reason (UAT 2026-09-13 D-70).
+// `unloadable_count` alone told a reader "2 views from this file could not be loaded" and nothing else: which two analyses were missing, and why, was known to the server (records.ViewRejection carries the name, the file paths, the code and the reason) and withheld. This entry surfaces exactly that record, so the preview can name the missing tabs and state the operator's remedy in the same words knowledge_describe would use.
+type KnowledgeBaseUnloadableView struct {
+	// Code The loader's rejection code, verbatim (e.g. `view_unknown_property`).
+	Code string `json:"code"`
+
+	// Name The view's declared name, when the file was readable enough to hold one. Absent for a file so broken that no `name:` key could be read.
+	Name *string `json:"name,omitempty"`
+
+	// Paths Every file involved, vault-relative. A duplicate-name conflict names both files, for the reason FR-003 gives for schemas.
+	Paths []string `json:"paths"`
+
+	// Reason Why the view could not be loaded, in the operator's own vocabulary.
+	Reason string `json:"reason"`
+}
+
 // KnowledgeBaseView One saved view that was imported from a given `.base` file, as the server knows it (view-kinds-design-2026-09-03 §7).
 // THE SERVER'S SLUG IS THE ONLY ADDRESS. Import is one-shot (FR-102): a `.base` file's views were translated into `<vault>/.omnipus-vault/views/<slug>.yaml` and the source file is never read again on the query path. The importer's own SlugRegistry (pkg/vaultimport/util.go) derives that slug — kebab(base stem) + "--" + kebab(view name), plus a numeric suffix when two view names kebab to the same string — and the suffix is a COUNTER over everything already handed out, which nothing outside the importer can reconstruct. A client that re-derived the slug by parsing the `.base` file therefore mapped two colliding view names onto ONE slug: the second tab silently rendered the first view's rows under the second view's name. `name` here is read from the saved view file itself, so there is nothing left to re-derive.
 type KnowledgeBaseView struct {
@@ -12345,6 +12361,9 @@ type KnowledgeBaseViews struct {
 
 	// Source The vault-relative path the views were matched on — the value an imported view carries in its own `source` field. Present exactly when `is_knowledge_base` is true. Reported so a base with zero views can be diagnosed without guessing what was looked for.
 	Source *string `json:"source,omitempty"`
+
+	// Unloadable The rejections behind `unloadable_count`, one per rejection (a duplicate-name conflict is ONE entry naming several files, so this list can be shorter than the count) — name, files, code and reason (UAT 2026-09-13 D-70). Present exactly when `is_knowledge_base` is true; empty when nothing failed.
+	Unloadable *[]KnowledgeBaseUnloadableView `json:"unloadable,omitempty"`
 
 	// UnloadableCount How many view files name this base as their `source` but FAILED TO LOAD — malformed YAML, an unknown key, a property the schema no longer declares. They cannot appear in `views` because they have no usable name to address, so they are counted here instead, and the caller says "N views could not be loaded" rather than quietly showing fewer tabs than the base has views.
 	//
@@ -19443,6 +19462,9 @@ type ViewResult struct {
 	// Problems Everything the evaluation could not include, and why — carried through from the engine unchanged. Always present — an empty array, never null.
 	Problems []RecordProblem `json:"problems"`
 
+	// PropertyConfig The view's own per-property PRESENTATION map (ViewDef.property_config — the `.base` file's top-level `properties:` block), echoed verbatim so a renderer can print a declared `display_name` as the column heading instead of the machine key (UAT 2026-09-13 D-35). Keyed by property name. Pure presentation: the engine never read it to produce `rows`, and a display name is never usable in a filter, sort or grouping. Absent when the view declares none.
+	PropertyConfig *map[string]ViewPropertyConfig `json:"property_config,omitempty"`
+
 	// Refusal Present exactly when the view could not be answered; `parts` and `rows` are then empty and `complete` is false.
 	Refusal *ViewResultRefusal `json:"refusal,omitempty"`
 
@@ -19451,6 +19473,9 @@ type ViewResult struct {
 
 	// RowsTruncated True when the row set exceeded the server's render bound and `rows` holds only the first page of it. Totals and subtotals are then NOT computed (`complete` is false and complete_reason says why) — a total over a truncated set would be a wrong number that looks right, which is the one output this surface exists to make impossible.
 	RowsTruncated *bool `json:"rows_truncated,omitempty"`
+
+	// Source The vault-relative path of the `.base` file this view was imported from — the saved view's own `source:` key, echoed verbatim (UAT 2026-09-13 D-136). Absent for a view authored directly (no `.base` behind it). Provenance for a surface that reaches a view by name alone (a search hit) and must be able to say which file it lives in and offer to open it.
+	Source *string `json:"source,omitempty"`
 
 	// Type The record type the view queries. Absent for an untyped view.
 	Type *string `json:"type,omitempty"`

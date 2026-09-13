@@ -188,6 +188,8 @@ export function KnowledgeBacklinks({
   });
 
   const edges = useMemo(() => query.data?.edges ?? [], [query.data]);
+  // UAT D-62: one source note = one mention, however many edges it holds.
+  const distinctSources = useMemo(() => new Set(edges.map((e) => e.from_path)).size, [edges]);
   const skipped = useMemo(() => query.data?.skipped ?? [], [query.data]);
   const nodeByPath = useMemo(() => {
     const map = new Map<string, KnowledgeGraphResponse["nodes"][number]>();
@@ -239,7 +241,10 @@ export function KnowledgeBacklinks({
     >
       <KnowledgeRailPanelHeader
         title="Linked mentions"
-        count={query.data ? edges.length : undefined}
+        // UAT D-62: the count is DISTINCT linking notes, not edges — a note
+        // that embeds this one whole and again by block anchor is one
+        // mention with two rows beneath it, not two mentions.
+        count={query.data ? distinctSources : undefined}
         collapsible={collapsible}
         expanded={expanded}
         onToggle={() => setExpanded((v) => !v)}
@@ -338,6 +343,16 @@ export function KnowledgeBacklinks({
                         className="block text-[11px] text-[var(--color-muted)]"
                       >
                         Links to the heading “{edge.heading}”
+                      </span>
+                    )}
+                    {/* UAT D-62: a block-anchored link used to be a row
+                        indistinguishable from the whole-note link beside it. */}
+                    {edge.block !== undefined && edge.block !== "" && (
+                      <span
+                        data-testid="knowledge-backlink-block"
+                        className="block text-[11px] text-[var(--color-muted)]"
+                      >
+                        Links to the block “^{edge.block}”
                       </span>
                     )}
                     {edge.embed === true && (

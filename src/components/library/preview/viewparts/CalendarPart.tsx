@@ -61,6 +61,19 @@ export function CalendarPart({
     return m
   }, [rows, dateProperty, groups])
 
+  // UAT D-69 — the rows the grid could NOT place. A record with no date
+  // used to vanish from the calendar without a count or a word; it is
+  // listed beneath the grid instead, still openable. When the part names
+  // no date property at all (a legacy `layout: calendar` whose translation
+  // found none), EVERY row is unplaced and the notice below says why the
+  // grid is empty rather than letting an empty month pass for "no records".
+  const hasDateSource = dateProperty !== undefined || groups !== undefined
+  const unscheduled = useMemo(() => {
+    const placed = new Set<string>()
+    for (const members of rowsByDay.values()) for (const r of members) placed.add(r.path)
+    return rows.filter((r) => !placed.has(r.path))
+  }, [rows, rowsByDay])
+
   const initialMonth = useMemo(() => {
     const days = [...rowsByDay.keys()].sort()
     const first = days[0]
@@ -122,6 +135,15 @@ export function CalendarPart({
 
   return (
     <div className="flex min-h-0 flex-col" data-testid="viewpart-calendar">
+      {!hasDateSource && (
+        <p
+          className="border-b border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-1.5 text-[11px] leading-snug text-[var(--color-warning)]"
+          data-testid="viewpart-calendar-no-date"
+        >
+          This calendar names no date property to place records on, so the grid is empty. Every record is
+          listed below instead.
+        </p>
+      )}
       <div className="flex items-center gap-2 px-3 py-1.5">
         <button
           type="button"
@@ -191,6 +213,45 @@ export function CalendarPart({
           </div>
         ))}
       </div>
+      {unscheduled.length > 0 && (
+        <div
+          className="flex flex-col gap-1 border-t border-[var(--color-border)] px-3 py-2"
+          data-testid="viewpart-calendar-unscheduled"
+        >
+          <p className="text-[11px] text-[var(--color-muted)]">
+            {unscheduled.length === 1
+              ? `1 record has no ${dateProperty ?? 'date'} and is not on the calendar:`
+              : `${unscheduled.length} records have no ${dateProperty ?? 'date'} and are not on the calendar:`}
+          </p>
+          <div className="flex flex-wrap gap-1">
+            {unscheduled.map((row) =>
+              onOpenPath ? (
+                <button
+                  key={row.path}
+                  type="button"
+                  tabIndex={0}
+                  onClick={() => onOpenPath(row.path)}
+                  title={row.title}
+                  aria-label={`Open ${row.title}`}
+                  data-testid="viewpart-calendar-unscheduled-row"
+                  className="max-w-[16rem] truncate rounded bg-[var(--color-surface-3)] px-1.5 py-0.5 text-left text-[10px] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+                >
+                  {row.title}
+                </button>
+              ) : (
+                <span
+                  key={row.path}
+                  title={row.title}
+                  data-testid="viewpart-calendar-unscheduled-row"
+                  className="max-w-[16rem] truncate rounded bg-[var(--color-surface-3)] px-1.5 py-0.5 text-[10px] text-[var(--color-secondary)]"
+                >
+                  {row.title}
+                </span>
+              ),
+            )}
+          </div>
+        </div>
+      )}
       <TotalsFooter
         totals={part.totals ?? []}
         excludedCount={part.excluded_count}

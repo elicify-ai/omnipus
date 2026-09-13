@@ -52,7 +52,9 @@ import {
   libraryQueryKeys,
 } from '@/lib/api'
 import type { LibraryEntry } from '@/lib/api'
+import { ApiError } from '@/lib/api-error'
 import type {
+  KnowledgeBaseView,
   KnowledgeBaseViews,
   KnowledgeGraphEdge,
   KnowledgeGraphNode,
@@ -118,6 +120,39 @@ export interface BasePreviewLoaders {
  * which is the exact dishonesty the three-state model exists to prevent.
  */
 const COLLECTION_LINK_ROW_QUERY_CAP = 40
+
+/** UAT D-135: does any cell of this row carry a `[[wikilink]]`? Only such a
+ *  row has anything for the collection-wide link resolver to check; the
+ *  rest are skipped before a request is ever issued. Exported as a test
+ *  seam. */
+export function rowCarriesWikilink(row: { cells?: { value: string }[] }): boolean {
+  return (row.cells ?? []).some((c) => c.value.includes('[['))
+}
+
+/** UAT D-135: page-wide ceiling on concurrent link-graph requests. Every
+ *  row query used to be issued in one burst (40 at once for a 40-row view),
+ *  and the gateway's rate limiter answered with 429s that the panel then
+ *  hid behind a bare "Evaluating view…" spinner. Queued requests wait for a
+ *  slot; the server's answer is never assumed. Exported as a test seam. */
+export const LINK_GRAPH_MAX_IN_FLIGHT = 4
+let linkGraphInFlight = 0
+const linkGraphWaiters: Array<() => void> = []
+export async function withLinkGraphSlot<T>(run: () => Promise<T>): Promise<T> {
+  if (linkGraphInFlight >= LINK_GRAPH_MAX_IN_FLIGHT) {
+    await new Promise<void>((resolve) => linkGraphWaiters.push(resolve))
+  }
+  linkGraphInFlight += 1
+  try {
+    return await run()
+  } finally {
+    linkGraphInFlight -= 1
+    linkGraphWaiters.shift()?.()
+  }
+}
+/** Test seam: how many link-graph requests are on the wire right now. */
+export function linkGraphInFlightCount(): number {
+  return linkGraphInFlight
+}
 
 const defaultLoadGraph: KnowledgeGraphLoader = ({ workspaceId, collectionId, kind, path, hops, limit }) =>
   fetchKnowledgeGraph(workspaceId, {
@@ -249,18 +284,56 @@ function Centered({ children }: { children: React.ReactNode }) {
 /** "N views could not be loaded" — the server's rejection count, said out
  *  loud. Silently showing fewer tabs than the base has views is the exact
  *  silent loss this surface exists to end. */
-function UnloadableNotice({ count }: { count: number }) {
+function UnloadableNotice({
+  count,
+  entries,
+}: {
+  count: number
+  entries: NonNullable<KnowledgeBaseViews['unloadable']> | undefined
+}) {
   return (
     <div
-      className="flex shrink-0 items-center gap-1.5 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[11px] text-[var(--color-warning)]"
+      className="flex shrink-0 flex-col gap-1 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[11px] text-[var(--color-warning)]"
       data-testid="base-preview-unloadable"
     >
-      <Warning size={13} />
-      {count === 1
-        ? '1 view from this file could not be loaded and is not shown.'
-        : `${count} views from this file could not be loaded and are not shown.`}
+      <span className="flex items-center gap-1.5">
+        <Warning size={13} />
+        {count === 1
+          ? '1 view from this file could not be loaded and is not shown.'
+          : `${count} views from this file could not be loaded and are not shown.`}
+      </span>
+      {/* UAT D-70: name each missing view and state the loader's reason
+          verbatim — the same words the agent door and the search bar use. */}
+      {entries !== undefined && entries.length > 0 && (
+        <ul className="flex flex-col gap-0.5 pl-5" data-testid="base-preview-unloadable-list">
+          {entries.map((e, i) => (
+            <li key={`${e.code}-${i}`} data-testid="base-preview-unloadable-entry">
+              <span className="font-medium text-[var(--color-secondary)]">{e.name ?? e.paths.join(', ')}</span>
+              <span className="text-[var(--color-muted)]"> — {e.reason}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
+}
+
+/** UAT D-78: two views carrying one label were indistinguishable in the
+ *  tablist. A label shared by more than one view is suffixed with the
+ *  view's own name so each tab reads as itself. Exported as a test seam. */
+export function tabLabelsFor(views: KnowledgeBaseView[]): Map<string, string> {
+  const byLabel = new Map<string, number>()
+  for (const v of views) byLabel.set(v.label, (byLabel.get(v.label) ?? 0) + 1)
+  const out = new Map<string, string>()
+  for (const v of views) out.set(v.name, (byLabel.get(v.label) ?? 0) > 1 ? `${v.label} (${v.name})` : v.label)
+  return out
+}
+
+/** UAT D-78: the tab a reader lands on is the first view that can actually
+ *  be served — never an unservable twin that happens to sort first. Falls
+ *  back to the first view when none is servable. Exported as a test seam. */
+export function defaultViewFor(views: KnowledgeBaseView[]): KnowledgeBaseView | undefined {
+  return views.find((v) => v.unservable !== true) ?? views[0]
 }
 
 export function BasePreview({
@@ -303,7 +376,8 @@ export function BasePreview({
   // the embed's own resolved view) changes under an already-mounted embed.
   const [selectedSlug, setSelectedSlug] = useState<string | undefined>(embed?.viewName)
   useEffect(() => setSelectedSlug(embed?.viewName), [entry.path, embed?.viewName])
-  const selected = views.find((v) => v.name === selectedSlug) ?? views[0]
+  const selected = views.find((v) => v.name === selectedSlug) ?? defaultViewFor(views)
+  const tabLabels = useMemo(() => tabLabelsFor(views), [views])
 
   // code-review finding #9 — the escape hatch for the "no views" dead end:
   // whether the "no views" state should show the raw file (view/edit, the
@@ -441,6 +515,13 @@ export function BasePreview({
     for (const r of result.rows) {
       if (seen.has(r.path)) continue
       seen.add(r.path)
+      // UAT D-135: a graph request is only worth issuing for a row that
+      // actually carries a wikilink in one of its cells — a view whose rows
+      // hold no `[[…]]` at all used to fire one request per row (40 for a
+      // 40-row view, each rebuilding the collection's whole link graph on
+      // the server) for nothing, and ten such views in a row tripped the
+      // gateway's own rate limiter.
+      if (!rowCarriesWikilink(r)) continue
       paths.push(r.path)
       if (paths.length >= COLLECTION_LINK_ROW_QUERY_CAP) break
     }
@@ -453,8 +534,12 @@ export function BasePreview({
       // cache, same request, just addressed by a row's path instead of the
       // one open note's path.
       queryKey: ['library', workspaceId, 'knowledge', 'graph', 'links', collectionId, rowPath],
+      // UAT D-135: at most LINK_GRAPH_MAX_IN_FLIGHT of these on the wire at
+      // once, page-wide — never the whole row set in one burst.
       queryFn: () =>
-        loadGraph({ workspaceId, collectionId: collectionId as string, kind: 'links' as const, path: rowPath }),
+        withLinkGraphSlot(() =>
+          loadGraph({ workspaceId, collectionId: collectionId as string, kind: 'links' as const, path: rowPath }),
+        ),
       enabled: collectionId !== undefined,
       staleTime: 60_000,
       retry: false,
@@ -489,6 +574,13 @@ export function BasePreview({
   // treatment `graph_unavailable` already gets in the note reader.
   const failedCollectionLinkQueries = useMemo(
     () => collectionLinkQueries.filter((q) => q.isError).length,
+    [collectionLinkQueries],
+  )
+  // UAT D-135: how many of those failures were the gateway's own rate
+  // limiter (HTTP 429) — named in the banner rather than hidden behind a
+  // spinner, so a reader can tell "throttled, wait" from "broken".
+  const rateLimitedCollectionLinkQueries = useMemo(
+    () => collectionLinkQueries.filter((q) => q.isError && q.error instanceof ApiError && q.error.status === 429).length,
     [collectionLinkQueries],
   )
 
@@ -645,7 +737,7 @@ export function BasePreview({
         : {})}
     >
       {answer !== undefined && answer.unloadable_count > 0 && (
-        <UnloadableNotice count={answer.unloadable_count} />
+        <UnloadableNotice count={answer.unloadable_count} entries={answer.unloadable} />
       )}
 
       {/* EMB-043: the embed chose no view itself — say so, and offer nothing
@@ -695,7 +787,7 @@ export function BasePreview({
                   : 'border-transparent text-[var(--color-muted)] hover:text-[var(--color-secondary)]'
               }`}
             >
-              {v.label}
+              {tabLabels.get(v.name) ?? v.label}
               {v.unservable === true && (
                 <Warning
                   size={12}
@@ -728,6 +820,14 @@ export function BasePreview({
             Link checking is incomplete for {failedCollectionLinkQueries}{' '}
             {failedCollectionLinkQueries === 1 ? 'row' : 'rows'} — their links show as unverified
             rather than confirmed broken.
+            {/* UAT D-135: a throttled request is named as such, never hidden. */}
+            {rateLimitedCollectionLinkQueries > 0 && (
+              <span data-testid="base-preview-link-graph-rate-limited">
+                {' '}
+                The gateway rate-limited {rateLimitedCollectionLinkQueries} of the link-checking requests
+                (HTTP 429); wait a moment before retrying.
+              </span>
+            )}
           </span>
           <button
             type="button"
