@@ -5,11 +5,13 @@ import { expect, test, type Page } from '@playwright/test';
 import { browserLiveFrame, browserLivePanel, browserLiveVideo, selectAgent } from '../e2e/fixtures/selectors';
 import { disconnect, installPixels, instrumentRoutes, point, routeEvidence, stateIs, type InputState } from './input-connection-probe';
 
-type Stage = 'media-close' | 'before-offer' | 'answer-pending';
-type FrameIdentity = { type: string; input_epoch?: number; control_epoch?: number; offer_id?: number; kind?: string; ok?: boolean };
+type Stage = 'media-close' | 'before-offer' | 'answer-pending' | 'answer-timeout';
+type FrameIdentity = { type: string; input_epoch?: number; control_epoch?: number; offer_id?: number; kind?: string; ok?: boolean; state?: string; reason?: string; atMs?: number };
+type LifecycleEvent = { atMs: number; event: string; peer: number; detail?: string };
 type FinalProbe = {
   held: boolean; arm(): void; release(): void; sent: FrameIdentity[]; received: FrameIdentity[];
   bindInput(): void; sameInput(): boolean; closeMedia(): void;
+  events: LifecycleEvent[]; snapshot(): unknown;
 };
 type FinalWindow = Window & { __browserFinal: FinalProbe };
 const fixture = fs.readFileSync(fileURLToPath(new URL('./input-connection-fixture.html', import.meta.url)), 'utf8');
@@ -27,13 +29,17 @@ async function instrumentFault(page: Page, stage: Stage) {
     let input: { pc: RTCPeerConnection; channels: RTCDataChannel[] } | undefined;
     let release = () => {};
     const sent: FrameIdentity[] = [], received: FrameIdentity[] = [];
+    const events: LifecycleEvent[] = [];
+    const record = (pc: RTCPeerConnection, event: string, detail?: string) => events.push({ atMs: performance.now(), event, peer: peers.findIndex(row => row.pc === pc), detail });
     const identity = (data: unknown): FrameIdentity | null => {
       if (typeof data !== 'string') return null;
       let f; try { f = JSON.parse(data); } catch { return null; }
-      return { type: f.type, input_epoch: f.input_epoch, control_epoch: f.control_epoch, offer_id: f.offer_id, kind: f.kind, ok: f.ok };
+      return { type: f.type, input_epoch: f.input_epoch, control_epoch: f.control_epoch, offer_id: f.offer_id, kind: f.kind, ok: f.ok, state: f.state, reason: f.reason, atMs: performance.now() };
     };
     const probe: FinalProbe = {
-      held: false, sent, received, arm() { armed = true; firstInput = null; }, release: () => release(),
+      held: false, sent, received, events,
+      snapshot: () => ({ atMs: performance.now(), peers: peers.map(({ pc, channels }, peer) => ({ peer, state: pc.connectionState, iceState: pc.iceConnectionState, signalingState: pc.signalingState, channels: channels.map(ch => ({ label: ch.label, state: ch.readyState })) })) }),
+      arm() { armed = true; firstInput = null; }, release: () => release(),
       bindInput() {
         const active = peers.filter(row => row.channels.some(ch => ch.label === 'input-reliable') && row.pc.connectionState === 'connected');
         if (active.length !== 1) throw Error('Exactly one connected input peer required');
@@ -48,26 +54,42 @@ async function instrumentFault(page: Page, stage: Stage) {
         media[0].pc.close(); // Real receiver transport closure; no fabricated state events.
       },
     };
-    const hold = () => { probe.held = true; return new Promise<void>(resolve => { release = () => { probe.held = false; resolve(); }; }); };
+    const hold = (pc: RTCPeerConnection) => { record(pc, 'held-enter'); probe.held = true; return new Promise<void>(resolve => { release = () => { record(pc, 'held-release'); probe.held = false; resolve(); }; }); };
     const NativePeer = window.RTCPeerConnection;
     window.RTCPeerConnection = class extends NativePeer {
-      constructor(...args: ConstructorParameters<typeof NativePeer>) { super(...args); peers.push({ pc: this, channels: [] }); }
+      constructor(...args: ConstructorParameters<typeof NativePeer>) {
+        super(...args); peers.push({ pc: this, channels: [] }); record(this, 'created');
+        this.addEventListener('connectionstatechange', () => record(this, 'connectionstate', this.connectionState));
+        this.addEventListener('iceconnectionstatechange', () => record(this, 'iceconnectionstate', this.iceConnectionState));
+      }
       createDataChannel(label: string, options?: RTCDataChannelInit) {
         const channel = super.createDataChannel(label, options);
         peers.find(row => row.pc === this)!.channels.push(channel);
+        record(this, 'channel-created', label);
+        for (const event of ['open', 'error', 'close']) channel.addEventListener(event, () => record(this, `channel-${event}`, label));
         if (label === 'input-reliable' && firstInput === null) firstInput = this;
         return channel;
       }
       createOffer(options?: RTCOfferOptions): Promise<RTCSessionDescriptionInit>;
       createOffer(success: RTCSessionDescriptionCallback, failure: RTCPeerConnectionErrorCallback, options?: RTCOfferOptions): Promise<void>;
       async createOffer(options?: RTCOfferOptions | RTCSessionDescriptionCallback, failure?: RTCPeerConnectionErrorCallback, legacyOptions?: RTCOfferOptions): Promise<RTCSessionDescriptionInit | void> {
-        if (armed && fault === 'before-offer' && this === firstInput) await hold();
+        record(this, 'createOffer-enter');
+        if (armed && fault === 'before-offer' && this === firstInput) await hold(this);
         if (typeof options === 'function') return super.createOffer(options, failure!, legacyOptions);
-        return super.createOffer(options);
+        const offer = await super.createOffer(options);
+        record(this, 'createOffer-complete');
+        return offer;
       }
       async setRemoteDescription(description: RTCSessionDescriptionInit) {
-        if (armed && fault === 'answer-pending' && this === firstInput) await hold();
-        return super.setRemoteDescription(description);
+        record(this, 'setRemoteDescription-enter', description.type);
+        if (armed && (fault === 'answer-pending' || fault === 'answer-timeout') && this === firstInput) await hold(this);
+        try {
+          await super.setRemoteDescription(description);
+          record(this, 'setRemoteDescription-complete', description.type);
+        } catch (error) {
+          record(this, 'setRemoteDescription-rejected', error instanceof Error ? error.name : 'unknown');
+          throw error;
+        }
       }
     };
     const NativeSocket = window.WebSocket;
@@ -96,7 +118,8 @@ async function clickFixture(page: Page, state: InputState) {
   return next;
 }
 
-for (const stage of ['media-close', 'before-offer', 'answer-pending'] as const) test(`dedicated ${stage}: exact input survives the independent lifecycle`, async ({ page }, info) => {
+for (const stage of ['media-close', 'before-offer', 'answer-pending', 'answer-timeout'] as const) test(`dedicated ${stage}: exact input survives the independent lifecycle`, async ({ page }, info) => {
+  if (stage === 'answer-timeout') test.setTimeout(90_000);
   const errors: string[] = [], checkpoints: string[] = [];
   let state: InputState = { nonce: randomInt(1, 65536), clicks: 0, downs: 0, ups: 0, held: 0, scroll: 0, drags: 0, errors: 0, text: '' };
   page.on('pageerror', error => errors.push(error.message));
@@ -114,7 +137,40 @@ for (const stage of ['media-close', 'before-offer', 'answer-pending'] as const) 
     const address = page.getByRole('textbox', { name: 'Address bar' });
     await ready(page); await address.fill(target.href); await address.press('Enter');
     await installPixels(page); await stateIs(page, state); await ready(page);
-    if (stage !== 'media-close') {
+    if (stage === 'answer-timeout') {
+      const before = await routeEvidence(page);
+      await page.evaluate(() => (window as unknown as FinalWindow).__browserFinal.arm());
+      await disconnect(page, 'dedicated');
+      await expect(page.getByTestId('browser-input-error')).toBeVisible();
+      await page.getByRole('button', { name: 'Retry input', exact: true }).click();
+      await expect.poll(() => page.evaluate(() => (window as unknown as FinalWindow).__browserFinal.held)).toBe(true);
+      const heldOffer = await page.evaluate(() => (window as unknown as FinalWindow).__browserFinal.sent.filter(f => f.type === 'browser_input_offer').at(-1)!);
+      // Deliberately keep the native answer unapplied through the real server
+      // deadline. This is a separate expected-failure case, not a test retry.
+      await expect(page.getByTestId('browser-input-error')).toContainText('input channels did not open', { timeout: 20_000 });
+      const failed = await page.evaluate(() => (window as unknown as FinalWindow).__browserFinal.received.filter(f => f.type === 'browser_input_state' && f.state === 'failed').at(-1));
+      expect(failed).toMatchObject({ input_epoch: heldOffer.input_epoch, offer_id: heldOffer.offer_id, reason: 'input channels did not open' });
+      expect((await routeEvidence(page)).sameMedia).toBe(true);
+      expect((await routeEvidence(page)).openedSockets).toBe(before.openedSockets);
+      await expect(browserLiveVideo(page)).toBeVisible();
+      await stateIs(page, state);
+      await browserLiveFrame(page).focus();
+      const routesBefore = (await routeEvidence(page)).routes.length;
+      await page.keyboard.press('x');
+      expect((await routeEvidence(page)).routes).toHaveLength(routesBefore);
+      // Release the now-retired native call; the next peer is not the armed
+      // firstInput and must negotiate normally after explicit user Retry.
+      await page.evaluate(() => (window as unknown as FinalWindow).__browserFinal.release());
+      await page.getByRole('button', { name: 'Retry input', exact: true }).click();
+      await ready(page);
+      const freshOffer = await page.evaluate(() => (window as unknown as FinalWindow).__browserFinal.sent.filter(f => f.type === 'browser_input_offer').at(-1)!);
+      expect(freshOffer.input_epoch).toBe(heldOffer.input_epoch! + 1);
+      expect(freshOffer.offer_id).toBe(freshOffer.input_epoch);
+      expect((await routeEvidence(page)).sameMedia).toBe(true);
+      expect((await routeEvidence(page)).openedSockets).toBe(before.openedSockets);
+      checkpoints.push('server-setup-timeout-explicit-retry-fresh-input-same-media-and-socket');
+    }
+    if (stage === 'before-offer' || stage === 'answer-pending') {
       const before = await page.evaluate(() => (window as unknown as FinalWindow).__browserFinal.sent);
       const priorOffers = before.filter(f => f.type === 'browser_input_offer');
       const priorEpoch = priorOffers.at(-1)!.input_epoch!;
@@ -169,10 +225,12 @@ for (const stage of ['media-close', 'before-offer', 'answer-pending'] as const) 
     expect(errors).toEqual([]);
   } finally {
     await fs.promises.mkdir(info.outputDir, { recursive: true });
-    const identities = await page.evaluate(() => { const p = (window as unknown as FinalWindow).__browserFinal; return p && { sent: p.sent, received: p.received, held: p.held }; }).catch(() => null);
+    const identities = await page.evaluate(() => { const p = (window as unknown as FinalWindow).__browserFinal; return p && { sent: p.sent, received: p.received, held: p.held, events: p.events, snapshot: p.snapshot(), clock: 'viewer performance.now milliseconds' }; }).catch(() => null);
+    const routes = await routeEvidence(page).catch(() => null);
+    await fs.promises.writeFile(info.outputPath('inverse-before-cleanup.json'), JSON.stringify({ stage, identities, routes }, null, 2));
     let cleanupError: string | null = null;
     try { await page.getByRole('button', { name: 'Close live browser panel', exact: true }).click({ timeout: 5000 }); }
     catch { cleanupError = 'Panel close failed; Playwright context teardown still follows'; }
-    await fs.promises.writeFile(info.outputPath('inverse-evidence.json'), JSON.stringify({ cleanupError, stage, provenance, state, checkpoints, errors, identities, routes: await routeEvidence(page).catch(() => null), limits: ['Controlled receiver closure and bounded negotiation stalls, not natural packet loss.', 'No performance or audible-content claim.', 'Startup runs during input Retry after stable media, avoiding unrelated initial viewport traffic; initial epoch-zero ordering has separate unit proof.', 'Pending-answer holds native description application after the real answer arrives; server pre-install ordering requires separate Go proof.'] }, null, 2));
+    await fs.promises.writeFile(info.outputPath('inverse-evidence.json'), JSON.stringify({ cleanupError, stage, provenance, state, checkpoints, errors, identities, routes, routesAfterCleanup: await routeEvidence(page).catch(() => null), limits: ['Controlled receiver closure and bounded negotiation stalls, not natural packet loss.', 'No performance or audible-content claim.', 'Startup runs during input Retry after stable media, avoiding unrelated initial viewport traffic; initial epoch-zero ordering has separate unit proof.', 'Pending-answer holds native description application after the real answer arrives; server pre-install ordering requires separate Go proof.'] }, null, 2));
   }
 });
