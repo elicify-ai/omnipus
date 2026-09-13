@@ -125,40 +125,57 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
   // deterministically in Go (TestQuietWindow_MakesZeroJudgeCalls) and by the
   // guard script; this file's job is the visible pill walk.
   const donePill = page.locator('[data-testid="goal-pill-done"]')
-  let sawDone = false
-  const claimDeadline = Date.now() + 45_000
-  while (Date.now() < claimDeadline) {
-    if (await donePill.isVisible({ timeout: 1_000 }).catch(() => false)) {
-      sawDone = true
-      break
+
+  // waitForDone polls rather than using a single web-first assertion because
+  // `judging` is a legitimate ephemeral mid-state and the pill may pass
+  // through it between polls; only `done` is the terminal we care about.
+  const waitForDone = async (budgetMs: number): Promise<boolean> => {
+    const deadline = Date.now() + budgetMs
+    while (Date.now() < deadline) {
+      if (await donePill.isVisible({ timeout: 1_000 }).catch(() => false)) return true
+      await page.waitForTimeout(500)
     }
-    await page.waitForTimeout(500)
+    return false
   }
 
-  if (!sawDone) {
-    // Claim through the reliable channel: goal_claim (ADR-084 §O/D12,
-    // JUDGE-FR-087–FR-091) is a tool call the engine either received or did
-    // not, rather than a prose marker it has to detect. Evidence is named
-    // explicitly because a BARE claim is bounced by design (G-4,
-    // goal_triggers.go's handleBareGoalClaim) and costs a round instead of
-    // adjudicating.
+  // FAST PATH: the worker may have claimed during its own turn. A model that
+  // already claimed must not be steered again, so check before asking.
+  let sawDone = await waitForDone(20_000)
+
+  // ASK FOR THE CLAIM, AND KEEP ASKING.
+  //
+  // A single steer was not enough. On CI the first attempt spent its whole
+  // budget without reaching done and only the retry passed — which this repo
+  // correctly treats as a failure, not a pass ("retries: 3 masked a real
+  // failure", docs/internal/false-green-patterns.md).
+  //
+  // The reason is structural, not a bug: adjudication has exactly one trigger
+  // now (a `met` claim — D13/JUDGE-FR-095), and whether a real model emits
+  // that claim on any given turn is not deterministic. Worse, a BARE claim is
+  // bounced by design (G-4, goal_triggers.go's handleBareGoalClaim) and costs
+  // a round instead of adjudicating, so a half-formed first attempt buys
+  // nothing.
+  //
+  // Steering repeatedly is a legitimate user action and is how a real
+  // operator would drive this, so ask up to three times with a full
+  // adjudication budget after each. What is being tested is unchanged: the
+  // walk from a met claim through the Judge to a done pill. Only the number
+  // of chances the model gets to issue the claim has changed.
+  const STEER_ATTEMPTS = 3
+  for (let attempt = 1; attempt <= STEER_ATTEMPTS && !sawDone; attempt++) {
     await input.fill(
-      'The goal is satisfied. Call the goal_claim tool now with status "met" and, as evidence, ' +
-        'the exact text of the check criterion you were given.',
+      'Call the goal_claim tool right now. Use status "met". For the evidence argument, pass ' +
+        'the exact text of the check criterion you were given. Do not reply with prose instead — ' +
+        'the tool call itself is what is required.',
     )
     await input.press('Enter')
-  }
 
-  // Adjudication is DEFERRED until after the reply is delivered (D13), so the
-  // walk is claim → judging (ephemeral) → done. Poll for done; judging is a
-  // legitimate mid-state that may flash past between polls.
-  const deadline = Date.now() + 300_000
-  while (Date.now() < deadline) {
-    if (await donePill.isVisible({ timeout: 1_000 }).catch(() => false)) {
-      sawDone = true
-      break
+    // Adjudication is DEFERRED until after the reply is delivered (D13), so
+    // the walk is claim → judging (ephemeral) → done.
+    sawDone = await waitForDone(90_000)
+    if (!sawDone && attempt < STEER_ATTEMPTS) {
+      console.log(`t0: no done pill after steer ${attempt}/${STEER_ATTEMPTS} — asking again`)
     }
-    await page.waitForTimeout(500)
   }
 
   // Differentiation assertion: the active pill must be GONE once done
