@@ -217,6 +217,14 @@ function countBadge(n: number, more = false) {
   )
 }
 
+/** "3 notes" / "1 record" — the per-kind phrase of the D-129/D-130 results
+ *  summary, pluralised so a sentence a reader trusts never reads "1 records". */
+function kindCountPhrase(n: number, kind: 'notes' | 'records' | 'views' | 'attachments'): string {
+  const singular =
+    kind === 'notes' ? 'note' : kind === 'records' ? 'record' : kind === 'views' ? 'view' : 'attachment'
+  return `${n.toLocaleString('en-US')} ${n === 1 ? singular : kind}`
+}
+
 /** KB-6 coverage chips: which of the query's own words this hit actually
  *  contains — the "why did this appear" explanation AND the relevance
  *  signal in one mechanism (ratified design, 2026-09-08). Only shown for a
@@ -897,20 +905,39 @@ export function LibrarySearchBar({
             </p>
           )}
 
-          {/* UAT D-130 (bar half) — a kind at the per-kind cap is a LOWER
-              bound, stated as a sentence next to the results rather than
-              only as a "+" on a tab badge. */}
-          {!error && isVaultMode && response && (
-            (() => {
-              const capped = (['notes', 'records', 'views', 'attachments'] as const).filter((k) => kindAtLimit(k))
-              if (capped.length === 0) return null
-              return (
-                <p data-testid="library-search-kind-cap" className="px-2 text-[11px] leading-snug text-[var(--color-muted)]">
-                  Showing the first {effectiveLimit} {capped.join(', ')} — the search returns at most {effectiveLimit} per
-                  kind, so more may exist. Narrow the search to see the rest.
-                </p>
-              )
-            })()
+          {/* UAT D-129/D-130 (leftover wording round) — ONE summary sentence
+              under the tabs stating exactly what was searched, how many hits
+              exist, and how many are shown. A kind at its per-kind cap is a
+              LOWER bound ("at least N … the search returns at most N per
+              kind"), never a fabricated total; an uncapped answer says every
+              hit is shown. Attachment hits are name-only matches (FR-039a),
+              stated beside the counts so the note count is never read as
+              covering them. */}
+          {!error && isVaultMode && response && counts.all > 0 && (
+            <p data-testid="library-search-results-summary" className="px-2 text-[11px] leading-snug text-[var(--color-muted)]">
+              {(() => {
+                const kinds = (['notes', 'records', 'views', 'attachments'] as const).filter((k) => counts[k] > 0)
+                const phrases = kinds.map((k) =>
+                  kindAtLimit(k) ? `at least ${kindCountPhrase(counts[k], k)}` : kindCountPhrase(counts[k], k),
+                )
+                const capped = kinds.some((k) => kindAtLimit(k))
+                if (capped) {
+                  return (
+                    <>
+                      Hits for “{text.trim()}”: {phrases.join(', ')} — the search returns at most {effectiveLimit} per
+                      kind, so more may exist.
+                    </>
+                  )
+                }
+                return (
+                  <>
+                    Showing all {counts.all.toLocaleString('en-US')} {counts.all === 1 ? 'hit' : 'hits'} for “
+                    {text.trim()}”: {phrases.join(', ')}.
+                  </>
+                )
+              })()}
+              {response.attachments !== undefined && ' Attachments are matched by filename only, never their contents.'}
+            </p>
           )}
 
           {!error && isVaultMode && (
@@ -951,13 +978,17 @@ export function LibrarySearchBar({
                   typeof response?.notes_searched === 'number' &&
                   typeof response.notes_total_known === 'number' && (
                     <p data-testid="library-search-coverage-ratio">
-                      {response.notes_searched.toLocaleString('en-US')} of{' '}
-                      {response.notes_total_known.toLocaleString('en-US')} notes searched.
+                      {/* UAT D-129: the pair counts markdown NOTES whose full
+                          text the index holds — attachments are name-only
+                          (FR-039a) and are never inside this number — so the
+                          sentence says exactly what was searched. */}
+                      Searched the full text of {response.notes_searched.toLocaleString('en-US')} of{' '}
+                      {response.notes_total_known.toLocaleString('en-US')} notes.
                     </p>
                   )}
                 {coverage === 'so-far' && typeof response?.notes_searched === 'number' && (
                   <p data-testid="library-search-coverage-so-far">
-                    {response.notes_searched.toLocaleString('en-US')} notes searched so far.
+                    Searched the full text of {response.notes_searched.toLocaleString('en-US')} notes so far.
                   </p>
                 )}
               </div>

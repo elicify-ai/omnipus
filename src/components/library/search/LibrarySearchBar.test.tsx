@@ -587,7 +587,12 @@ describe('LibrarySearchBar — server-authored statement and coverage (US-1 AS-1
 
     const banner = await screen.findByTestId('library-search-not-ready')
     expect(within(banner).getByText(statement)).toBeVisible()
-    expect(screen.getByTestId('library-search-coverage-ratio')).toHaveTextContent('4,120 of 12,880')
+    // UAT D-129 (web statement): the bar's own coverage line says exactly
+    // WHAT was searched — the full TEXT of markdown notes — so it can never
+    // again be read as "every file, attachments included".
+    expect(screen.getByTestId('library-search-coverage-ratio')).toHaveTextContent(
+      'Searched the full text of 4,120 of 12,880 notes',
+    )
   })
 
   it('shows a bare "so far" count — never an invented denominator — when the total is unknown', async () => {
@@ -597,7 +602,9 @@ describe('LibrarySearchBar — server-authored statement and coverage (US-1 AS-1
     type('a')
 
     const banner = await screen.findByTestId('library-search-not-ready')
-    expect(screen.getByTestId('library-search-coverage-so-far')).toHaveTextContent('4,120 notes searched so far')
+    expect(screen.getByTestId('library-search-coverage-so-far')).toHaveTextContent(
+      'Searched the full text of 4,120 notes so far',
+    )
     expect(screen.queryByTestId('library-search-coverage-ratio')).toBeNull()
     // No invented ratio anywhere in the banner.
     expect(banner.textContent ?? '').not.toMatch(/[\d,]+\s*(?:of|\/)\s*[\d,]+/i)
@@ -1394,21 +1401,65 @@ describe('UAT D-137 — the "+N more" control reveals the withheld cells instead
   })
 })
 
-describe('UAT D-130 (bar half) — a kind at the per-kind cap is stated as a lower bound in a sentence', () => {
-  it('names every capped kind and the cap', async () => {
+// UAT D-129/D-130 (leftover wording round): the summary sentence under the
+// tabs states exactly WHAT was searched, HOW MANY hits exist, and HOW MANY
+// are shown — one line, derived only from wire fields, never an invented
+// total. A kind at the per-kind cap is a LOWER bound ("at least N").
+describe('UAT D-129/D-130 — the results summary states what was searched, how many hits exist, how many are shown', () => {
+  it('a complete, uncapped answer says all hits are shown, per kind, and what "attachments" searching means', async () => {
+    renderBar({
+      res: response({
+        notes: [{ path: 'a.md', title: 'A' }],
+        records: [
+          { path: 'r1.md', title: 'R1', cells: [] },
+          { path: 'r2.md', title: 'R2', cells: [] },
+        ],
+        views: [{ view: 'v', label: 'V' }],
+        attachments: [{ path: 'x/logo.png', name: 'logo.png' }],
+      }),
+    })
+    type('acme')
+    const line = await screen.findByTestId('library-search-results-summary')
+    // DIES ON the old code: no such sentence existed — only tab badges and,
+    // for capped kinds, a separate cap line.
+    expect(line.textContent).toContain('Showing all 5 hits for “acme”')
+    expect(line.textContent).toContain('1 note')
+    expect(line.textContent).toContain('2 records')
+    expect(line.textContent).toContain('1 view')
+    expect(line.textContent).toContain('1 attachment')
+    // D-129: "exactly what was searched" — attachments are name-only, never
+    // full text, stated beside the counts so the note count is never read
+    // as covering them.
+    expect(line.textContent).toContain('Attachments are matched by filename only, never their contents')
+    expect(line.textContent).not.toContain('at least')
+  })
+
+  it('a kind at the per-kind cap is stated as a lower bound with the cap named (D-130)', async () => {
     const notes = Array.from({ length: 20 }, (_, i) => ({ path: `n${i}.md`, title: `Note ${i}` }))
     renderBar({ res: response({ notes, notes_capped_at_limit: true }) })
     type('mermaid')
-    const line = await screen.findByTestId('library-search-kind-cap')
-    expect(line.textContent).toContain('first 20 notes')
+    const line = await screen.findByTestId('library-search-results-summary')
+    // DIES ON the old code: "20 of 47 shown" understated the true total by
+    // 72 documents; the honest phrasing is a floor plus the cap.
+    expect(line.textContent).toContain('at least 20 notes')
     expect(line.textContent).toContain('at most 20 per kind')
+    expect(line.textContent).toContain('more may exist')
+    expect(line.textContent).not.toContain('Showing all')
   })
 
-  it('renders no cap sentence when no kind reached the cap', async () => {
+  it('an uncapped answer never says "at least" (D-130 control)', async () => {
     renderBar({ res: response({ notes: [{ path: 'a.md', title: 'A' }] }) })
     type('a')
-    await screen.findByTestId('vault-search-note-hit')
-    expect(screen.queryByTestId('library-search-kind-cap')).not.toBeInTheDocument()
+    const line = await screen.findByTestId('library-search-results-summary')
+    expect(line.textContent).toContain('Showing all 1 hit for “a”')
+    expect(line.textContent).not.toContain('at least')
+  })
+
+  it('says nothing beyond the empty-state sentence when there are no hits at all', async () => {
+    renderBar({ res: response() })
+    type('zzqqxx')
+    await screen.findByTestId('library-search-empty')
+    expect(screen.queryByTestId('library-search-results-summary')).not.toBeInTheDocument()
   })
 })
 
