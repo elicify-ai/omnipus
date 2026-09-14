@@ -43,6 +43,24 @@ func workspaceProseArg(text string) []any {
 	return []any{map[string]any{"kind": "prose", "text": text}}
 }
 
+// assertWorkspaceErrorField checks the structured part of a refusal: these
+// tools return errorJSON's {"error": {"code", "message", "suggestion"}} shape,
+// and the offending input's name rides in `suggestion`. Asserting on it (and on
+// the error identity) rather than on the message's wording keeps these tests
+// valid when the plain-language message is reworded.
+func assertWorkspaceErrorField(t *testing.T, forLLM, wantField string) {
+	t.Helper()
+	var body struct {
+		Error struct {
+			Code       string `json:"code"`
+			Suggestion string `json:"suggestion"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(forLLM), &body), "refusal is not the errorJSON shape: %s", forLLM)
+	assert.Equal(t, "INVALID_INPUT", body.Error.Code, "refusal code: %s", forLLM)
+	assert.Equal(t, wantField, body.Error.Suggestion, "refusal must name the offending field: %s", forLLM)
+}
+
 // createWorkspaceTaskForGoalLifecycle creates one task through
 // create_task_in_workspace and returns its id.
 func createWorkspaceTaskForGoalLifecycle(
@@ -85,8 +103,11 @@ func TestCreateTaskInWorkspaceRefusesDoDIdenticalToCriteria_GOALFR021(t *testing
 	require.True(t, res.IsError,
 		"a byte-identical DoD item and acceptance criterion must be refused (GOAL-FR-021/D-C): %s",
 		res.ForLLM)
-	assert.Contains(t, res.ForLLM, "distinct",
-		"the refusal must state the rule in the words it is advertised in")
+	// Identity and structured field, not wording (the message is plain language
+	// and may be reworded): the refusal carries the DoD-duplicate error and
+	// names the `dod` field.
+	assert.ErrorIs(t, res.Err, task.ErrDoDNotDistinct, "the refusal must be the DoD-duplicate rule: %s", res.ForLLM)
+	assertWorkspaceErrorField(t, res.ForLLM, "dod")
 
 	rows, err := task.New(home + "/tasks").List(task.Filter{WorkspaceID: testWorkspaceID})
 	require.NoError(t, err)
@@ -106,7 +127,8 @@ func TestUpdateTaskInWorkspaceRefusesDoDIdenticalToCriteria_GOALFR048(t *testing
 
 	require.True(t, res.IsError,
 		"an edit that makes the DoD restate an existing criterion must be refused: %s", res.ForLLM)
-	assert.Contains(t, res.ForLLM, "distinct")
+	assert.ErrorIs(t, res.Err, task.ErrDoDNotDistinct, "the refusal must be the DoD-duplicate rule: %s", res.ForLLM)
+	assertWorkspaceErrorField(t, res.ForLLM, "dod")
 
 	g, err := goal.NewStore(home).GetByOwner(generated.GoalOwnerKindTask, id)
 	require.NoError(t, err)

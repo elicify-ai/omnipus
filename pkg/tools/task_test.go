@@ -507,7 +507,7 @@ func TestTaskTool_CreateWithoutCriteria_Rejected(t *testing.T) {
 			if !res.IsError {
 				t.Fatal("expected an agent-created task with zero criteria to be rejected")
 			}
-			if !strings.Contains(res.ForLLM, "criteria is required") {
+			if !strings.Contains(res.ForLLM, "Add at least one acceptance criterion") {
 				t.Errorf("unexpected error message: %s", res.ForLLM)
 			}
 		})

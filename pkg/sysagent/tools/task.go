@@ -481,8 +481,8 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 		rawCriteria, _ := args["criteria"].([]any)
 		if len(rawCriteria) == 0 {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT",
-				"criteria is required: an agent-assigned task must supply at least one acceptance "+
-					"criterion — ADR-049 D5/SD-A7", "criteria"))
+				"Add at least one acceptance criterion: say what must be true for this task to be done.",
+				"criteria"))
 		}
 		criteria, cErr := parseCriteriaArgsFromWorkspaceTool(rawCriteria, caller)
 		if cErr != nil {
@@ -496,8 +496,7 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 		rawDoD, _ := args["dod"].([]any)
 		if len(rawDoD) == 0 {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT",
-				"dod is required: an agent-assigned task must supply at least one definition-of-done "+
-					"item, distinct from its acceptance criteria (GOAL-FR-021/D-C)", "dod"))
+				"Add at least one Definition of Done item, distinct from the acceptance criteria.", "dod"))
 		}
 		dod, dErr := parseCriteriaArgsFromWorkspaceTool(rawDoD, caller)
 		if dErr != nil {
@@ -510,7 +509,7 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 		// See task.ValidateDoDDistinct for the rule and for why it stops at
 		// whitespace and case. Checked before any store write.
 		if vErr := task.ValidateDoDDistinct(criteria, dod); vErr != nil {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT", vErr.Error(), "dod"))
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", vErr.Error(), "dod")).WithError(vErr)
 		}
 		goalDoD = dod
 		// D2 rule 5 (FR-017/052): an all-check criteria set can never be
@@ -1040,8 +1039,7 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 		criteriaProvided = true
 		if len(rawCriteria) == 0 {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT",
-				"criteria must not be empty: an update that supplies criteria must include at "+
-					"least one acceptance criterion (GOAL-FR-021/D-C)", "criteria"))
+				"An update that changes the acceptance criteria must leave at least one.", "criteria"))
 		}
 		parsed, cErr := parseCriteriaArgsFromWorkspaceTool(rawCriteria, caller)
 		if cErr != nil {
@@ -1055,8 +1053,7 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 		dodProvided = true
 		if len(rawDoD) == 0 {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT",
-				"dod must not be empty: an update that supplies dod must include at least one "+
-					"definition-of-done item (GOAL-FR-021/D-C)", "dod"))
+				"An update that changes the Definition of Done must leave at least one item.", "dod"))
 		}
 		parsed, dErr := parseCriteriaArgsFromWorkspaceTool(rawDoD, caller)
 		if dErr != nil {
@@ -1092,7 +1089,7 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 			effectiveDoD = persistedDoD
 		}
 		if vErr := task.ValidateDoDDistinct(effectiveCriteria, effectiveDoD); vErr != nil {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT", vErr.Error(), "dod"))
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", vErr.Error(), "dod")).WithError(vErr)
 		}
 	}
 

@@ -16,6 +16,7 @@
 package gateway
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -68,8 +69,12 @@ func TestCreateTaskRefusesDoDIdenticalToCriteria_GOALFR021(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code,
 		"a byte-identical DoD item and acceptance criterion must be refused (GOAL-FR-021/FR-047/D-C); body=%s",
 		w.Body.String())
-	assert.Contains(t, w.Body.String(), "distinct",
-		"the refusal must say WHY, in the same words the rule is advertised in")
+	// The structured field, not the message's wording: the plain-language
+	// message may be reworded, but the refusal must stay routed to `dod`.
+	var errBody gen.ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errBody), "body=%s", w.Body.String())
+	require.NotNil(t, errBody.Field, "the refusal must name the offending field; body=%s", w.Body.String())
+	assert.Equal(t, "dod", *errBody.Field, "the refusal must be routed to the dod field; body=%s", w.Body.String())
 	assert.Contains(t, w.Body.String(), uatDuplicateSentence,
 		"the refusal must name the offending item so the author can fix it")
 }

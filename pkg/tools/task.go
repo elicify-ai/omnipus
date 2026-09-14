@@ -1177,8 +1177,7 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	rawCriteria, _ := args["criteria"].([]any)
 	if len(rawCriteria) == 0 {
 		return ErrorResult(
-			"criteria is required: an agent-created task must supply at least one acceptance " +
-				"criterion (Definition of Done) — ADR-049 D5/SD-A7",
+			"Add at least one acceptance criterion: say what must be true for this task to be done.",
 		)
 	}
 	criteria, cErr := parseCriteriaArgs(rawCriteria, callerID)
@@ -1282,8 +1281,7 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	rawDoD, _ := args["dod"].([]any)
 	if len(rawDoD) == 0 {
 		return ErrorResult(
-			"dod is required: an agent-created task must supply at least one definition-of-done " +
-				"item, distinct from its acceptance criteria (GOAL-FR-021/D-C)",
+			"Add at least one Definition of Done item, distinct from the acceptance criteria.",
 		)
 	}
 	dod, dErr := parseCriteriaArgs(rawDoD, callerID)
@@ -1298,7 +1296,7 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	// and case rather than reaching for similarity. Checked before any store
 	// write, so a refused pair leaves no task and no goal record behind.
 	if vErr := task.ValidateDoDDistinct(criteria, dod); vErr != nil {
-		return ErrorResult(fmt.Sprintf("task_create failed: %v", vErr))
+		return ErrorResult(fmt.Sprintf("task_create failed: %v", vErr)).WithError(vErr)
 	}
 
 	parentTaskID, _ := args["parent_task_id"].(string)
@@ -1940,9 +1938,7 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	if rawCriteria, ok := args["criteria"].([]any); ok {
 		criteriaProvided = true
 		if len(rawCriteria) == 0 {
-			return ErrorResult(
-				"criteria must not be empty: an update that supplies criteria must include at " +
-					"least one acceptance criterion (GOAL-FR-021/D-C)")
+			return ErrorResult("An update that changes the acceptance criteria must leave at least one.")
 		}
 		parsed, cErr := parseCriteriaArgs(rawCriteria, callerID)
 		if cErr != nil {
@@ -1955,9 +1951,7 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	if rawDoD, ok := args["dod"].([]any); ok {
 		dodProvided = true
 		if len(rawDoD) == 0 {
-			return ErrorResult(
-				"dod must not be empty: an update that supplies dod must include at least one " +
-					"definition-of-done item (GOAL-FR-021/D-C)")
+			return ErrorResult("An update that changes the Definition of Done must leave at least one item.")
 		}
 		parsed, dErr := parseCriteriaArgs(rawDoD, callerID)
 		if dErr != nil {
@@ -1993,7 +1987,7 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 			effectiveDoD = persistedDoD
 		}
 		if vErr := task.ValidateDoDDistinct(effectiveCriteria, effectiveDoD); vErr != nil {
-			return ErrorResult(fmt.Sprintf("task_update failed: %v", vErr))
+			return ErrorResult(fmt.Sprintf("task_update failed: %v", vErr)).WithError(vErr)
 		}
 	}
 

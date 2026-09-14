@@ -77,7 +77,7 @@ func TestTaskCreate_DoDGateDoesNotPreemptFieldValidation(t *testing.T) {
 		{
 			name:    "missing_criteria_reports_criteria",
 			mutate:  func(a map[string]any) { delete(a, "criteria") },
-			wantMsg: "criteria is required",
+			wantMsg: "Add at least one acceptance criterion",
 		},
 	}
 
@@ -99,7 +99,7 @@ func TestTaskCreate_DoDGateDoesNotPreemptFieldValidation(t *testing.T) {
 			require.True(t, res.IsError, "expected a rejection, got success: %s", res.ForLLM)
 			assert.Contains(t, res.ForLLM, c.wantMsg,
 				"the dod gate pre-empted the %s validation: %s", c.name, res.ForLLM)
-			assert.NotContains(t, strings.ToLower(res.ForLLM), "dod is required",
+			assert.NotContains(t, strings.ToLower(res.ForLLM), "definition of done item",
 				"the dod gate must not answer for another field's defect: %s", res.ForLLM)
 
 			all, err := store.List(task.Filter{WorkspaceID: "ws-order"})
@@ -126,8 +126,8 @@ func TestTaskCreate_DoDGateStillFiresWhenEverythingElseIsValid(t *testing.T) {
 	})
 
 	require.True(t, res.IsError, "a create with no dod must be rejected (D-C): %s", res.ForLLM)
-	assert.Contains(t, res.ForLLM, "dod is required",
-		"expected the GOAL-FR-021/D-C dod message, got: %s", res.ForLLM)
+	assert.Contains(t, res.ForLLM, "Add at least one Definition of Done item",
+		"expected the Definition of Done message, got: %s", res.ForLLM)
 
 	all, err := store.List(task.Filter{WorkspaceID: "ws-order"})
 	require.NoError(t, err)
@@ -150,5 +150,57 @@ func TestTaskCreate_EmptyDoDListRejected(t *testing.T) {
 	})
 
 	require.True(t, res.IsError, "an empty dod array must be rejected: %s", res.ForLLM)
-	assert.Contains(t, res.ForLLM, "dod is required")
+	assert.Contains(t, res.ForLLM, "Add at least one Definition of Done item")
+}
+
+// TestTaskToolCriteriaMessagesArePlainLanguage pins the wording an agent reads
+// when create_task or update_task refuses a missing or emptied criteria or
+// Definition of Done list: it says what to do in plain words and carries no
+// internal requirement or decision ids (GOAL-FR-*, ADR-*, D-C, SD-A7), which an
+// agent cannot act on and a person reading the run cannot decode.
+func TestTaskToolCriteriaMessagesArePlainLanguage(t *testing.T) {
+	t.Parallel()
+	internalIDs := []string{"GOAL-FR", "ADR-", "D-C", "SD-A7"}
+	assertPlain := func(t *testing.T, msg, wantGuidance string) {
+		t.Helper()
+		assert.Contains(t, msg, wantGuidance)
+		for _, id := range internalIDs {
+			assert.NotContains(t, msg, id, "an agent-facing refusal must not cite internal ids: %s", msg)
+		}
+	}
+
+	t.Run("create without criteria", func(t *testing.T) {
+		t.Parallel()
+		tool, _ := newOrderTestCreateTool(t)
+		res := tool.Execute(orderTestCtx(), map[string]any{
+			"title": "no criteria", "prompt": "do it", "agent_id": "agent-b",
+		})
+		require.True(t, res.IsError, res.ForLLM)
+		assertPlain(t, res.ForLLM, "Add at least one acceptance criterion")
+	})
+	t.Run("create without dod", func(t *testing.T) {
+		t.Parallel()
+		tool, _ := newOrderTestCreateTool(t)
+		res := tool.Execute(orderTestCtx(), map[string]any{
+			"title": "no dod", "prompt": "do it", "agent_id": "agent-b", "criteria": validCriteriaArg(),
+		})
+		require.True(t, res.IsError, res.ForLLM)
+		assertPlain(t, res.ForLLM, "Add at least one Definition of Done item")
+	})
+	t.Run("update emptying criteria", func(t *testing.T) {
+		t.Parallel()
+		create, update, _, store, _ := newGoalLifecycleTools(t)
+		id := createGoalLifecycleTask(t, create, store, "the work is done", "the reviewer signed it off")
+		res := update.Execute(goalLifecycleCtx(), map[string]any{"task_id": id, "criteria": []any{}})
+		require.True(t, res.IsError, res.ForLLM)
+		assertPlain(t, res.ForLLM, "must leave at least one")
+	})
+	t.Run("update emptying dod", func(t *testing.T) {
+		t.Parallel()
+		create, update, _, store, _ := newGoalLifecycleTools(t)
+		id := createGoalLifecycleTask(t, create, store, "the work is done", "the reviewer signed it off")
+		res := update.Execute(goalLifecycleCtx(), map[string]any{"task_id": id, "dod": []any{}})
+		require.True(t, res.IsError, res.ForLLM)
+		assertPlain(t, res.ForLLM, "Definition of Done must leave at least one item")
+	})
 }
