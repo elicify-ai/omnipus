@@ -78,9 +78,11 @@
  * suite may not instrument — does not: measured 2026-08-23, WebKit reports NONE
  * of a sandboxed iframe's requests to the driver, while reporting the same page
  * loaded top-level normally. So every negative about gateway-bound traffic is
- * asserted TOP-LEVEL (test 110), and every non-vacuity check on an embedded
- * preview is read out of the frame's own DOM (tests 11a, 111) rather than from
- * the network. A negative asserted through a blind observer is not a negative.
+ * asserted in a frame WITHOUT the sandbox attribute (test 110 — top level until
+ * the 2026-09-14 amendment below), and every non-vacuity check on an
+ * attribute-sandboxed preview is read out of the frame's own DOM (tests 11a,
+ * 111) rather than from the network. A negative asserted through a blind
+ * observer is not a negative.
  *
  * THE DOCUMENT IS EMBEDDED THE WAY THE PRODUCT EMBEDS IT (§10.6, FR-005b):
  * `<iframe src="<token URL>">` with `sandbox="allow-scripts"`,
@@ -91,11 +93,22 @@
  * BOTH LOAD MODES RUN, and the distinction matters more than it looks. With a
  * `sandbox` ATTRIBUTE on the frame and a `sandbox` DIRECTIVE in the header, the
  * effective sandbox is the INTERSECTION (§10.6): embedded, the attribute alone
- * would keep blocking popups even if the header directive were deleted. Only
- * the TOP-LEVEL case — the tab a user opens on the preview URL, H-6's second
- * half — measures the response header on its own. So the top-level test is the
- * one that turns red when the sandbox half is dropped, and it is here for that
- * reason and not for completeness.
+ * would keep blocking popups even if the header directive were deleted. Only a
+ * load with NO attribute measures the response header on its own. So that test
+ * is the one that turns red when the sandbox half is dropped, and it is here
+ * for that reason and not for completeness.
+ *
+ * AMENDED 2026-09-14 (founder ruling; ADR-067 amendment of the same date). The
+ * no-attribute mode used to be the TOP-LEVEL tab — a user opening the preview
+ * URL on its own. The token route now refuses that request for any file that
+ * renders (UAT D-106): the preview is the file rendered INSIDE the Library,
+ * framed, and the token URL exists only to feed that frame. The header is now
+ * measured standing alone in a BARE frame (`embedPreviewBare`: no sandbox, no
+ * allow, no referrerpolicy) on the gateway's own page — same isolation
+ * properties, loaded the way people actually see a preview. The refusal is
+ * witnessed by its own test (D-106). Whether a top-level page can navigate
+ * `top.location` is no longer measurable in the frame, and no longer needs to
+ * be: D-106 is what prevents that tab from existing.
  *
  * ═══════════════════════════════════════════════════════════════════════════
  * EVERY ASSERTION HERE HAS BEEN SEEN TO FAIL
@@ -148,8 +161,11 @@ import { test, expect, type BrowserContext, type Page } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  BARE_FRAME_SELECTOR,
   BUNDLE_DIR_NAME,
   EGRESS_VECTORS,
+  bareFrameAttributes,
+  embedPreviewBare,
   type EgressVectorName,
   type MutantOrigin,
   type MutantPolicyName,
@@ -584,18 +600,48 @@ test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', 
     await log.settle();
   });
 
+  /**
+   * The bare frame really is bare. Asserted, never assumed: if a future edit
+   * gave it a `sandbox` attribute, every containment row that uses it would stay
+   * green with the header's sandbox directive deleted — the attribute would be
+   * doing the header's job — and nothing would say so.
+   */
+  async function expectBareFrame(page: Page): Promise<void> {
+    const attrs = await bareFrameAttributes(page);
+    expect(attrs.present, 'the bare frame was never created').toBe(true);
+    expect(attrs.sandbox, 'the bare frame must carry NO sandbox attribute — the header has to stand alone').toBe(false);
+    expect(attrs.allow, 'no allow attribute either').toBe(false);
+    expect(attrs.referrerpolicy, 'no referrerpolicy attribute either').toBe(false);
+    expect(attrs.csp, 'no csp attribute either').toBe(false);
+    expect(attrs.srcdoc, 'never srcdoc — it has no response to carry the policy').toBe(false);
+  }
+
   // ───────────────────────────────────────────────────────────────────────────
-  // Spec test 11 — top level. The mode where the response header stands alone.
+  // Spec test 11 — the mode where the response header stands alone.
+  //
+  // AMENDED 2026-09-14 (founder ruling; ADR-067 amendment of the same date).
+  // This test used to open the token URL as its own tab. The token route now
+  // refuses that request for any file that renders (UAT D-106): a preview is
+  // only ever seen framed, inside the Library. What the test was FOR is kept:
+  // the §10.3 header measured with nothing else helping it. A BARE frame (no
+  // sandbox attribute, see embedPreviewBare) is the framed form of that
+  // measurement. Only HOW the document loads changed. Every assertion of the
+  // old test is here unchanged, plus the opaque-origin and cookie reads US-2
+  // AS-1 asks for. The refusal itself is witnessed by the D-106 test below.
   // ───────────────────────────────────────────────────────────────────────────
-  test('11b — opened as its own tab, zero of seven vectors reach the second origin', async ({ page }) => {
+  test('11b — in a BARE frame (no sandbox attribute), zero of seven vectors reach the second origin', async ({ page }) => {
     const log = recordBrowserRequests(page.context());
     await page.goto('/');
     const tokenURL = await tokenURLFor(page, 'index.html');
 
-    await page.goto(tokenURL);
+    // 'commit', not 'load': a fixture that is NOT contained submits its form
+    // ~600 ms after load and navigates itself away, and a wait for 'load'
+    // would race that (the same race driveMutant documents). Every step below
+    // waits on its own oracle instead.
+    await embedPreviewBare(page, tokenURL, 'commit');
+    await expectBareFrame(page);
 
-    // Top level, the driver DOES see the page's requests on every engine, so
-    // both oracles are available and both are used: the network ping proves
+    // Both oracles are used, exactly as at top level: the network ping proves
     // the probes reached the network stack, the in-page list proves all twelve
     // were attempted.
     await expect.poll(
@@ -605,40 +651,74 @@ test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', 
     expect(log.matching((r) => r.url.includes('phase=pre-form'))[0].url)
       .toContain(`fired=${PROBES_BEFORE_FORM}`);
 
-    await clickInsidePreview(page);
+    await clickInsidePreview(page, BARE_FRAME_SELECTOR);
     await page.waitForTimeout(EGRESS_SETTLE_MS);
 
     const postForm = log.matching((r) => r.url.includes('phase=post-form'));
     expect(postForm.length, 'the form vector must have been attempted').toBeGreaterThan(0);
     expect(postForm[0].url).toContain(`fired=${PROBES_BEFORE_FORM + 1}`);
 
-    assertNoEgress(ext.hits, 'the top-level preview tab');
+    assertNoEgress(ext.hits, 'the bare-framed preview');
     expect(vectorsReaching(ext.hits)).toEqual([]);
+
+    // US-2 AS-1, measured where the header stands alone. THREW is the
+    // assertion, not "empty": empty is also what a page that never loaded
+    // reports. With no sandbox attribute on the frame, only the header's
+    // sandbox directive can make these two hold.
+    const report = await readPreviewReport(page, BARE_FRAME_SELECTOR);
+    expect(report.attempted.split(','), 'all twelve probes must have been attempted')
+      .toHaveLength(PROBES_BEFORE_FORM + 1);
+    expect(report.origin_opaque, 'FR-005: the header alone must bind the document to an opaque origin').toBe(true);
+    expect(report.cookie, 'document.cookie must THROW, not return empty').toMatch(/^THREW:/);
   });
 
   // ───────────────────────────────────────────────────────────────────────────
   // Spec test 110 — FR-006a: the accepted residual, and its stated condition
   // ───────────────────────────────────────────────────────────────────────────
   test('110 — same-origin subresources reach the gateway and carry NO session cookie', async ({ page }) => {
-    // TOP LEVEL, DELIBERATELY, and for two independent reasons.
+    // IN A BARE FRAME, DELIBERATELY — the framed form of what used to be a
+    // top-level tab (amended 2026-09-14: the token route now refuses a
+    // top-level document request for a rendering file, UAT D-106).
     //
-    // FIRST, it is the harsher case and the only one with teeth. Embedded, the
-    // frame's own `sandbox` ATTRIBUTE keeps the origin opaque even if the
-    // header's sandbox directive were deleted, so an embedded-only version of
-    // this test stays green through exactly the regression it exists to catch.
-    // Measured 2026-08-23: with the sandbox directive removed from the shipped
-    // policy the embedded form still passed and this form failed. Whatever
-    // holds top-level holds embedded too — embedding only ever intersects the
-    // sandbox further.
+    // FIRST, it must be the case with teeth. With the product's `sandbox`
+    // ATTRIBUTE on the frame, the attribute keeps the origin opaque even if the
+    // header's sandbox directive were deleted, so a version of this test framed
+    // the product's way stays green through exactly the regression it exists
+    // to catch. Measured 2026-08-23: with the sandbox directive removed from
+    // the shipped policy, the attribute-framed form still passed and the
+    // top-level form failed. The bare frame has no attribute, so the header is
+    // the only thing that can hold the cookie back — the same property the
+    // top-level tab measured.
     //
-    // SECOND, it is the only form that can be OBSERVED on all three engines.
-    // WebKit surfaces none of a sandboxed iframe's requests to the driver
-    // (measured 2026-08-23), so an embedded version could not read the Cookie
-    // header there at all — and an unreadable header is not an absent one.
+    // SECOND, the frame's parent is the gateway's own SPA page, so the frame is
+    // SAME-SITE with it. A missing cookie therefore cannot be the browser's
+    // third-party rules at work; it can only be the opaque origin the header
+    // imposes.
+    //
+    // THIRD, it must be OBSERVABLE on all three engines. WebKit surfaces none
+    // of an ATTRIBUTE-sandboxed iframe's requests to the driver (measured
+    // 2026-08-23), and an unreadable header is not an absent one. A BARE frame
+    // is different: measured 2026-09-14, WebKit reports its requests and their
+    // Cookie header normally. `headersRead` is still asserted for every probe,
+    // and the probe poll fails loudly rather than passing when nothing is seen.
+    //
+    // ⚠️ MEASURED 2026-09-14 — THIS TEST IS RED ON WEBKIT, AND THAT IS A FINDING,
+    // NOT A TEST DEFECT. WebKit attaches the SameSite=Strict session cookie to
+    // (b)'s same-origin image request from the opaque-origin framed document,
+    // while labelling it `Sec-Fetch-Site: cross-site`. Confirmed by a server-side
+    // oracle outside this suite: WebKit sends it from EVERY framed shape,
+    // including the product's own (attribute AND header), and withholds it only
+    // top-level; Chromium and Firefox withhold it everywhere. The old top-level
+    // form of this test could not see it, and the sentence that used to stand
+    // here — "whatever holds top-level holds embedded too" — is false on WebKit
+    // for cookies. Do NOT relax (b) to make WebKit green: FR-006a's accepted
+    // residual rests on exactly this condition. Record:
+    // uat/evidence/2026-09-13/reviews/FIX4-REPORT-preview-isolation-framed.md.
     const log = recordBrowserRequests(page.context());
     await page.goto('/');
     const tokenURL = await tokenURLFor(page, 'index.html');
-    await page.goto(tokenURL);
+    await embedPreviewBare(page, tokenURL, 'commit');
+    await expectBareFrame(page);
 
     await expect.poll(
       () => log.matching((r) => r.url.includes('probe=same-api-img')).length,
@@ -706,6 +786,54 @@ test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', 
     expect(control.cookie ?? '', 'positive control: the authenticated app DOES send the session cookie')
       .toContain('omnipus-session');
     await controlPage.close();
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // UAT 2026-09-13 D-106 — the top-level tab is refused, and still contained
+  // ───────────────────────────────────────────────────────────────────────────
+  test('D-106 — the same token URL opened as its own tab is refused, carries the isolation policy, and never renders the page', async ({ page }) => {
+    // The witness for what replaced the old top-level measurements (founder
+    // ruling 2026-09-14). A preview token URL exists to feed the framed view;
+    // opened as a page of its own, a hostile file would own the tab title and
+    // the viewport on the product's own host. So the route refuses a top-level
+    // document request for a file that renders — and this test goes red if
+    // that refusal is ever dropped, or if the refusal page itself sheds the
+    // isolation policy.
+    const log = recordBrowserRequests(page.context());
+    await page.goto('/');
+    const tokenURL = await tokenURLFor(page, 'index.html');
+
+    // POSITIVE CONTROL: the same live token DOES serve the hostile page to a
+    // request that is not a top-level document. Without it, the 403 below
+    // could just as well be a dead token.
+    const served = await page.request.get(tokenURL);
+    expect(served.status(), 'the token must be live and serve the fixture').toBe(200);
+    const servedPolicy = served.headers()['content-security-policy'];
+    expect(servedPolicy, 'FR-005a: every token-path response carries the §10.3 policy').toBeTruthy();
+    expect(await served.text(), 'the served bytes must be the hostile fixture').toContain('<title>hostile-preview</title>');
+
+    const nav = await page.goto(tokenURL);
+    expect(nav, 'navigation produced no response').not.toBeNull();
+    expect(nav!.status(), 'D-106: a top-level document request for a file that renders is refused').toBe(403);
+    expect(nav!.headers()['content-security-policy'], 'the refusal page carries the same isolation policy, byte for byte')
+      .toBe(servedPolicy);
+    expect(nav!.headers()['content-type'], 'the refusal is an HTML page of its own').toMatch(/^text\/html/);
+    expect(await nav!.text(), 'the refusal page must not contain the file').not.toContain('hostile-preview');
+
+    // The file did not render and its script did not run, measured three ways:
+    // its DOM is absent, its same-origin pings never left, and nothing reached
+    // the second origin.
+    await page.waitForTimeout(EGRESS_SETTLE_MS);
+    await log.settle();
+    expect(await page.title(), 'the tab title belongs to the file').not.toMatch(/^(hostile-preview|RESULT:)/);
+    expect(await page.locator('#gesture').count(), 'the fixture DOM rendered top-level').toBe(0);
+    expect(await page.locator('#result').count(), 'the fixture script ran top-level').toBe(0);
+    expect(
+      log.matching((r) => r.url.includes('phase=pre-form') || r.url.includes('probe=same-')).length,
+      'the fixture script issued its probes top-level',
+    ).toBe(0);
+    assertNoEgress(ext.hits, 'the refused top-level tab');
+    expect(vectorsReaching(ext.hits)).toEqual([]);
   });
 
   // ───────────────────────────────────────────────────────────────────────────
