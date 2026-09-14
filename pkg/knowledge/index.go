@@ -1919,11 +1919,23 @@ func (ix *Index) lockCtx(ctx context.Context) error {
 // this file as already accounted for rather than re-indexing it or flagging
 // it as inconsistent.
 //
-// Unlike SyncWith's own reconcile, this does NOT consult
-// Manifest.StatUnchanged first: a caller of UpdatePath already knows the
-// file's content changed — that is why it is calling this instead of waiting
-// for the next Sync — so re-indexing unconditionally is both correct and, for
-// one file, cheap.
+// # Unchanged files are a no-op
+//
+// A file whose recorded kind, size and mtime already match its stat
+// (Manifest.StatUnchanged, the same check SyncWith's reconcile uses) is left
+// alone: no document delete, no reindex, no manifest write. This matters
+// because the common call is NOT a changed file: every direct refresh after a
+// write is followed ~300 ms later by the collection watcher's own UpdatePath
+// for the same file (pkg/knowledge/watch.go deliberately does not suppress
+// self-events), and without this early-out each record-cell edit or Library
+// save rewrote the whole manifest twice.
+//
+// For a note the stat match is confirmed against the recorded content hash
+// before skipping, because a caller of UpdatePath is asserting the content
+// may have changed and a same-size edit can keep its mtime on a coarse-mtime
+// filesystem; a hash mismatch reindexes as before. An attachment is skipped on
+// the stat match alone, exactly as SyncWith does — hashing it would mean
+// reading it (FR-039a).
 //
 // relPath must name a file that already exists in the collection: a symlink,
 // a directory, a missing path, or a path that fails addressing-safety
@@ -1989,6 +2001,10 @@ func (ix *Index) UpdatePath(ctx context.Context, relPath string) error {
 			"knowledge: update path %s: manifest unusable, run a full Sync to rebuild it: %w", cleanRel, loadErr)
 	}
 
+	if ix.updatePathUnchanged(manifest, entry) {
+		return nil
+	}
+
 	batch := newBatchState(ix)
 	if _, err := ix.indexOneFile(batch, manifest, entry); err != nil {
 		return fmt.Errorf("knowledge: update path %s: %w", cleanRel, err)
@@ -2000,6 +2016,25 @@ func (ix *Index) UpdatePath(ctx context.Context, relPath string) error {
 		return err
 	}
 	return enforceIndexPermissions(ix.dir)
+}
+
+// updatePathUnchanged reports whether UpdatePath may skip entry entirely — see
+// UpdatePath's "Unchanged files are a no-op". Any doubt (no record, a stat
+// difference, a note with no recorded hash, a hash that cannot be computed or
+// does not match) answers false, which reindexes: the safe direction.
+func (ix *Index) updatePathUnchanged(manifest *Manifest, entry ScanEntry) bool {
+	if !manifest.StatUnchanged(entry) {
+		return false
+	}
+	if entry.Kind != ScanKindNote {
+		return true
+	}
+	rec, _ := manifest.Get(entry.RelPath)
+	if rec.Hash == "" {
+		return false
+	}
+	sum, err := ix.hashFile(entry.RelPath)
+	return err == nil && sum == rec.Hash
 }
 
 // RemovePath drops one file's index documents and its manifest entry, without

@@ -67,6 +67,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
@@ -1654,6 +1655,30 @@ func refreshIndexesForRename(ctx context.Context, home, collectionRoot, from str
 // on disk — the gate is checked before the MkdirAll rather than left to
 // propindex.Open alone, so a build that cannot open the store never creates a
 // directory for one it can never write.
+//
+// # One handle per collection, shared and reference-counted
+//
+// The returned Store is a process-shared handle, not a fresh one: every
+// per-cell record edit and every Library text save calls this, and opening
+// SQLite per call minted a new *sql.DB (plus schema checks) per keystroke-sized
+// write. The handle is shared the way the text index is (acquireSharedIndex),
+// with three differences that follow from SQLite being a file anyone may
+// delete:
+//
+//   - Close releases a reference; the handle stays open for
+//     propsStoreIdleTimeout after the last release, so a burst of edits reuses
+//     it, and is then closed so no file stays held open indefinitely.
+//   - Before reuse the database file's identity is re-checked. Deleting
+//     properties.db is the documented way to ask for a rebuild (propindex.Open);
+//     a handle still pointing at the unlinked file would write rows nobody can
+//     read, so a changed or missing file retires the handle and a new one opens.
+//   - A write that fails retires the handle too, so the next call reopens and
+//     gets propindex.Open's corruption self-heal, exactly as a per-call open did.
+//
+// Writes stay serialized exactly as before: propindex's public write methods
+// take the per-index-file reconcile lock (propindex/reconcile.go) whatever
+// handle they are called on, so sharing one handle changes nothing about how a
+// direct write queues behind Store.Reconcile.
 func openPropertiesIndexStore(ctx context.Context, home, collectionRoot string) (propindex.Store, error) {
 	if err := records.RequirePropertyIndex(records.CapabilityOpenIndex); err != nil {
 		return nil, err
@@ -1662,6 +1687,27 @@ func openPropertiesIndexStore(ctx context.Context, home, collectionRoot string) 
 	if err != nil {
 		return nil, err
 	}
+	key := filepath.Clean(idxPath)
+
+	propsStores.mu.Lock()
+	defer propsStores.mu.Unlock()
+
+	if e, ok := propsStores.entries[key]; ok {
+		fi, statErr := os.Stat(key)
+		if statErr == nil && os.SameFile(fi, e.file) {
+			e.refs++
+			if e.idle != nil {
+				e.idle.Stop()
+				e.idle = nil
+			}
+			return &sharedPropsStore{Store: e.store, key: key, entry: e}, nil
+		}
+		// The file was deleted or replaced under the handle: retire it.
+		retirePropsStoreLocked(key, e)
+	}
+
+	// Open runs under the registry mutex so two concurrent first callers for
+	// one collection cannot both open (and both cache) a handle.
 	dir := filepath.Dir(idxPath)
 	if mkErr := os.MkdirAll(dir, 0o700); mkErr != nil {
 		return nil, fmt.Errorf("knowledge: create properties index directory %s: %w", dir, mkErr)
@@ -1669,7 +1715,127 @@ func openPropertiesIndexStore(ctx context.Context, home, collectionRoot string) 
 	if chErr := os.Chmod(dir, 0o700); chErr != nil {
 		return nil, fmt.Errorf("knowledge: set permissions on properties index directory %s: %w", dir, chErr)
 	}
-	return propindex.Open(ctx, idxPath, propindex.Options{})
+	store, err := propindexOpen(ctx, idxPath, propindex.Options{})
+	if err != nil {
+		return nil, err
+	}
+	fi, statErr := os.Stat(key)
+	if statErr != nil {
+		// Cannot record the file's identity, so cannot safely reuse the handle
+		// later: hand it back unshared, closed by the caller as before.
+		return store, nil
+	}
+	e := &propsStoreEntry{store: store, file: fi, refs: 1}
+	propsStores.entries[key] = e
+	return &sharedPropsStore{Store: store, key: key, entry: e}, nil
+}
+
+// propindexOpen is the one place this file mints a properties-index handle
+// (a fresh *sql.DB). It is a variable only so a test can count how often a
+// direct refresh opens SQLite; production never reassigns it.
+var propindexOpen = propindex.Open
+
+// propsStoreIdleTimeout is how long a released properties handle stays open
+// for the next edit before it is closed.
+var propsStoreIdleTimeout = 30 * time.Second
+
+var propsStores = struct {
+	mu      sync.Mutex
+	entries map[string]*propsStoreEntry
+}{entries: make(map[string]*propsStoreEntry)}
+
+type propsStoreEntry struct {
+	store   propindex.Store
+	file    os.FileInfo // identity of the database file when the handle opened
+	refs    int
+	retired bool // removed from the registry; close when refs reaches 0
+	idle    *time.Timer
+}
+
+// retirePropsStoreLocked removes e from the registry and closes it now if no
+// caller holds it, or when its last holder releases it. propsStores.mu held.
+func retirePropsStoreLocked(key string, e *propsStoreEntry) {
+	if propsStores.entries[key] == e {
+		delete(propsStores.entries, key)
+	}
+	e.retired = true
+	if e.idle != nil {
+		e.idle.Stop()
+		e.idle = nil
+	}
+	if e.refs == 0 {
+		closePropsStoreQuietly(key, e.store)
+	}
+}
+
+func closePropsStoreQuietly(key string, store propindex.Store) {
+	if err := store.Close(); err != nil {
+		slog.Warn("knowledge: closing a shared properties index handle", "path", key, "error", err)
+	}
+}
+
+// closeIdlePropertiesStores closes every shared handle no caller currently
+// holds, and retires the held ones so they close on release. Test seam.
+func closeIdlePropertiesStores() {
+	propsStores.mu.Lock()
+	defer propsStores.mu.Unlock()
+	for key, e := range propsStores.entries {
+		retirePropsStoreLocked(key, e)
+	}
+}
+
+// sharedPropsStore is one caller's lease on a shared handle. Close releases the
+// lease; failed writes retire the handle (see openPropertiesIndexStore).
+type sharedPropsStore struct {
+	propindex.Store
+	key      string
+	entry    *propsStoreEntry
+	released bool
+}
+
+func (s *sharedPropsStore) retireOnError(err error) error {
+	if err != nil {
+		propsStores.mu.Lock()
+		if !s.entry.retired {
+			// Still leased by s, so this never closes under a live caller.
+			retirePropsStoreLocked(s.key, s.entry)
+		}
+		propsStores.mu.Unlock()
+	}
+	return err
+}
+
+func (s *sharedPropsStore) UpsertNote(ctx context.Context, rows propindex.NoteRows) error {
+	return s.retireOnError(s.Store.UpsertNote(ctx, rows))
+}
+
+func (s *sharedPropsStore) DeleteNote(ctx context.Context, path string) error {
+	return s.retireOnError(s.Store.DeleteNote(ctx, path))
+}
+
+func (s *sharedPropsStore) Close() error {
+	propsStores.mu.Lock()
+	defer propsStores.mu.Unlock()
+	if s.released {
+		return nil
+	}
+	s.released = true
+	e := s.entry
+	e.refs--
+	if e.refs > 0 {
+		return nil
+	}
+	if e.retired {
+		return e.store.Close()
+	}
+	e.idle = time.AfterFunc(propsStoreIdleTimeout, func() {
+		propsStores.mu.Lock()
+		defer propsStores.mu.Unlock()
+		if e.refs == 0 && !e.retired {
+			retirePropsStoreLocked(s.key, e)
+		}
+	})
+	return nil
 }
 
 // upsertPropertiesNote re-derives and writes one path's row (and its
