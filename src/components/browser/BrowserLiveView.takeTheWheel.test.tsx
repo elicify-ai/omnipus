@@ -268,10 +268,13 @@ describe('BrowserLiveView — watch-only while the agent is working (ADR-040 D2)
     setAgentWorking('s1', true)
     const container = screen.getByTestId('browser-live-frame')
 
-    fireEvent.keyDown(container, { key: 'a' })
-    fireEvent.keyUp(container, { key: 'a' })
+    fireEvent.keyDown(container, { key: 'a', code: 'KeyA', keyCode: 65 })
+    fireEvent.keyUp(container, { key: 'a', code: 'KeyA', keyCode: 65 })
 
-    expect(mockDedicatedSendInput).toHaveBeenCalledExactlyOnceWith({ kind: 'text', text: 'a', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 })
+    expect(mockDedicatedSendInput.mock.calls.map(([input]) => input)).toEqual([
+      { kind: 'key_down', key: 'a', code: 'KeyA', key_code: 65, text: 'a', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 },
+      { kind: 'key_up', key: 'a', code: 'KeyA', key_code: 65, modifiers: 0, capture_id: 'capture-test', capture_generation: 1 },
+    ])
   })
 
   // Reviewer finding coverage: the wheel listener now consults the same
@@ -1031,7 +1034,8 @@ describe('BrowserLiveView — shared human input reliability', () => {
     fireEvent.pointerDown(frame, { clientX: 25, clientY: 25 })
     fireEvent.pointerUp(frame, { clientX: 25, clientY: 25 })
     fireEvent.keyDown(frame, { key: 'a', code: 'KeyA', keyCode: 65 })
-    expect(mockDedicatedSendInput.mock.calls.map(([input]) => input.kind)).toEqual(['mouse_down', 'mouse_up', 'text'])
+    fireEvent.keyUp(frame, { key: 'a', code: 'KeyA', keyCode: 65 })
+    expect(mockDedicatedSendInput.mock.calls.map(([input]) => input.kind)).toEqual(['mouse_down', 'mouse_up', 'key_down', 'key_up'])
   })
 
   it('keeps human input available during chat without cancelling the response', () => {
@@ -1043,8 +1047,9 @@ describe('BrowserLiveView — shared human input reliability', () => {
     fireEvent.pointerDown(frame, { clientX: 20, clientY: 20 })
     fireEvent.pointerUp(frame, { clientX: 20, clientY: 20 })
     fireEvent.keyDown(frame, { key: 'a', code: 'KeyA', keyCode: 65 })
+    fireEvent.keyUp(frame, { key: 'a', code: 'KeyA', keyCode: 65 })
     expect(cancel).not.toHaveBeenCalled()
-    expect(mockDedicatedSendInput.mock.calls.map(([input]) => input.kind)).toEqual(['mouse_down', 'mouse_up', 'text'])
+    expect(mockDedicatedSendInput.mock.calls.map(([input]) => input.kind)).toEqual(['mouse_down', 'mouse_up', 'key_down', 'key_up'])
   })
 
   it('releases held keys when focus leaves the remote browser', () => {
@@ -1084,7 +1089,7 @@ it('reports failed input without trying another transport or replaying text', ()
   connectAndFrame()
   mockDedicatedSendInput.mockReturnValueOnce(false)
   fireEvent.keyDown(stubFrameRect(), { key: 'x', code: 'KeyX' })
-  expect(mockDedicatedSendInput.mock.calls.map(([input]) => input)).toEqual([{ kind: 'text', text: 'x', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 }])
+  expect(mockDedicatedSendInput.mock.calls.map(([input]) => input)).toEqual([{ kind: 'key_down', key: 'x', code: 'KeyX', key_code: 0, text: 'x', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 }])
   expect(useUiStore.getState().toasts.map(t => t.message)).toEqual(['Browser input was not sent. Check the connection and try again.'])
   expect(mockSocketSendInput).not.toHaveBeenCalled()
 })

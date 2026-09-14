@@ -244,12 +244,14 @@ describe('BrowserLiveView — mouse_move RAF coalescing', () => {
     const container = mountControllingWithFrame()
 
     act(() => {
-      fireEvent.keyDown(container, { key: 'a' })
-      fireEvent.keyUp(container, { key: 'a' })
+      fireEvent.keyDown(container, { key: 'a', code: 'KeyA', keyCode: 65 })
+      fireEvent.keyUp(container, { key: 'a', code: 'KeyA', keyCode: 65 })
     })
 
-    const textCalls = mockSendInput.mock.calls.filter(([arg]) => (arg as { kind?: string }).kind === 'text')
-    expect(textCalls).toHaveLength(1)
+    expect(mockSendInput.mock.calls.map(([input]) => input)).toEqual([
+      { kind: 'key_down', key: 'a', code: 'KeyA', key_code: 65, text: 'a', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 },
+      { kind: 'key_up', key: 'a', code: 'KeyA', key_code: 65, modifiers: 0, capture_id: 'capture-test', capture_generation: 1 },
+    ])
   })
 })
 

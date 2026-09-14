@@ -71,16 +71,20 @@ it.each(['/', '/?browserInput=websocket', '/?browserInput=dedicated'])('requires
   window.history.replaceState({}, '', url)
   const s = await connected()
   const originalMedia = s.video.srcObject
-  fireEvent.keyDown(s.frame, { key: 'a' })
+  fireEvent.keyDown(s.frame, { key: 'a', code: 'KeyA', keyCode: 65 })
+  fireEvent.keyUp(s.frame, { key: 'a', code: 'KeyA', keyCode: 65 })
   expect(s.peer.channels['input-reliable'].send.mock.calls.map(([data]) => JSON.parse(data))).toEqual([{
-    type: 'browser_input', kind: 'text', text: 'a', modifiers: 0, capture_id: capture, capture_generation: 1,
-    input_epoch: 1, control_epoch: 0, reliable_seq: 1, gesture_barrier: 0,
+    type: 'browser_input', kind: 'key_down', key: 'a', code: 'KeyA', key_code: 65, text: 'a', modifiers: 0, capture_id: capture, capture_generation: 1,
+    input_epoch: 1, control_epoch: 0, reliable_seq: 1, gesture_barrier: 1,
+  }, {
+    type: 'browser_input', kind: 'key_up', key: 'a', code: 'KeyA', key_code: 65, modifiers: 0, capture_id: capture, capture_generation: 1,
+    input_epoch: 1, control_epoch: 0, reliable_seq: 2, gesture_barrier: 2,
   }])
   expect(s.socket.frames.filter(f => f.type === 'browser_input' || f.type === 'browser_control')).toEqual([])
   act(() => s.peer.close())
   expect(screen.getByTestId('browser-input-error')).toHaveTextContent('Input connection lost')
   fireEvent.keyDown(s.frame, { key: 'b' })
-  expect(s.peer.channels['input-reliable'].send).toHaveBeenCalledTimes(1)
+  expect(s.peer.channels['input-reliable'].send).toHaveBeenCalledTimes(2)
   expect(s.video.srcObject).toBe(originalMedia)
   expect(s.socket.frames.filter(f => f.type === 'browser_control')).toEqual([{ type: 'browser_control', action: 'release', input_epoch: 1, control_epoch: 1 }])
   act(() => s.socket.receive({ type: 'browser_input_control_ack', session_id: 's1', input_epoch: 1, control_epoch: 1, ok: true, capture_id: capture, capture_generation: 1 }))
@@ -98,14 +102,17 @@ it('waits for the control acknowledgment and its presented capture generation', 
   const s = await connected()
   fireEvent.click(screen.getByRole('button', { name: 'Go back' }))
   expect(s.socket.frames.at(-1)).toEqual({ type: 'browser_input', kind: 'navigate_back', input_epoch: 1, control_epoch: 1 })
-  fireEvent.keyDown(s.frame, { key: 'a' })
+  fireEvent.keyDown(s.frame, { key: 'a', code: 'KeyA', keyCode: 65 })
+  fireEvent.keyUp(s.frame, { key: 'a', code: 'KeyA', keyCode: 65 })
   expect(s.peer.channels['input-reliable'].send).not.toHaveBeenCalled()
   act(() => s.socket.receive({ type: 'browser_input_control_ack', session_id: 's1', input_epoch: 1, control_epoch: 1, ok: true, capture_id: capture, capture_generation: 2 }))
-  fireEvent.keyDown(s.frame, { key: 'a' })
+  fireEvent.keyDown(s.frame, { key: 'a', code: 'KeyA', keyCode: 65 })
+  fireEvent.keyUp(s.frame, { key: 'a', code: 'KeyA', keyCode: 65 })
   expect(s.peer.channels['input-reliable'].send).not.toHaveBeenCalled()
   act(() => { health(s.socket, 2, 200); emitBrowserFrame(s.video, { rtpTimestamp: 200, expectedDisplayTime: performance.now() - 1 }) })
-  fireEvent.keyDown(s.frame, { key: 'a' })
-  expect(s.peer.channels['input-reliable'].send.mock.calls.map(([data]) => JSON.parse(data).capture_generation)).toEqual([2])
+  fireEvent.keyDown(s.frame, { key: 'a', code: 'KeyA', keyCode: 65 })
+  fireEvent.keyUp(s.frame, { key: 'a', code: 'KeyA', keyCode: 65 })
+  expect(s.peer.channels['input-reliable'].send.mock.calls.map(([data]) => JSON.parse(data).capture_generation)).toEqual([2, 2])
 })
 
 

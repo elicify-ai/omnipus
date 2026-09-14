@@ -1,0 +1,43 @@
+<!doctype html><meta charset="utf-8"><title>Focused chat with document game keys</title>
+<style>
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#151515;color:white;font:16px sans-serif}canvas{position:fixed;inset:0;width:100%;height:100%;pointer-events:none}textarea,button,#scroll,#drag{position:fixed;box-sizing:border-box}textarea{left:8%;top:64%;width:38%;height:9%;font-size:20px}button{left:54%;top:64%;width:38%;height:9%;font-size:20px}#scroll{left:8%;top:78%;width:38%;height:17%;overflow:auto;background:#183650}#scroll>div{height:2000px;background:repeating-linear-gradient(#183650 0px,#183650 49px,#276c91 50px,#276c91 99px)}#drag{left:54%;top:78%;width:38%;height:17%;background:#335522;touch-action:none;user-select:none}
+</style>
+<canvas id="pixels"></canvas><textarea id="text" aria-label="Game chat"></textarea><button id="click">Count click</button><div id="scroll"><div>Scroll exactly 300 CSS pixels</div></div><div id="drag">Drag left to right</div>
+<script>
+const nonce=Number(new URL(location.href).searchParams.get('nonce'));
+if(!Number.isInteger(nonce)||nonce<1||nonce>65535)throw Error('Valid fixture nonce required');
+const text=document.getElementById('text'),button=document.getElementById('click'),scroll=document.getElementById('scroll'),drag=document.getElementById('drag'),canvas=document.getElementById('pixels'),ctx=canvas.getContext('2d');
+const state={nonce,clicks:0,downs:0,ups:0,held:0,scroll:0,drags:0,errors:0};
+let dragging=false;
+function paint(){
+ const w=canvas.width=innerWidth,h=canvas.height=innerHeight;
+ ctx.fillStyle='#ff00ff';ctx.fillRect(0,0,w,h);ctx.fillStyle='#151515';ctx.fillRect(w*.025,h*.025,w*.95,h*.95);
+ const words=[...Object.values(state),...Array.from({length:32},(_,i)=>text.value.charCodeAt(i)||0)];
+ const bits=[];words.forEach((v,index)=>{for(let i=0;i<(index<8?32:16);i++)bits.push((v>>>i)&1)});
+ bits.forEach((b,i)=>{ctx.fillStyle=b?'#fff':'#000';ctx.fillRect(w*(.1+(i%32)*.8/32),h*(.06+Math.floor(i/32)*.5/24),w*.8/32,h*.5/24)});
+}
+function trusted(e){if(!e.isTrusted)state.errors++;}
+// Pixel fields: clicks=shots, downs/ups=key events, held=pressed-key count,
+// scroll=arrow movement, drags=A keydowns. Text remains the real textarea value.
+const pressed=new Set();
+// Independently specified native event identities, in the test's action order.
+const commonKeys=[[' ','Space',false],['a','KeyA',false],['ArrowRight','ArrowRight',false]];
+const expectedDown=[...commonKeys,['Alt','AltLeft',true],['@','KeyL',true]];
+const expectedUp=[...commonKeys,['@','KeyL',true],['Alt','AltLeft',false]];
+function checkKey(e,index){
+ const expected=(e.type==='keydown'?expectedDown:expectedUp)[index];
+ if(!expected||e.key!==expected[0]||e.code!==expected[1]||e.altKey!==expected[2]||e.ctrlKey||e.metaKey||e.shiftKey||e.repeat||e.target!==text)state.errors++;
+}
+text.addEventListener('input',e=>{trusted(e);if(text.value.length>32)state.errors++;paint()});
+document.addEventListener('keydown',e=>{
+ trusted(e);checkKey(e,state.downs);state.downs++;pressed.add(e.code);state.held=pressed.size;
+ if(e.code==='Space'){e.preventDefault();state.clicks++}
+ if(e.code==='ArrowRight'){e.preventDefault();state.scroll++}
+ if(e.code==='KeyA')state.drags++;
+ paint();
+});
+document.addEventListener('keyup',e=>{
+ trusted(e);checkKey(e,state.ups);state.ups++;if(!pressed.delete(e.code))state.errors++;state.held=pressed.size;paint();
+});
+addEventListener('resize',paint);paint();
+</script>

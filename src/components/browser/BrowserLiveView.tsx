@@ -1415,7 +1415,11 @@ export function BrowserLiveView({
         return false
       }
       const held = pressedInputsRef.current
-      if (input.kind === 'key_down') held.set(`key:${input.code || input.key}`, { ...payload, kind: 'key_up', modifiers: 0 })
+      if (input.kind === 'key_down') {
+        const release: Omit<BrowserInputFrame, 'type'> = { ...payload, kind: 'key_up', modifiers: 0 }
+        delete release.text
+        held.set(`key:${input.code || input.key}`, release)
+      }
       if (input.kind === 'key_up') held.delete(`key:${input.code || input.key}`)
       if (input.kind === 'mouse_down') held.set(`button:${input.button}`, { ...payload, kind: 'mouse_up', modifiers: 0 })
       if (input.kind === 'mouse_up') held.delete(`button:${input.button}`)
@@ -2215,15 +2219,10 @@ export function BrowserLiveView({
     }
     e.preventDefault()
     const modifiers = computeModifiers(e)
-    if (isPrintableKey(e)) {
-      dispatchInput({ kind: 'text', text: e.key, modifiers })
-    } else {
-      // key_code (DOM KeyboardEvent.keyCode) is REQUIRED for CDP to actually
-      // perform editing/navigation keys (Backspace, Delete, Enter, Tab,
-      // arrows) and modifier shortcuts (Ctrl+A/C/V) — key/code alone deliver
-      // the event but don't delete/submit/move/select. See ADR-039.
-      dispatchInput({ kind: 'key_down', key: e.key, code: e.code, key_code: e.keyCode, modifiers })
-    }
+    // Keep physical transitions for page shortcuts/games and provide the
+    // browser-composed character on keydown for text fields and layout keys.
+    dispatchInput({ kind: 'key_down', key: e.key, code: e.code, key_code: e.keyCode, modifiers,
+      ...(isPrintableKey(e, navigator.platform) ? { text: e.key } : {}) })
   }, [canDispatchInput, releaseWheel, dispatchInput])
 
   const handleKeyUp = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -2233,8 +2232,7 @@ export function BrowserLiveView({
     // 'you-driving' for the brief async gap before the release ack lands).
     if (e.key === 'Escape') return
     e.preventDefault()
-    // 'text' input is a one-shot insert (no matching key_up — mirrors
-    // Input.insertText on the backend, which has no down/up phase).
+    // Only release a physical key whose press was admitted by this viewer.
     if (pressedInputsRef.current.has(`key:${e.code || e.key}`)) {
       dispatchInput({ kind: 'key_up', key: e.key, code: e.code, key_code: e.keyCode, modifiers: computeModifiers(e) })
     }

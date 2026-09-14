@@ -40,7 +40,11 @@ function health(captureId: string, generation: number, marker?: number, cssWidth
     capture_id: captureId, capture_generation: generation, css_width: cssWidth, css_height: cssHeight, ...(marker === undefined ? {} : { rtp_timestamp: marker }),
   }))
 }
-function key() { fireEvent.keyDown(screen.getByTestId('browser-live-frame'), { key: 'a' }) }
+function key() {
+  const frame = screen.getByTestId('browser-live-frame')
+  fireEvent.keyDown(frame, { key: 'a', code: 'KeyA', keyCode: 65 })
+  fireEvent.keyUp(frame, { key: 'a', code: 'KeyA', keyCode: 65 })
+}
 
 describe('BrowserLiveView displayed capture identity', () => {
   it('requires boundary and actual presented frame and sends their exact identity', () => {
@@ -52,7 +56,10 @@ describe('BrowserLiveView displayed capture identity', () => {
     expect(sendInput.mock.calls).toEqual([])
     act(() => emitBrowserFrame(video, { rtpTimestamp: 100, expectedDisplayTime: performance.now() - 1 }))
     key()
-    expect(sendInput.mock.calls).toEqual([[{ kind: 'text', text: 'a', modifiers: 0, capture_id: 'capture-a', capture_generation: 1 }]])
+    expect(sendInput.mock.calls).toEqual([
+      [{ kind: 'key_down', key: 'a', code: 'KeyA', key_code: 65, text: 'a', modifiers: 0, capture_id: 'capture-a', capture_generation: 1 }],
+      [{ kind: 'key_up', key: 'a', code: 'KeyA', key_code: 65, modifiers: 0, capture_id: 'capture-a', capture_generation: 1 }],
+    ])
   })
 
   it('locks synchronously on a same-size target transition and ignores older frames', () => {
@@ -68,7 +75,10 @@ describe('BrowserLiveView displayed capture identity', () => {
     expect(sendInput.mock.calls).toEqual([])
     act(() => emitBrowserFrame(video, { rtpTimestamp: 200, expectedDisplayTime: performance.now() - 1 }))
     key()
-    expect(sendInput.mock.calls).toEqual([[{ kind: 'text', text: 'a', modifiers: 0, capture_id: 'capture-a', capture_generation: 2 }]])
+    expect(sendInput.mock.calls).toEqual([
+      [{ kind: 'key_down', key: 'a', code: 'KeyA', key_code: 65, text: 'a', modifiers: 0, capture_id: 'capture-a', capture_generation: 2 }],
+      [{ kind: 'key_up', key: 'a', code: 'KeyA', key_code: 65, modifiers: 0, capture_id: 'capture-a', capture_generation: 2 }],
+    ])
   })
 
   it('does not authorize a replacement capture using the previous capture frame', () => {
@@ -95,7 +105,10 @@ describe('BrowserLiveView displayed capture identity', () => {
       expect(sendInput.mock.calls).toEqual([])
       act(() => vi.advanceTimersByTime(1))
       key()
-      expect(sendInput.mock.calls).toEqual([[{ kind: 'text', text: 'a', modifiers: 0, capture_id: 'capture-a', capture_generation: 1 }]])
+      expect(sendInput.mock.calls).toEqual([
+        [{ kind: 'key_down', key: 'a', code: 'KeyA', key_code: 65, text: 'a', modifiers: 0, capture_id: 'capture-a', capture_generation: 1 }],
+        [{ kind: 'key_up', key: 'a', code: 'KeyA', key_code: 65, modifiers: 0, capture_id: 'capture-a', capture_generation: 1 }],
+      ])
     } finally { vi.useRealTimers() }
   })
   it('cancels queued CSS positions before accepting a new recovered generation', () => {
@@ -142,7 +155,10 @@ describe('BrowserLiveView displayed capture identity', () => {
     expect(sendInput.mock.calls).toEqual([])
     act(() => emitBrowserFrame(video, { rtpTimestamp: 101, expectedDisplayTime: performance.now() - 1 }))
     key()
-    expect(sendInput.mock.calls).toEqual([[{ kind: 'text', text: 'a', modifiers: 0, capture_id: 'capture-a', capture_generation: 1 }]])
+    expect(sendInput.mock.calls).toEqual([
+      [{ kind: 'key_down', key: 'a', code: 'KeyA', key_code: 65, text: 'a', modifiers: 0, capture_id: 'capture-a', capture_generation: 1 }],
+      [{ kind: 'key_up', key: 'a', code: 'KeyA', key_code: 65, modifiers: 0, capture_id: 'capture-a', capture_generation: 1 }],
+    ])
   })
 
   it('locks a lost feed until a recovered boundary and a new frame are presented', () => {
@@ -160,7 +176,10 @@ describe('BrowserLiveView displayed capture identity', () => {
     expect(sendInput.mock.calls).toEqual([])
     act(() => emitBrowserFrame(video, { rtpTimestamp: 200, expectedDisplayTime: performance.now() - 1 }))
     key()
-    expect(sendInput.mock.calls).toEqual([[{ kind: 'text', text: 'a', modifiers: 0, capture_id: 'capture-a', capture_generation: 1 }]])
+    expect(sendInput.mock.calls).toEqual([
+      [{ kind: 'key_down', key: 'a', code: 'KeyA', key_code: 65, text: 'a', modifiers: 0, capture_id: 'capture-a', capture_generation: 1 }],
+      [{ kind: 'key_up', key: 'a', code: 'KeyA', key_code: 65, modifiers: 0, capture_id: 'capture-a', capture_generation: 1 }],
+    ])
   })
 
   it('states that input is unavailable when the browser has no frame callbacks', () => {
@@ -222,7 +241,10 @@ describe('BrowserLiveView displayed capture identity', () => {
     fireEvent.pointerDown(container, { clientX: 100, clientY: 100, button: 0 })
     expect(sendInput.mock.calls).toEqual([])
     key()
-    expect(sendInput.mock.calls).toEqual([[{ kind: 'text', text: 'a', modifiers: 0, capture_id: 'capture-a', capture_generation: 1 }]])
+    expect(sendInput.mock.calls).toEqual([
+      [{ kind: 'key_down', key: 'a', code: 'KeyA', key_code: 65, text: 'a', modifiers: 0, capture_id: 'capture-a', capture_generation: 1 }],
+      [{ kind: 'key_up', key: 'a', code: 'KeyA', key_code: 65, modifiers: 0, capture_id: 'capture-a', capture_generation: 1 }],
+    ])
   })
 
   it('surfaces an operation-only failure without altering the healthy picture or input authorization', () => {
@@ -233,7 +255,10 @@ describe('BrowserLiveView displayed capture identity', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(useUiStore.getState().toasts.map(toast => toast.message)).toEqual(['The page changed before this input arrived.'])
     key()
-    expect(sendInput.mock.calls).toEqual([[{ kind: 'text', text: 'a', modifiers: 0, capture_id: 'capture-a', capture_generation: 1 }]])
+    expect(sendInput.mock.calls).toEqual([
+      [{ kind: 'key_down', key: 'a', code: 'KeyA', key_code: 65, text: 'a', modifiers: 0, capture_id: 'capture-a', capture_generation: 1 }],
+      [{ kind: 'key_up', key: 'a', code: 'KeyA', key_code: 65, modifiers: 0, capture_id: 'capture-a', capture_generation: 1 }],
+    ])
   })
 
 })

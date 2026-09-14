@@ -211,6 +211,30 @@ function ackDriving(container: HTMLElement) {
 }
 
 describe('BrowserLiveView — input routing: dedicated input during media connection changes', () => {
+  it.each([
+    { key: 'a', code: 'KeyA', keyCode: 65, platform: 'Linux x86_64', altKey: false, modifiers: 0 },
+    { key: ' ', code: 'Space', keyCode: 32, platform: 'Linux x86_64', altKey: false, modifiers: 0 },
+    { key: '@', code: 'KeyL', keyCode: 76, platform: 'MacIntel', altKey: true, modifiers: 1 },
+  ])('physical $code carries printable text and both key transitions on $platform', ({ key, code, keyCode, platform, altKey, modifiers }) => {
+    const platformSpy = vi.spyOn(navigator, 'platform', 'get').mockReturnValue(platform)
+    try {
+      render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+      connectAndFrame()
+      const container = stubFrameRect()
+      stubVideoDims()
+      ackDriving(container)
+      fireEvent.keyDown(container, { key, code, keyCode, altKey })
+      fireEvent.keyUp(container, { key, code, keyCode, altKey })
+      const identity = { capture_id: 'capture-test', capture_generation: 1 }
+      expect(mockSendInput.mock.calls.map(([input]) => input)).toEqual([
+        { kind: 'key_down', key, code, key_code: keyCode, text: key, modifiers, ...identity },
+        { kind: 'key_up', key, code, key_code: keyCode, modifiers, ...identity },
+      ])
+      expect(mockMachineSendInput).not.toHaveBeenCalled()
+      fireEvent.blur(window)
+      expect(mockSendInput).toHaveBeenCalledTimes(2)
+    } finally { platformSpy.mockRestore() }
+  })
   // US-1.4 and US-4.1: cleanup must survive media loss and navigation must
   // remain available without a presented frame. The component and gate are
   // real; only the socket and media boundary are controlled by this fixture.
@@ -308,7 +332,7 @@ describe('BrowserLiveView — input routing: dedicated input during media connec
     expect(mockMachineSendInput).not.toHaveBeenCalled()
     expect(mockSendInput).toHaveBeenCalledTimes(1)
     const payload = mockSendInput.mock.calls[0][0]
-    expect(payload).toEqual(expect.objectContaining({ kind: 'text', text: 'a' }))
+    expect(payload).toEqual(expect.objectContaining({ kind: 'key_down', key: 'a', code: '', key_code: 0, text: 'a' }))
   })
 
   it('a failing unused media data channel does not duplicate dedicated input', () => {
@@ -916,7 +940,7 @@ describe('BrowserLiveView fresh viewer fallback for missing received timestamps'
     expect(mockSendInput.mock.calls).toEqual([])
     presentWithoutRtp(fresh)
     typeA()
-    expect(mockSendInput.mock.calls).toEqual([[{ kind: 'text', text: 'a', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 }]])
+    expect(mockSendInput.mock.calls).toEqual([[{ kind: 'key_down', key: 'a', code: '', key_code: 0, text: 'a', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 }]])
     expect(mockMachineStart).toHaveBeenCalledTimes(1)
   })
 
@@ -936,7 +960,7 @@ describe('BrowserLiveView fresh viewer fallback for missing received timestamps'
     const secondFresh = incoming(3)
     presentWithoutRtp(secondFresh)
     typeA()
-    expect(mockSendInput.mock.calls).toEqual([[{ kind: 'text', text: 'a', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 }]])
+    expect(mockSendInput.mock.calls).toEqual([[{ kind: 'key_down', key: 'a', code: '', key_code: 0, text: 'a', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 }]])
   })
 
   it('cannot authorize an old fallback peer when another generation commits during negotiation', () => {
@@ -955,6 +979,6 @@ describe('BrowserLiveView fresh viewer fallback for missing received timestamps'
     const current = incoming(3, 2)
     presentWithoutRtp(current)
     typeA()
-    expect(mockSendInput.mock.calls).toEqual([[{ kind: 'text', text: 'a', modifiers: 0, capture_id: 'capture-test', capture_generation: 2 }]])
+    expect(mockSendInput.mock.calls).toEqual([[{ kind: 'key_down', key: 'a', code: '', key_code: 0, text: 'a', modifiers: 0, capture_id: 'capture-test', capture_generation: 2 }]])
   })
 })
