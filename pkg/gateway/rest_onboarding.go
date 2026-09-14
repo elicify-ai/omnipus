@@ -1689,17 +1689,53 @@ func (a *restAPI) probeSignInCLI(
 		}
 	}
 
-	// A login existed and the vendor still said no. That is the sign-in
-	// equivalent of a rejected key, so it maps to the one outcome that
-	// BLOCKS — `success:false`, Finish stays disabled (FR-029) — carrying a
-	// message written for a sign-in row rather than BuildMessage's key
-	// wording. SEC-16: chatErr stays in the debug log above, never on the wire.
+	// The vendor still said no. That is the sign-in equivalent of a rejected
+	// key, so it maps to the one outcome that BLOCKS — `success:false`, Finish
+	// stays disabled (FR-029) — carrying a message written for a sign-in row
+	// rather than BuildMessage's key wording. SEC-16: chatErr stays in the
+	// debug log above, never on the wire.
+	//
+	// Only Codex had its saved login CONFIRMED above. For Copilot the only
+	// pre-check was "the binary exists", so its message must not claim a
+	// sign-in; see copilotProbeFailureMsg.
+	message := signInProbeFailureMsg(displayName, model)
+	if row.CLIKind == catalog.CLIKindCopilot {
+		message = copilotProbeFailureMsg(displayName, model)
+	}
 	return providers.ValidationResult{
 		Outcome:     providers.OutcomeInvalidKey,
-		Message:     signInProbeFailureMsg(displayName, model),
+		Message:     message,
 		RawDetail:   chatErr.Error(),
 		ProbedModel: model,
 	}, ""
+}
+
+// copilotProbeFailureMsg is the Copilot counterpart of signInProbeFailureMsg
+// (SEC-16: no raw vendor detail).
+//
+// It never says "You're signed in". Nothing about the Copilot login is read
+// before the completion runs: the CLI keeps its token in the OS credential
+// store and has no status command (CopilotSignIn's verified-behaviour note), so
+// probeSignInCLI only confirms the binary exists. A timeout, a network or
+// certificate error, or a crash all land here, including on a machine that has
+// never run `copilot login`.
+//
+// Confirming the login first is not the fix: the only oracle is another prompt
+// run, which spends a second premium request on a probe ADR-068 specifies as
+// one dry-run completion (spec, "Vendor CLI" integration boundary; FR-036), on
+// a route reachable before any admin account exists (the C2 billing concern in
+// rest_signin_copilot.go). So the wording states what is known instead.
+func copilotProbeFailureMsg(displayName, model string) string {
+	if model == "" {
+		return fmt.Sprintf(
+			"The test message to %s failed, and Omnipus could not confirm your sign-in. "+
+				"Run `copilot login` in a terminal on this machine, then retry.",
+			displayName)
+	}
+	return fmt.Sprintf(
+		"The test message to %s failed for %q, and Omnipus could not confirm your sign-in. "+
+			"Check that model is available on your plan, or run `copilot login` again, then retry.",
+		displayName, model)
 }
 
 // signInProbeFailureMsg is the curated, user-facing text for a completion that

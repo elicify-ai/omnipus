@@ -593,10 +593,10 @@ func jwtUnverifiedExpiry(token string) (t time.Time, ok bool) {
 }
 
 // cliLoginStatus computes GET .../sign-in/status for a cli_login provider
-// (FR-009). Currently only codex-cli's ~/.codex/auth.json is a real,
-// read-only source (github-copilot's CLI-reported status is T068-15's
-// scope, not implemented here — falls back to not_signed_in like "no saved
-// login").
+// (FR-009). Only codex-cli's ~/.codex/auth.json is a real, read-only source
+// here. github-copilot's status route is handleCopilotSignInStatus
+// (rest_signin_copilot.go) and its provider row uses cliLoginRowStatus; any
+// other id falls back to not_signed_in like "no saved login".
 func cliLoginStatus(providerID string) gen.SignInStatus {
 	if providerID != "codex-cli" {
 		return gen.SignInStatus{State: gen.SignInStatusStateNotSignedIn}
@@ -625,6 +625,18 @@ func cliLoginStatus(providerID string) gen.SignInStatus {
 		resp.AccountLabel = &accountID
 	}
 	return resp
+}
+
+// cliLoginRowStatus is what a cli_login provider ROW may report without any
+// vendor call, and whether it knows anything at all. codex-cli reads its saved
+// login file. github-copilot has no such file — its only oracle is a paid CLI
+// run — so its row reports the operator's most recent explicit Check sign-in
+// while that answer is recent (copilotRowSignInStatus), and nothing otherwise.
+func (a *restAPI) cliLoginRowStatus(providerID string) (gen.SignInStatus, bool) {
+	if providerID == copilotProviderID {
+		return a.copilotRowSignInStatus()
+	}
+	return cliLoginStatus(providerID), true
 }
 
 // deviceCodeStatus computes GET .../sign-in/status for a device_code
@@ -679,23 +691,26 @@ func (a *restAPI) deviceCodeStatus(providerID string) gen.SignInStatus {
 // refresh attempt and no network I/O (providers_pkg.PeekStoreOAuthCred, in
 // contrast to deviceCodeStatus/NewStoreOAuthTokenSource which may refresh
 // against the vendor — that cost belongs to the explicit sign-in status
-// poll, never a list render). cli_login providers reuse cliLoginStatus,
-// which itself only reads a local file for codex-cli and is a constant
-// not_signed_in for any other cli_login id — github-copilot included,
-// deliberately: the real Copilot check runs the vendor CLI and spends a
-// PREMIUM request against the operator's subscription (see
-// rest_signin_copilot.go's handleCopilotSignInStatus doc comment); that
-// cost belongs exclusively to the operator's explicit "Check sign-in"
-// action. known is false whenever this cheap path has nothing more to say
-// than the row's key-derived default (not signed in / unsupported
-// provider) — callers must leave the row's existing status untouched.
+// poll, never a list render). cli_login providers use cliLoginRowStatus:
+// codex-cli reads its local login file, and github-copilot reports the
+// result of the operator's most recent explicit Check sign-in while it is
+// recent — never a CLI run of its own, because the real Copilot check spends
+// a PREMIUM request against the operator's subscription (see
+// rest_signin_copilot.go's handleCopilotSignInStatus doc comment), a cost
+// that belongs exclusively to that explicit action. known is false whenever
+// this cheap path has nothing more to say than the row's key-derived default
+// (not signed in / unsupported provider / no recent Copilot check) — callers
+// must leave the row's existing status untouched.
 func (a *restAPI) cheapSignInRowStatus(providerID string) (state gen.ProviderStatus, accountLabel string, known bool) {
 	method, ok := a.signInMethodFor(providerID)
 	if !ok {
 		return "", "", false
 	}
 	if method == "cli_login" {
-		st := cliLoginStatus(providerID)
+		st, rowKnows := a.cliLoginRowStatus(providerID)
+		if !rowKnows {
+			return "", "", false
+		}
 		label := ""
 		if st.AccountLabel != nil {
 			label = *st.AccountLabel

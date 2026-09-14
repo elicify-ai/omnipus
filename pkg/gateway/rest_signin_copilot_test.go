@@ -6,11 +6,16 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -42,18 +47,116 @@ func putFakeCopilotOnPath(t *testing.T, stdout, stderr string, exitCode int) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake CLI uses a #!/bin/bash shebang with no Windows equivalent (see #113)")
 	}
-	dir := t.TempDir()
-	body := "#!/bin/bash\n"
-	if stdout != "" {
-		body += "cat <<'OMNIPUS_EOF'\n" + stdout + "\nOMNIPUS_EOF\n"
-	}
-	if stderr != "" {
-		body += "cat >&2 <<'OMNIPUS_EOF'\n" + stderr + "\nOMNIPUS_EOF\n"
-	}
-	body += "exit " + strconv.Itoa(exitCode) + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "copilot"), []byte(body), 0o755))
+	dir := neutralFakeCLIDir(t)
+	writeFakeCopilot(t, dir, stdout, stderr, exitCode)
 	t.Setenv("PATH", dir)
 }
+
+// fakeCopilotScript is the body of a stand-in `copilot`. It uses bash
+// BUILT-INS ONLY (printf, echo, redirection), because every caller makes the
+// fake's own directory the whole PATH. An external command such as `cat` or
+// `touch` is then "command not found": the scripted text is never written, and
+// bash's own error line — which carries the fake's temp path — reaches the
+// sign-in classifier instead. That is how a random "401" in a temp folder name
+// turned not_signed_in into expired on CI (commit 829e26253, go-race gate).
+//
+// tally, when non-empty, is a file the fake appends one line to per run.
+func fakeCopilotScript(stdout, stderr string, exitCode int, tally string) string {
+	body := "#!/bin/bash\n"
+	if tally != "" {
+		body += "echo x >> " + fakeCopilotShellQuote(tally) + "\n"
+	}
+	if stdout != "" {
+		body += "printf '%s\\n' " + fakeCopilotShellQuote(stdout) + "\n"
+	}
+	if stderr != "" {
+		body += "printf '%s\\n' " + fakeCopilotShellQuote(stderr) + " >&2\n"
+	}
+	body += "exit " + strconv.Itoa(exitCode) + "\n"
+	return body
+}
+
+// fakeCopilotShellQuote single-quotes s for bash, so scripted CLI text with
+// quotes, backticks or dollar signs is written verbatim.
+func fakeCopilotShellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// neutralFakeCLIDir creates a directory for a fake vendor CLI whose own name
+// carries neither the test's name nor a decimal number. t.TempDir() embeds
+// both, and both once decided a Copilot sign-in result: the subtest named
+// "expired session" put "expired" into the path, and a random suffix
+// containing "401" did the same for not_signed_in. The suffix here is base32
+// (A–Z, 2–7), which can never spell 401, and is re-drawn in the
+// vanishingly rare case it spells "expired".
+//
+// The directory sits under os.TempDir(), so a run whose TMPDIR itself contains
+// such text still exercises the case that matters: the classifier must be
+// handed the fake's scripted message, never its path.
+func neutralFakeCLIDir(t *testing.T) string {
+	t.Helper()
+	name := "omnipus-fakecli-" + rand.Text()
+	for strings.Contains(strings.ToLower(name), "expired") {
+		name = "omnipus-fakecli-" + rand.Text()
+	}
+	dir := filepath.Join(os.TempDir(), name)
+	require.NoError(t, os.Mkdir(dir, 0o700))
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
+// installFakeCopilot writes a stand-in `copilot` into dir, then runs it once
+// with PATH narrowed to dir — the harshest environment any caller creates —
+// and fails the test unless it writes EXACTLY its scripted stdout and stderr
+// and exits with the scripted code. A fixture that cannot print its own
+// message must fail here, loudly, rather than hand the classifier something
+// else and let the fallback turn it green.
+//
+// With a tally file, the same run is the positive control for the counter: it
+// must record exactly one invocation, and the tally is then removed so the
+// test's own count starts from zero. Any tally left by an earlier install is
+// cleared first, so re-installing mid-test resets the count.
+func installFakeCopilot(t *testing.T, dir, stdout, stderr string, exitCode int, tally string) {
+	t.Helper()
+	if !hasBash() {
+		t.Skip("fake CLI uses a #!/bin/bash shebang with no Windows equivalent (see #113)")
+	}
+	if tally != "" {
+		if err := os.Remove(tally); err != nil && !os.IsNotExist(err) {
+			require.NoError(t, err)
+		}
+	}
+	script := filepath.Join(dir, "copilot")
+	require.NoError(t, os.WriteFile(script, []byte(fakeCopilotScript(stdout, stderr, exitCode, tally)), 0o755))
+
+	cmd := exec.Command(script)
+	cmd.Env = append(os.Environ(), "PATH="+dir)
+	var gotOut, gotErr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &gotOut, &gotErr
+	gotCode := 0
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		require.True(t, errors.As(err, &exitErr), "the fake copilot could not be run at all: %v", err)
+		gotCode = exitErr.ExitCode()
+	}
+	require.Equal(t, strings.TrimSpace(stderr), strings.TrimSpace(gotErr.String()),
+		"the fake copilot must write exactly its scripted stderr with PATH=%s", dir)
+	require.Equal(t, strings.TrimSpace(stdout), strings.TrimSpace(gotOut.String()),
+		"the fake copilot must write exactly its scripted stdout with PATH=%s", dir)
+	require.Equal(t, exitCode, gotCode, "the fake copilot must exit with its scripted code")
+
+	if tally != "" {
+		require.Equal(t, 1, countInvocations(t, tally),
+			"positive control: one run of the counting fake must record exactly one invocation")
+		require.NoError(t, os.Remove(tally))
+	}
+}
+
+// unrecognisedCopilotMessageLog is the fragment of the warning
+// providers.CopilotSignIn logs when a failed check matched no marker and fell
+// back to not_signed_in. Its ABSENCE is how a test proves the classifier
+// recognised the scripted message on purpose.
+const unrecognisedCopilotMessageLog = "unrecognised message"
 
 // clearCopilotFromPath points PATH at an empty directory: the CLI is not
 // installed on this machine.
@@ -93,17 +196,31 @@ To authenticate, you can use any of the following methods:
 		stderr   string
 		exitCode int
 		want     gen.SignInStatusState
+		// recognised: a failed check whose scripted stderr the classifier
+		// must match ON PURPOSE. false means the unrecognised-message
+		// fallback is itself the behaviour under test. Ignored for exit 0,
+		// which never reaches the classifier.
+		recognised bool
 	}{
-		{"signed in", "ok", "", 0, gen.SignInStatusStateSignedIn},
-		{"not signed in", "", realNotSignedInStderr, 1, gen.SignInStatusStateNotSignedIn},
-		{"expired session", "", "Error: your Copilot session has expired. Run `copilot login` again.", 1, gen.SignInStatusStateExpired},
-		{"unreadable failure degrades to not_signed_in", "", "Error: something unexpected", 1, gen.SignInStatusStateNotSignedIn},
+		{"signed in", "ok", "", 0, gen.SignInStatusStateSignedIn, false},
+		{"not signed in", "", realNotSignedInStderr, 1, gen.SignInStatusStateNotSignedIn, true},
+		// The verified error line on its own. The full message above also
+		// carries the '/login' guidance, which a second marker matches, so only
+		// this row proves the "No authentication information found" marker
+		// itself is exercised: remove that marker and this row reaches the
+		// fallback.
+		{"not signed in, error line only", "", "Error: No authentication information found.", 1, gen.SignInStatusStateNotSignedIn, true},
+		// Named without any marker word: the neutral fake directory keeps the
+		// name out of the path, and this row must pass on its message alone.
+		{"session rejected by the vendor", "", "Error: your Copilot session has expired. Run `copilot login` again.", 1, gen.SignInStatusStateExpired, true},
+		{"unreadable failure degrades to not_signed_in", "", "Error: something unexpected", 1, gen.SignInStatusStateNotSignedIn, false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			api, _ := newAuthMethodOnboardingAPI(t)
 			putFakeCopilotOnPath(t, tc.stdout, tc.stderr, tc.exitCode)
+			logs := captureSlog(t)
 
 			w := adminRequest(t, api, http.MethodGet, path)
 			require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
@@ -115,6 +232,22 @@ To authenticate, you can use any of the following methods:
 			// Omnipus never holds or decodes the Copilot token, so no expiry is
 			// ever reported for this cli_login provider (FR-009).
 			assert.Nil(t, got.ExpiresAt)
+
+			// The state alone cannot tell "recognised" from "fell back to
+			// not_signed_in", so pin which path the classifier took.
+			if tc.exitCode != 0 {
+				assert.NotContains(t, logs.String(), "command not found",
+					"the classifier was handed a fixture failure, not the scripted message")
+				if tc.recognised {
+					assert.NotContains(t, logs.String(), unrecognisedCopilotMessageLog,
+						"the scripted stderr must be recognised on purpose, not reach the fallback; logs=%s", logs.String())
+				} else {
+					assert.Contains(t, logs.String(), unrecognisedCopilotMessageLog,
+						"an unrecognised message must take the logged fallback; logs=%s", logs.String())
+					assert.Contains(t, logs.String(), fmt.Sprintf("detail=%q", tc.stderr),
+						"the fallback must have been handed exactly the scripted stderr; logs=%s", logs.String())
+				}
+			}
 		})
 	}
 
