@@ -60,12 +60,6 @@ import (
 )
 
 const (
-	// escapeSweepMaxEntries bounds the number of directory entries one sweep
-	// will inspect across all roots before giving up and reporting a partial
-	// result.
-	escapeSweepMaxEntries = 20000
-	// escapeSweepBudget bounds the wall-clock time one sweep may spend.
-	escapeSweepBudget = 400 * time.Millisecond
 	// escapeSweepSlack is subtracted from the command start time before the
 	// "appeared during this command" comparison, so coarse filesystem
 	// timestamp resolution (one second on some filesystems) cannot hide a
@@ -73,6 +67,16 @@ const (
 	// a link inside the window cannot be attributed to the command: the
 	// window deliberately reaches before the command began.
 	escapeSweepSlack = 2 * time.Second
+)
+
+// escapeSweepMaxEntries bounds the number of directory entries one sweep
+// will inspect across all roots before giving up and reporting a partial
+// result, and escapeSweepBudget bounds the wall-clock time one sweep may
+// spend. Package-level VARS (not consts) solely so tests can shrink them and
+// force a deterministic partial sweep; production never writes them.
+var (
+	escapeSweepMaxEntries = 20000
+	escapeSweepBudget     = 400 * time.Millisecond
 )
 
 // escapedSymlink records one reported link: the link's own path and the
@@ -91,6 +95,18 @@ type escapeSweepResult struct {
 	// Partial is true when the entry cap or the time budget stopped the walk
 	// before every root was fully inspected.
 	Partial bool
+	// Swept lists the roots the walk fully inspected, and Skipped lists the
+	// roots it never reached at all; PartialRoot is the one it was inside
+	// when the budget stopped it (inspected only in part). Claude review
+	// 2026-09-14 cut-list: on the production call path roots are
+	// [workspace, mount1, mount2, …] in order, so a budget exhausted inside
+	// the workspace leaves every MOUNT uninspected — the old banner said
+	// only "workspace too large", which a reader could mistake for "the
+	// mounts were checked". These fields exist so the notice and the WARN
+	// log can say exactly what was covered and what was not.
+	Swept       []string
+	PartialRoot string
+	Skipped     []string
 }
 
 // sweepEscapingSymlinks walks roots (without following symlinks) and reports
@@ -106,12 +122,16 @@ func sweepEscapingSymlinks(roots, allowed []string, since time.Time) escapeSweep
 	stop := fmt.Errorf("sweep budget exhausted")
 
 	seen := make(map[string]bool, len(roots))
+	queue := make([]string, 0, len(roots))
 	for _, root := range roots {
 		root = filepath.Clean(root)
 		if root == "" || seen[root] {
 			continue
 		}
 		seen[root] = true
+		queue = append(queue, root)
+	}
+	for i, root := range queue {
 		err := filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				// An unreadable subtree is skipped, not fatal: the sweep is a
@@ -148,8 +168,11 @@ func sweepEscapingSymlinks(roots, allowed []string, since time.Time) escapeSweep
 		})
 		if err != nil {
 			res.Partial = true
+			res.PartialRoot = root
+			res.Skipped = append(res.Skipped, queue[i+1:]...)
 			break
 		}
+		res.Swept = append(res.Swept, root)
 	}
 	sort.Slice(res.Found, func(i, j int) bool { return res.Found[i].Link < res.Found[j].Link })
 	return res
@@ -186,6 +209,13 @@ func symlinkTargetEscapes(linkPath, target string, allowed []string) bool {
 
 // escapeSweepNotice renders a sweep result for the tool result text. Empty
 // when nothing was found and the sweep was complete.
+//
+// A PARTIAL sweep is reported honestly (Claude review 2026-09-14 cut-list):
+// the notice names the root the budget died inside, the roots fully
+// inspected, and — most important for a reader deciding how much to trust a
+// clean result — the roots never inspected at all, mounts included. The old
+// text ("workspace too large to inspect within its budget") let a reader
+// believe the mounts had been checked when the walk had never reached them.
 func escapeSweepNotice(res escapeSweepResult) string {
 	if len(res.Found) == 0 && !res.Partial {
 		return ""
@@ -208,7 +238,15 @@ func escapeSweepNotice(res escapeSweepResult) string {
 		} else {
 			b.WriteString(": ")
 		}
-		b.WriteString("the post-command symlink sweep stopped early (workspace too large to inspect within its budget); the check was partial.")
+		fmt.Fprintf(&b, "the post-command symlink sweep stopped early (entry/time budget exhausted while walking %s); the check was PARTIAL.", res.PartialRoot)
+		if len(res.Swept) > 0 {
+			fmt.Fprintf(&b, " Fully inspected: %s.", strings.Join(res.Swept, ", "))
+		}
+		if len(res.Skipped) > 0 {
+			fmt.Fprintf(&b, " NOT inspected at all: %s — symlinks under those trees (mounted folders among them) were not looked for, so a clean result above says nothing about them.", strings.Join(res.Skipped, ", "))
+		} else {
+			b.WriteString(" Every other root was fully inspected.")
+		}
 	}
 	b.WriteString("]")
 	return b.String()

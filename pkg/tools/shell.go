@@ -850,11 +850,37 @@ func (t *ExecTool) sweepAfterRun(ctx context.Context, command, cwd, baseDir stri
 	if resolved, err := resolveRealpathUnderWorkDir(baseDir, ""); err == nil {
 		roots = []string{resolved}
 	}
+	// mountRootsResolved records whether the turn's mount list could be
+	// resolved at all. A nil AllowedRoots is NOT a failure (a workspace with
+	// no mounts yields nil) — only an error is, and only the error leaves the
+	// sweep ignorant of trees a link may legitimately point into. The sweep
+	// still runs and still only REPORTS (nothing is removed, nothing is
+	// refused on it), so the worst case is an over-broad finding, which the
+	// honesty note below names rather than letting the notice claim
+	// "... and its mounts" over mounts it never enumerated.
+	mountRootsResolved := true
 	if authored, err := ResolveTurnFSPolicy(ctx, t.workingDir, t.restrictToWorkspace); err == nil {
 		roots = append(roots, authored.AllowedRoots...)
+	} else {
+		mountRootsResolved = false
 	}
 	res := sweepEscapingSymlinks(roots, roots, started)
+	// Claude review 2026-09-14 cut-list: a partial sweep must be visible to
+	// the OPERATOR too, not only in the tool result an agent can paraphrase
+	// away — one WARN per run naming exactly what was skipped (mounts among
+	// it), so a log reader knows the sweep was partial and where.
+	if res.Partial {
+		slog.Warn("bash: post-command symlink sweep was partial — some roots were not inspected",
+			"agent_id", ToolAgentID(ctx),
+			"partial_root", res.PartialRoot,
+			"swept", strings.Join(res.Swept, ", "),
+			"skipped", strings.Join(res.Skipped, ", "),
+			"found", len(res.Found))
+	}
 	notice := escapeSweepNotice(res)
+	if len(res.Found) > 0 && !mountRootsResolved {
+		notice += escapeSweepMountsUnresolvedNote()
+	}
 	if notice == "" {
 		return result
 	}
@@ -890,6 +916,18 @@ func (t *ExecTool) sweepAfterRun(ctx context.Context, command, cwd, baseDir stri
 		result.ForUser += notice
 	}
 	return result
+}
+
+// escapeSweepMountsUnresolvedNote is appended to a sweep notice that reported
+// findings while the turn's mount list could not be resolved (Claude review
+// 2026-09-14 PLAUSIBLE, verified then hardened): without it the notice
+// asserts the links point "outside the workspace and its mounts" over a mount
+// list it never saw, and a link legitimately pointing INTO a mounted folder
+// would be described as an escape. The sweep is report-only either way —
+// nothing is removed or refused on these findings — so this is honesty about
+// the report's own coverage, not a new enforcement.
+func escapeSweepMountsUnresolvedNote() string {
+	return "\n  Note: this turn's mount list could not be resolved for this sweep, so a link above that points into a MOUNTED folder may be listed although pointing into a mount is legitimate. Only the workspace itself was swept."
 }
 
 // turnKernelPolicy derives the per-turn kernel policy for this bash call from
@@ -1495,16 +1533,16 @@ func newPathUseClassifier(cmd string) pathUseClassifier {
 // candidate from the command TEXT alone. readOnly is the ADR-068 proof;
 // exec and reason exist so a refusal can name WHY the proof failed (UAT
 // 2026-09-13 D-44/D-66) instead of describing every unproven reference as
-// "a WRITE".
+// "a WRITE". (A former `head` field carried the segment's command word too,
+// but no reader ever consumed it — the reasons embed the word via %q where
+// it matters — so it was deleted as dead code, Claude review 2026-09-14
+// cut-list; do not re-add it without a reader.)
 type pathUseVerdict struct {
 	// readOnly is true only when rules 1-6 all hold.
 	readOnly bool
 	// exec is true when the candidate sits in the segment's command position
 	// — the command would RUN it, which is neither a read nor a write.
 	exec bool
-	// head is the literal command word of the candidate's segment, "" when
-	// the segment could not be parsed.
-	head string
 	// reason explains, for a human or an agent, why the read proof failed.
 	// Empty when readOnly is true.
 	reason string
@@ -1550,25 +1588,25 @@ func (c pathUseClassifier) classify(start int) pathUseVerdict {
 	// allowlist so an absolute path in command position is reported as an
 	// EXEC rather than as "head not on the allowlist" (D-66).
 	if word == c.firstWordStart(segStart, segEnd) {
-		return pathUseVerdict{exec: true, head: head, reason: "the path is in command position — the shell would RUN it, which is not a read"}
+		return pathUseVerdict{exec: true, reason: "the path is in command position — the shell would RUN it, which is not a read"}
 	}
 	switch {
 	case headIsExpansion:
-		return pathUseVerdict{head: head, reason: "the command word is a shell expansion, so the guard cannot tell which program runs"}
+		return pathUseVerdict{reason: "the command word is a shell expansion, so the guard cannot tell which program runs"}
 	case headNormalised:
-		return pathUseVerdict{head: head, reason: fmt.Sprintf("the command word is spelled with a directory prefix or in upper case (%q), which the read-only allowlist matches only literally", head)}
+		return pathUseVerdict{reason: fmt.Sprintf("the command word is spelled with a directory prefix or in upper case (%q), which the read-only allowlist matches only literally", head)}
 	case !readOnlyShellCommands[head]:
-		return pathUseVerdict{head: head, reason: fmt.Sprintf("%q is not on the guard's read-only allowlist (%s) — it has a flag or mode that can write to a path named on its command line, so the guard cannot prove this use is a read", head, readOnlyShellCommandsSummary())}
+		return pathUseVerdict{reason: fmt.Sprintf("%q is not on the guard's read-only allowlist (%s) — it has a flag or mode that can write to a path named on its command line, so the guard cannot prove this use is a read", head, readOnlyShellCommandsSummary())}
 	}
 	// Rule 5: this word is a redirect target.
 	if c.precededByOutputRedirect(word, segStart) {
-		return pathUseVerdict{head: head, reason: "the path is the target of an output redirect"}
+		return pathUseVerdict{reason: "the path is the target of an output redirect"}
 	}
 	// Rule 6: some other redirect in this segment writes somewhere we cannot see.
 	if !c.redirectTargetsAreLiteral(segStart, segEnd) {
-		return pathUseVerdict{head: head, reason: "the same command segment redirects output to a target the guard cannot see (an expansion or a glob)"}
+		return pathUseVerdict{reason: "the same command segment redirects output to a target the guard cannot see (an expansion or a glob)"}
 	}
-	return pathUseVerdict{readOnly: true, head: head}
+	return pathUseVerdict{readOnly: true}
 }
 
 // readOnlyShellCommandsSummary renders the allowlist for a refusal message,
