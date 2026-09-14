@@ -11594,9 +11594,18 @@ turnLoop:
 						},
 					)
 					ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
+					// UAT A-12: wrap the TYPED refusal a provider raises for an
+					// undecodable tool call. A task attempt's turn error is
+					// classified by type only (task_attempt_turn_error.go's
+					// attemptRecoverableTurnErrorCode — errors.As for
+					// *common.ToolArgumentsError, then TranslateTurnError ->
+					// CodeToolArgs, the same code this exit already reports to
+					// the client). Untyped, this exhaustion failed the task on
+					// the spot instead of consuming one attempt.
 					return turnResult{}, fmt.Errorf(
-						"model emitted unparseable tool-call markup (marker %q, finish_reason %q) after %d repair attempts",
-						orphanMarkup.Marker, response.FinishReason, orphanToolMarkupRepairs)
+						"model emitted unparseable tool-call markup (marker %q, finish_reason %q) after %d repair attempts: %w",
+						orphanMarkup.Marker, response.FinishReason, orphanToolMarkupRepairs,
+						common.NewToolArgumentsError("", common.ErrToolArgumentsUndecodable, false))
 				}
 			}
 
