@@ -34,8 +34,20 @@ are unchanged; the backend already supports key-down text.
   held-key release. The focused test passed in 3.222 seconds. This does not
   itself establish browser DOM behavior.
 - Live old-candidate RED confirmed the Space/text-field problem with exact pixels.
-- Final frontend checks, mutation proof, deployed Linux keyboard test and
-  physical German Mac keyboard confirmation are pending.
+- All 237 focused frontend tests passed. Three isolated broken-code variants
+  (text-only dispatch, missing Mac Option eligibility and missing held-key
+  tracking) were caught by the regression tests. Relevant lint passed.
+- The production frontend build passed after correcting the helper callback
+  type; the final 130 routing/helper tests passed again after that typing fix.
+- Amsterdam runtime `47179a4c3a90ca9ad035e6c38e80a7affb132e0f` was deployed,
+  with installed/running binary SHA256
+  `fc233488ba5d50cb66f1f0b35bf1e8da46a8487a50846a6af748ded13f366f34`
+  verified. Machine configuration was preserved.
+- The live Linux regression passed in 24.2 seconds: one Space shot with no
+  inserted space, normal A input, ArrowRight movement and the complete logical
+  Option-L chord producing `a@`. Exactly five key-downs and five key-ups were
+  observed, with no held keys, fixture errors, viewer errors or WebSocket gestures.
+- Physical German Mac keyboard confirmation remains with the user.
 
 The live fixture models the logical Option-L chord through native viewer events;
 it does not constitute a test using physical German keyboard hardware. Dead-key
