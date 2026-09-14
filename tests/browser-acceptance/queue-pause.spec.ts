@@ -28,6 +28,8 @@ for (const automatic of [false, true]) test(`renderer queue expiry preserves pee
     const address = page.getByRole('textbox', { name: 'Address bar' }); await address.fill(url.href); await address.press('Enter');
     await installPixels(page); await stateIs(page, state); await ready();
     const chat = await point(page, .25, .68); await page.mouse.click(chat.x, chat.y);
+    await expect(browserLivePanel(page).getByRole('textbox', { name: 'Remote browser text input' })).toBeFocused();
+    await ready();
     const before = await routeEvidence(page);
     expect(before.peers.filter(peer => peer.labels.includes('input-reliable'))).toHaveLength(1);
     await page.evaluate(() => {

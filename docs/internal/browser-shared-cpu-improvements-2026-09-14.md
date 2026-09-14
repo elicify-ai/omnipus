@@ -40,6 +40,41 @@ Live evidence: `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/valida
 
 One read-only grill round found and resolved: missing scroll pressure classification, nil test logging, capture-binding retirement before asynchronous send, lost source cap on same-peer track replacement, and insufficient independent rate-limit boundary coverage. No remaining blocking code finding was reported. Performance claims remain dependent on the real-machine results, not that review verdict.
 
+## Real-browser findings during verification
+
+The first Mac capture check failed during browsing-tab startup, before the encoder; it is not a passing adaptation result. The isolated Linux check used the actual Amsterdam Chromium binary and a separate test browser. Its original reproduction helper omitted the current offer/capture identity fields; the encoder correctly rejected the stale handshake. The helper now uses the generated current protocol and binding checks.
+
+After that correction, real Linux capture exposed a production issue hidden by the mocked constraint tests: copying `getConstraints()` reapplied the one-time tab-capture acquisition token as `deviceId.exact`. The already-bound track reports a different device identity, so constraint application failed before either source or sender FPS changed. A disposable clone with standard frame-rate constraints immediately reported 20 FPS; waiting 200 ms on the original made no difference. The narrow correction omits acquisition identity when reconfiguring an existing track, while retaining original geometry and frame-rate constraints. The corrected real-Chrome test passed on Amsterdam Chromium 152.0.7977.82: actual source/sender settings were 20/20, 15/15, 20/20, and 30/uncapped, with 1344 × 672 dimensions throughout. Test timestamps were advanced only for the two restoration boundaries; the Node harness independently verifies the real ten-second policy. This proves applied limits, not a quantified reduction in processor use.
+
 ## Results
 
-Validation and deployed comparison are in progress. Do not interpret this document as a release or performance certification until the result section is completed.
+The Amsterdam candidate is source `7767f749933455c85fc0bee10f8bb963ca2a1e20`, extension 1.0.24. Installed and running binary SHA256 both matched `3755c6c0b8471437ff3e3aa184c514c051af5b26285897ab0cf8f65bb9a74fbe`. The machine remains in Amsterdam with four shared CPUs and 4096 MB memory; its environment, services, storage, initialization and restart settings are unchanged.
+
+The focused frontend suite passed 48 checks, with held-state, capture-identity and once-only faults deliberately caught. Queue admission, pressure boundaries and encoder behavior passed focused tests and deliberate-fault checks. The consumed-token regression failed before the fix and passed afterward; exact real-Linux cap/restore integration also passed. Production frontend and Linux builds passed. Full CI was not rerun for each fix.
+
+Two live severe-stall checks passed on this candidate: explicit recovery with held input (25.0 s), and eligible automatic recovery (21.8 s). Both retained the original peer and media, released held state, discarded stale actions, and accepted only fresh input. These are test durations, not latency measurements.
+
+Both sustained workloads passed: twelve rounds each on a normal page and a page with 120 ms deliberate key-handler work plus 75 ms wheel-handler work. Each ended with 12 clicks, 132 downs, 48 ups, zero held inputs, 3600 scroll units, 12 drags, zero errors, and exactly `@é` repeated twelve times. Sent routes included all 96 keydowns, 12 keyups and 12 text commits per workload, and used binary v1 only with no WebSocket gesture traffic. Replaceable mouse movement counts legitimately varied.
+
+The international-input regression passed in 25.5 s with exact text `a@日本é🙂🙂`, zero held keys and zero page errors. This verifies the exercised composition cases, not every physical keyboard/OS layout.
+
+| Workload | Gesture-to-picture category | Baseline median / maximum (ms) | Candidate median / maximum (ms) |
+| --- | --- | --- | --- |
+| Normal | Key batch | 2762 / 4855 | 2204 / 2412 |
+| Normal | Scroll batch | 4589 / 7146 | 3661 / 5731 |
+| Normal | Click | 1104 / 2645 | 566 / 662 |
+| Normal | Text | 1057 / 2899 | 615 / 743 |
+| Slow handlers | Key batch | 3384 / 5987 | 2182 / 3374 |
+| Slow handlers | Scroll batch | 5341 / 8491 | 3985 / 6933 |
+| Slow handlers | Click | 1422 / 4694 | 614 / 889 |
+| Slow handlers | Text | 1434 / 4900 | 622 / 887 |
+
+There are twelve samples per category; nearest-rank p95 therefore equals maximum. These durations include deliberate pacing, page work, automation and picture verification. The candidate's measured workload spans were 09:40:34.750–09:42:49.642 UTC (134.89 s) and 09:43:14.870–09:45:53.172 UTC (158.30 s), on 2026-09-14.
+
+No dedicated-input failure, queue expiry or dispatch deadline error appeared within either workload span. The two deliberate expiry events belonged to the earlier recovery tests, and connection closure events were outside the workloads. Media setup and OpenH264 initialization warnings remain visible in the raw logs; they did not produce page errors or failed input assertions in these runs.
+
+**Performance limit:** candidate CPU sampling covered 99.17%/99.72% of the workloads, with 0.85%/0.62% CPU steal (time the virtual CPUs could not run). The baseline normal overlap had 25.04% steal but covered only 18.23%; there are no overlapping CPU samples for the corrected slow baseline. These uncontrolled runs observed faster responses, but cannot attribute the improvement to this code or quantify CPU savings. The original incomplete slow-baseline attempt is retained separately; its first missing key was never sent by the viewer, and explicit focus/readiness checks corrected the harness before the valid baseline.
+
+Candidate live artifacts are under `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/validation/browser-input-connection/pressure-stress-candidate-7767f7499/`, with recovery and international artifacts in `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/validation/browser-input-connection/queue-pause-candidate-7767f7499/` and `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/validation/browser-input-connection/international-keyboard-candidate-7767f7499/`. The comparison report is `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/.local/browser-input-final-validation/pressure-stress-comparison-7767f7499.json`.
+
+No full-session endurance, audible A/V synchronization or complete OS/keyboard matrix is certified by these bounded tests. Successful pressure signals use Debug logging, so their absence in Amsterdam's Info logs is not evidence of failed delivery; failures remain warnings. The dispatch wiring test and real encoder integration prove the two sides independently.
