@@ -20,6 +20,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
@@ -396,8 +397,24 @@ type TranscriptEntry struct {
 	// notice id for a handover notice rides the existing TranscriptEntry.ID
 	// field, not a new one. Empty (and omitted from JSON) for every
 	// non-system entry and for every system entry that predates this field.
+	//
+	// A second legal value, SystemSubtypeGoalOutcome ("goal_outcome"), marks
+	// the one lasting line a goal's ending leaves in the thread; its
+	// structured payload rides GoalOutcome below.
 	SystemSubtype string `json:"system_subtype,omitempty"`
+
+	// GoalOutcome is the structured goal ending carried by a
+	// `type: system, system_subtype: goal_outcome` entry
+	// (contracts/components/schemas/GoalOutcome.yaml, Message.goal_outcome):
+	// written exactly once per goal ending by pkg/agent/goal_outcome.go, and
+	// re-sent on replay as the goal_outcome WS frame with this entry's ID as
+	// its message id. nil, and omitted from JSON, on every other entry.
+	GoalOutcome *generated.GoalOutcome `json:"goal_outcome,omitempty"`
 }
+
+// SystemSubtypeGoalOutcome is the TranscriptEntry.SystemSubtype value of a goal
+// outcome entry — the discriminator replay reads, never Content.
+const SystemSubtypeGoalOutcome = "goal_outcome"
 
 // Attachment represents a file attached to a message.
 type Attachment struct {

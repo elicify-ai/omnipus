@@ -312,6 +312,25 @@ func streamReplay(
 			continue
 		}
 
+		// Goal outcome line (founder decision 2026-09-14): a persisted goal
+		// ending replays as the SAME goal_outcome frame the ending sent live
+		// (goalOutcomeFrame, shared with websocket.go), discriminated on the
+		// stamped entry.SystemSubtype — never on Content — with the entry's own
+		// ID as message_id so the SPA keeps exactly one line per ending. An
+		// entry stamped goal_outcome but carrying no outcome is malformed: it
+		// is logged and falls through to the ordinary rendering below so its
+		// text is not lost.
+		if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeGoalOutcome {
+			if entry.GoalOutcome != nil {
+				if err2 := emitFrame(goalOutcomeFrame(sessionID, entry.ID, *entry.GoalOutcome)); err2 != nil {
+					return framesEmitted, err2
+				}
+				continue
+			}
+			slog.Warn("replay: goal_outcome transcript entry carries no outcome — replaying it as a plain entry",
+				"session_id", sessionID, "entry_id", entry.ID)
+		}
+
 		// Update the running fallback agent ID.
 		if entry.AgentID != "" {
 			lastSeenAgentID = entry.AgentID

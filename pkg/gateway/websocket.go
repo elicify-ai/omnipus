@@ -4937,6 +4937,20 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			}
 			setGoalStatusDoD(&goalF, p.DoD)
 			sendConnGenFrame(wc, string(generated.WsFrameTypeGoalStatus), goalF)
+		case agent.EventKindGoalOutcome:
+			// A goal ENDED (founder decision 2026-09-14): the lasting outcome
+			// line. pkg/agent emits this right after saving the matching
+			// `system_subtype: goal_outcome` transcript entry, with that
+			// entry's id as message_id, so this live frame, the replayed one
+			// (replay.go) and a cold REST load converge on one thread line.
+			// Broadcast like goal_status above; the SPA routes it by
+			// session_id (SESSION_SCOPED_FRAME_TYPES).
+			p, ok := evt.Payload.(agent.GoalOutcomePayload)
+			if !ok {
+				continue
+			}
+			sendConnGenFrame(wc, string(generated.WsFrameTypeGoalOutcome),
+				goalOutcomeFrame(p.SessionID, p.MessageID, p.Outcome))
 		case agent.EventKindLoopStatusChanged:
 			// ADR-049 D6/D7: a session's `/loop` status changed (set, run
 			// fired, run-cap reached, stop). Broadcast to every connection,

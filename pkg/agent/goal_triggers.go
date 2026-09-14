@@ -34,6 +34,7 @@ import (
 	"sync"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/goal"
@@ -898,7 +899,15 @@ func (al *AgentLoop) runGoalAdjudication(
 		// nothing in the UI ever correcting it. Honour the result: on a failed
 		// transition re-paint the card as active with the real reason, so the
 		// user sees a live goal rather than a frozen spinner.
-		if _, ok := al.clearGoalStatus(sessionID, store, goalClearNoteMet); !ok {
+		if _, ok := al.clearGoalWithOutcome(sessionID, store, goalClearNoteMet, goalOutcomeInput{
+			ending:     generated.GoalOutcomeEndingMet,
+			roundsUsed: attempt,
+			maxRounds:  maxRounds,
+			verdict:    verdict,
+			agentID:    agentInst.ID,
+			content: fmt.Sprintf("Goal %q met: the Judge confirmed all %d criteria.",
+				rec.Prompt, len(verdict.PerCriterion)),
+		}); !ok {
 			logger.ErrorCF("agent", "goal trigger: met verdict persisted but the terminal transition failed; leaving the goal active",
 				map[string]any{"session_id": sessionID, "goal_id": rec.GoalID, "attempt": attempt})
 			al.emitGoalStatusFrameWithCriteriaAndDoD(sessionID, rec.GoalID, rec.Prompt, attempt, maxRounds,
@@ -917,17 +926,27 @@ func (al *AgentLoop) runGoalAdjudication(
 		// transition first and write the handover only once it has actually
 		// landed; on failure the goal stays visibly active and clearGoal's own
 		// deferral re-drives it on the next turn.
+		//
+		// The handover is the outcome entry's own content (goal_outcome.go):
+		// one line, written only after the transition landed.
 		note := fmt.Sprintf("round bound reached (%d/%d)", attempt, maxRounds)
-		if _, ok := al.clearGoalStatus(sessionID, store, note); !ok {
-			logger.ErrorCF("agent", "goal trigger: round-bound termination failed; no handover written (the goal is still active)",
-				map[string]any{"session_id": sessionID, "goal_id": rec.GoalID, "attempt": attempt, "max_rounds": maxRounds})
-			return false
-		}
 		handover := fmt.Sprintf(
 			"Goal %q did not reach a MET verdict within %d round(s). Latest judge feedback:\n%s",
 			rec.Prompt, maxRounds, reasonText,
 		)
-		al.writeGoalSystemTranscript(store, sessionID, agentInst.ID, handover)
+		if _, ok := al.clearGoalWithOutcome(sessionID, store, note, goalOutcomeInput{
+			ending:      generated.GoalOutcomeEndingRoundsExhausted,
+			roundsUsed:  attempt,
+			maxRounds:   maxRounds,
+			verdict:     verdict,
+			judgeReason: reasonText,
+			agentID:     agentInst.ID,
+			content:     handover,
+		}); !ok {
+			logger.ErrorCF("agent", "goal trigger: round-bound termination failed; no handover written (the goal is still active)",
+				map[string]any{"session_id": sessionID, "goal_id": rec.GoalID, "attempt": attempt, "max_rounds": maxRounds})
+			return false
+		}
 		return false
 	}
 
@@ -2004,17 +2023,24 @@ func (al *AgentLoop) handleBareGoalClaim(
 	if newRound >= maxRounds {
 		// silent-SF-7 (review): transition FIRST, handover second, result
 		// honoured — see the met/round-bound branches in runGoalAdjudication.
+		// The handover is the outcome entry's own content; no Judge ran on a
+		// bare claim, so the line carries no judge reason and no verdict.
 		note := fmt.Sprintf("round bound reached (%d/%d) on a bare claim", newRound, maxRounds)
-		if _, ok := al.clearGoalStatus(sessionID, store, note); !ok {
-			logger.WarnCF("agent", "goal: bare-claim round-bound termination failed; no handover written (the goal is still active)",
-				map[string]any{"session_id": sessionID, "goal_id": rec.GoalID, "round": newRound, "max_rounds": maxRounds})
-			return true
-		}
 		handover := fmt.Sprintf(
 			"Goal %q did not reach a MET verdict within %d round(s) (round bound reached on a bare claim).",
 			rec.Prompt, maxRounds,
 		)
-		al.writeGoalSystemTranscript(store, sessionID, agentInst.ID, handover)
+		if _, ok := al.clearGoalWithOutcome(sessionID, store, note, goalOutcomeInput{
+			ending:     generated.GoalOutcomeEndingRoundsExhausted,
+			roundsUsed: newRound,
+			maxRounds:  maxRounds,
+			agentID:    agentInst.ID,
+			content:    handover,
+		}); !ok {
+			logger.WarnCF("agent", "goal: bare-claim round-bound termination failed; no handover written (the goal is still active)",
+				map[string]any{"session_id": sessionID, "goal_id": rec.GoalID, "round": newRound, "max_rounds": maxRounds})
+			return true
+		}
 		return true
 	}
 	// ADR-086: the round counter and the steering reason live on the goal

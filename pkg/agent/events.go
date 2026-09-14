@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -112,6 +113,12 @@ const (
 	// matching tool call; on reload the same state is read from
 	// ToolCall.content_state on the transcript.
 	EventKindToolResultProjection
+	// EventKindGoalOutcome is emitted once per goal ENDING, right after the
+	// matching `system_subtype: goal_outcome` transcript entry was saved
+	// (pkg/agent/goal_outcome.go). The WS forwarder turns it into a
+	// goal_outcome frame (generated.GoalOutcomeFrame) — the lasting outcome
+	// line in the chat thread — whose message id is that entry's id.
+	EventKindGoalOutcome
 
 	eventKindCount
 )
@@ -151,6 +158,7 @@ var eventKindNames = [...]string{
 	"loop_status_changed",
 	"task_run_status",
 	"tool_result_projection",
+	"goal_outcome",
 }
 
 // String returns the stable string form of an EventKind.
@@ -832,4 +840,21 @@ type ToolResultProjectionPayload struct {
 	Mark string
 	// AgentID is the agent whose window was emptied.
 	AgentID string
+}
+
+// GoalOutcomePayload is EventKindGoalOutcome's payload: one goal ENDING, for
+// the lasting outcome line in the chat thread (founder decision 2026-09-14;
+// contracts/components/schemas/GoalOutcome.yaml). Emitted by
+// pkg/agent/goal_outcome.go only after the matching `system_subtype:
+// goal_outcome` transcript entry was saved. The WS forwarder turns it into a
+// generated.GoalOutcomeFrame.
+type GoalOutcomePayload struct {
+	// SessionID is the session whose thread shows the line — the goal's
+	// active session (a chat session, or a task's run session).
+	SessionID string
+	// MessageID is the saved transcript entry's own id, stamped verbatim onto
+	// the frame so the live push, a replay and a cold load show one line.
+	MessageID string
+	// Outcome is the structured ending, identical to the persisted entry's.
+	Outcome generated.GoalOutcome
 }

@@ -110,7 +110,11 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 		return true, true, al.goalStatusReply(sessionID, store)
 	}
 	if isGoalClearVerb(args) {
-		return true, true, al.clearGoal(sessionID, store, goalClearNoteUser)
+		clearAgentID := ""
+		if agentInst != nil {
+			clearAgentID = agentInst.ID
+		}
+		return true, true, al.clearGoalByUser(sessionID, store, clearAgentID)
 	}
 	if strings.EqualFold(strings.TrimSpace(args), goalConfirmNoOpArg) {
 		// ADR-081 D1/FR-022: goals activate immediately now — there is no
@@ -687,6 +691,23 @@ func (al *AgentLoop) clearGoal(sessionID string, store *session.UnifiedStore, no
 // its doc comment) while three call sites genuinely need the outcome. Adding
 // a sibling keeps both properties.
 func (al *AgentLoop) clearGoalStatus(sessionID string, store *session.UnifiedStore, note string) (string, bool) {
+	reply, _, ok := al.endActiveGoal(sessionID, store, note)
+	return reply, ok
+}
+
+// endedGoal is what endActiveGoal reports about a goal it actually ended: the
+// record as it was just before the terminal transition, and that transition's
+// own timestamp (the value persisted as the record's LastActivityAt).
+type endedGoal struct {
+	rec     *goal.Goal
+	endedAt time.Time
+}
+
+// endActiveGoal is clearGoalStatus's body. It additionally returns the goal it
+// ended — nil when there was no active goal or the transition was refused — so
+// clearGoalWithOutcome (goal_outcome.go) can record the ending's outcome line
+// only once the ending itself is saved.
+func (al *AgentLoop) endActiveGoal(sessionID string, store *session.UnifiedStore, note string) (string, *endedGoal, bool) {
 	// FR-114 (N-12): /goal clear cancels the in-flight verifier. ADR-081 D9
 	// retires the pending-amendment/pending-compile states this check used to
 	// also cover (GoalPendingJSON/GoalClarificationJSON no longer exist) —
@@ -701,7 +722,7 @@ func (al *AgentLoop) clearGoalStatus(sessionID string, store *session.UnifiedSto
 	al.cancelOrphanedClarifyCard(al.getAskUserRegistry(), sessionID)
 
 	if !hadGoal {
-		return "No active goal to clear.", true
+		return "No active goal to clear.", nil, true
 	}
 
 	// Capture goal-id + condition + rounds BEFORE the terminal transition so
@@ -737,7 +758,8 @@ func (al *AgentLoop) clearGoalStatus(sessionID string, store *session.UnifiedSto
 	// session-meta zeroing this function used to perform first is gone with
 	// the fields themselves (S6); this transition IS the clear now, so its
 	// failure is what the Fix B.7 deferral below keys on.
-	if terr := terminateGoalRecordByID(goalID, goalState, note); terr != nil {
+	endedAt := time.Now().UTC()
+	if terr := terminateGoalRecordAt(goalID, goalState, note, endedAt); terr != nil {
 		// The durable record is still active. Do NOT emit the terminal pill
 		// (the user would see a cleared status while the durable state still
 		// has the live goal), and do NOT release the verifier / clear the
@@ -747,7 +769,7 @@ func (al *AgentLoop) clearGoalStatus(sessionID string, store *session.UnifiedSto
 		// but proceeded as if the clear succeeded.)
 		logger.WarnCF("agent", "goal: failed to clear goal state — skipping terminal side effects; next turn will re-drive clear",
 			map[string]any{"session_id": sessionID, "goal_id": goalID, "error": terr.Error()})
-		return "Goal clear deferred (the goal record could not be transitioned — will retry on next turn).", false
+		return "Goal clear deferred (the goal record could not be transitioned — will retry on next turn).", nil, false
 	}
 	if pe := GetPlanEngine(al); pe != nil {
 		// R5 admission accounting for "goal" moves off the old Admit/Release
@@ -767,7 +789,7 @@ func (al *AgentLoop) clearGoalStatus(sessionID string, store *session.UnifiedSto
 	// re-arm marker / routing entry all drop.
 	al.clearGoalTriggerState(sessionID, goalID)
 	al.emitGoalStatusFrame(sessionID, goalID, condition, rounds, maxRounds, note, pillState)
-	return "Goal cleared (" + note + ").", true
+	return "Goal cleared (" + note + ").", &endedGoal{rec: rec, endedAt: endedAt}, true
 }
 
 // terminateGoalRecordByID performs ADR-086 GOAL-FR-027/FR-028's status
@@ -792,12 +814,20 @@ func (al *AgentLoop) clearGoalStatus(sessionID string, store *session.UnifiedSto
 // logged here too so the storage fault is visible even to a caller that
 // only cares about its own reply.
 func terminateGoalRecordByID(goalID string, state generated.GoalState, reason string) error {
+	return terminateGoalRecordAt(goalID, state, reason, time.Now().UTC())
+}
+
+// terminateGoalRecordAt is terminateGoalRecordByID with the transition's
+// timestamp supplied by the caller, so endActiveGoal can stamp the goal
+// outcome line with exactly the time the record was ended at (Terminate
+// persists it as LastActivityAt).
+func terminateGoalRecordAt(goalID string, state generated.GoalState, reason string, now time.Time) error {
 	if goalID == "" {
 		return fmt.Errorf("goal: terminal transition requires a goal id")
 	}
 	store := resolveGoalRecordStore()
 	if _, err := store.Update(goalID, func(cur *goal.Goal) error {
-		return cur.Terminate(state, reason, time.Now().UTC())
+		return cur.Terminate(state, reason, now)
 	}); err != nil {
 		logger.WarnCF("agent", "goal: could not persist terminal transition on goal record",
 			map[string]any{"goal_id": goalID, "state": string(state), "error": err.Error()})
@@ -1637,17 +1667,26 @@ func (al *AgentLoop) goalIdleExpirySweep(cfg config.PlanningConfig, now time.Tim
 			// ACTIVE and the keeper went on pushing it — a lie the user has
 			// no way to detect. Transition FIRST, honour the result, and
 			// write the handover only once the goal has actually ended.
-			if _, ok := al.clearGoalStatus(sessionID, recStore, reason); !ok {
-				logger.WarnCF("agent", "goal idle sweep: expiry transition failed; no handover written (the goal is still active and will be re-swept)",
-					map[string]any{"session_id": sessionID, "goal_id": g.GoalID})
-				continue
-			}
+			//
+			// The handover is the outcome entry's own content, written into
+			// recStore (not store) because that is the thread the operator
+			// actually reads.
 			handover := fmt.Sprintf(
 				"Goal %q idle-expired after %d day(s) with no activity (last activity: %s).",
 				g.Prompt, maxDays, last.Format(time.RFC3339),
 			)
-			// recStore, not store: this is the note the operator actually reads.
-			al.writeGoalSystemTranscript(recStore, sessionID, agentID, handover)
+			if _, ok := al.clearGoalWithOutcome(sessionID, recStore, reason, goalOutcomeInput{
+				ending:      generated.GoalOutcomeEndingOther,
+				roundsUsed:  g.Round,
+				maxRounds:   g.MaxRounds,
+				judgeReason: g.LatestReason,
+				agentID:     agentID,
+				content:     handover,
+			}); !ok {
+				logger.WarnCF("agent", "goal idle sweep: expiry transition failed; no handover written (the goal is still active and will be re-swept)",
+					map[string]any{"session_id": sessionID, "goal_id": g.GoalID})
+				continue
+			}
 		}
 	}
 

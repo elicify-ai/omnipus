@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -404,21 +405,55 @@ func TerminateTaskGoalRecord(
 
 	now := time.Now().UTC()
 	terminalReason := TerminalGoalReasonForTask(status, reason)
-	if _, uErr := gs.Update(g.GoalID, func(cur *goal.Goal) error {
+	transitioned := false
+	updated, uErr := gs.Update(g.GoalID, func(cur *goal.Goal) error {
 		if cur.State != generated.GoalStateActive {
 			// Another writer ended it between the read above and this
 			// lock-held mutate. Not a fault — see the idempotence note.
 			return nil
 		}
-		return cur.Terminate(state, terminalReason, now)
-	}); uErr != nil {
+		if terr := cur.Terminate(state, terminalReason, now); terr != nil {
+			return terr
+		}
+		transitioned = true
+		return nil
+	})
+	if uErr != nil {
 		slog.Warn("task goal: the paired goal record of a terminated task could not be transitioned — "+
 			"it is still ACTIVE (GOAL-FR-015)",
 			"task_id", taskID, "goal_id", g.GoalID, "goal_state", string(state), "error", uErr)
 		return
 	}
+	if !transitioned || updated == nil {
+		return
+	}
 	slog.Info("task goal: paired goal record terminated with its task",
 		"task_id", taskID, "goal_id", g.GoalID, "goal_state", string(state))
+	if hook := taskGoalEndedHook.Load(); hook != nil {
+		(*hook)(*updated, status)
+	}
+}
+
+// taskGoalEndedHook is TerminateTaskGoalRecord's after-transition observer:
+// called exactly once per task-owned goal this function actually ended, with
+// the record as saved — never when the record was already terminal, still
+// defining, or the store refused the write. pkg/agent installs its goal
+// outcome recorder here at gateway boot (AgentLoop.InstallTaskGoalOutcomeRecorder)
+// so a task's run session gets the same lasting outcome line a chat goal's
+// session does; this package cannot reach pkg/agent to do it directly.
+// Process-wide, like every seam of its kind: one agent loop per process.
+var taskGoalEndedHook atomic.Pointer[func(ended goal.Goal, taskStatus task.Status)] //nolint:gochecknoglobals
+
+// SetTaskGoalEndedHook installs fn as TerminateTaskGoalRecord's
+// after-transition observer (nil removes it) and returns a func that restores
+// the previous observer — for tests; production installs once at boot.
+func SetTaskGoalEndedHook(fn func(ended goal.Goal, taskStatus task.Status)) (restore func()) {
+	var next *func(ended goal.Goal, taskStatus task.Status)
+	if fn != nil {
+		next = &fn
+	}
+	prev := taskGoalEndedHook.Swap(next)
+	return func() { taskGoalEndedHook.Store(prev) }
 }
 
 // TaskListTool lists tasks for the calling agent.

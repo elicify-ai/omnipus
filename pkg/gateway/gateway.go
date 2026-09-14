@@ -4804,6 +4804,10 @@ func setupAndStartServices(
 		// cold-start channel record echo / keeper action can rehydrate the
 		// persisted GoalRoute* fields before any /goal command runs.
 		agentLoop.SetGoalRouteSessionStore()
+		// Goal outcome line: a task-owned goal that ends with its task leaves
+		// the same lasting outcome line in the task's run session as a chat
+		// goal does (pkg/agent/goal_outcome.go).
+		agentLoop.InstallTaskGoalOutcomeRecorder()
 		// Boot rearm sweep (US-6 S1/FR-9): re-hydrate every persisted pending
 		// set so its default-safe timers re-arm from the durable CreatedAt
 		// (already-elapsed timers fire near-immediately) and the reconnect

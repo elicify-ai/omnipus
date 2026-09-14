@@ -104,8 +104,9 @@ func goalWorkingAgentID(sessionID string, store *session.UnifiedStore) (string, 
 // performs the full clearGoalStatus ending — terminal record transition, any
 // in-flight verifier cancelled, any parked question card cancelled without a
 // resume, the keeper's in-memory park/streak/route state dropped, exactly one
-// terminal goal-status frame — and then writes a system note into the goal's
-// session so the user reading the chat learns the goal ended and why.
+// terminal goal-status frame — and then, through clearGoalWithOutcome, records
+// the goal's outcome line in its session, whose text tells the user reading
+// the chat that the goal ended and why.
 //
 // Called by the gateway's DELETE /api/v1/agents/{id} handler once the agent's
 // entity record is gone. Returns how many goals were ended. A goal whose
@@ -147,19 +148,24 @@ func (al *AgentLoop) EndGoalsOfDeletedAgent(agentID, agentName string) (int, err
 		if working != agentID {
 			continue
 		}
-		if _, ok := al.clearGoalStatus(sessionID, store, goalAgentDeletedNotePrefix+label); !ok {
+		// The system note the user reads is the outcome entry's own content —
+		// written once, only after the terminal transition landed.
+		if _, ok := al.clearGoalWithOutcome(sessionID, store, goalAgentDeletedNotePrefix+label, goalOutcomeInput{
+			ending:      generated.GoalOutcomeEndingOther,
+			roundsUsed:  g.Round,
+			maxRounds:   g.MaxRounds,
+			judgeReason: g.LatestReason,
+			content: fmt.Sprintf(
+				"Goal %q ended: the agent working on it, %s, was deleted. The goal was not handed to another agent — "+
+					"start a new goal with an existing agent to continue this work.",
+				g.Prompt, label),
+		}); !ok {
 			errs = append(errs, fmt.Errorf("goal %q: the goal store refused the terminal transition; the goal is still active", g.GoalID))
 			continue
 		}
 		ended++
 		logger.InfoCF("agent", "goal: ended because the agent working it was deleted",
 			map[string]any{"component": "goal", "session_id": sessionID, "goal_id": g.GoalID, "agent_id": agentID})
-		if store != nil {
-			al.writeGoalSystemTranscript(store, sessionID, "", fmt.Sprintf(
-				"Goal %q ended: the agent working on it, %s, was deleted. The goal was not handed to another agent — "+
-					"start a new goal with an existing agent to continue this work.",
-				g.Prompt, label))
-		}
 	}
 	return ended, errors.Join(errs...)
 }
