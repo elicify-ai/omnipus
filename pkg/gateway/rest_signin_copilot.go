@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -231,7 +232,7 @@ func (a *restAPI) handleCopilotSignInStatus(w http.ResponseWriter, r *http.Reque
 	ctx, cancel := context.WithTimeout(r.Context(), copilotSignInCheckTimeout)
 	defer cancel()
 
-	res := providers_pkg.CopilotSignIn(ctx, "", a.copilotCheckWorkspace())
+	res := a.runCopilotSignInCheck(ctx)
 	status := copilotSignInStatusResponse(res)
 	a.copilotProbe.store(status)
 	a.copilotProbe.recordLast(status)
@@ -284,13 +285,36 @@ func auditActor(r *http.Request) string {
 	return ""
 }
 
-// copilotCheckWorkspace is the directory the sign-in check runs in — the
-// Omnipus home, never the gateway's own working directory.
-func (a *restAPI) copilotCheckWorkspace() string {
+// copilotCheckWorkspace returns the directory the sign-in check runs in, and a
+// cleanup to call once the check is done: the Omnipus home when the gateway has
+// one, otherwise a fresh private directory that the cleanup removes. Never the
+// gateway's own working directory — the check runs the CLI with
+// --allow-all-tools, whose tools are rooted in the directory it runs in, and
+// the gateway may have been started from a source checkout or a home folder.
+func (a *restAPI) copilotCheckWorkspace() (dir string, cleanup func(), err error) {
 	if a.homePath != "" {
-		return a.homePath
+		return a.homePath, func() {}, nil
 	}
-	return ""
+	private, err := os.MkdirTemp("", "omnipus-copilot-check-")
+	if err != nil {
+		return "", func() {}, err
+	}
+	return private, func() { _ = os.RemoveAll(private) }, nil
+}
+
+// runCopilotSignInCheck runs one Copilot sign-in check in copilotCheckWorkspace.
+// A workspace that cannot be created is a check that could not run — never a
+// fallback to the gateway's working directory.
+func (a *restAPI) runCopilotSignInCheck(ctx context.Context) providers_pkg.CopilotSignInResult {
+	workspace, cleanup, err := a.copilotCheckWorkspace()
+	if err != nil {
+		return providers_pkg.CopilotSignInResult{
+			State:  providers_pkg.CopilotCheckFailed,
+			Detail: "could not create a private directory to run the check in: " + err.Error(),
+		}
+	}
+	defer cleanup()
+	return providers_pkg.CopilotSignIn(ctx, "", workspace)
 }
 
 // copilotSignInStatusResponse maps the CLI's state onto the FR-009 wire enum.
