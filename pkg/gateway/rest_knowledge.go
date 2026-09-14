@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path"
@@ -78,9 +79,10 @@ import (
 // convenient it looks.
 // ---------------------------------------------------------------------------
 
-// Rate limiting for the knowledge-base retrieval endpoints (FR-055's
-// principle, applied to the operator surface): find, graph and outline all
-// check this ONE limiter, keyed per workspace, before doing any real work.
+// Rate limiting for the knowledge-base endpoints (FR-055's principle, applied
+// to the operator surface). Every knowledge route that does real work — find,
+// graph, view, views, record-schema, one record, the record write door, and
+// files/search — calls allowKnowledgeRetrieval before doing any of it.
 //
 // It used to be a pair — this outer instance plus an inner one
 // knowledge.SearchTool checked for itself, split because only this layer
@@ -89,12 +91,117 @@ import (
 // endpoint that was SearchTool's only caller here, so the inner instance
 // (knowledgeToolLimiter) went with it — there is no longer a second call site
 // for it to guard.
-var knowledgeRESTLimiter = knowledge.NewRetrievalRateLimiter(knowledge.RetrievalRateLimitConfig{})
+//
+// THREE BUDGETS, CHOSEN BY WHO IS ASKING (2026-09-14). This used to be ONE
+// bucket of 60 requests a minute per workspace, shared by every account and
+// every tab in that workspace, reads and writes together. Ordinary signed-in
+// work overran it, and D-109's larger read allowance never helped, because
+// that covers only the IP-keyed limiters in rest_auth.go:
+//
+//   - An inline cell edit is one write, after which BasePreview reloads every
+//     view over the edited collection. On a dashboard with five embedded
+//     views that is six requests an edit, so the 11th edit in a minute was
+//     refused.
+//   - Every Library write (trash, rename, move, upload, save) sends
+//     library_changed, which reloads every mounted knowledge query in the
+//     workspace. Beside one open base, a bulk trash exhausted the bucket after
+//     about 30 files.
+//
+// Now:
+//
+//   - A request with NO signed-in account keeps the old strict budget:
+//     knowledgeAnonymousPerMinute per workspace, reads and writes together.
+//     Every production route to these handlers requires authentication, so
+//     this is defence in depth, not a path the web app takes.
+//   - A signed-in account gets its OWN buckets in each workspace. One
+//     account's runaway tab cannot refuse another account's work, and one
+//     workspace's traffic still cannot starve another workspace's.
+//   - Reads and writes are counted apart, so a burst of edits cannot refuse
+//     the view reloads it triggers. Writes keep the far tighter ceiling: each
+//     one walks every markdown file in scope (findVaultRecordByID).
+//
+// The ceilings, from measured and code-derived traffic:
+//
+//   - knowledgeSignedInReadsPerMinute = 600. The heaviest ordinary minute
+//     found is a bulk trash at D-109's measured pace (54 deletes in ~90 s, so
+//     36 a minute) beside a five-embed dashboard: each delete reloads up to
+//     five view results and five link graphs, 360 reads. 600 covers that with
+//     room to spare and is still only 10 a second per account per workspace.
+//   - knowledgeSignedInWritesPerMinute = 120. Brisk inline editing is about
+//     one cell every two seconds, 30 writes a minute; the text editor's double
+//     submit (D-112) doubles that to 60. 120 is twice that again, and half of
+//     the 240 POSTs a minute the outer per-IP configLimiter already allows.
+//
+// A GENUINE FLOOD IS STILL REFUSED at each ceiling, with the same 429 body and
+// Retry-After as before. rest_knowledge_rate_budget_test.go pins both halves.
+var knowledgeRESTLimiter = newKnowledgeRateLimits()
 
-// knowledgeRateKey is the bucket one caller shares. It is the WORKSPACE, not
-// the process: a runaway Library tab in one workspace must not rate-limit
-// another workspace's operator out of their own notes.
+// knowledgeCallKind says which signed-in budget a knowledge call draws on.
+type knowledgeCallKind int
+
+const (
+	// knowledgeRead is every knowledge route except the record write door.
+	knowledgeRead knowledgeCallKind = iota
+	// knowledgeWrite is POST .../knowledge/records.
+	knowledgeWrite
+)
+
+// The per-minute ceilings. See knowledgeRESTLimiter for where each number
+// comes from; change one only against new traffic evidence.
+const (
+	knowledgeAnonymousPerMinute      = 60
+	knowledgeSignedInReadsPerMinute  = 600
+	knowledgeSignedInWritesPerMinute = 120
+)
+
+// knowledgeRateLimits holds the three budgets. Each is a sliding one-minute
+// window.
+type knowledgeRateLimits struct {
+	anonymous *knowledge.RetrievalRateLimiter
+	reads     *knowledge.RetrievalRateLimiter
+	writes    *knowledge.RetrievalRateLimiter
+}
+
+func newKnowledgeRateLimits() *knowledgeRateLimits {
+	perMinute := func(limit int) *knowledge.RetrievalRateLimiter {
+		return knowledge.NewRetrievalRateLimiter(knowledge.RetrievalRateLimitConfig{
+			PerAgentLimit: limit,
+			Window:        time.Minute,
+		})
+	}
+	return &knowledgeRateLimits{
+		anonymous: perMinute(knowledgeAnonymousPerMinute),
+		reads:     perMinute(knowledgeSignedInReadsPerMinute),
+		writes:    perMinute(knowledgeSignedInWritesPerMinute),
+	}
+}
+
+// knowledgeRateKey is the strict bucket every request with no signed-in
+// account shares. It is the WORKSPACE, not the process: a runaway client in
+// one workspace must not rate-limit another workspace's operator out of their
+// own notes.
 func knowledgeRateKey(workspaceID string) string { return "library-ui:" + workspaceID }
+
+// knowledgeAccountRateKey is one signed-in account's bucket in one workspace.
+// The username's length is part of the key, so no (username, workspace) pair
+// can spell another pair's key however either one is written.
+func knowledgeAccountRateKey(username, workspaceID string) string {
+	return "library-ui:user:" + strconv.Itoa(len(username)) + ":" + username + ":" + workspaceID
+}
+
+// budgetFor returns the limiter and key one knowledge call is counted against.
+// username is the caller's signed-in account name, empty when there is none.
+func (l *knowledgeRateLimits) budgetFor(username, workspaceID string, kind knowledgeCallKind) (*knowledge.RetrievalRateLimiter, string) {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return l.anonymous, knowledgeRateKey(workspaceID)
+	}
+	key := knowledgeAccountRateKey(username, workspaceID)
+	if kind == knowledgeWrite {
+		return l.writes, key
+	}
+	return l.reads, key
+}
 
 // HandleLibraryTree is the /api/v1/library/ subtree entry point.
 //
@@ -468,9 +575,13 @@ func knowledgeTemplatePath(realRoot string, m knowledge.Marker) (string, bool) {
 	return filepath.ToSlash(rel), true
 }
 
-// allowKnowledgeRetrieval admits one retrieval call, or writes the 429 itself.
-func (a *restAPI) allowKnowledgeRetrieval(w http.ResponseWriter, workspaceID string) bool {
-	d := knowledgeRESTLimiter.Allow(knowledgeRateKey(workspaceID))
+// allowKnowledgeRetrieval admits one knowledge call, or writes the 429 itself.
+// kind is knowledgeWrite for the record write door and knowledgeRead for every
+// other route; the caller's signed-in account, if any, picks the bucket (see
+// knowledgeRESTLimiter for the budgets and where their sizes come from).
+func (a *restAPI) allowKnowledgeRetrieval(w http.ResponseWriter, r *http.Request, workspaceID string, kind knowledgeCallKind) bool {
+	limiter, key := knowledgeRESTLimiter.budgetFor(a.callerIdentity(r).Username, workspaceID, kind)
+	d := limiter.Allow(key)
 	if d.Allowed {
 		return true
 	}
@@ -478,6 +589,13 @@ func (a *restAPI) allowKnowledgeRetrieval(w http.ResponseWriter, workspaceID str
 	if retry < 1 {
 		retry = 1
 	}
+	// A refusal is evidence (a flood, or a budget set too small) and was
+	// previously invisible: no log, no audit row. Match the IP limiter's
+	// shape (rest_auth.go's withRateLimit). The audit half is deliberately
+	// not written — see FIX4-REPORT-knowledge-limiter-tests.md.
+	slog.Warn("api: knowledge rate limit exceeded",
+		"ip", clientIP(r), "path", redactRequestPath(r.URL.Path),
+		"workspace", workspaceID, "retry_after", retry)
 	w.Header().Set("Retry-After", strconv.Itoa(retry))
 	jsonErr(w, http.StatusTooManyRequests, fmt.Sprintf(
 		"too many knowledge requests — at most %d per %s. Retry in %ds.",
@@ -568,7 +686,7 @@ func (a *restAPI) handleKnowledgeGraph(w http.ResponseWriter, r *http.Request, w
 		return
 	}
 
-	if !a.allowKnowledgeRetrieval(w, workspaceID) {
+	if !a.allowKnowledgeRetrieval(w, r, workspaceID, knowledgeRead) {
 		return
 	}
 

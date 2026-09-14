@@ -151,9 +151,10 @@ func (a *restAPI) handleLibraryFilesSearch(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Same class as the sibling knowledge-retrieval routes (MV-11, FR-017):
-	// one workspace-keyed limiter shared by every Library-UI retrieval
-	// endpoint, so a runaway search in one workspace never starves another.
-	if !a.allowKnowledgeRetrieval(w, workspaceID) {
+	// it draws on the same knowledge read budget (knowledgeRateLimits), kept
+	// per signed-in account per workspace, so a runaway search in one
+	// workspace never starves another.
+	if !a.allowKnowledgeRetrieval(w, r, workspaceID, knowledgeRead) {
 		return
 	}
 

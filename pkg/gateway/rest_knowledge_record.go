@@ -86,7 +86,7 @@ import (
 // read at all, so there is no longer any load failure this endpoint has to
 // drop.
 func (a *restAPI) handleKnowledgeRecordSchema(w http.ResponseWriter, r *http.Request, workspaceID string) {
-	if !a.allowKnowledgeRetrieval(w, workspaceID) {
+	if !a.allowKnowledgeRetrieval(w, r, workspaceID, knowledgeRead) {
 		return
 	}
 
@@ -231,7 +231,7 @@ func (a *restAPI) handleKnowledgeRecordGet(w http.ResponseWriter, r *http.Reques
 		jsonErr(w, http.StatusBadRequest, "invalid record id: "+err.Error())
 		return
 	}
-	if !a.allowKnowledgeRetrieval(w, workspaceID) {
+	if !a.allowKnowledgeRetrieval(w, r, workspaceID, knowledgeRead) {
 		return
 	}
 
@@ -555,7 +555,10 @@ func (a *restAPI) handleKnowledgeRecordWrite(w http.ResponseWriter, r *http.Requ
 	// in-scope collection. The outer withRateLimit on /api/v1/library/ meant
 	// this was never an open door, but "the costliest call is the unmetered
 	// one" is not a posture to leave standing.
-	if !a.allowKnowledgeRetrieval(w, workspaceID) {
+	//
+	// It draws on the WRITE budget (knowledgeWrite), which is far tighter than
+	// the read budget for exactly that reason — see knowledgeRESTLimiter.
+	if !a.allowKnowledgeRetrieval(w, r, workspaceID, knowledgeWrite) {
 		return
 	}
 

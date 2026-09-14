@@ -81,15 +81,17 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/elicify-ai/omnipus/pkg/knowledge"
 )
 
-// useFreshKnowledgeLimiter gives this test a private knowledge limiter and
-// puts the process-wide one back when the test ends.
+// processKnowledgeLimiter is the process-wide knowledge limiter exactly as
+// the package built it, so drainKnowledgeBudget can refuse to touch it.
+var processKnowledgeLimiter = knowledgeRESTLimiter
+
+// useFreshKnowledgeLimiter gives this test a private set of knowledge budgets
+// and puts the process-wide set back when the test ends.
 //
-// A test that DRAINS the knowledge limiter to prove that a full one refuses
-// must call this first. A drain on the process-wide limiter stays full for a
+// A test that DRAINS a knowledge budget to prove that a full one refuses must
+// call this first. A drain on the process-wide limiter stays full for a
 // minute, and any later request that reaches the same key is refused for
 // traffic it never sent. Unique workspace IDs make that unlikely; a private
 // limiter makes it impossible, whatever key the drain used.
@@ -99,8 +101,26 @@ import (
 func useFreshKnowledgeLimiter(t *testing.T) {
 	t.Helper()
 	shared := knowledgeRESTLimiter
-	knowledgeRESTLimiter = knowledge.NewRetrievalRateLimiter(knowledge.RetrievalRateLimitConfig{})
+	knowledgeRESTLimiter = newKnowledgeRateLimits()
 	t.Cleanup(func() { knowledgeRESTLimiter = shared })
+}
+
+// drainKnowledgeBudget fills the budget that `username` (empty for no
+// signed-in account) is counted against for `kind` calls in workspace ws, so
+// the next such request is refused. It asks budgetFor — the same question the
+// handler asks — so it can never drain a bucket the handler does not read.
+//
+// It refuses to drain the process-wide limiter: call useFreshKnowledgeLimiter
+// first.
+func drainKnowledgeBudget(t *testing.T, username, ws string, kind knowledgeCallKind) {
+	t.Helper()
+	if knowledgeRESTLimiter == processKnowledgeLimiter {
+		t.Fatal("drainKnowledgeBudget would drain the process-wide knowledge limiter; call useFreshKnowledgeLimiter first")
+	}
+	limiter, key := knowledgeRESTLimiter.budgetFor(username, ws, kind)
+	for i := 0; i < limiter.Limit(); i++ {
+		limiter.Allow(key)
+	}
 }
 
 // httptestDefaultRemoteAddr is the address net/http/httptest stamps on every
@@ -286,13 +306,20 @@ func TestUseFreshKnowledgeLimiter_DrainNeverOutlivesTheTest(t *testing.T) {
 		if knowledgeRESTLimiter == shared {
 			t.Fatal("the helper must install a private limiter; the drain below would hit the process-wide one")
 		}
-		if got, want := knowledgeRESTLimiter.Limit(), shared.Limit(); got != want {
-			t.Fatalf("the private limiter must be sized like production: limit %d, production %d", got, want)
+		for _, c := range []struct {
+			username string
+			kind     knowledgeCallKind
+		}{{"", knowledgeRead}, {"daniela", knowledgeRead}, {"daniela", knowledgeWrite}} {
+			private, _ := knowledgeRESTLimiter.budgetFor(c.username, ws, c.kind)
+			production, _ := shared.budgetFor(c.username, ws, c.kind)
+			if private.Limit() != production.Limit() {
+				t.Fatalf("the private budget for %+v must be sized like production: %d, production %d",
+					c, private.Limit(), production.Limit())
+			}
 		}
-		for i := 0; i < knowledgeRESTLimiter.Limit(); i++ {
-			knowledgeRESTLimiter.Allow(knowledgeRateKey(ws))
-		}
-		if knowledgeRESTLimiter.Allow(knowledgeRateKey(ws)).Allowed {
+		drainKnowledgeBudget(t, "", ws, knowledgeRead)
+		limiter, key := knowledgeRESTLimiter.budgetFor("", ws, knowledgeRead)
+		if limiter.Allow(key).Allowed {
 			t.Fatal("a drained private limiter must refuse, or the drain tests assert nothing")
 		}
 	})
@@ -300,7 +327,8 @@ func TestUseFreshKnowledgeLimiter_DrainNeverOutlivesTheTest(t *testing.T) {
 	if knowledgeRESTLimiter != shared {
 		t.Fatal("the process-wide knowledge limiter must be put back when the test ends")
 	}
-	if !knowledgeRESTLimiter.Allow(knowledgeRateKey(ws)).Allowed {
+	limiter, key := knowledgeRESTLimiter.budgetFor("", ws, knowledgeRead)
+	if !limiter.Allow(key).Allowed {
 		t.Fatal("a drain inside a test leaked into the process-wide knowledge limiter")
 	}
 }

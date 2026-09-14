@@ -151,9 +151,7 @@ func TestLibraryFilesSearch_ErrTaxonomy(t *testing.T) {
 		api, ws := buildLibraryTestAPI(t)
 		require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
 		useFreshKnowledgeLimiter(t)
-		for i := 0; i < knowledgeRESTLimiter.Limit(); i++ {
-			knowledgeRESTLimiter.Allow(knowledgeRateKey(ws))
-		}
+		drainKnowledgeBudget(t, "", ws, knowledgeRead) // libPostJSON carries no signed-in account
 		w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", `{"query":"x"}`)
 		assert.Equal(t, http.StatusTooManyRequests, w.Code, w.Body.String())
 	})
