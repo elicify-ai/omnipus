@@ -141,8 +141,18 @@ var salientURLPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.\-]*://`)
 // resource) and loses only the part that could authenticate someone else.
 // A URL that does not parse cannot be sanitised and is dropped outright
 // (ok=false) rather than logged as-is.
+//
+// Claude review 2026-09-14 (cut-list): a bearer-token-shaped VALUE under an
+// innocent allowlisted key (`key`, `id`, `name`, `target`) is redacted here
+// too, by the same bearerTokenValuePattern ArgsPreview applies — the salient
+// copy used to skip it and log the token at up to 256 bytes where the old
+// surface redacted it and capped at 32. Redaction runs BEFORE the URL
+// reduction and the length cap so neither can carry the token through.
 func salientString(s string) (string, bool) {
 	s = strings.TrimSpace(s)
+	if bearerTokenValuePattern.MatchString(s) {
+		return "<redacted>", true
+	}
 	if salientURLPattern.MatchString(s) {
 		u, err := url.Parse(s)
 		if err != nil {
@@ -158,12 +168,13 @@ func salientString(s string) (string, bool) {
 	return truncateSalient(s), true
 }
 
+// truncateSalient caps s at salientToolArgMaxValueLen BYTES on a UTF-8 rune
+// boundary by delegating to truncate (argshash.go) — the same rune-safe cut
+// ArgsPreview has always used. A raw byte slice here split multi-byte runes
+// in half and wrote mojibake into durable audit records (Claude review
+// 2026-09-14 cut-list).
 func truncateSalient(s string) string {
-	s = strings.TrimSpace(s)
-	if len(s) <= salientToolArgMaxValueLen {
-		return s
-	}
-	return s[:salientToolArgMaxValueLen] + "…"
+	return truncate(strings.TrimSpace(s), salientToolArgMaxValueLen)
 }
 
 // SalientToolArgsSummary renders the salient arguments as one stable,

@@ -253,7 +253,11 @@ func isBroadMountTarget(resolved string) bool {
 	if resolved == string(filepath.Separator) {
 		return true
 	}
-	if home, err := os.UserHomeDir(); err == nil && filepath.Clean(home) == resolved {
+	// Own home, in BOTH spellings (cleaned $HOME and its realpath — C9): the
+	// warning classification must agree with isSystemMountTarget's own-home
+	// exemption, or a symlink-spelled home would be exempted from the refusal
+	// yet never warned, i.e. a quiet broad grant, which FR-7.4 forbids.
+	if isOwnHomeMountTarget(resolved) {
 		return true
 	}
 	if isSystemMountTarget(resolved) {
@@ -288,13 +292,19 @@ var broadMountRoots = map[string]struct{}{
 }
 
 // systemMountRoots are operating-system-owned trees that no agent workspace
-// legitimately lives in. Mounting one is refused outright (UAT 2026-09-13
-// D-117): writing into /etc, /usr or /System is never "a folder the agent
-// works in", it is a machine-wide change, and a refusal here is the one
-// case the founder's 2026-08-12 warn-and-allow ruling did not contemplate
-// (that ruling addressed $HOME and /, which remain warn-and-allow). A
-// subdirectory of one of these (e.g. /var/www, /usr/local/src) is NOT
-// refused — only the root of the tree is.
+// legitimately lives in. Mounting the root of one — or a DIRECT child of it
+// (Claude review 2026-09-14 C9: /etc/ssh, /usr/bin, /var/root,
+// /Library/LaunchDaemons were previously never refused at any spelling) — is
+// refused outright (UAT 2026-09-13 D-117): writing there is never "a folder
+// the agent works in", it is a machine-wide change, and a refusal here is
+// the one case the founder's 2026-08-12 warn-and-allow ruling did not
+// contemplate (that ruling addressed $HOME and /, which remain
+// warn-and-allow). Anything DEEPER than a direct child is a user path and is
+// not refused by this list — that is what keeps macOS's per-user temp tree
+// (/private/var/folders/…) mountable, and it is why the deliberately broad
+// tmp family (/tmp, /private/tmp, /var/tmp — all direct children of system
+// roots) is carved out below (isBroadMountLocation) rather than re-refused
+// here.
 var systemMountRoots = map[string]struct{}{
 	"/etc": {}, "/private/etc": {}, "/usr": {}, "/bin": {}, "/sbin": {}, "/lib": {}, "/lib64": {},
 	"/var": {}, "/private/var": {}, "/private": {}, "/System": {}, "/Library": {},
@@ -302,16 +312,118 @@ var systemMountRoots = map[string]struct{}{
 	`C:\Windows`: {}, `C:\Program Files`: {}, `C:\Program Files (x86)`: {},
 }
 
-// isSystemMountTarget reports whether resolved IS one of systemMountRoots,
-// comparing real paths as well so the macOS /etc -> /private/etc symlink
-// pair is judged the same whichever spelling arrives.
-func isSystemMountTarget(resolved string) bool {
-	if _, ok := systemMountRoots[resolved]; ok {
+// isOwnHomeMountTarget reports whether resolved is the CURRENT process's own
+// home directory, comparing both spellings that matter: the cleaned value of
+// $HOME and that path's realpath (on macOS a home spelled /var/root resolves
+// to /private/var/root — both forms are the user's own home). It is the
+// CI go-test #2 fix: on the root-running worker $HOME IS /root, a system
+// root, and before this exemption that made the user's own home arrive as a
+// D-117 refusal instead of the broad-target warning the founder's
+// 2026-08-12 ruling grants it. The comparison is deliberately NOT
+// case-folded: an exemption may miss a case variant of the home (fail
+// closed, the refusal stands) but must never fire on anything the process
+// did not literally configure as its home.
+func isOwnHomeMountTarget(resolved string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return false
+	}
+	if filepath.Clean(home) == resolved {
 		return true
 	}
+	if realHome, rerr := resolveExistingDir(home); rerr == nil && realHome == resolved {
+		return true
+	}
+	return false
+}
+
+// foldedSameOrDirectChild reports whether child is parent itself or exactly
+// one path segment below it, compared WITHOUT regard to letter case.
+//
+// Case folding is unconditional, mirroring pkg/sandbox's pathCoversFold
+// (exec_paths.go) and for the same two reasons its doc comment gives: case
+// sensitivity is a property of the MOUNT, not of the OS (case-insensitive
+// APFS accepted /PRIVATE/etc, /system and /USR past the old exact-match
+// refusal — verified empirically in the Claude review), and the two failure
+// directions are not symmetric — a false MATCH here costs one mount target
+// the operator can see and re-scope, while a false MISS silently re-opens a
+// system tree. Both sides are lowercased in full before the segment test
+// (never sliced by byte length) so a multi-byte directory name cannot be
+// split mid-rune.
+func foldedSameOrDirectChild(parent, child string) bool {
+	sep := string(filepath.Separator)
+	p := strings.ToLower(strings.TrimSuffix(filepath.Clean(parent), sep))
+	c := strings.ToLower(strings.TrimSuffix(filepath.Clean(child), sep))
+	if p == "" {
+		// Clean+Trim collapses the filesystem root to "": "/" covers everything.
+		return true
+	}
+	if c == p {
+		return true
+	}
+	if !strings.HasPrefix(c, p+sep) {
+		return false
+	}
+	rest := c[len(p)+1:]
+	return rest != "" && !strings.Contains(rest, sep)
+}
+
+// pathComparisonForms returns every form a path must be compared in: the
+// cleaned declared form plus its symlink-resolved form when it differs —
+// the same additive pair pkg/sandbox's comparisonForms keeps, so the macOS
+// /etc -> /private/etc pair is judged identically whichever spelling
+// arrives. A form that cannot be resolved (does not exist on this host) is
+// simply absent, never an error.
+func pathComparisonForms(p string) []string {
+	clean := filepath.Clean(p)
+	resolved, err := filepath.EvalSymlinks(clean)
+	if err != nil || resolved == clean {
+		return []string{clean}
+	}
+	return []string{clean, resolved}
+}
+
+// isBroadMountLocation reports whether resolved IS one of the deliberately
+// warn-and-allow broad locations (folded, real paths included). It exists as
+// a CARVE-OUT from the system-root refusal: the tmp family (/tmp ->
+// /private/tmp, /var/tmp -> /private/var/tmp) consists of direct children of
+// system roots that D-117 and the founder's ruling explicitly keep as
+// warn-and-allow, so the depth rule must not re-refuse them.
+func isBroadMountLocation(resolved string) bool {
+	for root := range broadMountRoots {
+		for _, form := range pathComparisonForms(root) {
+			if foldedSameOrDirectChild(form, resolved) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isSystemMountTarget reports whether resolved is a system tree root or a
+// direct child of one, folded case-insensitively and judged on real paths
+// as well as typed ones. Two exemptions run BEFORE the list, both fail-safe
+// in the "refuse" direction they narrow:
+//
+//   - the current process's own home is never a system target (it gets the
+//     broad-target warning instead — CI go-test #2);
+//   - a deliberately broad location (the tmp family) is never re-refused by
+//     the depth rule (D-117 keeps /tmp warn-and-allow).
+//
+// Deeper-than-direct-child paths are NOT refused by this function, on
+// purpose: see systemMountRoots' doc comment.
+func isSystemMountTarget(resolved string) bool {
+	if isOwnHomeMountTarget(resolved) {
+		return false
+	}
+	if isBroadMountLocation(resolved) {
+		return false
+	}
 	for root := range systemMountRoots {
-		if realPath, err := filepath.EvalSymlinks(root); err == nil && realPath == resolved {
-			return true
+		for _, form := range pathComparisonForms(root) {
+			if foldedSameOrDirectChild(form, resolved) {
+				return true
+			}
 		}
 	}
 	return false

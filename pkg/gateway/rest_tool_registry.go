@@ -394,11 +394,16 @@ func resolveConfiguredPolicy(toolName string, cfg *config.AgentToolsCfg, globalP
 //
 // Auth:
 //   - Requires valid bearer token (withAuth, FR-014). Unauthenticated → 401.
+//   - The caller must be the approval's OWNER (Claude review 2026-09-14 C4,
+//     D-16 parity): the same approvalVisibleTo rule the WS side applies to
+//     SHOWING an approval. A different authenticated account gets 403; the
+//     owner-less and identity-less widenings behave exactly as on the WS side.
 //
 // Outcomes:
 //   - 200 OK        action processed
 //   - 400 Bad Request  malformed body or unknown action
 //   - 401 Unauthorized  missing/invalid token (enforced by withAuth)
+//   - 403 Forbidden   the approval belongs to another account
 //   - 404 Not Found    approval_id not found
 //   - 410 Gone       approval already resolved (FR-018)
 func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
@@ -458,6 +463,28 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	entry := a.approvalReg.get(approvalID)
 	if entry == nil {
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("approval %q not found", approvalID))
+		return
+	}
+
+	// Owner gate (Claude review 2026-09-14 C4): D-16 scoped who is SHOWN an
+	// approval (ws_tool_approval.go's approvalVisibleTo) but this decision
+	// door still resolved any approval for any authenticated account —
+	// approvalReg.resolve is keyed by approval id alone, so account B could
+	// approve, deny or always-grant account A's mount or bash call. Apply the
+	// IDENTICAL audience rule here, from the same source (the Owner stamped
+	// on the acting session's meta): the caller must be the owner, with the
+	// WS side's two deliberate widenings — an unresolvable owner ("") is
+	// decidable by anyone (an invisible approval is a hung turn) and a
+	// caller with no account identity ("", the env-token/dev-bypass shapes)
+	// may decide an owned approval (there is no account to scope by).
+	// Checked BEFORE the resolve attempt so a refused caller consumes
+	// nothing and learns nothing about the entry's state.
+	if !approvalVisibleTo(a.approvalOwner(entry.SessionID), callerUsername(r)) {
+		slog.Warn("tool-approval: decision refused — approval belongs to another account",
+			"approval_id", approvalID,
+			"action", string(body.Action),
+			"owner", a.approvalOwner(entry.SessionID))
+		jsonErr(w, http.StatusForbidden, "this approval belongs to another account")
 		return
 	}
 
@@ -524,6 +551,43 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonOK(w, resp)
+}
+
+// approvalOwner resolves the account an approval belongs to: the Owner
+// stamped on the ACTING session's meta at creation. It is the REST decision
+// door's mirror of (*WSHandler).approvalOwner (ws_tool_approval.go) — same
+// source, same "" -means-unknown semantics — so the door and the WS audience
+// can never disagree about whose approval it is. Returns "" when the owner
+// cannot be determined (channel/CLI-originated session, unresolvable store,
+// dev-bypass identity), which approvalVisibleTo widens to "decidable by
+// anyone" for the same reason the WS side widens it: an approval nobody can
+// decide is a hung turn.
+func (a *restAPI) approvalOwner(sessionID string) string {
+	if a.agentLoop == nil || sessionID == "" {
+		return ""
+	}
+	store := a.agentLoop.ResolveSessionStore(sessionID)
+	if store == nil {
+		return ""
+	}
+	meta, err := store.GetMeta(sessionID)
+	if err != nil || meta == nil {
+		return ""
+	}
+	return meta.Owner
+}
+
+// callerUsername returns the authenticated account making this request, ""
+// when the request carries no UserContextKey principal — the shape the
+// legacy env-token branch and dev-mode bypass produce (they authenticate
+// without resolving a user into the context). Mirrors the WS side's
+// wc.userID: "" widens to "may decide" in approvalVisibleTo because there is
+// no account to scope by.
+func callerUsername(r *http.Request) string {
+	if user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig); ok && user != nil {
+		return user.Username
+	}
+	return ""
 }
 
 // recordGrantOnDelegationParent is the fix for the bug where an "Always
