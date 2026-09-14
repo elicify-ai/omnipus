@@ -127,6 +127,15 @@ export const SAVE_TIMEOUT_MS = 30_000
 const SAVE_TIMED_OUT_MESSAGE =
   'Saving took too long and was stopped — your text is kept here. Check your connection and press Save again.'
 
+// Claude review 2026-09-14, cut-list — the message a RETRY surfaces when the
+// re-check read shows the file changed since the edit started. Not the
+// generic "changed elsewhere" wording: the most likely writer here is the
+// timed-out save itself, landing moments after the client abandoned it, and
+// saying "elsewhere" about the reader's own write is the misleading 409 this
+// re-check exists to replace.
+const SAVE_TIMEOUT_RETRY_CONFLICT_MESSAGE =
+  'The save that timed out may have reached the server after all — the file no longer matches the version you started from. Your text is kept here; reopen the file to compare, then reapply anything missing.'
+
 /** Detail of a save refused with a 409 (ADR-083 EMB-004) — surfaced
  * separately from `error` so a caller can render something more specific
  * than "save failed" ("someone else changed this file"), and so a retry can
@@ -217,6 +226,14 @@ export function useLibraryFileEditor({
   // `actualVersion` with a diff built on the stale bytes the user is still
   // looking at.
   const contentMismatchRef = useRef<{ actualVersion: string | null } | null>(null)
+  // Claude review 2026-09-14, cut-list: set when a save attempt was abandoned
+  // by the D-98 deadline, consumed by the NEXT save attempt. The deadline is
+  // a ceiling on SILENCE, not on the write — the server may complete the
+  // timed-out PUT moments after the client aborts it, so the retry must
+  // re-read the file before sending anything, rather than blindly PUTting
+  // the pre-timeout token into a file that has moved on (which answered with
+  // a misleading "changed on disk" 409 about the reader's OWN write).
+  const saveTimedOutRef = useRef(false)
 
   const isDirty = draft !== savedRef.current
 
@@ -246,6 +263,7 @@ export function useLibraryFileEditor({
     let cancelled = false
     versionRef.current = null
     contentMismatchRef.current = null
+    saveTimedOutRef.current = false
     const promise = fetchLibraryContentVersioned(workspaceId, path)
       .then((res) => {
         if (cancelled) return res.version
@@ -338,6 +356,43 @@ export function useLibraryFileEditor({
 
   const mutation = useMutation({
     mutationFn: async (content: string) => {
+      // Retry-after-timeout re-check (Claude review 2026-09-14): runs BEFORE
+      // anything else, because its outcome decides whether this retry is a
+      // save at all. The previous attempt was abandoned by the deadline —
+      // which says nothing about whether the server finished it. Re-read the
+      // file: unchanged since the edit started (savedRef) -> nothing landed,
+      // the retry proceeds with the token from THIS read; changed -> the
+      // timed-out write (or someone else's) landed, and the honest answer is
+      // a conflict prompt, never a blind PUT that reports the reader's own
+      // write as "changed on disk".
+      if (saveTimedOutRef.current) {
+        saveTimedOutRef.current = false
+        try {
+          const fresh = await fetchLibraryContentVersioned(workspaceId, path)
+          const freshContent = fresh.data.content
+          if (freshContent !== undefined && freshContent !== savedRef.current) {
+            versionRef.current = fresh.version
+            throw new LibraryVersionConflictError(
+              {
+                error: SAVE_TIMEOUT_RETRY_CONFLICT_MESSAGE,
+                code: 'library_version_conflict',
+                path,
+                expected_version: undefined,
+                actual_version: fresh.version ?? undefined,
+              },
+              '',
+            )
+          }
+          versionRef.current = fresh.version
+        } catch (err) {
+          if (err instanceof LibraryVersionConflictError) throw err
+          // The re-check read itself failed. The server's own compare-and-
+          // swap remains the authority — proceed with the ordinary path and
+          // let its 409 speak if the file really moved on. Logged so the
+          // swallowed failure is not invisible.
+          console.warn('[useLibraryFileEditor] could not re-check the file before retrying a timed-out save', err)
+        }
+      }
       // Awaited BEFORE the contentMismatchRef check below (not the other
       // way round): a save triggered while the version read is still
       // in-flight must observe whatever that SAME read discovers — checking
@@ -383,6 +438,10 @@ export function useLibraryFileEditor({
         )
       } catch (err) {
         if (controller.signal.aborted) {
+          // Remember for the retry: the PUT was ABANDONED, not answered —
+          // whether the server completed it is exactly what the next save()
+          // must establish before sending anything (see the re-check above).
+          saveTimedOutRef.current = true
           throw new ApiError(0, SAVE_TIMED_OUT_MESSAGE, { code: 'save_timeout', cause: err })
         }
         throw err
@@ -396,6 +455,8 @@ export function useLibraryFileEditor({
     },
     onSuccess: ({ data: entry, version }, content) => {
       savedRef.current = content
+      // A completed save answers the question the re-check exists for.
+      saveTimedOutRef.current = false
       // EMB-007 — the save's OWN response carries the file's new token; a
       // second save in the same session must send THIS, not the token the
       // original read returned.
