@@ -13,7 +13,7 @@
 
 import type { PendingToolApproval } from '@/store/toolApproval'
 
-export interface CrossWorkspaceApprovalSummary {
+export interface CrossWorkspaceApprovalSummary { // not-wire-format: client-side UI summary computed from the tool-approval store, never serialized or sent over any API/WS boundary
   /** Total pending approvals whose workspace differs from the active one. */
   count: number
   /** Distinct workspace ids holding those approvals, in queue (arrival) order. */
