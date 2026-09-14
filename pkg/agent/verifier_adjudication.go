@@ -1749,28 +1749,34 @@ func (e *verifierTruncatedTurnError) Error() string {
 // only an operator can clear, with its code and a Judge-specific message naming
 // the fix — never the raw provider body (ADR-051 §RD5 CRIT-001).
 //
+// Which errors qualify is decided by classifyOperatorOnlyTurnError
+// (operator_only_turn_error.go), the one classification a task run shares;
+// this function only words the fix for the Judge.
+//
 // Deliberately NOT llm.Message: the shared catalog copy for needs_provider is
 // the device-code "your sign-in expired" text (translate_error.go records that
 // ADR-067's pre-turn-gate producer of the same code is unreconciled), which
 // told an operator whose Judge names an unknown provider to sign in again —
-// observed live on the E-7 reproduction. The two needs_provider causes are
-// told apart by their sentinels.
+// observed live on the E-7 reproduction.
 func judgeDispatchNeedsOperator(callErr error) (code LLMErrorCode, message string, needsOperator bool) {
-	llm := TranslateTurnError(callErr)
-	switch llm.Code {
-	case CodeNeedsProvider:
-		if errors.Is(callErr, providers.ErrProviderNeedsSignIn) {
-			return llm.Code, "the Judge's provider sign-in expired; sign in again under Settings → Providers", true
-		}
-		return llm.Code, "the Judge's provider is not configured; give the Judge agent a configured provider and model", true
-	case CodeModelUnassigned:
-		return llm.Code, "the Judge has no model assigned; assign one on the Judge agent", true
-	case CodeContextWindowUnknown:
-		return llm.Code, "the Judge's model reports no context window; set a context-window override for it", true
-	case CodeProviderAuthFailed:
-		return llm.Code, "the provider rejected the Judge's credentials; update the key under Settings → Providers", true
+	code, cause := classifyOperatorOnlyTurnError(callErr)
+	switch cause {
+	case operatorFixSignInExpired:
+		return code, "the Judge's provider sign-in expired; sign in again under Settings → Providers", true
+	case operatorFixProviderNotConfigured:
+		return code, "the Judge's provider is not configured; give the Judge agent a configured provider and model", true
+	case operatorFixModelUnassigned:
+		return code, "the Judge has no model assigned; assign one on the Judge agent", true
+	case operatorFixContextWindowUnknown:
+		return code, "the Judge's model reports no context window; set a context-window override for it", true
+	case operatorFixCredentialsRejected:
+		return code, "the provider rejected the Judge's credentials; update the key under Settings → Providers", true
+	case operatorFixAgentNotOnWorkspace:
+		return code, "the Judge agent is not on any workspace team; add it to one", true
+	case operatorFixWorkDirUnavailable:
+		return code, "the Judge's working folder could not be opened; check that the disk has space and the folder is writable", true
 	}
-	return llm.Code, "", false
+	return code, "", false
 }
 
 // truncatedVerdictIsComplete reports whether a truncated turn's partial text

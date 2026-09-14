@@ -16,9 +16,12 @@
 //     CodeToolArgs / CodeToolCallTruncated) spends ONE goal try and the worker
 //     is re-prompted in the SAME run with a note naming the fault; its next
 //     claim is judged normally and no task attempt is used;
-//   - any other execution error (auth/config/provider-hard) BREAKS the run: the
-//     run fails as a whole, which uses one task attempt and restarts the task
-//     until its attempt limit;
+//   - an error only an operator can fix (rejected credentials, an unknown
+//     provider, no model) ends the task at once with no attempt used — founder
+//     decision 2026-09-15, pinned in task_run_operator_fix_test.go;
+//   - any other execution error (a rate limit, a provider outage, a timeout)
+//     BREAKS the run: the run fails as a whole, which uses one task attempt and
+//     restarts the task until its attempt limit;
 //   - a fault that repeats on every try spends the run's tries, then the
 //     attempts, and the task fails — never an endless loop.
 //
@@ -223,20 +226,25 @@ func TestTaskAttempt_MalformedToolOutput_SpendsOneTryAndContinuesTheRun(t *testi
 	}
 }
 
-// BDD: Given a task whose run breaks on an execution error that is NOT a
-// malformed-output fault (a provider auth failure),
+// BDD: Given a task whose run breaks on a temporary execution error that is NOT
+// a malformed-output fault (a provider rate limit),
 // When the run handles that error,
 // Then the run fails as a whole: one task attempt is used and the task
 // restarts in a fresh run, until its attempt limit ends it Failed,
 // And no try is ever re-prompted as a malformed-output fault, and nothing is
 // ever judged.
+//
+// This test used a provider auth failure until the founder decision of
+// 2026-09-15: an error only an operator can fix now ends the task at once with
+// no attempt used (task_run_operator_fix_test.go), so a temporary error is what
+// still exercises the restart.
 func TestTaskAttempt_BrokenRun_UsesOneAttemptPerRunUntilTheLimit(t *testing.T) {
 	worker := &attemptScriptedWorker{
 		failForever: true,
 		failErr: func() error {
 			return &providers.FailoverError{
-				Reason: providers.FailoverAuth, Provider: "scripted", Model: "test-model", Status: 401,
-				Wrapped: errors.New("invalid api key"),
+				Reason: providers.FailoverRateLimit, Provider: "scripted", Model: "test-model", Status: 429,
+				Wrapped: errors.New("rate limit exceeded"),
 			}
 		},
 	}
@@ -245,7 +253,7 @@ func TestTaskAttempt_BrokenRun_UsesOneAttemptPerRunUntilTheLimit(t *testing.T) {
 	judgeInst.Provider = judge
 
 	const maxAttempts = 2
-	tk := newTurnErrorTask(t, al, "auth failure task", maxAttempts)
+	tk := newTurnErrorTask(t, al, "rate limited task", maxAttempts)
 
 	final := waitForTaskStatus(t, al, tk.ID, task.StatusFailed, 60*time.Second)
 	if final.AttemptCount != maxAttempts {
@@ -261,7 +269,7 @@ func TestTaskAttempt_BrokenRun_UsesOneAttemptPerRunUntilTheLimit(t *testing.T) {
 	// asserting that none did.
 	time.Sleep(300 * time.Millisecond)
 	if n := countCarryingNote(worker.snapshot()); n != 0 {
-		t.Errorf("%d request(s) carried the malformed-output note — an auth failure must never be retried as one", n)
+		t.Errorf("%d request(s) carried the malformed-output note — a rate limit must never be retried as one", n)
 	}
 	if got, _ := al.taskStore.Get(tk.ID); got.Status != task.StatusFailed || got.AttemptCount != maxAttempts {
 		t.Errorf("after the limit the task moved on (status %q, attempt_count %d)", got.Status, got.AttemptCount)

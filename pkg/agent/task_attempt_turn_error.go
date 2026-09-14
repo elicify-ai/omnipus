@@ -4,8 +4,10 @@
 
 // task_attempt_turn_error.go classifies the one error family a worker turn
 // can end on that ANOTHER TURN IN THE SAME RUN can reasonably clear: malformed
-// tool-call output. Everything else (auth, config, cancellation, context
-// overflow) breaks the run.
+// tool-call output. An error only an operator can fix (rejected credentials,
+// an unknown provider, no model — operator_only_turn_error.go) ends the task at
+// once with no attempt used; everything else (a rate limit, a network or
+// provider outage, a timeout, a context overflow) breaks the run.
 //
 // Under the two-level run model (task_run_loop.go) a malformed-tool-output
 // turn spends an INNER goal try and steers the worker in the same session —

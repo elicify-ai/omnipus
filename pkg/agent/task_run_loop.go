@@ -32,6 +32,15 @@
 //	that never ran the work — a dispatch refusal wrapped in
 //	ErrTaskRunNotDispatched — ends the task without touching it.
 //
+//	A run whose turn is refused for a reason only an operator can fix
+//	(classifyOperatorOnlyTurnError: rejected credentials, an unknown provider,
+//	no model, an unknown context window, no workspace, an unusable working
+//	folder) is not a failed attempt either (founder decision 2026-09-15): a
+//	fresh run is refused the same way until a setting changes, so the task
+//	ends Failed at once with the reason and the fix — no attempt, no restart.
+//	Temporary errors (a rate limit, a network or provider outage, a stalled
+//	stream, a timeout) still break the run and restart it.
+//
 //	goal_claim(blocked) is not a failed run: the task ends Failed with
 //	"Blocked: <why>" — no attempt consumed, no Judge call, no restart.
 //	goal_claim(waiting_on_user) has no operator reply channel on a task run,
@@ -58,6 +67,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/plan"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -227,9 +237,24 @@ func (te *TaskExecutor) finishRunTurn(
 			map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "error": turnErr.Error()})
 
 		if errors.Is(turnErr, ErrTaskRunNotDispatched) {
-			te.appendRunErrorTranscript(t, taskSessionID, sessStore, turnErr)
+			te.appendRunErrorTranscript(t, taskSessionID, sessStore, fmt.Sprintf("Task execution failed: %v", turnErr))
 			te.transitionTaskLifecycle(taskSessionID, session.LifecycleFailed, "not_dispatched")
 			te.endTaskWithoutAttempt(t, taskSessionID, fmt.Sprintf("The task could not be started: %v", turnErr), run, nil)
+			return runStepEnded, "", ""
+		}
+
+		// Founder decision 2026-09-15: a refusal only an operator can fix fails
+		// every fresh run the same way, so it ends the task at once — no attempt,
+		// no restart. The reason is built from the classification and the
+		// agent's configuration only; the raw error (which can carry a provider
+		// response body) never reaches the task, its transcript or its goal.
+		if code, cause := classifyOperatorOnlyTurnError(turnErr); cause != operatorFixNone {
+			reason := te.taskOperatorFixReason(t.AgentID, turnErr, cause)
+			logger.ErrorCF("task_executor", "task run: refused for a reason only an operator can fix — failing the task, no attempt used",
+				map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "code": string(code)})
+			te.appendRunErrorTranscript(t, taskSessionID, sessStore, reason)
+			te.transitionTaskLifecycle(taskSessionID, session.LifecycleFailed, "operator_action_required")
+			te.endTaskWithoutAttempt(t, taskSessionID, reason, run, nil)
 			return runStepEnded, "", ""
 		}
 
@@ -245,7 +270,7 @@ func (te *TaskExecutor) finishRunTurn(
 			return runStepContinue, steer, ""
 		}
 
-		te.appendRunErrorTranscript(t, taskSessionID, sessStore, turnErr)
+		te.appendRunErrorTranscript(t, taskSessionID, sessStore, fmt.Sprintf("Task execution failed: %v", turnErr))
 		te.transitionTaskLifecycle(taskSessionID, session.LifecycleFailed, "execution_error")
 		return te.failedRunStep(ctx, t, taskSessionID, fmt.Sprintf("execution error: %v", turnErr), run)
 	}
@@ -767,15 +792,16 @@ func (te *TaskExecutor) writeTaskReason(t *task.Task, reason string) {
 }
 
 // appendRunErrorTranscript records a failed turn in the run session and marks
-// the session interrupted.
-func (te *TaskExecutor) appendRunErrorTranscript(t *task.Task, taskSessionID string, sessStore *session.UnifiedStore, err error) {
+// the session interrupted. content is written as given: a caller whose error
+// may carry a provider response body passes a plain reason instead.
+func (te *TaskExecutor) appendRunErrorTranscript(t *task.Task, taskSessionID string, sessStore *session.UnifiedStore, content string) {
 	if taskSessionID == "" || sessStore == nil {
 		return
 	}
 	if appendErr := sessStore.AppendTranscriptStrict(taskSessionID, session.TranscriptEntry{
 		ID:        fmt.Sprintf("%s-error-%d", t.ID, time.Now().UnixNano()),
 		Role:      "assistant",
-		Content:   fmt.Sprintf("Task execution failed: %v", err),
+		Content:   content,
 		Status:    "error",
 		Timestamp: time.Now().UTC(),
 	}); appendErr != nil {
@@ -864,6 +890,75 @@ func judgeOperatorFix(reason string) string {
 		}
 	}
 	return reason
+}
+
+// taskOperatorFixReason words a task run's operator-only refusal: that the task
+// could not run, what to change and where, and that the task must then be run
+// again. Names come from the agent's configuration and from the provider id
+// the fallback chain recorded on the error — never from the error's text,
+// which can carry a provider response body.
+func (te *TaskExecutor) taskOperatorFixReason(agentID string, turnErr error, cause operatorFixCause) string {
+	agentName, provider, model := agentID, "", ""
+	if te.agentLoop != nil {
+		if ag, ok := te.agentLoop.GetRegistry().GetAgent(agentID); ok && ag != nil {
+			if name := strings.TrimSpace(ag.Name); name != "" {
+				agentName = name
+			}
+			provider, model = ag.primaryModelPair()
+			if needs, id := ag.needsProviderSnapshot(); needs && strings.TrimSpace(id) != "" {
+				provider = id
+			}
+		}
+	}
+	var fe *providers.FailoverError
+	if errors.As(turnErr, &fe) && strings.TrimSpace(fe.Provider) != "" {
+		provider = fe.Provider
+	}
+	return taskOperatorFixText(cause, strings.TrimSpace(agentName), strings.TrimSpace(provider), strings.TrimSpace(model))
+}
+
+// taskOperatorFixText renders taskOperatorFixReason's sentence. A name that is
+// unknown is left out of the sentence rather than shown blank.
+func taskOperatorFixText(cause operatorFixCause, agentName, provider, model string) string {
+	const lead, rerun = "The task could not run: ", ", then run the task again."
+	agent := "the agent"
+	if agentName != "" {
+		agent = "the agent " + agentName
+	}
+	switch cause {
+	case operatorFixCredentialsRejected:
+		if provider != "" {
+			return lead + "the provider key for " + provider + " was rejected. Fix it in Settings → Providers" + rerun
+		}
+		return lead + "the provider rejected the key. Fix it in Settings → Providers" + rerun
+	case operatorFixSignInExpired:
+		if provider != "" {
+			return lead + "the sign-in for " + provider + " has expired. Sign in again in Settings → Providers" + rerun
+		}
+		return lead + "the provider sign-in has expired. Sign in again in Settings → Providers" + rerun
+	case operatorFixProviderNotConfigured:
+		if provider != "" {
+			return lead + agent + " uses the provider " + provider + ", which is not configured. " +
+				"Configure it in Settings → Providers or pick a configured provider in the agent's settings" + rerun
+		}
+		return lead + agent + " has no configured provider. " +
+			"Configure one in Settings → Providers or pick a configured provider in the agent's settings" + rerun
+	case operatorFixModelUnassigned:
+		return lead + agent + " has no model assigned. Pick a model in the agent's settings" + rerun
+	case operatorFixContextWindowUnknown:
+		subject := "the agent's model"
+		if model != "" {
+			subject = "the model " + model
+		}
+		return lead + subject + " did not report a context length. " +
+			"Set it in Settings → Models → Model overrides → Context length" + rerun
+	case operatorFixAgentNotOnWorkspace:
+		return lead + agent + " is not on any workspace team, so it has nowhere to work. Add it to a workspace team" + rerun
+	case operatorFixWorkDirUnavailable:
+		return lead + "the working folder for " + agent + " could not be opened. " +
+			"Check that the disk has space and the folder is writable" + rerun
+	}
+	return lead + "a setting needs an operator's attention. Check the run transcript for which one" + rerun
 }
 
 // taskVerdictStillApplicable re-reads taskID's CURRENT status and reports
