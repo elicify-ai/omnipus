@@ -833,7 +833,9 @@ request marked `Sec-Fetch-Site: cross-site`, which WebKit does send here.
 >   its path and never reads the cookie, so those are not authenticated requests.
 > - **Where it does not apply.** With no usable canonical origin (a `0.0.0.0` or `::` bind with no
 >   `gateway.public_url`) there is no host to attach a path to, so the policy falls back to `'self'`
->   and the finding above still stands for that configuration. The boot WARN says so.
+>   and the finding above still stands for that configuration. The boot WARN says so. *Layer 2
+>   below closes the cookie half of it there: the request still reaches the gateway, but not as the
+>   user.*
 > - **What it costs.** A reader who opens Omnipus under an address the policy does not name — a LAN
 >   name or reverse proxy without `gateway.public_url`, or `http://[::1]:<port>` — now sees previews
 >   without their external CSS and JavaScript on every browser, not only on Safari. Containment is
@@ -841,6 +843,26 @@ request marked `Sec-Fetch-Site: cross-site`, which WebKit does send here.
 > - **Test 110** now asserts the stronger property on all three engines: the API probe is refused
 >   by the browser, observed inside the preview; the gateway answers no probe aimed outside
 >   `/library-preview/`; and any probe that did reach it would have to carry no session cookie.
+>
+> **FIXED 2026-09-14 (FIX4 preview-cookie-residual) — layer 2: the session cookie no longer
+> authenticates a cross-site subresource request.** Defence in depth, chiefly for the `'self'`
+> fallback layer 1 cannot confine. The gateway ignores the `omnipus-session` cookie on any request
+> the browser marks `Sec-Fetch-Site: cross-site` whose `Sec-Fetch-Dest` is `image`, `style`,
+> `script`, `font`, `audio`, `video`, `track`, `object`, `embed`, `iframe` or `frame`
+> (`pkg/gateway/middleware/session_cookie.go`, `ResolveUserFromCookie`, the one function every
+> cookie-auth path uses). Such a request gets the answer it would get with no cookie: 401 on a
+> logged-in route, anonymous on an optional one. Unaffected: top-level navigations, fetch and XHR,
+> WebSocket handshakes, requests with no Fetch Metadata headers, and bearer tokens.
+>
+> - **Why it cannot break a working flow.** The cookie is `SameSite=Strict`, so Chromium and Firefox
+>   never send it on a cross-site request; nothing that works today can depend on one arriving. The
+>   SPA's own subresources are labelled same-origin (measured on all three engines), the Library
+>   preview frame is a same-origin frame, provider sign-in is a device-code flow, and no login flow
+>   uses a frame.
+> - **What it does not cover.** A browser that sends no Fetch Metadata headers. `SameSite=Strict` and
+>   layer 1 are what stand there.
+> - **Refusals are logged** under their own message ("session cookie ignored on a cross-site
+>   subresource request"), not as an invalid cookie, because the cookie may be perfectly valid.
 
 **Unaffected.** The `/preview/<agent>/<token>/` route (ADR-044) serves agent dev servers started
 by the `web_serve` tool. It is a different route for a different job and this amendment does not
