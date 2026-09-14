@@ -457,6 +457,12 @@ identical across engines:
   same page without `sandbox` read back the session cookie.
 - External stylesheet, external script and audio all loaded and worked.
 
+> **AMENDED 2026-09-14 (D15.8).** The "top-level" half of this measurement is a record of what
+> was measured in August, and it stands as a record. It is no longer a supported way to open a
+> preview: the token route now refuses a top-level tab for a file that renders (D-106). The
+> header-standing-alone measurement is carried forward in a frame **without** a `sandbox`
+> attribute, where the same properties are checked on every run.
+
 **`'self'` is used, not an explicit origin.** Revision 1 warned `'self'` might not match
 under an opaque origin. **Measured false on all three engines** — `'self'` resolves against
 the URL the resource was served from, not the document's opaque origin. An explicit origin
@@ -600,7 +606,8 @@ execution question — but the extension→type mapping is still what routes it.
   same-origin fetch, and a request from `origin: null` is cross-origin to the gateway
   regardless. Static artifacts only. **A preview needing live data belongs on the existing
   `/preview/` dev-server route** — a different mechanism for a different job.
-- **Cookies are not sent to a sandboxed page's own subresources.**
+- **Cookies are not sent to a sandboxed page's own subresources.** *Amended 2026-09-14 —
+  false on WebKit when the page is framed; see D15.8, "Measured while making this amendment".*
 - **`document.cookie` throws** rather than returning empty.
 - **PDF.js is single-threaded in the main context for some work**; very large or complex
   PDFs can be slow. A page-count or size threshold may be needed — unmeasured.
@@ -684,9 +691,19 @@ the session cookie. Revision 3 stated the isolation question "disappears"; that 
 > webfont served with `Access-Control-Allow-Origin` — renders with all subresources applied,
 > asserted by a rendered-width oracle in a real browser. `document.fonts.status` is not an
 > acceptable oracle.
-> **AC-15.2** A top-level GET of an inline `.html` yields a document that cannot read
+> **AC-15.2** ~~A top-level GET of an inline `.html` yields a document that cannot read
 > `document.cookie` and cannot reach any external origin. *(Met 2026-08-22; re-assert against
-> the real handler.)*
+> the real handler.)*~~ **Amended 2026-09-14 (see D15.8).** Two criteria replace it, and
+> together they cover what the original covered:
+> **(a)** A top-level document request (`Sec-Fetch-Dest: document`) for an inline `.html`,
+> `.svg` or text file on the preview-token path is **refused** with a 403 page that itself
+> carries the §10.3 policy, and the file does not render. A request for a file served as an
+> attachment is not refused.
+> **(b)** The same `.html` loaded in a frame **with no `sandbox` attribute**, on a page of the
+> gateway's own origin, yields a document whose `window.origin` is `"null"`, whose
+> `document.cookie` read **throws**, whose same-origin subresources carry no session cookie, and
+> which cannot reach any external origin. The frame must be bare so that the response headers
+> are the only containment present, as they were at top level.
 > **AC-15.3** Each audio extension returns a playable `Content-Type`, asserted against the
 > **Library** handler, not the workspace MIME table.
 > **AC-15.4** A `.pdf` renders in the preview pane via PDF.js on all three engines in the
@@ -704,6 +721,87 @@ the session cookie. Revision 3 stated the isolation question "disappears"; that 
 > SPA payload.
 > **AC-15.7** Adding an extension to the inline allow-list fails CI unless the change also
 > adds an AC-15.5-style test for it.
+
+#### D15.8 — AMENDMENT 2026-09-14: a preview is framed; the token URL is not a page of its own
+
+> **Founder ruling, 2026-09-14.** Recorded here because it overrides every passage in this ADR
+> and its spec that required a preview-token URL to render when opened as its own browser tab.
+> Those passages are kept and marked amended, not deleted.
+
+**What "preview" means.** In the Library and in a knowledge base, a preview is the file
+rendered **inside the Library panel, in a frame**. Nothing else is a preview.
+
+**Full screen is the Library, not the token URL.** The Library panel can open full screen in a
+new browser tab (the pop-out, `/#/library`). That tab is an ordinary Omnipus page with its own
+chrome, and the preview is framed inside it exactly as in the docked panel. It never opens the
+raw token URL.
+
+**The token route is framed-only for files that render.** The `/library-preview/<token>/…` route
+(D15.6, `pkg/gateway/rest_library_preview.go`) exists only to feed that frame. It is not meant to
+be opened as a top-level tab:
+
+| Request to the token route | Outcome |
+|---|---|
+| A frame loading the file (`Sec-Fetch-Dest: iframe`), or a subresource the framed page loads | Served, with the §10.3 policy — unchanged |
+| A top-level tab (`Sec-Fetch-Dest: document`) for a file served **inline** — HTML, SVG, text, and the rest of the §10.4 allow-list | **Refused** with a 403 page that still carries the §10.3 policy (UAT 2026-09-13 defect **D-106**) |
+| A top-level tab for a file served as an **attachment** — `.pdf`, an unknown extension | Served as a download. It never becomes a page, so there is nothing for D-106 to protect (FIX4, 2026-09-14) |
+| A client that sends no `Sec-Fetch-Dest` at all | Served as before. It cannot be told apart, and the §10.3 policy is what contains it |
+
+Why the refusal: opened on its own, an untrusted file keeps every confidentiality control but
+loses every presentation one. It owns the tab title and the whole viewport on the product's own
+host and port, shows no "untrusted content" boundary, and can navigate the top window. A
+convincing fake Omnipus sign-in page served that way is the harm D-106 describes.
+
+**Isolation is measured inside the frame.** D15.2's measurements, AC-15.2 and spec tests 11b,
+94 and 110 measured the §10.3 headers in a top-level tab, because that was the one place the
+headers stood alone. That place is now refused, so the **same properties** are measured where
+people actually see a preview: in a frame. The frame has **no `sandbox` attribute** and sits on
+a page of the gateway's own origin, for two reasons:
+
+- With the product's `sandbox="allow-scripts"` attribute on the frame, the effective sandbox is
+  the intersection of attribute and header. The attribute alone would keep the origin opaque, so
+  a test framed that way stays green with the header's `sandbox` directive deleted. Without the
+  attribute, the response headers are the only containment present, as they were at top level.
+- Same-origin with its parent, the frame is same-site. A missing session cookie can then only
+  be the opaque origin the header imposes, not the browser's third-party cookie rules.
+
+The properties measured are unchanged: the isolation policy on the response, `nosniff`, the
+extension-derived type, an opaque origin, `document.cookie` throwing, no session cookie on
+same-origin subresources, no same-origin `fetch`/beacon/WebSocket, zero of seven egress
+vectors, SVG typed and inert, and every probe proven to have fired. The refusal itself is
+witnessed by its own test: a top-level request for an HTML and an SVG token URL gets the 403,
+carries the policy, and does not render the file.
+
+**One top-level property no longer exists to measure.** Whether an untrusted page can set
+`top.location` from its own tab. D-106 is now what prevents that tab from existing.
+
+**Measured while making this amendment — an open security finding, not a decision.** Moving
+spec test 110 into the frame exposed something the top-level tab had hidden. On **WebKit**
+(Playwright's WebKit 26.5 build; real Safari not checked), a framed preview's same-origin
+subresource request **carries the `SameSite=Strict` session cookie**, even though the document's
+origin is opaque and WebKit itself labels the request `Sec-Fetch-Site: cross-site`. A
+server-side probe, independent of the test suite, found this in every framed shape, **including
+the product's own** (`sandbox` attribute and §10.3 header together). Top-level, WebKit withholds
+the cookie. Chromium and Firefox withhold it in every shape.
+
+| Engine | Top-level tab, header | Bare frame, header | Frame, attribute only | Frame, attribute + header (product) |
+|---|---|---|---|---|
+| Chromium | not sent | not sent | not sent | not sent |
+| Firefox | not sent | not sent | not sent | not sent |
+| **WebKit** | not sent | **sent** | **sent** | **sent** |
+
+What it means: FR-006a accepts that a previewed page can load images and other subresources
+from the gateway, **on the condition that they arrive unauthenticated**. On WebKit that
+condition does not hold today, so an untrusted preview could make authenticated `GET` requests
+to Omnipus (it still cannot read the answers, fetch, beacon or open a WebSocket). Test 110 is
+red on WebKit for this reason and must stay red until it is fixed. The earlier assumption
+"whatever holds top-level holds embedded too" is false on WebKit for cookies. The fix is
+outside this amendment; a candidate is for the gateway to ignore the session cookie on a
+request marked `Sec-Fetch-Site: cross-site`, which WebKit does send here.
+
+**Unaffected.** The `/preview/<agent>/<token>/` route (ADR-044) serves agent dev servers started
+by the `web_serve` tool. It is a different route for a different job and this amendment does not
+touch it.
 
 
 ### D16 — Deep-linking, and two markdown defects
@@ -968,7 +1066,7 @@ being actioned; all five criticals reproduced and confirmed.
 | Finding | Resolution |
 |---|---|
 | **C-1** CSP blocks bundles | D15 — inline route gets its own policy; `buildWorkspaceCSP`'s gap named; AC-15.1 fixture bundle asserted in a real browser; A14 fallback recorded |
-| **C-2** Inline disposition → stored XSS | D15 — response-borne `sandbox` CSP; AC-15.2 top-level-GET test; distinct-origin alternative recorded as A14 |
+| **C-2** Inline disposition → stored XSS | D15 — response-borne `sandbox` CSP; AC-15.2 top-level-GET test; distinct-origin alternative recorded as A14. *Amended 2026-09-14 (D15.8):* the top-level GET is now refused for rendering files (D-106), and AC-15.2's containment is measured in a frame with no `sandbox` attribute |
 | **C-3** `/preview/` cannot serve Library files | D15 — delivery path decided: the Library endpoint. `/preview/` reuse rejected with reasons |
 | **C-4** Multi-vault search crosses workspaces | D7 — scoped to the calling agent's workspace mounts; AC-7.1 negative test |
 | **C-5** Constraint #6 unaddressed | **New D17** — seed list, per-agent posture, upgrade migration, AC-17.1/17.2 |
