@@ -31,6 +31,42 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { fetchHostFolders, type HostFolderListing, type HostFolderEntry } from '@/lib/api'
 
+/** Lexically canonicalize a typed host path — collapse `//` runs, drop `.`
+ *  segments, resolve `..` segments, strip trailing slashes — with NO
+ *  filesystem access.
+ *
+ *  Claude review 2026-09-14, cut-list: the pre-submit verdict gate used to
+ *  match the TYPED string against the folder listing, so "/tmp/" (or
+ *  "/tmp/.", or "/a/../tmp") dodged the breadth banner and the "Add anyway"
+ *  second click entirely while naming the same folder as "/tmp". The gate —
+ *  and the submit — now run on the canonical spelling, so every way of
+ *  writing a folder gets the same verdict. Lexical only, deliberately: the
+ *  SERVER stays the authority on what the path resolves to through symlinks
+ *  (a system directory is still refused there even if this normalization
+ *  cannot see it); this exists so spelling cannot route around the gate. */
+export function canonicalizeHostPath(input: string): string {
+  const trimmed = input.trim()
+  if (trimmed === '') return ''
+  const absolute = trimmed.startsWith('/')
+  const segments: string[] = []
+  for (const segment of trimmed.split('/')) {
+    if (segment === '' || segment === '.') continue
+    if (segment === '..') {
+      if (segments.length > 0 && segments[segments.length - 1] !== '..') {
+        segments.pop()
+      } else if (!absolute) {
+        // A relative path cannot climb above where it started; keep the
+        // (leading) ".." rather than silently resolving it against the root.
+        segments.push('..')
+      }
+      continue
+    }
+    segments.push(segment)
+  }
+  const joined = segments.join('/')
+  return absolute ? `/${joined}` : joined
+}
+
 interface LibraryAddMountDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -139,9 +175,10 @@ export function LibraryAddMountDialog({
   // The selected row's verdict, when the current path is one we have listed.
   // Prefer the remembered verdict; fall back to the listing for the case where
   // the path matches a row that is still on screen (a refused row, which does
-  // not navigate).
-  const selected = selectedVerdict ?? listing?.entries.find((e) => e.path === path)
-  const trimmed = path.trim()
+  // not navigate). Both this lookup and everything below run on the
+  // CANONICAL spelling, so "/tmp/" cannot dodge the gate that "/tmp" hits.
+  const canonical = canonicalizeHostPath(path)
+  const selected = selectedVerdict ?? listing?.entries.find((e) => e.path === canonical)
   // D-117 response half: once the server has ANSWERED, the dialog stops being
   // a form and becomes the verdict. `createdWarning` (201 + warning) is the
   // terminal state — the mount exists, so there is nothing left to submit;
@@ -150,13 +187,13 @@ export function LibraryAddMountDialog({
   const showingCreatedWarning = createdWarning !== undefined
   const canSubmit =
     !showingCreatedWarning &&
-    trimmed.length > 0 &&
+    canonical.length > 0 &&
     !isPending &&
     !verifying &&
     selected?.mountable !== false
   const needsBroadAck = selected?.broad === true && selected.mountable !== false && !broadAcknowledged
-  const showServerError = error !== undefined && attemptedPath === trimmed
-  const showRefusal = refusal !== undefined && attemptedPath === trimmed
+  const showServerError = error !== undefined && attemptedPath === canonical
+  const showRefusal = refusal !== undefined && attemptedPath === canonical
 
   /** Resolve the verdict for a typed path from its parent's listing. Returns
    *  the entry when the server lists it, undefined when it does not (or the
@@ -178,14 +215,14 @@ export function LibraryAddMountDialog({
       // "Add anyway": the warning has been on screen since the previous
       // click; this click is the acknowledgement AND the submit.
       setBroadAcknowledged(true)
-      setAttemptedPath(trimmed)
-      onConfirm(trimmed)
+      setAttemptedPath(canonical)
+      onConfirm(canonical)
       return
     }
     let verdict = selected
     if (verdict === undefined) {
       setVerifying(true)
-      verdict = await lookUpVerdict(trimmed)
+      verdict = await lookUpVerdict(canonical)
       setVerifying(false)
       if (verdict !== undefined) {
         setSelectedVerdict(verdict)
@@ -193,8 +230,8 @@ export function LibraryAddMountDialog({
         if (verdict.broad) return
       }
     }
-    setAttemptedPath(trimmed)
-    onConfirm(trimmed)
+    setAttemptedPath(canonical)
+    onConfirm(canonical)
   }
 
   return (

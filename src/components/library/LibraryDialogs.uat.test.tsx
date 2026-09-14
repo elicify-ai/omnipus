@@ -218,6 +218,36 @@ describe('D-127 / D-117 — Add a folder from your Mac', () => {
     await waitFor(() => expect(onConfirm).toHaveBeenCalledWith('/proj'))
     expect(screen.queryByTestId('library-add-mount-broad')).not.toBeInTheDocument()
   })
+
+  // Claude review 2026-09-14, cut-list: the verdict lookup matched the TYPED
+  // string against the listing, so any non-canonical spelling ("/tmp/",
+  // "/tmp/.", "/private/tmp/.." on a Mac aside — here "/tmp/../tmp") dodged
+  // the breadth gate entirely: no banner, no second click, straight to
+  // onConfirm. The dialog canonicalizes lexically before the check now, and
+  // submits the canonical path, so every spelling of the same folder gets
+  // the same verdict. (System dirs stay caught server-side regardless.)
+  it('a non-canonical spelling of a broad path gets the same verdict and the same second click', async () => {
+    mockedHostFolders.mockImplementation(async (path?: string) => ({
+      path: path ?? '/',
+      entries: [{ name: 'tmp', path: '/tmp', mountable: true, broad: true, reason: 'This is a system directory.' }],
+    }))
+    const onConfirm = vi.fn()
+    render(<LibraryAddMountDialog open onOpenChange={vi.fn()} onConfirm={onConfirm} isPending={false} />)
+    const input = screen.getByTestId('library-add-mount-path')
+
+    for (const spelling of ['/tmp/', '/tmp/.', '/tmp/../tmp']) {
+      onConfirm.mockClear()
+      fireEvent.change(input, { target: { value: spelling } })
+      fireEvent.click(screen.getByTestId('library-add-mount-confirm'))
+      await waitFor(() => expect(screen.getByTestId('library-add-mount-broad')).toBeInTheDocument())
+      expect(onConfirm).not.toHaveBeenCalled()
+      expect(screen.getByTestId('library-add-mount-confirm')).toHaveTextContent('Add anyway')
+
+      fireEvent.click(screen.getByTestId('library-add-mount-confirm'))
+      await waitFor(() => expect(onConfirm).toHaveBeenCalledWith('/tmp'))
+      expect(onConfirm).toHaveBeenCalledTimes(1)
+    }
+  })
 })
 
 // D-117, RESPONSE half (2026-09-14 fix round): the pre-submit banners above
