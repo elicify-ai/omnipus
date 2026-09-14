@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -862,8 +863,10 @@ func TestTaskUpdate_BlockedByRejectsCycle(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("expected cycle rejection when setting blocked_by that forms a→b→a")
 	}
-	if !strings.Contains(res.ForLLM, "cycle") {
-		t.Errorf("expected 'cycle' in error, got: %s", res.ForLLM)
+	// Identity, not wording: the message is plain language (da455dad) and may
+	// be reworded; the refusal carries the dependency-cycle sentinel.
+	if !errors.Is(res.Err, task.ErrBlockedByCycle) {
+		t.Errorf("refusal must carry task.ErrBlockedByCycle, got err=%v (message: %s)", res.Err, res.ForLLM)
 	}
 
 	// a must NOT have acquired the cyclic edge.

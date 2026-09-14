@@ -9,19 +9,21 @@ package config
 // whenever the corresponding field is zero, and used directly by DefaultConfig
 // (defaults.go) to populate a fresh install's config.json.
 const (
-	// DefaultGoalMaxRounds is the shipped value of the ONE global goal try
-	// limit (Settings -> Performance "goal_max_rounds"). ADR-086 GOAL-FR-024
-	// ("one budget for both owner kinds, defaulting to 20
-	// (config.DefaultGoalMaxRounds)"), D10 and D-D/D-E: it governs a chat goal's
-	// rounds AND a task's attempts identically. There is deliberately no second
-	// "task attempts" default any more — the former DefaultTaskMaxAttempts and
-	// its `planning.task_max_attempts` config key are retired (founder decision
-	// 2026-09-14): a separate, UI-less key that silently bounded tasks while the
-	// Settings value claimed to was exactly the ADR-037 "says saved, changes
-	// nothing" defect. The two COUNTERS stay distinct (task attempts and goal
-	// rounds are different brakes, R-03); only the NUMBER is shared, so the
-	// task path's 2x divergence ceiling is 2x this value.
-	DefaultGoalMaxRounds       = 20
+	// DefaultGoalMaxRounds is the shipped value of the global goal try limit
+	// (Settings -> Performance "goal_max_rounds", ADR-086 GOAL-FR-024): how many
+	// tries a goal gets — Judge rulings, and turns that ended without a usable
+	// claim — before it ends not met. It bounds a chat goal and the goal a task
+	// run works toward identically (the INNER limit).
+	DefaultGoalMaxRounds = 20
+	// DefaultTaskMaxAttempts is the shipped task attempt limit (the OUTER
+	// limit): how many times a task is run from a fresh start before it ends
+	// Failed. A run fails as a whole when its goal ends not met after all its
+	// tries, when the run breaks, or after two reasoning-only tries in a row.
+	// Goal tries and task attempts are separate limits (founder decision
+	// 2026-09-14); whether to merge them is tracked in issue #710. There is no
+	// Settings control for this value yet — it is the `planning.task_max_attempts`
+	// config key, overridden per task by `max_attempts`.
+	DefaultTaskMaxAttempts     = 3
 	DefaultPlanJudgeMaxRounds  = 20
 	DefaultLoopMaxRuns         = 100
 	DefaultIdleExpiryDays      = 7
@@ -58,11 +60,16 @@ const (
 // take precedence over these global values — see the Effective* resolver
 // methods below (FR-9). Deliberately has NO token/money fields (NFR-1).
 type PlanningConfig struct {
-	// GoalMaxRounds is the ONE global goal try limit (Settings -> Performance,
-	// D-D/D-E): it bounds a chat goal's adjudication rounds AND a task's
-	// attempts. Resolved by EffectiveGoalMaxRounds (chat goals, and every
-	// paired task goal record) and EffectiveTaskMaxAttempts (the task attempt
-	// ceiling), which falls back to it — never to a separate task key.
+	// TaskMaxAttempts is the global task attempt limit (the OUTER limit): how
+	// many fresh runs a task gets before it ends Failed. Overridden per task by
+	// task.Task.MaxAttempts. Resolved by EffectiveTaskMaxAttempts. No Settings
+	// control yet (founder decision pending); config.json only.
+	TaskMaxAttempts int `json:"task_max_attempts,omitempty"`
+	// GoalMaxRounds is the global goal try limit (Settings -> Performance, the
+	// INNER limit): how many tries a goal gets before it ends not met, for a
+	// chat goal and for the goal a task run works toward alike. Resolved by
+	// EffectiveGoalMaxRounds and snapshotted onto the goal record when the goal
+	// starts. It does not bound task attempts.
 	GoalMaxRounds int `json:"goal_max_rounds,omitempty"`
 	// PlanJudgeMaxRounds is the default plan-judge round ceiling before a
 	// running Plan fails with failed_reason=judge_rounds_exhausted.
@@ -156,31 +163,20 @@ func (c PlanningConfig) EffectiveSnapshotMaxBytes() int64 {
 	return 0
 }
 
-// EffectiveTaskMaxAttempts resolves a task's attempt ceiling from the SAME
-// global goal try limit a chat goal uses (founder decision 2026-09-14,
-// ADR-086 GOAL-FR-024/D10, D-D/D-E). Resolution order:
-//
-//  1. override — the task's own per-task `max_attempts` (R-03: "Task.MaxAttempts
-//     stays as the per-task override"), when non-nil and >=1;
-//  2. runningGoalMaxRounds — the limit snapshotted onto the task's paired goal
-//     record when its run started, when >=1. Callers pass 0 when the task has
-//     no paired record, or its record is still in the defining phase (not yet
-//     started). This is what gives a task the same snapshot semantics a chat
-//     goal has: a Settings change never retroactively moves the bound of a run
-//     that has already started;
-//  3. EffectiveGoalMaxRounds() — the live Settings -> Performance value.
-//
-// There is no step that reads a task-specific global: tasks and chat goals can
-// never resolve different numbers from the same Settings value. Safe to call
-// against a zero-value PlanningConfig (step 3 returns DefaultGoalMaxRounds).
-func (c PlanningConfig) EffectiveTaskMaxAttempts(override *int, runningGoalMaxRounds int) int {
+// EffectiveTaskMaxAttempts resolves a task's attempt limit — how many fresh
+// runs it gets (the OUTER limit): the task's own `max_attempts` when non-nil
+// and >=1; otherwise this config's TaskMaxAttempts when >=1; otherwise
+// DefaultTaskMaxAttempts. It never reads the goal try limit: goal tries and
+// task attempts are separate limits (founder decision 2026-09-14, issue #710).
+// Safe to call against a zero-value PlanningConfig.
+func (c PlanningConfig) EffectiveTaskMaxAttempts(override *int) int {
 	if override != nil && *override >= 1 {
 		return *override
 	}
-	if runningGoalMaxRounds >= 1 {
-		return runningGoalMaxRounds
+	if c.TaskMaxAttempts >= 1 {
+		return c.TaskMaxAttempts
 	}
-	return c.EffectiveGoalMaxRounds()
+	return DefaultTaskMaxAttempts
 }
 
 // EffectivePlanJudgeMaxRounds resolves the plan-judge round ceiling (FR-9): a
@@ -209,15 +205,13 @@ func (c PlanningConfig) EffectiveIdleExpiryDays(override *int) int {
 	return DefaultIdleExpiryDays
 }
 
-// EffectiveGoalMaxRounds resolves the ONE global goal try limit (FR-9,
-// FR-067, GOAL-FR-024, D-D/D-E): this config's GoalMaxRounds when >=1, else
+// EffectiveGoalMaxRounds resolves the global goal try limit (FR-9, FR-067,
+// GOAL-FR-024, D-D/D-E): this config's GoalMaxRounds when >=1, else
 // DefaultGoalMaxRounds. There is no per-goal override (D-E/NQ-2). The
 // resolved value is snapshotted onto the goal record's MaxRounds when the goal
-// starts running — at `/goal` set time for a chat goal, and at run activation
-// for a task's paired goal (TaskExecutor.activateTaskGoal) — so a later config
-// change never retroactively changes an already-running goal's bound. The
-// task attempt ceiling resolves through EffectiveTaskMaxAttempts, which falls
-// back to this same method.
+// starts running — at `/goal` set time for a chat goal, and when a task run
+// activates its goal (TaskExecutor.activateTaskGoal) — so a later config
+// change never retroactively changes an already-running goal's bound.
 func (c PlanningConfig) EffectiveGoalMaxRounds() int {
 	if c.GoalMaxRounds >= 1 {
 		return c.GoalMaxRounds

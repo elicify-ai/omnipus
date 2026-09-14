@@ -9,55 +9,55 @@ import (
 	"testing"
 )
 
-// TestEffectiveTaskMaxAttempts_ResolvesFromGoalTryLimit pins the founder
-// decision of 2026-09-14: Settings -> Performance "goal_max_rounds" is the ONE
-// setting that bounds how many tries a goal gets, for a goal set in chat AND a
-// goal on a task (ADR-086 GOAL-FR-024 "one budget for both owner kinds,
-// defaulting to 20"; D-D/D-E). The task attempt ceiling must therefore resolve
-// from that value. Expected numbers below come from that decision and the
-// ratified R-03 text ("Task.MaxAttempts stays as the per-task override"), not
-// from reading the implementation.
-func TestEffectiveTaskMaxAttempts_ResolvesFromGoalTryLimit(t *testing.T) {
+// TestEffectiveTaskMaxAttempts_SeparateFromGoalTryLimit pins the founder
+// decision of 2026-09-14 (confirmed the same day): goal tries and task attempts
+// are TWO separate limits. The goal try limit (Settings -> Performance
+// goal_max_rounds) bounds how many tries a goal gets within one run; the task
+// attempt limit bounds how many fresh runs a task gets — the task's own
+// max_attempts, else planning.task_max_attempts, else 3. The expected numbers
+// come from that decision, not from the implementation.
+func TestEffectiveTaskMaxAttempts_SeparateFromGoalTryLimit(t *testing.T) {
 	two := 2
 	zero := 0
 	cases := []struct {
 		name     string
 		cfg      PlanningConfig
 		override *int
-		running  int
 		want     int
 	}{
-		{"no override, run not started: the live goal try limit", PlanningConfig{GoalMaxRounds: 5}, nil, 0, 5},
-		{"unset goal try limit: the shipped default of 20", PlanningConfig{}, nil, 0, 20},
-		{"started run keeps the limit snapshotted at its start", PlanningConfig{GoalMaxRounds: 20}, nil, 5, 5},
-		{"per-task max_attempts beats the snapshot and the global", PlanningConfig{GoalMaxRounds: 5}, &two, 5, 2},
-		{"per-task max_attempts below 1 is not an override", PlanningConfig{GoalMaxRounds: 5}, &zero, 0, 5},
-		{"a non-positive snapshot is not a limit", PlanningConfig{GoalMaxRounds: 7}, nil, -1, 7},
+		{"nothing set: the default of 3", PlanningConfig{}, nil, 3},
+		{"the goal try limit does not move the task attempt limit", PlanningConfig{GoalMaxRounds: 5}, nil, 3},
+		{"the global task attempt limit applies", PlanningConfig{TaskMaxAttempts: 4, GoalMaxRounds: 5}, nil, 4},
+		{"a per-task max_attempts wins", PlanningConfig{TaskMaxAttempts: 4}, &two, 2},
+		{"a per-task max_attempts below 1 is not an override", PlanningConfig{TaskMaxAttempts: 4}, &zero, 4},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := tc.cfg.EffectiveTaskMaxAttempts(tc.override, tc.running); got != tc.want {
-				t.Fatalf("EffectiveTaskMaxAttempts(override=%v, running=%d) with goal_max_rounds=%d = %d, want %d",
-					tc.override, tc.running, tc.cfg.GoalMaxRounds, got, tc.want)
+			if got := tc.cfg.EffectiveTaskMaxAttempts(tc.override); got != tc.want {
+				t.Fatalf("EffectiveTaskMaxAttempts(override=%v) with task_max_attempts=%d goal_max_rounds=%d = %d, want %d",
+					tc.override, tc.cfg.TaskMaxAttempts, tc.cfg.GoalMaxRounds, got, tc.want)
 			}
 		})
 	}
+	if got := (PlanningConfig{TaskMaxAttempts: 4}).EffectiveGoalMaxRounds(); got != 20 {
+		t.Fatalf("the task attempt limit must not move the goal try limit: EffectiveGoalMaxRounds = %d, want 20", got)
+	}
 }
 
-// TestPlanningConfig_RetiredTaskMaxAttemptsKeyBoundsNothing proves the retired
-// `planning.task_max_attempts` key can no longer override the Settings value:
-// every install created before this change carries `"task_max_attempts": 20`
-// in its config.json (DefaultConfig used to seed it), and before the fix that
-// seeded key — not the Settings value — bounded every task. A config naming 3
-// for the retired key and 5 for the goal try limit must bound tasks at 5.
-// It also proves a fresh install no longer writes the retired key at all.
-func TestPlanningConfig_RetiredTaskMaxAttemptsKeyBoundsNothing(t *testing.T) {
+// TestPlanningConfig_TaskMaxAttemptsSeededAndReadFromConfig proves a fresh
+// install writes both limits with their own defaults (3 and 20), and that a
+// config.json naming task_max_attempts is honoured again (commit f78d77de3 had
+// retired the key).
+func TestPlanningConfig_TaskMaxAttemptsSeededAndReadFromConfig(t *testing.T) {
 	var p PlanningConfig
-	if err := json.Unmarshal([]byte(`{"task_max_attempts": 3, "goal_max_rounds": 5}`), &p); err != nil {
+	if err := json.Unmarshal([]byte(`{"task_max_attempts": 4, "goal_max_rounds": 5}`), &p); err != nil {
 		t.Fatalf("unmarshal planning config: %v", err)
 	}
-	if got := p.EffectiveTaskMaxAttempts(nil, 0); got != 5 {
-		t.Fatalf("task attempt ceiling = %d, want 5 (the goal try limit) — the retired task_max_attempts key must not bound tasks", got)
+	if got := p.EffectiveTaskMaxAttempts(nil); got != 4 {
+		t.Fatalf("task attempt limit = %d, want 4 from task_max_attempts", got)
+	}
+	if got := p.EffectiveGoalMaxRounds(); got != 5 {
+		t.Fatalf("goal try limit = %d, want 5 from goal_max_rounds", got)
 	}
 
 	raw, err := json.Marshal(DefaultConfig().Planning)
@@ -68,8 +68,8 @@ func TestPlanningConfig_RetiredTaskMaxAttemptsKeyBoundsNothing(t *testing.T) {
 	if err := json.Unmarshal(raw, &seeded); err != nil {
 		t.Fatalf("unmarshal default planning config: %v", err)
 	}
-	if v, ok := seeded["task_max_attempts"]; ok {
-		t.Fatalf("a fresh install seeds task_max_attempts=%v; the retired key must not be written", v)
+	if got, ok := seeded["task_max_attempts"].(float64); !ok || got != 3 {
+		t.Fatalf("a fresh install seeds task_max_attempts=%v, want 3", seeded["task_max_attempts"])
 	}
 	if got, ok := seeded["goal_max_rounds"].(float64); !ok || got != 20 {
 		t.Fatalf("a fresh install seeds goal_max_rounds=%v, want 20", seeded["goal_max_rounds"])

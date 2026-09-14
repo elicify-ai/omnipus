@@ -755,21 +755,19 @@ func (a *restAPI) toWireTask(t task.Task, idx rollupIndex, gidx taskGoalIndex) (
 	if t.MaxAttempts != nil {
 		out.MaxAttempts = ptr(*t.MaxAttempts)
 	}
-	// effective_max_attempts (founder decision 2026-09-14, D-D/D-E): the
-	// ceiling this task actually runs under, resolved by the SAME function the
-	// task executor enforces (tools.EffectiveTaskMaxAttempts) from the task's
-	// own max_attempts, the goal try limit snapshotted onto its paired goal
-	// record (g, already resolved above) when its run started, or the live
-	// Settings -> Performance goal try limit. Clients render this instead of a
-	// hardcoded default, so the displayed "attempt N/M" cannot drift from the
-	// enforced bound.
+	// effective_max_attempts: the task attempt limit (how many fresh runs this
+	// task gets), resolved by the SAME function the task executor enforces
+	// (tools.EffectiveTaskMaxAttempts): the task's own max_attempts, else the
+	// global planning.task_max_attempts, else the default of 3. It is not the
+	// goal try limit — goal tries and task attempts are separate limits
+	// (founder decision 2026-09-14, issue #710).
 	var planning config.PlanningConfig
 	if a.agentLoop != nil {
 		if cfg := a.agentLoop.GetConfig(); cfg != nil {
 			planning = cfg.Planning
 		}
 	}
-	out.EffectiveMaxAttempts = ptr(tools.EffectiveTaskMaxAttempts(planning, &t, g))
+	out.EffectiveMaxAttempts = ptr(tools.EffectiveTaskMaxAttempts(planning, &t))
 	if t.Trigger != nil {
 		out.Trigger = toWireTrigger(t.Trigger)
 	}

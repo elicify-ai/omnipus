@@ -642,14 +642,11 @@ func DefaultConfig() *Config {
 		// config.json is self-documenting; validateBootConfig still applies
 		// the same defaults for any field an operator zeroes out later.
 		Planning: PlanningConfig{
-			// GOAL-FR-024 (ADR-086, D-D/D-E): ONE budget for BOTH owner kinds
-			// (a task goal and a chat goal), defaulting to 20. This is the
-			// operator's single global Settings -> Performance "goal try
-			// limit" — it bounds chat goal rounds AND task attempts
-			// (PlanningConfig.EffectiveTaskMaxAttempts falls back to it).
-			// No `task_max_attempts` is seeded: that separate key is retired
-			// (founder decision 2026-09-14) because a seeded, UI-less task
-			// ceiling silently overrode this setting for every task.
+			// Two separate limits (founder decision 2026-09-14, issue #710):
+			// TaskMaxAttempts is how many fresh runs a task gets (default 3);
+			// GoalMaxRounds is how many tries a goal gets within one run or one
+			// chat (Settings -> Performance, default 20).
+			TaskMaxAttempts:         DefaultTaskMaxAttempts,
 			GoalMaxRounds:           DefaultGoalMaxRounds,
 			PlanJudgeMaxRounds:      DefaultPlanJudgeMaxRounds,
 			LoopMaxRuns:             DefaultLoopMaxRuns,

@@ -2014,7 +2014,10 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 
 	updated, err := t.store.Update(taskID, patch)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("task_update failed: %v", err))
+		// WithError carries the store sentinel (task.ErrBlockedByCycle,
+		// ErrValidation, ...) so callers and tests assert identity rather
+		// than the plain-language message wording.
+		return ErrorResult(fmt.Sprintf("task_update failed: %v", err)).WithError(err)
 	}
 
 	// GOAL-FR-029/FR-030: the task record's write already landed above

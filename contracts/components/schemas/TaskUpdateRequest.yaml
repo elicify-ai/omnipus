@@ -153,10 +153,10 @@ properties:
     minimum: 1
     nullable: true
     description: >
-      New per-task override of the attempt ceiling before the goal loop
-      wakes the owner (ADR-049 D7/FR-9, R-03). Null clears the override
-      (inherit the single global goal try limit,
-      `PerformanceSettings.goal_max_rounds`).
+      New per-task override of the task attempt limit — how many fresh runs
+      this task gets before it ends Failed (ADR-049 D7/FR-9, R-03). Null
+      clears the override (inherit the global `planning.task_max_attempts`
+      config value, default 3).
     example: 5
   surface:
     type: string

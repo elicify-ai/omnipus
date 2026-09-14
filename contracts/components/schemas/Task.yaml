@@ -263,39 +263,38 @@ properties:
     minimum: 0
     readOnly: true
     description: >
-      Current run's attempt index within its goal loop (ADR-049 D7).
-      Read-only, server-set; the UI renders "attempt N/M" against
-      `effective_max_attempts`.
+      Task attempts already used: how many runs of this task have failed as a
+      whole and been started over (ADR-049 D7). A run fails as a whole when
+      its goal ends not met after all its tries, when the run breaks, or
+      after two reasoning-only tries in a row. Read-only, server-set; the UI
+      renders "attempt N of M" against `effective_max_attempts`. Separate
+      from the goal's tries within a run (`judge_rounds`/`goal_max_rounds`).
     example: 1
   max_attempts:
     type: integer
     minimum: 1
     nullable: true
     description: >
-      Per-task override of the attempt ceiling before the goal loop wakes
-      the owner (ADR-049 D7/FR-9, R-03). Null/absent inherits the single
-      global goal try limit (`PerformanceSettings.goal_max_rounds`, Settings
-      → Performance, default 20) — the same setting that bounds a chat goal
-      (founder decision 2026-09-14, D-D/D-E). There is no separate global
-      task-attempts setting.
+      Per-task override of the task attempt limit — how many fresh runs this
+      task gets before it ends Failed (ADR-049 D7/FR-9, R-03). Null/absent
+      inherits the global `planning.task_max_attempts` config value (default
+      3). This is not the goal try limit (`PerformanceSettings.goal_max_rounds`):
+      goal tries and task attempts are separate limits (founder decision
+      2026-09-14, issue #710).
     example: 5
   effective_max_attempts:
     type: integer
     minimum: 1
     readOnly: true
     description: >
-      Server-derived, read-only: the attempt ceiling this task actually runs
-      under — the task fails once this many attempts end unmet, and it is
-      the "M" in the UI's "attempt N/M". Resolved by the same function the
-      task executor enforces (`pkg/tools/task_attempt_budget.go::
-      EffectiveTaskMaxAttempts`): the per-task `max_attempts` override when
-      set; otherwise the goal try limit snapshotted onto the task's goal
-      record when its current or most recent run started; otherwise the live
-      global goal try limit (`PerformanceSettings.goal_max_rounds`). Clients
-      render this value rather than a hardcoded default. Not writable — change
-      `max_attempts` or the global setting instead. Always present in
-      responses.
-    example: 20
+      Server-derived, read-only: the task attempt limit this task runs under —
+      the task ends Failed once this many runs have failed as a whole, and it
+      is the "M" in the UI's "attempt N of M". Resolved by the same function
+      the task executor enforces (`pkg/tools/task_attempt_budget.go::
+      EffectiveTaskMaxAttempts`): the per-task `max_attempts` when set,
+      otherwise the global `planning.task_max_attempts` config value
+      (default 3). Not writable. Always present in responses.
+    example: 3
   trigger:
     $ref: ./TaskTrigger.yaml
   due:

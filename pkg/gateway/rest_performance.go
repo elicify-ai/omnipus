@@ -17,12 +17,11 @@ import (
 //
 // GET returns the current max_parallel_agents config, the effective
 // (auto-detected or explicit) value actually in use, and goal_max_rounds —
-// the SINGLE, GLOBAL goal try limit governing every goal, task and chat
-// identically (GOAL-FR-024/FR-045, D-D/D-E, founder decision 2026-09-14): it
-// bounds a chat goal's rounds AND a task's attempts
-// (config.PlanningConfig.EffectiveTaskMaxAttempts falls back to it). There is
-// no per-goal override anywhere: this is the one control. A task may still
-// carry its own per-task max_attempts (R-03).
+// the global goal try limit (GOAL-FR-024/FR-045, D-D/D-E): how many tries a
+// goal gets, in chat and within one task run alike. There is no per-goal
+// override. It does not bound task attempts (how many fresh runs a task gets):
+// that is the separate planning.task_max_attempts config value, overridden per
+// task by max_attempts (founder decision 2026-09-14, issue #710).
 //
 // PUT accepts a partial update of {max_parallel_agents, tools_on_demand,
 // goal_max_rounds} and updates config.json atomically. The dispatch
