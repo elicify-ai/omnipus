@@ -1331,7 +1331,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 	proseCriteria []task.AcceptanceCriterion,
 	evidence []task.EvidenceRecord,
 	diffText string,
-) (verdicts []task.CriterionVerdict, model, judgeAgentID string, unavailable bool, reason string, unjudgeableIDs []string) {
+) (verdicts []task.CriterionVerdict, model, judgeAgentID string, unavailable bool, reason string, unjudgeableIDs []string, unableToVerifyIDs []string) {
 	unitID := verifierUnitID(in)
 	registry := currentVerifierSessionRegistry()
 	sessionKey := fmt.Sprintf("agent:%s:verify:%s", string(coreagent.IDJudge), uuid.New().String())
@@ -1399,7 +1399,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 			"verifier: adjudication refused — god mode is active (JUDGE-FR-057); "+
 				"no verifier session was created and no Judge turn ran",
 			map[string]any{"unit_id": unitID, "scope": in.Scope, "reason": godModeReason})
-		return nil, "", "", true, godModeReason, nil
+		return nil, "", "", true, godModeReason, nil, nil
 	}
 
 	windowText := al.resolveVerifierWindowText(in)
@@ -1407,7 +1407,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 	for attempt := 0; ; attempt++ {
 		iterations = attempt + 1
 		if ctx.Err() != nil {
-			return nil, "", "", true, ctx.Err().Error(), nil
+			return nil, "", "", true, ctx.Err().Error(), nil, nil
 		}
 		// JUDGE-FR-082/FR-103 (UAT E-14): the registered verifier session is this
 		// adjudication's cancel handle, and every cancel surface (`/goal clear`,
@@ -1421,7 +1421,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 			logger.InfoCF("agent",
 				"verifier: adjudication discarded — its verifier session was released by a cancel while it waited to retry (JUDGE-FR-082)",
 				map[string]any{"unit_id": unitID, "scope": in.Scope, "attempt": attempt})
-			return nil, "", "", true, VerifierAdjudicationCancelledReason, nil
+			return nil, "", "", true, VerifierAdjudicationCancelledReason, nil, nil
 		}
 		if attempt > 0 {
 			al.noteGoalJudgeRetrying(in, attempt)
@@ -1433,7 +1433,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 			logger.WarnCF("agent", "verifier: Judge System Agent not resolvable; pausing (D7 unavailability)", nil)
 			al.noteGoalJudgeRetryWait(in, attempt, "the Judge agent is not available")
 			if waitErr := al.judgeBackoffWait(ctx, attempt, notConfiguredReason); waitErr != nil {
-				return nil, "", "", true, notConfiguredReason, nil
+				return nil, "", "", true, notConfiguredReason, nil, nil
 			}
 			continue
 		}
@@ -1444,7 +1444,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 				map[string]any{"reason": denyReason, "retry_after_s": retryAfter.Seconds()})
 			al.noteGoalJudgeRetryWait(in, attempt, "the Judge reached its rate limit")
 			if waitErr := al.judgeBackoffWait(ctx, attempt, denyReason); waitErr != nil {
-				return nil, "", "", true, denyReason, nil
+				return nil, "", "", true, denyReason, nil, nil
 			}
 			continue
 		}
@@ -1454,7 +1454,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 		prompt, buildErr := buildJudgeUserContent(proseCriteria, evidence, in.ClaimText, in.ExtraContext, windowText, diffText)
 		if buildErr != nil {
 			return failClosedProseVerdicts(proseCriteria, "internal error building verifier prompt: "+buildErr.Error()),
-				"", "", false, "build_error", nil
+				"", "", false, "build_error", nil, nil
 		}
 
 		if !registered {
@@ -1473,7 +1473,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 				if existing, held := richer.Lookup(unitID); held && existing != "" {
 					reason = "concurrent adjudication in flight for unit"
 					unavailable = true
-					return nil, "", "", true, reason, nil
+					return nil, "", "", true, reason, nil, nil
 				}
 			}
 			// Create the type-stamped verifier session now — right before it
@@ -1495,7 +1495,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 				// as any other pre-create failure path above.
 				reason = "concurrent adjudication in flight for unit"
 				unavailable = true
-				return nil, "", "", true, reason, nil
+				return nil, "", "", true, reason, nil, nil
 			}
 			registered = true
 		}
@@ -1549,7 +1549,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 		} else {
 			callCtx = WithSystemAgentWorkspaceOverride(callCtx, in.WorkspaceID)
 		}
-		content, flagged, callErr := al.dispatchVerifierTurn(callCtx, judgeInst, prompt, sessionKey, chatID)
+		content, flagged, toolCalls, callErr := al.dispatchVerifierTurn(callCtx, judgeInst, prompt, sessionKey, chatID)
 		cancel()
 		reportVerifierInjectionFlags(unitID, adjudicationID, flagged)
 
@@ -1569,7 +1569,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 				logger.ErrorCF("agent",
 					"verifier: adjudication withheld — the Judge's verdict was truncated at its output-token limit",
 					map[string]any{"unit_id": unitID, "scope": in.Scope, "partial_chars": len(truncated.partial)})
-				return nil, "", "", true, reason, nil
+				return nil, "", "", true, reason, nil, nil
 			}
 			content, callErr = truncated.partial, nil
 		}
@@ -1585,7 +1585,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 				}
 				logger.InfoCF("agent", "verifier: adjudication discarded — its turn was cancelled (JUDGE-FR-082)",
 					map[string]any{"unit_id": unitID, "scope": in.Scope, "attempt": attempt})
-				return nil, "", "", true, VerifierAdjudicationCancelledReason, nil
+				return nil, "", "", true, VerifierAdjudicationCancelledReason, nil, nil
 			}
 			// UAT E-7: a refusal only an operator can clear is withheld at once,
 			// never retried on judgeRetryBackoff — waiting cannot fix it, and the
@@ -1596,13 +1596,37 @@ func (al *AgentLoop) runVerifierAdjudication(
 				logger.ErrorCF("agent",
 					"verifier: adjudication withheld — the Judge cannot run until an operator fixes its configuration",
 					map[string]any{"unit_id": unitID, "scope": in.Scope, "code": string(code), "error": callErr.Error()})
-				return nil, "", "", true, reason, nil
+				return nil, "", "", true, reason, nil, nil
 			}
 			logger.WarnCF("agent", "verifier: turn failed; pausing (D7 unavailability)",
 				map[string]any{"error": callErr.Error()})
+			// ADR-084 D9 prerequisite 3 / R3-c, FR-053/FR-054/FR-054a: a turn
+			// that already recorded at least one completed tool call MADE
+			// PROGRESS — a full tool-using LLM turn was spent. Retrying it on
+			// judgeRetryBackoff burns another one every cycle, forever (D9's
+			// "tokens spent, tool calls made, zero progress, retried forever"
+			// steady state). Exit the retry loop NOW and hand every prose
+			// criterion to JudgeCriteria as unable_to_verify (unavailable is
+			// FALSE — the turn mechanism ran; JudgeCriteria's FR-018/FR-019
+			// tracker decides, per criterion and with its K bound, whether
+			// this adjudication is withheld (round not consumed) or scored as
+			// an honest failure). Any callErr on a turn that made progress
+			// takes this exit — timeout, mid-turn SEC-26 denial, provider
+			// error, window-guard exit — per FR-054a; a zero-progress failure
+			// keeps the D7 backoff below (FR-055).
+			if toolCalls > 0 {
+				cause := judgeRetryCause(callErr)
+				reason = judgeUnfinishedReason(cause)
+				logger.ErrorCF("agent",
+					"verifier: adjudication failed AFTER progress — not retrying (FR-054); criteria resolve unable_to_verify",
+					map[string]any{"unit_id": unitID, "scope": in.Scope, "attempt": attempt,
+						"tool_calls": toolCalls, "cause": cause})
+				return failClosedProseVerdicts(proseCriteria, reason),
+					judgeInst.Model, judgeInst.ID, false, reason, nil, allProseCriterionIDs(proseCriteria)
+			}
 			al.noteGoalJudgeRetryWait(in, attempt, judgeRetryCause(callErr))
 			if waitErr := al.judgeBackoffWait(ctx, attempt, callErr.Error()); waitErr != nil {
-				return nil, "", "", true, callErr.Error(), nil
+				return nil, "", "", true, callErr.Error(), nil, nil
 			}
 			continue
 		}
@@ -1616,7 +1640,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 			// ran, no judgment). Old path fail-closed silently (the bug).
 			return failClosedProseVerdicts(proseCriteria,
 					"criterion_unjudgeable: verifier turn ran but produced no content"),
-				judgeInst.Model, judgeInst.ID, false, "", allProseCriterionIDs(proseCriteria)
+				judgeInst.Model, judgeInst.ID, false, "", allProseCriterionIDs(proseCriteria), nil
 		}
 
 		parsed, parseErr := parseJudgeResponse(content)
@@ -1625,7 +1649,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 			// criterion_unjudgeable for every criterion (same M1 predicate).
 			return failClosedProseVerdicts(
 				proseCriteria, "criterion_unjudgeable: verifier response could not be parsed: "+parseErr.Error(),
-			), judgeInst.Model, judgeInst.ID, false, "", allProseCriterionIDs(proseCriteria)
+			), judgeInst.Model, judgeInst.ID, false, "", allProseCriterionIDs(proseCriteria), nil
 		}
 
 		byID := dedupeJudgeCriteriaAnyUnmetWins(parsed.Criteria)
@@ -1676,7 +1700,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 			unitID, logID, judgeInst.Model, al.judgeTurnTimeout(),
 			al.buildInvestigationLogFromJudgeTranscript(judgeInst.ID, chatID),
 		)
-		return out, judgeInst.Model, judgeInst.ID, false, "", missing
+		return out, judgeInst.Model, judgeInst.ID, false, "", missing, nil
 	}
 }
 
@@ -1825,18 +1849,20 @@ func truncatedVerdictIsComplete(partial string, proseCriteria []task.AcceptanceC
 //     runAgentLoop's own comment names itself the only writer.
 //
 // Returns the turn's final content, the adjudication-level injection flags
-// captured during it (JUDGE-FR-009a — tool-call id -> matched pattern), and
-// any turn error. A nil/empty flags map means nothing was flagged.
+// captured during it (JUDGE-FR-009a — tool-call id -> matched pattern), how
+// many tool calls the turn ADMITTED (FR-053's progress predicate — the count
+// this adjudication's VerifierBudget recorded), and any turn error. A
+// nil/empty flags map means nothing was flagged.
 func (al *AgentLoop) dispatchVerifierTurn(
 	ctx context.Context,
 	judgeInst *AgentInstance,
 	prompt, sessionKey, chatID string,
-) (content string, flagged map[string]string, err error) {
+) (content string, flagged map[string]string, toolCalls int, err error) {
 	if hookErr := al.ensureHooksInitialized(ctx); hookErr != nil {
-		return "", nil, fmt.Errorf("verifier turn: hooks: %w", hookErr)
+		return "", nil, 0, fmt.Errorf("verifier turn: hooks: %w", hookErr)
 	}
 	if mcpErr := al.ensureMCPInitialized(ctx); mcpErr != nil {
-		return "", nil, fmt.Errorf("verifier turn: mcp: %w", mcpErr)
+		return "", nil, 0, fmt.Errorf("verifier turn: mcp: %w", mcpErr)
 	}
 
 	// Tool context uses the "system" channel so the verifier's tools resolve
@@ -1856,7 +1882,7 @@ func (al *AgentLoop) dispatchVerifierTurn(
 	// mistaken for caps that never fired.
 	dispatchKind, dispatchErr := runner.ResolveDispatch(executorConfigOf(judgeInst))
 	if dispatchErr != nil {
-		return "", nil, fmt.Errorf("verifier turn: %w", dispatchErr)
+		return "", nil, 0, fmt.Errorf("verifier turn: %w", dispatchErr)
 	}
 	if dispatchKind == runner.DispatchKindExternalCLI {
 		logger.WarnCF("agent",
@@ -1864,7 +1890,10 @@ func (al *AgentLoop) dispatchVerifierTurn(
 				"(JUDGE-FR-051) and the injection capture (JUDGE-FR-030) cannot be enforced for this turn",
 			map[string]any{"judge_agent_id": judgeInst.ID})
 		out, cliErr := al.processTaskDirect(ctx, judgeInst.ID, prompt, sessionKey, chatID)
-		return out, nil, cliErr
+		// FR-053 progress is unknowable on the external-CLI path (no
+		// VerifierBudget binds to it) — report zero, so a failure there keeps
+		// the D7 backoff rather than taking the FR-054 no-retry exit.
+		return out, nil, 0, cliErr
 	}
 
 	opts := processOptions{
@@ -1936,17 +1965,17 @@ func (al *AgentLoop) dispatchVerifierTurn(
 	// ClaimCancel sets it), not the end status, because a cancel can land on
 	// several different terminal statuses.
 	if ts.cancelFired.Load() {
-		return "", flagged, errVerifierTurnCancelled
+		return "", flagged, vb.ToolCalls(), errVerifierTurnCancelled
 	}
 	if runErr != nil {
-		return "", flagged, runErr
+		return "", flagged, vb.ToolCalls(), runErr
 	}
 	if result.status == TurnEndStatusAborted {
 		// Mirrors runAgentLoop: a user-initiated hard abort returns empty
 		// content with no error (every system-initiated abort already
 		// returned a non-nil error above). The caller treats empty content as
 		// criterion_unjudgeable, which is the honest classification.
-		return "", flagged, nil
+		return "", flagged, vb.ToolCalls(), nil
 	}
 	// UAT E-7: a turn that ended at the output-token limit (ADR-087 D4a/D4b)
 	// returns NO error and its partial text as finalContent. Returning that as a
@@ -1954,9 +1983,9 @@ func (al *AgentLoop) dispatchVerifierTurn(
 	// criterion_unjudgeable → unmet. Report it as what it is; the caller decides
 	// whether the partial still holds a complete verdict.
 	if ts.getTruncationReason() == truncationReasonMaxOutputTokens {
-		return "", flagged, &verifierTruncatedTurnError{partial: result.finalContent}
+		return "", flagged, vb.ToolCalls(), &verifierTruncatedTurnError{partial: result.finalContent}
 	}
-	return result.finalContent, flagged, nil
+	return result.finalContent, flagged, vb.ToolCalls(), nil
 }
 
 // judgeTurnTimeout bounds ONE verifier turn — a full agent-loop turn under the
@@ -2048,6 +2077,25 @@ func judgeRetryCause(callErr error) string {
 		return "its model stopped responding mid-call"
 	}
 	return "its model returned an error"
+}
+
+// JudgeUnfinishedReasonPrefix prefixes the Reason of an adjudication that
+// failed AFTER the verifier turn made real progress (ADR-084 D9 prerequisite
+// 3 / FR-054): the review started, spent a tool-using turn, and could not
+// finish. Distinct from a transient outage (no prefix), a misconfiguration
+// (JudgeMisconfiguredReasonPrefix), a truncated verdict
+// (JudgeOutputTruncatedReasonPrefix) and a cancel
+// (VerifierAdjudicationCancelledReason), so the five never merge in what the
+// operator sees.
+const JudgeUnfinishedReasonPrefix = "judge_unfinished: "
+
+// judgeUnfinishedReason builds that Reason in plain language: what happened,
+// that no round is consumed by the withheld occurrence, and what happens
+// next (the K bound from FR-018/FR-019, then an honest failure). Never the
+// raw provider error (ADR-051 §RD5 CRIT-001).
+func judgeUnfinishedReason(cause string) string {
+	return JudgeUnfinishedReasonPrefix + "the Judge could not finish checking this goal — its review failed after real progress (" +
+		cause + "). No round is consumed; a re-claim re-runs the review, and after repeated failures the criteria are recorded as not verified rather than retried forever."
 }
 
 // judgeBudgetConfig resolves the operator's JudgeConfig, falling back to a

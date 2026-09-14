@@ -490,7 +490,7 @@ func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) J
 		// prose Judge's context, so it sees the actual file changes — not a
 		// transcript window alone.
 		diffText, diffHead := al.resolveVerifierDiffText(in)
-		proseVerdicts, model, jaID, unavailable, reason, unjudgeableIDs := al.runVerifierAdjudication(
+		proseVerdicts, model, jaID, unavailable, reason, unjudgeableIDs, unableToVerifyIDs := al.runVerifierAdjudication(
 			ctx, in, proseCriteria, evidence, diffText,
 		)
 		if unavailable {
@@ -503,6 +503,43 @@ func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) J
 			// call must still see the same cumulative diff, not a
 			// spuriously-empty one.
 			return JudgeCriteriaResult{Unavailable: true, Reason: reason}
+		}
+		// ADR-084 D9 prerequisite 3 / FR-054 (this wave): a post-progress
+		// failure comes back unavailable=FALSE with every prose criterion
+		// marked unable_to_verify (unableToVerifyIDs) and its verdicts already
+		// fail-closed. Route those through the SAME FR-018/FR-019 K-bound
+		// tracker the deterministic rungs use — the first K consecutive
+		// occurrences withhold (Unavailable, round not consumed), the (K+1)th
+		// is scored as an honest unmet with a could-not-verify reason. That is
+		// D9's "consumes a round and reaches an honest failure instead of
+		// looping", and it is what bounds the failure the retry loop no longer
+		// absorbs.
+		utvSet := make(map[string]bool, len(unableToVerifyIDs))
+		for _, id := range unableToVerifyIDs {
+			utvSet[id] = true
+		}
+		if len(utvSet) > 0 {
+			postProgressWithheld := false
+			byID := make(map[string]task.CriterionVerdict, len(proseVerdicts))
+			for _, v := range proseVerdicts {
+				byID[v.CriterionID] = v
+			}
+			for _, c := range proseCriteria {
+				wh, cnv := noteNonVerdict(c.ID, NonVerdictUnableToVerify)
+				if wh {
+					postProgressWithheld = true
+					continue
+				}
+				if cnv {
+					couldNotVerifyIDs = append(couldNotVerifyIDs, c.ID)
+				}
+				perCriterion = append(perCriterion, byID[c.ID])
+			}
+			if postProgressWithheld {
+				return JudgeCriteriaResult{Unavailable: true, Reason: reason}
+			}
+			judgeModel, judgeAgentID = model, jaID
+			return al.finalizeVerdict(in, perCriterion, couldNotVerifyIDs, judgeModel, judgeAgentID)
 		}
 		// Fix GX-E-3: the round genuinely completed — advance THIS unit's
 		// cumulative-diff boundary to the HEAD this call resolved, so the

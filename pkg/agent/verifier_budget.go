@@ -122,6 +122,19 @@ func (vb *VerifierBudget) RecordToolCall(resultBytes int) {
 	}
 }
 
+// ToolCalls reports how many ADMITTED tool calls this budget has recorded —
+// ADR-084 D9 prerequisite 3 / FR-053's progress predicate: a verifier turn
+// that recorded at least one completed tool call MADE PROGRESS, so a failure
+// after that point must not be retried forever (FR-054/FR-054a).
+func (vb *VerifierBudget) ToolCalls() int {
+	if vb == nil {
+		return 0
+	}
+	vb.mu.Lock()
+	defer vb.mu.Unlock()
+	return vb.toolCalls
+}
+
 // RecordTokens accounts one LLM call's prompt+completion tokens toward
 // JUDGE-FR-081's cost ceiling and logs a one-time WARN once cumulative usage
 // crosses 75% of it. Exposed for the wave that dispatches the verifier's
