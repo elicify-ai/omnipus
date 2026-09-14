@@ -9,8 +9,9 @@
 // classifier (task_attempt_turn_error.go::attemptRecoverableTurnErrorCode)
 // could not see it and the task went terminal `failed` at attempt 1 with its
 // budget unused. The required behaviour (planning-goals-spec FR-045 / US-5
-// AS-4): the attempt is consumed, the task is re-dispatched with a note, and
-// the next attempt's claim is judged.
+// AS-4, under the two-level model of 2026-09-14, issue #710): the fault spends
+// one goal try inside the same run, the worker is re-prompted with a note, and
+// its next claim is judged — no task attempt is used.
 package agent
 
 import (
@@ -27,8 +28,7 @@ import (
 // orphanMarkupAttemptWorker answers every request that does NOT yet carry the
 // malformed-output note with residual tool-call markup and no parsed tool call
 // (the verbatim UAT residue), so the attempt exhausts runTurn's repair budget.
-// Once the goal loop re-dispatches with the note, it answers with a clean,
-// evidenced success claim.
+// Once the run re-prompts it with the note, it claims through goal_claim.
 type orphanMarkupAttemptWorker struct {
 	mu       sync.Mutex
 	requests []string
@@ -47,7 +47,7 @@ func (w *orphanMarkupAttemptWorker) Chat(
 	w.requests = append(w.requests, flat)
 	w.mu.Unlock()
 	if strings.Contains(flat, malformedOutputNote) {
-		return &providers.LLMResponse{Content: cleanWorkerClaim}, nil
+		return cleanClaimTurn(msgs), nil
 	}
 	return &providers.LLMResponse{Content: uatOrphanToolMarkupLeaks[3].content, ToolCalls: []providers.ToolCall{}}, nil
 }
@@ -60,21 +60,18 @@ func (w *orphanMarkupAttemptWorker) snapshot() []string {
 	return append([]string(nil), w.requests...)
 }
 
-// BDD: Given a task whose first attempt ends because the model's tool calls
-// keep arriving as unparseable markup until the repair budget is spent,
-// When the goal loop handles that attempt,
-// Then the task is NOT failed — exactly one attempt is consumed,
-// And it is re-dispatched with a note that the previous attempt ended on
+// BDD: Given a task whose first try ends because the model's tool calls keep
+// arriving as unparseable markup until the repair budget is spent,
+// When the run handles that try,
+// Then the task is NOT failed and NO task attempt is used — one goal try is
+// spent inside the same run,
+// And the worker is re-prompted with a note that the previous try ended on
 // malformed tool-call output,
-// And the next, clean attempt's claim is judged and completes the task.
-func TestTaskAttempt_OrphanMarkupExhaustion_ConsumesOneAttemptAndRedispatches(t *testing.T) {
+// And its next, clean claim is judged and completes the task.
+func TestTaskAttempt_OrphanMarkupExhaustion_SpendsOneTryAndContinuesTheRun(t *testing.T) {
 	worker := &orphanMarkupAttemptWorker{}
 	al, judgeInst := newGoalLoopTestLoop(t, worker, nil)
-	judge := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
-		return &providers.LLMResponse{
-			Content: `{"met": true, "criteria": [{"id":"c1","met":true,"reason":"one line, exit 0"}]}`,
-		}, nil
-	}}
+	judge := &b6ScriptedJudge{metFromCall: 1, reason: "one line, exit 0"}
 	judgeInst.Provider = judge
 
 	maxAttempts := 5
@@ -113,21 +110,21 @@ func TestTaskAttempt_OrphanMarkupExhaustion_ConsumesOneAttemptAndRedispatches(t 
 		t.Fatal("task reached no terminal status within 40s")
 	}
 	if reached.Status != task.StatusDone {
-		t.Fatalf("status = %q, want %q — an attempt that ended on unparseable tool-call markup must not fail "+
-			"the task while attempts remain (result: %s)", reached.Status, task.StatusDone, reached.Result)
+		t.Fatalf("status = %q, want %q — a try that ended on unparseable tool-call markup must not fail "+
+			"the task (result: %s)", reached.Status, task.StatusDone, reached.Result)
 	}
 	final := t3WaitForTerminal(t, al, tk.ID, 2)
 	if final.Status != task.StatusDone {
-		t.Fatalf("status = %q, want %q — an attempt that ended on unparseable tool-call markup must not fail "+
-			"the task while attempts remain (result: %s)", final.Status, task.StatusDone, final.Result)
+		t.Fatalf("status = %q, want %q — a try that ended on unparseable tool-call markup must not fail "+
+			"the task (result: %s)", final.Status, task.StatusDone, final.Result)
 	}
-	if final.AttemptCount != 1 {
-		t.Errorf("attempt_count = %d, want 1 — the markup-exhausted attempt consumes exactly one attempt, "+
-			"and the met verdict on the next attempt consumes none", final.AttemptCount)
+	if final.AttemptCount != 0 {
+		t.Errorf("attempt_count = %d, want 0 — the markup-exhausted try spends a goal try inside the run, "+
+			"not a task attempt", final.AttemptCount)
 	}
 	if got := judge.callCount(); got != 1 {
-		t.Errorf("judge ran %d time(s), want exactly 1 — the markup attempt has no claim to judge; "+
-			"the clean attempt's claim must be judged normally", got)
+		t.Errorf("judge ran %d time(s), want exactly 1 — the markup try has no claim to judge; "+
+			"the clean claim must be judged normally", got)
 	}
 
 	reqs := worker.snapshot()
@@ -139,10 +136,10 @@ func TestTaskAttempt_OrphanMarkupExhaustion_ConsumesOneAttemptAndRedispatches(t 
 		withoutNote++
 	}
 	if withoutNote != 1+maxOrphanToolMarkupRepairs {
-		t.Errorf("the first attempt made %d request(s) before the re-dispatch, want %d (1 + the repair budget) — "+
-			"the attempt must end on the repair-budget exhaustion, not earlier or later", withoutNote, 1+maxOrphanToolMarkupRepairs)
+		t.Errorf("the first try made %d request(s) before the re-prompt, want %d (1 + the repair budget) — "+
+			"the try must end on the repair-budget exhaustion, not earlier or later", withoutNote, 1+maxOrphanToolMarkupRepairs)
 	}
 	if len(reqs) == 0 || !strings.Contains(reqs[len(reqs)-1], malformedOutputNote) {
-		t.Errorf("the re-dispatched attempt's prompt does not say the previous attempt ended on %s", malformedOutputNote)
+		t.Errorf("the re-prompted try's request does not say the previous try ended on %s", malformedOutputNote)
 	}
 }

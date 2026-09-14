@@ -777,7 +777,7 @@ func lintMember(id string, blockedBy, writeSet []string) task.Task {
 //  5. ■ Stop on a second in_progress task cancels its worker + verifier
 //     sessions (RequestCancelForSession) and marks the task failed/cancelled.
 //
-// e2e residue: the real-LLM worker turn (vs the scripted finishTaskRun resp)
+// e2e residue: the real-LLM worker turn (vs the scripted finishRunTurn resp)
 // is the real-LLM gate (Conformance_t1_E2E); this proves the evidence-gate +
 // Stop control plane walks the drawn path faithfully.
 //
@@ -789,11 +789,10 @@ func TestConformance_t1_StandaloneTask_Design(t *testing.T) {
 	if sessStore == nil {
 		t.Fatal("native-agent session store not available")
 	}
-	taskMeta, err := sessStore.NewSession(session.SessionTypeTask, "system", "native-agent")
-	if err != nil {
-		t.Fatalf("create task session: %v", err)
+	agentInst, ok := al.GetRegistry().GetAgent("native-agent")
+	if !ok {
+		t.Fatal("native-agent not registered")
 	}
-	taskSessionID := taskMeta.ID
 
 	tk := &task.Task{
 		ID: "t1-standalone", AgentID: "native-agent", WorkspaceID: "test-ws",
@@ -804,15 +803,12 @@ func TestConformance_t1_StandaloneTask_Design(t *testing.T) {
 		t.Fatalf("create task: %v", createErr)
 	}
 
-	// A met-verdict judge that echoes the criterion id (the verifier reaches it
-	// only on a claim WITH evidence — node 4).
-	judgeInst.Provider = &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
-		return &providers.LLMResponse{
-			Content: `{"met": true, "criteria": [{"id":"c1","met":true,"reason":"ok"}]}`,
-		}, nil
-	}}
+	// A met-verdict judge answering every criterion it is asked about.
+	judge := &b6ScriptedJudge{metFromCall: 1, reason: "ok"}
+	judgeInst.Provider = judge
 
-	// (1) ▶ Run: claim the next task into in_progress (the dispatch).
+	// (1) ▶ Run: claim the next task into in_progress and mint its run
+	// session the way dispatch does (the goal is bound to that session).
 	if _, claimErr := taskStore.ClaimForRun(tk.ID, time.Now()); claimErr != nil {
 		t.Fatalf("(1) Run/claim: %v", claimErr)
 	}
@@ -820,63 +816,48 @@ func TestConformance_t1_StandaloneTask_Design(t *testing.T) {
 	if current.Status != task.StatusInProgress {
 		t.Fatalf("(1) after Run: status = %q, want in_progress", current.Status)
 	}
+	taskSessionID, serr := al.taskExecutor.createTaskSessionSync(current)
+	if serr != nil || taskSessionID == "" {
+		t.Fatalf("(1) mint the run session: id=%q err=%v", taskSessionID, serr)
+	}
+	state := &taskRunState{claimWatermark: time.Now().UTC()}
 
-	// (2) 1st bare claim → evidence-gate rejects pre-Judge, free steer, attempt 0.
-	bare := "done.\nTASK_STATUS: success\n"
-	if redis := al.taskExecutor.finishTaskRun(context.Background(), current, taskSessionID, bare, nil, "", nil); redis == "" {
-		t.Fatal("(2) 1st bare claim must be re-prompted (free steer), got empty redispatch")
+	// (2) A native worker's prose marker is NOT a claim: the turn spends one
+	// goal try, the Judge is not reached, no task attempt is used, and the
+	// run goes on in the same session.
+	bare := "done.\n[goal:evidence] looked at it\nTASK_STATUS: success\n"
+	step, _, _ := al.taskExecutor.finishRunTurn(context.Background(), current, taskSessionID, bare, nil, "", nil, state)
+	if step != runStepContinue {
+		t.Fatalf("(2) a prose marker from a native worker must continue the run, got step %v", step)
+	}
+	if judge.callCount() != 0 {
+		t.Fatal("(2) a prose marker must NOT reach the Judge — only goal_claim claims")
 	}
 	after2, _ := taskStore.Get(tk.ID)
-	if after2.AttemptCount != 0 {
-		t.Fatalf("(2) 1st bare claim consumed an attempt (%d), want 0 (G-4 free bounce)", after2.AttemptCount)
+	if after2.AttemptCount != 0 || after2.Status != task.StatusInProgress {
+		t.Fatalf("(2) attempt_count=%d status=%q, want 0 and in_progress", after2.AttemptCount, after2.Status)
 	}
-	fakeJudgeB2, ok := judgeInst.Provider.(*fakeJudgeProvider)
-	if !ok {
-		t.Fatalf("unexpected type %T for judgeInst.Provider, want *fakeJudgeProvider", judgeInst.Provider)
-	}
-	if fakeJudgeB2.callCount() != 0 {
-		t.Fatal("(2) 1st bare claim must NOT reach the Judge (evidence-gate rejects pre-Judge)")
+	if got := activeGoalForSession(taskSessionID); got == nil || got.Round != 1 {
+		t.Fatalf("(2) the goal must have spent exactly one try, got %+v", got)
 	}
 
-	// (3) re-claim → 2nd bare claim → consumes a real attempt (AttemptCount 1).
-	if _, claimErr3 := taskStore.ClaimForRun(tk.ID, time.Now()); claimErr3 != nil {
-		t.Fatalf("(3) re-claim: %v", claimErr3)
+	// (3) goal_claim(met) through the REAL tool → the Judge runs once → done.
+	claimTool, ok := agentInst.Tools.Get(tools.GoalClaimToolName)
+	if !ok {
+		t.Fatal("goal_claim is not registered on the worker")
 	}
+	b6ClaimMetAndPersist(t, claimTool, sessStore, taskSessionID, "call-t1-claim", "compared the output to c1, it matches")
 	current, _ = taskStore.Get(tk.ID)
-	if redis := al.taskExecutor.finishTaskRun(context.Background(), current, taskSessionID, bare, nil, "", nil); redis == "" {
-		t.Fatal("(3) 2nd bare claim must be re-prompted too")
+	step, _, _ = al.taskExecutor.finishRunTurn(context.Background(), current, taskSessionID, "verified.", nil, "", nil, state)
+	if step != runStepEnded {
+		t.Fatalf("(3) a met claim ends the run, got step %v", step)
+	}
+	if judge.callCount() != 1 {
+		t.Fatalf("(3) a goal_claim must reach the Judge exactly once, got %d", judge.callCount())
 	}
 	after3, _ := taskStore.Get(tk.ID)
-	if after3.AttemptCount != 1 {
-		t.Fatalf("(3) 2nd bare claim: attempt_count = %d, want 1 (G-4: 2nd costs an attempt)", after3.AttemptCount)
-	}
-	fakeJudgeB3, ok := judgeInst.Provider.(*fakeJudgeProvider)
-	if !ok {
-		t.Fatalf("unexpected type %T for judgeInst.Provider, want *fakeJudgeProvider", judgeInst.Provider)
-	}
-	if fakeJudgeB3.callCount() != 0 {
-		t.Fatal("(3) 2nd bare claim must still NOT reach the Judge (no evidence to judge)")
-	}
-
-	// (4) claim WITH evidence → verifier dispatched → met → done.
-	if _, claimErr4 := taskStore.ClaimForRun(tk.ID, time.Now()); claimErr4 != nil {
-		t.Fatalf("(4) re-claim: %v", claimErr4)
-	}
-	current, _ = taskStore.Get(tk.ID)
-	withEvidence := "verified output matches c1.\n[goal:evidence] compared to acceptance criterion c1, matches\nTASK_STATUS: success\n"
-	if redis := al.taskExecutor.finishTaskRun(context.Background(), current, taskSessionID, withEvidence, nil, "", nil); redis != "" {
-		t.Fatalf("(4) a met claim must NOT re-dispatch, got redispatch=%q", redis)
-	}
-	fakeJudgeB4, ok := judgeInst.Provider.(*fakeJudgeProvider)
-	if !ok {
-		t.Fatalf("unexpected type %T for judgeInst.Provider, want *fakeJudgeProvider", judgeInst.Provider)
-	}
-	if fakeJudgeB4.callCount() != 1 {
-		t.Fatalf("(4) a claim WITH evidence must reach the Judge exactly once, got %d", fakeJudgeB4.callCount())
-	}
-	after4, _ := taskStore.Get(tk.ID)
-	if after4.Status != task.StatusDone {
-		t.Fatalf("(4) a met verdict must transition the task to done, got %q", after4.Status)
+	if after3.Status != task.StatusDone {
+		t.Fatalf("(3) a met verdict must transition the task to done, got %q", after3.Status)
 	}
 
 	// (5) ■ Stop cancels the in-flight turn + verifier sessions on a second

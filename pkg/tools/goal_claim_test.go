@@ -286,7 +286,10 @@ func TestGoalClaim_MetWithEvidenceSucceedsAndReportsIt(t *testing.T) {
 
 // TestGoalClaim_BlockedAndWaitingOnUserNeedNoEvidence asserts blocked and
 // waiting_on_user succeed with no evidence argument at all — FR-088's
-// evidence requirement is scoped to status:met only.
+// evidence requirement is scoped to status:met only — and that the one-line
+// reason, when the caller gives one, is carried in the result so the engine
+// can show it (founder decision 2026-09-14, issue #710: a blocked task ends
+// Failed "Blocked: <reason>").
 func TestGoalClaim_BlockedAndWaitingOnUserNeedNoEvidence(t *testing.T) {
 	for _, status := range []string{"blocked", "waiting_on_user"} {
 		t.Run(status, func(t *testing.T) {
@@ -295,20 +298,30 @@ func TestGoalClaim_BlockedAndWaitingOnUserNeedNoEvidence(t *testing.T) {
 			access.condition[sessionID] = "ship the thing"
 			tool := newGoalClaimTool(access)
 
-			res := tool.Execute(setGoalCtx(sessionID, "mia"), map[string]any{"status": status})
-			if res.IsError {
-				t.Fatalf("status:%s with no evidence should succeed, got error: %q", status, res.ForLLM)
+			decode := func(res *ToolResult) map[string]any {
+				t.Helper()
+				if res.IsError {
+					t.Fatalf("status:%s should succeed, got error: %q", status, res.ForLLM)
+				}
+				var payload map[string]any
+				if err := json.Unmarshal([]byte(res.ForLLM), &payload); err != nil {
+					t.Fatalf("result payload is not valid JSON: %v (%q)", err, res.ForLLM)
+				}
+				if payload["status"] != status {
+					t.Fatalf("payload[status] = %v, want %q", payload["status"], status)
+				}
+				return payload
 			}
 
-			var payload map[string]any
-			if err := json.Unmarshal([]byte(res.ForLLM), &payload); err != nil {
-				t.Fatalf("result payload is not valid JSON: %v (%q)", err, res.ForLLM)
+			bare := decode(tool.Execute(setGoalCtx(sessionID, "mia"), map[string]any{"status": status}))
+			if _, present := bare["evidence"]; present {
+				t.Fatalf("status:%s with no reason must not carry an evidence key, got payload %v", status, bare)
 			}
-			if payload["status"] != status {
-				t.Fatalf("payload[status] = %v, want %q", payload["status"], status)
-			}
-			if _, present := payload["evidence"]; present {
-				t.Fatalf("status:%s must not carry an evidence key, got payload %v", status, payload)
+
+			const reason = "  the supplier portal needs a login I do not have  "
+			withReason := decode(tool.Execute(setGoalCtx(sessionID, "mia"), map[string]any{"status": status, "evidence": reason}))
+			if withReason["evidence"] != "the supplier portal needs a login I do not have" {
+				t.Fatalf("status:%s must carry the trimmed reason, got payload %v", status, withReason)
 			}
 		})
 	}

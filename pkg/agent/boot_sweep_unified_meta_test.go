@@ -56,7 +56,7 @@ func newMetaReconcileTestAgentLoop(t *testing.T) (al *AgentLoop, agentID string)
 			},
 		},
 	}
-	al = mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &scriptedProvider{responseBody: successMarkerBody})
+	al = mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &scriptedProvider{responseBody: "Did the work."})
 	t.Cleanup(func() { al.Close() })
 	return al, agentID
 }

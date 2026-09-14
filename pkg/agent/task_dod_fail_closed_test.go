@@ -6,7 +6,7 @@
 // must not be able to complete a task with its Definition of Done unjudged.
 //
 // The shape of the defect. taskGoalDoD answered every read failure with a bare
-// nil and one WARN. At the call site (adjudicateClaim) nil is not a failure
+// nil and one WARN. At the call site (adjudicateRunClaim) nil is not a failure
 // signal — it is the ordinary value for "this task has no Definition of Done":
 //
 //	dod := taskGoalDoD(t.ID)
@@ -109,7 +109,7 @@ func duplicateGoalRecordFile(t *testing.T, taskID string) {
 // TestUnreadableDoDCannotCompleteTheTask_C2 is the oracle.
 //
 // The outcome for a fault row is EC-6's judge-unavailable shape, which
-// adjudicateClaim already uses twice for the same reason: this is a claim that
+// adjudicateRunClaim already uses twice for the same reason: this is a claim that
 // CANNOT be adjudicated, not a claim that is false. Non-terminal, no round and
 // no attempt consumed, the task left in_progress with its run still open, and
 // the Judge never dispatched at all — a claim that cannot be judged must not
@@ -187,8 +187,8 @@ func TestUnreadableDoDCannotCompleteTheTask_C2(t *testing.T) {
 				tc.breakGoalStore(t, stored.ID)
 			}
 
-			al.taskExecutor.adjudicateClaim(context.Background(), stored, taskSessionID,
-				"Implemented the CSV export and exercised the endpoint by hand.", nil)
+			al.taskExecutor.adjudicateRunClaim(context.Background(), stored, taskSessionID,
+				"Implemented the CSV export and exercised the endpoint by hand.", nil, &taskRunState{})
 
 			final, err := GetTaskStore(al).Get(stored.ID)
 			if err != nil {
@@ -264,8 +264,8 @@ func TestUnreadableDoDDoesNotBlockAnUnrelatedTask(t *testing.T) {
 		[]task.AcceptanceCriterion{proseCriterion("", dodTestCriterionText)},
 		[]task.AcceptanceCriterion{proseCriterion("", dodTestDoDText)})
 
-	al.taskExecutor.adjudicateClaim(context.Background(), healthy, healthySession,
-		"Implemented the CSV export and exercised the endpoint by hand.", nil)
+	al.taskExecutor.adjudicateRunClaim(context.Background(), healthy, healthySession,
+		"Implemented the CSV export and exercised the endpoint by hand.", nil, &taskRunState{})
 
 	final, err := GetTaskStore(al).Get(healthy.ID)
 	if err != nil {

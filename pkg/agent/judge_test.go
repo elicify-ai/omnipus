@@ -136,6 +136,9 @@ func newGoalLoopTestLoop(
 			},
 		},
 	}
+	// Production seeds goal_claim "allow" for every agent (pkg/config/defaults.go);
+	// a task worker can only finish by calling it (founder decision 2026-09-14).
+	cfg.Sandbox.ToolPolicies = map[string]string{"goal_claim": "allow"}
 	if mutateCfg != nil {
 		mutateCfg(cfg)
 	}

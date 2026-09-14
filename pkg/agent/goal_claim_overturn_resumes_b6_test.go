@@ -120,40 +120,6 @@ func (j *b6ScriptedJudge) askedOnCall(n int) []string {
 	return j.askedTexts[n-1]
 }
 
-// b6RecordingWorker is the worker agent's provider. Unlike scriptedProvider it
-// keeps EVERY request, so a test can compare what attempt 1 and attempt 2 were
-// each actually sent.
-type b6RecordingWorker struct {
-	mu       sync.Mutex
-	requests []string
-	response string
-}
-
-func (w *b6RecordingWorker) Chat(
-	_ context.Context, messages []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any,
-) (*providers.LLMResponse, error) {
-	var sb strings.Builder
-	for _, m := range messages {
-		sb.WriteString(m.Content)
-		sb.WriteString("\n")
-	}
-	w.mu.Lock()
-	w.requests = append(w.requests, sb.String())
-	resp := w.response
-	w.mu.Unlock()
-	return &providers.LLMResponse{Content: resp}, nil
-}
-
-func (w *b6RecordingWorker) GetDefaultModel() string { return "recording-worker-model" }
-
-func (w *b6RecordingWorker) snapshot() []string {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	out := make([]string, len(w.requests))
-	copy(out, w.requests)
-	return out
-}
-
 // b6ClaimMetAndPersist executes the REAL goal_claim tool registered on the
 // working agent, then persists the call exactly the way loop.go's tool-call
 // record stores a successful plain-text tool result (Result["text"] carrying
@@ -305,25 +271,20 @@ func TestB6_ChatGoal_OverturnedGoalClaimMet_SteersWorkerAndNextClaimIsJudged(t *
 	}
 }
 
-// TestB6_TaskGoal_OverturnedCompletionClaim_NextAttemptCarriesJudgeFeedback
+// TestB6_TaskGoal_OverturnedClaim_SameRunCarriesJudgeFeedback
 //
 // Given a task with an acceptance criterion and its paired goal record
-// When the worker claims success with the completion marker the task prompt
-// teaches and the Judge overturns that claim
-// Then the task is re-dispatched, not ended: one attempt is consumed and a
-// second worker turn actually runs
-// And the second attempt's prompt, as received by the worker's provider,
-// carries the Judge's reason under the attempt-1 feedback heading, while the
-// first attempt's prompt did not
+// When the worker claims completion through goal_claim and the Judge overturns
+// that claim
+// Then the task keeps working in the SAME run and session — an overturned claim
+// spends a goal try, not a task attempt (founder decision 2026-09-14, issue
+// #710) — and a second worker turn actually runs
+// And the second turn's request, as received by the worker's provider, carries
+// the Judge's reason, while the first turn's did not
 // And when the Judge upholds the second claim the task completes done and the
-// goal ends met without ever having been terminated in between.
-func TestB6_TaskGoal_OverturnedCompletionClaim_NextAttemptCarriesJudgeFeedback(t *testing.T) {
-	worker := &b6RecordingWorker{
-		response: "I compiled the supplier report.\n" +
-			"[goal:evidence] wrote report.md and re-read it\n" +
-			"TASK_STATUS: success\n" +
-			"TASK_SUMMARY: report.md written.",
-	}
+// goal ends met on its second try, never having been ended in between.
+func TestB6_TaskGoal_OverturnedClaim_SameRunCarriesJudgeFeedback(t *testing.T) {
+	worker := newClaimingWorker(turnClaimMet("wrote report.md and re-read it"), turnClaimMet(b6SecondEvidence))
 	al, judgeInst := newGoalLoopTestLoop(t, worker, nil)
 	judge := &b6ScriptedJudge{metFromCall: 2, reason: b6JudgeReason}
 	judgeInst.Provider = judge
@@ -360,9 +321,8 @@ func TestB6_TaskGoal_OverturnedCompletionClaim_NextAttemptCarriesJudgeFeedback(t
 	if final.Status != task.StatusDone {
 		t.Fatalf("task status = %q, want %q (result: %s)", final.Status, task.StatusDone, final.Result)
 	}
-	if final.AttemptCount != 1 {
-		t.Errorf("attempts consumed = %d, want 1 (the overturned claim costs one attempt; the upheld one costs none)",
-			final.AttemptCount)
+	if final.AttemptCount != 0 {
+		t.Errorf("task attempts used = %d, want 0 (the overturned claim spends a goal try inside the run)", final.AttemptCount)
 	}
 	if n := judge.callCount(); n != 2 {
 		t.Errorf("Judge calls = %d, want 2 (one overturn, one upheld)", n)
@@ -371,26 +331,28 @@ func TestB6_TaskGoal_OverturnedCompletionClaim_NextAttemptCarriesJudgeFeedback(t
 		t.Fatal("fixture broken: the Judge was asked about no criteria on the first claim")
 	}
 
-	reqs := worker.snapshot()
+	reqs := worker.requestSnapshot()
 	if len(reqs) != 2 {
-		t.Fatalf("worker turns = %d, want 2 — an overturned claim must start a new attempt", len(reqs))
+		t.Fatalf("worker turns = %d, want 2 — an overturned claim must be followed by another turn", len(reqs))
 	}
 	if strings.Contains(reqs[0], b6JudgeReason) {
-		t.Fatal("fixture broken: attempt 1's prompt already contained the Judge's reason before any verdict existed")
+		t.Fatal("fixture broken: the first turn's request already contained the Judge's reason before any verdict existed")
 	}
 	if !strings.Contains(reqs[1], b6JudgeReason) {
-		t.Errorf("attempt 2's prompt does not carry the Judge's reason — the worker was re-dispatched blind "+
-			"and can only repeat the claim that was just overturned.\nattempt 2 request:\n%s", reqs[1])
+		t.Errorf("the second turn's request does not carry the Judge's reason — the worker was sent back blind "+
+			"and can only repeat the claim that was just overturned.\nsecond request:\n%s", reqs[1])
 	}
-	if !strings.Contains(reqs[1], "Feedback from attempt 1") {
-		t.Errorf("attempt 2's prompt has no attempt-1 feedback heading.\nattempt 2 request:\n%s", reqs[1])
+	runs, rerr := al.taskStore.ListRuns(taskID)
+	if rerr != nil {
+		t.Fatalf("ListRuns: %v", rerr)
+	}
+	if len(runs) != 1 || runs[0].SessionID != final.SessionID {
+		t.Errorf("runs = %+v, final session = %q — both tries must happen in the run's one session", runs, final.SessionID)
 	}
 
 	// completeTaskWithResult archives the task session (the signal
-	// t3WaitForTerminal returns on) BEFORE it ends the paired goal record
-	// (terminateTaskGoalRecord is the next write), so the goal's terminal
-	// state is read with a bounded wait rather than a single read that would
-	// race that one trailing write.
+	// t3WaitForTerminal returns on) BEFORE it ends the paired goal record, so
+	// the goal's terminal state is read with a bounded wait.
 	rec := readTaskGoal(t, taskID)
 	for deadline := time.Now().Add(10 * time.Second); rec.State == generated.GoalStateActive && time.Now().Before(deadline); {
 		time.Sleep(20 * time.Millisecond)
@@ -399,8 +361,11 @@ func TestB6_TaskGoal_OverturnedCompletionClaim_NextAttemptCarriesJudgeFeedback(t
 	if rec.State != generated.GoalStateMet {
 		t.Errorf("paired goal state = %q, want %q", rec.State, generated.GoalStateMet)
 	}
+	if rec.Round != 2 {
+		t.Errorf("paired goal tries used = %d, want 2 (one overturned, one upheld)", rec.Round)
+	}
 	if len(rec.TerminalHistory) != 0 {
 		t.Errorf("the paired goal carries %d terminal-history entr(ies) — it was ENDED by the overturn and "+
-			"re-activated, instead of staying active across the retry: %+v", len(rec.TerminalHistory), rec.TerminalHistory)
+			"re-activated, instead of staying active within the run: %+v", len(rec.TerminalHistory), rec.TerminalHistory)
 	}
 }

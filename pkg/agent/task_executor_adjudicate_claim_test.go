@@ -2,7 +2,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// task_executor_adjudicate_claim_test.go covers TaskExecutor.adjudicateClaim's
+// task_executor_adjudicate_claim_test.go covers TaskExecutor.adjudicateRunClaim's
 // two 7-reviewer-gate fixes (ADR-052 fix wave): item 3 (an empty completion
 // claim fails closed BEFORE any verifier dispatch — never a slow judge/
 // verifier turn for a claim with nothing to adjudicate) and item 4 (FR-014
@@ -50,34 +50,38 @@ func TestTaskExecutor_AdjudicateClaim_EmptyClaimFailsClosedWithoutVerifierDispat
 		t.Fatalf("create task: %v", err)
 	}
 
-	redispatch := al.taskExecutor.adjudicateClaim(context.Background(), tk, "", "   ", nil)
+	state := &taskRunState{}
+	step, steer, redispatch := al.taskExecutor.adjudicateRunClaim(context.Background(), tk, "", "   ", nil, state)
 
 	if fake.callCount() != 0 {
 		t.Fatalf("an empty completion claim must never dispatch the verifier; callCount=%d", fake.callCount())
 	}
-	if redispatch == "" {
-		t.Fatal("expected a re-dispatch id (attempt 1 of the default 3, consumed via the goal loop)")
+	if step != runStepContinue || redispatch != "" {
+		t.Fatalf("step=%v redispatch=%q, want the run to continue in the same session (a spent try, not a failed run)",
+			step, redispatch)
+	}
+	if !strings.Contains(steer, "one-line statement") {
+		t.Errorf("steer = %q, want it to ask for the evidence line", steer)
+	}
+	if state.innerTries != 1 {
+		t.Errorf("tries spent = %d, want 1", state.innerTries)
 	}
 	final, err := taskStore.Get(tk.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if final.Status == task.StatusDone {
-		t.Fatal("an empty claim must never resolve to done")
+	if final.Status != task.StatusInProgress {
+		t.Fatalf("status = %q, want in_progress — an empty claim neither completes nor fails the run", final.Status)
 	}
-	if final.AttemptCount != 1 {
-		t.Errorf("attempt_count = %d, want 1 (the fail-closed empty-claim reason still consumes an attempt "+
-			"like any other unmet outcome)", final.AttemptCount)
-	}
-	if !strings.Contains(final.Result, "empty claim summary") {
-		t.Errorf("result = %q, want it to explain the empty-claim fail-closed reason", final.Result)
+	if final.AttemptCount != 0 {
+		t.Errorf("attempt_count = %d, want 0 — a spent goal try is not a task attempt", final.AttemptCount)
 	}
 }
 
 // TestTaskExecutor_AdjudicateClaim_FR014_DropsStaleVerdictAfterConcurrentStop
 // proves item 4: JudgeCriteria's verifier turn runs OUTSIDE any lock, so a
 // concurrent Stop (PlanEngine.StopTask, plan_engine.go) can flip the task
-// out of in_progress WHILE the judge call is still in flight. adjudicateClaim
+// out of in_progress WHILE the judge call is still in flight. adjudicateRunClaim
 // must re-check the task's current status before applying the verdict —
 // dropping it (no verdict write, no attempt consumption) rather than
 // clobbering the Stop outcome, mirroring plan_engine.go's
@@ -108,7 +112,8 @@ func TestTaskExecutor_AdjudicateClaim_FR014_DropsStaleVerdictAfterConcurrentStop
 
 	done := make(chan string, 1)
 	go func() {
-		done <- al.taskExecutor.adjudicateClaim(context.Background(), tk, "", "I finished the thing", nil)
+		_, _, redispatch := al.taskExecutor.adjudicateRunClaim(context.Background(), tk, "", "I finished the thing", nil, &taskRunState{})
+		done <- redispatch
 	}()
 
 	<-registered
@@ -126,7 +131,7 @@ func TestTaskExecutor_AdjudicateClaim_FR014_DropsStaleVerdictAfterConcurrentStop
 	redispatch := <-done
 
 	if redispatch != "" {
-		t.Errorf("adjudicateClaim must not request a re-dispatch once the verdict was dropped, got %q", redispatch)
+		t.Errorf("adjudicateRunClaim must not request a re-dispatch once the verdict was dropped, got %q", redispatch)
 	}
 	final, err := taskStore.Get(tk.ID)
 	if err != nil {
@@ -149,7 +154,7 @@ func TestTaskExecutor_AdjudicateClaim_FR014_DropsStaleVerdictAfterConcurrentStop
 // ADR-086 / GOAL-FR-022 and GOAL-FR-023 — wave T3
 //
 // FR-022: "The trust-the-claim branch in
-// pkg/agent/task_executor.go::adjudicateClaim — which completes a task when
+// pkg/agent/task_executor.go::adjudicateRunClaim — which completes a task when
 // its criteria set and its soft tier are both empty — MUST be deleted."
 //
 // FR-023: "A task created before FR-021 with no criteria MUST continue to
@@ -171,7 +176,7 @@ func TestTaskExecutor_AdjudicateClaim_FR014_DropsStaleVerdictAfterConcurrentStop
 // the array, so no end delimiter has to be guessed.
 //
 // This reads the REAL prompt the Judge received rather than a value the test
-// itself supplied — the only way to prove WHICH criteria adjudicateClaim
+// itself supplied — the only way to prove WHICH criteria adjudicateRunClaim
 // chose (explicit list vs. the ephemeral soft tier) without reaching into
 // the function's internals.
 func judgeCriteriaSentToJudge(t *testing.T, content string) []struct {
@@ -270,8 +275,8 @@ func (p *goalFR022JudgeProvider) lastContent(t *testing.T) string {
 }
 
 // mustCreateInProgressTask creates tk in al's task store and moves it to
-// in_progress — the status consumeAttemptOrExhaust's compare-and-swap and
-// adjudicateClaim's taskVerdictStillApplicable re-read both require.
+// in_progress — the status consumeTaskAttempt's compare-and-swap and
+// adjudicateRunClaim's taskVerdictStillApplicable re-read both require.
 func mustCreateInProgressTask(t *testing.T, al *AgentLoop, tk *task.Task) *task.Task {
 	t.Helper()
 	store := GetTaskStore(al)
@@ -305,14 +310,14 @@ func mustCreateInProgressTask(t *testing.T, al *AgentLoop, tk *task.Task) *task.
 // blank task: pkg/task's own store-layer validation (Store.normalize) makes
 // Title mandatory and non-blank, so SoftTierCriterion can never return nil
 // for a task READ BACK from the store. The structurally-empty state is
-// therefore only reachable by handing adjudicateClaim a Task value whose
+// therefore only reachable by handing adjudicateRunClaim a Task value whose
 // text fields are empty — which is exactly the shape the deleted branch
 // existed to handle, and exactly the shape a restored branch would trust.
 func TestTrustTheClaimPathRemoved_GOALFR022(t *testing.T) {
 	cases := []struct {
 		name string
 		// blankText empties Title/Description/Prompt on the value handed to
-		// adjudicateClaim, making SoftTierCriterion return nil.
+		// adjudicateRunClaim, making SoftTierCriterion return nil.
 		blankText bool
 		criteria  []task.AcceptanceCriterion
 		judgeMet  bool
@@ -374,8 +379,8 @@ func TestTrustTheClaimPathRemoved_GOALFR022(t *testing.T) {
 				stored.Title, stored.Description, stored.Prompt = "", "", ""
 			}
 
-			redispatch := al.taskExecutor.adjudicateClaim(
-				context.Background(), stored, "", "I finished it, trust me.", nil)
+			_, _, redispatch := al.taskExecutor.adjudicateRunClaim(
+				context.Background(), stored, "", "I finished it, trust me.", nil, &taskRunState{})
 
 			if got := judge.callCount(); got != tc.wantJudgeCalls {
 				t.Errorf("Judge dispatched %d time(s), want %d", got, tc.wantJudgeCalls)
@@ -400,8 +405,8 @@ func TestTrustTheClaimPathRemoved_GOALFR022(t *testing.T) {
 					t.Fatal("a structurally empty task completed on the worker's claim alone — " +
 						"the trust-the-claim branch GOAL-FR-022 deletes has been reintroduced")
 				}
-				if !strings.Contains(final.Result, "no soft-tier fallback") {
-					t.Errorf("result = %q, want it to state the fail-closed reason (no criteria, no soft tier)",
+				if !strings.Contains(final.Result, "no acceptance criteria") {
+					t.Errorf("result = %q, want it to state the fail-closed reason (no criteria, no text)",
 						final.Result)
 				}
 			}
@@ -472,8 +477,8 @@ func TestLegacyCriterialessTaskStillRuns_GOALFR023(t *testing.T) {
 				Title: tc.title, Description: tc.description, Prompt: tc.prompt, Criteria: tc.criteria,
 			})
 
-			al.taskExecutor.adjudicateClaim(
-				context.Background(), stored, "", "[goal:evidence] painted it green", nil)
+			al.taskExecutor.adjudicateRunClaim(
+				context.Background(), stored, "", "painted it green", nil, &taskRunState{})
 
 			if judge.callCount() != 1 {
 				t.Fatalf("Judge dispatched %d time(s), want exactly 1 — a criteria-less legacy task "+

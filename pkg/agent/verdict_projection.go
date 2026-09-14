@@ -10,7 +10,7 @@
 // this). It is called from all three places criteria live (FR-040):
 //
 //   - the goal record, from goal_triggers.go::runGoalAdjudication
-//   - the task record, from task_executor.go::adjudicateClaim
+//   - the task record, from task_run_loop.go::adjudicateRunClaim
 //   - a plan member's definition of done, from
 //     plan_engine.go::applyJudgeRoundOutcome
 //

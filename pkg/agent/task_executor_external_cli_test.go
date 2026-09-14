@@ -53,6 +53,9 @@ func newExternalCLITaskTestLoop(t *testing.T, provider providers.LLMProvider) (a
 			},
 		},
 	}
+	// Production seeds goal_claim "allow" for every agent (pkg/config/defaults.go);
+	// a task worker can only finish by calling it (founder decision 2026-09-14).
+	cfg.Sandbox.ToolPolicies = map[string]string{"goal_claim": "allow"}
 	al = mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
 	bindMetSoftTierJudge(t, al)
 	// See newNativeTaskCompletionTestLoop's identical Close() cleanup (same
@@ -168,18 +171,14 @@ func TestProcessTaskDirect_ExternalCLIWorker_NoSoul_ComposesTaskOnly(t *testing.
 	}
 }
 
-// TestTaskExecutor_ExternalCLIWorker_CompletesViaStatusMarker (renamed from
-// ...AutoCompletesTaskViaExternalCLI — review D4: the old name described the
-// retired ADR-042 §3 auto-complete-to-Done default; this test now proves the
-// ADR-043 marker contract instead) proves the full end-to-end path:
-// TaskExecutor.ExecuteTask dispatches a task assigned to a subagent_3p
-// worker, which runs via runExternalCLISubTurn (fake driver) instead of the
-// native engine, and — since an external-CLI worker's tool registry is its
-// own CLI's and has no task_update tool wired to Omnipus at all —
-// TaskExecutor.finishTaskRun takes the "agent did not call task_update"
-// branch and completes the task from the standardized TASK_STATUS completion
-// marker (ADR-043) the fake driver's output carries, using the aggregated CLI
-// output (marker included, no TASK_SUMMARY here) as the result.
+// TestTaskExecutor_ExternalCLIWorker_CompletesViaStatusMarker proves the full
+// end-to-end path for a subagent_3p worker: TaskExecutor.ExecuteTask dispatches
+// the task, it runs via runExternalCLISubTurn (fake driver) instead of the
+// native engine, and — because an external CLI cannot call Omnipus tools — its
+// evidence line plus TASK_STATUS marker (ADR-043) is read as its claim and fed
+// into the SAME claim path goal_claim feeds (founder decision 2026-09-14): the
+// Judge checks it, and the upheld claim completes the task with the worker's
+// own evidence line as its result, exactly as for a native worker.
 func TestTaskExecutor_ExternalCLIWorker_CompletesViaStatusMarker(t *testing.T) {
 	provider := &countingProvider{}
 	al, _ := newExternalCLITaskTestLoop(t, provider)
@@ -190,11 +189,9 @@ func TestTaskExecutor_ExternalCLIWorker_CompletesViaStatusMarker(t *testing.T) {
 	go func() {
 		fr.InjectEvent(runner.RunEvent{
 			Kind: runner.EventKindOutput,
-			// ADR-052 FR-035: the evidence-marker gate (task_executor.go's
-			// finishTaskRun, ahead of parseTaskCompletionSignal) requires a
-			// "[goal:evidence] ..." line immediately before TASK_STATUS —
-			// without it this bare claim would be re-prompted instead of
-			// completing the task from the marker.
+			// ADR-052 FR-035: an external CLI's success marker is a claim only
+			// with a "[goal:evidence] ..." line immediately before it — without
+			// it the bare marker spends a goal try and the worker is re-prompted.
 			Output: &runner.OutputEvent{
 				Text: "task finished by external CLI\n[goal:evidence] confirmed the external run completed\nTASK_STATUS: success",
 			},
@@ -224,8 +221,8 @@ func TestTaskExecutor_ExternalCLIWorker_CompletesViaStatusMarker(t *testing.T) {
 	if final.Status != task.StatusDone {
 		t.Fatalf("task status = %q, want %q (result: %s)", final.Status, task.StatusDone, final.Result)
 	}
-	if !strings.Contains(final.Result, "task finished by external CLI") {
-		t.Errorf("task result = %q, want it to contain the external CLI output", final.Result)
+	if final.Result != "confirmed the external run completed" {
+		t.Errorf("task result = %q, want the upheld claim's evidence line", final.Result)
 	}
 	if provider.calls != 0 {
 		t.Fatalf("native LLM provider was called %d times, want 0", provider.calls)
@@ -234,11 +231,11 @@ func TestTaskExecutor_ExternalCLIWorker_CompletesViaStatusMarker(t *testing.T) {
 
 // TestTaskExecutor_ExternalCLIWorker_FatalError_TaskFails (T1, pr-test-analyzer)
 // proves the failure path through the TASK entry point (TaskExecutor.ExecuteTask):
-// a fatal EventKindError from the external CLI driver must land the task in
-// task.StatusFailed — not merely "not done", and not silently auto-completed
-// to Done the way the happy path does — with a Result an operator can actually
-// read (the underlying driver error message), mirroring finishTaskRun's error
-// branch (te.failTask + Result: "execution error: ...").
+// a fatal EventKindError from the external CLI driver breaks the run, which
+// fails the run as a whole (founder decision 2026-09-14: a broken run is an
+// OUTER attempt failure). With a task attempt limit of 1 there is no restart:
+// the task lands in task.StatusFailed — not merely "not done", and not
+// auto-completed — with a Result an operator can actually read.
 func TestTaskExecutor_ExternalCLIWorker_FatalError_TaskFails(t *testing.T) {
 	provider := &countingProvider{}
 	al, _ := newExternalCLITaskTestLoop(t, provider)
@@ -254,6 +251,7 @@ func TestTaskExecutor_ExternalCLIWorker_FatalError_TaskFails(t *testing.T) {
 		fr.Cancel() // closes the event channel so the dispatcher/drain loop ends
 	}()
 
+	one := 1
 	tk := &task.Task{
 		Title:       "assigned to external worker",
 		Prompt:      "do the failing task",
@@ -262,6 +260,7 @@ func TestTaskExecutor_ExternalCLIWorker_FatalError_TaskFails(t *testing.T) {
 		Priority:    3,
 		WorkspaceID: "default",
 		Status:      task.StatusNext,
+		MaxAttempts: &one,
 	}
 	if err := al.taskStore.Create(tk); err != nil {
 		t.Fatalf("create task: %v", err)
@@ -288,6 +287,9 @@ func TestTaskExecutor_ExternalCLIWorker_FatalError_TaskFails(t *testing.T) {
 	if !strings.Contains(final.Result, "external-cli run failed") {
 		t.Errorf("task Result = %q, want it to mention the generic failure wrapper",
 			final.Result)
+	}
+	if final.AttemptCount != 1 {
+		t.Errorf("attempt_count = %d, want 1 — a broken run is one failed task attempt", final.AttemptCount)
 	}
 	if provider.calls != 0 {
 		t.Fatalf("native LLM provider was called %d times, want 0", provider.calls)
@@ -329,6 +331,9 @@ func TestProcessTaskDirect_ExternalCLIWorker_Timeout_TaskFailsWithoutHanging(t *
 	// deadline below. A driver that hangs like this is exactly the scenario
 	// FR-5.4's turn cap and this timeout exist to bound.
 
+	// A run that times out is broken — one failed task attempt; a limit of 1
+	// ends the task on it instead of restarting (founder decision 2026-09-14).
+	oneAttempt := 1
 	tk := &task.Task{
 		Title:       "assigned to external worker",
 		Prompt:      "do the task that never finishes",
@@ -337,6 +342,7 @@ func TestProcessTaskDirect_ExternalCLIWorker_Timeout_TaskFailsWithoutHanging(t *
 		Priority:    3,
 		WorkspaceID: "default",
 		Status:      task.StatusNext,
+		MaxAttempts: &oneAttempt,
 	}
 	if err := al.taskStore.Create(tk); err != nil {
 		t.Fatalf("create task: %v", err)
@@ -363,7 +369,7 @@ func TestProcessTaskDirect_ExternalCLIWorker_Timeout_TaskFailsWithoutHanging(t *
 	// driver that never emits an end/error event: drainExternalRun's ctx.Done()
 	// branch sets runErr = ctx.Err() (context.DeadlineExceeded), which
 	// propagates unwrapped through runExternalCLISubTurn's result.Err ->
-	// processTaskDirectExternalCLI's %w-wrapped error -> finishTaskRun's
+	// processTaskDirectExternalCLI's %w-wrapped error -> the task run loop's
 	// "execution error: %v" — locking in a stable "deadline exceeded"
 	// substring so this test can't silently start passing for the wrong
 	// reason (e.g. a different, non-timeout failure).
@@ -508,7 +514,7 @@ func TestProcessTaskDirect_ExternalCLIWorker_Cancel_FiresTurnCanceledCallback(t 
 
 	// This test returns as soon as the turn_canceled entry appears (written mid-run
 	// in Finish's onCancelFinish callback) — but the runTask goroutine keeps going
-	// afterward through finishTaskRun (task-store status + transcript writes). Block
+	// afterward through the run loop (task-store status + transcript writes). Block
 	// until that goroutine has fully finished so t.TempDir()'s deferred cleanup can't
 	// race its late writes (the pre-existing "TempDir RemoveAll: directory not empty"
 	// flake, which contended package runs occasionally surfaced).
@@ -550,7 +556,7 @@ func waitTaskTerminal(t *testing.T, al *AgentLoop, taskID string) *task.Task {
 
 // waitTaskRunGoroutineDone blocks until the runTask goroutine for taskID has
 // fully finished. runTask defers delete(te.running, id) (task_executor.go), which
-// runs LAST — after finishTaskRun's late task-store/transcript writes — so once
+// runs LAST — after the run loop's late task-store/transcript writes — so once
 // te.running no longer holds the id, no further writes from that goroutine can
 // race a test's t.TempDir() cleanup.
 func waitTaskRunGoroutineDone(t *testing.T, te *TaskExecutor, taskID string) {

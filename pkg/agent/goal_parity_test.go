@@ -21,12 +21,18 @@
 // own expectations — which is exactly the failure mode a hand-written
 // "assert chat does X, assert task does X" pair invites.
 //
-// The one deliberate asymmetry, stated so it is not mistaken for a gap: the
-// two runs differ in how the claim turn is ADMITTED by checkGoalLoopAfterTurn's
-// origin gate — a chat turn is admitted as `UserInitiated`, a task run's own
-// dispatched turn as `IsTaskRun` (goal_loop.go's origin gate, GOAL-FR-015).
-// That is turn PROVENANCE, not goal behaviour; every observation compared
-// below is downstream of admission.
+// The deliberate asymmetries, stated so they are not mistaken for gaps. Both
+// are turn PROVENANCE, not goal behaviour, and every observation compared below
+// is downstream of them:
+//
+//   - how a turn is ADMITTED: a chat turn as `UserInitiated`, a task run's own
+//     dispatched turn as `IsTaskRun` (goal_loop.go's origin gate, GOAL-FR-015);
+//   - which DRIVER resolves a claim (founder decision 2026-09-14, issue #710:
+//     one claim mechanism, one Judge pipeline). Both kinds claim through the
+//     same goal_claim tool call and are adjudicated by the same Judge
+//     verification; a chat claim is picked up by the after-turn hook and
+//     judged after the reply is delivered, a task run's claim by the task
+//     executor's run loop once the turn has ended.
 package agent
 
 import (
@@ -39,6 +45,8 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // parityGoalText is the identical text both goals are built from — SC-001's
@@ -47,10 +55,10 @@ import (
 // what makes the dispatched content directly comparable between the runs.
 const parityGoalText = "migrate the billing importer to the new schema"
 
-// goalBehaviourObservation is the comparable surface. Every field is
+// goalBehaviourObservation is the comparable surface. Every exported field is
 // something an operator or an agent could observe — a dispatched turn, a
 // counter read back from pkg/goal's store, a terminal state, a Judge call
-// count. No field records an implementation detail.
+// count. No exported field records an implementation detail.
 type goalBehaviourObservation struct {
 	// Phase A — a suppression that must hold identically for both kinds.
 	KeeperActedWhileWaitingOnUser bool
@@ -63,16 +71,21 @@ type goalBehaviourObservation struct {
 	RoundsAfterKeeper     int
 	JudgeCallsAfterKeeper int
 
-	// Phase C — the claim driver.
-	ClaimRecordedDeferredWork bool
-	JudgeCallsAfterClaimTurn  int
+	// Phase C — a met claim made through the real goal_claim tool, and the
+	// adjudication it triggers.
+	JudgeCallsAfterClaim  int
+	TerminalState         string
+	RoundsAfterVerdict    int
+	CriteriaCountOnRecord int
 
-	// Phase D — the adjudication the claim triggers.
-	JudgeCallsAfterDispatch int
-	TerminalState           string
-	RoundsAfterVerdict      int
-	CriteriaCountOnRecord   int
+	// Chat-driver facts (JUDGE-FR-098's deferral), checked on the chat run's
+	// baseline and never compared: a task run's claim is resolved after its turn
+	// has already ended, so it has no in-turn window to defer out of.
+	chatClaimDeferred        bool
+	chatJudgeCallsInsideHook int
 }
+
+const parityTaskID = "task-parity"
 
 // observeGoalBehaviour runs the fixed script against one owner kind and
 // returns what was observed. Each call builds its OWN AgentLoop and its own
@@ -91,9 +104,8 @@ func observeGoalBehaviour(t *testing.T, ownerKind generated.GoalOwnerKind) goalB
 
 	armedAt := time.Now().Add(-1 * time.Hour)
 	var (
-		sid, gid  string
-		isTaskRun bool
-		store     *session.UnifiedStore
+		sid, gid string
+		store    *session.UnifiedStore
 	)
 	switch ownerKind {
 	case generated.GoalOwnerKindSession:
@@ -106,13 +118,12 @@ func observeGoalBehaviour(t *testing.T, ownerKind generated.GoalOwnerKind) goalB
 		// parity comparison unable to fail on the keeper's store defect. Each
 		// branch now carries the store that actually OWNS its session, which
 		// is also what a real turn would use as its TranscriptStore.
-		store, sid, gid = mintTaskRunGoal(t, al, agentInst.ID, "task-parity", parityGoalText,
+		store, sid, gid = mintTaskRunGoal(t, al, agentInst.ID, parityTaskID, parityGoalText,
 			recordedGoalCriteria(parityGoalText), 0, armedAt)
 	default:
 		t.Fatalf("observeGoalBehaviour: unsupported owner kind %q", ownerKind)
 	}
 	al.recordGoalRouting(sid, gid, "webchat", "c1", "sk1", agentInst.ID)
-	isTaskRun = ownerKind == generated.GoalOwnerKindTask
 
 	cp := metJudgeProvider("the importer runs against the new schema")
 	judgeInst.Provider = cp
@@ -139,23 +150,41 @@ func observeGoalBehaviour(t *testing.T, ownerKind generated.GoalOwnerKind) goalB
 	obs.RoundsAfterKeeper = afterKeeper.Round
 	obs.JudgeCallsAfterKeeper = cp.callCount()
 
-	// --- Phase C: the claim driver.
-	opts := processOptions{
-		TranscriptStore: store, TranscriptSessionID: sid,
-		Channel: "webchat", ChatID: "c1", SessionKey: "sk1",
-		UserInitiated: !isTaskRun,
-		IsTaskRun:     isTaskRun,
+	// --- Phase C: a met claim through the REAL goal_claim tool, resolved by the
+	// driver that owns this kind's turns.
+	claimTool, ok := agentInst.Tools.Get(tools.GoalClaimToolName)
+	if !ok {
+		t.Fatal("goal_claim is not registered on the working agent")
 	}
-	result := &turnResult{finalContent: "[goal:evidence] importer migrated, backfill verified\nGOAL_STATUS: met"}
-	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, result)
-	obs.ClaimRecordedDeferredWork = result.goalDeferredAdjudication != nil
-	obs.JudgeCallsAfterClaimTurn = cp.callCount()
-
-	// --- Phase D: the adjudication.
-	if result.goalDeferredAdjudication != nil {
-		al.dispatchDeferredGoalAdjudication(result.goalDeferredAdjudication)
+	claimedFrom := time.Now().UTC().Add(-time.Second)
+	b6ClaimMetAndPersist(t, claimTool, store, sid, "parity-claim", "importer migrated, backfill verified")
+	const reply = "The importer is migrated and the backfill is verified."
+	switch ownerKind {
+	case generated.GoalOwnerKindSession:
+		opts := processOptions{
+			TranscriptStore: store, TranscriptSessionID: sid,
+			Channel: "webchat", ChatID: "c1", SessionKey: "sk1", UserInitiated: true,
+		}
+		result := &turnResult{finalContent: reply}
+		al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, result)
+		obs.chatClaimDeferred = result.goalDeferredAdjudication != nil
+		obs.chatJudgeCallsInsideHook = cp.callCount()
+		if result.goalDeferredAdjudication != nil {
+			al.dispatchDeferredGoalAdjudication(result.goalDeferredAdjudication)
+		}
+	case generated.GoalOwnerKindTask:
+		ts := GetTaskStore(al)
+		if _, err := ts.Update(parityTaskID, task.Patch{Status: ptrStatus(task.StatusInProgress)}); err != nil {
+			t.Fatalf("observeGoalBehaviour: move the task to in_progress: %v", err)
+		}
+		running, err := ts.Get(parityTaskID)
+		if err != nil {
+			t.Fatalf("observeGoalBehaviour: read the running task: %v", err)
+		}
+		al.taskExecutor.finishRunTurn(context.Background(), running, sid, reply, nil, "", nil,
+			&taskRunState{claimWatermark: claimedFrom})
 	}
-	obs.JudgeCallsAfterDispatch = cp.callCount()
+	obs.JudgeCallsAfterClaim = cp.callCount()
 	final := mustGoalRecord(t, gid)
 	obs.TerminalState = string(final.State)
 	obs.RoundsAfterVerdict = final.Round
@@ -169,8 +198,8 @@ func observeGoalBehaviour(t *testing.T, ownerKind generated.GoalOwnerKind) goalB
 // Given a chat goal and a task goal built from identical text
 // When each is driven through the same script — a suppression, a
 //
-//	quiet-window keeper tick, a completion claim, and the adjudication that
-//	claim triggers
+//	quiet-window keeper tick, and a completion claim made through the real
+//	goal_claim tool together with the adjudication that claim triggers
 //
 // Then every observation is identical.
 //
@@ -214,13 +243,14 @@ func TestChatAndTaskGoalsBehaveIdentically(t *testing.T) {
 		t.Fatalf("baseline (JUDGE-FR-097): the re-post consumes no round; rounds_used = %d, want 0",
 			chat.RoundsAfterKeeper)
 	}
-	if chat.JudgeCallsAfterClaimTurn != 0 {
-		t.Fatalf("baseline (JUDGE-FR-098): the Judge must not run inside checkGoalLoopAfterTurn; calls = %d, want 0",
-			chat.JudgeCallsAfterClaimTurn)
+	if !chat.chatClaimDeferred || chat.chatJudgeCallsInsideHook != 0 {
+		t.Fatalf("baseline (JUDGE-FR-098): a chat goal_claim(met) must record deferred work and the Judge must not "+
+			"run inside checkGoalLoopAfterTurn; deferred = %v, calls inside the hook = %d",
+			chat.chatClaimDeferred, chat.chatJudgeCallsInsideHook)
 	}
-	if chat.JudgeCallsAfterDispatch != 1 || chat.TerminalState != string(generated.GoalStateMet) {
+	if chat.JudgeCallsAfterClaim != 1 || chat.TerminalState != string(generated.GoalStateMet) {
 		t.Fatalf("baseline (JUDGE-FR-095): a `met` claim is the SOLE adjudication trigger and must fire exactly once; "+
-			"judge calls = %d, state = %q", chat.JudgeCallsAfterDispatch, chat.TerminalState)
+			"judge calls = %d, state = %q", chat.JudgeCallsAfterClaim, chat.TerminalState)
 	}
 
 	type field struct {
@@ -244,12 +274,9 @@ func TestChatAndTaskGoalsBehaveIdentically(t *testing.T) {
 			"JUDGE-FR-097: a keeper re-post consumes no round, for either kind"},
 		{"JudgeCallsAfterKeeper", chat.JudgeCallsAfterKeeper, task.JudgeCallsAfterKeeper,
 			"JUDGE-FR-095: the keeper never adjudicates, for either kind"},
-		{"ClaimRecordedDeferredWork", chat.ClaimRecordedDeferredWork, task.ClaimRecordedDeferredWork,
-			"GOAL-FR-013/FR-015: the after-turn claim driver is one code path serving both owner kinds"},
-		{"JudgeCallsAfterClaimTurn", chat.JudgeCallsAfterClaimTurn, task.JudgeCallsAfterClaimTurn,
-			"JUDGE-FR-098: the Judge runs after delivery, never inside checkGoalLoopAfterTurn, for either kind"},
-		{"JudgeCallsAfterDispatch", chat.JudgeCallsAfterDispatch, task.JudgeCallsAfterDispatch,
-			"a claim triggers exactly one adjudication, for either kind"},
+		{"JudgeCallsAfterClaim", chat.JudgeCallsAfterClaim, task.JudgeCallsAfterClaim,
+			"issue #710: one claim mechanism and one Judge pipeline — a goal_claim(met) triggers exactly one " +
+				"adjudication, for either kind"},
 		{"TerminalState", chat.TerminalState, task.TerminalState,
 			"GOAL-FR-027: a met verdict is a status transition on a retained record, identical for both kinds"},
 		{"RoundsAfterVerdict", chat.RoundsAfterVerdict, task.RoundsAfterVerdict,

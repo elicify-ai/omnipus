@@ -2,28 +2,29 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// task_attempt_turn_error_test.go pins how a task's goal loop treats an
-// attempt that ENDS ON A TURN ERROR (task_attempt_turn_error.go).
+// task_attempt_turn_error_test.go pins how a task run treats a try that ENDS
+// ON A TURN ERROR (task_attempt_turn_error.go, task_run_loop.go).
 //
-// The defect (live UAT lane L2, scenario A-12): a task's attempt ended because
-// the model emitted a tool call as unparseable output, and the task went
-// terminal `failed` at attempt 1/20 — the error branch of finishTaskRun failed
-// every error on the spot. The required behaviour, from planning-goals-spec.md
-// FR-045 / US-5 AS-4 ("treated as an unmet claim (attempt consumed, re-dispatch
-// or owner-wake) — NOT terminally failed on the spot"), and the operator's
-// scope for which errors qualify:
+// The defect (live UAT lane L2, scenario A-12): a task's run ended because the
+// model emitted a tool call as unparseable output, and the task went terminal
+// `failed` on the spot. The required behaviour comes from planning-goals-spec.md
+// FR-045 / US-5 AS-4 ("NOT terminally failed on the spot") under the two-level
+// model the founder set on 2026-09-14 (issue #710) — goal TRIES inside a run,
+// task ATTEMPTS across runs:
 //
 //   - a malformed-tool-call-output fault (typed *common.ToolArgumentsError,
-//     CodeToolArgs / CodeToolCallTruncated) consumes ONE attempt and
-//     re-dispatches with a note naming the fault; a later clean attempt is
-//     judged normally;
-//   - any other execution error (auth/config/provider-hard, Stop) still fails
-//     the task, consuming nothing;
-//   - the attempt budget still ends the loop when the fault repeats.
+//     CodeToolArgs / CodeToolCallTruncated) spends ONE goal try and the worker
+//     is re-prompted in the SAME run with a note naming the fault; its next
+//     claim is judged normally and no task attempt is used;
+//   - any other execution error (auth/config/provider-hard) BREAKS the run: the
+//     run fails as a whole, which uses one task attempt and restarts the task
+//     until its attempt limit;
+//   - a fault that repeats on every try spends the run's tries, then the
+//     attempts, and the task fails — never an endless loop.
 //
 // Oracles are the spec's observable outcomes — task status, AttemptCount, how
-// many times the Judge ran, and what the next attempt's prompt carried — never
-// the implementation's own strings.
+// many times the Judge ran, and what the next try's request carried — never the
+// implementation's own strings.
 package agent
 
 import (
@@ -35,19 +36,34 @@ import (
 	"testing"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // malformedOutputNote is the phrase the operator's requirement names for the
-// note the next attempt must carry: "the previous one ended on malformed
+// note the next try must carry: "the previous one ended on malformed
 // tool-call output".
 const malformedOutputNote = "malformed tool-call output"
 
-const cleanWorkerClaim = "fixed greeting.sh so it prints one line\n" +
-	"[goal:evidence] ran ./greeting.sh | wc -l -> 1, exit 0\n" +
-	"TASK_STATUS: success\nTASK_SUMMARY: greeting.sh prints exactly one line."
+// cleanWorkerEvidence is the one-line evidence a clean try claims with.
+const cleanWorkerEvidence = "ran ./greeting.sh | wc -l -> 1, exit 0"
+
+// cleanClaimTurn answers a clean try the one way a native task worker can
+// finish: a goal_claim(met) call, then — once the tool result is back — the
+// turn's closing text.
+func cleanClaimTurn(msgs []providers.Message) *providers.LLMResponse {
+	if n := len(msgs); n > 0 && msgs[n-1].Role == "tool" {
+		return &providers.LLMResponse{Content: "greeting.sh now prints exactly one line."}
+	}
+	return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+		ID: "call-goal-claim-clean", Type: "function", Name: tools.GoalClaimToolName,
+		Arguments: map[string]any{"status": tools.GoalClaimStatusMet, "evidence": cleanWorkerEvidence},
+	}}}
+}
 
 // typedMalformedToolCall builds the typed refusal a provider raises for an
 // undecodable tool call — the same shape pkg/providers/common returns.
@@ -60,10 +76,10 @@ func typedMalformedToolCall(truncated bool) error {
 
 // attemptScriptedWorker is the worker agent's provider. Every call whose
 // request does NOT carry the malformed-output note fails with failErr(); once
-// the note is present (i.e. the goal loop re-dispatched with it) the worker
-// answers with a clean, evidenced success claim — unless failForever is set.
-// Keying on the note rather than on a call count keeps the test independent of
-// how many in-turn repair calls runTurn spends before giving up.
+// the note is present (i.e. the run re-prompted with it) the worker claims
+// through goal_claim — unless failForever is set. Keying on the note rather
+// than on a call count keeps the test independent of how many in-turn repair
+// calls runTurn spends before giving up.
 type attemptScriptedWorker struct {
 	mu          sync.Mutex
 	failErr     func() error
@@ -89,7 +105,7 @@ func (w *attemptScriptedWorker) Chat(
 	if failForever || !strings.Contains(flat, malformedOutputNote) {
 		return nil, w.failErr()
 	}
-	return &providers.LLMResponse{Content: cleanWorkerClaim}, nil
+	return cleanClaimTurn(msgs), nil
 }
 
 func (w *attemptScriptedWorker) GetDefaultModel() string { return "scripted-model" }
@@ -110,9 +126,9 @@ func countCarryingNote(requests []string) int {
 	return n
 }
 
-// waitForTaskStatus polls the store for want. The failTask path leaves the
-// session `interrupted` rather than archived, so t3WaitForTerminal's archive
-// condition cannot be used for it.
+// waitForTaskStatus polls the store for want. A task whose last run broke
+// leaves its session `interrupted` rather than archived, so t3WaitForTerminal's
+// archive condition cannot be used for it.
 func waitForTaskStatus(t *testing.T, al *AgentLoop, taskID string, want task.Status, within time.Duration) *task.Task {
 	t.Helper()
 	deadline := time.Now().Add(within)
@@ -132,14 +148,33 @@ func waitForTaskStatus(t *testing.T, al *AgentLoop, taskID string, want task.Sta
 	return nil
 }
 
-// BDD: Given a task whose first attempt ends because the model's tool call
-// could not be decoded,
-// When the goal loop handles that attempt,
-// Then the task is NOT failed — exactly one attempt is consumed,
-// And the task is re-dispatched with a note that the previous attempt ended on
+func newTurnErrorTask(t *testing.T, al *AgentLoop, title string, maxAttempts int) *task.Task {
+	t.Helper()
+	mx := maxAttempts
+	tk := &task.Task{
+		Title: title, Prompt: "fix greeting.sh", Action: task.ActionLLM,
+		AgentID: "native-agent", Priority: 3, WorkspaceID: "default", Status: task.StatusNext,
+		MaxAttempts: &mx,
+		Criteria:    []task.AcceptanceCriterion{proseCriterion("c1", "greeting.sh prints exactly one line")},
+	}
+	if err := al.taskStore.Create(tk); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
+		t.Fatalf("ExecuteTask: %v", err)
+	}
+	return tk
+}
+
+// BDD: Given a task whose first try ends because the model's tool call could
+// not be decoded,
+// When the run handles that try,
+// Then the task is NOT failed and NO task attempt is used — one goal try is
+// spent inside the same run,
+// And the worker is re-prompted with a note that the previous try ended on
 // malformed tool-call output,
-// And the next, clean attempt's claim is judged and completes the task.
-func TestTaskAttempt_MalformedToolOutput_ConsumesOneAttemptAndRedispatches(t *testing.T) {
+// And its next, clean claim is judged and completes the task.
+func TestTaskAttempt_MalformedToolOutput_SpendsOneTryAndContinuesTheRun(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		truncated bool
@@ -150,63 +185,52 @@ func TestTaskAttempt_MalformedToolOutput_ConsumesOneAttemptAndRedispatches(t *te
 		t.Run(tc.name, func(t *testing.T) {
 			worker := &attemptScriptedWorker{failErr: func() error { return typedMalformedToolCall(tc.truncated) }}
 			al, judgeInst := newGoalLoopTestLoop(t, worker, nil)
-			judge := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
-				return &providers.LLMResponse{
-					Content: `{"met": true, "criteria": [{"id":"c1","met":true,"reason":"one line, exit 0"}]}`,
-				}, nil
-			}}
+			judge := &b6ScriptedJudge{metFromCall: 1, reason: "one line, exit 0"}
 			judgeInst.Provider = judge
 
-			maxAttempts := 5
-			tk := &task.Task{
-				Title: "UAT-J1 build greeting script", Prompt: "fix greeting.sh", Action: task.ActionLLM,
-				AgentID: "native-agent", Priority: 3, WorkspaceID: "default", Status: task.StatusNext,
-				MaxAttempts: &maxAttempts,
-				Criteria:    []task.AcceptanceCriterion{proseCriterion("c1", "greeting.sh prints exactly one line")},
-			}
-			if err := al.taskStore.Create(tk); err != nil {
-				t.Fatalf("create task: %v", err)
-			}
-			if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
-				t.Fatalf("ExecuteTask: %v", err)
-			}
+			tk := newTurnErrorTask(t, al, "UAT-J1 build greeting script", 5)
 
 			final := t3WaitForTerminal(t, al, tk.ID, 2)
 			if final.Status != task.StatusDone {
-				t.Fatalf("status = %q, want %q — an attempt that ended on malformed tool-call output must not "+
-					"fail the task while attempts remain (result: %s)", final.Status, task.StatusDone, final.Result)
+				t.Fatalf("status = %q, want %q — a try that ended on malformed tool-call output must not "+
+					"fail the task (result: %s)", final.Status, task.StatusDone, final.Result)
 			}
-			if final.AttemptCount != 1 {
-				t.Errorf("attempt_count = %d, want 1 — the malformed attempt consumes exactly one attempt, "+
-					"and the met verdict on the next attempt consumes none", final.AttemptCount)
+			if final.AttemptCount != 0 {
+				t.Errorf("attempt_count = %d, want 0 — a malformed-output try spends a goal try inside the run, "+
+					"not a task attempt", final.AttemptCount)
 			}
 			if got := judge.callCount(); got != 1 {
-				t.Errorf("judge ran %d time(s), want exactly 1 — the malformed attempt has no claim to judge; "+
-					"the clean attempt's claim must be judged normally", got)
+				t.Errorf("judge ran %d time(s), want exactly 1 — the malformed try has no claim to judge; "+
+					"the clean claim must be judged normally", got)
 			}
 
 			reqs := worker.snapshot()
 			if len(reqs) < 2 {
-				t.Fatalf("worker saw %d request(s), want at least 2 (the failed attempt and its re-dispatch)", len(reqs))
+				t.Fatalf("worker saw %d request(s), want at least 2 (the failed try and the re-prompted one)", len(reqs))
 			}
 			if strings.Contains(reqs[0], malformedOutputNote) {
-				t.Errorf("the FIRST attempt's prompt already carries the malformed-output note — the note must " +
-					"only reach the attempt that follows the fault")
+				t.Errorf("the FIRST try's request already carries the malformed-output note — the note must " +
+					"only reach the try that follows the fault")
 			}
 			if !strings.Contains(reqs[len(reqs)-1], malformedOutputNote) {
-				t.Errorf("the re-dispatched attempt's prompt does not say the previous attempt ended on %s",
-					malformedOutputNote)
+				t.Errorf("the re-prompted try's request does not say the previous try ended on %s", malformedOutputNote)
+			}
+			rec := waitForGoalState(t, tk.ID, generated.GoalStateMet)
+			if rec.Round != 2 {
+				t.Errorf("goal tries used = %d, want 2 (the malformed try and the upheld claim)", rec.Round)
 			}
 		})
 	}
 }
 
-// BDD: Given a task whose attempt ends on an execution error that is NOT a
+// BDD: Given a task whose run breaks on an execution error that is NOT a
 // malformed-output fault (a provider auth failure),
-// When the goal loop handles that attempt,
-// Then the task fails on the spot, consuming no attempt,
-// And it is never re-dispatched and never judged.
-func TestTaskAttempt_NonRecoverableExecutionError_StillFailsTask(t *testing.T) {
+// When the run handles that error,
+// Then the run fails as a whole: one task attempt is used and the task
+// restarts in a fresh run, until its attempt limit ends it Failed,
+// And no try is ever re-prompted as a malformed-output fault, and nothing is
+// ever judged.
+func TestTaskAttempt_BrokenRun_UsesOneAttemptPerRunUntilTheLimit(t *testing.T) {
 	worker := &attemptScriptedWorker{
 		failForever: true,
 		failErr: func() error {
@@ -217,92 +241,67 @@ func TestTaskAttempt_NonRecoverableExecutionError_StillFailsTask(t *testing.T) {
 		},
 	}
 	al, judgeInst := newGoalLoopTestLoop(t, worker, nil)
-	judge := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
-		return &providers.LLMResponse{Content: `{"met": true, "criteria": []}`}, nil
-	}}
+	judge := &b6ScriptedJudge{metFromCall: 1, reason: "must never be asked"}
 	judgeInst.Provider = judge
 
-	maxAttempts := 5
-	tk := &task.Task{
-		Title: "auth failure task", Prompt: "do it", Action: task.ActionLLM,
-		AgentID: "native-agent", Priority: 3, WorkspaceID: "default", Status: task.StatusNext,
-		MaxAttempts: &maxAttempts,
-		Criteria:    []task.AcceptanceCriterion{proseCriterion("c1", "the work is really done")},
-	}
-	if err := al.taskStore.Create(tk); err != nil {
-		t.Fatalf("create task: %v", err)
-	}
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
-		t.Fatalf("ExecuteTask: %v", err)
-	}
+	const maxAttempts = 2
+	tk := newTurnErrorTask(t, al, "auth failure task", maxAttempts)
 
-	final := waitForTaskStatus(t, al, tk.ID, task.StatusFailed, 30*time.Second)
-	if !strings.HasPrefix(final.Result, "execution error:") {
-		t.Errorf("result = %q, want the terminal execution-error outcome — an auth failure is not a "+
-			"malformed-output fault and must not enter the attempt loop", final.Result)
+	final := waitForTaskStatus(t, al, tk.ID, task.StatusFailed, 60*time.Second)
+	if final.AttemptCount != maxAttempts {
+		t.Errorf("attempt_count = %d, want %d — every broken run is one failed task attempt", final.AttemptCount, maxAttempts)
 	}
-	if final.AttemptCount != 0 {
-		t.Errorf("attempt_count = %d, want 0 — a non-recoverable execution error consumes no attempt", final.AttemptCount)
+	if !strings.Contains(final.Result, "execution error:") {
+		t.Errorf("result = %q, want the broken run's execution error as the reason", final.Result)
 	}
-	// Give any (wrong) re-dispatch time to reach the worker before asserting
-	// that none did.
+	if !strings.Contains(final.Result, fmt.Sprintf("(max %d)", maxAttempts)) {
+		t.Errorf("result = %q, want it to report the attempt limit the task ran under", final.Result)
+	}
+	// Give any (wrong) further restart time to reach the worker before
+	// asserting that none did.
 	time.Sleep(300 * time.Millisecond)
 	if n := countCarryingNote(worker.snapshot()); n != 0 {
-		t.Errorf("%d request(s) carried the malformed-output note — an auth failure must never be re-dispatched as one", n)
+		t.Errorf("%d request(s) carried the malformed-output note — an auth failure must never be retried as one", n)
 	}
-	if got, _ := al.taskStore.Get(tk.ID); got.Status != task.StatusFailed {
-		t.Errorf("task status moved to %q after failing — it was re-dispatched", got.Status)
+	if got, _ := al.taskStore.Get(tk.ID); got.Status != task.StatusFailed || got.AttemptCount != maxAttempts {
+		t.Errorf("after the limit the task moved on (status %q, attempt_count %d)", got.Status, got.AttemptCount)
 	}
 	if got := judge.callCount(); got != 0 {
 		t.Errorf("judge ran %d time(s), want 0", got)
 	}
 }
 
-// BDD: Given a task whose EVERY attempt ends on malformed tool-call output,
-// When the attempt budget is spent,
-// Then the task fails through the attempt-exhaustion path — never an endless
-// re-dispatch — with exactly max_attempts attempts consumed.
-func TestTaskAttempt_MalformedToolOutputEveryAttempt_ExhaustsBudget(t *testing.T) {
+// BDD: Given a task whose EVERY try ends on malformed tool-call output,
+// When each run's tries and then the task's attempts are spent,
+// Then the task fails through the attempt-limit path — never an endless loop —
+// with exactly max_attempts attempts used.
+func TestTaskAttempt_MalformedToolOutputEveryTry_ExhaustsTriesThenAttempts(t *testing.T) {
+	const triesPerGoal, maxAttempts = 2, 2
 	worker := &attemptScriptedWorker{failForever: true, failErr: func() error { return typedMalformedToolCall(false) }}
-	al, judgeInst := newGoalLoopTestLoop(t, worker, nil)
-	judge := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
-		return &providers.LLMResponse{Content: `{"met": true, "criteria": []}`}, nil
-	}}
+	al, judgeInst := newGoalLoopTestLoop(t, worker, func(cfg *config.Config) { cfg.Planning.GoalMaxRounds = triesPerGoal })
+	judge := &b6ScriptedJudge{metFromCall: 1, reason: "must never be asked"}
 	judgeInst.Provider = judge
 
-	const maxAttempts = 2
-	mx := maxAttempts
-	tk := &task.Task{
-		Title: "always malformed", Prompt: "do it", Action: task.ActionLLM,
-		AgentID: "native-agent", Priority: 3, WorkspaceID: "default", Status: task.StatusNext,
-		MaxAttempts: &mx,
-		Criteria:    []task.AcceptanceCriterion{proseCriterion("c1", "the work is really done")},
-	}
-	if err := al.taskStore.Create(tk); err != nil {
-		t.Fatalf("create task: %v", err)
-	}
-	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
-		t.Fatalf("ExecuteTask: %v", err)
-	}
+	tk := newTurnErrorTask(t, al, "always malformed", maxAttempts)
 
-	final := t3WaitForTerminal(t, al, tk.ID, maxAttempts)
+	final := t3WaitForTerminal(t, al, tk.ID, triesPerGoal*maxAttempts)
 	if final.Status != task.StatusFailed {
-		t.Fatalf("status = %q, want %q once the budget is spent", final.Status, task.StatusFailed)
+		t.Fatalf("status = %q, want %q once the tries and attempts are spent", final.Status, task.StatusFailed)
 	}
 	if final.AttemptCount != maxAttempts {
-		t.Errorf("attempt_count = %d, want %d — each malformed attempt consumes exactly one", final.AttemptCount, maxAttempts)
+		t.Errorf("attempt_count = %d, want %d — each run whose tries are all malformed uses one attempt",
+			final.AttemptCount, maxAttempts)
 	}
-	if strings.HasPrefix(final.Result, "execution error:") {
-		t.Errorf("result = %q — the task failed on the spot through the execution-error path instead of "+
-			"through attempt exhaustion", final.Result)
+	if want := fmt.Sprintf("did not reach a met verdict within %d tries", triesPerGoal); !strings.Contains(final.Result, want) {
+		t.Errorf("result = %q, want it to say the goal %s", final.Result, want)
 	}
 	time.Sleep(300 * time.Millisecond)
 	if got, _ := al.taskStore.Get(tk.ID); got.Status != task.StatusFailed || got.AttemptCount != maxAttempts {
-		t.Errorf("after exhaustion the task moved on (status %q, attempt_count %d) — the loop did not stop",
+		t.Errorf("after the limit the task moved on (status %q, attempt_count %d) — the loop did not stop",
 			got.Status, got.AttemptCount)
 	}
 	if got := judge.callCount(); got != 0 {
-		t.Errorf("judge ran %d time(s), want 0 — no attempt made a claim", got)
+		t.Errorf("judge ran %d time(s), want 0 — no try made a claim", got)
 	}
 }
 

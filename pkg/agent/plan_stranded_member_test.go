@@ -7,14 +7,12 @@
 //
 // WHY IT EXISTS. planStallReason read `in_progress` as "in flight"
 // unconditionally, so the most eternal stall the system can produce was the
-// one shape it was guaranteed to miss. That shape is reachable by five
-// documented paths in task_executor.go — adjudicateClaim's judge-unregistered,
-// DoD-unreadable, judge-Unavailable and verdict-no-longer-applicable branches,
-// and consumeAttemptOrExhaust's CAS-conflict branch — each of which ends the
-// run goroutine with no terminal write and no redispatch, and each of which
-// says in its own comment that the task is "left in_progress with its run
-// still open" with "boot reconciliation ... the accepted backstop" and "no
-// dedicated in-process reaper". For a plan member that is not a backstop: the
+// one shape it was guaranteed to miss. That shape is reachable by the task
+// run loop's silent-exit paths (task_run_loop.go) — adjudicateRunClaim's
+// DoD-unreadable branch, finishRunTurn's claim-read-fault branch and
+// consumeTaskAttempt's CAS-conflict branch — each of which ends the run with
+// no terminal write and no restart, leaving boot reconciliation as the only
+// backstop and no dedicated in-process reaper. For a plan member that is not a backstop: the
 // plan renders "Running 5/6" for as long as the process lives.
 //
 // THE SIGNAL IS BINARY, NOT A TIMER, and that distinction is the whole safety
@@ -90,8 +88,8 @@ func TestStrandedMember_SurfacesAsStallInsteadOfRunningForever(t *testing.T) {
 	if got.PlanPhase != plan.PhaseStalled {
 		t.Fatalf("plan_phase = %q, want %q.\n\n"+
 			"A plan whose only non-terminal member is recorded in_progress while NO run is executing it can "+
-			"never make progress: the five silent-exit paths in task_executor.go (adjudicateClaim's four "+
-			"`return \"\"` branches and consumeAttemptOrExhaust's CAS-conflict branch) leave exactly this "+
+			"never make progress: the task run loop's silent-exit paths (task_run_loop.go: adjudicateRunClaim's "+
+			"DoD-unreadable branch, finishRunTurn's claim-read-fault branch and consumeTaskAttempt's CAS-conflict branch) leave exactly this "+
 			"state, with no terminal write and no redispatch. planStallReason must stop counting such a "+
 			"member as in-flight — see PlanEngine.memberExecuting. Note was: %q",
 			got.PlanPhase, plan.PhaseStalled, got.HandoverText)

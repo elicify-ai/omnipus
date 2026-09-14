@@ -87,14 +87,6 @@ type planJudge interface {
 // the same reason as planJudge above.
 type planTaskDispatcher interface {
 	ExecuteTask(ctx context.Context, taskID string, occurrenceMs *int64) error
-	// ClearEvidenceGateStreak resets taskID's in-memory evidence-marker-gate
-	// rejection streak (ADR-052 Fix-Wave-2/fix-wave item ii). cancelMemberLocked
-	// (this file, US-6/US-7 Stop) marks a task `failed` via a direct store
-	// write, bypassing TaskExecutor's own completeTaskWithResult/failTask
-	// terminal-write chokepoints that would otherwise have cleared it — see
-	// TaskExecutor.ClearEvidenceGateStreak's doc comment for why a Stop needs
-	// the same treatment those "ANY terminal disposition" call sites get.
-	ClearEvidenceGateStreak(taskID string)
 	// executeTaskPlanVerified is dispatchReadyMembers' OWN documented bypass
 	// of TaskExecutor's plan-state gate (requirePlanExecuting, task_executor.go)
 	// — unexported so only this package's real implementation
@@ -524,9 +516,8 @@ func NewPlanEngine(al *AgentLoop, planStore *plan.Store, taskStore *task.Store, 
 	// assigning a nil *TaskExecutor directly to the dispatcher interface
 	// field (as the old `dispatcher: taskExecutor,` struct-literal line did)
 	// leaves pe.dispatcher NON-nil at the interface level (it has a concrete
-	// type, just a nil pointer) — every existing `pe.dispatcher != nil` guard
-	// in this file (cancelMemberLocked's ClearEvidenceGateStreak call) would
-	// then pass the nil check and panic calling a method on a nil receiver.
+	// type, just a nil pointer) — every `pe.dispatcher != nil` guard
+	// in this file would then pass the nil check and panic calling a method on a nil receiver.
 	// Test callers that legitimately pass nil (e.g. a bare-engine test that
 	// never dispatches) now get a TRUE nil interface, so those guards work.
 	if taskExecutor != nil {
@@ -1724,14 +1715,13 @@ func stallHandoverNote(reason string) string {
 // "in flight" unconditionally, so the most eternal stall the system can
 // produce was the one shape this function was guaranteed to miss.
 //
-// It is a real, reachable state, not a hypothetical. task_executor.go has five
-// documented paths that end a member's run goroutine WITHOUT a terminal write
-// and WITHOUT a redispatch — adjudicateClaim's judge-unregistered,
-// DoD-unreadable, judge-Unavailable and verdict-no-longer-applicable branches,
-// and consumeAttemptOrExhaust's CAS-conflict branch — each of which says in
-// its own comment that the task is "left in_progress with its run still open"
-// and that "boot reconciliation is the accepted backstop if the retry never
-// comes. There is no dedicated in-process reaper." For a PLAN member that is
+// It is a real, reachable state, not a hypothetical. The task run loop
+// (task_run_loop.go) has paths that end a member's run WITHOUT a terminal
+// write and WITHOUT a restart — adjudicateRunClaim's DoD-unreadable branch and
+// finishRunTurn's claim-read-fault branch (both leave the task in_progress
+// with the reason written on it), and consumeTaskAttempt's CAS-conflict
+// branch — for which boot reconciliation is the accepted backstop if the
+// retry never comes; there is no dedicated in-process reaper. For a PLAN member that is
 // not a backstop at all: the plan goes on rendering "Running 5/6" for as long
 // as the process lives, its own LastActivityAt frozen at the last dispatch,
 // and its only terminator is the multi-day idle-expiry calendar brake.
@@ -2449,7 +2439,7 @@ func (pe *PlanEngine) applyJudgeRoundOutcome(planID string, result JudgeCriteria
 	// are TWO DISTINCT brakes, never conflated. This line — the only place
 	// JudgeRounds is incremented — is the SOLE writer of the plan's rounds
 	// counter; it never touches a member task's AttemptCount, symmetric to
-	// TaskExecutor.consumeAttemptOrExhaust being the sole writer of
+	// TaskExecutor.consumeTaskAttempt being the sole writer of
 	// AttemptCount (which never touches JudgeRounds). Whichever trips first
 	// stops its OWN scope locally. Pinned by TestAttemptsVsRounds_DistinctBrakes.
 	newRounds := current.JudgeRounds + 1
@@ -2591,9 +2581,8 @@ func (pe *PlanEngine) synthesizeAndComplete(p *plan.Plan, newRounds int) {
 
 // completePlan handles the SD-A7 soft-tier-empty case (no DoD, no
 // title/description/goal text worth judging at all): nothing to adjudicate,
-// so the plan is trusted complete directly, mirroring
-// TaskExecutor.adjudicateClaim's identical "structurally empty, trust it"
-// branch. Caller must hold planDecisionMu (applyJudgeRoundOutcome's
+// so the plan is trusted complete directly. (A task with nothing to judge
+// fails its run instead — task_run_loop.go::adjudicateRunClaim.) Caller must hold planDecisionMu (applyJudgeRoundOutcome's
 // own re-checked lock, or FR-041/idle-expiry's — every call site already
 // holds it before reaching here).
 func (pe *PlanEngine) completePlan(p *plan.Plan) {
@@ -2718,7 +2707,7 @@ func (pe *PlanEngine) StopPlan(ctx context.Context, planID, userID, channel stri
 	// verifier session is registered under the plan's own unit (planID) and
 	// a member's verifier session is only ever registered while that member
 	// is itself in_progress (adjudication runs before the member's own
-	// terminal write — see task_executor.go's finishTaskRun), so scanning
+	// terminal write — see task_run_loop.go's adjudicateRunClaim), so scanning
 	// every member id costs nothing and misses nothing}. Unit keys MUST go
 	// through verifierUnitForPlan/verifierUnitForTask (F1) — the exact same
 	// helpers runVerifierAdjudication/beginPlanJudgeRound register under —
@@ -3061,15 +3050,6 @@ func (pe *PlanEngine) cancelMemberLocked(taskID, userID string) (*task.Task, err
 		logger.WarnCF("plan_engine", "stop: could not mark member task cancelled",
 			map[string]any{"task_id": taskID, "error": err.Error()})
 		return nil, fmt.Errorf("plan_engine: cancel task %q: %w", taskID, err)
-	}
-	// Fix-wave item ii: this write is a terminal disposition for taskID (like
-	// completeTaskWithResult/failTask) that bypasses both of TaskExecutor's
-	// own chokepoints — clear its evidence-marker-gate streak directly so it
-	// does not leak for the process lifetime. dispatcher is nil-guarded the
-	// same way agentLoop/canceller/notifier are elsewhere in this file (a
-	// bare struct-literal test engine may omit it).
-	if pe.dispatcher != nil {
-		pe.dispatcher.ClearEvidenceGateStreak(taskID)
 	}
 	// GOAL-FR-015/FR-027/FR-028: the same reasoning as the streak clear above,
 	// for the paired goal record — this is a terminal disposition for taskID

@@ -194,13 +194,26 @@ func TestMetTaskGoalLeavesRealHistoryOnRerun(t *testing.T) {
 	}
 
 	judgeInst.Provider = metJudgeProvider("exporter shipped")
-	opts := processOptions{
-		TranscriptStore: al.GetSessionStore(), TranscriptSessionID: sid,
-		Channel: "webchat", ChatID: "c1", IsTaskRun: true,
+	// The run succeeds the one way a task run can (founder decision
+	// 2026-09-14, issue #710): the worker claims through the real goal_claim
+	// tool and the task executor's run loop has the Judge check it.
+	ts := GetTaskStore(al)
+	if _, uerr := ts.Update(tk.ID, task.Patch{Status: ptrStatus(task.StatusInProgress)}); uerr != nil {
+		t.Fatalf("arrange: move the task to in_progress: %v", uerr)
 	}
-	result := &turnResult{finalContent: "[goal:evidence] exporter merged\nGOAL_STATUS: met"}
-	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, result)
-	al.dispatchDeferredGoalAdjudication(result.goalDeferredAdjudication)
+	running, gerr := ts.Get(tk.ID)
+	if gerr != nil {
+		t.Fatalf("arrange: read the running task: %v", gerr)
+	}
+	claimTool, ok := agentInst.Tools.Get(tools.GoalClaimToolName)
+	if !ok {
+		t.Fatal("goal_claim is not registered on the working agent")
+	}
+	state := &taskRunState{claimWatermark: time.Now().UTC().Add(-time.Second)}
+	b6ClaimMetAndPersist(t, claimTool, al.GetAgentStore(tk.AgentID), sid, "history-claim", "exporter merged")
+	if step, _, _ := al.taskExecutor.finishRunTurn(context.Background(), running, sid, "Exporter merged.", nil, "", nil, state); step != runStepEnded {
+		t.Fatalf("arrange: the upheld claim must end the run, got step %v", step)
+	}
 
 	if got := readGoalRecord(t, rec.GoalID); got.State != generated.GoalStateMet {
 		t.Fatalf("arrange/precondition: record state = %q, want met", got.State)

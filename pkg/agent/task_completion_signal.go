@@ -163,8 +163,8 @@ func (s taskCompletionSignal) Found() bool {
 // verdictSuccess -> task.StatusDone, verdictFailure -> task.StatusFailed.
 // Only meaningful when Found() is true — callers must check Found() first;
 // this method does not attempt to synthesize a status for verdictNotFound
-// (finishTaskRun's own fail-closed branch decides that case explicitly,
-// without going through this method).
+// (the task run loop, task_run_loop.go::resolveRunClaim, decides that case
+// explicitly without going through this method).
 func (s taskCompletionSignal) Status() task.Status {
 	if s.Verdict == verdictSuccess {
 		return task.StatusDone
@@ -394,11 +394,10 @@ func truncateRunes(s string, maxRunes int) string {
 // the two functions can never disagree about fencing/exclusion semantics,
 // while keeping parseTaskCompletionSignal's existing behavior and the 27
 // pre-existing tests around it completely unchanged. This gate IS wired into
-// TaskExecutor's dispatch path: TaskExecutor.finishTaskRun (task_executor.go)
-// calls it before parseTaskCompletionSignal and, on Applicable && !Honored,
-// re-prompts via rejectBareEvidenceClaim (which also owns the
-// evidenceGateMaxConsecutiveRejections bound and its Warn logging) — this
-// file only supplies the primitive.
+// the task run loop for external CLI workers: task_run_loop.go::resolveRunClaim
+// calls it after parseTaskCompletionSignal and, on Applicable && !Honored,
+// treats the marker as a bare claim that spends one goal try and re-prompts
+// the worker — this file only supplies the primitive.
 
 // goalEvidenceLabel is the ADR-052 evidence-marker token. Case-insensitive at
 // match time (goalEvidenceLineRe), like the rest of the ADR-043 vocabulary.

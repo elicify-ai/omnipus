@@ -58,6 +58,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // --- arrange primitives -------------------------------------------------
@@ -799,26 +800,43 @@ func TestInvisibleProgressTaskIsPushedThenJudged(t *testing.T) {
 		t.Fatalf("phase 1: rounds_used = %d, want 0 — the push must precede any round being spent", got)
 	}
 
-	// --- Phase 2: the pushed worker answers with a completion claim.
+	// --- Phase 2: the pushed worker answers with a completion claim, made
+	// through the real goal_claim tool. A task run's claim is resolved by the
+	// task executor's run loop (founder decision 2026-09-14, issue #710: one
+	// claim mechanism, one Judge pipeline), so the chat after-turn hook stands
+	// aside for the task run's turn and nothing is judged yet.
+	claimTool, ok := h.agentInst.Tools.Get(tools.GoalClaimToolName)
+	if !ok {
+		t.Fatal("goal_claim is not registered on the working agent")
+	}
+	state := &taskRunState{claimWatermark: time.Now().UTC().Add(-time.Second)}
+	b6ClaimMetAndPersist(t, claimTool, h.store, h.sid, "invisible-progress-claim", "exporter merged behind FLAG_CSV")
 	opts := processOptions{
 		TranscriptStore: h.store, TranscriptSessionID: h.sid,
 		Channel: "webchat", ChatID: "c1", SessionKey: "sk1",
 		IsTaskRun: true,
 	}
-	result := &turnResult{finalContent: "[goal:evidence] exporter merged behind FLAG_CSV\nGOAL_STATUS: met"}
+	result := &turnResult{finalContent: "Exporter merged behind FLAG_CSV."}
 	h.al.checkGoalLoopAfterTurn(context.Background(), h.agentInst, opts, result)
-
-	if result.goalDeferredAdjudication == nil {
-		t.Fatal("GOAL-FR-019 phase 2: a met+evidence claim on a TASK run must record deferred adjudication work " +
-			"(JUDGE-FR-098) — the unified claim driver must serve a task-owned goal exactly as it serves a chat goal " +
-			"(GOAL-FR-013/FR-015)")
+	if result.goalDeferredAdjudication != nil {
+		t.Fatal("GOAL-FR-019 phase 2: the chat after-turn hook must leave a task run's claim to the task executor")
 	}
 	if cp.callCount() != 0 {
-		t.Fatalf("phase 2: JUDGE-FR-098: the Judge must not run inside checkGoalLoopAfterTurn; calls = %d, want 0", cp.callCount())
+		t.Fatalf("phase 2: the Judge must not run before the task run resolves the claim; calls = %d, want 0", cp.callCount())
 	}
 
-	// --- Phase 3: the claim triggers EXACTLY ONE adjudication.
-	h.al.dispatchDeferredGoalAdjudication(result.goalDeferredAdjudication)
+	// --- Phase 3: the task run resolves the claim — EXACTLY ONE adjudication.
+	ts := GetTaskStore(h.al)
+	if _, uerr := ts.Update(h.taskID, task.Patch{Status: ptrStatus(task.StatusInProgress)}); uerr != nil {
+		t.Fatalf("phase 3 arrange: move the task to in_progress: %v", uerr)
+	}
+	running, gerr := ts.Get(h.taskID)
+	if gerr != nil {
+		t.Fatalf("phase 3 arrange: read the running task: %v", gerr)
+	}
+	if step, _, _ := h.al.taskExecutor.finishRunTurn(context.Background(), running, h.sid, result.finalContent, nil, "", nil, state); step != runStepEnded {
+		t.Fatalf("phase 3: the upheld claim must end the run, got step %v", step)
+	}
 
 	if cp.callCount() != 1 {
 		t.Fatalf("GOAL-FR-019 phase 3: the claim must trigger EXACTLY ONE adjudication; Judge calls = %d, want 1",
@@ -834,13 +852,9 @@ func TestInvisibleProgressTaskIsPushedThenJudged(t *testing.T) {
 	if len(final.Criteria) == 0 {
 		t.Fatal("phase 3: GOAL-FR-027: a terminal goal keeps its record, including the criteria it was judged against")
 	}
-	// Deliberately NOT asserted here: the value of the record's round counter
-	// after a MET verdict. runGoalAdjudication's met branch terminates the goal
-	// before writing the round back, so a met outcome records zero rounds —
-	// observed, and left to wave T3, which owns attempt-and-round accounting
-	// (joint delivery plan §3, wave T3). This test's obligation under C-49 is
-	// "the claim triggers EXACTLY ONE adjudication", asserted on the Judge call
-	// count above.
+	if final.Round != 1 {
+		t.Fatalf("phase 3: one adjudication is one goal try; tries used = %d, want 1", final.Round)
+	}
 }
 
 // ==================== FR-020 / S-11: the ladder is unreachable ============

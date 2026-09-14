@@ -2,14 +2,21 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// task_attempt_budget_test.go pins the founder decision of 2026-09-14: the
-// Settings -> Performance goal try limit (goal_max_rounds) is the ONE setting
-// that bounds how many tries a goal gets — a goal set in chat AND a goal on a
-// task — and "goals already running keep the limit they started with".
+// task_attempt_budget_test.go pins the founder decisions of 2026-09-14 (issue
+// #710) on the two limits a task runs under. They are different things and
+// must never be mixed up:
 //
-// Every expected number below is the value the test itself configures (5, 10,
-// 2), never a value read back from the implementation. The task cases drive
-// real ExecuteTask dispatches (worker turn + Judge turn per attempt); only the
+//   - Settings -> Tries per goal (goal_max_rounds) bounds how many tries a goal
+//     gets — a goal set in chat AND the goal a task run works toward — and
+//     "goals already running keep the limit they started with";
+//   - the task attempt limit (per-task max_attempts, else the config-only
+//     planning.task_max_attempts, default 3) bounds how many RUNS a task gets:
+//     a run whose goal ends not met after all its tries fails as a whole and
+//     the task restarts in a fresh run.
+//
+// Every expected number below is derived from the values the test itself
+// configures, never read back from the implementation. The task cases drive
+// real ExecuteTask dispatches (a worker turn and a Judge turn per try); only the
 // LLM replies are canned.
 
 package agent
@@ -36,21 +43,21 @@ import (
 const (
 	tryLimitCriterionText = "the invoice report lists every open invoice"
 	tryLimitDoDText       = "no credentials appear anywhere in the report"
-	tryLimitWorkerReply   = "wrote the report\n" +
-		"[goal:evidence] opened the report and checked every invoice against the ledger\n" +
-		"TASK_STATUS: success\n" +
-		"TASK_SUMMARY: The report is written."
+	tryLimitEvidence      = "opened the report and checked every invoice against the ledger"
 )
 
 // tryLimitJudge answers every verifier call UNMET for the acceptance criterion
 // (perCriterionJudgeProvider, keyed by criterion text), so a task never
-// completes and its attempt ceiling is the only thing that can stop it. It runs
-// onFirstCall exactly once, before answering the first call — i.e. after the
-// task's run has started and its goal record has been activated.
+// completes and its limits are the only thing that can stop it. It counts its
+// calls — one per judged try — and runs onFirstCall exactly once, before
+// answering the first call, i.e. after the task's run has started and its goal
+// record has been activated.
 type tryLimitJudge struct {
 	inner       *perCriterionJudgeProvider
 	once        sync.Once
 	onFirstCall func()
+	mu          sync.Mutex
+	calls       int
 }
 
 func newTryLimitJudge(onFirstCall func()) *tryLimitJudge {
@@ -68,21 +75,35 @@ func (j *tryLimitJudge) Chat(
 			j.onFirstCall()
 		}
 	})
+	j.mu.Lock()
+	j.calls++
+	j.mu.Unlock()
 	return j.inner.Chat(ctx, msgs, defs, model, opts)
 }
 
 func (j *tryLimitJudge) GetDefaultModel() string { return "fake-judge-model" }
 
+func (j *tryLimitJudge) callCount() int {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.calls
+}
+
 // newTryLimitLoop builds the goal-loop harness with the goal try limit set to
-// limit. The agent home base is rooted under OMNIPUS_HOME because create_task
-// resolves its workspace against filepath.Dir(agent home base), which must be
-// the test home where the harness's membership workspace lives.
-func newTryLimitLoop(t *testing.T, limit int) (*AgentLoop, *AgentInstance) {
+// tries and the global task attempt limit set to taskAttempts; its worker claims
+// through goal_claim on every try. The agent home base is rooted under
+// OMNIPUS_HOME because create_task resolves its workspace against
+// filepath.Dir(agent home base), which must be the test home where the
+// harness's membership workspace lives.
+func newTryLimitLoop(t *testing.T, tries, taskAttempts int) (*AgentLoop, *AgentInstance, *claimingWorker) {
 	t.Helper()
-	return newGoalLoopTestLoop(t, &scriptedProvider{responseBody: tryLimitWorkerReply}, func(cfg *config.Config) {
-		cfg.Planning.GoalMaxRounds = limit
+	worker := newClaimingWorker(turnClaimMet(tryLimitEvidence))
+	al, judgeInst := newGoalLoopTestLoop(t, worker, func(cfg *config.Config) {
+		cfg.Planning.GoalMaxRounds = tries
+		cfg.Planning.TaskMaxAttempts = taskAttempts
 		cfg.Agents.Defaults.Home = filepath.Join(config.OmnipusHomeDir(), "agents")
 	})
+	return al, judgeInst, worker
 }
 
 // createTaskThroughAgentTool creates a task exactly as an agent does: through
@@ -132,9 +153,9 @@ func pairedGoalRecord(t *testing.T, taskID string) *goal.Goal {
 }
 
 // runTaskToTerminal dispatches taskID and waits for it to end. waitFor sizes the
-// deadline for the LARGEST attempt count the case could produce if the code
-// under test were wrong, so a regression fails on the count assertion rather
-// than on a wait timeout.
+// deadline for the LARGEST number of worker turns the case could produce if the
+// code under test were wrong, so a regression fails on the count assertion
+// rather than on a wait timeout.
 func runTaskToTerminal(t *testing.T, al *AgentLoop, taskID string, waitFor int) *task.Task {
 	t.Helper()
 	if err := al.taskExecutor.ExecuteTask(context.Background(), taskID, nil); err != nil {
@@ -143,42 +164,52 @@ func runTaskToTerminal(t *testing.T, al *AgentLoop, taskID string, waitFor int) 
 	return t3WaitForTerminal(t, al, taskID, waitFor)
 }
 
-// (a) + (c): an agent-created task under a goal try limit of 5, no per-task
-// override, every attempt judged unmet — its goal record says 5 from the moment
-// it is created, and the task fails after exactly 5 attempts.
-func TestTaskAttemptCeiling_AgentCreatedTaskFollowsGoalTryLimit(t *testing.T) {
-	const limit = 5
-	al, judgeInst := newTryLimitLoop(t, limit)
-	judgeInst.Provider = newTryLimitJudge(nil)
+// An agent-created task under 3 tries per goal and 2 task attempts, every try
+// judged unmet: its goal record says 3 from the moment it is created, each run
+// spends exactly 3 tries, and the task fails after exactly 2 runs — 6 judged
+// tries in all.
+func TestTaskAttemptCeiling_AgentCreatedTaskFollowsBothLimits(t *testing.T) {
+	const tries, attempts = 3, 2
+	al, judgeInst, worker := newTryLimitLoop(t, tries, attempts)
+	judge := newTryLimitJudge(nil)
+	judgeInst.Provider = judge
 
 	id := createTaskThroughAgentTool(t, al)
-	if got := pairedGoalRecord(t, id).MaxRounds; got != limit {
+	if got := pairedGoalRecord(t, id).MaxRounds; got != tries {
 		t.Fatalf("create_task wrote goal record max_rounds=%d, want %d: the agent tool must snapshot the "+
-			"live goal try limit, not the shipped default", got, limit)
+			"live goal try limit, not the shipped default", got, tries)
 	}
 
-	final := runTaskToTerminal(t, al, id, 20)
+	final := runTaskToTerminal(t, al, id, 3*tries*attempts)
 	if final.Status != task.StatusFailed {
-		t.Fatalf("status = %q, want failed (every attempt was judged unmet)", final.Status)
+		t.Fatalf("status = %q, want failed (every try was judged unmet)", final.Status)
 	}
-	if final.AttemptCount != limit {
-		t.Fatalf("AttemptCount = %d, want %d: the task must stop at the Settings goal try limit", final.AttemptCount, limit)
+	if final.AttemptCount != attempts {
+		t.Fatalf("AttemptCount = %d, want %d: the task must stop at its attempt limit, not at the try limit",
+			final.AttemptCount, attempts)
 	}
-	if want := fmt.Sprintf("(max %d)", limit); !strings.Contains(final.Result, want) {
-		t.Fatalf("handover must report the limit the task ran under %q; got: %s", want, final.Result)
+	if got := judge.callCount(); got != tries*attempts {
+		t.Fatalf("Judge calls = %d, want %d: each of the %d runs must spend exactly %d tries", got, tries*attempts, attempts, tries)
 	}
-	if got := pairedGoalRecord(t, id).MaxRounds; got != limit {
-		t.Fatalf("goal record max_rounds after the run = %d, want %d", got, limit)
+	if got := worker.turnsStarted(); got != tries*attempts {
+		t.Fatalf("worker turns = %d, want %d", got, tries*attempts)
+	}
+	if want := fmt.Sprintf("(max %d)", attempts); !strings.Contains(final.Result, want) {
+		t.Fatalf("handover must report the attempt limit the task ran under %q; got: %s", want, final.Result)
+	}
+	if got := pairedGoalRecord(t, id).MaxRounds; got != tries {
+		t.Fatalf("goal record max_rounds after the run = %d, want %d", got, tries)
 	}
 }
 
-// A task created while the limit was 20 and started after it was lowered to 5
-// runs under 5: a goal takes the limit in force when it STARTS, as a chat goal
+// A task created while the try limit was 20 and started after it was lowered to
+// 3 runs under 3: a goal takes the limit in force when it STARTS, as a chat goal
 // does at `/goal` set time.
-func TestTaskAttemptCeiling_RunTakesTheLimitInForceWhenItStarts(t *testing.T) {
-	const limit = 5
-	al, judgeInst := newTryLimitLoop(t, limit)
-	judgeInst.Provider = newTryLimitJudge(nil)
+func TestTaskAttemptCeiling_RunTakesTheTryLimitInForceWhenItStarts(t *testing.T) {
+	const tries, attempts = 3, 1
+	al, judgeInst, _ := newTryLimitLoop(t, tries, attempts)
+	judge := newTryLimitJudge(nil)
+	judgeInst.Provider = judge
 
 	id := createTaskThroughAgentTool(t, al)
 	rec := pairedGoalRecord(t, id)
@@ -190,30 +221,34 @@ func TestTaskAttemptCeiling_RunTakesTheLimitInForceWhenItStarts(t *testing.T) {
 	}
 
 	final := runTaskToTerminal(t, al, id, 20)
-	if final.AttemptCount != limit {
-		t.Fatalf("AttemptCount = %d, want %d: a run must take the goal try limit in force when it starts", final.AttemptCount, limit)
+	if final.AttemptCount != attempts {
+		t.Fatalf("AttemptCount = %d, want %d", final.AttemptCount, attempts)
 	}
-	if got := pairedGoalRecord(t, id).MaxRounds; got != limit {
-		t.Fatalf("goal record max_rounds = %d, want %d: the run start must stamp the live limit onto the record", got, limit)
+	if got := judge.callCount(); got != tries {
+		t.Fatalf("Judge calls = %d, want %d: a run must take the goal try limit in force when it starts", got, tries)
+	}
+	if got := pairedGoalRecord(t, id).MaxRounds; got != tries {
+		t.Fatalf("goal record max_rounds = %d, want %d: the run start must stamp the live limit onto the record", got, tries)
 	}
 }
 
-// The lead's requested case: start a task with the limit at 5, change the
-// setting to 10 while it is running, and the task still stops at 5 ("goals
-// already running keep the limit they started with").
-func TestTaskAttemptCeiling_SettingChangeMidRunDoesNotMoveARunningTask(t *testing.T) {
-	const startLimit, changedLimit = 5, 10
-	al, judgeInst := newTryLimitLoop(t, startLimit)
+// Start a task with the try limit at 3, change the setting to 6 while its first
+// run is going: that run still stops after 3 tries ("goals already running keep
+// the limit they started with"), and the restarted run — a new start — takes 6.
+func TestTaskAttemptCeiling_SettingChangeMidRunDoesNotMoveARunningGoal(t *testing.T) {
+	const startTries, changedTries, attempts = 3, 6, 2
+	al, judgeInst, _ := newTryLimitLoop(t, startTries, attempts)
 	mutated := make(chan error, 1)
-	judgeInst.Provider = newTryLimitJudge(func() {
+	judge := newTryLimitJudge(func() {
 		mutated <- al.MutateConfig(func(cfg *config.Config) error {
-			cfg.Planning.GoalMaxRounds = changedLimit
+			cfg.Planning.GoalMaxRounds = changedTries
 			return nil
 		})
 	})
+	judgeInst.Provider = judge
 
 	id := createTaskThroughAgentTool(t, al)
-	final := runTaskToTerminal(t, al, id, changedLimit)
+	final := runTaskToTerminal(t, al, id, 2*(startTries+changedTries))
 
 	select {
 	case err := <-mutated:
@@ -223,23 +258,28 @@ func TestTaskAttemptCeiling_SettingChangeMidRunDoesNotMoveARunningTask(t *testin
 	default:
 		t.Fatal("the Judge was never called, so the setting was never changed mid-run — the case proves nothing")
 	}
-	if got := goalTryLimit(al); got != changedLimit {
-		t.Fatalf("live goal try limit = %d, want %d — the mid-run change did not land", got, changedLimit)
+	if got := goalTryLimit(al); got != changedTries {
+		t.Fatalf("live goal try limit = %d, want %d — the mid-run change did not land", got, changedTries)
 	}
-	if final.AttemptCount != startLimit {
-		t.Fatalf("AttemptCount = %d, want %d: a task already running must keep the limit it started with", final.AttemptCount, startLimit)
+	if final.AttemptCount != attempts {
+		t.Fatalf("AttemptCount = %d, want %d", final.AttemptCount, attempts)
 	}
-	if got := pairedGoalRecord(t, id).MaxRounds; got != startLimit {
-		t.Fatalf("goal record max_rounds = %d, want %d", got, startLimit)
+	if got, want := judge.callCount(), startTries+changedTries; got != want {
+		t.Fatalf("Judge calls = %d, want %d: the running goal must keep %d tries and only the restarted run may take %d",
+			got, want, startTries, changedTries)
+	}
+	if got := pairedGoalRecord(t, id).MaxRounds; got != changedTries {
+		t.Fatalf("goal record max_rounds after the restarted run = %d, want %d", got, changedTries)
 	}
 }
 
-// (d): a per-task max_attempts (R-03, "stays as the per-task override") still
-// wins over the global goal try limit.
+// A per-task max_attempts ("stays as the per-task override") wins over the
+// global task attempt limit, and does not touch the try limit.
 func TestTaskAttemptCeiling_PerTaskMaxAttemptsStillWins(t *testing.T) {
-	const limit, perTask = 5, 2
-	al, judgeInst := newTryLimitLoop(t, limit)
-	judgeInst.Provider = newTryLimitJudge(nil)
+	const tries, globalAttempts, perTask = 2, 3, 1
+	al, judgeInst, _ := newTryLimitLoop(t, tries, globalAttempts)
+	judge := newTryLimitJudge(nil)
+	judgeInst.Provider = judge
 
 	id := createTaskThroughAgentTool(t, al)
 	v := perTask
@@ -248,29 +288,34 @@ func TestTaskAttemptCeiling_PerTaskMaxAttemptsStillWins(t *testing.T) {
 		t.Fatalf("arrange: set max_attempts=%d: %v", perTask, err)
 	}
 
-	final := runTaskToTerminal(t, al, id, limit)
+	final := runTaskToTerminal(t, al, id, tries*globalAttempts)
 	if final.AttemptCount != perTask {
-		t.Fatalf("AttemptCount = %d, want %d: a per-task max_attempts must win over the goal try limit", final.AttemptCount, perTask)
+		t.Fatalf("AttemptCount = %d, want %d: a per-task max_attempts must win over the global task attempt limit",
+			final.AttemptCount, perTask)
+	}
+	if got := judge.callCount(); got != tries*perTask {
+		t.Fatalf("Judge calls = %d, want %d", got, tries*perTask)
 	}
 	if want := fmt.Sprintf("(max %d)", perTask); !strings.Contains(final.Result, want) {
 		t.Fatalf("handover must report %q; got: %s", want, final.Result)
 	}
 }
 
-// The divergence brake is twice the RESOLVED ceiling (FR-047, GOAL-FR-026
-// "the 2 × effective budget hard ceiling"), so it follows the goal try limit.
-// It cannot be observed end-to-end (the normal gate always trips first by
-// construction — see consumeAttemptOrExhaust's doc comment), so it is pinned
-// here, at the one function consumeAttemptOrExhaust calls.
+// The divergence brake on the OUTER counter is twice the resolved task attempt
+// limit (FR-047, GOAL-FR-026 "the 2 × effective budget hard ceiling"). It cannot
+// be observed end-to-end in the normal flow (the attempt limit always trips
+// first by construction), so it is pinned here, at the one function the run
+// loop calls; TestTaskExecutor_AttemptHardCeiling_StopsUnconditionally covers
+// the dispatch that starts past it.
 func TestTaskAttemptHardCeiling_IsTwiceTheResolvedLimit(t *testing.T) {
-	for _, tc := range []struct{ limit, want int }{{5, 10}, {2, 4}, {1, 2}, {20, 40}} {
+	for _, tc := range []struct{ limit, want int }{{5, 10}, {2, 4}, {1, 2}, {3, 6}} {
 		if got := taskAttemptHardCeiling(tc.limit); got != tc.want {
 			t.Fatalf("taskAttemptHardCeiling(%d) = %d, want %d", tc.limit, got, tc.want)
 		}
 	}
 }
 
-// (b): the same goal try limit of 5 bounds a chat goal at 5 rounds.
+// The same goal try limit of 5 bounds a chat goal at 5 rounds.
 func TestChatGoal_GoalTryLimitBoundsRoundsAtFive(t *testing.T) {
 	const limit = 5
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, func(cfg *config.Config) {

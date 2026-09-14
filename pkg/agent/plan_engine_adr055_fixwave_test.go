@@ -62,8 +62,6 @@ func (d *turnBoundDispatcher) ExecuteTask(ctx context.Context, taskID string, _ 
 	return d.executeTaskPlanVerified(ctx, taskID)
 }
 
-func (d *turnBoundDispatcher) ClearEvidenceGateStreak(string) {}
-
 func (d *turnBoundDispatcher) executeTaskPlanVerified(ctx context.Context, taskID string) error {
 	inProgress := task.StatusInProgress
 	if _, err := d.store.Update(taskID, task.Patch{Status: &inProgress}); err != nil {

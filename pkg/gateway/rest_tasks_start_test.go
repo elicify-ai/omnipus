@@ -606,7 +606,8 @@ func newTestRestAPIAlignedStores(t *testing.T) *restAPI {
 // restMockProvider) can supply its own scripted providers.LLMProvider.
 // extraAgents are appended to the harness config's agent list verbatim. It
 // exists for one reason: ADR-084/GOAL-FR-022 (plan row R-27) deleted the last
-// trust-the-claim branch from TaskExecutor.adjudicateClaim, so a worker's
+// trust-the-claim branch from the task claim adjudication (now
+// task_run_loop.go::adjudicateRunClaim), so a worker's
 // completion claim now reaches `done` ONLY through a real met verdict from
 // the seeded Judge System Agent. A test that drives a task all the way to a
 // genuine Done must therefore register a Judge (and bind it a provider that
@@ -618,6 +619,13 @@ func newTestRestAPIAlignedStoresWithProvider(
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	tmpDir := t.TempDir()
+	// Goal records live beside the task store in production: the REST layer
+	// derives their directory from the task store (tools.GoalStoreForTasks ->
+	// filepath.Dir(tmpDir/tasks) = tmpDir) and the task executor from
+	// OMNIPUS_HOME. Point OMNIPUS_HOME at the same directory, or the executor
+	// cannot see the goal record a REST-created task already has and mints a
+	// second one for its run.
+	t.Setenv(config.EnvHome, tmpDir)
 	// The agent loop will place its task store at filepath.Dir(workspace)/tasks.
 	// Set workspace to tmpDir/workspace so the task store lands at tmpDir/tasks,
 	// matching what we pass to task.New below.
@@ -646,6 +654,9 @@ func newTestRestAPIAlignedStoresWithProvider(
 	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[{"id":"mia"}]},"providers":[]}`)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
 
+	// Production seeds goal_claim "allow" for every agent (pkg/config/defaults.go);
+	// a task worker can only finish by calling it (founder decision 2026-09-14).
+	cfg.Sandbox.ToolPolicies = map[string]string{"goal_claim": "allow"}
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, provider)
 

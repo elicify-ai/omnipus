@@ -21,8 +21,8 @@
 // through, not manually assembled here.
 //
 // JudgeCriteria is the single reusable entrypoint for ALL THREE scopes that
-// adjudicate a completion claim: the task goal-loop (task_executor.go's
-// adjudicateClaim, task.VerdictScopeTask), the Wave 2-B plan engine's
+// adjudicate a completion claim: the task run loop (task_run_loop.go's
+// adjudicateRunClaim, task.VerdictScopeTask), the Wave 2-B plan engine's
 // plan-level judge (plan_engine.go's runPlanJudgeRound, SD-B8,
 // task.VerdictScopePlan), and the session-level `/goal` loop
 // (goal_loop.go's checkGoalLoopAfterTurn, task.VerdictScopeGoal) — same

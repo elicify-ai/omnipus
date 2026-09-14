@@ -96,9 +96,9 @@ func TestMintTaskLifecycleRecord_NilStore_NoOp(t *testing.T) {
 // producer (item 3 of the parent brief: no lost functionality on the path
 // that already worked, extended here to prove the NEW path also behaves).
 func TestExecuteTask_LifecycleRecord_HappyPathReachesCompleted(t *testing.T) {
-	worker := &scriptedProvider{responseBody: "doing it\n[goal:evidence] verified against c1\nTASK_STATUS: success\nTASK_SUMMARY: done"}
+	worker := newClaimingWorker(turnClaimMet("verified against c1"))
 	al, judgeInst := newGoalLoopTestLoop(t, worker, nil)
-	judgeInst.Provider = metJudgeProviderC1()
+	judgeInst.Provider = &b6ScriptedJudge{metFromCall: 1, reason: "evidenced"}
 
 	ls := session.NewLifecycleStore(filepath.Join(t.TempDir(), "session_lifecycle"))
 	al.taskExecutor.SetLifecycleStore(ls)
@@ -162,7 +162,7 @@ func TestExecuteTask_LifecycleRecord_HappyPathReachesCompleted(t *testing.T) {
 // production StartTaskNow path (mirrors a REST "Run" click), intercepts
 // immediately after the goroutine genuinely starts running (goroutineCtxHook
 // — an existing test seam, not a fake production path), and simulates a
-// process crash by simply never letting finishTaskRun run for it. It then
+// process crash by simply never letting the run loop run for it. It then
 // constructs a FRESH PlanEngine sharing the SAME durable stores (as a real
 // restarted process would resolve them from disk) and runs the boot sweep,
 // asserting BOTH:
@@ -185,7 +185,7 @@ func TestBootSweep_ReconcilesCrashedTaskDispatchSession(t *testing.T) {
 	al.taskExecutor.goroutineCtxHook = func(_ context.Context, _ string) {
 		close(started)
 		// Simulate the process being killed -9 right here: do nothing further,
-		// never reach finishTaskRun.
+		// never reach the run loop.
 	}
 
 	tk := &task.Task{

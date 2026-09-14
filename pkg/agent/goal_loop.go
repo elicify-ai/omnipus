@@ -1188,11 +1188,16 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 	opts processOptions,
 	result *turnResult,
 ) {
-	// GOAL-FR-015 (E12): the entry gate's own opts.IsTaskRun exclusion is
-	// REMOVED — a task-owned goal's after-turn claim/keeper handling MUST
-	// reach this hook exactly like a chat-owned goal's does (GOAL-FR-013's
-	// "one code path"). The origin gate below is amended, not dropped, to
-	// admit a task run explicitly rather than by accident.
+	// Founder decision 2026-09-14 (one Judge pipeline): a TASK run's goal is
+	// owned end-to-end by the task executor (pkg/agent/task_run_loop.go) —
+	// its turns' claims, the parks, the Judge dispatches and the try budget
+	// are all resolved there, in the run's own session. This hook must NOT
+	// resolve a task run's claim or schedule a second adjudication for it
+	// (the B-5 duplicate-pipeline defect), so a task-run turn never proceeds
+	// past this gate. Chat goals keep this hook as their only consumer.
+	if opts.IsTaskRun {
+		return
+	}
 	if result == nil || opts.TranscriptStore == nil || opts.TranscriptSessionID == "" {
 		return
 	}
@@ -1232,6 +1237,13 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 	rec := activeGoalForSession(sessionID)
 	if rec == nil {
 		return // no active goal — fast path
+	}
+	// A task-owned goal is consumed ONLY by the task executor
+	// (task_run_loop.go), even when a turn in its session arrives through a
+	// non-task path: resolving its claim here would start a second Judge
+	// pipeline on the same goal.
+	if rec.OwnerKind == generated.GoalOwnerKindTask {
+		return
 	}
 
 	// Founder decision 2026-09-14 (UAT B-1 run 4): lift the Stop-pause once a
@@ -1360,7 +1372,9 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 		al.goalSetBlocked(rec.GoalID, true)
 		if rec.GoalID != "" {
 			if _, uerr := resolveGoalRecordStore().Update(rec.GoalID, func(cur *goal.Goal) error {
-				return cur.RecordClaim(generated.GoalLatestClaimStatusBlocked, "", time.Now().UTC())
+				// The one-line reason the worker gave (goal_claim carries it as
+				// evidence for blocked) is kept so the operator can see why.
+				return cur.RecordClaim(generated.GoalLatestClaimStatusBlocked, toolEvidence, time.Now().UTC())
 			}); uerr != nil {
 				logger.WarnCF("agent", "goal: could not persist the blocked claim onto the goal record",
 					map[string]any{"session_id": sessionID, "goal_id": rec.GoalID, "error": uerr.Error()})

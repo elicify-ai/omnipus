@@ -6,7 +6,7 @@
 // goal record's OWN criteria[] mirror must carry the verdict's per-criterion
 // outcome (ADR-086 D8, GOAL-FR-036/FR-040/FR-041). UAT record eed50f19 showed
 // criterion 2b9872ae as `pending` on the goal record while its verdict said
-// met:true and the task's REST view said `met`: adjudicateClaim projected the
+// met:true and the task's REST view said `met`: adjudicateRunClaim projected the
 // criteria half onto the task record only, and the goal record received the
 // DoD half alone. recordTaskGoalVerdict now projects both of the record's own
 // lists in the same store write that records the verdict.
@@ -59,8 +59,8 @@ func TestTaskVerdictProjectsOntoTheGoalRecordsOwnCriteria_UATDefect3(t *testing.
 				stored.Criteria, []task.AcceptanceCriterion{proseCriterion("", dodTestDoDText)})
 			criterionID := stored.Criteria[0].ID
 
-			al.taskExecutor.adjudicateClaim(context.Background(), stored, taskSessionID,
-				"Implemented the CSV export and exercised the endpoint by hand.", nil)
+			al.taskExecutor.adjudicateRunClaim(context.Background(), stored, taskSessionID,
+				"Implemented the CSV export and exercised the endpoint by hand.", nil, &taskRunState{})
 
 			rec, err := goal.NewStore(config.OmnipusHomeDir()).GetByOwner(generated.GoalOwnerKindTask, stored.ID)
 			if err != nil {

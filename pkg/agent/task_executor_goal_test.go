@@ -82,7 +82,10 @@ func seedDefiningTaskGoal(t *testing.T, al *AgentLoop, taskID, agentID string) (
 // its real criteria, budget and round") is still proven end to end. Per D-F
 // there is no migration path to a mirror to preserve.
 func TestActivateTaskGoal_BindsDefiningRecordAndIsSessionReachable(t *testing.T) {
-	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	// Settings -> Tries per goal is 7 while the record was created with 10:
+	// a run takes the limit in force when it STARTS (founder decision
+	// 2026-09-14, issue #710), as a chat goal does when it is set.
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, func(cfg *config.Config) { cfg.Planning.GoalMaxRounds = 7 })
 	tk, g := seedDefiningTaskGoal(t, al, "t-activate-1", "native-agent")
 
 	sid, err := al.taskExecutor.createTaskSessionSync(tk)
@@ -123,21 +126,24 @@ func TestActivateTaskGoal_BindsDefiningRecordAndIsSessionReachable(t *testing.T)
 			"already fixed at creation, so it must never read as the D3 chat-only recordless/unregistered " +
 			"state (GOAL-FR-020: the nudge ladder stays unreachable for a task-owned goal)")
 	}
-	if found.MaxRounds != 10 {
-		t.Fatalf("found.MaxRounds = %d, want 10 (stamped at goal creation)", found.MaxRounds)
+	if found.MaxRounds != 7 {
+		t.Fatalf("found.MaxRounds = %d, want 7 — the run must take the goal try limit in force when it starts, "+
+			"not the 10 stamped at creation", found.MaxRounds)
 	}
 	if found.Round != 0 {
 		t.Fatalf("found.Round = %d, want 0 on fresh activation", found.Round)
 	}
 }
 
-// TestActivateTaskGoal_NoGoalRecord_TaskStillRuns proves GOAL-FR-023: a
-// task with no paired goal record (pre-D-C task, or a test fixture that
-// never seeded one) still gets a session created without error, and simply
-// never enters the goal loop — activeGoalForSession finds nothing, exactly
-// the "no active goal — fast path" checkGoalLoopAfterTurn's own entry gate
-// already handles.
-func TestActivateTaskGoal_NoGoalRecord_TaskStillRuns(t *testing.T) {
+// TestActivateTaskGoal_NoGoalRecord_MintsOneBoundToTheRun: a task with no
+// paired goal record (created before goal records existed, GOAL-FR-023) still
+// gets a session without error — and now also a goal record, minted at run
+// start from its acceptance criteria and the floor Definition of Done and bound
+// to that session. A task completes only through a judged goal_claim (founder
+// decision 2026-09-14, issue #710), and goal_claim finds a task's goal through
+// the session it is bound to, so without the mint such a task could never
+// finish.
+func TestActivateTaskGoal_NoGoalRecord_MintsOneBoundToTheRun(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	taskStore := GetTaskStore(al)
 	tk := &task.Task{
@@ -158,8 +164,22 @@ func TestActivateTaskGoal_NoGoalRecord_TaskStillRuns(t *testing.T) {
 		t.Fatal("createTaskSessionSync returned an empty session id")
 	}
 
-	if found := activeGoalForSession(sid); found != nil {
-		t.Fatalf("activeGoalForSession found %q — a task with no goal record must never enter the goal loop", found.Prompt)
+	found := activeGoalForSession(sid)
+	if found == nil {
+		t.Fatal("a legacy task must get a goal record bound to its run's session — its worker could never claim otherwise")
+	}
+	if found.OwnerKind != generated.GoalOwnerKindTask || found.OwnerID != tk.ID {
+		t.Fatalf("minted record owner = %s/%s, want task/%s", found.OwnerKind, found.OwnerID, tk.ID)
+	}
+	if found.Prompt != "legacy criteria-less task" {
+		t.Fatalf("minted record prompt = %q, want the task's title (it has no prompt)", found.Prompt)
+	}
+	if len(found.DoD) == 0 {
+		t.Fatal("the minted record carries no Definition of Done — the floor must be there")
+	}
+	stored, gerr := goal.NewStore(config.OmnipusHomeDir()).GetByOwner(generated.GoalOwnerKindTask, tk.ID)
+	if gerr != nil || stored.GoalID != found.GoalID {
+		t.Fatalf("GetByOwner = %+v, %v — the task must own exactly the record bound to its session", stored, gerr)
 	}
 }
 

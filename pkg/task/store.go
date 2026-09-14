@@ -999,10 +999,6 @@ type Patch struct {
 	FollowedUp    *bool
 	SourceChannel *string
 	SourceChatID  *string
-	// PendingJudgeClaim is the runtime/tool-layer write path for
-	// Task.PendingJudgeClaim (ADR-049 C1/SD-B2, review r1). A non-nil pointer
-	// to "" clears it (adjudication finished, either outcome).
-	PendingJudgeClaim *string
 
 	// allowBlockedSet is the internal escape hatch that permits a Status patch to
 	// set or clear the derived `blocked` side-state. It is NEVER set from the wire
@@ -1273,7 +1269,7 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 	// preserves as re-run context for the worker). Concretely: a task that
 	// exhausted at AttemptCount==maxAttempts, re-run via this route and
 	// producing another unmet outcome, immediately re-exhausts in
-	// consumeAttemptOrExhaust (newAttempt==maxAttempts+1 already fails the
+	// consumeTaskAttempt (newAttempt==maxAttempts+1 already fails the
 	// `< maxAttempts` gate) — one supervised extra shot per Run click, never
 	// a free budget refill. This is judged defensible and is NOT changed;
 	// see TestAttemptCount_NotResetOnRunRoute for the pinned regression.
@@ -1419,9 +1415,6 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 	if patch.SourceChatID != nil {
 		t.SourceChatID = *patch.SourceChatID
 	}
-	if patch.PendingJudgeClaim != nil {
-		t.PendingJudgeClaim = *patch.PendingJudgeClaim
-	}
 
 	// Cross-field invariant (ADR-052 FR-028, mirrors plan.Plan's normalize()-
 	// enforced FailedReason/State coupling — pkg/plan/plan.go:299-306):
@@ -1471,9 +1464,8 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 
 // UpdateIfStatus is the compare-and-swap write primitive that closes the
 // EXECUTOR-side half of the ADR-052 FR-014/§6.4(b) Stop guarantee's TOCTOU
-// window (see pkg/agent/task_executor.go's adjudicate/finish-path outcome
-// writers — completeTaskWithResult, consumeAttemptOrExhaust,
-// rejectBareEvidenceClaim). Those callers each re-read a task, decide an
+// window (see the task executor's outcome writers in pkg/agent —
+// completeTaskWithResult and task_run_loop.go's consumeTaskAttempt). Those callers each re-read a task, decide an
 // outcome (possibly after an unlocked, potentially slow judge/verifier
 // call), and only THEN write it — a separate re-check (e.g.
 // taskVerdictStillApplicable) followed by a LATER, SEPARATE write leaves a
@@ -1563,7 +1555,6 @@ func (s *Store) RestartReset(id string) (*Task, error) {
 	t.StartedAt = ""
 	t.CompletedAt = ""
 	t.FollowedUp = false
-	t.PendingJudgeClaim = ""
 	s.recomputeBlockedStateLocked(t)
 	t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := s.write(t); err != nil {

@@ -80,15 +80,12 @@ var knownStatusWriters = []statusWriter{
 
 	// ---- non-terminal writers: each states why it cannot reach done/failed --
 	{
-		where: "pkg/agent.TaskExecutor.consumeAttemptOrExhaust",
-		why: "writes task.StatusNext only (the re-dispatch edge). Its OWN " +
-			"attempts-exhausted branch does not write the terminal status here — it " +
-			"delegates to completeTaskWithResult, which carries the hook.",
-	},
-	{
-		where: "pkg/agent.TaskExecutor.rejectBareEvidenceClaim",
-		why: "writes task.StatusNext only (the free re-dispatch edge, ADR-052 FR-014). " +
-			"Its streak-exhaust branch delegates to consumeAttemptOrExhaust.",
+		where: "pkg/agent.TaskExecutor.consumeTaskAttempt",
+		why: "writes task.StatusNext only (the automatic fresh-run restart after a failed run). It " +
+			"ends the run's goal so the fresh run can Goal.Reactivate it, WITHOUT the goal hook, because " +
+			"the task itself has not ended — its one outcome line is written when it does. Its " +
+			"attempts-exhausted branch delegates the terminal write to completeTaskWithResult, which " +
+			"carries the hook.",
 	},
 	{
 		where: "pkg/agent.PlanEngine.promoteInboxMembers",

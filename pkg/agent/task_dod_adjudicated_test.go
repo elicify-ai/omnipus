@@ -206,7 +206,7 @@ const (
 // goal_compile.go::compiledGoalCriteriaFor states the rule for the chat path in
 // its own doc comment — "Without this union the DoD would be defined,
 // confirmed, and never scored (ADR-080 R-C1)" — and GOAL-FR-013 requires ONE
-// code path for both owner kinds. TaskExecutor.adjudicateClaim judged
+// code path for both owner kinds. TaskExecutor.adjudicateRunClaim judged
 // t.Criteria alone, and a task's DoD does not live there (there is no Task.Dod
 // field at all), so on the task path the DoD was never scored.
 //
@@ -255,9 +255,9 @@ func TestTaskDefinitionOfDoneIsAdjudicated_GOALFR047(t *testing.T) {
 			// Same judged set — what changes is the outcome, which is exactly
 			// the point: the DoD must be able to FAIL the claim.
 			wantJudgedTexts: []string{dodTestCriterionText, dodTestDoDText},
-			// consumeAttemptOrExhaust moves an unmet claim to `next` for
-			// another attempt (default budget 3, this is attempt 1 of 3).
-			wantStatus:     task.StatusNext,
+			// An unmet verdict spends a goal try and the worker keeps going
+			// in the same run: the task stays in_progress.
+			wantStatus:     task.StatusInProgress,
 			wantCritStatus: task.CritMet,
 			wantDoDStatus:  task.CritUnmet,
 		},
@@ -290,17 +290,21 @@ func TestTaskDefinitionOfDoneIsAdjudicated_GOALFR047(t *testing.T) {
 
 			_, taskSessionID := newGoalTestSession(t, al, "native-agent")
 			if tc.seedGoal {
+				// The goal record carries the task's OWN criteria, ids and all:
+				// task creation writes one set for both records (GOAL-FR-007),
+				// and a claim is judged against the record's criteria, so the
+				// verdict projects onto the task's list by those shared ids.
 				seeded := seedActiveTaskGoalWithDoD(t, stored.ID, taskSessionID,
 					"make the export endpoint return CSV",
-					[]task.AcceptanceCriterion{proseCriterion("", dodTestCriterionText)},
+					stored.Criteria,
 					[]task.AcceptanceCriterion{proseCriterion("", dodTestDoDText)})
 				if len(seeded.DoD) != 1 {
 					t.Fatalf("fixture broken: seeded goal record carries %d DoD items, want 1", len(seeded.DoD))
 				}
 			}
 
-			al.taskExecutor.adjudicateClaim(context.Background(), stored, taskSessionID,
-				"Implemented the CSV export and exercised the endpoint by hand.", nil)
+			al.taskExecutor.adjudicateRunClaim(context.Background(), stored, taskSessionID,
+				"Implemented the CSV export and exercised the endpoint by hand.", nil, &taskRunState{})
 
 			// --- what the Judge was actually ASKED --------------------------
 
@@ -382,38 +386,40 @@ func TestUnmetDoDIsTheReasonTheClaimFailed(t *testing.T) {
 		Criteria: []task.AcceptanceCriterion{proseCriterion("", dodTestCriterionText)},
 	})
 	_, taskSessionID := newGoalTestSession(t, al, "native-agent")
+	// The task's own criteria, ids and all (GOAL-FR-007) — see the table test above.
 	seeded := seedActiveTaskGoalWithDoD(t, stored.ID, taskSessionID, "make the export endpoint return CSV",
-		[]task.AcceptanceCriterion{proseCriterion("", dodTestCriterionText)},
+		stored.Criteria,
 		[]task.AcceptanceCriterion{proseCriterion("", dodTestDoDText)})
 	dodID := seeded.DoD[0].ID
 	if dodID == "" {
 		t.Fatal("fixture broken: the seeded goal record's DoD item carries no id")
 	}
 
-	al.taskExecutor.adjudicateClaim(context.Background(), stored, taskSessionID,
-		"Implemented the CSV export and exercised the endpoint by hand.", nil)
+	step, steer, _ := al.taskExecutor.adjudicateRunClaim(context.Background(), stored, taskSessionID,
+		"Implemented the CSV export and exercised the endpoint by hand.", nil, &taskRunState{})
+	if step != runStepContinue {
+		t.Fatalf("step = %v, want the run to continue with the Judge's feedback", step)
+	}
 
 	final, err := GetTaskStore(al).Get(stored.ID)
 	if err != nil {
 		t.Fatalf("reload task: %v", err)
 	}
-	// writeSteeringPrompt repurposes Result as the in-flight steering carrier
-	// between attempts (its own doc comment), so this is the text the next
-	// attempt's buildPrompt feeds the worker.
-	if !strings.Contains(final.Result, dodID) {
+	// steer is the text the worker's NEXT turn in this same run receives.
+	if !strings.Contains(steer, dodID) {
 		t.Errorf("the re-dispatch steering does not name the DoD item that failed (id %q).\n"+
 			"got: %q\n"+
 			"An unmet DoD must be reported as the reason the claim was refused — otherwise the "+
 			"worker is re-dispatched blind and the DoD is unfixable as well as unexplained.",
-			dodID, final.Result)
+			dodID, steer)
 	}
 	// The acceptance criterion was MET, so it must not be reported as a
 	// reason. Without this half the test would also pass for an implementation
 	// that failed the claim wholesale and blamed everything.
 	for _, c := range final.Criteria {
-		if c.Text == dodTestCriterionText && strings.Contains(final.Result, c.ID) {
+		if c.Text == dodTestCriterionText && strings.Contains(steer, c.ID) {
 			t.Errorf("the steering names the MET acceptance criterion (id %q) as unmet:\n%q\n"+
-				"only the DoD item was judged unmet in this fixture", c.ID, final.Result)
+				"only the DoD item was judged unmet in this fixture", c.ID, steer)
 		}
 	}
 }

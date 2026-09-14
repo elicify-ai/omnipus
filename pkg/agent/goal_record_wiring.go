@@ -334,6 +334,27 @@ func (a agentLoopGoalRecordAccess) ReadGoalState(sessionID string) (goalID, goal
 	return g.GoalID, g.Prompt, rec, nil
 }
 
+// ReadClaimableGoal implements tools.GoalClaimAccess: it answers goal_claim's
+// "is there a goal this session can claim" question by the goal BOUND to the
+// session (activeGoalForSession), for either owner kind. That is the lookup a
+// task run needs: a task-owned goal's owner is the TASK, while the claim is
+// made from the session the run minted, so ReadGoalState's owner-keyed lookup
+// (which set_goal keeps — a task goal's criteria are frozen and never
+// authored by its worker) refused every task-run claim with "this session has
+// no active goal" (UAT B-5).
+func (a agentLoopGoalRecordAccess) ReadClaimableGoal(sessionID string) (goalID, goalCondition string, err error) {
+	if a.al.ResolveSessionStore(sessionID) == nil {
+		return "", "", fmt.Errorf("goal record access: session %q is not known to any session store", sessionID)
+	}
+	rec := activeGoalForSession(sessionID)
+	if rec == nil {
+		return "", "", nil
+	}
+	return rec.GoalID, rec.Prompt, nil
+}
+
+var _ tools.GoalClaimAccess = agentLoopGoalRecordAccess{}
+
 // goalRecordAnchor describes one ENGINE-authored goal-record write that must
 // be anchored in the session transcript as a `set_goal` tool call (ADR-082
 // D9, review CR8). Three paths write a record without ever running the tool

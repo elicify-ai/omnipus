@@ -31,6 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 )
 
@@ -202,6 +203,16 @@ func TestHandleTaskPatch_InProgress_ApprovedPlanMember_StillLaunches(t *testing.
 	approved := plan.StateApproved
 	_, err := planStore.Update(p.ID, plan.Patch{State: &approved})
 	require.NoError(t, err, "approve plan")
+
+	// This harness's mock worker never claims, so its run spends goal tries
+	// and task attempts (founder decision 2026-09-14). One of each lets the
+	// launched run end Failed quickly, so the teardown guard below does not
+	// wait out the default 20 tries x 3 attempts.
+	require.NoError(t, api.agentLoop.MutateConfig(func(cfg *config.Config) error {
+		cfg.Planning.GoalMaxRounds = 1
+		cfg.Planning.TaskMaxAttempts = 1
+		return nil
+	}))
 
 	w := patchTask(t, api, tsk.Id, `{"status":"in_progress"}`)
 	require.Equal(t, 200, w.Code,

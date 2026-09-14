@@ -32,6 +32,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // taskRunNowSuccessProvider is a scripted LLMProvider that always returns a
@@ -40,9 +41,10 @@ import (
 //
 // A completion signal is now a CLAIM, not a completion. ADR-084/GOAL-FR-022
 // (joint delivery plan row R-27) deleted both trust-the-claim branches from
-// TaskExecutor.adjudicateClaim: "an unreachable Judge is a reason the claim
+// the task claim adjudication (now task_run_loop.go::adjudicateRunClaim):
+// "an unreachable Judge is a reason the claim
 // CANNOT be adjudicated, not evidence that it is true". This provider's
-// marker therefore only gets the task as far as adjudication — reaching
+// goal_claim therefore only gets the task as far as adjudication — reaching
 // task.StatusDone additionally requires a registered Judge System Agent that
 // returns a met verdict, which is what bindMetVerdictJudge supplies below.
 //
@@ -51,7 +53,7 @@ import (
 // UNRELATED reason ("no completion signal") — a Status of Failed by itself
 // cannot distinguish that from the context-cancellation bug's own failure
 // ("execution error: turn not started: context canceled",
-// pkg/agent/task_executor.go's finishTaskRun). Only a provider that can
+// pkg/agent/task_run_loop.go). Only a provider that can
 // actually reach a genuine Done, with real Result content the canceled-ctx
 // path could never produce, proves the fix — not merely "some terminal
 // status, whichever it is".
@@ -61,14 +63,21 @@ const taskRunNowSuccessSummary = "run-now-live-server-check: verified"
 
 func (p *taskRunNowSuccessProvider) Chat(
 	_ context.Context,
-	_ []providers.Message,
+	msgs []providers.Message,
 	_ []providers.ToolDefinition,
 	_ string,
 	_ map[string]any,
 ) (*providers.LLMResponse, error) {
-	return &providers.LLMResponse{
-		Content: "Done.\n[goal:evidence] verified\nTASK_STATUS: success\nTASK_SUMMARY: " + taskRunNowSuccessSummary,
-	}, nil
+	// A native task worker finishes only by claiming with goal_claim (founder
+	// decision 2026-09-14, issue #710); the claim's evidence becomes the
+	// upheld run's Result.
+	if n := len(msgs); n > 0 && msgs[n-1].Role == "tool" {
+		return &providers.LLMResponse{Content: "Done."}, nil
+	}
+	return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+		ID: "call-goal-claim", Type: "function", Name: tools.GoalClaimToolName,
+		Arguments: map[string]any{"status": tools.GoalClaimStatusMet, "evidence": taskRunNowSuccessSummary},
+	}}}, nil
 }
 
 func (p *taskRunNowSuccessProvider) GetDefaultModel() string { return "test-model" }
@@ -80,7 +89,7 @@ func (p *taskRunNowSuccessProvider) GetDefaultModel() string { return "test-mode
 // Resolved lazily rather than baked in because the criterion ids are minted
 // by the store at create time: a verdict that omitted a criterion would be
 // classified criterion_unjudgeable (JUDGE-FR-138) and resolve UNMET, so the
-// task would land on `next` via consumeAttemptOrExhaust instead of `done` —
+// task would spend its goal tries instead of reaching `done` —
 // the same red this fixture exists to rule out, for a different reason.
 type metVerdictJudgeProvider struct {
 	criteriaIDs func() []string
@@ -131,8 +140,8 @@ func bindMetVerdictJudge(t *testing.T, api *restAPI, criteriaIDs func() []string
 	t.Helper()
 	judgeInst, ok := api.agentLoop.GetRegistry().GetAgent(string(coreagent.IDJudge))
 	require.True(t, ok,
-		"the Judge System Agent (%s) is not registered — adjudicateClaim takes the EC-6 "+
-			"judge-unavailable pause (GOAL-FR-022/R-27) and the task can never reach a terminal status",
+		"the Judge System Agent (%s) is not registered — the task run ends Failed \"The Judge could not run\" "+
+			"(GOAL-FR-022/R-27) and the task can never reach done",
 		coreagent.IDJudge)
 	judgeInst.Provider = &metVerdictJudgeProvider{criteriaIDs: criteriaIDs}
 }
@@ -358,7 +367,7 @@ func TestTaskRunsEndpoint(t *testing.T) {
 // merely "some terminal status". An earlier version of this test accepted
 // done OR failed, on the theory that a canceled dispatch would strand the
 // run in_progress forever; that reasoning was wrong; a context-canceled
-// dispatch (pkg/agent/task_executor.go's finishTaskRun, on err != nil) closes
+// dispatch (pkg/agent/task_run_loop.go's execution-error branch) closes
 // the run as `failed` with Result "execution error: turn not started:
 // context canceled" — itself a terminal status — so "reaches done or
 // failed" passes whether or not the bug is present and would have shipped
@@ -374,17 +383,21 @@ func TestTaskRunNow_LiveExecutor_ViaRealServer(t *testing.T) {
 	setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 
 	tsk := createTaskViaAPI(t, api, "RunNowLiveServerTask", wsID)
-	// ADR-084/GOAL-FR-022/R-27: the worker's TASK_STATUS marker is a claim,
-	// not a completion — a met verdict from the Judge is the only route to
-	// Done. The ids are read back from the store on each verifier call so the
-	// verdict always covers the criteria this task really carries.
+	// ADR-084/GOAL-FR-022/R-27: the worker's goal_claim is a claim, not a
+	// completion — a met verdict from the Judge is the only route to Done. The
+	// ids are read back from the task's goal record on each verifier call, so
+	// the verdict always covers what the claim is really judged against: the
+	// record's acceptance criteria AND its Definition of Done.
 	bindMetVerdictJudge(t, api, func() []string {
-		stored, err := api.taskStore.Get(tsk.Id)
-		if err != nil {
+		g, err := tools.GoalStoreForTasks(api.taskStore).GetByOwner(gen.GoalOwnerKindTask, tsk.Id)
+		if err != nil || g == nil {
 			return nil
 		}
-		ids := make([]string, 0, len(stored.Criteria))
-		for _, c := range stored.Criteria {
+		ids := make([]string, 0, len(g.Criteria)+len(g.DoD))
+		for _, c := range g.Criteria {
+			ids = append(ids, c.ID)
+		}
+		for _, c := range g.DoD {
 			ids = append(ids, c.ID)
 		}
 		return ids
@@ -442,8 +455,8 @@ func TestTaskRunNow_LiveExecutor_ViaRealServer(t *testing.T) {
 			return false
 		}, 10*time.Second, 20*time.Millisecond,
 			"the occurrence run must round-trip via GET /tasks/{id}/runs and reach a genuine Done — "+
-				"a spurious request-context cancel closes the run as `failed` instead (finishTaskRun's "+
-				"err != nil branch), which is itself a terminal status and would otherwise pass unnoticed")
+				"a spurious request-context cancel closes the run as `failed` instead (the task run loop's "+
+				"execution-error branch), which is itself a terminal status and would otherwise pass unnoticed")
 
 		assert.Equal(t, tsk.Id, matched.TaskId)
 		assert.Equal(t, gen.TaskRunKindManual, matched.Kind, "Run-now always opens a manual-kind run")

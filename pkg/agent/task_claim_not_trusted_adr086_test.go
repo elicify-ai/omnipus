@@ -7,7 +7,8 @@
 // completion claim is a REQUEST to be judged, never a completion.
 //
 // Why this file exists at all. R-27 named TWO trust-the-claim branches inside
-// TaskExecutor.adjudicateClaim. The second one completed a task outright —
+// TaskExecutor.adjudicateClaim (since replaced by task_run_loop.go's
+// adjudicateRunClaim). The second one completed a task outright —
 // StatusDone, on the worker's own say-so, with no verdict of any kind —
 // whenever the SOFT tier was in play (a task with no explicit Criteria,
 // judged against judge.go::SoftTierCriterion) AND the Judge System Agent was
@@ -25,12 +26,12 @@
 // "the claim was not trusted", and it would go green again the instant the
 // defect returned.
 //
-// So this is the guard. It drives adjudicateClaim in exactly the condition
-// the deleted branch keyed on and asserts the ADR-086 shape that replaced it:
-// EC-6's judge-unavailable outcome, identical to the result.Unavailable
-// branch — the task is NOT completed, it stays in_progress with its run still
-// open, no attempt and no round are consumed, and one operator-visible WARN
-// names the real cause. Restore the branch and the very first assertion dies.
+// So this is the guard. It drives adjudicateRunClaim in exactly the condition
+// the deleted branch keyed on and asserts the shape that replaced it (founder
+// decision 2026-09-14, "Judge unavailable on a task"): a Judge only an
+// operator can fix — here, none registered at all — ends the task Failed with
+// a plain reason naming the fix, no attempt and no round consumed, no verdict
+// recorded, and never a restart. Restore the branch and the first assertion dies.
 package agent
 
 import (
@@ -44,7 +45,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/goal"
-	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -118,7 +118,7 @@ func TestTaskClaimIsNeverTrustedWhenJudgeUnregistered(t *testing.T) {
 		t.Fatalf("create task: %v", err)
 	}
 	if soft := SoftTierCriterion(tk.Title, tk.Description, tk.Prompt); soft == nil {
-		t.Fatal("fixture broken: SoftTierCriterion returned nil, so adjudicateClaim would take the " +
+		t.Fatal("fixture broken: SoftTierCriterion returned nil, so adjudicateRunClaim would take the " +
 			"structurally-empty fail-closed branch instead of the judge-unregistered one under test")
 	}
 
@@ -136,7 +136,7 @@ func TestTaskClaimIsNeverTrustedWhenJudgeUnregistered(t *testing.T) {
 	}
 	run := &activeRun{runID: seededRun.RunID}
 
-	// A REAL session, bound to the goal record and handed to adjudicateClaim
+	// A REAL session, bound to the goal record and handed to adjudicateRunClaim
 	// as the task's own session id — deliberately not "": completeTaskWithResult
 	// archives that session as part of completing a task, so the restored
 	// branch must have a genuine one to work on for this guard to be testing
@@ -144,109 +144,67 @@ func TestTaskClaimIsNeverTrustedWhenJudgeUnregistered(t *testing.T) {
 	_, taskSessionID := newGoalTestSession(t, al, "native-agent")
 	seededGoal := seedActiveTaskGoalForClaimGuard(t, claimed.ID, taskSessionID)
 
-	readLog := captureLogFile(t, logger.WARN)
-
 	const claim = "Implemented the CSV export and checked the output by hand."
-	redispatch := al.taskExecutor.adjudicateClaim(context.Background(), claimed, taskSessionID, claim, run)
-
-	// --- the task itself ---------------------------------------------------
+	step, _, redispatch := al.taskExecutor.adjudicateRunClaim(
+		context.Background(), claimed, taskSessionID, claim, run, &taskRunState{})
 
 	final, gerr := al.taskStore.Get(tk.ID)
 	if gerr != nil {
 		t.Fatalf("get task: %v", gerr)
 	}
-
-	// THE kill assertion. The deleted branch wrote StatusDone here on the
-	// worker's own say-so; nothing may do that again.
+	// THE kill assertion: nothing may complete a task on the worker's say-so.
 	if final.Status == task.StatusDone {
-		t.Fatalf("status = %q — the task was COMPLETED with no Judge registered and no verdict of any "+
-			"kind. This is the trust-the-claim branch GOAL-FR-022/R-27 deleted: a completion claim is a "+
-			"request to be judged, never a completion (result: %q)", final.Status, final.Result)
+		t.Fatalf("status = %q — the task was COMPLETED with no Judge registered and no verdict of any kind "+
+			"(GOAL-FR-022/R-27). result: %q", final.Status, final.Result)
 	}
-	if final.Status != task.StatusInProgress {
-		t.Fatalf("status = %q, want %q — EC-6's judge-unavailable outcome is a PAUSE: the task is left "+
-			"exactly as it was, neither completed nor failed nor re-queued (result: %q)",
-			final.Status, task.StatusInProgress, final.Result)
+	if final.Status != task.StatusFailed {
+		t.Fatalf("status = %q, want %q — a claim no Judge can check ends the task with the reason, rather "+
+			"than leaving it in progress with nothing visible (result: %q)", final.Status, task.StatusFailed, final.Result)
+	}
+	if !strings.Contains(final.Result, "The Judge could not run") || !strings.Contains(final.Result, "not registered") {
+		t.Errorf("result = %q, want the plain reason naming the missing Judge", final.Result)
 	}
 	if strings.Contains(final.Result, claim) {
-		t.Errorf("result = %q — the worker's own claim text must never be written as this task's "+
-			"completion result when nothing judged it", final.Result)
+		t.Errorf("result = %q — the worker's own claim must never be written as the result", final.Result)
 	}
 	if final.AttemptCount != 0 {
-		t.Errorf("attempt_count = %d, want 0 — an unreachable Judge is an environment gap, not a failed "+
-			"attempt by the worker; consumeAttemptOrExhaust must not be called on this path", final.AttemptCount)
+		t.Errorf("attempt_count = %d, want 0 — a missing Judge is an environment gap, not a failed run", final.AttemptCount)
 	}
-	if redispatch != "" {
-		t.Errorf("redispatch id = %q, want \"\" — this path pauses for a later retry (runTask's openRun is "+
-			"idempotent on (taskID, occurrenceMs)); it does not re-prompt the worker", redispatch)
+	if step != runStepEnded || redispatch != "" {
+		t.Errorf("step=%v redispatch=%q, want the run ended with no restart — restarting cannot fix it", step, redispatch)
 	}
-
-	// --- the run stays open ------------------------------------------------
 
 	runs, lerr := al.taskStore.ListRuns(tk.ID)
 	if lerr != nil {
 		t.Fatalf("ListRuns: %v", lerr)
 	}
-	if len(runs) != 1 {
-		t.Fatalf("expected exactly 1 run, got %d: %+v", len(runs), runs)
+	if len(runs) != 1 || runs[0].RunID != seededRun.RunID {
+		t.Fatalf("runs = %+v, want the one seeded run", runs)
 	}
-	gotRun := runs[0]
-	if gotRun.RunID != seededRun.RunID {
-		t.Errorf("run_id = %q, want the seeded run's id %q", gotRun.RunID, seededRun.RunID)
+	if runs[0].Status != task.StatusFailed || runs[0].EndedAt == nil {
+		t.Errorf("run status=%q ended_at=%v, want it closed failed with the task", runs[0].Status, runs[0].EndedAt)
 	}
-	if gotRun.EndedAt != nil && *gotRun.EndedAt != "" {
-		t.Errorf("run ended_at = %q, want it still unset — the run mirrors the task's own genuinely "+
-			"unresolved, paused reality and must not be closed by a claim nobody judged", *gotRun.EndedAt)
-	}
-	if gotRun.Status != task.StatusInProgress {
-		t.Errorf("run status = %q, want %q (still open)", gotRun.Status, task.StatusInProgress)
-	}
-
-	// --- no round consumed -------------------------------------------------
 
 	afterGoal, rerr := goal.NewStore(config.OmnipusHomeDir()).Get(seededGoal.GoalID)
 	if rerr != nil {
 		t.Fatalf("re-read the task's goal record: %v", rerr)
 	}
-	if afterGoal.Round != 0 {
-		t.Errorf("goal round = %d, want 0 — an unreachable Judge must not burn a round of the task's "+
-			"goal budget (GOAL-FR-022/R-27: no round consumed)", afterGoal.Round)
-	}
-	if afterGoal.AttemptsUsed != 0 {
-		t.Errorf("goal attempts_used = %d, want 0", afterGoal.AttemptsUsed)
-	}
-	if afterGoal.State != generated.GoalStateActive {
-		t.Errorf("goal state = %q, want %q — the goal is paused mid-flight, not terminated",
-			afterGoal.State, generated.GoalStateActive)
+	if afterGoal.Round != 0 || afterGoal.AttemptsUsed != 0 {
+		t.Errorf("goal round=%d attempts_used=%d, want 0/0 — nothing was judged", afterGoal.Round, afterGoal.AttemptsUsed)
 	}
 	if afterGoal.LatestVerdict != nil {
-		t.Errorf("a verdict was recorded (%+v) — nothing adjudicated this claim, so there is no verdict "+
-			"to record", afterGoal.LatestVerdict)
+		t.Errorf("a verdict was recorded (%+v) — nothing adjudicated this claim", afterGoal.LatestVerdict)
 	}
-
-	// --- the operator can see why ------------------------------------------
-
-	// Silence is what EC-6 prohibits here, not the pause: a task that stops
-	// making progress because the Judge is missing must say so, or an
-	// operator has no way to tell it apart from a hung run.
-	log := readLog()
-	if !strings.Contains(log, "judge_unregistered") {
-		t.Errorf("no WARN carrying reason=judge_unregistered was logged — the pause must be "+
-			"operator-visible. Captured log:\n%s", log)
-	}
-	if !strings.Contains(log, "the Judge System Agent is not registered") {
-		t.Errorf("the WARN does not name the real cause in words an operator can act on. Captured log:\n%s", log)
-	}
-	if !strings.Contains(log, tk.ID) {
-		t.Errorf("the WARN does not name the task it is about (%s). Captured log:\n%s", tk.ID, log)
+	if afterGoal.State == generated.GoalStateActive {
+		t.Errorf("goal state = %q — the goal must end with its task", afterGoal.State)
 	}
 }
 
 // seedActiveTaskGoalForClaimGuard creates and activates a task-owned goal
 // record with its round counter at zero, so the guard's "no round consumed"
 // assertion reads a real record rather than proving nothing. Criteria stay
-// empty — the goal record's list is not what adjudicateClaim consults (it
-// reads Task.Criteria, which is what makes this the soft tier) — and the DoD
+// empty on the goal record AND on the task — adjudicateRunClaim judges the
+// record's criteria, then the task's, and only then the soft tier — and the DoD
 // is the built-in floor, which goal.New requires to be non-empty.
 func seedActiveTaskGoalForClaimGuard(t *testing.T, taskID, sessionID string) *goal.Goal {
 	t.Helper()

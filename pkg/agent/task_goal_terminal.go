@@ -10,7 +10,8 @@
 // A task's Definition of Done lives EXCLUSIVELY on its paired goal record
 // (task.Task has no Dod field at all — see Task.Criteria's own doc comment).
 // Task creation REFUSES with 400 unless a DoD distinct from the acceptance
-// criteria is supplied, and then nothing judged it: TaskExecutor.adjudicateClaim
+// criteria is supplied, and then nothing judged it: TaskExecutor.adjudicateClaim (since
+// replaced by task_run_loop.go::adjudicateRunClaim)
 // fed the Judge `t.Criteria` alone and never opened the goal record, so every
 // terminated task's goal record read `dod: [pending]` — including tasks that
 // reached `done` with `criteria: [met]`. The floor-DoD items
@@ -47,6 +48,7 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -151,7 +153,7 @@ func taskGoalDoD(taskID string) ([]task.AcceptanceCriterion, error) {
 // wrote — is projected by recordTaskGoalVerdict, in the same store write that
 // records the verdict (UAT defect 3). The DoD statuses that function writes are
 // the ones written here, so this write is now redundant but harmless; removing
-// it needs a call-site change in task_executor.go::adjudicateClaim.
+// it needs a call-site change in task_run_loop.go::adjudicateRunClaim.
 //
 // Called on BOTH met and unmet outcomes (FR-040 is not conditioned on the
 // overall verdict) and only when the projection actually changed something, so
@@ -195,7 +197,7 @@ func persistTaskGoalDoDProjection(taskID string, projectedDoD []task.AcceptanceC
 // It also projects the verdict onto the record's OWN Criteria and DoD lists
 // (ADR-086 D8, GOAL-FR-036/FR-040/FR-041), inside the same store write that
 // records the verdict — UAT defect 3. Nothing on the task path ever wrote the
-// goal record's criteria[] mirror: adjudicateClaim projected the criteria half
+// goal record's criteria[] mirror: the since-replaced adjudicateClaim projected the criteria half
 // onto the task record and persistTaskGoalDoDProjection wrote the DoD half
 // alone, so record eed50f19 read `criteria: [pending]` beside a latest_verdict
 // that judged that very criterion met. Projecting here, against the record's
@@ -235,6 +237,31 @@ func recordTaskGoalVerdict(taskID string, verdict *task.JudgeVerdict, reason str
 			"goal: could not record this round's verdict on the paired goal record",
 			map[string]any{"task_id": taskID, "goal_id": g.GoalID, "error": uerr.Error()})
 	}
+}
+
+// mintLegacyTaskGoal creates the defining-phase goal record a legacy task
+// (created before D-C, GOAL-FR-023) never got, so its run can activate a goal
+// and its worker can claim through goal_claim. Criteria come from the task
+// record (possibly none — the Judge then uses the soft-tier criterion), the
+// Definition of Done is the built-in floor every compiled goal carries
+// (ADR-080 D-DOD layer 3), and the try limit is the live Settings value.
+func (te *TaskExecutor) mintLegacyTaskGoal(t *task.Task) (*goal.Goal, error) {
+	prompt := strings.TrimSpace(t.Prompt)
+	if prompt == "" {
+		prompt = strings.TrimSpace(t.Title)
+	}
+	if prompt == "" {
+		prompt = "task " + t.ID
+	}
+	g, err := goal.New(generated.GoalOwnerKindTask, t.ID, generated.GoalSourceTaskExplicit,
+		prompt, "", t.Criteria, newFloorDoD(), goalTryLimit(te.agentLoop), time.Now().UTC())
+	if err != nil {
+		return nil, fmt.Errorf("build goal record: %w", err)
+	}
+	if err := resolveGoalRecordStore().Create(g); err != nil {
+		return nil, fmt.Errorf("persist goal record: %w", err)
+	}
+	return g, nil
 }
 
 // terminateTaskGoalRecord is this package's entry point to the ONE shared

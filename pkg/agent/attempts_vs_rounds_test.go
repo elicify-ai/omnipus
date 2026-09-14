@@ -15,7 +15,7 @@ import (
 
 // TestAttemptsVsRounds_DistinctBrakes pins FR-178: the per-member/task
 // attempts brake (Task.AttemptCount, sole writer
-// TaskExecutor.consumeAttemptOrExhaust) and the per-goal/plan judge-rounds
+// TaskExecutor.consumeTaskAttempt) and the per-goal/plan judge-rounds
 // brake (plan.JudgeRounds, sole writer PlanEngine.applyJudgeRoundOutcome)
 // are TWO DISTINCT counters — never conflated, and whichever trips first stops
 // its OWN scope locally. The matrix row 58 claimed this test; it did not exist.
@@ -94,7 +94,7 @@ func TestAttemptsVsRounds_DistinctBrakes(t *testing.T) {
 
 	t.Run("attempts_brake_does_not_trip_the_rounds_brake", func(t *testing.T) {
 		// Direction B: drive a member task's attempts to exhaustion via the SOLE
-		// AttemptCount writer (consumeAttemptOrExhaust) and assert the OWNING
+		// AttemptCount writer (consumeTaskAttempt) and assert the OWNING
 		// PLAN is untouched — JudgeRounds intact, still running, NOT failed on
 		// rounds. The two brakes write to different stores/fields; the
 		// attempts brake fails the TASK, it does not trip the plan rounds brake.
@@ -120,12 +120,12 @@ func TestAttemptsVsRounds_DistinctBrakes(t *testing.T) {
 			Status:       task.StatusNext,
 			PlanID:       "plan-attempts",
 			MaxAttempts:  &maxAttempts,
-			AttemptCount: maxAttempts - 1, // one consumeAttemptOrExhaust call exhausts it
+			AttemptCount: maxAttempts - 1, // one consumeTaskAttempt call exhausts it
 		}
 		if err := al.taskStore.Create(tk); err != nil {
 			t.Fatalf("create task: %v", err)
 		}
-		// consumeAttemptOrExhaust CASes against in_progress — establish it.
+		// consumeTaskAttempt CASes against in_progress — establish it.
 		inProg := task.StatusInProgress
 		if _, err := al.taskStore.Update(tk.ID, task.Patch{Status: &inProg}); err != nil {
 			t.Fatalf("set in_progress: %v", err)
@@ -136,7 +136,7 @@ func TestAttemptsVsRounds_DistinctBrakes(t *testing.T) {
 		}
 
 		// Sole AttemptCount writer, verdict=nil (no-signal unmet outcome).
-		al.taskExecutor.consumeAttemptOrExhaust(context.Background(), fresh, "", "claim summary", nil, nil)
+		al.taskExecutor.consumeTaskAttempt(context.Background(), fresh, "", "claim summary", nil)
 
 		// The TASK failed on attempts (the attempts brake tripped for ITS scope).
 		final, err := al.taskStore.Get(tk.ID)
@@ -175,7 +175,7 @@ func TestAttemptsVsRounds_DistinctBrakes(t *testing.T) {
 // ADR-086 / GOAL-FR-026 and GOAL-FR-049 — wave T3
 //
 // FR-026: "The `2 x effective budget` hard ceiling
-// (pkg/agent/task_executor.go::consumeAttemptOrExhaust) MUST apply to both
+// (pkg/agent/task_executor.go::consumeTaskAttempt) MUST apply to both
 // owner kinds."
 //
 // FR-049: "Task-owned goals MUST NOT consume the 'goal' admission slot
@@ -252,7 +252,7 @@ func t3ArmGoalRecord(
 //
 // The requirement has two surfaces because the unified goal has two counters
 // that ADR-086 R-03 keeps deliberately distinct — the task's own attempt
-// ladder (Task.AttemptCount, sole writer consumeAttemptOrExhaust) and the
+// ladder (Task.AttemptCount, sole writer consumeTaskAttempt) and the
 // goal record's round ladder (Goal.Round, advanced by the adjudication) —
 // and the bound has to hold on BOTH, for BOTH owner kinds. The two subtests
 // below take one surface each.
@@ -311,8 +311,8 @@ func TestHardCeilingAppliesToBothOwnerKinds_GOALFR026(t *testing.T) {
 					t.Fatalf("reload task: %v", err)
 				}
 
-				redispatch := al.taskExecutor.consumeAttemptOrExhaust(
-					context.Background(), fresh, "", "unmet: not there yet", nil, nil)
+				redispatch := al.taskExecutor.consumeTaskAttempt(
+					context.Background(), fresh, "", "unmet: not there yet", nil)
 
 				if (redispatch != "") != tc.wantRedispatch {
 					t.Fatalf("re-dispatch id = %q, want re-dispatch = %v (budget %d, attempts already used %d)",
@@ -323,7 +323,7 @@ func TestHardCeilingAppliesToBothOwnerKinds_GOALFR026(t *testing.T) {
 					t.Fatalf("reload task: %v", gerr)
 				}
 				// The attempt is consumed exactly once either way —
-				// consumeAttemptOrExhaust is the sole writer of this counter
+				// consumeTaskAttempt is the sole writer of this counter
 				// and increments by one per call, never skipping ahead to the
 				// ceiling and never leaving it untouched.
 				if final.AttemptCount != tc.seededAttempts+1 {

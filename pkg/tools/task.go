@@ -604,7 +604,7 @@ const maxTaskListRows = 100
 // carries fields whose own doc comments declare them DISK-ONLY and forbid them
 // from crossing any boundary — CreatedByAgentID ("the REST mapper does NOT copy
 // it to the wire type, and it MUST NOT be added to any schema in contracts/"),
-// Scratchpad, PendingJudgeClaim, DelegationDepth — and a whole-struct marshal
+// Scratchpad, DelegationDepth — and a whole-struct marshal
 // shipped every one of them into an LLM's context. Because these rows are
 // already scoped to the caller this was never a cross-principal disclosure, but
 // the disk-only contract is a contract regardless of audience, and an allowlist
@@ -1461,34 +1461,6 @@ func (t *TaskUpdateTool) SetDelegationDenyChecker(
 	t.delegationDeny = fn
 }
 
-// deferDoneClaimToJudge reports whether an explicit update_task(status:"done")
-// call on t must be staged as a pending judge claim rather than written as a
-// terminal `done` immediately (ADR-049 C1/SD-B2, review r1 blocker). This is
-// the FR-041 evidence-ladder judge closing the #1 self-certification bypass:
-// a worker could previously call update_task(done) directly and skip the
-// judge entirely, even though the SAME claim arriving via the TASK_STATUS
-// completion marker (task_executor.go finishTaskRun/adjudicateClaim) was
-// always judged.
-//
-//   - A task with explicit acceptance criteria (hard tier, len(Criteria)>0)
-//     is ALWAYS judged — this returns true.
-//   - A criteria-less task (soft tier — ADR-049 D5 synthesizes an implicit
-//     prose criterion from Prompt/title/description at judge time) keeps
-//     today's exact behavior: an explicit done write is trusted immediately,
-//     unchanged by this fix (explicitly accepted scope per review r1 C1).
-//   - A Scratchpad task (FR-048, set_todos-created checklist tracking) is
-//     exempt from the goal loop entirely, mirroring finishTaskRun's own
-//     Scratchpad exemption — trusted immediately regardless of criteria.
-//
-// ADR-086 D5/GOAL-FR-029/FR-030 names this function as a Task.Criteria
-// consumer to re-point onto the task's paired goal record. No change was
-// needed: t.Criteria continues to be dual-written by this wave's create/
-// update paths (see Task.Criteria's own doc comment, pkg/task/task.go), so
-// this pre-existing check keeps working unchanged.
-func deferDoneClaimToJudge(t *task.Task, newStatus task.Status) bool {
-	return newStatus == task.StatusDone && !t.Scratchpad && len(t.Criteria) > 0
-}
-
 // frozenUpdateTaskDefinitionFields is the update_task half of the
 // running-task field freeze (operator decision, 2026-09-12). It is the exact
 // counterpart of pkg/gateway/rest_tasks.go's frozenTaskDefinitionFields —
@@ -1560,11 +1532,10 @@ func (t *TaskUpdateTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *TaskUpdateTool) Description() string {
 	return "Update a task assigned to you or that you created: status, title, priority, due date, agent_id, or blocked_by.\n" +
-		"Mark status (done/failed — in_progress is reached only through real dispatch via run_task, " +
-		"never written directly here). If the task has acceptance criteria, a done claim is NOT applied " +
-		"directly: during that task's own run it is recorded as a claim for the evidence-ladder judge " +
-		"(the task stays non-terminal and the response says so), and outside that run it is refused. " +
-		"Tasks with no criteria are marked done immediately. Only provided fields are updated."
+		"Status: failed ends a task you are NOT currently running; done on a task with acceptance criteria " +
+		"is refused outside its own run (the judge decides completion there), and while a task's own run is " +
+		"in flight you cannot write its status at all — claim completion with the goal_claim tool instead " +
+		"(status \"met\" with evidence, or \"blocked\" when you cannot proceed). Only provided fields are updated."
 }
 
 func (t *TaskUpdateTool) Parameters() map[string]any {
@@ -1771,48 +1742,30 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		}
 		newStatus = st
 		updatedFields = append(updatedFields, "status")
-		if deferDoneClaimToJudge(existing, st) {
-			// review r2 Chunk 1: a hard-tier done claim is ONLY ever
-			// adjudicated inside THAT task's own executor run — finishTaskRun
-			// (task_executor.go) is the sole reader of Task.PendingJudgeClaim.
-			// An out-of-band call (this task is not the caller's
-			// currently-running task, e.g. a stale/idle criteria task nobody
-			// is executing, or a different agent poking at it) must be
-			// rejected outright rather than staged: nothing would ever
-			// adjudicate that claim, stranding the task non-terminal forever
-			// (bounded only by boot's reconcileStuckTasks). Status is
-			// deliberately left unpatched in the genuine in-run case too —
-			// the PendingJudgeClaim block after the result/artifacts fields
-			// stages the claim instead.
-			if ToolRunningTaskID(ctx) != taskID {
-				return ErrorResult("this task has acceptance criteria — completion is adjudicated by " +
-					"the judge during a task run; it cannot be force-completed here")
-			}
-		} else {
-			patch.Status = &st
+		// Founder decision 2026-09-14 (one claim mechanism): while THIS task's
+		// own executor run is in flight (the context names it as the running
+		// task), the worker cannot write any terminal status itself — done or
+		// failed. Completion is claimed with goal_claim and decided by the
+		// judge; an honest give-up is goal_claim(status:"blocked"). A worker
+		// that could mark its own run failed would bypass the judge entirely.
+		if ToolRunningTaskID(ctx) == taskID {
+			return ErrorResult("you cannot set this task's status while it is running — its completion is " +
+				"decided by the judge. Call goal_claim with status \"met\" and your one-line evidence when the " +
+				"work is verified, or goal_claim with status \"blocked\" if you cannot proceed")
 		}
+		// Out-of-band done on a task with acceptance criteria: nothing would
+		// ever adjudicate it — the judge runs inside the task's own run.
+		if st == task.StatusDone && !existing.Scratchpad && len(existing.Criteria) > 0 {
+			return ErrorResult("this task has acceptance criteria — completion is adjudicated by the judge " +
+				"during a task run; it cannot be marked done here. Run the task and let its worker claim")
+		}
+		patch.Status = &st
 	}
 
 	// Result / artifacts — accepted with or without a status.
-	deferToJudge := deferDoneClaimToJudge(existing, newStatus)
-	var claimText string
 	if result, ok := args["result"].(string); ok && result != "" {
-		claimText = result
-		if deferToJudge {
-			// Captured below as the judge's claim text (adjudicateClaim),
-			// NOT written to Task.Result directly — Task.Result stays the
-			// goal loop's own in-flight steering carrier between attempts
-			// (task_executor.go writeSteeringPrompt's doc comment) until the
-			// judge decides; completeTaskWithResult overwrites it with the
-			// real final result once terminal.
-		} else {
-			patch.Result = &result
-			updatedFields = append(updatedFields, "result")
-		}
-	}
-	if deferToJudge {
-		patch.PendingJudgeClaim = &claimText
-		updatedFields = append(updatedFields, "pending_judge_claim")
+		patch.Result = &result
+		updatedFields = append(updatedFields, "result")
 	}
 	if rawArtifacts, ok := args["artifacts"].([]any); ok {
 		artifacts := make([]string, 0, len(rawArtifacts))
@@ -1997,19 +1950,13 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		)
 	}
 
-	// Timestamps keyed off status (unchanged behavior for the status path). A
-	// deferred done-claim is NOT actually terminal yet (review r1 C1) — the
-	// judge decides — so CompletedAt is not stamped until adjudication lands
-	// (task_executor.go completeTaskWithResult stamps it then, via the normal
-	// Update path).
+	// Timestamps keyed off status.
 	now := time.Now().UTC().Format(time.RFC3339)
 	switch newStatus {
 	case task.StatusInProgress:
 		patch.StartedAt = &now
 	case task.StatusDone, task.StatusFailed:
-		if !deferToJudge {
-			patch.CompletedAt = &now
-		}
+		patch.CompletedAt = &now
 	}
 
 	updated, err := t.store.Update(taskID, patch)
@@ -2041,8 +1988,7 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	// subsequent re-run of that task (activateTaskGoal's `default:` branch).
 	//
 	// Keyed on `updated.Status` (what actually landed on disk) rather than on
-	// the requested `newStatus`, so a deferred done-claim — which deliberately
-	// leaves patch.Status unset — correctly terminates nothing. The prior-
+	// the requested `newStatus`. The prior-
 	// status guard keeps a no-op resend on an already-terminal task from
 	// re-entering the hook; the hook is idempotent anyway, this just keeps the
 	// logs honest.
@@ -2057,14 +2003,13 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	// caller as an advance_warning rather than turning a successful update into a
 	// failure (which would orphan dependents with no signal either way).
 	//
-	// A deferred done-claim (review r1 C1/SD-B2) must NOT advance dependents
-	// or fire onComplete here — the task has not actually reached `done`
-	// (patch.Status was deliberately left unset above), so newStatus=="done"
-	// alone is no longer sufficient to gate these; the judge
-	// (task_executor.go adjudicateClaim -> completeTaskWithResult) is the
-	// only path that may do so, once it actually adjudicates the claim MET.
+	// A done write only reaches here for a task with no acceptance criteria,
+	// from outside that task's own run: a status write on the caller's own
+	// running task, and a done write on a criteria task, are both refused
+	// above, because only a Judge-upheld claim may complete those (founder
+	// decision 2026-09-14, pkg/agent/task_run_loop.go).
 	var advanceWarning string
-	if newStatus == task.StatusDone && !deferToJudge {
+	if newStatus == task.StatusDone {
 		advanced, advErr := t.store.AdvanceBlockedDependents(taskID)
 		if advErr != nil {
 			// Storage fault advancing dependents — the update itself succeeded,
@@ -2078,7 +2023,7 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		}
 	}
 
-	if task.IsTerminal(newStatus) && !deferToJudge && t.onComplete != nil {
+	if task.IsTerminal(newStatus) && t.onComplete != nil {
 		t.onComplete(updated)
 	}
 
@@ -2088,16 +2033,6 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		"task_id":        updated.ID,
 		"status":         updated.Status,
 		"updated_fields": updatedFields,
-	}
-	if deferToJudge {
-		// FR-041/SD-B2 (review r1 C1): tell the calling agent its done claim
-		// was received but is NOT yet final — this task has explicit
-		// acceptance criteria, so the evidence-ladder judge must adjudicate
-		// the claim (task_executor.go adjudicateClaim) before the task can
-		// actually reach `done`.
-		resultPayload["pending_judge_note"] = "completion claim recorded — this task has acceptance " +
-			"criteria, so it is NOT yet done; the evidence-ladder judge will adjudicate your claim " +
-			"against the criteria before the task can reach a terminal status"
 	}
 	if advanceWarning != "" {
 		resultPayload["advance_warning"] = advanceWarning

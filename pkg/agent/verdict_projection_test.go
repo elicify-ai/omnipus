@@ -372,7 +372,7 @@ func TestProjectGoalVerdict_NilVerdictLeavesBothListsUnchanged(t *testing.T) {
 // representative shape from each scope in one test.
 
 func TestProjectionRunsOnAllThreeScopes(t *testing.T) {
-	// Task scope: task_executor.go::adjudicateClaim projects t.Criteria.
+	// Task scope: task_run_loop.go::adjudicateRunClaim projects t.Criteria.
 	taskCriteria := []task.AcceptanceCriterion{mkCriterion("task-c1", task.CritPending)}
 	taskVerdict := mkVerdict(task.CriterionVerdict{CriterionID: "task-c1", Met: true})
 	taskOut, taskStats := projectVerdictOntoCriteria(taskCriteria, taskVerdict)

@@ -430,7 +430,7 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	// Task.CreatedByAgent, which rejects an empty value on BOTH sides rather
 	// than treating "" as a wildcard.
 	//
-	// DISK-ONLY, mirroring Scratchpad / DelegationDepth / PendingJudgeClaim:
+	// DISK-ONLY, mirroring Scratchpad / DelegationDepth:
 	// the REST mapper (toWireTask) does NOT copy it to the wire type, and it
 	// MUST NOT be added to any schema in contracts/.
 	CreatedByAgentID string `json:"created_by_agent_id,omitempty"`
@@ -453,17 +453,6 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	// it is NOT part of the gen.Task wire contract and never crosses the
 	// gateway/SPA boundary (the REST task mapper does not copy it).
 	DelegationDepth int `json:"delegation_depth,omitempty"`
-	// PendingJudgeClaim holds a worker's explicit update_task(status:"done")
-	// completion summary when the task HAS acceptance criteria (ADR-049
-	// C1/SD-B2, review r1): the tool layer (pkg/tools/task.go) does NOT write
-	// a terminal `done` status for that case — it stages the claim here
-	// instead, and pkg/agent/task_executor.go's finishTaskRun adjudicates it
-	// through the SAME evidence-ladder judge path (adjudicateClaim) a
-	// TASK_STATUS completion marker uses, closing the self-certification
-	// bypass where an explicit tool call skipped the judge entirely. Cleared
-	// once adjudicated. DISK-ONLY (mirrors Scratchpad/DelegationDepth): the
-	// REST mapper (toWireTask) does NOT copy it to the wire type.
-	PendingJudgeClaim string `json:"pending_judge_claim,omitempty"`
 }
 
 // CreatedByAgent reports whether this task was created by the agent agentID.

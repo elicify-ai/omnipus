@@ -2,14 +2,14 @@ package tools
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
-// seedCriteriaTask creates a task with one prose acceptance criterion — the
-// "hard tier" that must always be adjudicated by the judge before it can
-// reach `done` (ADR-049 C1/SD-B2). Mirrors seedTask but stamps Criteria.
+// seedCriteriaTask creates an in_progress task with one prose acceptance
+// criterion (ADR-049 C1/SD-B2 hard tier). Mirrors seedTask but stamps Criteria.
 func seedCriteriaTask(t *testing.T, store *task.Store, agentID, createdBy, wsID string) *task.Task {
 	t.Helper()
 	tk := &task.Task{
@@ -35,110 +35,105 @@ func seedCriteriaTask(t *testing.T, store *task.Store, agentID, createdBy, wsID 
 	return tk
 }
 
-// TestTaskUpdate_DoneOnCriteriaTask_OutOfBand_Rejected proves the review-r2
-// Chunk 1 fix: an out-of-band update_task(status:"done") call on a
-// criteria-bearing task — one the caller's turn is NOT currently executing as
-// its own task run (tools.ToolRunningTaskID(ctx) unset or naming a different
-// task) — is rejected outright rather than staged as a PendingJudgeClaim.
-// Staging here would strand the task non-terminal forever: only
-// finishTaskRun (task_executor.go), reached exclusively from that task's own
-// executor run, ever reads/adjudicates PendingJudgeClaim.
+// TestTaskUpdate_StatusOnOwnRunningTask_Refused pins the founder decision of
+// 2026-09-14: while a task's own run is executing, its worker cannot write the
+// task's status at all — neither done nor failed, with or without criteria.
+// Completion is claimed with goal_claim and decided by the judge; an honest
+// give-up is goal_claim(status:"blocked").
+//
+// The `failed` and criteria-less `done` rows are the ones that isolate this
+// rule: the separate out-of-band criteria-task refusal below cannot catch them.
+func TestTaskUpdate_StatusOnOwnRunningTask_Refused(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		criteria bool
+		status   string
+	}{
+		{"failed_on_a_criteria_task", true, updStatusFailed},
+		{"done_on_a_criteria_less_task", false, updStatusDone},
+		{"failed_on_a_criteria_less_task", false, updStatusFailed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := task.New(t.TempDir())
+			var tk *task.Task
+			if tc.criteria {
+				tk = seedCriteriaTask(t, store, "agent-a", "agent-a", "ws-1")
+			} else {
+				tk = seedTask(t, store, "agent-a", "agent-a", "ws-1")
+				inProgress := task.StatusInProgress
+				if _, err := store.Update(tk.ID, task.Patch{Status: &inProgress}); err != nil {
+					t.Fatalf("arrange in_progress: %v", err)
+				}
+			}
+			tool := NewTaskUpdateTool(store)
+			ctx := WithRunningTaskID(WithAgentID(context.Background(), "agent-a"), tk.ID)
+
+			res := tool.Execute(ctx, map[string]any{"task_id": tk.ID, "status": tc.status, "result": "I decided"})
+			if !res.IsError {
+				t.Fatalf("a status write on the caller's own running task must be refused, got: %s", res.ForLLM)
+			}
+			if !strings.Contains(res.ForLLM, "goal_claim") {
+				t.Errorf("the refusal must name the one claim path (goal_claim): %s", res.ForLLM)
+			}
+			got, err := store.Get(tk.ID)
+			if err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			if got.Status != task.StatusInProgress {
+				t.Errorf("status = %q, want in_progress — nothing may be written by a refused call", got.Status)
+			}
+		})
+	}
+}
+
+// TestTaskUpdate_DoneOnCriteriaTask_OutOfBand_Rejected: a done write on a
+// criteria task from outside that task's run is refused — nothing would ever
+// adjudicate it.
 func TestTaskUpdate_DoneOnCriteriaTask_OutOfBand_Rejected(t *testing.T) {
 	t.Parallel()
-	store := task.New(t.TempDir())
-	tk := seedCriteriaTask(t, store, "agent-a", "agent-a", "ws-1")
-	tool := NewTaskUpdateTool(store)
-
-	// No ToolRunningTaskID set at all — an out-of-band call (e.g. the agent
-	// poking at a criteria task nobody is currently executing).
-	ctx := WithAgentID(context.Background(), "agent-a")
-
-	res := tool.Execute(ctx, map[string]any{
-		"task_id": tk.ID,
-		"status":  updStatusDone,
-		"result":  "I claim this is done",
-	})
-	if !res.IsError {
-		t.Fatalf("expected out-of-band done-claim on a criteria task to be rejected, got success: %s", res.ForLLM)
-	}
-
-	got, err := store.Get(tk.ID)
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	if got.Status == task.StatusDone {
-		t.Errorf("task must NOT have been marked done by an out-of-band call, got status=%q", got.Status)
-	}
-	if got.PendingJudgeClaim != "" {
-		t.Errorf("task must NOT have a staged PendingJudgeClaim from an out-of-band call, got %q",
-			got.PendingJudgeClaim)
+	for _, ctx := range []context.Context{
+		WithAgentID(context.Background(), "agent-a"),
+		WithRunningTaskID(WithAgentID(context.Background(), "agent-a"), "some-other-task-id"),
+	} {
+		store := task.New(t.TempDir())
+		tk := seedCriteriaTask(t, store, "agent-a", "agent-a", "ws-1")
+		res := NewTaskUpdateTool(store).Execute(ctx, map[string]any{
+			"task_id": tk.ID, "status": updStatusDone, "result": "I claim this is done",
+		})
+		if !res.IsError {
+			t.Fatalf("out-of-band done on a criteria task must be refused, got: %s", res.ForLLM)
+		}
+		got, err := store.Get(tk.ID)
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if got.Status == task.StatusDone {
+			t.Errorf("task marked done by an out-of-band call")
+		}
 	}
 }
 
-// TestTaskUpdate_DoneOnCriteriaTask_OutOfBand_WrongRunningTask_Rejected proves
-// the gate compares the RUNNING task's ID, not just "is any task running" —
-// a turn that IS a genuine task-run, but for a DIFFERENT task, must still be
-// rejected when it tries to force-complete tk.
-func TestTaskUpdate_DoneOnCriteriaTask_OutOfBand_WrongRunningTask_Rejected(t *testing.T) {
+// TestTaskUpdate_FailedOnAnotherRunningTask_Allowed is the boundary: the in-run
+// refusal is scoped to the task the caller's OWN run is executing. A delegator
+// ending some other task it created keeps working.
+func TestTaskUpdate_FailedOnAnotherRunningTask_Allowed(t *testing.T) {
 	t.Parallel()
 	store := task.New(t.TempDir())
 	tk := seedCriteriaTask(t, store, "agent-a", "agent-a", "ws-1")
-	tool := NewTaskUpdateTool(store)
+	ctx := WithRunningTaskID(WithAgentID(context.Background(), "agent-a"), "some-other-task-id")
 
-	ctx := WithAgentID(context.Background(), "agent-a")
-	ctx = WithRunningTaskID(ctx, "some-other-task-id")
-
-	res := tool.Execute(ctx, map[string]any{
-		"task_id": tk.ID,
-		"status":  updStatusDone,
-		"result":  "I claim this is done",
-	})
-	if !res.IsError {
-		t.Fatalf("expected done-claim naming a task other than the running one to be rejected, got success: %s", res.ForLLM)
-	}
-
-	got, err := store.Get(tk.ID)
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	if got.PendingJudgeClaim != "" {
-		t.Errorf("must NOT have staged a claim for a task that is not the running task, got %q",
-			got.PendingJudgeClaim)
-	}
-}
-
-// TestTaskUpdate_DoneOnCriteriaTask_InRun_StagesClaim proves the in-run path
-// is unchanged by the Chunk 1 fix: a worker calling update_task(done) FROM
-// WITHIN that task's own executor run (tools.ToolRunningTaskID(ctx) ==
-// task_id, exactly as task_executor.go's runTask/runTaskFromInProgress stamp
-// it) still stages a PendingJudgeClaim for finishTaskRun to adjudicate — it
-// is not rejected, and Status is not written directly.
-func TestTaskUpdate_DoneOnCriteriaTask_InRun_StagesClaim(t *testing.T) {
-	t.Parallel()
-	store := task.New(t.TempDir())
-	tk := seedCriteriaTask(t, store, "agent-a", "agent-a", "ws-1")
-	tool := NewTaskUpdateTool(store)
-
-	ctx := WithAgentID(context.Background(), "agent-a")
-	ctx = WithRunningTaskID(ctx, tk.ID) // exactly this task's own run
-
-	res := tool.Execute(ctx, map[string]any{
-		"task_id": tk.ID,
-		"status":  updStatusDone,
-		"result":  "the verifiable work is complete",
-	})
+	res := NewTaskUpdateTool(store).Execute(ctx, map[string]any{"task_id": tk.ID, "status": updStatusFailed})
 	if res.IsError {
-		t.Fatalf("expected in-run done-claim to be staged (not rejected): %s", res.ForLLM)
+		t.Fatalf("failing a task that is not the caller's own running task must be allowed: %s", res.ForLLM)
 	}
-
 	got, err := store.Get(tk.ID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if got.Status == task.StatusDone {
-		t.Errorf("Status must remain unpatched pending judge adjudication, got status=%q", got.Status)
-	}
-	if got.PendingJudgeClaim != "the verifiable work is complete" {
-		t.Errorf("expected PendingJudgeClaim to be staged with the claim text, got %q", got.PendingJudgeClaim)
+	if got.Status != task.StatusFailed {
+		t.Errorf("status = %q, want failed", got.Status)
 	}
 }

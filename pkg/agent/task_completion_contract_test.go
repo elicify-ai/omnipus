@@ -3,10 +3,10 @@
 // Copyright (c) 2026 Omnipus contributors
 
 // End-to-end coverage for ADR-043's task completion contract
-// (docs/internal/architecture/ADR-043-task-completion-contract.md): when the
-// agent does not call task_update explicitly, TaskExecutor.finishTaskRun must
-// resolve completion from the TASK_STATUS/TASK_SUMMARY marker in the agent's
-// final output — never default to success on no signal. Covers both dispatch
+// (docs/internal/architecture/ADR-043-task-completion-contract.md): a task
+// completes only through a claim the Judge upholds — goal_claim for a native
+// worker, the evidence line and TASK_STATUS marker for an external CLI worker
+// (ADR-043 §8) — and never defaults to success on no signal. Covers both dispatch
 // kinds (native via processTaskDirect/a scripted LLM provider, and external
 // via the fake driver task_executor_external_cli_test.go already exercises)
 // so the contract is proven uniform across both, per the feature spec.
@@ -15,7 +15,6 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -34,11 +33,12 @@ import (
 // dispatch harness in this package must register.
 //
 // GOAL-FR-022/FR-023 (plan row R-27) deleted the last trust-the-claim branch
-// from TaskExecutor.adjudicateClaim: when the SOFT tier applied (a task with
-// no explicit Criteria, judged against judge.go::SoftTierCriterion) and the
-// Judge agent was absent from the registry, the task used to be completed on
-// the worker's own say-so. It is now EC-6's judge-unavailable shape instead —
-// non-terminal, no attempt and no round consumed, one operator-visible WARN.
+// from the task claim adjudication (now task_run_loop.go::adjudicateRunClaim):
+// when the SOFT tier applied (a task with no explicit Criteria, judged against
+// judge.go::SoftTierCriterion) and the Judge agent was absent from the
+// registry, the task used to be completed on the worker's own say-so. It now
+// ends Failed "The Judge could not run: …", with no attempt and no round used
+// (founder decision 2026-09-14).
 //
 // Every harness in this file creates criteria-less tasks, so every one of
 // them took that soft tier. They were green ONLY because of the deleted
@@ -62,26 +62,26 @@ func judgeAgentConfigForTaskTests(t *testing.T) config.AgentConfig {
 // AgentInstance built from config inherits the loop's shared worker provider,
 // which in these harnesses is a scriptedProvider replaying the WORKER's task
 // text. Fed to the verifier that parses as no judgment at all, every
-// criterion comes back unjudgeable/unmet, and the task lands on `next` via
-// consumeAttemptOrExhaust instead of `done` — the same red, for a different
+// criterion comes back unjudgeable/unmet, and the claim spends a goal try
+// instead of reaching `done` — the same red, for a different
 // reason. The Judge needs its own provider that actually answers a verdict.
 //
-// The canned verdict answers for softTierCriterionID ("soft-tier-implicit",
-// judge.go), the id SoftTierCriterion synthesises — a verdict that omitted it
-// would be classified criterion_unjudgeable (JUDGE-FR-138) and resolve unmet.
-func bindMetSoftTierJudge(t *testing.T, al *AgentLoop) *fakeJudgeProvider {
+// The canned verdict answers for every criterion id the verifier is asked
+// about — the soft-tier criterion ("soft-tier-implicit", judge.go) and the
+// floor Definition of Done a legacy task's minted goal record carries — because
+// a verdict that omitted one would be classified criterion_unjudgeable
+// (JUDGE-FR-138) and resolve unmet.
+func bindMetSoftTierJudge(t *testing.T, al *AgentLoop) *b6ScriptedJudge {
 	t.Helper()
 	judgeInst, ok := al.GetRegistry().GetAgent(string(coreagent.IDJudge))
 	if !ok {
-		t.Fatalf("the Judge System Agent (%s) is not registered — adjudicateClaim would take the "+
-			"EC-6 judge-unavailable pause (GOAL-FR-022/R-27) and this task could never complete",
+		t.Fatalf("the Judge System Agent (%s) is not registered — a task claim could never be judged",
 			coreagent.IDJudge)
 	}
-	fake := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
-		return &providers.LLMResponse{Content: fmt.Sprintf(
-			`{"met": true, "criteria": [{"id":%q,"met":true,"reason":"the claim's evidence satisfies the criterion"}]}`,
-			softTierCriterionID)}, nil
-	}}
+	// Answers met for every criterion the verifier is actually asked about —
+	// the soft-tier criterion AND the floor Definition of Done a legacy task's
+	// minted goal record carries.
+	fake := &b6ScriptedJudge{metFromCall: 1, reason: "the claim's evidence satisfies the criterion"}
 	judgeInst.Provider = fake
 	return fake
 }
@@ -89,8 +89,8 @@ func bindMetSoftTierJudge(t *testing.T, al *AgentLoop) *fakeJudgeProvider {
 // newNativeTaskCompletionTestLoop builds a real AgentLoop with a single
 // native (non-external-CLI) worker agent registered, backed by provider, so a
 // task assigned to it exercises the real processTaskDirect -> runAgentLoop ->
-// provider.Chat dispatch path and lands in TaskExecutor.finishTaskRun exactly
-// as production does.
+// provider.Chat dispatch path and lands in the task run loop (task_run_loop.go)
+// exactly as production does.
 func newNativeTaskCompletionTestLoop(t *testing.T, provider providers.LLMProvider) *AgentLoop {
 	t.Helper()
 	home := t.TempDir()
@@ -116,6 +116,9 @@ func newNativeTaskCompletionTestLoop(t *testing.T, provider providers.LLMProvide
 			},
 		},
 	}
+	// Production seeds goal_claim "allow" for every agent (pkg/config/defaults.go);
+	// a task worker can only finish by calling it (founder decision 2026-09-14).
+	cfg.Sandbox.ToolPolicies = map[string]string{"goal_claim": "allow"}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
 	bindMetSoftTierJudge(t, al)
 	// al.Close() drains session workers/recaps before t.TempDir()'s own
@@ -166,17 +169,17 @@ func newCompletionContractTask(t *testing.T, al *AgentLoop, agentID, title strin
 //
 // It ALSO waits for the task's own session to be archived (when one exists)
 // before returning — not just terminal task status. A task can go terminal
-// mid-goroutine (e.g. an explicit task_update tool call sets it Done inside
-// iteration 1 of a multi-iteration run) well BEFORE the run's own goroutine
-// actually returns; runTask/runTaskFromInProgress only archive the session in
-// finishTaskRun, which runs once processTaskDirect itself returns (i.e. after
+// mid-goroutine (e.g. a Stop lands during iteration 1 of a multi-iteration
+// run) well BEFORE the run's own goroutine
+// actually returns; runTask/runTaskFromInProgress only archive the session
+// when the run loop ends the task, once processTaskDirect itself returns (i.e. after
 // EVERY iteration, not just the one that flipped the status). Returning as
 // soon as status alone goes terminal would let the test (and its t.Cleanup,
 // including al.Close()'s own graceful-shutdown transcript write) race the
 // still-in-flight goroutine's own trailing writes to the same session files —
 // exactly the class of race Close()'s doc comment warns about for TempDir
 // cleanup. Waiting for archival too closes that window because it is the
-// LAST write finishTaskRun performs before returning.
+// LAST write completeTaskWithResult performs before returning.
 func waitForCompletionContractTerminal(t *testing.T, al *AgentLoop, taskID string) *task.Task {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -205,30 +208,15 @@ func waitForCompletionContractTerminal(t *testing.T, al *AgentLoop, taskID strin
 	return nil
 }
 
-// TestTaskCompletionContract_Native_SuccessMarker_DoneWithSummary proves the
-// native-dispatch happy path: a scripted LLM response ending with
-// "TASK_STATUS: success" + "TASK_SUMMARY: ..." (no task_update tool call)
-// completes the task to Done with the TASK_SUMMARY text as Result.
-func TestTaskCompletionContract_Native_SuccessMarker_DoneWithSummary(t *testing.T) {
-	provider := &scriptedProvider{
-		responseBody: "Implemented the feature and ran the tests.\n" +
-			// ADR-052 FR-035: the evidence-marker gate (finishTaskRun, ahead of
-			// parseTaskCompletionSignal) requires this line immediately before
-			// TASK_STATUS or the claim is re-prompted instead of completing.
-			"[goal:evidence] ran the test suite, all green\n" +
-			"TASK_STATUS: success\n" +
-			"TASK_SUMMARY: Added the new export endpoint and its tests.",
-	}
-	al := newNativeTaskCompletionTestLoop(t, provider)
-	// Re-binding returns the harness's own canned Judge provider so this test
-	// can prove HOW the task completed, not just that it did. GOAL-FR-022/R-27
-	// deleted the branch that completed a task on the worker's say-so, so a
-	// Done here must be the product of a real met verdict — if the verifier
-	// were never dispatched, this task could not legitimately reach Done at
-	// all, and a future change that made it do so again would slip past a
-	// status-only assertion.
+// TestTaskCompletionContract_Native_ClaimMet_DoneWithEvidence: a native worker
+// completes a task ONLY by calling goal_claim (founder decision 2026-09-14). The
+// Judge checks the claim, and a met verdict completes the task with the
+// worker's own evidence line as its result.
+func TestTaskCompletionContract_Native_ClaimMet_DoneWithEvidence(t *testing.T) {
+	const evidence = "ran the test suite, all green"
+	al := newNativeTaskCompletionTestLoop(t, newClaimingWorker(turnClaimMet(evidence)))
 	judge := bindMetSoftTierJudge(t, al)
-	tk := newCompletionContractTask(t, al, "native-agent", "native success marker")
+	tk := newCompletionContractTask(t, al, "native-agent", "native claim met")
 
 	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
@@ -238,32 +226,23 @@ func TestTaskCompletionContract_Native_SuccessMarker_DoneWithSummary(t *testing.
 	if final.Status != task.StatusDone {
 		t.Fatalf("status = %q, want %q (result: %s)", final.Status, task.StatusDone, final.Result)
 	}
-	if judge.callCount() == 0 {
-		t.Error("the verifier was never dispatched — this task reached done without being judged, " +
-			"which is exactly the trust-the-claim shape GOAL-FR-022 deleted")
+	if judge.callCount() != 1 {
+		t.Errorf("Judge calls = %d, want 1 — the task must reach done through a judged claim", judge.callCount())
 	}
-	want := "Added the new export endpoint and its tests."
-	if final.Result != want {
-		t.Errorf("result = %q, want the TASK_SUMMARY text %q", final.Result, want)
+	if final.Result != evidence {
+		t.Errorf("result = %q, want the claim's evidence %q", final.Result, evidence)
 	}
 }
 
-// TestTaskCompletionContract_Native_FailureMarker_FailedWithAgentWords proves
-// that "TASK_STATUS: failure" fails the task with the AGENT's own reported
-// words (the TASK_SUMMARY text) as Result — not the "no signal" framing,
-// since the agent did report an outcome.
-func TestTaskCompletionContract_Native_FailureMarker_FailedWithAgentWords(t *testing.T) {
-	provider := &scriptedProvider{
-		responseBody: "Tried to reach the upstream service repeatedly.\n" +
-			// ADR-052 FR-035: the evidence-marker gate applies uniformly to a
-			// failure marker too (checkEvidenceMarkerGate: "success OR failure
-			// — the gate does not care which").
-			"[goal:evidence] retried the connection 5 times, all timed out\n" +
-			"TASK_STATUS: failure\n" +
-			"TASK_SUMMARY: Could not reach the upstream API (connection timeout).",
-	}
-	al := newNativeTaskCompletionTestLoop(t, provider)
-	tk := newCompletionContractTask(t, al, "native-agent", "native failure marker")
+// TestTaskCompletionContract_Native_Blocked_FailedWithReason: a worker that
+// honestly cannot proceed calls goal_claim(status:"blocked"). The task ends
+// Failed with "Blocked: <reason>" — no attempt used, no Judge run, no restart.
+func TestTaskCompletionContract_Native_Blocked_FailedWithReason(t *testing.T) {
+	const reason = "the upstream API refuses every connection"
+	worker := newClaimingWorker(turnClaimBlocked(reason))
+	al := newNativeTaskCompletionTestLoop(t, worker)
+	judge := bindMetSoftTierJudge(t, al)
+	tk := newCompletionContractTask(t, al, "native-agent", "native blocked claim")
 
 	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
@@ -273,25 +252,34 @@ func TestTaskCompletionContract_Native_FailureMarker_FailedWithAgentWords(t *tes
 	if final.Status != task.StatusFailed {
 		t.Fatalf("status = %q, want %q (result: %s)", final.Status, task.StatusFailed, final.Result)
 	}
-	want := "Could not reach the upstream API (connection timeout)."
-	if final.Result != want {
-		t.Errorf("result = %q, want the agent's own TASK_SUMMARY text %q", final.Result, want)
+	if want := "Blocked: " + reason; final.Result != want {
+		t.Errorf("result = %q, want %q", final.Result, want)
 	}
-	if strings.Contains(final.Result, "no completion signal") {
-		t.Error("an explicit failure marker must not be framed as a missing-signal fail-closed result")
+	if final.AttemptCount != 0 {
+		t.Errorf("attempt_count = %d, want 0 — blocked is not a failed run", final.AttemptCount)
+	}
+	if judge.callCount() != 0 {
+		t.Errorf("Judge calls = %d, want 0 — a blocked claim is never judged", judge.callCount())
+	}
+	if n := worker.turnsStarted(); n != 1 {
+		t.Errorf("worker turns = %d, want 1 — a blocked task is never restarted", n)
 	}
 }
 
-// TestTaskCompletionContract_Native_NoMarker_FailsClosed_NotAutoDone proves
-// the central regression this feature exists to close: a plain response with
-// NO TASK_STATUS marker (and no task_update call) must fail the task closed,
-// never silently default to Done — the retired behavior.
-func TestTaskCompletionContract_Native_NoMarker_FailsClosed_NotAutoDone(t *testing.T) {
-	provider := &scriptedProvider{
-		responseBody: "I looked into this and made some progress, but didn't finish.",
+// TestTaskCompletionContract_Native_NoClaim_FailsClosed_NotAutoDone: a worker
+// that never claims can never complete its task. Each claimless turn spends a
+// goal try; with the tries and the attempts spent, the task ends Failed.
+func TestTaskCompletionContract_Native_NoClaim_FailsClosed_NotAutoDone(t *testing.T) {
+	al := newNativeTaskCompletionTestLoop(t, newClaimingWorker(turnNoClaim("I made some progress but did not finish.")))
+	if err := al.MutateConfig(func(cfg *config.Config) error { cfg.Planning.GoalMaxRounds = 1; return nil }); err != nil {
+		t.Fatalf("set the goal try limit: %v", err)
 	}
-	al := newNativeTaskCompletionTestLoop(t, provider)
-	tk := newCompletionContractTask(t, al, "native-agent", "native no marker")
+	tk := newCompletionContractTask(t, al, "native-agent", "native no claim")
+	one := 1
+	onePtr := &one
+	if _, err := al.taskStore.Update(tk.ID, task.Patch{MaxAttempts: &onePtr}); err != nil {
+		t.Fatalf("pin max_attempts=1: %v", err)
+	}
 
 	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
@@ -299,118 +287,14 @@ func TestTaskCompletionContract_Native_NoMarker_FailsClosed_NotAutoDone(t *testi
 
 	final := waitForCompletionContractTerminal(t, al, tk.ID)
 	if final.Status != task.StatusFailed {
-		t.Fatalf("status = %q, want %q — no TASK_STATUS marker must fail closed, never auto-complete "+
-			"to done (result: %s)", final.Status, task.StatusFailed, final.Result)
+		t.Fatalf("status = %q, want %q — a worker that never claims must never complete (result: %s)",
+			final.Status, task.StatusFailed, final.Result)
 	}
-	if final.Result == "Task completed" || strings.Contains(final.Result, "Task completed") {
-		t.Errorf("result = %q, the retired 'Task completed' auto-complete default must be gone", final.Result)
+	if strings.Contains(final.Result, "Task completed") {
+		t.Errorf("result = %q, the retired 'Task completed' default must be gone", final.Result)
 	}
-	if !strings.Contains(final.Result, "completion signal") {
-		t.Errorf("result = %q, want it to explain the missing completion signal", final.Result)
-	}
-	if !strings.Contains(final.Result, "I looked into this and made some progress") {
-		t.Errorf("result = %q, want it to include the agent's raw output for operator review", final.Result)
-	}
-}
-
-// TestTaskCompletionContract_FinishTaskRun_EmptyOutput_FailsClosed proves the
-// empty-output edge case (item (c) of the feature spec) directly against
-// TaskExecutor.finishTaskRun: a genuinely empty resp must fail the task
-// closed, and the retired "Task completed" default must never appear.
-//
-// This calls finishTaskRun directly rather than through a live dispatch
-// because BOTH real dispatch paths substitute a non-empty sentinel before an
-// empty LLM/CLI response ever reaches finishTaskRun (runAgentLoop's
-// package-level defaultResponse, loop.go; drainExternalRun's "completed with
-// no textual output" fallback, external_dispatch.go) — so this is the only
-// way to exercise the executor's own fail-closed handling of a truly empty
-// string, which the parser and finishTaskRun both explicitly guard for.
-// TestTaskCompletionContract_FinishTaskRun_EmptyOutput_FailsClosed proves the
-// empty-output edge case (item (c) of the feature spec) directly against
-// TaskExecutor.finishTaskRun: a genuinely empty resp is now an UNMET claim
-// (ADR-049 FR-045) — the run re-dispatches internally (via
-// ExecuteTask/mockProvider, which itself always returns non-marker content)
-// until the default attempt ceiling (3) is exhausted, landing terminal
-// Failed with a graceful wind-down handover — never the retired "Task
-// completed" auto-complete default, and never a false Done.
-func TestTaskCompletionContract_FinishTaskRun_EmptyOutput_FailsClosed(t *testing.T) {
-	al := newNativeTaskCompletionTestLoop(t, &mockProvider{})
-	tk := newCompletionContractTask(t, al, "native-agent", "empty output task")
-	// ADR-052 FR-014/§6.4(b) TOCTOU fix: finishTaskRun's outcome writers
-	// (consumeAttemptOrExhaust) now CAS against the task being genuinely
-	// in_progress — the SAME invariant a real dispatch always establishes via
-	// ExecuteTask's own ClaimForRun claim before it ever calls finishTaskRun.
-	// This test intentionally bypasses real dispatch (see the doc comment
-	// above) to inject a truly empty resp, so it must claim the task itself
-	// to keep that invariant true, rather than calling finishTaskRun against
-	// the fixture's on-disk `next` status.
-	if _, err := al.taskStore.ClaimForRun(tk.ID, time.Now()); err != nil {
-		t.Fatalf("claim task before direct finishTaskRun call: %v", err)
-	}
-	tk.Status = task.StatusInProgress
-
-	// This test bypasses real dispatch (see the doc comment above), so it
-	// must also seed the ADR-050 TaskRun openRun would otherwise have opened
-	// — finishTaskRun's fail-closed path closes it, and the assertions below
-	// verify that close actually landed.
-	seeded, _, oerr := al.taskStore.OpenRun(tk.ID, nil, task.RunKindManual, "")
-	if oerr != nil {
-		t.Fatalf("seed OpenRun: %v", oerr)
-	}
-	run := &activeRun{runID: seeded.RunID}
-
-	redispatchID := al.taskExecutor.finishTaskRun(context.Background(), tk, "", "", nil, "", run)
-	if redispatchID != "" {
-		if err := al.taskExecutor.ExecuteTask(context.Background(), redispatchID, nil); err != nil {
-			t.Fatalf("ExecuteTask (goal-loop re-dispatch): %v", err)
-		}
-	}
-
-	final := waitForCompletionContractTerminal(t, al, tk.ID)
-	if final.Status != task.StatusFailed {
-		t.Fatalf("status = %q, want %q — empty output must fail closed, not auto-complete to done "+
-			"(result: %s)", final.Status, task.StatusFailed, final.Result)
-	}
-	if final.Result == "Task completed" || strings.Contains(final.Result, "Task completed") {
-		t.Errorf("result = %q, the retired 'Task completed' auto-complete default must be gone", final.Result)
-	}
-	if final.AttemptCount == 0 {
-		t.Errorf("attempt_count = %d, want it to have been consumed by the goal loop", final.AttemptCount)
-	}
-
-	// waitForCompletionContractTerminal above only proves the TASK reached its
-	// terminal status with its session archived — completeTaskWithResult
-	// (task_executor.go) writes those two BEFORE it calls closeRun, so the
-	// run-history record this test is about to inspect can still be
-	// in-flight the instant the task+session condition is satisfied.
-	// waitForRunClosed (task_run_history_test.go, same package) closes that
-	// gap by polling the run record itself (EndedAt set) before any
-	// assertion below reads it — without this, the assertions raced
-	// closeRun's own write and observed a stale
-	// Status=in_progress/EndedAt=nil/Result="" record even though the task
-	// mirror was already correctly Failed with its real result.
-	waitForRunClosed(t, al, tk.ID, 5*time.Second)
-
-	runs, lerr := al.taskStore.ListRuns(tk.ID)
-	if lerr != nil {
-		t.Fatalf("ListRuns: %v", lerr)
-	}
-	if len(runs) != 1 {
-		t.Fatalf("expected exactly 1 run, got %d: %+v", len(runs), runs)
-	}
-	gotRun := runs[0]
-	if gotRun.RunID != seeded.RunID {
-		t.Errorf("run_id = %q, want the seeded run's id %q", gotRun.RunID, seeded.RunID)
-	}
-	if gotRun.Status != task.StatusFailed {
-		t.Errorf("run status = %q, want failed", gotRun.Status)
-	}
-	if gotRun.EndedAt == nil || *gotRun.EndedAt == "" {
-		t.Error("run ended_at must be set — finishTaskRun's no-marker fail-closed path must close a " +
-			"real open run, not leave it stranded in_progress (no reaper backstop)")
-	}
-	if gotRun.Result != final.Result {
-		t.Errorf("run result = %q, want the same result written to the task mirror %q", gotRun.Result, final.Result)
+	if !strings.Contains(final.Result, "did not reach a met verdict") {
+		t.Errorf("result = %q, want it to say the goal did not reach a met verdict", final.Result)
 	}
 }
 
@@ -450,9 +334,14 @@ func TestTaskCompletionContract_External_FailureMarker_FailedWithAgentWords(t *t
 	if final.Status != task.StatusFailed {
 		t.Fatalf("status = %q, want %q (result: %s)", final.Status, task.StatusFailed, final.Result)
 	}
-	want := "Blocked by missing write access to the target repo."
+	// An external CLI's failure marker is its blocked claim (the same claim
+	// path goal_claim feeds): Failed with the worker's own words, no attempt.
+	want := "Blocked: Blocked by missing write access to the target repo."
 	if final.Result != want {
-		t.Errorf("result = %q, want the agent's own TASK_SUMMARY text %q", final.Result, want)
+		t.Errorf("result = %q, want %q", final.Result, want)
+	}
+	if final.AttemptCount != 0 {
+		t.Errorf("attempt_count = %d, want 0 — a blocked claim is not a failed run", final.AttemptCount)
 	}
 	if provider.calls != 0 {
 		t.Fatalf("native LLM provider was called %d times, want 0", provider.calls)
@@ -485,6 +374,9 @@ func TestTaskCompletionContract_External_NoMarker_FailsClosed_NotAutoDone(t *tes
 		fr.Cancel()
 	}()
 
+	if err := al.MutateConfig(func(cfg *config.Config) error { cfg.Planning.GoalMaxRounds = 1; return nil }); err != nil {
+		t.Fatalf("set the goal try limit: %v", err)
+	}
 	tk := newCompletionContractTask(t, al, "ext-agent", "external no marker")
 	one := 1
 	onePtr := &one
@@ -503,8 +395,8 @@ func TestTaskCompletionContract_External_NoMarker_FailsClosed_NotAutoDone(t *tes
 	if strings.Contains(final.Result, "Task completed") {
 		t.Error("result must not contain the retired 'Task completed' auto-complete default")
 	}
-	if !strings.Contains(final.Result, "completion signal") {
-		t.Errorf("result = %q, want it to explain the missing completion signal", final.Result)
+	if !strings.Contains(final.Result, "did not reach a met verdict") {
+		t.Errorf("result = %q, want it to say the goal did not reach a met verdict", final.Result)
 	}
 	if provider.calls != 0 {
 		t.Fatalf("native LLM provider was called %d times, want 0", provider.calls)
@@ -569,43 +461,31 @@ func TestBuildPrompt_InstructionEchoNeverResolvesToSuccess(t *testing.T) {
 	})
 }
 
-// TestBuildPrompt_TeachesEvidenceMarkerBothDispatchKinds is ADR-052 FR-035
-// Fix-Wave-2's fix 1 regression proof: buildPrompt's instruction text must
-// teach the [goal:evidence] marker requirement in BOTH the native and the
-// external-CLI branch. Before this fix, [goal:evidence] appeared NOWHERE in
-// either prompt — only in checkEvidenceMarkerGate's parser regex, the
-// goalEvidenceLabel const, and evidenceGateSteeringText — so every
-// marker-path completion tripped the gate on turn 1 by construction. This
-// was especially acute for external-CLI (subagent_3p) dispatch:
-// dispatchesExternalCLI's early return in buildPrompt means that worker gets
-// ONLY the marker instruction (no task_update tool escape hatch exists for
-// it at all — see dispatchesExternalCLI's own doc comment), so teaching the
-// evidence marker there is its ONLY possible path to ever satisfy the gate.
-//
-// Verified this fails against pre-fix code: the pre-fix buildPrompt (read
-// directly before this wave's edits) wrote exactly two example lines —
-// "  TASK_STATUS: success\n" and "  TASK_STATUS: failure\n" — with no
-// occurrence of goalEvidenceLabel ("[goal:evidence]") anywhere in either the
-// native or the external-CLI instruction block; this assertion would have
-// failed on that text for both subtests.
-func TestBuildPrompt_TeachesEvidenceMarkerBothDispatchKinds(t *testing.T) {
+// TestBuildPrompt_TeachesTheOneClaimPathPerDispatchKind pins the founder
+// decision of 2026-09-14: a native worker is taught goal_claim and is NOT
+// taught the prose completion markers; a subagent_3p worker, whose CLI cannot
+// call Omnipus tools, is taught the evidence line and the marker.
+func TestBuildPrompt_TeachesTheOneClaimPathPerDispatchKind(t *testing.T) {
 	t.Run("native", func(t *testing.T) {
 		al := newNativeTaskCompletionTestLoop(t, &mockProvider{})
-		tk := newCompletionContractTask(t, al, "native-agent", "evidence-marker teaching native")
+		tk := newCompletionContractTask(t, al, "native-agent", "claim teaching native")
 		prompt := al.taskExecutor.buildPrompt(tk)
-		if !strings.Contains(prompt, goalEvidenceLabel) {
-			t.Fatalf("native buildPrompt output does not mention %q — the worker is never taught the "+
-				"evidence-marker gate's requirement:\n%s", goalEvidenceLabel, prompt)
+		if !strings.Contains(prompt, "goal_claim") {
+			t.Fatalf("native prompt does not teach goal_claim:\n%s", prompt)
+		}
+		if strings.Contains(prompt, taskStatusLabel) || strings.Contains(prompt, goalEvidenceLabel) {
+			t.Fatalf("native prompt still teaches the prose markers:\n%s", prompt)
+		}
+		if strings.Contains(prompt, "update_task") {
+			t.Fatalf("native prompt still offers update_task as a way to finish:\n%s", prompt)
 		}
 	})
 	t.Run("external_cli", func(t *testing.T) {
 		al, _ := newExternalCLITaskTestLoop(t, &countingProvider{})
-		tk := newCompletionContractTask(t, al, "ext-agent", "evidence-marker teaching external")
+		tk := newCompletionContractTask(t, al, "ext-agent", "claim teaching external")
 		prompt := al.taskExecutor.buildPrompt(tk)
-		if !strings.Contains(prompt, goalEvidenceLabel) {
-			t.Fatalf("external-CLI buildPrompt output does not mention %q — a subagent_3p worker has no "+
-				"task_update escape hatch, so this instruction is its ONLY path to ever satisfy the "+
-				"gate:\n%s", goalEvidenceLabel, prompt)
+		if !strings.Contains(prompt, goalEvidenceLabel) || !strings.Contains(prompt, taskStatusLabel) {
+			t.Fatalf("external-CLI prompt must teach the evidence line and the marker:\n%s", prompt)
 		}
 	})
 }
@@ -620,12 +500,9 @@ func TestBuildPrompt_TeachesEvidenceMarkerBothDispatchKinds(t *testing.T) {
 // can no longer silently cascade into a dependent that assumed real work was
 // done.
 func TestTaskCompletionContract_BlockedDependent_StaysBlockedOnFailedBlocker(t *testing.T) {
-	provider := &scriptedProvider{
-		responseBody: "I looked into this and made some progress, but didn't finish.",
-	}
-	al := newNativeTaskCompletionTestLoop(t, provider)
+	al := newNativeTaskCompletionTestLoop(t, newClaimingWorker(turnClaimBlocked("the service is down")))
 
-	blocker := newCompletionContractTask(t, al, "native-agent", "blocker task (no marker)")
+	blocker := newCompletionContractTask(t, al, "native-agent", "blocker task (blocked)")
 
 	dependent := &task.Task{
 		Title:       "dependent task",
@@ -647,7 +524,7 @@ func TestTaskCompletionContract_BlockedDependent_StaysBlockedOnFailedBlocker(t *
 
 	finalBlocker := waitForCompletionContractTerminal(t, al, blocker.ID)
 	if finalBlocker.Status != task.StatusFailed {
-		t.Fatalf("blocker status = %q, want %q — no TASK_STATUS marker must fail closed",
+		t.Fatalf("blocker status = %q, want %q — a blocked claim ends the task Failed",
 			finalBlocker.Status, task.StatusFailed)
 	}
 
@@ -662,60 +539,35 @@ func TestTaskCompletionContract_BlockedDependent_StaysBlockedOnFailedBlocker(t *
 	}
 }
 
-// TestTaskCompletionContract_TaskUpdatePrecedence_WinsOverMarkerlessResponse
-// is review E2: the agent calls the REAL update_task tool (pkg/tools/task.go
-// TaskUpdateTool.Name() == "update_task") to set a terminal status mid-run,
-// then returns a marker-less final response with no TASK_STATUS line at all.
-// finishTaskRun's own precedence check (re-read task, task.IsTerminal) must
-// find the task ALREADY terminal from the tool call and return before ever
-// calling parseTaskCompletionSignal — the explicit status/result set by the
-// tool call must be preserved verbatim, not overwritten or reinterpreted by
-// the (absent) marker branch.
-func TestTaskCompletionContract_TaskUpdatePrecedence_WinsOverMarkerlessResponse(t *testing.T) {
-	// tk.ID must be known before scripting the tool call's arguments, so the
-	// task is created first via a throwaway loop construction, then the real
-	// scripted provider (which needs tk.ID baked into its first response) is
-	// used to build the real loop. Simpler: create the loop once, create the
-	// task, THEN build the scripted provider referencing tk.ID, and register
-	// it — newNativeTaskCompletionTestLoop takes the provider at construction
-	// time, so we build the task ID deterministically ourselves instead of
-	// relying on Store.Create's UUID generation.
-	provider := newScriptedProvider() // empty; real responses patched in below
+// TestTaskCompletionContract_UpdateTaskOnOwnRun_RefusedThenClaimJudged: a
+// worker that tries to mark its own running task done with update_task is
+// refused (founder decision 2026-09-14); the task completes only when its next
+// turn claims with goal_claim and the Judge upholds the claim.
+func TestTaskCompletionContract_UpdateTaskOnOwnRun_RefusedThenClaimJudged(t *testing.T) {
+	provider := newScriptedProvider() // responses patched in once tk.ID is known
 	al := newNativeTaskCompletionTestLoop(t, provider)
-
 	agentInst, ok := al.GetRegistry().GetAgent("native-agent")
 	if !ok {
 		t.Fatal("native-agent not found in registry")
 	}
-	// No-default-policy model (CLAUDE.md hard constraint 6): update_task needs
-	// an explicit agent-level grant or it fails closed to "deny" before the
-	// tool call under test ever executes.
 	agentInst.StoreToolPolicy(&tools.ToolPolicyCfg{
-		Policies: map[string]config.ToolPolicy{"update_task": "allow"},
+		Policies: map[string]config.ToolPolicy{"update_task": "allow", "goal_claim": "allow"},
 	})
+	judge := bindMetSoftTierJudge(t, al)
+	tk := newCompletionContractTask(t, al, "native-agent", "update_task refused in run")
 
-	tk := newCompletionContractTask(t, al, "native-agent", "task_update precedence")
-
+	const evidence = "re-ran the export and compared the output by hand"
 	provider.responses = []*providers.LLMResponse{
-		{
-			ToolCalls: []providers.ToolCall{{
-				ID:   "call-update-task",
-				Type: "function",
-				Name: "update_task",
-				Arguments: map[string]any{
-					"task_id": tk.ID,
-					"status":  "done",
-					"result":  "Done via explicit update_task call.",
-				},
-			}},
-		},
-		{
-			// Marker-less final response — no TASK_STATUS line anywhere. If
-			// the marker branch engaged at all, this response has no signal
-			// and would fail the task closed; the explicit tool call above
-			// must win outright before that branch is ever reached.
-			Content: "Wrapping up now, nothing further to report.",
-		},
+		{ToolCalls: []providers.ToolCall{{
+			ID: "call-update-task", Type: "function", Name: "update_task",
+			Arguments: map[string]any{"task_id": tk.ID, "status": "done", "result": "Done via update_task."},
+		}}},
+		{Content: "Marked it done."},
+		{ToolCalls: []providers.ToolCall{{
+			ID: "call-goal-claim", Type: "function", Name: tools.GoalClaimToolName,
+			Arguments: map[string]any{"status": "met", "evidence": evidence},
+		}}},
+		{Content: "Claimed."},
 	}
 
 	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
@@ -724,13 +576,14 @@ func TestTaskCompletionContract_TaskUpdatePrecedence_WinsOverMarkerlessResponse(
 
 	final := waitForCompletionContractTerminal(t, al, tk.ID)
 	if final.Status != task.StatusDone {
-		t.Fatalf("status = %q, want %q — the explicit update_task call must win (result: %s)",
-			final.Status, task.StatusDone, final.Result)
+		t.Fatalf("status = %q, want %q (result: %s)", final.Status, task.StatusDone, final.Result)
 	}
-	want := "Done via explicit update_task call."
-	if final.Result != want {
-		t.Errorf("result = %q, want the tool call's own result %q — the marker-less final response "+
-			"must never overwrite it", final.Result, want)
+	if final.Result != evidence {
+		t.Errorf("result = %q, want the judged claim's evidence %q — the refused update_task must not have written it",
+			final.Result, evidence)
+	}
+	if judge.callCount() != 1 {
+		t.Errorf("Judge calls = %d, want 1", judge.callCount())
 	}
 }
 
@@ -738,14 +591,7 @@ func TestTaskCompletionContract_TaskUpdatePrecedence_WinsOverMarkerlessResponse(
 // completeTaskWithResult runs (any terminal outcome), the task's own session
 // must be archived (session.StatusArchived) — not left active/interrupted.
 func TestTaskCompletionContract_SessionArchivedOnCompletion(t *testing.T) {
-	provider := &scriptedProvider{
-		responseBody: "Implemented the feature and ran the tests.\n" +
-			// ADR-052 FR-035: see the SuccessMarker test above.
-			"[goal:evidence] ran the test suite, all green\n" +
-			"TASK_STATUS: success\n" +
-			"TASK_SUMMARY: Added the new export endpoint and its tests.",
-	}
-	al := newNativeTaskCompletionTestLoop(t, provider)
+	al := newNativeTaskCompletionTestLoop(t, newClaimingWorker(turnClaimMet("ran the test suite, all green")))
 	tk := newCompletionContractTask(t, al, "native-agent", "session archival check")
 
 	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {

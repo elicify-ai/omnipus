@@ -62,6 +62,15 @@ const (
 	GoalClaimStatusWaitingOnUser = "waiting_on_user"
 )
 
+// GoalClaimAccess is the optional claim-side read a GoalRecordAccess may also
+// implement: the goal BOUND to the session, for either owner kind. goal_claim
+// prefers it over ReadGoalState, whose owner-keyed lookup cannot see a
+// task-owned goal from the task run's session. A seam without it (test
+// doubles) falls back to ReadGoalState.
+type GoalClaimAccess interface {
+	ReadClaimableGoal(sessionID string) (goalID, goalCondition string, err error)
+}
+
 // GoalClaimTool implements the goal_claim tool (ADR-084 revision 9 §O, D12).
 type GoalClaimTool struct {
 	BaseTool
@@ -110,7 +119,8 @@ func (t *GoalClaimTool) Description() string {
 		"verified) or the call is refused before anything is recorded — no partial credit for trying. " +
 		"status:waiting_on_user and status:blocked both end the turn without any adjudication: " +
 		"waiting_on_user means you need an answer from the operator to continue; blocked means you " +
-		"cannot proceed and it is not something the operator can answer directly. This tool refuses on " +
+		"cannot proceed and it is not something the operator can answer directly — for either, give the " +
+		"reason in one line as evidence so the operator can see why. This tool refuses on " +
 		"a delegated sub-turn (it reports the OWNER session's completion only) and on a session with no " +
 		"active goal."
 }
@@ -132,8 +142,9 @@ func (t *GoalClaimTool) Parameters() map[string]any {
 			"evidence": map[string]any{
 				"type": "string",
 				"description": "Your own one-line statement of what you verified. Required and non-empty " +
-					"when status is met (whitespace-only counts as empty and the call is refused); ignored " +
-					"for blocked and waiting_on_user.",
+					"when status is met (whitespace-only counts as empty and the call is refused). For " +
+					"blocked and waiting_on_user it is optional: one line saying why you cannot proceed or " +
+					"what you need — it becomes the reason the operator sees.",
 			},
 		},
 		"required": []string{"status"},
@@ -161,12 +172,24 @@ func (t *GoalClaimTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	// this tool's own preconditions, not tool policy — a policy denial is a
 	// different thing (JUDGE-E-29), handled generically by the tool-policy
 	// layer before Execute is ever reached. ---
-	if depth := ToolDelegationDepth(ctx); depth > 0 {
+	// A task run carries its task's delegation generation on the context
+	// (every agent-created task has generation >= 1), so the depth alone
+	// cannot tell a delegated sub-turn from a task's own worker. A task run's
+	// turn names its running task; its goal is bound to the run's own session,
+	// so the bound-session lookup below still refuses any turn that is not
+	// that session's owner.
+	if depth := ToolDelegationDepth(ctx); depth > 0 && ToolRunningTaskID(ctx) == "" {
 		return ErrorResult("goal_claim is owner-session-only: a delegated sub-turn cannot claim the " +
 			"parent session's goal (ADR-084 JUDGE-FR-090) — report your findings back to the parent instead")
 	}
 
-	goalID, goalCondition, _, err := access.ReadGoalState(sessionID)
+	var goalID, goalCondition string
+	var err error
+	if claimAccess, ok := access.(GoalClaimAccess); ok {
+		goalID, goalCondition, err = claimAccess.ReadClaimableGoal(sessionID)
+	} else {
+		goalID, goalCondition, _, err = access.ReadGoalState(sessionID)
+	}
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("goal_claim: could not read this session's goal state: %v", err)).WithError(err)
 	}
@@ -201,12 +224,13 @@ func (t *GoalClaimTool) Execute(ctx context.Context, args map[string]any) *ToolR
 
 	// The result payload is what the engine reads off the transcript to
 	// resolve the claim (JUDGE-FR-092/094) — this tool never calls into
-	// pkg/agent itself. evidence is carried only for a met claim: it is
-	// destined to become the adjudication's ClaimText (FR-094), and
-	// blocked/waiting_on_user never adjudicate, so there is nothing for a
-	// stray evidence argument on those paths to mean.
+	// pkg/agent itself. For a met claim evidence becomes the adjudication's
+	// ClaimText (FR-094). For blocked/waiting_on_user, which never
+	// adjudicate, the same one line is the REASON the operator is shown
+	// (founder decision 2026-09-14, issue #710: a blocked task ends Failed
+	// "Blocked: <reason>"); it is carried only when the caller gave one.
 	payload := map[string]any{"status": status}
-	if status == GoalClaimStatusMet {
+	if status == GoalClaimStatusMet || evidence != "" {
 		payload["evidence"] = evidence
 	}
 	if goalID != "" {

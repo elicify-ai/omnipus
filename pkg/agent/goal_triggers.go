@@ -29,12 +29,12 @@ package agent
 import (
 	"context"
 	"fmt"
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/goal"
@@ -108,8 +108,7 @@ const (
 var goalIdleQuietWindow = 60 * time.Second //nolint:gochecknoglobals
 
 // goalBareClaimCostThreshold is N in G-4's "the Nth consecutive bare claim
-// costs a round" (mirrors task_executor.go's evidenceGateMaxConsecutiveRejections
-// = 2). The 1st bare claim (streak < threshold) is free — a teaching steer
+// costs a round" (= 2). The 1st bare claim (streak < threshold) is free — a teaching steer
 // only; from the threshold onward it consumes an attempt/round (D8/N-13:
 // claiming stays cheaper than idling — a bare claim is at worst one round,
 // never the idle path's full quiet-window cost).
@@ -706,7 +705,7 @@ func (al *AgentLoop) setGoalClaimScanWatermark(goalID string, t time.Time) {
 }
 
 // bumpGoalBareClaimStreak increments and returns goalID's consecutive
-// bare-claim count (G-4). Mirrors TaskExecutor.bumpEvidenceRejectStreak.
+// bare-claim count (G-4).
 // Keyed by GOAL ID (GOAL-FR-052, E12).
 func (al *AgentLoop) bumpGoalBareClaimStreak(goalID string) int {
 	s := goalTriggers()
@@ -895,7 +894,7 @@ func (al *AgentLoop) runGoalAdjudication(
 	// GOAL-FR-036/FR-040/FR-041 (E14, verdict_projection.go): project the
 	// verdict's per-criterion outcomes onto the goal record's OWN Criteria
 	// and DoD lists — the goal-scope recording site of the projection's
-	// three (task_executor.go::adjudicateClaim and
+	// three (task_run_loop.go::adjudicateRunClaim and
 	// plan_engine.go::applyJudgeRoundOutcome are the other two). Reads the
 	// record's two SEPARATE lists straight from pkg/goal.Store — never the
 	// flattened Criteria ∪ DoD union `criteria` (above) fed to the Judge —
@@ -1272,6 +1271,13 @@ func (al *AgentLoop) maybeSettleGoalIdle(now time.Time, store *session.UnifiedSt
 	// adjudication is currently in-flight for this goal, the idle timer must
 	// not race a second verdict against it.
 	if al.goalAdjudicationInFlight(sessionID) {
+		return
+	}
+	// Two-level task run model (task_run_loop.go): while the task executor
+	// holds a task's run it steers the worker itself after every turn and
+	// judges claims inside the run, so a keeper push would only start a
+	// second turn in the same session that nothing consumes.
+	if rec.OwnerKind == generated.GoalOwnerKindTask && al.taskExecutor != nil && al.taskExecutor.holdsRun(rec.OwnerID) {
 		return
 	}
 	last := effectiveGoalActivity(rec)
@@ -2100,8 +2106,8 @@ func resolveGoalAgent(al *AgentLoop, s *session.UnifiedMeta) *AgentInstance {
 // handleBareGoalClaim is the G-4 path: a `GOAL_STATUS: met` marker was found
 // WITHOUT a preceding [goal:evidence] line. The FIRST such bare claim is
 // bounced before the Judge with a teaching steer (free — no round spent); from
-// the 2nd consecutive bare claim onward it consumes an attempt/round (mirrors
-// task_executor.go's rejectBareEvidenceClaim / evidenceGateMaxConsecutiveRejections).
+// the 2nd consecutive bare claim onward it consumes an attempt/round (a task run's bare
+// marker instead spends one goal try at once — task_run_loop.go).
 // A bare claim is therefore ALWAYS cheaper than or equal to the idle path —
 // never more expensive (D8/N-13).
 //

@@ -680,20 +680,6 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 	}))
 }
 
-// deferWorkspaceDoneClaimToJudge mirrors pkg/tools/task.go's
-// deferDoneClaimToJudge exactly (duplicated rather than exported/shared —
-// same "criteria/timestamp-helper dedup" scope call already accepted
-// elsewhere in this feature's review): a `status:"done"` write on a task WITH
-// explicit acceptance criteria (hard tier, non-Scratchpad) must be
-// adjudicated by the judge, never trusted as an immediate terminal write.
-//
-// ADR-086 D5/GOAL-FR-029/FR-030: t.Criteria continues to be dual-written by
-// this wave's create/update paths — see pkg/tools/task.go's twin doc comment
-// on Task.Criteria (pkg/task/task.go) for the full rationale.
-func deferWorkspaceDoneClaimToJudge(t *task.Task, newStatus task.Status) bool {
-	return newStatus == task.StatusDone && !t.Scratchpad && len(t.Criteria) > 0
-}
-
 // ---- update_task_in_workspace ----
 
 type TaskUpdateTool struct{ deps *Deps }
@@ -867,7 +853,6 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 		patch.Prompt = &v
 		updated = append(updated, "prompt")
 	}
-	pendingJudgeNote := ""
 	if v, ok := args["status"].(string); ok {
 		if !isValidTaskStatus(v) {
 			// UAT batch3 S58 (docs/internal/qa/uat-report-full-tool-catalog-batch3-2026-09-02.md,
@@ -899,32 +884,25 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 				"in_progress cannot be set directly — it is only ever reached through real dispatch; "+
 					"call run_task to actually start this task", "status"))
 		}
-		if deferWorkspaceDoneClaimToJudge(existing, st) {
-			// review r2 Chunk 1: close the privileged-tool judge-bypass — this
-			// tool (update_task_in_workspace) previously wrote status:"done"
-			// straight to disk and advanced dependents directly, with no judge
-			// routing at all, for a task WITH acceptance criteria. Mirror the
-			// plain update_task gate: only stage a claim when this call is
-			// genuinely part of THAT task's own executor run (so
-			// finishTaskRun, the sole reader of PendingJudgeClaim, will
-			// adjudicate it) — otherwise reject outright rather than stage a
-			// claim nothing will ever adjudicate.
-			if tools.ToolRunningTaskID(ctx) != id {
-				return tools.ErrorResult(errorJSON("JUDGE_REQUIRED",
-					"this task has acceptance criteria — completion is adjudicated by the judge "+
-						"during a task run; it cannot be force-completed here", "status"))
-			}
-			claimText, _ := args["result"].(string)
-			patch.PendingJudgeClaim = &claimText
-			updated = append(updated, "pending_judge_claim")
-			pendingJudgeNote = "completion claim recorded — this task has acceptance criteria, so it is " +
-				"NOT yet done; the evidence-ladder judge will adjudicate your claim against the criteria " +
-				"before the task can reach a terminal status"
-			// Status is deliberately left unpatched — the judge decides.
-		} else {
-			patch.Status = &st
-			updated = append(updated, "status")
+		// Founder decision 2026-09-14 (one claim mechanism): while THIS
+		// task's own executor run is in flight, no terminal status may be
+		// written through this privileged tool either — completion is claimed
+		// with goal_claim and decided by the judge. Out-of-band done on a
+		// criteria task stays refused for the same reason it always was:
+		// nothing would ever adjudicate it.
+		if tools.ToolRunningTaskID(ctx) == id {
+			return tools.ErrorResult(errorJSON("JUDGE_REQUIRED",
+				"you cannot set this task's status while it is running — its completion is decided "+
+					"by the judge. The worker claims with goal_claim (status \"met\" with evidence, "+
+					"or \"blocked\" when it cannot proceed)", "status"))
 		}
+		if st == task.StatusDone && !existing.Scratchpad && len(existing.Criteria) > 0 {
+			return tools.ErrorResult(errorJSON("JUDGE_REQUIRED",
+				"this task has acceptance criteria — completion is adjudicated by the judge "+
+					"during a task run; it cannot be force-completed here", "status"))
+		}
+		patch.Status = &st
+		updated = append(updated, "status")
 	}
 	if v, ok := args["agent_id"].(string); ok && v != "" {
 		// subagent_3p (external-CLI) worker reassignment is no longer guarded
@@ -1168,9 +1146,6 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 	}
 
 	respFields := map[string]any{"id": id, "updated_fields": updated}
-	if pendingJudgeNote != "" {
-		respFields["pending_judge_note"] = pendingJudgeNote
-	}
 	if goalSyncWarning != "" {
 		respFields["goal_sync_warning"] = "criteria/dod saved on the task, but the paired goal " +
 			"record could not be updated: " + goalSyncWarning
@@ -1324,7 +1299,7 @@ const maxWorkspaceTaskRows = 100
 // declare them DISK-ONLY and forbid them from crossing any boundary —
 // CreatedByAgentID ("the REST mapper does NOT copy it to the wire type, and it
 // MUST NOT be added to any schema in contracts/"), Scratchpad (every agent's
-// private todo card), PendingJudgeClaim, DelegationDepth — and a whole-struct
+// private todo card), DelegationDepth — and a whole-struct
 // marshal shipped every one of them, plus Prompt and Result, straight into an
 // LLM's context. With an allowlist a field added to task.Task tomorrow is NOT
 // disclosed by default; with a denylist the next field to land would re-open

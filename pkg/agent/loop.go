@@ -7149,10 +7149,10 @@ func (al *AgentLoop) processTaskDirect(
 	agentID, prompt, sessionKey, taskChatID string,
 ) (string, error) {
 	if err := al.ensureHooksInitialized(ctx); err != nil {
-		return "", fmt.Errorf("processTaskDirect: hooks: %w", err)
+		return "", fmt.Errorf("processTaskDirect: hooks: %w: %w", ErrTaskRunNotDispatched, err)
 	}
 	if err := al.ensureMCPInitialized(ctx); err != nil {
-		return "", fmt.Errorf("processTaskDirect: mcp: %w", err)
+		return "", fmt.Errorf("processTaskDirect: mcp: %w: %w", ErrTaskRunNotDispatched, err)
 	}
 
 	registry := al.GetRegistry()
@@ -7166,7 +7166,7 @@ func (al *AgentLoop) processTaskDirect(
 		ag = registry.GetDefaultAgent()
 	}
 	if ag == nil {
-		return "", fmt.Errorf("processTaskDirect: no agent %q", agentID)
+		return "", fmt.Errorf("processTaskDirect: no agent %q: %w", agentID, ErrTaskRunNotDispatched)
 	}
 
 	// Tool context uses "system" channel so exec/cron tools are permitted.
@@ -7197,7 +7197,7 @@ func (al *AgentLoop) processTaskDirect(
 	// paper over. This dispatch branch is what lets those guards be relaxed.
 	dispatchKind, dispatchErr := runner.ResolveDispatch(executorConfigOf(ag))
 	if dispatchErr != nil {
-		return "", fmt.Errorf("processTaskDirect: %w", dispatchErr)
+		return "", fmt.Errorf("processTaskDirect: %w: %w", ErrTaskRunNotDispatched, dispatchErr)
 	}
 	if dispatchKind == runner.DispatchKindExternalCLI {
 		return al.processTaskDirectExternalCLI(taskCtx, ag, prompt, sessionKey, taskChatID, delegationDepth)
@@ -7252,15 +7252,15 @@ func (al *AgentLoop) processTaskDirect(
 // An external-CLI worker's tool registry is its OWN CLI's, never Omnipus's —
 // it has no task_update tool wired at all — so buildPrompt's ADR-043
 // TASK_STATUS/TASK_SUMMARY marker instruction (task_executor.go) is this
-// dispatch kind's ONLY possible completion signal. The caller
-// (TaskExecutor.finishTaskRun) parses the aggregated CLI output (ForUser,
-// falling back to ForLLM) for that marker: a found "success"/"failure" line
-// lands the task Done/Failed with the marker's own reported words as Result;
-// no parseable marker at all fails the task closed (StatusFailed) — it is
-// NEVER auto-completed to Done on unverified prose alone. This replaced the
-// former "auto-complete to Done, WARN-only" default (ADR-042 §3's finding);
-// see ADR-043 for the full contract and finishTaskRun's own WarnCF log on the
-// fail-closed path.
+// dispatch kind's ONLY possible completion signal. The task run loop
+// (task_run_loop.go::resolveRunClaim) reads the aggregated CLI output
+// (ForUser, falling back to ForLLM) for that marker and feeds it into the same
+// claim path goal_claim feeds: success with an evidence line is a met claim the
+// Judge checks, failure is a blocked claim that ends the task Failed, and no
+// marker at all spends one goal try — it is NEVER auto-completed to Done on
+// unverified prose alone. This replaced the former "auto-complete to Done,
+// WARN-only" default (ADR-042 §3's finding); see ADR-043 §8 for the current
+// contract.
 //
 // Delegation-depth bounding: the dispatched CLI child runs as a separate OS
 // process with its own tool registry — it has no delegate/create_task tools
@@ -14201,21 +14201,17 @@ func (al *AgentLoop) assembleMessages(
 			})
 		}
 	}
-	// Review B3: a task's TASK_STATUS/TASK_SUMMARY marker instruction
-	// (buildPrompt, task_executor.go) lives only in the task's first user
-	// turn — a long, tool-heavy task run can trip windowTrim (ADR-028) and
-	// evict that turn entirely, silently dropping the instruction for the
-	// rest of the run. Piggyback a terse reminder onto the SAME breadcrumb
-	// block that already fires exactly when (and only when) something has
-	// been evicted (breadcrumb != ""), scoped to task runs only
-	// (ts.opts.IsTaskRun) — this re-surfaces the instruction precisely when
-	// it risks having been evicted, at near-zero token cost, without a
-	// second parallel injection mechanism.
+	// Review B3 (reworded for the one-claim-path model, founder decision
+	// 2026-09-14): a task run's goal_claim instruction (buildPrompt,
+	// task_executor.go) lives only in the run's first user turn — a long,
+	// tool-heavy run can trip windowTrim (ADR-028) and evict that turn
+	// entirely, silently dropping the instruction for the rest of the run.
+	// Piggyback a terse reminder onto the SAME breadcrumb block that already
+	// fires exactly when (and only when) something has been evicted
+	// (breadcrumb != ""), scoped to native task runs only (ts.opts.IsTaskRun;
+	// an external-CLI worker never reaches assembleMessages at all).
 	if ts.opts.IsTaskRun && breadcrumb != "" {
-		breadcrumb += fmt.Sprintf(
-			"\n\nReminder (task run): end your final message with `%s: success` or `%s: failure` (ADR-043).",
-			taskStatusLabel, taskStatusLabel,
-		)
+		breadcrumb += "\n\nReminder (task run): when the work is verified, report completion by calling goal_claim (status \"met\", with your one-line evidence) — not by writing a status yourself."
 	}
 	span := al.activeRecallSpan(ts.sessionKey)
 	// ADR-066 D5.4 (FR-043): this from-scratch assembly includes the active

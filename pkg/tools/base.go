@@ -381,16 +381,14 @@ func ToolCallID(ctx context.Context) string {
 }
 
 // WithRunningTaskID returns a child context carrying the ID of the task
-// currently being executed by the task-run turn in progress (review r2,
-// Chunk 1). TaskExecutor stamps this onto the turn's tool ctx at
-// task-dispatch time (runTask / runTaskFromInProgress, task_executor.go) so a
-// task-update tool call can tell whether IT is genuinely part of THAT task's
-// own executor run — the only run whose completion (finishTaskRun) ever
-// adjudicates a staged PendingJudgeClaim. An out-of-band call (this context
-// carries no running task, or a different one) must never stage a claim:
-// nothing would ever adjudicate it, stranding the task non-terminal forever.
-// Empty ("") for every non-task-run turn — interactive chat, /goal, /loop,
-// scheduled runs, and sub-turns all leave this unset.
+// currently being executed by the task-run turn in progress. TaskExecutor
+// stamps this onto the turn's tool ctx at dispatch time (runTask /
+// runTaskFromInProgress, task_executor.go) so update_task can REFUSE a status
+// write on the very task its own run is executing: while a task runs, its
+// completion is claimed with goal_claim and decided by the judge (founder
+// decision 2026-09-14), never written by the worker. Empty ("") for every
+// non-task-run turn — interactive chat, /goal, /loop, scheduled runs, and
+// sub-turns all leave this unset.
 func WithRunningTaskID(ctx context.Context, taskID string) context.Context {
 	return context.WithValue(ctx, ctxKeyRunningTaskID, taskID)
 }

@@ -27,6 +27,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // --- shared test helpers -----------------------------------------------
@@ -731,17 +732,18 @@ func TestGoalLoop_ScheduledTurn_DoesNotAdvanceGoal(t *testing.T) {
 	}
 }
 
-// TestGoalLoop_TaskRunTurn_AdvancesTaskOwnedGoal proves GOAL-FR-015 (E12):
-// unlike TestGoalLoop_ScheduledTurn_DoesNotAdvanceGoal's plain scheduled/loop
-// turn (IsTaskRun=false, UserInitiated=false — excluded), a TASK RUN's own
-// dispatched turn (IsTaskRun=true, UserInitiated=false, SenderID=
-// "task-executor" — exactly loop.go's processTaskDirect literal) on a
-// task-owned goal's own session DOES reach checkGoalLoopAfterTurn's ordinary-
-// turn branch and bumps the goal's activity clock — GOAL-FR-013's "one code
-// path" requires the after-turn hook to apply to a task-owned goal exactly
-// like a chat-owned one.
-func TestGoalLoop_TaskRunTurn_AdvancesTaskOwnedGoal(t *testing.T) {
-	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+// TestGoalLoop_TaskRunTurn_IsLeftToTheTaskExecutor pins the founder decision of
+// 2026-09-14 (issue #710: one claim mechanism, one Judge pipeline): a TASK
+// RUN's own dispatched turn (IsTaskRun=true, UserInitiated=false, SenderID=
+// "task-executor" — processTaskDirect's own processOptions literal) is resolved
+// by the task executor's run loop (task_run_loop.go). The chat after-turn hook
+// must therefore leave that goal completely alone — even when the turn carries
+// a met claim made through the real goal_claim tool: no deferred adjudication,
+// no follow-up, no Judge call, and no write to the goal record.
+func TestGoalLoop_TaskRunTurn_IsLeftToTheTaskExecutor(t *testing.T) {
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	judge := &b6ScriptedJudge{metFromCall: 1, reason: "must never be asked"}
+	judgeInst.Provider = judge
 	tk, _ := seedDefiningTaskGoal(t, al, "t-goal-loop-task-run", "native-agent")
 	sid, err := al.taskExecutor.createTaskSessionSync(tk)
 	if err != nil {
@@ -753,26 +755,38 @@ func TestGoalLoop_TaskRunTurn_AdvancesTaskOwnedGoal(t *testing.T) {
 	if activeGoalForSession(sid) == nil {
 		t.Fatal("test setup: the task-owned goal must already be bound ACTIVE to this session")
 	}
-	// Push the activity clock into the past first (rewindGoalActivity's own
-	// precedent, elsewhere in this suite) — asserting "changed" against a
-	// same-instant activation timestamp would be flaky, not a real signal.
+	// Push the activity clock into the past first, so "unchanged" below is a
+	// real signal rather than a same-instant coincidence.
 	rewindGoalActivityTimeOnly(t, store, sid)
 	before := goalRecordForSession(t, sid)
 
-	// Mirrors processTaskDirect's own processOptions literal (loop.go):
-	// IsTaskRun=true, UserInitiated left false, SenderID="task-executor".
+	claimTool, ok := agentInst.Tools.Get(tools.GoalClaimToolName)
+	if !ok {
+		t.Fatal("goal_claim is not registered on the working agent")
+	}
+	b6ClaimMetAndPersist(t, claimTool, store, sid, "task-run-claim", "finished the thing and checked it")
+
 	taskRunOpts := processOptions{
 		TranscriptStore: store, TranscriptSessionID: sid,
 		Channel: "webchat", ChatID: "task:" + sid, SenderID: "task-executor",
 		IsTaskRun: true,
 	}
-	result := &turnResult{finalContent: "made some progress on the task, no claim yet"}
+	result := &turnResult{finalContent: "Finished the thing."}
 	al.checkGoalLoopAfterTurn(context.Background(), agentInst, taskRunOpts, result)
 
+	if result.goalDeferredAdjudication != nil {
+		t.Fatal("the chat after-turn hook recorded an adjudication for a task run's claim — task claims are judged by the task executor")
+	}
+	if len(result.followUps) != 0 {
+		t.Fatalf("the chat after-turn hook queued %d follow-up(s) into a task run", len(result.followUps))
+	}
+	if n := judge.callCount(); n != 0 {
+		t.Fatalf("Judge calls = %d, want 0", n)
+	}
 	after := goalRecordForSession(t, sid)
-	if after.LastActivityAt.Equal(before.LastActivityAt) {
-		t.Fatal("a task run's own turn must bump the task-owned goal's activity clock — " +
-			"the origin gate must admit opts.IsTaskRun turns (GOAL-FR-015)")
+	if !after.LastActivityAt.Equal(before.LastActivityAt) || after.Round != before.Round || after.LatestClaim != nil {
+		t.Fatalf("the chat after-turn hook wrote to a task run's goal record (activity %v -> %v, round %d -> %d, claim %+v)",
+			before.LastActivityAt, after.LastActivityAt, before.Round, after.Round, after.LatestClaim)
 	}
 }
 
