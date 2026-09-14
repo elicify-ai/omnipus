@@ -136,16 +136,22 @@ const (
 	ManifestSearchOnly
 )
 
-// previewedLazyToolNames is the exact 7-name Tier 2 set (ADR-071 D3 §4.1,
+// previewedLazyToolNames is the exact 9-name Tier 2 set (ADR-071 D3 §4.1,
 // minus navigate's retirement, which held one of the original 8 slots as a
 // total no-op — its callback was nil in every production path and nothing
-// anywhere could receive a navigation event; see
-// TestVisibility_PreviewedSetIsExactlySeven's doc comment in
+// anywhere could receive a navigation event; plus create_plan and
+// execute_plan, moved in from search-only by the 2026-09-14 amendment; see
+// TestVisibility_PreviewedSetIsExactlyNine's doc comment in
 // manifest_test.go): lazy tools that still render a preview line in the
 // compressed manifest block. Everything else lazy resolves to ManifestSearchOnly.
-// Membership is pinned by TestVisibility_PreviewedSetIsExactlySeven — adding
+// Membership is pinned by TestVisibility_PreviewedSetIsExactlyNine — adding
 // a tool here (or removing one) without updating that test's literal list is
 // a build failure by design (FR-034).
+//
+// A preview line is never a policy bypass: BuildCompressedManifest renders
+// only the tools its caller passes, and the agent loop passes the
+// policy-filtered slice, so an agent whose policy denies a name here never
+// sees its line.
 var previewedLazyToolNames = map[string]struct{}{
 	"list_agents":   {},
 	"list_jobs":     {},
@@ -154,6 +160,13 @@ var previewedLazyToolNames = map[string]struct{}{
 	"bash":          {}, // ADR-071 D3: demoted from Full — see fullManifestToolNames doc.
 	"create_task":   {},
 	"update_task":   {},
+	// ADR-071 amendment 2026-09-14 (founder decision): moved from search-only.
+	// UAT A-17/B-7/B-10 showed agents never discovered them and fanned
+	// multi-part parallel work out as raw delegate calls instead — §4.3's
+	// accepted risk (a ToolSearch query the model has no prompt to formulate)
+	// materialised for exactly the tools that work needs.
+	"create_plan":  {},
+	"execute_plan": {},
 }
 
 // administrativeToolNames is the exact, drift-tested "destructive-and-

@@ -471,6 +471,55 @@ func TestBuildToolManifestNote_LoadedToolsExcluded(t *testing.T) {
 		"loaded tool %q must be excluded from manifest note", lazyName)
 }
 
+// TestBuildToolManifestNote_PlanToolPreviewFollowsAgentPolicy pins, on a real
+// agent and the real note builder, the property the ADR-071 amendment of
+// 2026-09-14 relies on: create_plan and execute_plan are now previewed, and
+// the preview is built from the agent's policy-filtered tools — so the SAME
+// agent sees both lines under its seeded policy and neither line once its
+// policy denies them. pkg/tools/manifest_plan_preview_test.go covers the
+// builder against every policy layer; this proves the agent loop's own
+// builder renders only what the policy filter kept.
+func TestBuildToolManifestNote_PlanToolPreviewFollowsAgentPolicy(t *testing.T) {
+	cfg := newCompressedCfg(t)
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
+	defer al.Close()
+
+	jimAgent, ok := al.registry.GetAgent("jim")
+	require.True(t, ok)
+	allTools := jimAgent.Tools.GetAll()
+
+	seeded := jimAgent.LoadToolPolicy()
+	require.NotNil(t, seeded, "fixture: Jim must carry a tool policy")
+	allowedTools, allowedVerdicts := tools.FilterToolsByPolicy(allTools, jimAgent.AgentType, seeded)
+	for _, name := range []string{"create_plan", "execute_plan"} {
+		require.Contains(t, allowedVerdicts, name,
+			"fixture: Jim's seeded policy must not deny %q, or the allowed half below is vacuous", name)
+	}
+	allowedNote := al.buildToolManifestNote(fakeTurnState(jimAgent, "sess-plan-preview-allow"), allowedTools)
+	assert.Contains(t, allowedNote, "  - create_plan — ")
+	assert.Contains(t, allowedNote, "  - execute_plan — ")
+
+	denied := &tools.ToolPolicyCfg{
+		Policies:       make(map[string]config.ToolPolicy, len(seeded.Policies)+2),
+		GlobalPolicies: seeded.GlobalPolicies,
+		GodMode:        seeded.GodMode,
+	}
+	for k, v := range seeded.Policies {
+		denied.Policies[k] = v
+	}
+	denied.Policies["create_plan"] = config.ToolPolicyDeny
+	denied.Policies["execute_plan"] = config.ToolPolicyDeny
+	deniedTools, deniedVerdicts := tools.FilterToolsByPolicy(allTools, jimAgent.AgentType, denied)
+	require.NotContains(t, deniedVerdicts, "create_plan")
+	require.NotContains(t, deniedVerdicts, "execute_plan")
+	deniedNote := al.buildToolManifestNote(fakeTurnState(jimAgent, "sess-plan-preview-deny"), deniedTools)
+	// Control: the note still renders Jim's other previewed tools, so the
+	// absence below is the policy's doing, not an empty note.
+	require.Contains(t, deniedNote, "  - create_task — ", "control: create_task must still preview for Jim")
+	assert.NotContains(t, deniedNote, "  - create_plan")
+	assert.NotContains(t, deniedNote, "  - execute_plan")
+}
+
 // TestBudgetEstimatesAgreeWithLoadedState_ADR071D3BugFix is the BUG 1
 // regression test (tool-manifest-tier-redesign review-fix pass): after a
 // lazy tool is ToolSearch-loaded mid-turn, midturn_budget.go's
@@ -1850,7 +1899,7 @@ func TestMiaNavigate_DemotedToPreviewedTier(t *testing.T) {
 			"breaks, get_workspace was added to fullManifestToolNames in pkg/tools/manifest.go.")
 	require.Equal(t, tools.ManifestPreviewed, tools.ToolManifestVisibility("get_workspace"),
 		"ToolManifestVisibility(\"get_workspace\") must be ManifestPreviewed "+
-			"(it is one of the 7 Tier 2 names in previewedLazyToolNames).")
+			"(it is one of the 9 Tier 2 names in previewedLazyToolNames).")
 
 	cfg := newCompressedCfg(t)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})

@@ -23,8 +23,11 @@ import (
 // one-line edit in pkg/tools/manifest.go, and this is the only thing checking.
 //
 // The previewed-set count is asserted alongside because the ruling's OTHER
-// half is that ADR-071's previewed set stays at seven — i.e. this change makes
-// no production tiering edit at all.
+// half is that ADR-071's previewed set gains none of these browser tools —
+// i.e. this change makes no production tiering edit at all. The set is nine
+// rather than the seven the ruling saw only because the ADR-071 amendment of
+// 2026-09-14 moved create_plan and execute_plan (neither a browser tool) in
+// from search-only.
 func TestManifestTierPartition_D2BrowserToolsAreTier3(t *testing.T) {
 	for _, name := range []string{
 		"browser_select_option", "browser_press_key", "browser_hover",
@@ -40,9 +43,10 @@ func TestManifestTierPartition_D2BrowserToolsAreTier3(t *testing.T) {
 		}
 	}
 
-	if got := len(tools.PreviewedLazyToolNames()); got != 7 {
-		t.Errorf("the previewed set has %d names, want 7. ADR D1.9b ruling 3 leaves ADR-071's "+
-			"previewed set untouched — a change here means one of the browser tools was promoted "+
+	if got := len(tools.PreviewedLazyToolNames()); got != 9 {
+		t.Errorf("the previewed set has %d names, want 9 (ADR-071's seven plus create_plan and "+
+			"execute_plan, amendment 2026-09-14). ADR D1.9b ruling 3 leaves the previewed set "+
+			"untouched by the browser tools — a change here means one of them was promoted "+
 			"into it, which is the edit the ruling declined to make", got)
 	}
 

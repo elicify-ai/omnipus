@@ -170,10 +170,17 @@ func (t *PlanCreateTool) Scope() ToolScope       { return ScopeCore }
 func (t *PlanCreateTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *PlanCreateTool) Description() string {
-	return "Create a draft Plan to decompose / break down a complex, multi-step goal — a " +
-		"Definition-of-Done-driven grouping of tasks. Use a plan instead of several parallel delegate " +
-		"calls when a goal has two or more independent parts meant to run in parallel (for example " +
-		"several files or deliverables written by different agents): each member declares a write_set, " +
+	// The first line (up to '\n') is create_plan's preview line in the
+	// compressed "More tools" block (ADR-071 amendment 2026-09-14 made it a
+	// previewed tool), so it says WHEN to reach for a plan and must fit in
+	// maxManifestLineLen runes. It is a reorder of words this description
+	// already carried, not new wording: ToolSearch's BM25 index tokenises on
+	// whitespace and strips edge punctuation, so ranking is unchanged.
+	return "Use a plan instead of several parallel delegate calls when a goal has two or more " +
+		"independent parts meant to run in parallel.\n" +
+		"Create a draft Plan to decompose / break down a complex, multi-step goal — a " +
+		"Definition-of-Done-driven grouping of tasks, for example several files or deliverables " +
+		"written by different agents: each member declares a write_set, " +
 		"and plan-lint rejects overlapping parallel write_sets before anything runs. " +
 		"Attach member tasks afterward with " +
 		"create_task(plan_id=..., write_set=..., stream=..., is_join=...). Requires at least one " +
@@ -481,7 +488,13 @@ func (t *PlanExecuteTool) Scope() ToolScope       { return ScopeCore }
 func (t *PlanExecuteTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *PlanExecuteTool) Description() string {
-	return "Start autonomous execution of a draft plan — no human approval required. Runs the same " +
+	// The first line (up to '\n') is execute_plan's preview line in the
+	// compressed "More tools" block (ADR-071 amendment 2026-09-14 made it a
+	// previewed tool), so it says WHEN to call it and must fit in
+	// maxManifestLineLen runes.
+	return "Start autonomous execution of a draft plan once its member tasks are attached — no human " +
+		"approval required.\n" +
+		"Runs the same " +
 		"gates the human approve path enforces: the plan must have at least one member task, every " +
 		"member must carry at least one acceptance criterion, and plan-lint must pass — lint rejects " +
 		"overlapping parallel write_sets and convergence points with no authored join member " +

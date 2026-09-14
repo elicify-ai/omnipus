@@ -4,11 +4,14 @@
 
 // UAT 2026-09-14 (A-17, B-7/B-9/B-10): an agent granted create_plan /
 // execute_plan never created a plan for a multi-part "work in parallel" goal
-// and fanned out raw delegate calls instead (0/5 runs). create_plan and
-// execute_plan are ADR-071 Tier 3 (search-only): the model can reach them only
-// by naming them in ToolSearch or by a query that ranks them. delegate is
-// Tier 1, so its description is the one text the model sees on every request.
-// These tests pin both halves of the fix: delegate's description names the
+// and fanned out raw delegate calls instead (0/5 runs). At the time
+// create_plan and execute_plan were ADR-071 Tier 3 (search-only): the model
+// could reach them only by naming them in ToolSearch or by a query that ranks
+// them. delegate is Tier 1, so its description is the one text the model sees
+// on every request. The ADR-071 amendment of 2026-09-14 has since moved both
+// plan tools to the previewed tier (one line each in the "More tools" block),
+// but a previewed tool is still loaded through ToolSearch, so both halves
+// below still matter. These tests pin both halves of the fix: delegate's description names the
 // plan tools by their exact, loadable names, and the natural ways a model
 // describes parallel multi-part work find create_plan through ToolSearch —
 // without create_plan swallowing queries that belong to other tools.
