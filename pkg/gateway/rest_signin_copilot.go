@@ -111,6 +111,32 @@ type copilotProbeGuard struct {
 	inFlight bool
 	cached   *gen.SignInStatus
 	cachedAt time.Time
+	// last/lastAt hold the most recent FRESH check result, whatever its state.
+	// They answer the provider row (copilotRowSignInStatus) and never decide
+	// whether a check re-probes — that is cached/cachedAt's job alone.
+	last   *gen.SignInStatus
+	lastAt time.Time
+}
+
+// lastResult returns the most recent fresh check result while it is younger
+// than copilotProbeCacheTTL, and whether there was one.
+func (g *copilotProbeGuard) lastResult() (gen.SignInStatus, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.last == nil || time.Since(g.lastAt) >= copilotProbeCacheTTL {
+		return gen.SignInStatus{}, false
+	}
+	return *g.last, true
+}
+
+// recordLast remembers a fresh check result, whatever its state, for the
+// provider row.
+func (g *copilotProbeGuard) recordLast(st gen.SignInStatus) {
+	g.mu.Lock()
+	last := st
+	g.last = &last
+	g.lastAt = time.Now()
+	g.mu.Unlock()
 }
 
 // hit returns a cached probe result when one is live, and whether there was one.
@@ -208,6 +234,7 @@ func (a *restAPI) handleCopilotSignInStatus(w http.ResponseWriter, r *http.Reque
 	res := providers_pkg.CopilotSignIn(ctx, "", a.copilotCheckWorkspace())
 	status := copilotSignInStatusResponse(res)
 	a.copilotProbe.store(status)
+	a.copilotProbe.recordLast(status)
 	a.auditCopilotProbe(r, status, false)
 	jsonOK(w, status)
 }
@@ -315,6 +342,26 @@ func copilotSignInStatusResponse(res providers_pkg.CopilotSignInResult) gen.Sign
 	}
 
 	return status
+}
+
+// copilotRowSignInStatus is what a github-copilot provider ROW may say about the
+// login without running the CLI (ADR-068 FR-034 row states): the result of the
+// operator's most recent explicit Check sign-in, while it is younger than
+// copilotProbeCacheTTL and the CLI is still on this machine. Otherwise it
+// reports nothing and the row keeps its default.
+//
+// It never probes. Running the CLI spends a premium request, and a list render
+// must never pay that (TestListProviders_NoCopilotVendorFanOut); the "still
+// installed" check is a PATH lookup only.
+func (a *restAPI) copilotRowSignInStatus() (gen.SignInStatus, bool) {
+	st, ok := a.copilotProbe.lastResult()
+	if !ok {
+		return gen.SignInStatus{}, false
+	}
+	if !providers_pkg.CopilotCLIAvailable("") {
+		return gen.SignInStatus{}, false
+	}
+	return st, true
 }
 
 // copilotRowHint returns the operator hint for a github-copilot provider row
