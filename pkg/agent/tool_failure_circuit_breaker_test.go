@@ -17,6 +17,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -148,6 +149,16 @@ func TestRunTurn_ToolFailureCircuitBreaker_CapsIdenticalRetries(t *testing.T) {
 		}
 		assert.Contains(t, payload.Reason, "circuit breaker",
 			"skip reason should name the circuit breaker so an operator reading events can tell why")
+		// THE STREAK COUNT IN THE DENIAL IS THE OBSERVABLE THAT MAKES THE OLD
+		// POST-DISPATCH TRIP ARM UNREACHABLE (round-3 cut list, 2026-09-14):
+		// the pre-dispatch refusal fires at streak threshold-1 = 5 recorded
+		// failures, so the attempt that would have recorded failure number 6
+		// never dispatches and no post-dispatch code can ever see a streak of
+		// 6. If this number ever reads 6, dispatch has been allowed past the
+		// pre-dispatch refusal and the deleted arm's job is live again.
+		assert.Contains(t, payload.Reason,
+			fmt.Sprintf("failed identically %d times in a row", toolFailureCircuitBreakThreshold-1),
+			"the pre-dispatch denial must name the exact streak it refused at")
 		breakerDenials++
 	}
 	assert.Equal(t, totalScripted-(toolFailureCircuitBreakThreshold-1), breakerDenials,
