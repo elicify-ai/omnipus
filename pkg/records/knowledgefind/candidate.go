@@ -55,6 +55,14 @@ type candidate struct {
 	// neither: the formula produced a legitimate ABSENT result and the reason
 	// has to reach the response.
 	formulaProblems []records.ComparisonProblem
+
+	// formulaNotes holds the evaluator's explanation of a formula result
+	// (records.FormulaResult.Note, D-61), keyed by the full `formula.<name>`
+	// property name, for the formulas that produced one. It is nil until the
+	// first note: most results need no explanation. The survivor carries it
+	// to renderRow, which shows it beside the value — PropertyValue has no
+	// place for it, and dropping it there is exactly what D-61 reported.
+	formulaNotes map[string]string
 }
 
 func newCandidate(
@@ -267,6 +275,15 @@ func (c *candidate) formulaValue(prop *records.Property) (records.PropertyValue,
 	// the comparator, the arity rule and the memo reading the same object.
 	pv.Property = prop
 	c.memo[prop.Name] = pv
+	// D-61: the explanation a bare number cannot give. Captured here, once,
+	// because this is the only place the FormulaResult is in hand — the memo
+	// above answers every later read without re-evaluating.
+	if res.Note != "" {
+		if c.formulaNotes == nil {
+			c.formulaNotes = make(map[string]string, 1)
+		}
+		c.formulaNotes[prop.Name] = res.Note
+	}
 	return pv, nil
 }
 

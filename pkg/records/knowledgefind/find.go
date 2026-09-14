@@ -1622,6 +1622,9 @@ type survivor struct {
 	textHash string
 	hasText  bool
 	values   map[string]records.PropertyValue
+	// formulaNotes is the candidate's formulaNotes, kept because the
+	// candidate itself does not outlive visit (D-61).
+	formulaNotes map[string]string
 }
 
 // visit is the per-candidate callback. Returning Accepted counts against B2.
@@ -1708,6 +1711,7 @@ func (e *evaluation) visit(c propindex.Candidate) (propindex.Verdict, error) {
 
 	e.survivors = append(e.survivors, survivor{
 		cand: c, score: hit.Score, textHash: hit.SourceHash, hasText: hasText, values: values,
+		formulaNotes: cand.formulaNotes,
 	})
 	return propindex.Accepted, nil
 }
