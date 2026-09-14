@@ -784,10 +784,10 @@ func (a *restAPI) handleLibraryEntryDelete(w http.ResponseWriter, r *http.Reques
 	}
 	defer root.Close()
 
-	// UAT #701 / D-123: a note or an attachment inside a knowledge base goes
-	// to that knowledge base's trash (restorable), the way the agent door
-	// deletes — see rest_library_knowledge_cascade.go.
-	note, governed, noteErr := a.libraryManagedFileInCollection(root, rel)
+	// UAT #701 / D-123: a note, an attachment or a whole folder inside a
+	// knowledge base goes to that knowledge base's trash (restorable), the
+	// way the agent door deletes — see rest_library_knowledge_cascade.go.
+	note, governed, noteErr := a.libraryManagedEntryInCollection(root, rel)
 	if noteErr != nil {
 		mapLibraryErr(w, "delete entry", workspaceID, noteErr)
 		return
@@ -1815,10 +1815,11 @@ func (a *restAPI) handleLibraryRename(w http.ResponseWriter, r *http.Request, wo
 		return
 	}
 
-	// UAT #701 / D-123: a note or an attachment renamed within its knowledge
-	// base has every inbound link and embed rewritten, the way the agent door
-	// renames — see rest_library_knowledge_cascade.go.
-	note, governed, noteErr := a.libraryManagedFileInCollection(root, fromRel)
+	// UAT #701 / D-123: a note, an attachment or a folder renamed within its
+	// knowledge base has every inbound link and embed rewritten (for a folder,
+	// every link to anything under it), the way the agent door renames — see
+	// rest_library_knowledge_cascade.go.
+	note, governed, noteErr := a.libraryManagedEntryInCollection(root, fromRel)
 	if noteErr != nil {
 		mapLibraryErr(w, "rename", workspaceID, noteErr)
 		return
@@ -1977,14 +1978,14 @@ func (a *restAPI) handleLibraryTransfer(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// UAT #701 / D-123: a same-workspace MOVE of a note or an attachment to
-	// another folder of the SAME knowledge base is a rename in the knowledge
-	// layer's terms — every inbound link and embed is rewritten. A copy
+	// UAT #701 / D-123: a same-workspace MOVE of a note, an attachment or a
+	// folder to another folder of the SAME knowledge base is a rename in the
+	// knowledge layer's terms — every inbound link and embed is rewritten. A copy
 	// duplicates bytes and rewrites nothing; a cross-workspace or
 	// cross-knowledge-base move is a real departure the link graph cannot
 	// follow, so both keep the plain filesystem semantics.
 	if mode == transferModeMove && sameWorkspace {
-		note, governed, noteErr := a.libraryManagedFileInCollection(fromRoot, fromRel)
+		note, governed, noteErr := a.libraryManagedEntryInCollection(fromRoot, fromRel)
 		if noteErr != nil {
 			mapLibraryErr(w, string(mode), req.FromWorkspaceId, noteErr)
 			return

@@ -1,6 +1,6 @@
 // rest_library_knowledge_cascade.go — the Library's rename / move / delete
-// doors, when the entry is a NOTE INSIDE A KNOWLEDGE BASE (UAT 2026-09-13,
-// #701 / D-123).
+// doors, when the entry is a NOTE, an ATTACHMENT or a FOLDER INSIDE A
+// KNOWLEDGE BASE (UAT 2026-09-13, #701 / D-123).
 //
 // THE DEFECT. The agent door (knowledge_restructure) renames a note by
 // rewriting every inbound wikilink under a journal, and deletes a note by
@@ -8,18 +8,26 @@
 // restored. The Library door did neither: `root.Rename` was a plain
 // filesystem rename that left every `[[link]]` to the note dangling, and
 // `root.Delete` unlinked the file for good — the same note, two doors, and
-// the human one was the lossy one.
+// the human one was the lossy one. Round 3 fixed that for markdown notes;
+// round 4 extends it to attachments and folders, which were still lossy.
 //
-// THE RULE. A Library operation on a MARKDOWN NOTE whose innermost enclosing
-// knowledge base (enclosingCollectionRel, the same ancestor walk the
-// version-guarded save uses — EMB-006a) is known, and — for a rename or a
-// same-workspace move — whose destination lies in that SAME knowledge base,
-// goes through pkg/knowledge's own Renamer / Trasher, followed by the same
-// index refresh the agent door performs. Everything else (a directory, an
-// attachment, a file outside any knowledge base, a move across knowledge
-// bases or workspaces) keeps the plain filesystem semantics it always had:
-// those shapes the knowledge layer does not model, and pretending otherwise
-// would trade one silent behaviour for another.
+// THE RULE. A Library operation on a markdown note, an attachment (any other
+// regular file) or a folder whose innermost enclosing knowledge base
+// (enclosingCollectionRel, the same ancestor walk the version-guarded save
+// uses — EMB-006a) is known, and — for a rename or a same-workspace move —
+// whose destination lies in that SAME knowledge base as the same kind of
+// entry, goes through pkg/knowledge's own Renamer / Trasher, followed by the
+// same index refresh the agent door performs. A folder carries everything
+// under it: renaming or moving it rewrites every link and embed that points
+// at anything inside, and deleting it trashes the whole folder recoverably.
+//
+// Everything else keeps the plain filesystem semantics it always had: a file
+// or folder outside any knowledge base, a symbolic link, a mounted folder's
+// own entry, a folder that is itself a knowledge base, a rename that changes
+// a file's kind (diagram.png -> diagram.md), and a move across knowledge
+// bases or workspaces. The enclosing knowledge base does not model those
+// shapes, and pretending otherwise would trade one silent behaviour for
+// another.
 //
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -31,11 +39,25 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/knowledge"
 	"github.com/elicify-ai/omnipus/pkg/library"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+)
+
+// libraryManagedKind is which kind of entry the knowledge layer manages at a
+// Library path.
+type libraryManagedKind int
+
+const (
+	// libraryManagedNote is a markdown note.
+	libraryManagedNote libraryManagedKind = iota
+	// libraryManagedAttachment is any other regular file (an image, a PDF).
+	libraryManagedAttachment
+	// libraryManagedFolder is a directory, with everything under it.
+	libraryManagedFolder
 )
 
 // libraryCollectionNote is one Library path resolved to the knowledge base
@@ -46,13 +68,12 @@ type libraryCollectionNote struct {
 	collRel string
 	col     *knowledge.Collection
 	root    knowledge.CollectionRoot
-	// relInCol is the note's path relative to the knowledge base.
+	// relInCol is the entry's path relative to the knowledge base.
 	relInCol string
 	lock     knowledge.NoteLockConfig
-	// isAttachment is true for a non-markdown regular file (resolved by
-	// libraryManagedFileInCollection). Its destination must stay
-	// non-markdown too — see sameCollectionDestination.
-	isAttachment bool
+	// kind records which kind of entry the resolver vetted. A rename's
+	// destination must keep it — see sameCollectionDestination.
+	kind libraryManagedKind
 }
 
 // relWithinCollection strips the knowledge base's directory off a
@@ -79,26 +100,24 @@ func (a *restAPI) libraryNoteInCollection(root *library.Root, rel string) (note 
 	if !knowledge.IsMarkdownPath(rel) {
 		return nil, false, nil
 	}
-	return a.resolveLibraryCollectionFile(root, rel, false)
+	return a.resolveLibraryCollectionFile(root, rel, libraryManagedNote)
 }
 
-// libraryManagedFileInCollection is libraryNoteInCollection widened to every
-// REGULAR FILE the knowledge layer manages: a markdown note, or an attachment
-// (an image, a PDF — anything a note can cite with ![[embed]] or a markdown
-// link). knowledge.Renamer rewrites inbound links to an attachment exactly as
-// it does for a note, and knowledge.Trasher addresses an attachment at its
-// own path, so the Library's rename / move / delete doors must route both
-// (round-4 attachment cascade; fix3/spa-fixes finding 7 reproduced a 200
-// attachment rename that left the embed dangling).
+// libraryManagedEntryInCollection is libraryNoteInCollection widened to every
+// entry the knowledge layer manages: a markdown note, an attachment (anything
+// a note can cite with ![[embed]] or a markdown link), or a folder.
+// knowledge.Renamer rewrites inbound links to all three, and knowledge.Trasher
+// trashes all three recoverably, so the Library's rename / move / delete
+// doors route all three (round-4 attachment cascade; fix3/spa-fixes finding 7
+// reproduced a 200 attachment rename that left the embed dangling).
 //
-// A DIRECTORY is deliberately NOT governed: Renamer.Plan refuses a
-// non-regular source (ErrRenameSourceNotAddressable) and the Trasher has no
-// subtree move, so routing a folder there would turn a working rename into a
-// 400. A folder keeps plain filesystem semantics — which means links INTO a
-// renamed folder are not rewritten; that gap needs a directory-aware engine
-// in pkg/knowledge, not a gateway shim. A path that does not exist is not
-// governed either, so the plain door answers its own 404.
-func (a *restAPI) libraryManagedFileInCollection(root *library.Root, rel string) (file *libraryCollectionNote, governed bool, err error) {
+// A path that does not exist is not governed unless it is spelled as a note,
+// which keeps round 3's behaviour: the knowledge layer answers the 404 for a
+// missing note, the plain door for anything else.
+func (a *restAPI) libraryManagedEntryInCollection(root *library.Root, rel string) (entry *libraryCollectionNote, governed bool, err error) {
+	if _, dirErr := root.StatDir(rel); dirErr == nil {
+		return a.libraryFolderInCollection(root, rel)
+	}
 	if knowledge.IsMarkdownPath(rel) {
 		return a.libraryNoteInCollection(root, rel)
 	}
@@ -111,12 +130,57 @@ func (a *restAPI) libraryManagedFileInCollection(root *library.Root, rel string)
 	case !fi.Mode().IsRegular():
 		return nil, false, nil
 	}
-	return a.resolveLibraryCollectionFile(root, rel, true)
+	return a.resolveLibraryCollectionFile(root, rel, libraryManagedAttachment)
+}
+
+// libraryFolderInCollection governs a directory inside a knowledge base.
+// Three kinds of directory are left to plain filesystem semantics, each
+// because the knowledge layer would act on something other than the folder
+// the operator sees:
+//
+//   - a mounted folder's own entry: trashing it would move the operator's
+//     real folder into the knowledge base's trash, and the plain door already
+//     refuses it with ErrIsMountRoot, which is the right answer;
+//   - a symbolic link, or a folder reached through one: the knowledge layer
+//     never follows a link (FR-044), so it would refuse a rename that works
+//     today;
+//   - a folder that is itself a knowledge base: it has its own links, index
+//     and trash, which the enclosing knowledge base does not model.
+func (a *restAPI) libraryFolderInCollection(root *library.Root, rel string) (*libraryCollectionNote, bool, error) {
+	if _, _, _, inMount := root.MountAt(rel); inMount && !strings.Contains(rel, "/") {
+		return nil, false, nil
+	}
+	if isKB, established := detectKnowledgeBaseInRoot(root, rel); established && isKB {
+		return nil, false, nil
+	}
+	entry, governed, err := a.resolveLibraryCollectionFile(root, rel, libraryManagedFolder)
+	if err != nil || !governed {
+		return entry, governed, err
+	}
+	if !knowledgeSeesRealFolder(entry.root, entry.relInCol) {
+		return nil, false, nil
+	}
+	return entry, true, nil
+}
+
+// knowledgeSeesRealFolder reports whether the knowledge layer would address
+// relInCol as an ordinary folder: reachable with no symbolic link anywhere on
+// the way (FR-044) and a directory itself. It is a yes/no question on
+// purpose. A path the knowledge layer cannot resolve is not an error for the
+// Library door, only a folder it must leave to plain filesystem semantics,
+// where the plain door answers for it as it always has.
+func knowledgeSeesRealFolder(croot knowledge.CollectionRoot, relInCol string) bool {
+	abs, err := croot.ResolveContainedNoSymlink(knowledge.OSLinkFS(), relInCol)
+	if err != nil {
+		return false
+	}
+	info, err := os.Lstat(abs)
+	return err == nil && info.IsDir()
 }
 
 // resolveLibraryCollectionFile resolves rel's innermost knowledge base and
-// lock. isAttachment records which kind of managed file the caller vetted.
-func (a *restAPI) resolveLibraryCollectionFile(root *library.Root, rel string, isAttachment bool) (*libraryCollectionNote, bool, error) {
+// lock. kind records which kind of managed entry the caller vetted.
+func (a *restAPI) resolveLibraryCollectionFile(root *library.Root, rel string, kind libraryManagedKind) (*libraryCollectionNote, bool, error) {
 	collRel, col, lock, relInCol, err := resolveCollectionNoteLock(root, a.homePath, rel)
 	if err != nil {
 		return nil, false, err
@@ -129,26 +193,35 @@ func (a *restAPI) resolveLibraryCollectionFile(root *library.Root, rel string, i
 		return nil, false, fmt.Errorf("resolve knowledge base root for %q: %w", collRel, err)
 	}
 	return &libraryCollectionNote{
-		collRel:      collRel,
-		col:          col,
-		root:         croot,
-		relInCol:     relInCol,
-		lock:         lock,
-		isAttachment: isAttachment,
+		collRel:  collRel,
+		col:      col,
+		root:     croot,
+		relInCol: relInCol,
+		lock:     lock,
+		kind:     kind,
 	}, true, nil
 }
 
 // sameCollectionDestination reports whether toRel (workspace-relative) lands
-// inside the SAME knowledge base as note, as the same kind of managed file: a
+// inside the SAME knowledge base as entry, as the same kind of entry: a
 // markdown note stays a markdown note, an attachment stays a non-markdown
 // file. A rename that changes kind (diagram.png -> diagram.md) is not a
-// rename the link graph models, so it keeps plain filesystem semantics.
-func sameCollectionDestination(root *library.Root, note *libraryCollectionNote, toRel string) bool {
-	if knowledge.IsMarkdownPath(toRel) == note.isAttachment {
-		return false
+// rename the link graph models, so it keeps plain filesystem semantics. A
+// folder has no kind to change, so any name will do.
+func sameCollectionDestination(root *library.Root, entry *libraryCollectionNote, toRel string) bool {
+	switch entry.kind {
+	case libraryManagedNote:
+		if !knowledge.IsMarkdownPath(toRel) {
+			return false
+		}
+	case libraryManagedAttachment:
+		if knowledge.IsMarkdownPath(toRel) {
+			return false
+		}
+	case libraryManagedFolder:
 	}
 	toCollRel, found := enclosingCollectionRel(root, toRel)
-	return found && toCollRel == note.collRel
+	return found && toCollRel == entry.collRel
 }
 
 // mapKnowledgeRestructureErr writes the HTTP answer for a Renamer / Trasher
@@ -187,14 +260,15 @@ func mapKnowledgeRestructureErr(w http.ResponseWriter, op, workspaceID string, e
 }
 
 // renameNoteInCollection performs a Library rename / same-workspace move of
-// a note inside a knowledge base through knowledge.Renamer, so every inbound
-// link is rewritten under a journal, then refreshes both indexes. It writes
-// the HTTP response itself and returns false when it has already answered
-// with an error.
+// a note, an attachment or a folder inside a knowledge base through
+// knowledge.Renamer, so every inbound link is rewritten under a journal, then
+// refreshes both indexes. It writes the HTTP response itself and returns
+// false when it has already answered with an error.
 func (a *restAPI) renameNoteInCollection(
 	w http.ResponseWriter, r *http.Request, op, workspaceID string,
 	root *library.Root, note *libraryCollectionNote, fromRel, toRel string,
 ) bool {
+	isFolder := note.kind == libraryManagedFolder
 	renamer := &knowledge.Renamer{
 		FS: knowledge.OSLinkFS(), Root: note.root, Lock: note.lock,
 		Audit: func(ev knowledge.RenameAuditEvent) {
@@ -205,28 +279,40 @@ func (a *restAPI) renameNoteInCollection(
 		},
 	}
 	res, err := renamer.Rename(knowledge.RenameRequest{
-		From: note.relInCol, To: relWithinCollection(note.collRel, toRel),
+		From: note.relInCol, To: relWithinCollection(note.collRel, toRel), Folder: isFolder,
 	})
 	if err != nil {
 		mapKnowledgeRestructureErr(w, op, workspaceID, err)
 		return false
 	}
 	if !res.NoOp {
-		if warning := knowledge.RefreshIndexesForRename(r.Context(), a.homePath, note.col.Root(), res.From, res.Touched); warning != "" {
+		var warning string
+		if isFolder {
+			warning = knowledge.RefreshIndexesForFolderRename(r.Context(), a.homePath, note.col.Root(), res)
+		} else {
+			warning = knowledge.RefreshIndexesForRename(r.Context(), a.homePath, note.col.Root(), res.From, res.Touched)
+		}
+		if warning != "" {
 			logger.WarnCF("rest", "library: "+op+" landed but an index could not be refreshed",
 				map[string]any{"workspace_id": workspaceID, "path": toRel, "warning": warning})
 		}
 	}
 	a.revokePreviewTokensForPath(workspaceID, fromRel)
 	a.logLibraryAudit(r, "library."+op, workspaceID, map[string]any{
-		"from": fromRel, "to": toRel, "knowledge_base": note.collRel,
-		"links_rewritten": res.LinksRewritten, "files_rewritten": res.FilesRewritten,
-		"journal_id": res.JournalID,
+		"from": fromRel, "to": toRel, "knowledge_base": note.collRel, "folder": isFolder,
+		"files_moved": len(res.Moves), "links_rewritten": res.LinksRewritten,
+		"files_rewritten": res.FilesRewritten, "journal_id": res.JournalID,
 	})
-	// D-107: the note moved under a new name — same listing-staleness reason
+	// D-107: the entry moved under a new name — same listing-staleness reason
 	// as the plain rename path.
 	a.emitLibraryChange(workspaceID, toRel, op)
-	fi, statErr := root.StatFile(toRel)
+	var fi os.FileInfo
+	var statErr error
+	if isFolder {
+		fi, statErr = root.StatDir(toRel)
+	} else {
+		fi, statErr = root.StatFile(toRel)
+	}
 	if statErr != nil {
 		mapLibraryErr(w, op, workspaceID, statErr)
 		return false
@@ -235,14 +321,15 @@ func (a *restAPI) renameNoteInCollection(
 	return true
 }
 
-// trashNoteInCollection performs a Library delete of a note inside a
-// knowledge base through knowledge.Trasher, so the note lands in
-// `.omnipus-vault/trash/` with a receipt an agent can restore from, then
-// drops its live entry from both indexes. It writes the HTTP response itself.
+// trashNoteInCollection performs a Library delete of a note, an attachment or
+// a folder inside a knowledge base through knowledge.Trasher, so it lands in
+// `.omnipus-vault/trash/` with a receipt it can be restored from, then drops
+// its live entries from both indexes. It writes the HTTP response itself.
 func (a *restAPI) trashNoteInCollection(
 	w http.ResponseWriter, r *http.Request, workspaceID string,
 	note *libraryCollectionNote, rel string,
 ) {
+	isFolder := note.kind == libraryManagedFolder
 	trasher := &knowledge.Trasher{
 		FS: knowledge.OSLinkFS(), Root: note.root, Lock: note.lock,
 		Audit: func(ev knowledge.TrashAuditEvent) {
@@ -251,22 +338,29 @@ func (a *restAPI) trashNoteInCollection(
 			})
 		},
 	}
-	res, err := trasher.Trash(knowledge.TrashRequest{Path: note.relInCol})
+	res, err := trasher.Trash(knowledge.TrashRequest{Path: note.relInCol, Folder: isFolder})
 	if err != nil {
 		mapKnowledgeRestructureErr(w, "delete entry", workspaceID, err)
 		return
 	}
-	if warning := knowledge.RemoveFromIndexesForNote(context.WithoutCancel(r.Context()), a.homePath, note.col.Root(), res.OriginalPath); warning != "" {
+	ctx := context.WithoutCancel(r.Context())
+	var warning string
+	if isFolder {
+		warning = knowledge.RemoveFromIndexesForFolderTrash(ctx, a.homePath, note.col.Root(), res)
+	} else {
+		warning = knowledge.RemoveFromIndexesForNote(ctx, a.homePath, note.col.Root(), res.OriginalPath)
+	}
+	if warning != "" {
 		logger.WarnCF("rest", "library: delete landed but an index could not be refreshed",
 			map[string]any{"workspace_id": workspaceID, "path": rel, "warning": warning})
 	}
 	a.revokePreviewTokensForPath(workspaceID, rel)
 	a.logLibraryAudit(r, "library.delete", workspaceID, map[string]any{
-		"path": rel, "knowledge_base": note.collRel, "trash_id": res.TrashID,
-		"trash_path": res.TrashPath, "dangling_link_count": res.DanglingLinkCount,
+		"path": rel, "knowledge_base": note.collRel, "folder": isFolder, "files_trashed": len(res.Members),
+		"trash_id": res.TrashID, "trash_path": res.TrashPath, "dangling_link_count": res.DanglingLinkCount,
 	})
-	// D-107: the note left the listing for the trash — other tabs' rows for
-	// it now point at a file that no longer exists at that path.
+	// D-107: the entry left the listing for the trash — other tabs' rows for
+	// it now point at something that no longer exists at that path.
 	a.emitLibraryChange(workspaceID, rel, "delete")
 	w.WriteHeader(http.StatusNoContent)
 }
