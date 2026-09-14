@@ -558,6 +558,34 @@ export function ToolApprovalModal() {
   const restoreSetAside = useToolApprovalStore((s) => s.restoreSetAside)
   const visible = selectVisibleApproval({ queue, setAside })
 
+  // Prune expired set-asides on the same 500 ms cadence the visible card's
+  // countdown ticks on (Claude review 2026-09-14 cut-list): a set-aside
+  // approval whose countdown has run out is decided server-side (a timeout,
+  // not a human's answer), but nothing removed it from the local queue — so
+  // the "approvals waiting" pill kept counting it (this component only
+  // re-renders on a store change; its Date.now() filter went stale) and a
+  // later restore re-opened a long-expired card. dequeue() removes the entry
+  // from both the queue and setAside — exactly what the expired card's own
+  // Dismiss button does, applied automatically for entries the user cannot
+  // still decide. Fresh state is read from the store on every tick, so the
+  // interval survives unrelated queue changes without restarting.
+  const hasSetAside = setAside.length > 0
+  useEffect(() => {
+    if (!hasSetAside) return
+    const prune = () => {
+      const now = Date.now()
+      const { queue: currentQueue, setAside: currentSetAside, dequeue } = useToolApprovalStore.getState()
+      for (const a of currentQueue) {
+        if (a.expiresAt <= now && currentSetAside.includes(a.approvalId)) {
+          dequeue(a.approvalId)
+        }
+      }
+    }
+    prune()
+    const interval = setInterval(prune, 500)
+    return () => clearInterval(interval)
+  }, [hasSetAside])
+
   if (!visible) {
     const waiting = queue.filter((a) => setAside.includes(a.approvalId) && a.expiresAt > Date.now())
     if (waiting.length === 0) return null

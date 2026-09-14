@@ -14,7 +14,7 @@
 //  9. Countdown uses expires_in_ms — expiresAt computed as Date.now() + expires_in_ms
 // 10. session_state reconciliation removes stale approvals
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { act } from 'react'
 import type { ToolApprovalRequiredFrame } from '@/lib/api/generated/asyncapi-types'
@@ -795,5 +795,112 @@ describe('ToolApprovalModal — expiry is a timeout, not a user decision (UAT 20
     expect(api.submitToolApproval).not.toHaveBeenCalled()
     expect(useToolApprovalStore.getState().queue).toHaveLength(0)
     expect(useToolApprovalStore.getState().setAside).toEqual([])
+  })
+})
+
+// ── Round-3 cut-list: expired set-asides are pruned ──────────────────────────
+//
+// A set-aside approval whose countdown ran out used to stay in the queue
+// forever: the "approvals waiting" pill kept counting it (the component only
+// re-renders on a store change, so its Date.now() filter went stale) and a
+// later restore re-opened a long-expired card. The modal now prunes expired
+// set-asides on the same 500 ms tick the visible card's countdown uses.
+describe('ToolApprovalModal — expired set-asides are pruned on the countdown tick', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('keeps the pill while unexpired, then prunes the set-aside once it expires', () => {
+    act(() => {
+      useToolApprovalStore.setState({
+        queue: [{ ...SAMPLE_APPROVAL, expiresAt: Date.now() + 1_000 }],
+        setAside: ['appr-001'],
+      })
+    })
+    const { unmount } = render(<ToolApprovalModal />)
+
+    // Before expiry: the pill is up and counts the waiting approval.
+    act(() => {
+      vi.advanceTimersByTime(400)
+    })
+    const pill = screen.getByTestId('tool-approval-set-aside-pill')
+    expect(pill).toHaveTextContent('1 approval waiting')
+    expect(useToolApprovalStore.getState().queue).toHaveLength(1)
+
+    // Past expiry plus one 500 ms pruning tick: the ghost is gone from the
+    // pill, the queue AND the set-aside list.
+    act(() => {
+      vi.advanceTimersByTime(1_200)
+    })
+    expect(screen.queryByTestId('tool-approval-set-aside-pill')).toBeNull()
+    expect(useToolApprovalStore.getState().queue).toHaveLength(0)
+    expect(useToolApprovalStore.getState().setAside).toEqual([])
+    // Pruning is a local dismissal — never a posted decision (D-80).
+    expect(api.submitToolApproval).not.toHaveBeenCalled()
+    unmount()
+  })
+
+  it('restoring after expiry shows no stale Expired card', () => {
+    act(() => {
+      useToolApprovalStore.setState({
+        queue: [{ ...SAMPLE_APPROVAL, expiresAt: Date.now() + 500 }],
+        setAside: ['appr-001'],
+      })
+    })
+    const { container } = render(<ToolApprovalModal />)
+
+    act(() => {
+      vi.advanceTimersByTime(1_200)
+    })
+    // The entry is gone, so a restore has nothing to bring back — the old
+    // behavior re-opened a long-expired card here.
+    act(() => {
+      useToolApprovalStore.getState().restoreSetAside()
+    })
+    expect(container.firstChild).toBeNull()
+    expect(screen.queryByTestId('tool-approval-set-aside-pill')).toBeNull()
+    expect(screen.queryByText(/Approval expired unanswered/)).toBeNull()
+  })
+
+  it('does not prune a set-aside approval that has not expired', () => {
+    act(() => {
+      useToolApprovalStore.setState({
+        queue: [{ ...SAMPLE_APPROVAL, expiresAt: Date.now() + 300_000 }],
+        setAside: ['appr-001'],
+      })
+    })
+    render(<ToolApprovalModal />)
+
+    act(() => {
+      vi.advanceTimersByTime(5_000)
+    })
+    expect(screen.getByTestId('tool-approval-set-aside-pill')).toHaveTextContent('1 approval waiting')
+    expect(useToolApprovalStore.getState().queue).toHaveLength(1)
+    expect(useToolApprovalStore.getState().setAside).toEqual(['appr-001'])
+  })
+
+  it('prunes only the expired entry when several are set aside', () => {
+    act(() => {
+      useToolApprovalStore.setState({
+        queue: [
+          { ...SAMPLE_APPROVAL, approvalId: 'appr-old', expiresAt: Date.now() + 300 },
+          { ...SAMPLE_APPROVAL, approvalId: 'appr-live', expiresAt: Date.now() + 300_000 },
+        ],
+        setAside: ['appr-old', 'appr-live'],
+      })
+    })
+    render(<ToolApprovalModal />)
+
+    act(() => {
+      vi.advanceTimersByTime(1_200)
+    })
+    expect(screen.getByTestId('tool-approval-set-aside-pill')).toHaveTextContent('1 approval waiting')
+    const state = useToolApprovalStore.getState()
+    expect(state.queue.map((a) => a.approvalId)).toEqual(['appr-live'])
+    expect(state.setAside).toEqual(['appr-live'])
   })
 })
