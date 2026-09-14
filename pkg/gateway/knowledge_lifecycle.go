@@ -652,6 +652,69 @@ func (kl *KnowledgeLifecycle) RevokeMount(workspaceID, mountName string) error {
 	return nil
 }
 
+// ReleaseDemotedCollection lets go of the collection at collectionRoot once
+// that folder has DEFINITELY stopped being a knowledge base — its last marker
+// was deleted, renamed or moved away — and reports whether it released
+// anything. Every holder goes at once (a work-tree attachment and any mounts
+// of the same folder), in RevokeMount's order: the drift schedule, then the
+// filesystem watcher, then one index Close per holder.
+//
+// UAT re-test U-58 (2026-09-14): "records stop indexing". Without this, the
+// only releases were a revoked mount and a stopped gateway, so a work-tree
+// folder demoted from the Library stayed attached — its watcher re-indexing
+// every note edit and its drift schedule re-indexing the folder — until the
+// next restart, while every endpoint had already stopped naming it.
+//
+// It does nothing when the folder is still a knowledge base (another marker
+// remains), when detection cannot be completed (unreadable is not "not a
+// knowledge base"), or when the folder no longer resolves at all. A release
+// that races the collection's own first attach, before that attach has
+// started its services, leaves those services running, exactly as the same
+// race does for RevokeMount. Nil-receiver-safe, like RevokeMount.
+func (kl *KnowledgeLifecycle) ReleaseDemotedCollection(collectionRoot string) bool {
+	if kl == nil {
+		return false
+	}
+	realRoot, err := knowledge.ResolveCollectionRoot(collectionRoot)
+	if err != nil {
+		return false
+	}
+	if isKB, detectErr := knowledge.IsKnowledgeBase(realRoot); detectErr != nil || isKB {
+		return false
+	}
+
+	kl.mu.Lock()
+	collection := kl.byRoot[realRoot]
+	if collection == nil {
+		kl.mu.Unlock()
+		return false
+	}
+	delete(kl.byRoot, realRoot)
+	for key := range collection.holders {
+		if kl.byKey[key] == realRoot {
+			delete(kl.byKey, key)
+		}
+	}
+	holds := len(collection.holders)
+	collection.holders = make(map[knowledgeMountKey]struct{})
+	watcher := collection.watcher
+	kl.mu.Unlock()
+
+	kl.health.Unwatch(realRoot)
+	if watcher != nil {
+		watcher.Stop()
+	}
+	for range holds {
+		if cErr := collection.index.Close(); cErr != nil {
+			slog.Warn("knowledge: close index of a folder that is no longer a knowledge base",
+				"collection", realRoot, "error", cErr)
+		}
+	}
+	slog.Info("knowledge: released a folder that is no longer a knowledge base",
+		"collection", realRoot, "holders", holds)
+	return true
+}
+
 // AttachCollection opens (or joins) the index for one collection and
 // reconciles it, exactly as AttachMount does — the difference is entirely in
 // what identifies the attachment.

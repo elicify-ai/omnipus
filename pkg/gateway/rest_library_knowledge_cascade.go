@@ -180,12 +180,24 @@ func knowledgeSeesRealFolder(croot knowledge.CollectionRoot, relInCol string) bo
 
 // resolveLibraryCollectionFile resolves rel's innermost knowledge base and
 // lock. kind records which kind of managed entry the caller vetted.
+//
+// An entry that is, or lies inside, a tool-state directory of that knowledge
+// base (`.omnipus-vault`, `.obsidian`, `.git`, `.trash` — the set
+// knowledge.IsReservedLocation answers for) is NOT governed, whatever its
+// kind. The knowledge layer does not model those directories: every walker
+// skips them, nothing in them is indexed or linked, and Renamer / Trasher
+// refuse them by name. Routing one there could only ever turn a Library
+// action that used to work into a 400. UAT re-test U-58 (2026-09-14): round 4
+// routed folders here, and deleting a knowledge base's own `.omnipus-vault`
+// from the Library stopped working. A tool-state entry keeps the plain
+// filesystem semantics it had before round 4 (and, for a note-shaped file
+// inside one, before round 3).
 func (a *restAPI) resolveLibraryCollectionFile(root *library.Root, rel string, kind libraryManagedKind) (*libraryCollectionNote, bool, error) {
 	collRel, col, lock, relInCol, err := resolveCollectionNoteLock(root, a.homePath, rel)
 	if err != nil {
 		return nil, false, err
 	}
-	if col == nil {
+	if col == nil || knowledge.IsReservedLocation(relInCol) {
 		return nil, false, nil
 	}
 	croot, err := knowledge.NewCollectionRoot(knowledge.OSLinkFS(), col.Root())
@@ -200,6 +212,23 @@ func (a *restAPI) resolveLibraryCollectionFile(root *library.Root, rel string, k
 		lock:     lock,
 		kind:     kind,
 	}, true, nil
+}
+
+// releaseKnowledgeBaseIfDemoted runs after a PLAIN Library delete, rename or
+// move of fromRel has landed. When fromRel was a marker folder
+// (`.omnipus-vault` or `.obsidian`), its parent may have just stopped being a
+// knowledge base, and the knowledge lifecycle must stop indexing it
+// (ReleaseDemotedCollection decides, from the folder itself, whether it did).
+// UAT re-test U-58: "records stop indexing".
+func (a *restAPI) releaseKnowledgeBaseIfDemoted(root *library.Root, fromRel string) {
+	parent, base := "", fromRel
+	if i := strings.LastIndexByte(fromRel, '/'); i >= 0 {
+		parent, base = fromRel[:i], fromRel[i+1:]
+	}
+	if base != knowledge.MarkerDirName && base != knowledge.ObsidianMarkerDirName {
+		return
+	}
+	a.knowledgeLifecycle().ReleaseDemotedCollection(root.HostPath(parent))
 }
 
 // sameCollectionDestination reports whether toRel (workspace-relative) lands
