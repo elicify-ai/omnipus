@@ -119,6 +119,18 @@ const (
 	// goal_outcome frame (generated.GoalOutcomeFrame) — the lasting outcome
 	// line in the chat thread — whose message id is that entry's id.
 	EventKindGoalOutcome
+	// EventKindJudgeVerdict is emitted once per Judge adjudication, right
+	// after the matching `judge_verdict` transcript entry was saved
+	// (TaskExecutor.writeJudgeVerdictTranscript / AgentLoop.writeGoalVerdict-
+	// Transcript). The WS forwarder turns it into a live
+	// generated.JudgeVerdictFrame push — the SAME conversion
+	// (pkg/gateway/replay.go's toJudgeVerdictFrame) replay uses to
+	// reconstruct the frame from the persisted entry, so a live push and a
+	// replay of the same round can never disagree. Carries the verdict's own
+	// session (task run session / goal session) so the SPA can anchor the
+	// Verbose-chat-gated card in that specific chat thread, not just the
+	// GLOBAL ActivityPanel.
+	EventKindJudgeVerdict
 
 	eventKindCount
 )
@@ -159,6 +171,7 @@ var eventKindNames = [...]string{
 	"task_run_status",
 	"tool_result_projection",
 	"goal_outcome",
+	"judge_verdict",
 }
 
 // String returns the stable string form of an EventKind.
@@ -857,4 +870,22 @@ type GoalOutcomePayload struct {
 	MessageID string
 	// Outcome is the structured ending, identical to the persisted entry's.
 	Outcome generated.GoalOutcome
+}
+
+// JudgeVerdictPayload is EventKindJudgeVerdict's payload: one Judge
+// adjudication, for the live judge_verdict WS push. Emitted by
+// TaskExecutor.writeJudgeVerdictTranscript (scope=task) and
+// AgentLoop.writeGoalVerdictTranscript (scope=goal) only after their matching
+// `judge_verdict` transcript entry was saved. The WS forwarder turns it into
+// a generated.JudgeVerdictFrame via pkg/gateway/replay.go's
+// toJudgeVerdictFrame — the same conversion replay uses.
+type JudgeVerdictPayload struct {
+	// SessionID is the verdict's owning chat session — the task run session
+	// for scope=task, the /goal session for scope=goal. Empty for scope=plan
+	// (a plan round has no single owning chat session; plan-scope verdicts
+	// do not currently reach this event at all — plan_engine.go writes no
+	// judge_verdict transcript entry).
+	SessionID string
+	// Verdict is the adjudication itself, identical to the persisted entry's.
+	Verdict task.JudgeVerdict
 }

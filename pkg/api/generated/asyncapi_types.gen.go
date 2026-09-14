@@ -508,8 +508,10 @@ type JudgeVerdictFrame struct {
 	PlanId *string `json:"plan_id,omitempty"`
 	Round  int     `json:"round"`
 	Scope  string  `json:"scope"`
-	TaskId *string `json:"task_id,omitempty"`
-	Type   string  `json:"type"`
+	// OPTIONAL chat-thread session this verdict's round belongs to — present for `scope: task` (the task's run session) and `scope: goal` (the `/goal` session itself), absent for `scope: plan` (a plan round has no single owning chat session). A `judge_verdict` frame without it stays a GLOBAL, panel-only push exactly as before this field existed; when present the SPA also inserts the verdict as a thread message, de-duplicated against the persisted transcript entry's own id so a live push, a replay and a cold REST load converge on one card. Keep in sync by hand with components/schemas/JudgeVerdictFrame.yaml.
+	SessionId *string `json:"session_id,omitempty"`
+	TaskId    *string `json:"task_id,omitempty"`
+	Type      string  `json:"type"`
 }
 
 // LLMError — Translated provider/LLM error safe for the live WebSocket boundary.

@@ -4951,6 +4951,23 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			}
 			sendConnGenFrame(wc, string(generated.WsFrameTypeGoalOutcome),
 				goalOutcomeFrame(p.SessionID, p.MessageID, p.Outcome))
+		case agent.EventKindJudgeVerdict:
+			// pkg/agent emits this right after saving the matching
+			// `judge_verdict` transcript entry (task_executor.go's
+			// writeJudgeVerdictTranscript, goal_loop.go's
+			// writeGoalVerdictTranscript). Broadcast to every connection like
+			// goal_outcome above — toJudgeVerdictFrame (replay.go) is the ONE
+			// conversion both this live push and replay use, so the two
+			// frames for one round can never differ. p.SessionID is "" for a
+			// scope=plan verdict (never emitted today) — toJudgeVerdictFrame
+			// leaves session_id absent on the wire in that case, and the SPA
+			// keeps today's GLOBAL panel-only routing for it.
+			p, ok := evt.Payload.(agent.JudgeVerdictPayload)
+			if !ok {
+				continue
+			}
+			sendConnGenFrame(wc, string(generated.WsFrameTypeJudgeVerdict),
+				toJudgeVerdictFrame(p.SessionID, p.Verdict))
 		case agent.EventKindLoopStatusChanged:
 			// ADR-049 D6/D7: a session's `/loop` status changed (set, run
 			// fired, run-cap reached, stop). Broadcast to every connection,

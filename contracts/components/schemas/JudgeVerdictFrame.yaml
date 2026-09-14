@@ -180,3 +180,21 @@ properties:
       ID of the Judge System Agent that produced this verdict (NFR-5
       correlation).
     example: "judge"
+  session_id:
+    type: string
+    description: >
+      OPTIONAL chat-thread session this verdict's round belongs to —
+      present for `scope: task` (the task's run session) and `scope: goal`
+      (the `/goal` session itself), absent for `scope: plan` (a plan round
+      has no single owning chat session). Unlike goal_status/goal_outcome,
+      this field is NOT required: a `judge_verdict` frame without it stays
+      a GLOBAL, panel-only push (ActivityPanel via useJudgeActivityStore),
+      exactly as before this field existed. When present, the SPA ALSO
+      inserts the verdict as a thread message in that session — anchored
+      right after the judged round's own messages (live arrival and replay
+      both deliver this frame chronologically after them), de-duplicated
+      against the persisted `judge_verdict` transcript entry's own id (the
+      cold-load carrier, `Message.id`) so a live push, a replay of the same
+      round and a cold REST load converge on exactly one card. Keep in sync
+      by hand with the inline copy in contracts/asyncapi.yaml.
+    example: "550e8400-e29b-41d4-a716-446655440099"

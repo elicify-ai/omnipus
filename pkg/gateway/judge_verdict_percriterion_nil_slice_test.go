@@ -79,7 +79,7 @@ func TestToJudgeVerdictFrame_EmptyPerCriterion_MarshalsAsEmptyArrayNotNull(t *te
 	v := emptyCriterionVerdict()
 	require.Nil(t, v.PerCriterion, "precondition: the source verdict must have a nil PerCriterion")
 
-	f := toJudgeVerdictFrame(v)
+	f := toJudgeVerdictFrame("", v)
 	data, err := json.Marshal(f)
 	require.NoError(t, err)
 

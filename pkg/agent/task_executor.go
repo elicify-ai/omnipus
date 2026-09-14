@@ -2076,7 +2076,16 @@ func (te *TaskExecutor) writeJudgeVerdictTranscript(t *task.Task, taskSessionID 
 		taskGoalTranscriptWriteFailures.Add(1)
 		logger.WarnCF("task_executor", "goal-loop: judge verdict transcript write failed",
 			map[string]any{"task_id": t.ID, "session_id": taskSessionID, "error": appendErr.Error()})
+		return
 	}
+	// Live push, ONLY once the entry above is durably saved (mirrors
+	// recordGoalOutcome's ordering, goal_outcome.go): the WS forwarder
+	// (websocket.go's EventKindJudgeVerdict case) turns this into a live
+	// generated.JudgeVerdictFrame carrying taskSessionID as session_id, so
+	// the SPA can anchor the card in this task's run session thread — not
+	// just the GLOBAL ActivityPanel.
+	te.agentLoop.emitEvent(EventKindJudgeVerdict, EventMeta{Source: "task_executor", AgentID: t.AgentID},
+		JudgeVerdictPayload{SessionID: taskSessionID, Verdict: *verdict})
 }
 
 // completeTaskWithResult marks task t terminal — Done when success is true,

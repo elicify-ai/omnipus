@@ -818,6 +818,7 @@ export interface JudgeVerdictFrame {
   model: string;
   judged_at: string;
   judge_agent_id: string;
+  session_id?: string;
 }
 
 export interface BrowserHandoverNoticeFrame {

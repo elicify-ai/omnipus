@@ -1638,7 +1638,16 @@ func (al *AgentLoop) writeGoalVerdictTranscript(store *session.UnifiedStore, ses
 		taskGoalTranscriptWriteFailures.Add(1)
 		logger.WarnCF("agent", "goal loop: judge verdict transcript write failed",
 			map[string]any{"session_id": sessionID, "error": err.Error()})
+		return
 	}
+	// Live push, ONLY once the entry above is durably saved (mirrors
+	// recordGoalOutcome's ordering, goal_outcome.go): the WS forwarder
+	// (websocket.go's EventKindJudgeVerdict case) turns this into a live
+	// generated.JudgeVerdictFrame carrying sessionID as session_id, so the
+	// SPA can anchor the card in this goal's own chat session thread — not
+	// just the GLOBAL ActivityPanel.
+	al.emitEvent(EventKindJudgeVerdict, EventMeta{Source: "goal_loop"},
+		JudgeVerdictPayload{SessionID: sessionID, Verdict: *verdict})
 }
 
 // --- Idle-expiry sweep (FR-064/D7, review r1) -----------------------------

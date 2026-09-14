@@ -284,7 +284,7 @@ func streamReplay(
 					"session_id", sessionID, "entry_id", entry.ID, "error", uerr)
 				continue
 			}
-			if err2 := emitFrame(toJudgeVerdictFrame(verdict)); err2 != nil {
+			if err2 := emitFrame(toJudgeVerdictFrame(sessionID, verdict)); err2 != nil {
 				return framesEmitted, err2
 			}
 			continue
@@ -1277,11 +1277,14 @@ func buildReplayErrorFrame(sessionID string, entry session.TranscriptEntry) gene
 // (gen.JudgeVerdict, the openapi Message.verdict shape, vs.
 // generated.JudgeVerdictFrame, the asyncapi WS frame shape); both live in the
 // same pkg/api/generated package but are distinct generated structs.
-// JudgeVerdictFrame deliberately carries no session_id (see chat.ts's own
-// comment on the live frame) — it is correlated by task_id/plan_id, or by
-// the session the judge_verdict transcript entry itself lives in for the
-// scope=goal case.
-func toJudgeVerdictFrame(v task.JudgeVerdict) generated.JudgeVerdictFrame {
+// sessionID is the verdict's owning chat session — the task run session for
+// scope=task, the /goal session for scope=goal, "" for scope=plan (a plan
+// round has no single owning chat session; plan-scope verdicts pass "" here,
+// same as before this field existed). Stamped onto the frame's OPTIONAL
+// session_id (JudgeVerdictFrame.yaml) so the SPA can anchor the card in that
+// specific chat thread in addition to the GLOBAL ActivityPanel; a frame
+// without it keeps the pre-existing panel-only routing exactly as before.
+func toJudgeVerdictFrame(sessionID string, v task.JudgeVerdict) generated.JudgeVerdictFrame {
 	f := generated.JudgeVerdictFrame{
 		Type:         string(generated.WsFrameTypeJudgeVerdict),
 		Id:           v.ID,
@@ -1299,6 +1302,10 @@ func toJudgeVerdictFrame(v task.JudgeVerdict) generated.JudgeVerdictFrame {
 	if v.PlanID != "" {
 		planIDCopy := v.PlanID
 		f.PlanId = &planIDCopy
+	}
+	if sessionID != "" {
+		sessionIDCopy := sessionID
+		f.SessionId = &sessionIDCopy
 	}
 	// Fix-wave finding #3: PerCriterion is a required array on the wire
 	// (asyncapi_types.gen.go, no `omitempty`) — a nil slice marshals as JSON

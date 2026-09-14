@@ -11759,6 +11759,7 @@ export const JudgeVerdictFrame = z
     model: z.string(),
     judged_at: z.string(),
     judge_agent_id: z.string(),
+    session_id: z.string().optional(),
   })
   .strict();
 
