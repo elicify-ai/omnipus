@@ -102,3 +102,29 @@ these tests establish browser composition handling, not exhaustive device covera
 References: [UI Events](https://www.w3.org/TR/uievents/),
 [Input Events](https://www.w3.org/TR/input-events-2/),
 [beforeinput behavior](https://developer.mozilla.org/en-US/docs/Web/API/Element/beforeinput_event).
+
+
+## Retest after the invalid-channel user report
+
+The user's recent-session log at 05:45:07 UTC records `invalid_input`; this fixed
+category does not identify which channel property was rejected. The exact UI
+message reported was `invalid input data channel`.
+
+A fresh authenticated keyboard retest passed in 22.6 seconds with exact Space,
+arrows, text and logical Option-L over binary input. The initial attempt reached
+the sign-in screen because the test authentication had expired; it did not test
+input behavior. Authentication was refreshed before the successful run.
+
+An isolated live probe reproduced the exact reported error by advertising empty
+DCEP protocols, matching the pre-binary client's connection options. Retry created
+two new empty-protocol channels and failed again. Disabling that interception and
+fully reloading the page created two `omnipus.input.v1` channels and reached ready
+without the error. This passed in 32.1 seconds. The probe simulates old connection
+options, not every behavior of the previous client bundle.
+
+An already-open pre-update client is therefore a verified reproduction mechanism
+and the leading explanation for the user's session, not direct evidence of the
+user's actual loaded bundle. Retry reuses loaded JavaScript; a full page reload
+loads the new protocol. The generic Retry UI lacks an explicit upgrade/reload
+path. No protocol checks were relaxed and no runtime changes were deployed in
+this retest. The user was directed to reload the entire Omnipus page.
