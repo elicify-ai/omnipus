@@ -1260,6 +1260,64 @@ describe('fetchSessionMessages: wire parameters → SPA params transform', () =>
     expect(messages[0].id).toBe('cancel_xyz')
   })
 
+  it('forwards type:"judge_verdict" and the verdict payload onto the SPA message (ADR-049 D2/SD-C10)', async () => {
+    // Regression for the "verdict card never appears" bug: rawToMessage's
+    // `role: 'system'` branch used to build a SystemMessage without ever
+    // reading raw.type/raw.verdict, so a cold-loaded (REST) judge_verdict
+    // transcript entry silently lost the one field
+    // (shouldRenderJudgeVerdictInThread + JudgeVerdictThreadCard,
+    // ChatScreen.tsx) needs to tell it apart from an ordinary system
+    // message and render the card.
+    const wirePayload = [
+      {
+        id: 'goal-sid-verdict-judge-1',
+        type: 'judge_verdict',
+        role: 'system',
+        agent_id: 'judge',
+        timestamp: '2026-09-14T12:05:00Z',
+        verdict: {
+          id: 'verdict-1',
+          scope: 'goal',
+          round: 1,
+          met: true,
+          per_criterion: [{ criterion_id: 'crit-1', met: true, reason: 'confirmed' }],
+          model: 'z-ai/glm-5.3',
+          judged_at: '2026-09-14T12:05:00Z',
+          judge_agent_id: 'judge',
+        },
+      },
+      // The judged turn's own assistant entry, carrying turn_id —
+      // mergeJudgeVerdictHistory anchors the verdict's thread position to
+      // this turn (chat.ts); rawToMessage must forward it.
+      {
+        id: 'assistant-turn-entry',
+        type: 'message',
+        role: 'assistant',
+        agent_id: 'mia',
+        content: 'OK-DONE-VERDICT-TEST',
+        timestamp: '2026-09-14T12:04:00Z',
+        status: 'ok',
+        turn_id: 'mia-turn-2',
+      },
+    ]
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const { fetchSessionMessages } = await import('./api')
+    const messages = await fetchSessionMessages('sid-verdict')
+    expect(messages).toHaveLength(2)
+    expect(messages[0].id).toBe('goal-sid-verdict-judge-1')
+    expect(messages[0].type).toBe('judge_verdict')
+    expect(messages[0].verdict?.id).toBe('verdict-1')
+    expect(messages[0].verdict?.scope).toBe('goal')
+    expect(messages[0].verdict?.met).toBe(true)
+    expect(messages[0].verdict?.per_criterion).toHaveLength(1)
+    expect(messages[1].turnId).toBe('mia-turn-2')
+  })
+
   it('degrades an unknown entry type to a placeholder instead of rejecting the whole list (Issue 3 / library-uat HIGH)', async () => {
     // Updated for the per-item resilience fix. Previously this asserted
     // fetchSessionMessages REJECTED the whole array on a single out-of-enum

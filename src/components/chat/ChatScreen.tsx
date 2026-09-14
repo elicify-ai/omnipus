@@ -3313,6 +3313,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   // directly by GoalPillTray via its own useChatStore subscription — FE-1.)
   const loopStatus = useChatStore((s) => s.loopStatus ?? null)
   const setMessages = useChatStore((s) => s.setMessages)
+  const mergeJudgeVerdictHistory = useChatStore((s) => s.mergeJudgeVerdictHistory)
   const attachedSessionType = useSessionStore((s) => s.attachedSessionType)
   const attachedTaskTitle = useSessionStore((s) => s.attachedTaskTitle)
   // For the ARIA live region: track the last assistant message id for screen reader announcements.
@@ -3389,6 +3390,46 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
     )
     setMessages(validMessages)
   }, [historyData, isReplaying, storeMessageCount, replayCompletedForSession, activeSessionId, setMessages])
+
+  // ADR-049 D2/D4/SD-C10 (verdict-card fix): backfill any `judge_verdict`
+  // entries from the REST-fetched transcript, independent of the OVERWRITE
+  // condition above (isReplaying/replayCompletedForSession/storeMessageCount
+  // gate whether `setMessages` replaces the whole bucket) but NOT
+  // independent of timing. WS replay never inserts a judge_verdict entry
+  // into the thread at all (it is a GLOBAL frame routed to the
+  // ActivityPanel only, see chat.ts's `case 'judge_verdict'`), so without
+  // this second, narrower effect a verdict card could never appear in the
+  // thread, reload or not, even though `historyData` carries it
+  // (rawToMessage forwards it).
+  //
+  // The `!isReplaying && storeMessageCount > 0` gate is load-bearing, not
+  // cosmetic — reproduced live against a real gateway: `historyData` (REST)
+  // routinely resolves BEFORE WS attach_session + replay has delivered this
+  // session's own messages. Running the timestamp-positioned merge
+  // (chat.ts's `mergeJudgeVerdictHistory`) against an empty or PARTIAL
+  // bucket has nothing (or too little) to position the verdict against, so
+  // it lands at index 0 (or 1, 2, ... for each subsequent round in the same
+  // pass) — and because the merge dedupes by id, a later re-run once the
+  // rest of replay lands can never CORRECT that first, premature placement.
+  // `!isReplaying` alone is not enough (replay's isReplaying flag is only
+  // raised when the FIRST replay frame arrives — an early-arriving
+  // historyData can slip in before it), and neither is
+  // `replayCompletedForSession` (chat.ts only sets it when a live turn was
+  // announced or at a real turn's done — a completed session's
+  // replay-terminator done NEVER sets it, live-verified). So: wait until
+  // replay is not in flight AND the bucket actually has messages. The
+  // effect re-runs whenever either flips, so the normal sequence
+  // (historyData → isReplaying=true → replay_message* → terminator
+  // isReplaying=false) always lands one run of this with the full bucket.
+  // In the WS-unavailable REST-fallback path, `setMessages` above already
+  // includes verdict entries correctly ordered via its own
+  // `role: 'system'` filter — this effect then finds them already present
+  // and no-ops (mergeJudgeVerdictHistory is id-deduped).
+  useEffect(() => {
+    if (!historyData || !activeSessionId || activeSessionId === '__pending') return
+    if (isReplaying || storeMessageCount === 0) return
+    mergeJudgeVerdictHistory(activeSessionId, historyData)
+  }, [historyData, activeSessionId, isReplaying, storeMessageCount, mergeJudgeVerdictHistory])
 
   const liteMode = useConnectionStore((s) => s.liteMode)
 

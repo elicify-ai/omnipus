@@ -1277,6 +1277,17 @@ interface MessageBase { // not-wire-format
    * `normalizeTruncationReason`.
    */
   truncationReason?: TruncationReason
+  /**
+   * Turn-correlation id (wire `Message.turn_id`, stamped by the backend on
+   * every real assistant entry). Forwarded by rawToMessage so
+   * chat.ts's `mergeJudgeVerdictHistory` can anchor a cold-loaded
+   * `judge_verdict` entry's thread position to the judged turn's assistant
+   * message — the one stable per-turn correlator shared by the REST
+   * transcript and the WS-replay path (replay frames carry `turn_id` but
+   * no timestamp, so timestamps cannot order a replay-populated bucket;
+   * see that action's doc comment).
+   */
+  turnId?: string
 }
 
 export interface UserMessage extends MessageBase { // not-wire-format: SPA-internal user message. Status 'error' means the WS send failed; Retry button re-sends the content.
@@ -1403,7 +1414,7 @@ interface RawToolCall { // not-wire-format: adapter alias over the generated Too
 
 interface RawMessage { // not-wire-format: adapter alias over the generated Message wire schema. Used only in rawToMessage() to delegate ToolCall transformation. The wire `status` enum values differ from the SPA's ('ok'|'error'|'interrupted' vs 'streaming'|'done'|'error'|'interrupted'). Never sent to or received as a standalone type from the gateway.
   id: string
-  type?: 'message' | 'compaction' | 'system'
+  type?: 'message' | 'compaction' | 'system' | 'judge_verdict'
   role?: 'user' | 'assistant' | 'system'
   content?: string
   summary?: string
@@ -1442,6 +1453,20 @@ interface RawMessage { // not-wire-format: adapter alias over the generated Mess
    * Forwarded by rawToMessage so a reloaded thread shows how a goal ended.
    */
   goal_outcome?: WireGoalOutcome
+  /**
+   * Judge verdict payload — present on a `type: judge_verdict, role: system`
+   * entry (contracts/components/schemas/JudgeVerdict.yaml, wire
+   * `Message.verdict`). Forwarded by rawToMessage so a cold-loaded (REST)
+   * transcript can render `JudgeVerdictThreadCard`, gated by
+   * `shouldRenderJudgeVerdictInThread` (toolVisibility.ts) — ADR-049
+   * D2/D4/SD-C10. See rawToMessage's own comment on this field for why REST
+   * is currently the only carrier that can populate the card.
+   */
+  verdict?: JudgeVerdict
+  /**
+   * Turn-correlation id (wire `Message.turn_id`) — see MessageBase.turnId.
+   */
+  turn_id?: string
 }
 
 function rawToToolCall(raw: RawToolCall): ToolCall {
@@ -1511,6 +1536,20 @@ function rawToMessage(raw: RawMessage): Message {
       agentId: raw.agent_id || undefined,
       status: 'done',
       ...(raw.goal_outcome ? { goalOutcome: raw.goal_outcome } : {}),
+      // ADR-049 D2/D4/SD-C10: a persisted `type: judge_verdict` entry cold-
+      // loaded via REST must carry `type`/`verdict` through so ChatScreen's
+      // `msg.type === 'judge_verdict'` branch can render
+      // JudgeVerdictThreadCard. Before this fix `raw.type`/`raw.verdict`
+      // were silently dropped here, so the card never appeared even when
+      // Verbose chat was on. NOTE: this is currently the ONLY carrier that
+      // can populate the thread card — the live/replayed `judge_verdict` WS
+      // frame (store/chat.ts's `case 'judge_verdict'`) is a deliberately
+      // GLOBAL frame with no `session_id` (JudgeVerdictFrame.yaml), so it
+      // is routed to `useJudgeActivityStore` (the ActivityPanel) only and
+      // cannot be attributed to a specific chat thread without a contract
+      // change. See the investigation notes on this change for the
+      // recommended follow-up.
+      ...(raw.type === 'judge_verdict' && raw.verdict ? { type: 'judge_verdict' as const, verdict: raw.verdict } : {}),
     } satisfies SystemMessage
   }
   // role === 'assistant' (default)
@@ -1542,6 +1581,7 @@ function rawToMessage(raw: RawMessage): Message {
     // (never on persisted wire messages) so this branch guards for undefined only.
     status: (baseStatus === 'done' || baseStatus === 'error' || baseStatus === 'interrupted') ? baseStatus : 'done',
     tool_calls: raw.tool_calls?.map(rawToToolCall),
+    ...(raw.turn_id ? { turnId: raw.turn_id } : {}),
     ...(modelField ? { model: modelField } : {}),
     ...(raw.truncated ? { truncated: true as const, truncationReason } : {}),
   } satisfies AssistantMessage
