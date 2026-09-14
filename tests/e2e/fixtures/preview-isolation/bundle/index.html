@@ -46,9 +46,9 @@
   did the script die on line one?" — and it is answered two ways, because
   neither works on every engine:
 
-    * the probe-done pings, which are same-origin and permitted by
-      img-src 'self', so the DRIVER sees them leave. Reliable top-level on all
-      three engines;
+    * the probe-done pings, which are same-origin, stay under this document's
+      own /library-preview/ path and so are permitted by img-src, so the DRIVER
+      sees them leave. Reliable top-level on all three engines;
     * the `attempted` list in #result, read out of this document's own DOM.
       Required for the EMBEDDED case, where WebKit reports none of a sandboxed
       frame's requests to the driver at all.
@@ -69,6 +69,28 @@
   var EXT = 'http://127.0.0.1:__EXTPORT__';
   var attempted = [];
 
+  // CSP VIOLATION RECORDER (spec test 110, 2026-09-14). Every violation this
+  // document raises is appended, as JSON, to #csp-violations, which the test
+  // reads through the frame. It is the non-vacuity oracle for a probe the
+  // policy REFUSES: "the gateway never answered it" is equally true of a probe
+  // that was never fired, so the refusal itself has to be observed. Recorded
+  // live rather than inside report(), because a violation event is dispatched
+  // asynchronously and may land after the report is written. Measured on all
+  // three engines: effectiveDirective is "img-src" and blockedURI is the full
+  // URL of the refused image.
+  var violations = [];
+  var violationsEl = document.createElement('pre');
+  violationsEl.id = 'csp-violations';
+  violationsEl.textContent = '[]';
+  document.body.appendChild(violationsEl);
+  document.addEventListener('securitypolicyviolation', function (e) {
+    violations.push({
+      directive: String(e.effectiveDirective || e.violatedDirective),
+      blocked: String(e.blockedURI)
+    });
+    violationsEl.textContent = JSON.stringify(violations);
+  });
+
   // Every probe is individually guarded. A vector that throws synchronously
   // (sendBeacon under some engines, WebSocket under others) must not prevent
   // the vectors after it from firing — otherwise "zero egress" would be true
@@ -80,8 +102,9 @@
   }
 
   function ping(phase) {
-    // Same-origin, img-src 'self' — permitted under the measured policy, and
-    // its ARRIVAL at the gateway is the oracle for "the script really ran".
+    // Relative, so it stays under this document's own /library-preview/<token>/
+    // path — which img-src permits under the measured policy — and its ARRIVAL
+    // at the gateway is the oracle for "the script really ran".
     new Image().src = './probe-done.png?phase=' + phase +
       '&fired=' + attempted.length + '&v=' + Date.now();
   }
@@ -89,17 +112,18 @@
   function fireAll() {
     // ---- Same-origin probes (FR-006, FR-006a) --------------------------------
     // FR-006 permits NO fetch/XHR/sendBeacon/WebSocket to ANY origin, the
-    // gateway's own included, while same-origin SUBRESOURCE loads remain
-    // possible and are an accepted residual — on the condition that they arrive
-    // UNAUTHENTICATED. Both halves are probed here.
+    // gateway's own included. Same-origin SUBRESOURCE loads remain possible
+    // only under the preview's own path (§10.3, confined 2026-09-14), and are
+    // an accepted residual there. Both halves are probed here.
     attempt('same-img', function () {
       new Image().src = './probe-same.png?probe=same-img&v=' + Date.now();
     });
     attempt('same-api-img', function () {
-      // The residual FR-006a actually cares about: an IMAGE request to a real
-      // API path. img-src 'self' permits it, so it goes out — and it must go
-      // out with no session cookie, or untrusted content is an authenticated
-      // API caller.
+      // The request FR-006a actually cares about: an IMAGE aimed at a real API
+      // path. Until 2026-09-14 img-src admitted it, and on WebKit it went out
+      // WITH the session cookie — untrusted content as an authenticated API
+      // caller. Under the path-confined policy it must be REFUSED before it
+      // leaves, and the refusal is recorded in #csp-violations.
       new Image().src = '/api/v1/state?probe=same-api-img&v=' + Date.now();
     });
     attempt('same-fetch', function () {

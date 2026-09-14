@@ -133,10 +133,11 @@ import type { AddressInfo } from 'node:net';
 import type { Socket } from 'node:net';
 import { bareFrameAttributes, embedPreviewBare } from './fixtures/preview-isolation/harness.js';
 import {
-  GATEWAY_ORIGIN_PLACEHOLDER,
+  PREVIEW_PATH_PREFIX,
+  PREVIEW_SOURCES_PLACEHOLDER,
   expectedIsolationPolicy,
   gatewayCanonicalOrigin,
-  gatewayOriginSources,
+  gatewayPreviewSources,
 } from './fixtures/preview-isolation/policy-oracle.js';
 
 // FILE-level retry pin. See the header: this is the second of two independent
@@ -863,40 +864,43 @@ test.describe('ADR-067 §10.4 — .svg on the inline allow-list, and type confus
    * The ORACLE must have substituted, and it must have substituted correctly.
    *
    * Without this, the byte-exact assertions below would be satisfied by an
-   * oracle that quietly produced §10.3's EMPTY case — the collapsed `'self'`
-   * form — while the gateway also produced it, and both would be wrong
-   * together: every Safari preview in that configuration renders blank. The
-   * empty case is legitimate (a wildcard bind with no `gateway.public_url`) and
-   * the gateway logs a WARN for it, so it is not asserted away here — it is
-   * asserted ALOUD, with the derivation printed, so a run in that configuration
-   * says which case it measured instead of silently measuring the weaker one.
+   * oracle that quietly produced §10.3's EMPTY case — the `'self'` fallback —
+   * while the gateway also produced it, and both would be wrong together:
+   * every preview in that configuration is unconfined, and Safari renders it
+   * blank. The empty case is legitimate (a wildcard bind with no
+   * `gateway.public_url`) and the gateway logs a WARN for it, so it is not
+   * asserted away here — it is asserted ALOUD, with the derivation printed, so a
+   * run in that configuration says which case it measured instead of silently
+   * measuring the weaker one.
    *
    * Read off §10.3's substitution table, never off the served header:
    *   • a placeholder never survives into a served policy;
-   *   • the empty case collapses `'self' ${GATEWAY_ORIGIN}` to `'self'` with NO
-   *     double space anywhere — the failure that is invisible in both strings;
-   *   • otherwise every derived source appears, and a loopback bind yields both
-   *     of its CSP-expressible spellings (`[::1]` is not one of them — §10.3's
-   *     2026-09-09 amendment).
+   *   • the empty case substitutes `'self'` with NO double space anywhere — the
+   *     failure that is invisible in both strings;
+   *   • otherwise every derived source appears, each confined to the preview
+   *     prefix, no `'self'` appears anywhere (amended 2026-09-14), and a
+   *     loopback bind yields both of its CSP-expressible spellings (`[::1]` is
+   *     not one of them — §10.3's 2026-09-09 amendment).
    */
   test('the policy oracle substituted §10.3\'s placeholder, and says which case it took', () => {
     const canonical = gatewayCanonicalOrigin();
-    const sources = gatewayOriginSources(canonical);
+    const sources = gatewayPreviewSources(canonical);
     const evidence =
       `canonical origin: ${canonical || '(none — wildcard bind and no gateway.public_url)'} | ` +
       `substituted sources: ${sources.length ? sources.join(' ') : '(none — §10.3 empty case)'} | ` +
       `policy: ${ISOLATION_POLICY}`;
 
     expect(ISOLATION_POLICY, `a placeholder must never survive substitution. ${evidence}`)
-      .not.toContain(GATEWAY_ORIGIN_PLACEHOLDER);
+      .not.toContain(PREVIEW_SOURCES_PLACEHOLDER);
     expect(ISOLATION_POLICY, `§10.3 forbids a double space in every case. ${evidence}`)
       .not.toContain('  ');
 
     if (sources.length === 0) {
       // The empty case, stated rather than skipped past. This gateway serves
-      // previews that WebKit renders without CSS or JS; §10.3 accepts that and
-      // requires a WARN, and this suite must not report it as the normal case.
-      expect(ISOLATION_POLICY, `§10.3 empty case must collapse to 'self' exactly. ${evidence}`)
+      // previews that are not confined to /library-preview/ and that WebKit
+      // renders without CSS or JS; §10.3 accepts that and requires a WARN, and
+      // this suite must not report it as the normal case.
+      expect(ISOLATION_POLICY, `§10.3 empty case must substitute 'self' exactly. ${evidence}`)
         .toContain("script-src 'self' 'unsafe-inline'");
       return;
     }
@@ -904,7 +908,13 @@ test.describe('ADR-067 §10.4 — .svg on the inline allow-list, and type confus
     for (const source of sources) {
       expect(ISOLATION_POLICY, `every derived source must appear in the policy. ${evidence}`)
         .toContain(source);
+      expect(source.endsWith(PREVIEW_PATH_PREFIX), `every source is confined to ${PREVIEW_PATH_PREFIX}. ${evidence}`)
+        .toBe(true);
     }
+    expect(
+      ISOLATION_POLICY,
+      `with an origin known, 'self' must appear nowhere — it admits every gateway path (2026-09-14). ${evidence}`,
+    ).not.toContain("'self'");
     // A loopback bind is the default install and the case that broke Safari;
     // one entry there means the alias rule was lost.
     //
@@ -913,7 +923,8 @@ test.describe('ADR-067 §10.4 — .svg on the inline allow-list, and type confus
     // IPv6 host it can express. `[::1]` was emitted and DISCARDED by every
     // engine, granting nothing while logging six "invalid source" errors per
     // preview. Asserting 3 here would demand we re-emit a source that never
-    // worked. An IPv6 reader is still covered by 'self'.
+    // worked. Since 2026-09-14 no 'self' covers an IPv6-literal reader either;
+    // they must reach the gateway as localhost for a preview's assets to load.
     if (/^https?:\/\/(127\.|localhost|\[::1\])/.test(canonical)) {
       expect(
         sources.length,

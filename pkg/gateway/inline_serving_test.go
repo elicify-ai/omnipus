@@ -67,11 +67,17 @@ import (
 // copies of the same mistake.
 //
 // AMENDED 2026-08-23. §10.3 stopped being a fixed literal: the six source
-// directives now name the gateway's origin BESIDE `'self'`, because `'self'`
+// directives named the gateway's origin BESIDE `'self'`, because `'self'`
 // matches nothing inside an FR-005b attribute-sandboxed WebKit iframe. The
 // byte-for-byte contract did not weaken — it binds the SUBSTITUTED string, and
 // the substitution rules are §10.3's own.
-const inlinePolicyTemplateFromSpec = "sandbox allow-scripts; default-src 'none'; script-src 'self' ${GATEWAY_ORIGIN} 'unsafe-inline'; style-src 'self' ${GATEWAY_ORIGIN} 'unsafe-inline'; img-src 'self' ${GATEWAY_ORIGIN} data: blob:; font-src 'self' ${GATEWAY_ORIGIN}; media-src 'self' ${GATEWAY_ORIGIN}; frame-src 'self' ${GATEWAY_ORIGIN}; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'"
+//
+// AMENDED 2026-09-14. `'self' ${GATEWAY_ORIGIN}` became `${PREVIEW_SOURCES}`:
+// each gateway origin followed by /library-preview/, and no `'self'`. The
+// sources used to admit the whole gateway, and WebKit sends the session cookie
+// on a framed preview's subresource requests, so a preview could make
+// logged-in GET requests to the API.
+const inlinePolicyTemplateFromSpec = "sandbox allow-scripts; default-src 'none'; script-src ${PREVIEW_SOURCES} 'unsafe-inline'; style-src ${PREVIEW_SOURCES} 'unsafe-inline'; img-src ${PREVIEW_SOURCES} data: blob:; font-src ${PREVIEW_SOURCES}; media-src ${PREVIEW_SOURCES}; frame-src ${PREVIEW_SOURCES}; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'"
 
 // inlineServingWantPolicy is the header these routes must serve once the
 // gateway origin is frozen to previewFixtureCanonicalOrigin: §10.3's template,
@@ -112,10 +118,10 @@ func TestInlineIsolationPolicy_MatchesSpecDocument(t *testing.T) {
 			"symptom and reopens measured egress vectors.")
 	assert.Equal(t, fromDoc, inlinePolicyTemplateFromSpec,
 		"this test file's transcription of §10.3 has drifted from the spec")
-	assert.Contains(t, fromDoc, libraryIsolationOriginPlaceholder,
+	assert.Contains(t, fromDoc, libraryIsolationSourcesPlaceholder,
 		"§10.3 is a template: the production code substitutes %s, so a spec that has lost "+
-			"its placeholder would silently pin the pre-amendment literal and Safari would "+
-			"render blank previews again", libraryIsolationOriginPlaceholder)
+			"its placeholder would silently pin a literal with no confined sources in it",
+		libraryIsolationSourcesPlaceholder)
 }
 
 // readSpecPolicyString extracts the single fenced code block that follows the

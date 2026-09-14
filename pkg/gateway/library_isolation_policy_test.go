@@ -4,35 +4,38 @@
 
 package gateway
 
-// ADR-067 §10.3 (amended 2026-08-23) — the policy BUILDER, at unit level.
+// ADR-067 §10.3 (amended 2026-08-23 and 2026-09-14) — the policy BUILDER, at
+// unit level.
 //
 // SCOPE, stated up front so a green here is not read as more than it is.
 // rest_library_preview_test.go asserts the served header against the spec
-// markdown, end to end through the real handlers. This file asserts the three
-// things that live UNDER that oracle and that it cannot localise:
+// markdown, end to end through the real handlers. This file asserts the things
+// that live UNDER that oracle and that it cannot localise:
 //
 //  1. THE SUBSTITUTION IS STRUCTURALLY SOUND. Twelve directives, in §10.3's
-//     order, in BOTH substitutions — including the collapsed one, which is the
-//     branch nobody looks at. A directive that goes missing has no visible
+//     order, in BOTH substitutions — including the `'self'` fallback, which is
+//     the branch nobody looks at. A directive that goes missing has no visible
 //     symptom: the preview still renders and is simply no longer contained.
-//  2. THE ORIGIN LANDS WHERE §10.3 PUTS IT — beside `'self'` in the six source
-//     directives, and NOWHERE ELSE. `connect-src` staying `'none'` is the
-//     measured requirement (FR-006); giving it the origin would look like a
-//     consistency fix and would reopen the channel the requirement exists for.
-//  3. THE ORIGIN → SOURCE-LIST RULES. Path stripping and the loopback alias
-//     set decide whether a real deployment renders at all, and both fail
-//     silently: the wrong list produces a perfectly valid header that blocks
-//     every subresource.
+//  2. THE SOURCES LAND WHERE §10.3 PUTS THEM — alone in the six source
+//     directives, with NO `'self'` beside them, and NOWHERE ELSE. `connect-src`
+//     staying `'none'` is the measured requirement (FR-006).
+//  3. THE ORIGIN → SOURCE-LIST RULES. Path stripping, the loopback alias set
+//     and (since 2026-09-14) the preview-prefix confinement decide whether a
+//     real deployment renders at all AND whether a preview can reach the API.
+//  4. WHAT THE SOURCES ADMIT. The default install's policy is pinned as a
+//     hand-typed literal, and an independent transcription of CSP3's
+//     host-source path matching shows the confined sources admit the preview
+//     prefix and refuse every API path — while a bare origin, the pre-fix
+//     shape, admits them.
 //
-// WHY `'self'` IS STILL HERE, since the whole exercise was about it not
-// matching. `'self'` is what Chromium and Firefox match when the reader
-// spelled the URL differently from the configured origin; the explicit host
-// source is what WebKit can match inside an FR-005b attribute-sandboxed frame.
-// Measured: a policy naming 127.0.0.1 while the browser reached the same
-// socket as localhost blocked the bundle's script and stylesheet on ALL THREE
-// engines. Keeping both is what makes a wrong or absent origin a Safari-only
-// degradation instead of an all-engine outage — so "tidying" either one away
-// is a one-line edit with no visible symptom, and each is pinned below.
+// WHY `'self'` IS GONE (2026-09-14). `'self'` spans the whole gateway, the
+// authenticated API included. WebKit attaches the SameSite=Strict session
+// cookie to a FRAMED preview's subresource requests (ADR-067 D15.8), so any
+// source that reaches /api/ lets untrusted HTML make logged-in GET requests on
+// Safari. Confining every source to /library-preview/ closes that on every
+// engine. The price is recorded in library_isolation_policy.go: a reader on an
+// address spelling the source list does not name now loses a preview's
+// external assets on every engine, not only on Safari.
 //
 // The directive extractor these tests lean on is itself mutation-checked: a
 // parser that could not see a dropped directive would make every assertion
@@ -52,7 +55,7 @@ import (
 // the builder: an expected value copied from the implementation agrees with
 // any mistake the implementation makes.
 //
-// The six that carry the gateway origin are NOT re-listed here — they are
+// The six that carry the sources are NOT re-listed here — they are
 // originBearingDirectives in rest_library_preview_test.go, transcribed from
 // §10.3's substitution table, and one copy of that list is the point.
 var libraryIsolationDirectiveOrder = []string{
@@ -69,6 +72,12 @@ var libraryIsolationDirectiveOrder = []string{
 	"base-uri",
 	"object-src",
 }
+
+// libraryIsolationPreviewPrefixFromSpec is the path every source is confined
+// to, typed from §10.3 rather than read from libraryPreviewPathPrefix, so that
+// a change to the router's prefix that is not also made in the spec fails here
+// instead of silently moving the fence along with the route.
+const libraryIsolationPreviewPrefixFromSpec = "/library-preview/"
 
 // policyDirectives splits a policy header into its directives, in order.
 //
@@ -100,10 +109,10 @@ func policyDirectives(t *testing.T, policy string) (names []string, values map[s
 //
 // TWO spellings, not the three §10.3 listed before 2026-09-09: `[::1]` was
 // removed by defect HP-2 because CSP has no syntax for an IPv6 host at all.
-// See TestLibraryIsolationSources_NeverEmitsAnIPv6HostSource.
+// Each carries the preview prefix since 2026-09-14.
 var libraryIsolationTestSources = []string{
-	"http://127.0.0.1:5000",
-	"http://localhost:5000",
+	"http://127.0.0.1:5000/library-preview/",
+	"http://localhost:5000/library-preview/",
 }
 
 // --- 0. The extractor can actually fail ------------------------------------
@@ -133,18 +142,18 @@ func TestPolicyDirectives_SeesADroppedDirective(t *testing.T) {
 
 // --- 1. Twelve directives, in order, in both substitutions -----------------
 
-// TestBuildLibraryIsolationPolicy_TwelveDirectivesInOrder covers the collapsed
-// branch as well as the substituted one.
+// TestBuildLibraryIsolationPolicy_TwelveDirectivesInOrder covers the `'self'`
+// fallback as well as the substituted form.
 //
 // A directive silently going missing is the failure this whole exercise exists
-// to prevent, and the collapsed branch is where it would go unnoticed longest:
-// it is only reached on a wildcard bind with no gateway.public_url, i.e. in
-// somebody else's container.
+// to prevent, and the fallback is where it would go unnoticed longest: it is
+// only reached on a wildcard bind with no gateway.public_url, i.e. in somebody
+// else's container.
 func TestBuildLibraryIsolationPolicy_TwelveDirectivesInOrder(t *testing.T) {
 	cases := map[string][]string{
-		"one explicit origin":        {"https://omnipus.acme.com"},
-		"loopback alias set":         libraryIsolationTestSources,
-		"no origin (collapsed form)": nil,
+		"one confined source":         {"https://omnipus.acme.com/library-preview/"},
+		"loopback alias set":          libraryIsolationTestSources,
+		"no source ('self' fallback)": nil,
 	}
 	for name, sources := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -154,28 +163,39 @@ func TestBuildLibraryIsolationPolicy_TwelveDirectivesInOrder(t *testing.T) {
 	}
 }
 
-// --- 2. Where the origin lands, and where it must not ----------------------
+// --- 2. Where the sources land, and where they must not --------------------
 
-// TestBuildLibraryIsolationPolicy_OriginSitsBesideSelfInTheSixDirectives.
+// TestBuildLibraryIsolationPolicy_SourcesStandAloneInTheSixDirectives.
 //
-// Per-directive, not "the origin appears six times": six occurrences in the
+// Per-directive, not "the source appears six times": six occurrences in the
 // wrong places would satisfy a count, and five of six naming it would look
 // identical in a diff while breaking exactly one class of subresource.
-func TestBuildLibraryIsolationPolicy_OriginSitsBesideSelfInTheSixDirectives(t *testing.T) {
+//
+// The `'self'` assertions are the 2026-09-14 fix itself. Putting `'self'` back
+// beside the sources is a one-token edit that makes every subresource directive
+// admit the whole gateway again — /api/ included — and it would render every
+// preview perfectly, so nothing but this assertion would notice.
+func TestBuildLibraryIsolationPolicy_SourcesStandAloneInTheSixDirectives(t *testing.T) {
 	joined := strings.Join(libraryIsolationTestSources, " ")
 	policy := buildLibraryIsolationPolicy(libraryIsolationTestSources)
 	_, values := policyDirectives(t, policy)
 
 	for _, directive := range originBearingDirectives {
-		assert.True(t, strings.HasPrefix(values[directive], "'self' "+joined),
-			"§10.3: %s must name 'self' AND the gateway sources, in that order.\n"+
-				"Dropping 'self' breaks Chromium and Firefox whenever the reader spelled the\n"+
-				"URL differently from the configured origin; dropping the sources leaves Safari\n"+
-				"with an unstyled, inert preview inside the FR-005b sandbox attribute.\n"+
+		assert.True(t, strings.HasPrefix(values[directive], joined),
+			"§10.3: %s must begin with the path-confined gateway sources.\n"+
+				"Without them Safari loads no external script or stylesheet inside the FR-005b\n"+
+				"sandbox attribute, and — with no 'self' left — neither does any other engine.\n"+
 				"got: %s %s", directive, directive, values[directive])
+		assert.NotContains(t, values[directive], "'self'",
+			"2026-09-14: %s must not carry 'self' when an origin is known. 'self' spans the whole "+
+				"gateway, API included, and WebKit sends the session cookie on a framed preview's "+
+				"subresource requests — so 'self' makes untrusted HTML an authenticated API caller "+
+				"on Safari. got: %s", directive, values[directive])
 	}
+	assert.NotContains(t, policy, "'self'",
+		"with a source list present, 'self' must appear nowhere in the policy")
 
-	// The origin belongs in those six and nowhere else. connect-src is called
+	// The sources belong in those six and nowhere else. connect-src is called
 	// out by name because it is the one a later reader would "fix".
 	assert.Equal(t, "'none'", values["connect-src"],
 		"FR-006: connect-src opens a CHANNEL rather than loading a subresource, and stays "+
@@ -196,13 +216,13 @@ func TestBuildLibraryIsolationPolicy_OriginSitsBesideSelfInTheSixDirectives(t *t
 
 // TestBuildLibraryIsolationPolicy_KeepsBothMechanismsAndTheOmissions.
 //
-// Substituting an origin changes which sources the six directives match. It
-// must change nothing else — and the parts it must not touch are exactly the
-// parts that fail invisibly.
+// Substituting sources changes which URLs the six directives match. It must
+// change nothing else — and the parts it must not touch are exactly the parts
+// that fail invisibly.
 func TestBuildLibraryIsolationPolicy_KeepsBothMechanismsAndTheOmissions(t *testing.T) {
 	for name, sources := range map[string][]string{
-		"substituted": libraryIsolationTestSources,
-		"collapsed":   nil,
+		"substituted":     libraryIsolationTestSources,
+		"'self' fallback": nil,
 	} {
 		t.Run(name, func(t *testing.T) {
 			policy := buildLibraryIsolationPolicy(sources)
@@ -233,42 +253,47 @@ func TestBuildLibraryIsolationPolicy_KeepsBothMechanismsAndTheOmissions(t *testi
 	}
 }
 
-// TestBuildLibraryIsolationPolicy_CollapsedFormKeepsSelf pins FR-005c's
+// TestBuildLibraryIsolationPolicy_EmptyListFallsBackToSelf pins FR-005c's
 // promise from the builder's side: a gateway that cannot resolve its own
-// origin serves what it served yesterday, exactly.
+// origin serves what it served before 2026-08-23, exactly.
 //
 // The byte-for-byte half is asserted in rest_library_preview_test.go against
 // preAmendmentIsolationPolicy, the hand-transcribed pre-amendment literal.
-// Here the property is the one a refactor would break: `'self'` must survive
-// the collapse. A collapsed form that dropped it would leave the six source
-// directives with NO source at all — a policy that blocks every stylesheet and
-// script on every engine, in the deployment least able to diagnose it.
-func TestBuildLibraryIsolationPolicy_CollapsedFormKeepsSelf(t *testing.T) {
-	collapsed := buildLibraryIsolationPolicy(nil)
-	_, values := policyDirectives(t, collapsed)
+// Here the property is the one a refactor would break: the fallback must be
+// `'self'` and not an empty source list. An empty list would leave the six
+// source directives with NO source at all — a policy that blocks every
+// stylesheet and script on every engine, in the deployment least able to
+// diagnose it.
+//
+// This fallback is also the ONE case the 2026-09-14 path confinement cannot
+// reach (CSP has no path-only source), which is why freezeLibraryIsolationPolicy
+// warns about it.
+func TestBuildLibraryIsolationPolicy_EmptyListFallsBackToSelf(t *testing.T) {
+	fallback := buildLibraryIsolationPolicy(nil)
+	_, values := policyDirectives(t, fallback)
 
 	for _, directive := range originBearingDirectives {
 		assert.True(t, strings.HasPrefix(values[directive], "'self'"),
-			"FR-005c: %s must still name 'self' when no origin resolves; the collapse removes "+
-				"the placeholder, not the fallback that keeps two engines working", directive)
+			"FR-005c: %s must name 'self' when no origin resolves; the substitution replaces the "+
+				"placeholder, it never leaves the directive without a source", directive)
 	}
-	assert.NotContains(t, collapsed, "://",
-		"the collapsed form names no host source: there is no origin to name")
+	assert.NotContains(t, fallback, "://",
+		"the fallback names no host source: there is no origin to name")
 
 	// And the substituted form must actually differ, or the amendment is a
 	// no-op every other assertion would accept.
-	assert.NotEqual(t, collapsed, buildLibraryIsolationPolicy(libraryIsolationTestSources),
+	assert.NotEqual(t, fallback, buildLibraryIsolationPolicy(libraryIsolationTestSources),
 		"a resolved origin must change the policy; equal strings mean the template lost its "+
-			"placeholders and Safari renders blank previews again")
+			"placeholders and the preview is unconfined again")
 }
 
-// --- 3. Origin → source list ------------------------------------------------
+// --- 3. Origin → origins → sources ------------------------------------------
 
-// TestLibraryIsolationSources covers §10.3's substitution table: normalisation
-// and the loopback alias set. Both decide whether a real deployment renders,
-// and both fail silently — the wrong list is a perfectly valid header that
-// blocks every subresource.
-func TestLibraryIsolationSources(t *testing.T) {
+// TestLibraryIsolationOrigins covers §10.3's substitution table below the path:
+// normalisation and the loopback alias set. Both decide whether a real
+// deployment renders, and both fail silently — the wrong list is a perfectly
+// valid header that blocks every subresource.
+func TestLibraryIsolationOrigins(t *testing.T) {
 	cases := []struct {
 		name   string
 		origin string
@@ -281,10 +306,9 @@ func TestLibraryIsolationSources(t *testing.T) {
 		want:   []string{"https://omnipus.acme.com"},
 	}, {
 		// CanonicalGatewayOrigin returns gateway.public_url VERBATIM, so it can
-		// arrive with a path or a trailing slash. A CSP host-source carrying a
-		// path is a PATH MATCH and would stop matching /library-preview/… — a
-		// blank preview, from a value that looks perfectly reasonable in
-		// config.json.
+		// arrive with a path or a trailing slash. The preview prefix is served at
+		// the root of the host, so a source built on "https://host/omnipus"
+		// would match no URL the browser ever requests.
 		name:   "a path or trailing slash is stripped",
 		origin: "https://omnipus.acme.com/omnipus/",
 		want:   []string{"https://omnipus.acme.com"},
@@ -296,7 +320,7 @@ func TestLibraryIsolationSources(t *testing.T) {
 		// reached the same socket as localhost.
 		name:   "a loopback bind names both of its expressible spellings",
 		origin: "http://127.0.0.1:5000",
-		want:   libraryIsolationTestSources,
+		want:   []string{"http://127.0.0.1:5000", "http://localhost:5000"},
 	}, {
 		name:   "the canonical spelling comes first, whichever it is",
 		origin: "http://localhost:5000",
@@ -310,7 +334,7 @@ func TestLibraryIsolationSources(t *testing.T) {
 		// place §10.3's "canonical origin first" rule has an exception. The
 		// aliases still stand: they are other spellings of the same gateway,
 		// they ARE expressible, and a reader who typed one of them is still
-		// carried on WebKit.
+		// carried.
 		name:   "an IPv6 loopback literal is dropped but keeps its expressible aliases",
 		origin: "http://[::1]:5000",
 		want: []string{
@@ -330,10 +354,8 @@ func TestLibraryIsolationSources(t *testing.T) {
 		},
 	}, {
 		// A non-loopback IPv6 origin has nothing expressible left, so it takes
-		// §10.3's Empty row and freezeLibraryIsolationPolicy WARNs. Before
-		// HP-2 it emitted one source every browser discarded — the same
-		// rendering degradation with nothing in the log to notice it by.
-		name:   "a non-loopback IPv6 origin yields no source and degrades loudly",
+		// §10.3's Empty row and freezeLibraryIsolationPolicy WARNs.
+		name:   "a non-loopback IPv6 origin yields no origin and degrades loudly",
 		origin: "https://[2001:db8::1]:5000",
 		want:   nil,
 	}, {
@@ -354,11 +376,11 @@ func TestLibraryIsolationSources(t *testing.T) {
 	}, {
 		// A wildcard bind with no gateway.public_url: CanonicalGatewayOrigin
 		// returns "". This is FR-005c's degraded case, not a misconfiguration.
-		name:   "no origin yields no source at all",
+		name:   "no origin yields nothing at all",
 		origin: "",
 		want:   nil,
 	}, {
-		name:   "an unparseable origin yields no source rather than a guess",
+		name:   "an unparseable origin yields nothing rather than a guess",
 		origin: "not an origin",
 		want:   nil,
 	}, {
@@ -369,9 +391,69 @@ func TestLibraryIsolationSources(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, libraryIsolationSources(tc.origin))
+			assert.Equal(t, tc.want, libraryIsolationOrigins(tc.origin))
 		})
 	}
+}
+
+// TestLibraryIsolationSources_AreConfinedToThePreviewPrefix is the 2026-09-14
+// fix at the level of the source list: every source is an origin FOLLOWED BY
+// the preview prefix, never a bare origin.
+//
+// A bare origin is exactly what shipped before, and it is the shape that let a
+// framed preview reach /api/ with WebKit attaching the session cookie. It is
+// asserted two ways: a table of hand-derived expected lists (which catches a
+// wrong prefix or a lost alias) and a property over every source emitted (which
+// catches a bare origin creeping back in for some origin shape the table does
+// not list).
+func TestLibraryIsolationSources_AreConfinedToThePreviewPrefix(t *testing.T) {
+	// The spec's prefix and the router's prefix must be the same string, or the
+	// fence and the route have drifted apart: either previews stop rendering
+	// (the fence moved) or the fence admits a path the preview route does not
+	// own (the route moved).
+	require.Equal(t, libraryIsolationPreviewPrefixFromSpec, libraryPreviewPathPrefix,
+		"the router serves previews under a different prefix from the one §10.3 confines "+
+			"sources to — the two must move together")
+
+	cases := []struct {
+		origin string
+		want   []string
+	}{
+		{"https://omnipus.acme.com", []string{"https://omnipus.acme.com/library-preview/"}},
+		{"https://omnipus.acme.com/omnipus/", []string{"https://omnipus.acme.com/library-preview/"}},
+		{"http://127.0.0.1:5000", libraryIsolationTestSources},
+		{"http://[::1]:5000", []string{"http://127.0.0.1:5000/library-preview/", "http://localhost:5000/library-preview/"}},
+		{"http://192.168.1.20:5000", []string{"http://192.168.1.20:5000/library-preview/"}},
+		{"", nil},
+		{"https://[2001:db8::1]:5000", nil},
+		{"http://*", nil},
+	}
+	for _, tc := range cases {
+		assert.Equal(t, tc.want, libraryIsolationSources(tc.origin), "origin %q", tc.origin)
+	}
+
+	emitted := 0
+	for _, origin := range []string{
+		"https://omnipus.acme.com", "https://omnipus.acme.com/omnipus/", "http://127.0.0.1:5000",
+		"http://localhost:5000", "http://127.0.0.2:5000", "http://[::1]:5000",
+		"http://192.168.1.20:5000", "https://sub.example.co.uk:8443",
+	} {
+		for _, source := range libraryIsolationSources(origin) {
+			emitted++
+			u, err := url.Parse(source)
+			require.NoError(t, err, "origin %q produced %q, which is not a URL", origin, source)
+			assert.Equal(t, libraryIsolationPreviewPrefixFromSpec, u.Path,
+				"origin %q produced %q — every source must be confined to exactly the preview "+
+					"prefix. A bare origin admits the whole gateway, /api/ included", origin, source)
+			assert.Empty(t, u.RawQuery, "a CSP source carries no query: %q", source)
+			assert.Empty(t, u.Fragment, "a CSP source carries no fragment: %q", source)
+			assert.True(t, strings.HasSuffix(source, "/"),
+				"%q must end in '/': CSP3 §6.7.2.10 treats a path without a trailing slash as an "+
+					"EXACT match, which would admit one URL and block every bundle asset", source)
+		}
+	}
+	require.Positive(t, emitted,
+		"no source was emitted for ANY origin — the property above passed having checked nothing")
 }
 
 // TestLibraryIsolationSources_AliasesShareSchemeAndPort states the property
@@ -386,15 +468,17 @@ func TestLibraryIsolationSources(t *testing.T) {
 // the aliases are this gateway — adversarial review showed a foreign process
 // can bind [::1]:<port> while we listen on 127.0.0.1 alone, and "localhost"
 // resolves to both families. The accepted residual is documented at
-// libraryIsolationSources. Do not rename this test to claim more than it
+// libraryIsolationOrigins. Do not rename this test to claim more than it
 // checks.
 func TestLibraryIsolationSources_AliasesShareSchemeAndPort(t *testing.T) {
 	sources := libraryIsolationSources("http://127.0.0.1:5000")
 	require.Len(t, sources, 2)
 	for _, source := range sources {
-		assert.True(t, strings.HasPrefix(source, "http://"),
+		u, err := url.Parse(source)
+		require.NoError(t, err)
+		assert.Equal(t, "http", u.Scheme,
 			"%s changed scheme — an alias must be the same gateway, reachable the same way", source)
-		assert.True(t, strings.HasSuffix(source, ":5000"),
+		assert.Equal(t, "5000", u.Port(),
 			"%s changed port — an alias must be the same listener", source)
 	}
 }
@@ -450,12 +534,183 @@ func TestLibraryIsolationSources_NeverEmitsAnIPv6HostSource(t *testing.T) {
 
 	// Positive control. Without it, a resolver that returned nothing for every
 	// origin would satisfy every assertion above while disabling the whole
-	// 2026-08-23 amendment.
+	// amendment.
 	require.Positive(t, emitted,
 		"no source was emitted for ANY origin — the assertions above passed having checked nothing")
 }
 
-// --- 4. The frozen value ----------------------------------------------------
+// --- 4. What the frozen policy actually admits ------------------------------
+
+// defaultInstallIsolationPolicy is the policy a default install (gateway bound
+// to 127.0.0.1:5000, no public_url) must serve since 2026-09-14, typed out by
+// hand from §10.3's template and substitution table. It is the Go pin of the
+// new policy string's sources: a test that compared the frozen policy against
+// buildLibraryIsolationPolicy's own output would agree with any mistake in it.
+const defaultInstallIsolationPolicy = "sandbox allow-scripts; default-src 'none'; " +
+	"script-src http://127.0.0.1:5000/library-preview/ http://localhost:5000/library-preview/ 'unsafe-inline'; " +
+	"style-src http://127.0.0.1:5000/library-preview/ http://localhost:5000/library-preview/ 'unsafe-inline'; " +
+	"img-src http://127.0.0.1:5000/library-preview/ http://localhost:5000/library-preview/ data: blob:; " +
+	"font-src http://127.0.0.1:5000/library-preview/ http://localhost:5000/library-preview/; " +
+	"media-src http://127.0.0.1:5000/library-preview/ http://localhost:5000/library-preview/; " +
+	"frame-src http://127.0.0.1:5000/library-preview/ http://localhost:5000/library-preview/; " +
+	"connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'"
+
+// reverseProxyIsolationPolicy is the same pin for a reverse-proxied deployment
+// that sets gateway.public_url — one source, no aliases, still confined.
+const reverseProxyIsolationPolicy = "sandbox allow-scripts; default-src 'none'; " +
+	"script-src https://omnipus.acme.com/library-preview/ 'unsafe-inline'; " +
+	"style-src https://omnipus.acme.com/library-preview/ 'unsafe-inline'; " +
+	"img-src https://omnipus.acme.com/library-preview/ data: blob:; " +
+	"font-src https://omnipus.acme.com/library-preview/; " +
+	"media-src https://omnipus.acme.com/library-preview/; " +
+	"frame-src https://omnipus.acme.com/library-preview/; " +
+	"connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'"
+
+// TestLibraryIsolationPolicy_PinsTheConfinedSources pins the frozen policy
+// byte for byte for the two deployment shapes that matter most.
+func TestLibraryIsolationPolicy_PinsTheConfinedSources(t *testing.T) {
+	t.Run("default install, loopback bind", func(t *testing.T) {
+		freezeLibraryIsolationPolicyForTest(t, "http://127.0.0.1:5000")
+		assert.Equal(t, defaultInstallIsolationPolicy, libraryIsolationPolicy(),
+			"the default install must serve §10.3's template with both loopback spellings, each "+
+				"confined to /library-preview/, and no 'self'")
+	})
+	t.Run("reverse proxy, gateway.public_url set", func(t *testing.T) {
+		freezeLibraryIsolationPolicyForTest(t, "https://omnipus.acme.com/")
+		assert.Equal(t, reverseProxyIsolationPolicy, libraryIsolationPolicy(),
+			"gateway.public_url must yield exactly one confined source and no loopback aliases")
+	})
+}
+
+// cspHostSourceAdmits reports whether a CSP host-source with an explicit
+// scheme, host and port admits a URL on a request that has NOT been redirected.
+//
+// It is an independent transcription of CSP3 §6.7.2.9 ("does url match
+// expression in origin with redirect count", redirect count 0) restricted to
+// the one source shape this policy emits, plus §6.7.2.10 ("path-part matches
+// path"), and it is written from the specification rather than from the
+// builder so that the two cannot share a mistake. It deliberately does not
+// model redirects: after one, CSP ignores the path entirely, which is why the
+// gateway must never redirect on the preview prefix
+// (library_preview_no_redirect_test.go), not something a matcher can express.
+func cspHostSourceAdmits(t *testing.T, source, target string) bool {
+	t.Helper()
+	src, err := url.Parse(source)
+	require.NoError(t, err)
+	u, err := url.Parse(target)
+	require.NoError(t, err)
+	if !strings.EqualFold(src.Scheme, u.Scheme) || !strings.EqualFold(src.Host, u.Host) {
+		return false
+	}
+	return cspPathPartMatches(src.EscapedPath(), u.EscapedPath())
+}
+
+// cspPathPartMatches is CSP3 §6.7.2.10, step by step.
+func cspPathPartMatches(pathA, pathB string) bool {
+	// 1. An empty path-part matches every path.
+	if pathA == "" {
+		return true
+	}
+	// 2. "/" matches the empty path.
+	if pathA == "/" && pathB == "" {
+		return true
+	}
+	// 3. A trailing "/" makes the match a prefix match; otherwise it is exact.
+	exactMatch := !strings.HasSuffix(pathA, "/")
+	// 4. Strictly split both on "/".
+	listA := strings.Split(pathA, "/")
+	listB := strings.Split(pathB, "/")
+	// 5. A longer source path can never match.
+	if len(listA) > len(listB) {
+		return false
+	}
+	// 6. An exact match needs the same number of segments.
+	if exactMatch && len(listA) != len(listB) {
+		return false
+	}
+	// 7. A prefix match drops the source's final, empty segment.
+	if !exactMatch {
+		listA = listA[:len(listA)-1]
+	}
+	// 8. Every source segment must equal the target's, both percent-decoded.
+	for i, pieceA := range listA {
+		decodedA, errA := url.PathUnescape(pieceA)
+		decodedB, errB := url.PathUnescape(listB[i])
+		if errA != nil || errB != nil || decodedA != decodedB {
+			return false
+		}
+	}
+	return true
+}
+
+// TestLibraryIsolationPolicy_SourcesAdmitThePreviewPrefixAndNothingElse is the
+// 2026-09-14 property in the terms a browser evaluates it: every host source in
+// every subresource directive of the frozen default-install policy admits the
+// preview route and refuses every other gateway path — the API above all.
+//
+// The positive control is the pre-fix shape. A BARE origin source must admit
+// the API paths under the same matcher; otherwise "refused" below could just
+// mean the matcher refuses everything.
+func TestLibraryIsolationPolicy_SourcesAdmitThePreviewPrefixAndNothingElse(t *testing.T) {
+	freezeLibraryIsolationPolicyForTest(t, "http://127.0.0.1:5000")
+	_, values := policyDirectives(t, libraryIsolationPolicy())
+
+	token := strings.Repeat("A", 43)
+	admitted := []string{
+		"/library-preview/" + token + "/site/index.html",
+		"/library-preview/" + token + "/site/assets/app.js",
+		"/library-preview/" + token + "/site/assets/logo.svg",
+	}
+	// Every gateway path a preview has no business requesting. /api/ is the one
+	// the finding is about; the rest are the other authenticated or
+	// cookie-reading surfaces on the same listener.
+	refused := []string{
+		"/api/v1/state",
+		"/api/v1/library/ws/download?path=secret.txt",
+		"/api/v1/media/workspace/ws/id",
+		"/api/v1/chat/ws",
+		"/",
+		"/assets/index-abc123.js",
+		"/preview/agent/" + token + "/",
+		"/uploads/file.png",
+		"/media/file.png",
+		"/library-previewx/" + token + "/site/index.html",
+	}
+
+	checkedSources := 0
+	for _, directive := range originBearingDirectives {
+		for _, source := range strings.Fields(values[directive]) {
+			if !strings.Contains(source, "://") {
+				continue // 'unsafe-inline', data:, blob: — not host sources
+			}
+			checkedSources++
+			base := source[:strings.Index(source, "/library-preview/")]
+			for _, p := range admitted {
+				assert.True(t, cspHostSourceAdmits(t, source, base+p),
+					"%s source %s must admit its own preview asset %s, or bundles stop rendering",
+					directive, source, p)
+			}
+			for _, p := range refused {
+				assert.False(t, cspHostSourceAdmits(t, source, base+p),
+					"%s source %s admits %s — a previewed page could request it, and WebKit would "+
+						"attach the session cookie", directive, source, p)
+			}
+			// A different listener or scheme under the same prefix is not us.
+			assert.False(t, cspHostSourceAdmits(t, source, "https://evil.example/library-preview/"+token+"/x.png"))
+		}
+	}
+	assert.Equal(t, len(originBearingDirectives)*2, checkedSources,
+		"every one of the six subresource directives must carry both loopback sources")
+
+	// POSITIVE CONTROL: the pre-2026-09-14 shape, a bare origin, admits the API
+	// under the very same matcher.
+	for _, p := range []string{"/api/v1/state", "/api/v1/library/ws/download?path=secret.txt"} {
+		assert.True(t, cspHostSourceAdmits(t, "http://127.0.0.1:5000", "http://127.0.0.1:5000"+p),
+			"the matcher must admit %s under a bare origin source — otherwise its refusals above prove nothing", p)
+	}
+}
+
+// --- 5. The frozen value ----------------------------------------------------
 
 // freezeLibraryIsolationPolicyForTest freezes the policy for one test and puts
 // the previous value back afterwards.
@@ -476,12 +731,12 @@ func TestFreezeLibraryIsolationPolicy_ServesTheOriginItWasGiven(t *testing.T) {
 	freezeLibraryIsolationPolicyForTest(t, "https://omnipus.acme.com")
 
 	assert.Equal(t,
-		buildLibraryIsolationPolicy([]string{"https://omnipus.acme.com"}),
+		buildLibraryIsolationPolicy([]string{"https://omnipus.acme.com/library-preview/"}),
 		libraryIsolationPolicy())
 
 	state := libraryIsolationFrozen.Load()
 	require.NotNil(t, state)
-	assert.Equal(t, []string{"https://omnipus.acme.com"}, state.sources)
+	assert.Equal(t, []string{"https://omnipus.acme.com/library-preview/"}, state.sources)
 }
 
 // TestLibraryIsolationPolicy_IsIdenticalOnEveryRead is MV-13 reduced to the
@@ -498,17 +753,17 @@ func TestLibraryIsolationPolicy_IsIdenticalOnEveryRead(t *testing.T) {
 		assert.Equal(t, first, libraryIsolationPolicy(),
 			"§10.3/MV-13: every response must carry the SAME policy, byte for byte")
 	}
-	assert.Contains(t, first, "http://localhost:5000",
+	assert.Contains(t, first, "http://localhost:5000/library-preview/",
 		"the frozen value must carry the resolved source list, not a rebuilt guess")
 }
 
-// TestLibraryIsolationPolicy_UnfrozenIsTheCollapsedForm covers the state a unit
+// TestLibraryIsolationPolicy_UnfrozenIsTheSelfFallback covers the state a unit
 // test reaches when it never registers routes — and the state the process would
 // be in if a future refactor moved the freeze after the listener starts.
 //
-// Either way the answer is §10.3's collapsed substitution, which is what a
+// Either way the answer is §10.3's `'self'` substitution, which is what a
 // gateway with no derivable origin serves. It is not a fourth code path.
-func TestLibraryIsolationPolicy_UnfrozenIsTheCollapsedForm(t *testing.T) {
+func TestLibraryIsolationPolicy_UnfrozenIsTheSelfFallback(t *testing.T) {
 	previous := libraryIsolationFrozen.Load()
 	t.Cleanup(func() { libraryIsolationFrozen.Store(previous) })
 	libraryIsolationFrozen.Store(nil)
@@ -519,7 +774,7 @@ func TestLibraryIsolationPolicy_UnfrozenIsTheCollapsedForm(t *testing.T) {
 
 // TestFreezeLibraryIsolationPolicy_WildcardBindDegradesVisibly is FR-005c's
 // documented consequence: a 0.0.0.0 bind with no gateway.public_url keeps all
-// twelve directives and the collapsed `'self'` form, and names no host source.
+// twelve directives and the `'self'` fallback, and names no host source.
 func TestFreezeLibraryIsolationPolicy_WildcardBindDegradesVisibly(t *testing.T) {
 	// What middleware.CanonicalGatewayOrigin returns for host "0.0.0.0".
 	freezeLibraryIsolationPolicyForTest(t, "")
@@ -542,11 +797,8 @@ func TestFreezeLibraryIsolationPolicy_WildcardBindDegradesVisibly(t *testing.T) 
 // asserting the frozen sources IS asserting the WARN branch — there is no
 // second condition between them.
 //
-//	non-loopback IPv6 → NO sources → collapsed policy → WARN.  NEW in 2026-09-09.
-//	                    Before HP-2 it emitted one source every browser
-//	                    discarded: the same rendering degradation, silently.
-//	loopback IPv6     → TWO sources → substituted policy → NO warn.  UNCHANGED
-//	                    in warning terms; only the inert [::1] entry is gone.
+//	non-loopback IPv6 → NO sources → 'self' fallback → WARN.
+//	loopback IPv6     → TWO confined sources → substituted policy → NO warn.
 func TestFreezeLibraryIsolationPolicy_IPv6OriginTakesTheDocumentedBranch(t *testing.T) {
 	t.Run("a non-loopback IPv6 origin degrades and therefore warns", func(t *testing.T) {
 		freezeLibraryIsolationPolicyForTest(t, "https://[2001:db8::1]:5000")
@@ -557,7 +809,7 @@ func TestFreezeLibraryIsolationPolicy_IPv6OriginTakesTheDocumentedBranch(t *test
 			"CSP cannot express an IPv6 host, so there is no source to name — and an empty "+
 				"source list is exactly freezeLibraryIsolationPolicy's WARN condition")
 		assert.Equal(t, buildLibraryIsolationPolicy(nil), libraryIsolationPolicy(),
-			"the degraded case must be §10.3's collapsed form, not a fourth policy shape")
+			"the degraded case must be §10.3's 'self' fallback, not a fourth policy shape")
 		assert.NotContains(t, libraryIsolationPolicy(), "://",
 			"no host source may survive: the previous behaviour served an invalid one")
 	})
@@ -567,7 +819,10 @@ func TestFreezeLibraryIsolationPolicy_IPv6OriginTakesTheDocumentedBranch(t *test
 
 		state := libraryIsolationFrozen.Load()
 		require.NotNil(t, state)
-		assert.Equal(t, []string{"http://127.0.0.1:5000", "http://localhost:5000"}, state.sources,
+		assert.Equal(t, []string{
+			"http://127.0.0.1:5000/library-preview/",
+			"http://localhost:5000/library-preview/",
+		}, state.sources,
 			"the canonical IPv6 spelling is dropped, but the two expressible spellings of the "+
 				"SAME gateway remain — so this case must NOT join the WARN set")
 		assert.NotContains(t, libraryIsolationPolicy(), "[",
@@ -599,7 +854,7 @@ func TestLibraryIsolationSources_NonConcreteHostFailsClosed(t *testing.T) {
 		"https://host;script-src *",
 	} {
 		require.Nil(t, libraryIsolationSources(bad),
-			"%q is not one concrete host and MUST collapse to 'self' rather than widen the policy", bad)
+			"%q is not one concrete host and MUST fall back to 'self' rather than widen the policy", bad)
 	}
 
 	// Positive control: without it, a function that refused everything would

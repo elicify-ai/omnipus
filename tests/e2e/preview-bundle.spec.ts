@@ -23,7 +23,9 @@
  * a WEBFONT and AUDIO — and they are exactly the two that fail differently:
  *
  *   a font is blocked by CORS, not by CSP. §10.3 already says
- *     `font-src 'self' ${GATEWAY_ORIGIN}`, so the policy permits it and it
+ *     `font-src ${PREVIEW_SOURCES}` — the gateway's own /library-preview/ path
+ *     (amended 2026-09-14; it was `'self' ${GATEWAY_ORIGIN}`) — so the policy
+ *     permits it and it
  *     still does not load without `Access-Control-Allow-Origin` — because the
  *     document's origin is OPAQUE, which makes every request it issues
  *     cross-origin, gateway's own bytes included (FR-019).
@@ -360,16 +362,19 @@ async function startControlOrigin(): Promise<ControlOrigin> {
 /**
  * The §10.3 policy with its host sources repointed at another origin.
  *
- * MECHANICALLY DERIVED FROM THE LIVE TEMPLATE, never hand-copied. §10.3 carries
- * `'self'` AND explicit gateway origins in six directives, and it has already
- * changed shape once (the 2026-08-23 amendment added the explicit origins; the
- * 2026-09-09 one removed the IPv6 spelling). A policy transcribed into this
- * file would keep testing the policy we used to have — silently, and green.
+ * MECHANICALLY DERIVED FROM THE LIVE TEMPLATE, never hand-copied. §10.3 has
+ * changed shape three times (the 2026-08-23 amendment added explicit gateway
+ * origins beside `'self'`; the 2026-09-09 one removed the IPv6 spelling; the
+ * 2026-09-14 one confined every source to `/library-preview/` and dropped
+ * `'self'`). A policy transcribed into this file would keep testing the policy
+ * we used to have — silently, and green.
  *
- * Every `http(s)://…` token is rewritten, and `'self'` is deliberately LEFT
- * ALONE: under this policy's own `sandbox` directive the document's origin is
- * opaque, so `'self'` grants nothing, and removing it would change a second
- * variable at the same time as the one under test.
+ * Every `http(s)://…` token is rewritten to the bare harness origin, path and
+ * all, so the repointed policy admits the harness's own files wherever it
+ * serves them. `'self'`, which now appears only in §10.3's Empty case, is
+ * deliberately LEFT ALONE: under this policy's own `sandbox` directive the
+ * document's origin is opaque, so `'self'` grants nothing, and removing it
+ * would change a second variable at the same time as the one under test.
  */
 /**
  * The same policy with ONLY its `font-src` directive repointed at a dead origin.

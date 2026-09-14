@@ -30,13 +30,15 @@ package gateway
 //
 //  1. The policy is built from §10.3's template exactly once and is asserted
 //     directive by directive against the spec's own text. Its six source
-//     directives name the gateway's canonical origin IN ADDITION TO `'self'`:
-//     under WebKit, the FR-005b iframe sandbox ATTRIBUTE on top of the §10.3
-//     sandbox DIRECTIVE makes the document's `self` an opaque origin matching
-//     nothing, so the explicit host source is the one that matches — and
-//     `'self'` stays beside it so a wrong or absent origin degrades on Safari
-//     alone rather than on every engine (library_isolation_policy.go has the
-//     measurement).
+//     directives name the gateway's canonical origin(s) CONFINED TO THIS
+//     ROUTE'S PREFIX (`<origin>/library-preview/`), with no `'self'` since
+//     2026-09-14: WebKit sends the session cookie on a framed preview's
+//     subresource requests, so a source that reached the API made untrusted
+//     HTML an authenticated GET caller. The confinement holds only while
+//     NOTHING on this prefix answers with a redirect — CSP ignores a source's
+//     path after one — so no handler on this route may ever redirect
+//     (library_isolation_policy.go has the measurements;
+//     library_preview_no_redirect_test.go is the tripwire).
 //     BOTH halves are load-bearing: measured on three engines,
 //     the `sandbox` directive alone let five of seven egress vectors out, and
 //     the source directives alone let window.open out because no CSP
@@ -261,11 +263,13 @@ func newLibraryPreviewRoutes(a *restAPI) *libraryPreviewRoutes {
 	// the origin the BROWSER reaches rather than the one we bound.
 	//
 	// When it resolves to "" — a wildcard bind with no gateway.public_url —
-	// freezeLibraryIsolationPolicy collapses §10.3's template to its
-	// `'self'`-only form, which is byte-identical to what this package shipped
-	// before the amendment, and logs one WARN. Containment is unchanged; what
-	// degrades is Safari's ability to load a bundle's external CSS and JS
-	// inside the FR-005b sandbox attribute.
+	// freezeLibraryIsolationPolicy substitutes `'self'` into §10.3's template,
+	// which is byte-identical to what this package shipped before the
+	// 2026-08-23 amendment, and logs one WARN. The sandbox and connect-src
+	// 'none' are unchanged; what is lost is the path confinement (a preview can
+	// again request any gateway path, without reading the answer) and Safari's
+	// ability to load a bundle's external CSS and JS inside the FR-005b
+	// sandbox attribute.
 	freezeLibraryIsolationPolicy(previewCanonicalOrigin(a))
 
 	routes := &libraryPreviewRoutes{api: a, tokens: NewPreviewTokenStore()}
