@@ -131,6 +131,9 @@ type trashReceipt struct {
 	SourceVersion string   `json:"source_version,omitempty"`
 	DanglingLinks int      `json:"dangling_links"`
 	DanglingNotes []string `json:"dangling_notes,omitempty"`
+	// Kind is "folder" for a whole-folder trash and empty for a single file,
+	// so every receipt written before folders existed still reads as a file.
+	Kind string `json:"kind,omitempty"`
 }
 
 // TrashAuditEvent is one trash-engine outcome, applied or refused.
@@ -151,6 +154,11 @@ type TrashAuditFunc func(TrashAuditEvent)
 type TrashRequest struct {
 	// Path is the note's collection-relative path.
 	Path string
+	// Folder asks for Path to be trashed as a whole FOLDER, with everything
+	// under it (knowledge_restructure_trash_folder.go). It must be set
+	// explicitly: without it a folder is never trashed, so the habit of
+	// naming a note without ".md" can never reach a folder of the same name.
+	Folder bool
 }
 
 // TrashResult reports what trash did.
@@ -164,6 +172,11 @@ type TrashResult struct {
 	RecordType             string
 	RecordID               string
 	PriorTrashings         []string // other TrashIDs already holding this original path
+	// Folder reports a whole-folder trash. Members is then every file (note
+	// or attachment) that left the live collection with it, by its original
+	// collection-relative path, sorted.
+	Folder  bool
+	Members []string
 }
 
 // RestoreRequest is one restore operation.
@@ -186,6 +199,8 @@ type RestoreResult struct {
 	RecordType         string
 	RecordID           string
 	ResolvedLinksCount int // inbound links that resolve again after the restore
+	// Folder reports that a whole trashed folder was restored.
+	Folder bool
 }
 
 // Trasher performs trash and restore inside one collection. It holds no
@@ -263,6 +278,9 @@ func (tr *Trasher) Trash(req TrashRequest) (*TrashResult, error) {
 	if err != nil {
 		tr.emit(trashOpTrash, "refused", nil, err.Error())
 		return nil, err
+	}
+	if req.Folder {
+		return tr.trashFolder(fsys, from)
 	}
 	from = tr.trashSourcePath(fsys, from)
 
@@ -611,9 +629,18 @@ func (tr *Trasher) findTrashCopies(fsys LinkFS, originalPath string) ([]trashCop
 // (pkg/records/propindex) is not reachable from this package without an
 // import cycle (see integrity.go's PropertyIndexReader doc comment).
 func (tr *Trasher) findLiveRecordByID(fsys LinkFS, id string) (foundPath string, found bool, err error) {
+	foundPath, _, found, err = tr.findLiveRecordByAnyID(fsys, map[string]struct{}{id: {}})
+	return foundPath, found, err
+}
+
+// findLiveRecordByAnyID is findLiveRecordByID for a set of identifiers: one
+// walk of the live collection however many identifiers a restored folder
+// carries. It reports the first live note, in path order, that holds any of
+// them, and which identifier it holds.
+func (tr *Trasher) findLiveRecordByAnyID(fsys LinkFS, ids map[string]struct{}) (foundPath, foundID string, found bool, err error) {
 	wr, werr := WalkContained(fsys, tr.Root)
 	if werr != nil {
-		return "", false, werr
+		return "", "", false, werr
 	}
 	for _, rel := range wr.Files {
 		if !IsMarkdownPath(rel) {
@@ -627,11 +654,35 @@ func (tr *Trasher) findLiveRecordByID(fsys LinkFS, id string) (foundPath string,
 			// skipped rather than failing the whole restore.
 			continue
 		}
-		if records.ParseRecord(rel, data).ID() == id {
-			return rel, true, nil
+		id := records.ParseRecord(rel, data).ID()
+		if id == "" {
+			continue
+		}
+		if _, hit := ids[id]; hit {
+			return rel, id, true, nil
 		}
 	}
-	return "", false, nil
+	return "", "", false, nil
+}
+
+// chooseTrashCopy picks the most recently trashed copy, or the one named by
+// trashedAt. what names the kind of entry ("note", "folder") in the refusal.
+func chooseTrashCopy(copies []trashCopy, trashedAt, what, orig string) (*trashCopy, error) {
+	wantID := strings.TrimSpace(trashedAt)
+	if wantID == "" {
+		return &copies[0], nil
+	}
+	for i := range copies {
+		if copies[i].TrashID == wantID {
+			return &copies[i], nil
+		}
+	}
+	avail := make([]string, len(copies))
+	for i, c := range copies {
+		avail[i] = c.TrashID
+	}
+	return nil, fmt.Errorf("%w: no trashed %s at %s trashed at %s; available: %s",
+		ErrRestoreNotFound, what, orig, wantID, strings.Join(avail, ", "))
 }
 
 // Restore puts the most recently trashed copy of `path` (or the copy named
@@ -650,6 +701,7 @@ func (tr *Trasher) Restore(req RestoreRequest) (*RestoreResult, error) {
 	// check protects: Trash refuses a reserved source, so no trashed copy can
 	// sit at a reserved path, and a reserved as-given path therefore falls
 	// through to its ".md" form exactly as it did before.
+	asGiven := orig
 	orig, copies, err := tr.restoreSourcePath(fsys, orig)
 	if err != nil {
 		tr.emit(trashOpRestore, "refused", []string{orig}, err.Error())
@@ -662,6 +714,17 @@ func (tr *Trasher) Restore(req RestoreRequest) (*RestoreResult, error) {
 	}
 
 	if len(copies) == 0 {
+		// A trashed FOLDER answers only when no trashed file does
+		// (knowledge_restructure_trash_folder.go), so a path that names a
+		// trashed note keeps meaning that note.
+		folderCopies, ferr := tr.findTrashFolderCopies(fsys, asGiven)
+		if ferr != nil {
+			tr.emit(trashOpRestore, "refused", []string{asGiven}, ferr.Error())
+			return nil, ferr
+		}
+		if len(folderCopies) > 0 {
+			return tr.restoreFolder(fsys, asGiven, folderCopies, req.TrashedAt)
+		}
 		// NOT "knowledge_describe reports the trash contents" — it does not.
 		// knowledge_describe renders four sections (index, types, views,
 		// templates) and none of them reads the trash directory, so the old
@@ -672,26 +735,10 @@ func (tr *Trasher) Restore(req RestoreRequest) (*RestoreResult, error) {
 		return nil, rerr
 	}
 
-	wantID := strings.TrimSpace(req.TrashedAt)
-	chosen := &copies[0]
-	if wantID != "" {
-		chosen = nil
-		for i := range copies {
-			if copies[i].TrashID == wantID {
-				chosen = &copies[i]
-				break
-			}
-		}
-		if chosen == nil {
-			avail := make([]string, len(copies))
-			for i, c := range copies {
-				avail[i] = c.TrashID
-			}
-			rerr := fmt.Errorf("%w: no trashed note at %s trashed at %s; available: %s",
-				ErrRestoreNotFound, orig, wantID, strings.Join(avail, ", "))
-			tr.emit(trashOpRestore, "refused", []string{orig}, rerr.Error())
-			return nil, rerr
-		}
+	chosen, cerr := chooseTrashCopy(copies, req.TrashedAt, "note", orig)
+	if cerr != nil {
+		tr.emit(trashOpRestore, "refused", []string{orig}, cerr.Error())
+		return nil, cerr
 	}
 
 	// FR-048b: the reconstructed destination is resolved through
@@ -748,7 +795,10 @@ func (tr *Trasher) Restore(req RestoreRequest) (*RestoreResult, error) {
 		if mvErr := moveFile(chosen.FileAbs, destAbs); mvErr != nil {
 			return fmt.Errorf("knowledge: restore %q: %w", orig, mvErr)
 		}
-		if chosen.HasReceipt {
+		// A FOLDER's receipt stays when one file is restored out of that
+		// folder's trash entry: it still describes the rest of the folder,
+		// which stays restorable by the folder's own name.
+		if chosen.HasReceipt && chosen.Receipt.Kind != trashKindFolder {
 			receiptAbs := filepath.Join(tr.Root.Path(), MarkerDirName, trashDirName, chosen.TrashID, trashReceiptFileName)
 			if remErr := os.Remove(receiptAbs); remErr != nil && !errors.Is(remErr, fs.ErrNotExist) {
 				slog.Warn("knowledge: could not remove trash receipt after restore", "trash_id", chosen.TrashID, "error", remErr)

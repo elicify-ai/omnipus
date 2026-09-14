@@ -136,6 +136,12 @@ type RenameRequest struct {
 	// previously-unambiguous basename ambiguous. The ambiguity is reported
 	// either way; this only decides whether it is fatal.
 	AllowAmbiguity bool
+	// Folder asks for From to be renamed as a FOLDER: every note and
+	// attachment under it moves with it, and every link to any of them is
+	// rewritten (rename_folder.go). It must be set explicitly. Without it a
+	// folder source is refused exactly as before, so a caller that only ever
+	// meant a note can never move a whole folder.
+	Folder bool
 }
 
 // RenamePlan is everything the rename will do, computed before anything is
@@ -166,6 +172,9 @@ type RenamePlan struct {
 	// is true — the honest reading is "rewrote everything this plan could
 	// see", not "rewrote everything".
 	Incomplete bool
+	// Moves is every file the rename relocates, sorted by From: the one
+	// subject of a note rename, or each file under a renamed folder.
+	Moves []PathMove
 }
 
 // RenameAuditEvent is one auditable knowledge-base mutation or refusal
@@ -236,6 +245,8 @@ type RenameResult struct {
 	// is not, by itself, proof the rename saw every citation.
 	Skipped    []SkippedEntry
 	Incomplete bool
+	// Moves carries RenamePlan.Moves: every file that changed path.
+	Moves []PathMove
 }
 
 // Renamer renames notes inside one collection.
@@ -364,6 +375,7 @@ func (r *Renamer) Rename(req RenameRequest) (*RenameResult, error) {
 		Recovery:       rec,
 		Skipped:        plan.Skipped,
 		Incomplete:     plan.Incomplete,
+		Moves:          plan.Moves,
 	}
 	if rec != nil {
 		res.Touched = rec.Touched
@@ -527,8 +539,11 @@ func (r *Renamer) Plan(req RenameRequest) (*RenamePlan, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %q: %w", ErrRenameSourceMissing, from, err)
 	}
-	if !fromInfo.Mode().IsRegular() {
-		// A directory, device, fifo or socket. NOT a symlink — FR-044 is
+	switch {
+	case req.Folder && !fromInfo.IsDir():
+		return nil, fmt.Errorf("%w: %q is not a folder", ErrRenameSourceNotAddressable, from)
+	case !req.Folder && !fromInfo.Mode().IsRegular():
+		// A directory (without Folder), device, fifo or socket. NOT a symlink — FR-044 is
 		// enforced above, by ResolveContainedNoSymlink, and it has to be:
 		// this comment used to say "a symlink or an irregular file", which was
 		// false for the symlink half. fromReal came from ResolveContained,
@@ -539,6 +554,11 @@ func (r *Renamer) Plan(req RenameRequest) (*RenamePlan, error) {
 		// It is a live check now — fromReal is the path the caller named —
 		// which is why it is kept rather than deleted.
 		return nil, fmt.Errorf("%w: %q is %s", ErrRenameSourceNotAddressable, from, fromInfo.Mode().String())
+	}
+	if req.Folder {
+		if ferr := checkFolderRenameSource(r.Root, from, to); ferr != nil {
+			return nil, ferr
+		}
 	}
 
 	if destErr := r.checkDestination(fsys, to, caseOnly, fromInfo); destErr != nil {
@@ -551,17 +571,26 @@ func (r *Renamer) Plan(req RenameRequest) (*RenamePlan, error) {
 		return nil, err
 	}
 	files := graph.Files()
-	if !sliceHasString(files, from) {
-		return nil, fmt.Errorf("%w: %q", ErrRenameSourceNotAddressable, from)
+	var moves []PathMove
+	if req.Folder {
+		moves = folderMoves(files, from, to)
+	} else {
+		if !sliceHasString(files, from) {
+			return nil, fmt.Errorf("%w: %q", ErrRenameSourceNotAddressable, from)
+		}
+		moves = []PathMove{{From: from, To: to}}
+	}
+	moved := make(map[string]string, len(moves))
+	for _, m := range moves {
+		moved[m.From] = m.To
 	}
 
-	ambiguity := ambiguityAfterRename(files, from, to)
-	if ambiguity != nil && !ambiguity.WasAmbiguous && !req.AllowAmbiguity {
-		return nil, &AmbiguityError{Report: *ambiguity}
+	qualify, ambiguity, ambErr := ambiguityForMoves(files, moves, moved, req.AllowAmbiguity)
+	if ambErr != nil {
+		return nil, ambErr
 	}
-	qualify := ambiguity != nil
 
-	plan := &RenamePlan{CaseOnly: caseOnly, Ambiguity: ambiguity}
+	plan := &RenamePlan{CaseOnly: caseOnly, Ambiguity: ambiguity, Moves: moves}
 	// FR-112, applied to a write rather than a read: a note this graph could
 	// not scan might hold the very citation this rename needs to rewrite (or
 	// might itself be cited by the subject), and there is no way to tell from
@@ -585,36 +614,37 @@ func (r *Renamer) Plan(req RenameRequest) (*RenamePlan, error) {
 		return nil, err
 	}
 
-	dirChanged := path.Dir(from) != path.Dir(to)
 	for _, note := range graph.Notes() {
+		newNote, noteMoves := moved[note]
 		noteDir := path.Dir(note)
-		if note == from {
-			noteDir = path.Dir(to)
+		if noteMoves {
+			noteDir = path.Dir(newNote)
 		}
 		if noteDir == "." {
 			noteDir = ""
 		}
+		dirChanged := noteMoves && path.Dir(note) != path.Dir(newNote)
 
 		var edits []LinkEdit
 		for _, rl := range graph.Links(note) {
 			if rl.State != ResolveResolved {
 				continue
 			}
-			pointsAtSubject := rl.To == from
+			newTarget, pointsAtSubject := moved[rl.To]
 			// A markdown link is spelled relative to the note that holds it,
 			// so moving THAT note to another folder changes the correct
 			// spelling of every markdown link in it, even the ones pointing
 			// somewhere else entirely. Wikilinks are collection-relative and
 			// are unaffected by the move.
-			respellForMove := note == from && dirChanged && rl.Kind == LinkMarkdown
+			respellForMove := dirChanged && rl.Kind == LinkMarkdown
 			if !pointsAtSubject && !respellForMove {
 				continue
 			}
 			target := rl.To
 			if pointsAtSubject {
-				target = to
+				target = newTarget
 			}
-			newRaw, ok := rewriteLinkRaw(rl, target, noteDir, qualify)
+			newRaw, ok := rewriteLinkRaw(rl, target, noteDir, qualify[target])
 			if !ok || newRaw == rl.Raw {
 				continue
 			}
@@ -625,12 +655,20 @@ func (r *Renamer) Plan(req RenameRequest) (*RenamePlan, error) {
 		}
 		sort.Slice(edits, func(i, k int) bool { return edits[i].Offset < edits[k].Offset })
 
-		step, err := r.buildStep(fsys, note, note == from, edits)
+		step, err := r.buildStep(fsys, note, noteMoves && !req.Folder, edits)
 		if err != nil {
 			return nil, err
 		}
 		if step == nil {
 			continue
+		}
+		if noteMoves && req.Folder {
+			// A file inside a renamed folder is rewritten AFTER the folder
+			// has moved (Recover always performs the move first), so its step
+			// is recorded at the path the file will have then. It is not a
+			// Subject step: the journal's one subject is the file whose own
+			// location is From/To, and a folder holds many files.
+			step.RelPath = newNote
 		}
 		j.Steps = append(j.Steps, *step)
 		plan.LinksRewritten += len(edits)
@@ -730,32 +768,55 @@ func (r *Renamer) buildStep(fsys LinkFS, note string, subject bool, edits []Link
 	}, nil
 }
 
-// ambiguityAfterRename reports whether the destination's bare link name would
-// match more than one note once the rename has happened.
+// ambiguityForMoves reports, for every file a rename relocates, whether its
+// bare link name would match more than one note once the rename has happened,
+// and returns which destinations must therefore be written as full paths.
 //
 // Both sides are computed with the SAME index the resolver uses, so "ambiguous"
 // here means exactly what it means at resolution time (FR-041) rather than
 // something a second, approximate rule decided.
-func ambiguityAfterRename(files []string, from, to string) *AmbiguityReport {
+//
+// A note rename asks this once. A folder rename asks it for every file under
+// the folder: moving a folder keeps every basename, so it cannot make an
+// unambiguous name ambiguous, but a name that was ALREADY ambiguous still has
+// to be written as a full path, or a bare link could resolve by tie-break to a
+// different note after the move.
+//
+// The first report, in move order, is returned for RenamePlan.Ambiguity. An
+// *AmbiguityError is returned when a move would make an unambiguous name
+// ambiguous and allow is false.
+func ambiguityForMoves(files []string, moves []PathMove, moved map[string]string, allow bool) (map[string]bool, *AmbiguityReport, error) {
 	post := make([]string, 0, len(files))
 	for _, f := range files {
-		if f == from {
+		if to, ok := moved[f]; ok {
 			post = append(post, to)
 			continue
 		}
 		post = append(post, f)
 	}
-	key := bareLinkKey(to)
-	preMatches := NewNoteIndex(files).basenameCandidates(key)
-	postMatches := NewNoteIndex(post).basenameCandidates(key)
-	if len(postMatches) <= 1 {
-		return nil
+	preIndex, postIndex := NewNoteIndex(files), NewNoteIndex(post)
+	qualify := make(map[string]bool)
+	var first *AmbiguityReport
+	for _, m := range moves {
+		key := bareLinkKey(m.To)
+		postMatches := postIndex.basenameCandidates(key)
+		if len(postMatches) <= 1 {
+			continue
+		}
+		report := &AmbiguityReport{
+			Basename:     key,
+			Candidates:   append([]string(nil), postMatches...),
+			WasAmbiguous: len(preIndex.basenameCandidates(key)) > 1,
+		}
+		if !report.WasAmbiguous && !allow {
+			return nil, nil, &AmbiguityError{Report: *report}
+		}
+		qualify[m.To] = true
+		if first == nil {
+			first = report
+		}
 	}
-	return &AmbiguityReport{
-		Basename:     key,
-		Candidates:   append([]string(nil), postMatches...),
-		WasAmbiguous: len(preMatches) > 1,
-	}
+	return qualify, first, nil
 }
 
 // bareLinkKey is the name a bare "[[Name]]" would use for a path: the basename,
