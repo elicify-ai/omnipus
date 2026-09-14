@@ -6,7 +6,8 @@
       "key_slot": "a",
       "port": 6060,
       "specs": [
-        "tests/e2e/chat.spec.ts"
+        "tests/e2e/chat.spec.ts",
+        "tests/e2e/truncation-notice-live.spec.ts"
       ]
     },
     {
@@ -134,7 +135,8 @@
         "tests/e2e/settings-memory.spec.ts",
         "tests/e2e/tool-order.spec.ts",
         "tests/e2e/uat-browser-panel.spec.ts",
-        "tests/e2e/uat-ownership-api.spec.ts"
+        "tests/e2e/uat-ownership-api.spec.ts",
+        "tests/e2e/truncation-notice.spec.ts"
       ]
     },
     {
