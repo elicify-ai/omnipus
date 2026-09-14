@@ -2468,6 +2468,11 @@ Five properties this change makes materially worse and which nothing above bound
     `GoalStatusFrame.yaml` and the `asyncapi.yaml` inline duplicate — rows 10 and 11 of the copies
     table). Missing the inline copy blanks the goal card in production with `make verify-contracts`
     green (C20).
+  - **Amendment 2026-09-14 (issue #710), task runs only:** a task run cannot park, so on a
+    task-owned goal `blocked` ends the task Failed "Blocked: <reason>" — no adjudication, no round,
+    no task attempt, no restart — and `waiting_on_user` ends it Failed "Needs the operator: <reason>"
+    the same way. `goal_claim` carries the one-line reason for both as `evidence`. Chat goals park
+    exactly as stated above. See ADR-084 §11.
 - **FR-094**: `goal_claim`'s `evidence` MUST become the adjudication's `ClaimText`, occupying the
   same position in `buildJudgeUserContent`'s ordering that the marker path's `result.finalContent`
   occupies today (ADR-074's prose-led input order, protected by

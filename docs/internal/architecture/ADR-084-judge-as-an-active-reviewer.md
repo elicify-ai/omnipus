@@ -617,3 +617,27 @@ A criterion the Judge genuinely could not reach is now reported as not done, whi
 ### Consequence for ADR-086
 
 `ADR-086 D8`'s dependency on this ADR is removed. Projecting the verdict onto criterion status now needs only `met` and `unmet`, both of which exist today, so the visibility fix ships independently and immediately. §4's ordering claim in ADR-086 — that the goal-entity work should land before ADR-084 — becomes correct rather than contradicted.
+
+## 11. Amendment — 2026-09-14 (issue #710): task runs use the one claim path and the one Judge pipeline
+
+The founder's decisions of 2026-09-14. The text above stands as the record; this section changes how it applies to **task runs**. Chat goals are unchanged.
+
+**D12 said:** "**The text markers keep working**, unchanged, as a fallback for a model that types them anyway."
+
+**For task runs, now:** a native task worker finishes only through `goal_claim`; typed markers are not a fallback for it. The `TASK_STATUS` marker survives only for `subagent_3p` workers, whose CLI cannot call the tool, and it feeds the same claim resolution (success with evidence is a met claim; failure is a blocked claim — ADR-043 §8). `goal_claim` finds a task's goal through the session the goal is bound to: a task-owned goal is owned by the task, so the owner lookup could never see it from the run's session, and every task-run claim was refused (UAT B-5). A task run's own turn may claim even though every agent-created task carries a delegation generation of at least 1; a delegated sub-turn still may not. `set_goal` stays refused on task sessions.
+
+**D13 said:** "**A claim is the sole trigger.**" and "**It runs after the answer has been delivered to the operator**, not inside the turn they are waiting on."
+
+**For task runs, now:** the claim is still the sole trigger, and the Judge still runs only after the worker's turn has ended. What changes is who resolves it: the task executor's run loop, in the run's own session — not the chat after-turn hook. `checkGoalLoopAfterTurn` returns at once for a task run's turn, and the idle keeper stands down while the executor holds a task's run. It is the same `JudgeCriteria` verification, against the same goal record's criteria and Definition of Done. Nobody waits on a task turn, so nothing is gained by deferring further.
+
+**The Judge spec's FR-093 said:** "`status: blocked` MUST park the goal without an adjudication and without consuming a round, and MUST surface to the operator as a distinct goal state."
+
+**For task runs, now:** a task run has no one to un-park it, so `blocked` ends the task Failed "Blocked: <reason>" — still with no adjudication and no round consumed, and also with no task attempt used and no restart. The goal records the blocked claim and then ends through the one shared task-to-goal ending writer, so the run's session gets exactly one goal outcome line (an `other` ending, never a user stop). `goal_claim` now carries the one-line reason, given as `evidence`, for `blocked` and `waiting_on_user`; the chat path records that reason on the goal record too.
+
+**`waiting_on_user` on a task (decided here).** D13 says it "parks with no adjudication and no round consumed". A task run has no reply channel to the operator, and parking would leave the task `in_progress` with no run behind it. So on a task it ends the task Failed "Needs the operator: <reason>" — no adjudication, no round, no attempt, no restart. The operator answers by editing the task and running it again.
+
+**The Judge cannot run on a task.** A reason only an operator can fix (the Judge is misconfigured or not registered, a god-mode refusal, the Judge's output was cut off) ends the task Failed "The Judge could not run: <plain reason>", with no attempt used. A transient reason re-sends the same claim up to 3 times, with the reason visible on the task while it retries; after that the task ends Failed, again with no attempt used.
+
+**Reasoning-only tries.** A try whose output-token limit went entirely to reasoning, with no answer, spends one goal try. Two in a row fail the run with: "The model kept reasoning without producing an answer; the task may be too hard for this model." There is no per-turn time limit.
+
+Code: `pkg/agent/task_run_loop.go`; `pkg/agent/goal_loop.go::checkGoalLoopAfterTurn`; `pkg/agent/goal_triggers.go::maybeSettleGoalIdle`; `pkg/agent/goal_record_wiring.go::ReadClaimableGoal`; `pkg/tools/goal_claim.go`.

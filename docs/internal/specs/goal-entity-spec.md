@@ -422,6 +422,7 @@ The re-arm marker (`idleSettling`) means one fire per quiet spell, re-arming onl
 - **FR-012** — A task MUST hold its goal in the definition phase from task creation until the task starts, and MUST activate it against the session the task mints (`pkg/agent/task_executor.go::createTaskSessionSync`).
 - **FR-013** — After activation there MUST be exactly one code path for the loop, the claim, the Judge, the budget accounting and the verdict. `JudgeCriteriaInput`'s validation (`pkg/agent/judge.go`, the scope switch rejecting `scope %q must not also carry TaskID/GoalSessionID`) MUST be relaxed to permit a running task's goal carrying both.
 - **FR-014** — A test MUST exist that fails if any post-activation behavioural difference between a chat-owned and a task-owned goal appears. It MUST compare observable behaviour, not implementation structure.
+  - **Amendment 2026-09-14 (issue #710):** FR-013 and FR-014 are now met by one claim mechanism (`goal_claim`) and one Judge pipeline for both kinds. The claim's driver — the chat after-turn hook, or the task executor's run loop — is the stated provenance difference. See ADR-086 §8.
 
 ### C. The six contradictions
 
@@ -435,6 +436,7 @@ The re-arm marker (`idleSettling`) means one fire per quiet spell, re-arming onl
 - **FR-022** — The trust-the-claim branch in `pkg/agent/task_executor.go::adjudicateClaim` — which completes a task when its criteria set and its soft tier are both empty — MUST be deleted.
 - **FR-023** — A task created before FR-021 with no criteria MUST continue to run and MUST continue to be judged by `pkg/agent/judge.go::SoftTierCriterion`. FR-021 binds at creation and at edit only.
 - **FR-024** — There MUST be one budget for both owner kinds, defaulting to **20** (`config.DefaultGoalMaxRounds`).
+  - **Amendment 2026-09-14 (issue #710):** superseded by two limits — tries per goal (this budget, default 20, for both kinds) and task attempts (default 3, the task's own `max_attempts` when set). FR-026's ceiling now guards task attempts. See ADR-086 §8.
 - **FR-025** — The budget MUST accept a per-goal override. `pkg/config/planning.go::EffectiveGoalMaxRounds` MUST take an override argument, mirroring `EffectiveTaskMaxAttempts`. An override below 1 MUST be rejected.
 - **FR-026** — The `2 × effective budget` hard ceiling (`pkg/agent/task_executor.go::consumeAttemptOrExhaust`) MUST apply to both owner kinds.
 - **FR-027** — Ending a goal MUST be a status transition on a retained record. The record MUST survive with its criteria, their final statuses, the verdict, the reason and any handover.

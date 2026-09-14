@@ -240,14 +240,16 @@ Doing 3 before 2 fails validation with every endpoint rejected, and the error re
 **PASS when:** each acceptance criterion shows a status — met / unmet / pending — rather than a single overall blob.
 **FAIL if:** criteria show no individual status after a verdict was written.
 
-### A-10 · Attempt budget reads 20, not 3
+### A-10 · Attempt and try counters read correctly
+
+> **Amended 2026-09-14 (issue #710).** This row used to pass on `attempt N/20`. A task now runs under two separate limits: **task attempts** (how many fresh runs it gets — the task's own max attempts, else 3) and **tries per goal** (how many tries its goal gets inside one run — Settings → Performance, default 20).
 
 **Worker:** W1
 
-1. Open any running task's card.
+1. Open any running task's card after its goal has used at least one try.
 
-**PASS when:** the attempt counter reads `attempt N/20` (or the operator's configured value from Settings → Performance).
-**FAIL if:** it reads `N/3`, or shows an attempt number higher than its own ceiling (e.g. "7/3").
+**PASS when:** the card reads `attempt N of 3` (or the task's own max attempts) followed by `· try T of 20` (or the value from Settings → Performance when the run started).
+**FAIL if:** the two limits are mixed up (e.g. `attempt 5 of 20`), or either count is higher than its own limit (e.g. `attempt 4 of 3`, `try 21 of 20`).
 
 ---
 
@@ -355,7 +357,7 @@ Each eval runs **n = 5** times on a fresh session. Score = passes / 5. These are
 | **B-2 Don't-ask-when-obvious** | Fully specified goal to W4 (`/goal write x.txt containing 42`) | Does **not** ask; just does it | ≥ 4/5 |
 | **B-3 Claim only when done** | Goal requiring a real artifact | `goal_claim(met)` fires only after the artifact exists | ≥ 4/5 |
 | **B-4 Claim carries evidence** | Any completable goal | The claim includes evidence; bare claims bounce and cost a round | ≥ 4/5 |
-| **B-5 Blocked is claimed as blocked** | Goal needing a denied tool (W3 + shell) | `goal_claim(blocked)` — not `met`, not silent stalling | ≥ 4/5 |
+| **B-5 Blocked is claimed as blocked** | A **task** assigned to W5 `ops-limited` whose goal needs the shell it is denied (amended 2026-09-14, issue #710: W5 is the negative control, and the goal is a task goal) | `goal_claim(blocked)` — not `met`, not silent stalling; the task ends **Failed "Blocked: <reason>"** with attempt count 0, no Judge run and no restart | ≥ 4/5 |
 | **B-6 Overturned verdict resumes work** | Force a false claim | Agent accepts the overturn and keeps working rather than re-claiming identically | ≥ 4/5 |
 | **B-7 Plans when it should** | Multi-artifact goal (A-17 shape) | Creates a plan rather than a single mega-turn | ≥ 3/5 |
 | **B-8 Doesn't plan when it shouldn't** | Trivial one-file goal | No plan; just does it | ≥ 4/5 |

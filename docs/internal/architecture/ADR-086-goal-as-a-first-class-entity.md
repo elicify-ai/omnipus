@@ -273,3 +273,20 @@ scheduled and vanishes from the surface they were standing on. The two **control
 | M6 | "The writer runs where the verdict is recorded" | D8 — **three** write paths; the goal path must de-union `compiledGoalCriteriaFor`'s flattened `Criteria ∪ DoD`. |
 | M7 | D7 "greenfield" | D7 — states the actual failure: orphan keys are dropped silently, both drivers gate on `GoalCondition != ""`, so an in-flight goal **ceases to exist** with no terminal frame. |
 | m1 | Cites ADR-084 revision 7 | Cites **revision 9** throughout. |
+
+## 8. Amendment — 2026-09-14 (issue #710): two limits, one claim path
+
+The founder's decisions of 2026-09-14. The text above stands as the record.
+
+**D10 said:** "Row 9 is resolved to a single budget for both paths: **default 20**, with a **per-goal override**." and "The task path's `2 × maxAttempts` hard ceiling survives as a divergence brake". The goal entity spec's GOAL-FR-024 said: "There MUST be one budget for both owner kinds, defaulting to **20**".
+
+**Now there are two limits, and they are different things:**
+
+- **Tries per goal** (Settings → Performance, `goal_max_rounds`, default 20) bounds how many tries a goal gets — a chat goal, and the goal a task run works toward. A goal the Judge finds not met yet keeps working in the same run and session. A running goal keeps the limit it started with.
+- **Task attempts** (the task's own `max_attempts`, else `planning.task_max_attempts`, default 3 — config only, with no UI) bounds how many runs a task gets. A run fails as a whole when its goal ends not met after all its tries, when the run breaks, or after two reasoning-only tries in a row. The task then restarts in a fresh run — a new session, with the goal reactivated — until the limit, and then ends Failed with the reason. A run that was never dispatched uses no attempt.
+- The hard ceiling is now twice the task attempt limit, and guards the attempt counter.
+- `effective_max_attempts` on the wire is the task attempt limit. The task card may show both counters, for example "attempt 1 of 3 · try 5 of 20".
+
+**GOAL-FR-013 said:** "After activation there MUST be exactly one code path for the loop, the claim, the Judge, the budget accounting and the verdict." **GOAL-FR-014 said:** "A test MUST exist that fails if any post-activation behavioural difference between a chat-owned and a task-owned goal appears."
+
+**Now:** both goal kinds claim through the same `goal_claim` tool call and are judged by the same `JudgeCriteria` verification, against the criteria and Definition of Done on the goal record. The one remaining difference is which driver picks the claim up — the chat after-turn hook, or the task executor's run loop — which is turn provenance. It is stated in `pkg/agent/goal_parity_test.go`, whose differential test now drives both kinds through the real tool and fails if the adjudication count, the terminal state, the tries used or the retained criteria differ. The duplicate task-side path (`deferDoneClaimToJudge`, `Task.PendingJudgeClaim`, the native `[goal:evidence]` gate) is deleted. The task card reads its criteria and Definition of Done from the goal record (D5).
