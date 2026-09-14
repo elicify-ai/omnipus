@@ -222,7 +222,7 @@ func (p *DedicatedInputPeer) answerNative(ctx context.Context, sdp string) (stri
 func (p *DedicatedInputPeer) bindChannel(dc *pion.DataChannel) {
 	hover := dc.Label() == "input-hover"
 	valid := dc.Label() == "input-reliable" || hover
-	valid = valid && !dc.Negotiated() && dc.MaxPacketLifeTime() == nil
+	valid = valid && dc.Protocol() == InputBinaryProtocol && !dc.Negotiated() && dc.MaxPacketLifeTime() == nil
 	if hover {
 		valid = valid && !dc.Ordered() && dc.MaxRetransmits() != nil && *dc.MaxRetransmits() == 0
 	} else {
@@ -265,20 +265,25 @@ func (p *DedicatedInputPeer) bindChannel(dc *pion.DataChannel) {
 			p.fail("input channels not ready")
 			return
 		}
-		if !message.IsString || len(message.Data) > 64*1024 {
+		if message.IsString || len(message.Data) > inputBinaryMaxBytes {
 			p.fail("invalid input message")
 			return
 		}
+		frame, err := DecodeInputPacket(message.Data)
+		if err != nil {
+			p.fail("invalid input payload")
+			return
+		}
 		if p.validate != nil {
-			if err := p.validate(message.Data); err != nil {
+			raw, err := json.Marshal(frame)
+			if err != nil {
 				p.fail("invalid input payload")
 				return
 			}
-		}
-		var frame generated.BrowserInputFrame
-		if err := json.Unmarshal(message.Data, &frame); err != nil {
-			p.fail("invalid input payload")
-			return
+			if err := p.validate(raw); err != nil {
+				p.fail("invalid input payload")
+				return
+			}
 		}
 		if frame.Type != "browser_input" {
 			p.fail("invalid input payload")

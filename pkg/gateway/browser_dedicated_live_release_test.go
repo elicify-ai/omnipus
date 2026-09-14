@@ -64,7 +64,7 @@ func TestDedicatedReleaseCancelsLivePeerSourceBeforeAcknowledgment(t *testing.T)
 	case <-ctx.Done():
 		t.Fatal("server channels did not become ready")
 	}
-	require.NoError(t, reliable.SendText(`{"type":"browser_input","kind":"key_down","key":"ArrowLeft","code":"ArrowLeft","input_epoch":1,"control_epoch":0,"reliable_seq":1,"gesture_barrier":1}`))
+	sendDedicatedBinaryJSON(t, reliable, `{"type":"browser_input","kind":"key_down","key":"ArrowLeft","code":"ArrowLeft","input_epoch":1,"control_epoch":0,"reliable_seq":1,"gesture_barrier":1}`)
 	var oldSource context.Context
 	select {
 	case oldSource = <-entered:
@@ -128,12 +128,12 @@ func dedicatedReleaseClient(t *testing.T, ctx context.Context, peer *webrtc.Dedi
 	client, err := pion.NewAPI(pion.WithSettingEngine(settings)).NewPeerConnection(pion.Configuration{})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = client.Close() })
-	reliable, err := client.CreateDataChannel("input-reliable", nil)
+	reliable, err := client.CreateDataChannel("input-reliable", &pion.DataChannelInit{Protocol: func() *string { value := webrtc.InputBinaryProtocol; return &value }()})
 	require.NoError(t, err)
 	opened := make(chan struct{})
 	reliable.OnOpen(func() { close(opened) })
 	ordered, retries := false, uint16(0)
-	_, err = client.CreateDataChannel("input-hover", &pion.DataChannelInit{Ordered: &ordered, MaxRetransmits: &retries})
+	_, err = client.CreateDataChannel("input-hover", &pion.DataChannelInit{Ordered: &ordered, MaxRetransmits: &retries, Protocol: func() *string { value := webrtc.InputBinaryProtocol; return &value }()})
 	require.NoError(t, err)
 	offer, err := client.CreateOffer(nil)
 	require.NoError(t, err)
@@ -153,4 +153,13 @@ func dedicatedReleaseClient(t *testing.T, ctx context.Context, peer *webrtc.Dedi
 		t.Fatal("client reliable channel did not open")
 	}
 	return client, reliable
+}
+
+func sendDedicatedBinaryJSON(t *testing.T, channel *pion.DataChannel, raw string) {
+	t.Helper()
+	var frame generated.BrowserInputFrame
+	require.NoError(t, json.Unmarshal([]byte(raw), &frame))
+	packet, err := webrtc.EncodeInputPacket(frame)
+	require.NoError(t, err)
+	require.NoError(t, channel.Send(packet))
 }

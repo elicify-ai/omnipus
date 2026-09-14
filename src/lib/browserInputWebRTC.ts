@@ -1,3 +1,4 @@
+import { browserInputProtocol, encodeBrowserInput } from './browserInputCodec'
 import type { BrowserInputFrame, BrowserInputOfferFrame, BrowserInputAnswerFrame, BrowserInputStateFrame, BrowserInputControlAckFrame } from '@/lib/api/generated/asyncapi-types'
 
 type Input = Omit<BrowserInputFrame, 'type'>
@@ -72,8 +73,8 @@ export class BrowserInputWebRTCSession {
       const pc = (this.options.pcFactory ?? ((config) => new RTCPeerConnection(config)))({ iceServers: this.iceServers })
       attemptedPeer = pc
       this.pc = pc
-      this.reliable = pc.createDataChannel('input-reliable', { ordered: true })
-      this.hover = pc.createDataChannel('input-hover', { ordered: false, maxRetransmits: 0 })
+      this.reliable = pc.createDataChannel('input-reliable', { ordered: true, protocol: browserInputProtocol })
+      this.hover = pc.createDataChannel('input-hover', { ordered: false, maxRetransmits: 0, protocol: browserInputProtocol })
       for (const channel of [this.reliable, this.hover]) {
         channel.onopen = () => { if (this.pc === pc) this.updateReady() }
         channel.onclose = () => { if (this.pc === pc) this.fail('Input connection closed. Retry input.') }
@@ -179,7 +180,7 @@ export class BrowserInputWebRTCSession {
       gesture_barrier: barrier,
       ...(hover ? { hover_seq: sequence } : { reliable_seq: sequence }),
     }
-    try { channel.send(JSON.stringify(frame)) } catch { this.fail('Input was not sent. Retry input.'); return false }
+    try { channel.send(encodeBrowserInput(frame)) } catch { this.fail('Input was not sent. Retry input.'); return false }
     this.barrier = barrier
     if (hover) this.hoverSequence = sequence
     else this.reliableSequence = sequence

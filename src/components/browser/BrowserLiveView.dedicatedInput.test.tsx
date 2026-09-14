@@ -1,3 +1,4 @@
+import { decodeBrowserInput } from '@/lib/browserInputCodec'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { installBrowserFrameCallbacks, emitBrowserFrame } from './browserFrameTestUtils'
@@ -73,7 +74,7 @@ it.each(['/', '/?browserInput=websocket', '/?browserInput=dedicated'])('requires
   const originalMedia = s.video.srcObject
   fireEvent.keyDown(s.frame, { key: 'a', code: 'KeyA', keyCode: 65 })
   fireEvent.keyUp(s.frame, { key: 'a', code: 'KeyA', keyCode: 65 })
-  expect(s.peer.channels['input-reliable'].send.mock.calls.map(([data]) => JSON.parse(data))).toEqual([{
+  expect(s.peer.channels['input-reliable'].send.mock.calls.map(([data]) => decodeBrowserInput(data))).toEqual([{
     type: 'browser_input', kind: 'key_down', key: 'a', code: 'KeyA', key_code: 65, text: 'a', modifiers: 0, capture_id: capture, capture_generation: 1,
     input_epoch: 1, control_epoch: 0, reliable_seq: 1, gesture_barrier: 1,
   }, {
@@ -112,7 +113,7 @@ it('waits for the control acknowledgment and its presented capture generation', 
   act(() => { health(s.socket, 2, 200); emitBrowserFrame(s.video, { rtpTimestamp: 200, expectedDisplayTime: performance.now() - 1 }) })
   fireEvent.keyDown(s.frame, { key: 'a', code: 'KeyA', keyCode: 65 })
   fireEvent.keyUp(s.frame, { key: 'a', code: 'KeyA', keyCode: 65 })
-  expect(s.peer.channels['input-reliable'].send.mock.calls.map(([data]) => JSON.parse(data).capture_generation)).toEqual([2, 2])
+  expect(s.peer.channels['input-reliable'].send.mock.calls.map(([data]) => decodeBrowserInput(data).capture_generation)).toEqual([2, 2])
 })
 
 

@@ -48,6 +48,8 @@ test('focused game chat preserves Space, A, arrows and logical German Mac at-sig
     await ready(); marks.push({ label: 'exact-game-keys-and-layout-complete', at: new Date().toISOString() });
     const routes = (await routeEvidence(page)).routes;
     expect(routes.filter(row => row.route === 'websocket')).toEqual([]);
+    expect(routes.length).toBeGreaterThan(0);
+    expect(routes.every(row => row.encoding === 'binary-v1')).toBe(true);
     expect(errors).toEqual([]);
   } finally {
     const final = await page.evaluate(() => (window as unknown as { __inputSmoke?: { sample(): { state: InputState } | null } }).__inputSmoke?.sample()?.state).catch(() => null);

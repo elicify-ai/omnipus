@@ -69,10 +69,10 @@ func TestDedicatedPayloadUsesRealSchemaAndChannelAdmission(t *testing.T) {
 			client, err := pion.NewAPI(pion.WithSettingEngine(settings)).NewPeerConnection(pion.Configuration{})
 			require.NoError(t, err)
 			defer client.Close()
-			reliable, err := client.CreateDataChannel("input-reliable", nil)
+			reliable, err := client.CreateDataChannel("input-reliable", &pion.DataChannelInit{Protocol: func() *string { value := webrtc.InputBinaryProtocol; return &value }()})
 			require.NoError(t, err)
 			ordered, retries := false, uint16(0)
-			hover, err := client.CreateDataChannel("input-hover", &pion.DataChannelInit{Ordered: &ordered, MaxRetransmits: &retries})
+			hover, err := client.CreateDataChannel("input-hover", &pion.DataChannelInit{Ordered: &ordered, MaxRetransmits: &retries, Protocol: func() *string { value := webrtc.InputBinaryProtocol; return &value }()})
 			require.NoError(t, err)
 			channel := reliable
 			if tc.hover {
@@ -114,7 +114,11 @@ func TestDedicatedPayloadUsesRealSchemaAndChannelAdmission(t *testing.T) {
 			}
 			raw, err := json.Marshal(frame)
 			require.NoError(t, err)
-			require.NoError(t, channel.SendText(string(raw)))
+			var wireFrame generated.BrowserInputFrame
+			require.NoError(t, json.Unmarshal(raw, &wireFrame))
+			packet, err := webrtc.EncodeInputPacket(wireFrame)
+			require.NoError(t, err)
+			require.NoError(t, channel.Send(packet))
 			if tc.failure == "" {
 				select {
 				case got := <-delivered:

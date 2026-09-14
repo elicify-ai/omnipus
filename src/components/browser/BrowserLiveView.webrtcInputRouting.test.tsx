@@ -211,6 +211,136 @@ function ackDriving(container: HTMLElement) {
 }
 
 describe('BrowserLiveView — input routing: dedicated input during media connection changes', () => {
+  it('native composition commits Unicode once and keeps candidate keys local', async () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+    connectAndFrame(); const container = stubFrameRect(); stubVideoDims(); ackDriving(container)
+    const sink = screen.getByRole('textbox', { name: 'Remote browser text input' })
+    act(() => sink.focus())
+    fireEvent.compositionStart(sink)
+    fireEvent.input(sink, { target: { value: 'に' }, data: 'に', isComposing: true, inputType: 'insertCompositionText' })
+    fireEvent.keyDown(sink, { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, isComposing: true })
+    fireEvent.keyDown(sink, { key: 'Enter', code: 'Enter', keyCode: 13, isComposing: true })
+    expect(mockSendInput).not.toHaveBeenCalled()
+    fireEvent.compositionEnd(sink, { data: '日本é🙂' })
+    fireEvent.input(sink, { target: { value: '日本é🙂' }, data: '日本é🙂', inputType: 'insertFromComposition' })
+    await act(async () => { await Promise.resolve() })
+    expect(mockSendInput.mock.calls.map(([input]) => input)).toEqual([{ kind: 'text', text: '日本é🙂', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 }])
+    fireEvent.compositionStart(sink)
+    fireEvent.compositionEnd(sink, { data: '日本é🙂' })
+    await act(async () => { await Promise.resolve() })
+    expect(mockSendInput).toHaveBeenCalledTimes(2)
+  })
+
+  it('native text insertion and paste preserve combining marks and newlines without physical paste duplication', async () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+    connectAndFrame(); const container = stubFrameRect(); stubVideoDims(); ackDriving(container)
+    const sink = screen.getByRole('textbox', { name: 'Remote browser text input' })
+    act(() => sink.focus())
+    fireEvent.input(sink, { target: { value: '🙂e\u0301' }, data: '🙂e\u0301', inputType: 'insertText' })
+    await act(async () => { await Promise.resolve() })
+    fireEvent.keyDown(sink, { key: 'v', code: 'KeyV', keyCode: 86, ctrlKey: true })
+    fireEvent.paste(sink, { clipboardData: { getData: () => '日本\nمرحبا🙂' } })
+    fireEvent.keyUp(sink, { key: 'v', code: 'KeyV', keyCode: 86, ctrlKey: true })
+    await act(async () => { await Promise.resolve() })
+    fireEvent.input(sink, { target: { value: '後🙂' }, data: '後🙂', inputType: 'insertText' })
+    await act(async () => { await Promise.resolve() })
+    expect(mockSendInput.mock.calls.map(([input]) => input)).toEqual([
+      { kind: 'text', text: '🙂e\u0301', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 },
+      { kind: 'text', text: '日本\nمرحبا🙂', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 },
+      { kind: 'text', text: '後🙂', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 },
+    ])
+  })
+
+  it('dead-key native text and idle insertion after pointer capture loss stay usable', async () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+    connectAndFrame(); const container = stubFrameRect(); stubVideoDims(); ackDriving(container)
+    const sink = screen.getByRole('textbox', { name: 'Remote browser text input' })
+    act(() => sink.focus())
+    fireEvent.lostPointerCapture(container)
+    fireEvent.input(sink, { target: { value: '🙂' }, inputType: 'insertText' })
+    await act(async () => { await Promise.resolve() })
+    fireEvent.keyDown(sink, { key: 'Dead', code: 'Quote', keyCode: 222 })
+    fireEvent.keyDown(sink, { key: 'é', code: 'KeyE', keyCode: 69 })
+    fireEvent.input(sink, { target: { value: 'é' }, data: 'é', inputType: 'insertText' })
+    fireEvent.keyUp(sink, { key: 'é', code: 'KeyE', keyCode: 69 })
+    await act(async () => { await Promise.resolve() })
+    expect(mockSendInput.mock.calls.map(([input]) => input)).toEqual([
+      { kind: 'text', text: '🙂', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 },
+      { kind: 'text', text: 'é', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 },
+    ])
+  })
+
+  it('paste cancels an active candidate and permits the next native insertion after its terminal event', async () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+    connectAndFrame(); const container = stubFrameRect(); stubVideoDims(); ackDriving(container)
+    const sink = screen.getByRole('textbox', { name: 'Remote browser text input' })
+    act(() => sink.focus())
+    fireEvent.compositionStart(sink)
+    fireEvent.input(sink, { target: { value: '候補' }, isComposing: true, inputType: 'insertCompositionText' })
+    fireEvent.paste(sink, { clipboardData: { getData: () => 'pasted' } })
+    fireEvent.compositionEnd(sink, { data: '候補' })
+    fireEvent.input(sink, { target: { value: '候補' }, inputType: 'insertFromComposition' })
+    await act(async () => { await Promise.resolve() })
+    fireEvent.input(sink, { target: { value: '🙂' }, inputType: 'insertText' })
+    await act(async () => { await Promise.resolve() })
+    expect(mockSendInput.mock.calls.map(([input]) => input.text)).toEqual(['pasted', '🙂'])
+    expect(mockSendInput.mock.calls.every(([input]) => input.kind === 'text')).toBe(true)
+  })
+
+  it('navigation cancels candidate text and refuses its late terminal events', async () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+    connectAndFrame(); const container = stubFrameRect(); stubVideoDims(); ackDriving(container)
+    const sink = screen.getByRole('textbox', { name: 'Remote browser text input' })
+    act(() => sink.focus())
+    fireEvent.compositionStart(sink)
+    fireEvent.input(sink, { target: { value: 'discard' }, isComposing: true, inputType: 'insertCompositionText' })
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh page' }))
+    fireEvent.compositionEnd(sink, { data: 'discard' })
+    fireEvent.input(sink, { target: { value: 'discard' }, inputType: 'insertFromComposition' })
+    await act(async () => { await Promise.resolve() })
+    expect(mockSendInput).not.toHaveBeenCalled()
+    expect(mockSocketSendInput).toHaveBeenCalledExactlyOnceWith({ kind: 'reload' })
+  })
+
+  it('oversized native paste refuses the complete action without partial insertion', async () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+    connectAndFrame(); const container = stubFrameRect(); stubVideoDims(); ackDriving(container)
+    const sink = screen.getByRole('textbox', { name: 'Remote browser text input' })
+    act(() => sink.focus())
+    fireEvent.paste(sink, { clipboardData: { getData: () => '🙂'.repeat(8193) } })
+    await act(async () => { await Promise.resolve() })
+    expect(mockSendInput).not.toHaveBeenCalled()
+    expect(useUiStore.getState().toasts.at(-1)?.message).toContain('8,192')
+  })
+
+  it.each(['disconnect', 'frame change'])('native commit cannot survive %s', async (change) => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+    connectAndFrame(); const container = stubFrameRect(); stubVideoDims(); ackDriving(container)
+    const sink = screen.getByRole('textbox', { name: 'Remote browser text input' })
+    act(() => sink.focus())
+    fireEvent.compositionStart(sink)
+    fireEvent.compositionEnd(sink, { data: 'discard' })
+    act(() => {
+      if (change === 'disconnect') wsCallbacksRef.current?.onDisconnected?.()
+      else wsCallbacksRef.current?.onVideoHealth({ type: 'browser_video_health', session_id: 's1', state: 'transitioning', capture_id: 'capture-test', capture_generation: 2 })
+    })
+    await act(async () => { await Promise.resolve() })
+    expect(mockSendInput).not.toHaveBeenCalled()
+  })
+
+  it('composition cancellation on true blur cannot commit late text or release driving on IME Escape', async () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+    connectAndFrame(); const container = stubFrameRect(); stubVideoDims(); ackDriving(container)
+    const sink = screen.getByRole('textbox', { name: 'Remote browser text input' })
+    act(() => sink.focus())
+    fireEvent.compositionStart(sink)
+    fireEvent.keyDown(sink, { key: 'Escape', code: 'Escape', keyCode: 27, isComposing: true })
+    expect(mockSendControl).not.toHaveBeenCalled()
+    fireEvent.compositionEnd(sink, { data: 'discard' })
+    act(() => screen.getByRole('textbox', { name: 'Address bar' }).focus())
+    await act(async () => { await Promise.resolve() })
+    expect(mockSendInput).not.toHaveBeenCalled()
+  })
   it.each([
     { key: 'a', code: 'KeyA', keyCode: 65, platform: 'Linux x86_64', altKey: false, modifiers: 0 },
     { key: ' ', code: 'Space', keyCode: 32, platform: 'Linux x86_64', altKey: false, modifiers: 0 },

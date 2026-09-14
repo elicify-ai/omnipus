@@ -2,6 +2,7 @@ package webrtc
 
 import (
 	"context"
+	"encoding/hex"
 	"sync"
 	"testing"
 	"time"
@@ -11,7 +12,7 @@ import (
 )
 
 func TestDedicatedInputPeerChannelsAndRetirement(t *testing.T) {
-	for _, invalid := range []string{"", "duplicate", "wrong-options", "wrong-label"} {
+	for _, invalid := range []string{"", "duplicate", "wrong-options", "wrong-label", "wrong-protocol", "json-message", "unknown-version", "truncated-message"} {
 		t.Run(invalid, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -44,7 +45,7 @@ func TestDedicatedInputPeerChannelsAndRetirement(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer client.Close()
-			reliable, err := client.CreateDataChannel("input-reliable", nil)
+			reliable, err := client.CreateDataChannel("input-reliable", &pion.DataChannelInit{Protocol: func() *string { value := InputBinaryProtocol; return &value }()})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -54,15 +55,19 @@ func TestDedicatedInputPeerChannelsAndRetirement(t *testing.T) {
 			if invalid == "wrong-options" {
 				ordered = true
 			}
+			protocol := InputBinaryProtocol
+			if invalid == "wrong-protocol" {
+				protocol = "omnipus.input.v2"
+			}
 			label := "input-hover"
 			if invalid == "wrong-label" {
 				label = "unknown"
 			}
-			if _, err = client.CreateDataChannel(label, &pion.DataChannelInit{Ordered: &ordered, MaxRetransmits: &retries}); err != nil {
+			if _, err = client.CreateDataChannel(label, &pion.DataChannelInit{Ordered: &ordered, MaxRetransmits: &retries, Protocol: &protocol}); err != nil {
 				t.Fatal(err)
 			}
 			if invalid == "duplicate" {
-				if _, err = client.CreateDataChannel("input-reliable", nil); err != nil {
+				if _, err = client.CreateDataChannel("input-reliable", &pion.DataChannelInit{Protocol: &protocol}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -87,26 +92,63 @@ func TestDedicatedInputPeerChannelsAndRetirement(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := "ready"
-			if invalid != "" {
+			channelInvalid := invalid != "" && invalid != "json-message" && invalid != "unknown-version" && invalid != "truncated-message"
+			if channelInvalid {
 				want = "invalid input data channel"
 			}
 			for {
 				select {
 				case actual := <-states:
 					if actual == want {
-						if invalid == "" {
+						if !channelInvalid {
 							select {
 							case <-reliableOpen:
 							case <-ctx.Done():
 								t.Fatal(ctx.Err())
 							}
-							const payload = `{"type":"browser_input","kind":"text","text":"Zażółć 世界 👋","input_epoch":1,"control_epoch":0,"reliable_seq":1,"gesture_barrier":0}`
-							if err := reliable.SendText(payload); err != nil {
+							// Fixed v1 vector: text field (bit 10), epochs (15/16),
+							// reliable sequence (17), barrier (19), all little-endian.
+							payload, err := hex.DecodeString("4f4249010700840b00010061000000000000f03f0000000000000000000000000000f03f0000000000000000")
+							if err != nil {
+								t.Fatal(err)
+							}
+							if invalid != "" {
+								wantFailure := "invalid input payload"
+								if invalid == "json-message" {
+									wantFailure = "invalid input message"
+									err = reliable.SendText(`{"type":"browser_input","kind":"text","text":"a"}`)
+								} else {
+									if invalid == "unknown-version" {
+										payload[3] = 2
+									} else {
+										payload = payload[:len(payload)-1]
+									}
+									err = reliable.Send(payload)
+								}
+								if err != nil {
+									t.Fatal(err)
+								}
+								select {
+								case failure := <-states:
+									if failure != wantFailure {
+										t.Fatalf("failure=%q want=%q", failure, wantFailure)
+									}
+								case <-ctx.Done():
+									t.Fatal("malformed packet was not refused")
+								}
+								select {
+								case frame := <-delivered:
+									t.Fatalf("malformed packet dispatched: %#v", frame)
+								default:
+								}
+								return
+							}
+							if err := reliable.Send(payload); err != nil {
 								t.Fatal(err)
 							}
 							select {
 							case frame := <-delivered:
-								if frame.Kind != "text" || frame.Text == nil || *frame.Text != "Zażółć 世界 👋" {
+								if frame.Kind != "text" || frame.Text == nil || *frame.Text != "a" {
 									t.Fatalf("wrong delivered payload: %#v", frame)
 								}
 							case <-ctx.Done():

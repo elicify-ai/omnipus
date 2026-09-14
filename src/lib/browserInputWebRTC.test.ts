@@ -1,3 +1,4 @@
+import { browserInputProtocol, decodeBrowserInput } from './browserInputCodec'
 import { describe, it, expect, vi } from 'vitest'
 import { BrowserInputWebRTCSession } from './browserInputWebRTC'
 
@@ -20,14 +21,14 @@ function setup(onFailure?: () => boolean) {
     await vi.waitFor(() => expect(machine.state).toBe('ready'))
   }
   const input = { kind: 'mouse_move' as const, x: 12, y: 24, modifiers: 0, capture_id: 'a'.repeat(64), capture_generation: 1 }
-  const sent = (label: string) => channels[label].send.mock.calls.map(([data]) => JSON.parse(data as string))
+  const sent = (label: string) => channels[label].send.mock.calls.map(([data]) => decodeBrowserInput(data as Uint8Array))
   return { machine, pc, channels, offer, changed, connect, input, sent }
 }
 
 describe('dedicated input contract', () => {
   it('negotiates only the two specified data channels and applies an exact answer', async () => {
     const s = setup(); await s.connect()
-    expect(s.pc.createDataChannel.mock.calls).toEqual([['input-reliable', { ordered: true }], ['input-hover', { ordered: false, maxRetransmits: 0 }]])
+    expect(s.pc.createDataChannel.mock.calls).toEqual([['input-reliable', { ordered: true, protocol: browserInputProtocol }], ['input-hover', { ordered: false, maxRetransmits: 0, protocol: browserInputProtocol }]])
     expect(s.offer.mock.calls).toEqual([[{ sdp: 'offer-sdp', offer_id: 1, input_epoch: 1, control_epoch: 0 }]])
     expect(s.pc.setRemoteDescription.mock.calls).toEqual([[{ type: 'answer', sdp: 'answer-sdp' }]])
     s.machine.stop()
@@ -279,5 +280,20 @@ it('ignores transport failure while ordered retirement awaits its own acknowledg
   expect(s.offer).toHaveBeenCalledTimes(1)
   expect(s.machine.applyControlAck({ type: 'browser_input_control_ack', session_id: 'session', input_epoch: 1, control_epoch: 1, ok: true })).toBe(true)
   await vi.waitFor(() => expect(s.offer).toHaveBeenCalledTimes(2))
+  s.machine.stop()
+})
+
+// Independent v1 wire oracle: OBI/version 1/text kind, presence mask,
+// UTF-8 length + "a", followed by input/control/sequence/barrier doubles.
+it('sends versioned binary bytes on the actual reliable transport', async () => {
+  const s = setup(); await s.connect()
+  expect(s.machine.sendInput({ kind: 'text', text: 'a' })).toBe(true)
+  const packet = s.channels['input-reliable'].send.mock.calls[0][0]
+  expect(packet).toBeInstanceOf(Uint8Array)
+  expect(Array.from(packet as Uint8Array)).toEqual([
+    79,66,73,1,7,0,132,11,0,1,0,97,
+    0,0,0,0,0,0,240,63, 0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,240,63, 0,0,0,0,0,0,0,0,
+  ])
   s.machine.stop()
 })

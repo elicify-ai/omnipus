@@ -2,7 +2,7 @@ import { expect, type Page } from '@playwright/test';
 import { browserLiveVideo } from '../e2e/fixtures/selectors';
 
 export type InputState = { nonce: number; clicks: number; downs: number; ups: number; held: number; scroll: number; drags: number; errors: number; text: string };
-export type RouteEvent = { route: string; kind: string; at: number };
+export type RouteEvent = { route: string; kind: string; at: number; encoding: 'json' | 'binary-v1'; bytes: number };
 type Geometry = { left: number; top: number; width: number; height: number; canvasWidth: number; canvasHeight: number };
 type Observation = { state: InputState; geometry: Geometry };
 type RuntimeProbe = {
@@ -20,9 +20,18 @@ export async function instrumentRoutes(page: Page) {
   await page.addInitScript(() => {
     const routes: RouteEvent[] = [], peers: Array<{ pc: RTCPeerConnection; labels: string[] }> = [], sockets: WebSocket[] = [];
     function record(route: string, data: unknown) {
-      if (typeof data !== 'string') return;
-      let frame; try { frame = JSON.parse(data); } catch { return; }
-      if (frame.type === 'browser_input' && ['mouse_down', 'mouse_up', 'mouse_move', 'key_down', 'key_up', 'text', 'wheel'].includes(frame.kind)) routes.push({ route, kind: frame.kind, at: performance.now() });
+      const kinds = ['mouse_move', 'mouse_down', 'mouse_up', 'wheel', 'key_down', 'key_up', 'text'];
+      if (typeof data === 'string') {
+        let frame; try { frame = JSON.parse(data); } catch { return; }
+        if (frame.type === 'browser_input' && kinds.includes(frame.kind)) routes.push({ route, kind: frame.kind, at: performance.now(), encoding: 'json', bytes: new TextEncoder().encode(data).length });
+        return;
+      }
+      // Observe the versioned packet header without retaining user payloads.
+      // Full framing/schema admission is independently tested at the server.
+      const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : ArrayBuffer.isView(data) ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength) : null;
+      if (bytes && bytes.length >= 9 && bytes.length <= 65536 && bytes[0] === 79 && bytes[1] === 66 && bytes[2] === 73 && bytes[3] === 1 && kinds[bytes[4] - 1]) {
+        routes.push({ route, kind: kinds[bytes[4] - 1], at: performance.now(), encoding: 'binary-v1', bytes: bytes.length });
+      }
     }
     let openedSockets = 0;
     const NativePeer = window.RTCPeerConnection;
@@ -32,7 +41,7 @@ export async function instrumentRoutes(page: Page) {
         const channel = super.createDataChannel(label, options);
         peers.find(row => row.pc === this)!.labels.push(label);
         const send = channel.send.bind(channel);
-        channel.send = ((data: string) => { send(data); record(label, data); }) as typeof channel.send;
+        channel.send = ((data: Parameters<RTCDataChannel['send']>[0]) => { send(data); record(label, data); }) as typeof channel.send;
         return channel;
       }
     };

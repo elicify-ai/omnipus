@@ -5,6 +5,7 @@
 // presentation hint, not a prerequisite for input; annotation stays local.
 
 import { BrowserInputWebRTCSession, type BrowserInputState } from '@/lib/browserInputWebRTC'
+import { useBrowserTextComposition } from './useBrowserTextComposition'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowSquareOut,
@@ -385,6 +386,7 @@ export function BrowserLiveView({
   // down), mirroring wsRef's own per-mount lifetime.
   const webrtcRef = useRef<BrowserWebRTCSession | null>(null)
   const inputRef = useRef<BrowserInputWebRTCSession | null>(null)
+  const cancelTextRef = useRef<() => void>(() => {})
   const [inputState, setInputState] = useState<BrowserInputState>('idle')
   const [inputError, setInputError] = useState<string | null>(null)
   const inputFrameRequirementRef = useRef<{ id: string; generation: number } | null | undefined>(undefined)
@@ -953,6 +955,7 @@ export function BrowserLiveView({
       sendOffer: (offer) => wsRef.current?.sendInputOffer(offer) ?? false,
       onFailure: () => wsRef.current?.sendControl('release') ?? false,
       onState: (state, reason) => {
+        if (state !== 'ready') cancelTextRef.current()
         setInputState(state)
         setInputError(state === 'failed' ? reason || 'Input connection failed.' : null)
         if (state === 'failed') {
@@ -1261,6 +1264,7 @@ export function BrowserLiveView({
       },
     }, {
       beforeControl: () => {
+        cancelTextRef.current()
         flushWheelBeforeActionRef.current()
         pendingMoveRef.current = pendingWheelRef.current = null
         pressedInputsRef.current.clear()
@@ -1431,13 +1435,30 @@ export function BrowserLiveView({
       return true
     }, [dedicatedFrameReady],
   )
-  const releasePressedInputs = useCallback(() => {
+  const releasePhysicalInputs = useCallback(() => {
     pendingMoveRef.current = null
     pendingWheelRef.current = null
     const releases = [...pressedInputsRef.current.values()]
     pressedInputsRef.current.clear()
     for (const release of releases) dispatchInput(release, true)
   }, [dispatchInput])
+  const textComposition = useBrowserTextComposition({
+    identity: () => {
+      if (!canDispatchInput()) return null
+      const control = inputRef.current?.controlIdentity
+      const frame = captureRef.current
+      return control ? `${control.input_epoch}:${control.control_epoch}:${frame.id}:${frame.generation}` : null
+    },
+    send: (text) => dispatchInput({ kind: 'text', text, modifiers: 0 }),
+    releaseKeys: releasePhysicalInputs,
+    reportError: (message) => useUiStore.getState().addToast({ message, variant: 'error' }),
+  })
+  cancelTextRef.current = textComposition.cancel
+  const textInputRef = textComposition.inputRef
+  const releasePressedInputs = useCallback(() => {
+    cancelTextRef.current()
+    releasePhysicalInputs()
+  }, [releasePhysicalInputs])
   useEffect(() => {
     releaseInputsRef.current = releasePressedInputs
     const onVisibility = () => { if (document.hidden) releasePressedInputs() }
@@ -2020,14 +2041,24 @@ export function BrowserLiveView({
   // held down. Shared by both handlePointerDown branches (annotate-drag
   // start and remote mouse_down) — the capture step is identical either way.
   const focusAndCapturePointer = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    containerRef.current?.focus()
+    if (annotateMode) containerRef.current?.focus()
+    else {
+      textComposition.activate()
+      const sink = textInputRef.current
+      const bounds = e.currentTarget.getBoundingClientRect()
+      if (sink) {
+        sink.style.left = `${Math.max(0, Math.min(bounds.width - 1, e.clientX - bounds.left))}px`
+        sink.style.top = `${Math.max(0, Math.min(bounds.height - 1, e.clientY - bounds.top))}px`
+        sink.focus({ preventScroll: true })
+      }
+    }
     try {
       e.currentTarget.setPointerCapture(e.pointerId)
     } catch {
       // Pointer capture is best-effort — unsupported/jsdom environments fall
       // back to normal bounds-limited pointer events.
     }
-  }, [])
+  }, [annotateMode, textInputRef, textComposition])
 
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (annotateMode) {
@@ -2196,7 +2227,8 @@ export function BrowserLiveView({
   }, [])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (!canDispatchInput()) return
+    if (!canDispatchInput()) { e.preventDefault(); return }
+    if (textComposition.nativeKey(e)) return
     // WCAG 2.1.2 "No Keyboard Trap" — Escape is the advertised, always
     // available way to stop driving (see the hand-back hint below, which now
     // advertises it too). This panel used to be hosted in a Radix Sheet,
@@ -2223,10 +2255,11 @@ export function BrowserLiveView({
     // browser-composed character on keydown for text fields and layout keys.
     dispatchInput({ kind: 'key_down', key: e.key, code: e.code, key_code: e.keyCode, modifiers,
       ...(isPrintableKey(e, navigator.platform) ? { text: e.key } : {}) })
-  }, [canDispatchInput, releaseWheel, dispatchInput])
+  }, [canDispatchInput, releaseWheel, dispatchInput, textComposition.nativeKey])
 
   const handleKeyUp = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     if (!canDispatchInput()) return
+    if (textComposition.composing() || e.nativeEvent.isComposing) return
     // Escape's release already happened on keydown above — nothing left to
     // forward for its key_up half (and driveMode may still read stale
     // 'you-driving' for the brief async gap before the release ack lands).
@@ -2236,7 +2269,7 @@ export function BrowserLiveView({
     if (pressedInputsRef.current.has(`key:${e.code || e.key}`)) {
       dispatchInput({ kind: 'key_up', key: e.key, code: e.code, key_code: e.keyCode, modifiers: computeModifiers(e) })
     }
-  }, [canDispatchInput, dispatchInput])
+  }, [canDispatchInput, dispatchInput, textComposition])
 
   // ── ADR-040 D6 — header chip config (icon + text label + colour), derived
   // from `visualState`. Words + icon back up the colour for accessibility
@@ -2662,11 +2695,27 @@ export function BrowserLiveView({
             onPointerUp={handlePointerUp}
             onKeyDown={handleKeyDown}
             onKeyUp={handleKeyUp}
-            onBlur={releasePressedInputs}
+            onFocus={(event) => { if (event.target === event.currentTarget) textInputRef.current?.focus({ preventScroll: true }) }}
+            onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) releasePressedInputs() }}
             onPointerCancel={releasePressedInputs}
-            onLostPointerCapture={releasePressedInputs}
+            onLostPointerCapture={releasePhysicalInputs}
             onDragStart={(e) => e.preventDefault()}
           >
+            <textarea
+              ref={textInputRef}
+              aria-label="Remote browser text input"
+              tabIndex={-1}
+              autoComplete="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              className="absolute left-0 top-0 h-px w-px resize-none border-0 p-0 opacity-0"
+              style={{ pointerEvents: 'none' }}
+              onFocus={textComposition.onFocus}
+              onCompositionStart={textComposition.onCompositionStart}
+              onCompositionEnd={textComposition.onCompositionEnd}
+              onInput={textComposition.onInput}
+              onPaste={textComposition.onPaste}
+            />
             {/* The ONLY video sink — mounted the instant a WebRTC stream is
                 attached (`attached`), independently of whether it has
                 presented a real frame yet (`videoReady`, tracked by the
