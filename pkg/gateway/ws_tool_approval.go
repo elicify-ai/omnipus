@@ -4,15 +4,26 @@
 
 // WebSocket events for the Central Tool Registry redesign (A3 lane).
 //
-// Emits two event types:
+// Emits three event types:
 //
 //  1. tool_approval_required (FR-011, FR-082)
 //     Sent to all connected WS clients when an ask-policy tool call is paused.
 //     Uses expires_in_ms (not expires_at) per OBS-004.
 //
-//  2. session_state (FR-052, FR-073, FR-081)
+//  2. tool_approval_resolved
+//     Sent to all connected WS clients when a pending approval leaves the
+//     pending state for ANY reason (see approvalRegistryV2.resolutionListener).
+//
+//  3. session_state (FR-052, FR-073, FR-081)
 //     One-shot per WS connection on every reconnect.
 //     Single-user model: every connection sees every pending approval.
+//
+// Workspace scoping: the two approval-carrying frames stamp workspace_id (the
+// requesting session's workspace) so the SPA can show an approval only while
+// that workspace is active. Delivery itself stays unscoped — every connection
+// still receives every frame — because the SPA's active workspace can change
+// without a reconnect and a hidden approval must reappear when the user
+// switches to its workspace.
 
 package gateway
 
@@ -23,6 +34,53 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 )
+
+// approvalWorkspaceMaxHops bounds approvalWorkspaceID's walk up the
+// delegation chain. Real chains are a handful of levels deep; the bound only
+// guarantees termination over corrupt or cyclic on-disk meta.
+const approvalWorkspaceMaxHops = 16
+
+// approvalWorkspaceIDMaxLen mirrors the wire schema's maxLength for
+// workspace_id (ToolApprovalRequiredFrame / SessionStatePendingApproval). A
+// longer value is omitted rather than emitted schema-invalid.
+const approvalWorkspaceIDMaxLen = 128
+
+// approvalWorkspaceID resolves the workspace an approval belongs to from the
+// acting session's meta. A delegated child session may carry no workspace of
+// its own, so the walk follows ParentSessionID upward until a session with a
+// workspace is found. Returns "" when the session belongs to no workspace, or
+// when its meta cannot be read — the SPA treats an absent workspace_id as
+// "show everywhere", which is the safe direction for an approval the agent is
+// blocked on.
+func (h *WSHandler) approvalWorkspaceID(sessionID string) string {
+	if h == nil || h.agentLoop == nil || sessionID == "" {
+		return ""
+	}
+	seen := make(map[string]struct{}, 4)
+	sid := sessionID
+	for hop := 0; hop < approvalWorkspaceMaxHops && sid != ""; hop++ {
+		if _, dup := seen[sid]; dup {
+			return ""
+		}
+		seen[sid] = struct{}{}
+		store := h.resolveSessionStore(sid)
+		if store == nil {
+			return ""
+		}
+		meta, err := store.GetMeta(sid)
+		if err != nil || meta == nil {
+			return ""
+		}
+		if meta.WorkspaceID != "" {
+			if len(meta.WorkspaceID) > approvalWorkspaceIDMaxLen {
+				return ""
+			}
+			return meta.WorkspaceID
+		}
+		sid = meta.ParentSessionID
+	}
+	return ""
+}
 
 // broadcastToolApprovalRequired sends a tool_approval_required WS frame to
 // every connected WebSocket client (FR-073; single-user model, no per-account
@@ -59,6 +117,9 @@ func (h *WSHandler) broadcastToolApprovalRequired(entry *approvalEntry) {
 		TurnId:      entry.TurnID,
 		ExpiresInMs: int(entry.expiresInMs()), // OBS-004: relative, not absolute
 	}
+	if ws := h.approvalWorkspaceID(entry.SessionID); ws != "" {
+		frame.WorkspaceId = &ws
+	}
 	raw, err := json.Marshal(frame)
 	if err != nil {
 		slog.Error("ws: marshal tool_approval_required", "error", err)
@@ -70,6 +131,44 @@ func (h *WSHandler) broadcastToolApprovalRequired(entry *approvalEntry) {
 	// broadcast unconditionally (role-based scoping removed).
 	h.broadcastRaw(raw, "ws: tool_approval_required dropped — send buffer full",
 		"approval_id", entry.ApprovalID)
+}
+
+// broadcastToolApprovalResolved sends a tool_approval_resolved WS frame to
+// every connected client. It is the registry's resolution listener
+// (approvalRegistryV2.setResolutionListener, wired in gateway.go), so it runs
+// once for every pending→terminal transition whatever caused it — a decision
+// from any tab, the timeout, a Stop, the owning agent's deletion, a batch
+// short-circuit, or shutdown.
+//
+// Why it exists: before it, only the tab whose POST resolved an approval
+// learned of the resolution. Every other open tab — and every tab after a
+// resolution the server made on its own — kept a dialog whose actions could
+// only return 410, then 404 once the registry's terminal retention elapsed,
+// with no way to dismiss it short of a full reload.
+//
+// Best-effort like every broadcast: a client with a full send buffer misses
+// the frame. It still converges — its next session_state snapshot no longer
+// lists the approval, and the SPA dismisses on a 404/410 action response.
+func (h *WSHandler) broadcastToolApprovalResolved(entry *approvalEntry, state ApprovalState) {
+	if entry == nil {
+		return
+	}
+	frame := generated.ToolApprovalResolvedFrame{
+		Type:       string(generated.WsFrameTypeToolApprovalResolved),
+		ApprovalId: entry.ApprovalID,
+		State:      string(state),
+	}
+	if entry.SessionID != "" {
+		sid := entry.SessionID
+		frame.SessionId = &sid
+	}
+	raw, err := json.Marshal(frame)
+	if err != nil {
+		slog.Error("ws: marshal tool_approval_resolved", "error", err)
+		return
+	}
+	h.broadcastRaw(raw, "ws: tool_approval_resolved dropped — send buffer full",
+		"approval_id", entry.ApprovalID, "state", string(state))
 }
 
 // emitSessionState sends a session_state frame to a single WS connection —
@@ -107,13 +206,17 @@ func (h *WSHandler) emitSessionState(wc *wsConn, sessionID string) {
 		// client is the one account, so every connection sees every pending
 		// approval (role-based scoping removed).
 		for _, e := range allPending {
-			pendingApprovals = append(pendingApprovals, generated.SessionStatePendingApproval{
+			entry := generated.SessionStatePendingApproval{
 				ApprovalId:  e.ApprovalID,
 				SessionId:   e.SessionID,
 				ToolName:    e.ToolName,
 				AgentId:     e.AgentID,
 				ExpiresInMs: int(e.expiresInMs()),
-			})
+			}
+			if ws := h.approvalWorkspaceID(e.SessionID); ws != "" {
+				entry.WorkspaceId = &ws
+			}
+			pendingApprovals = append(pendingApprovals, entry)
 		}
 	}
 

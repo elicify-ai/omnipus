@@ -89,6 +89,8 @@ channels:
         $ref: '#/components/messages/AgentSwitchedFrame'
       ToolApprovalRequiredFrame:
         $ref: '#/components/messages/ToolApprovalRequiredFrame'
+      ToolApprovalResolvedFrame:
+        $ref: '#/components/messages/ToolApprovalResolvedFrame'
       SessionStateFrame:
         $ref: '#/components/messages/SessionStateFrame'
       SystemOverloadFrame:
@@ -449,6 +451,17 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/ToolApprovalRequiredFrame'
+  receiveToolApprovalResolved:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: 'A pending tool approval left the pending state for any reason (a decision from any tab, the timeout, a Stop/cancel,
+      the owning agent being deleted, a batch short-circuit, or shutdown). Broadcast to every client so no tab keeps a dialog
+      whose actions can only fail.
+
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/ToolApprovalResolvedFrame'
   receiveSessionState:
     action: receive
     channel:
@@ -997,6 +1010,13 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/ToolApprovalRequiredFrame'
+    ToolApprovalResolvedFrame:
+      name: ToolApprovalResolvedFrame
+      title: tool_approval_resolved
+      summary: Tool approval no longer pending (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ToolApprovalResolvedFrame'
     SessionStateFrame:
       name: SessionStateFrame
       title: session_state
@@ -1263,6 +1283,7 @@ components:
       - media
       - agent_switched
       - tool_approval_required
+      - tool_approval_resolved
       - session_state
       - system_overload
       - replay_warning
@@ -3225,6 +3246,51 @@ components:
             ADR-057 FR-012/FR-013. Present iff it differs from session_id.
             Class (a) (FR-089): the child turn's own session id when this
             frame crosses the wire from a delegated child.
+        workspace_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >
+            Workspace the requesting session belongs to (resolved server-side
+            from session meta, walking up to the delegating parent). The SPA
+            shows the approval only while that workspace is active. Omitted
+            when the session belongs to no workspace (shown everywhere).
+    ToolApprovalResolvedFrame:
+      title: ToolApprovalResolvedFrame
+      description: >
+        Server → client. Emitted once, to every connected client, when a
+        pending tool approval leaves the pending state for ANY reason (a
+        decision from any tab, timeout, Stop/cancel, agent deletion, batch
+        short-circuit, shutdown). The SPA drops the matching queue entry and
+        remembers the id so a late snapshot cannot resurrect it. THIS is the
+        GENERATING copy; components/schemas/ToolApprovalResolvedFrame.yaml
+        exists for the Constraint #8 process and the inboundschemas sync —
+        keep both in sync by hand.
+      type: object
+      required:
+      - type
+      - approval_id
+      - state
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: tool_approval_resolved
+        approval_id:
+          type: string
+          minLength: 1
+        state:
+          type: string
+          enum:
+          - approved
+          - denied_user
+          - denied_timeout
+          - denied_cancel
+          - denied_restart
+          - denied_batch_short_circuit
+        session_id:
+          type: string
+          minLength: 1
     AskUserQuestionCard:
       title: AskUserQuestionCard
       description: >
@@ -3471,6 +3537,11 @@ components:
           type: integer
           minimum: 0
           maximum: 86400000
+        workspace_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Same value and semantics as ToolApprovalRequiredFrame.workspace_id.
     SessionStateActiveTurn:
       title: SessionStateActiveTurn
       description: >

@@ -10781,7 +10781,7 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_handover_notice"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_handover_notice"]);
 
 export const AuthFrame = z
   .object({
@@ -11226,6 +11226,16 @@ export const ToolApprovalRequiredFrame = z
     turn_id: z.string().min(1),
     expires_in_ms: z.number().int().min(0).max(86400000),
     producing_session_id: z.string().min(1).optional(),
+    workspace_id: z.string().min(1).max(128).optional(),
+  })
+  .strict();
+
+export const ToolApprovalResolvedFrame = z
+  .object({
+    type: z.literal("tool_approval_resolved"),
+    approval_id: z.string().min(1),
+    state: z.enum(["approved", "denied_user", "denied_timeout", "denied_cancel", "denied_restart", "denied_batch_short_circuit"]),
+    session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -11297,6 +11307,7 @@ export const SessionStatePendingApproval = z
     tool_name: z.string().min(1).max(128),
     agent_id: z.string().min(1),
     expires_in_ms: z.number().int().min(0).max(86400000),
+    workspace_id: z.string().min(1).max(128).optional(),
   })
   .strict();
 
@@ -11773,6 +11784,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   MediaFrame,
   AgentSwitchedFrame,
   ToolApprovalRequiredFrame,
+  ToolApprovalResolvedFrame,
   AskUserQuestionFrame,
   AskUserAnswerFrame,
   SessionStateFrame,

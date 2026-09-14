@@ -3258,6 +3258,14 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, id string) {
 		slog.Warn("rest: deleteAgent: reload did not confirm within the poll window; "+
 			"deleted agent may still be resolvable in the runtime registry", "agent_id", id)
 	}
+	// Deny every tool approval the deleted agent is still waiting on. Left
+	// pending, each one keeps its turn blocked and its dialog open in every
+	// tab until the approval timeout, offering an Approve that would run a
+	// tool for an agent that no longer exists. The registry's resolution
+	// listener broadcasts tool_approval_resolved, so every tab drops it.
+	if a.approvalReg != nil {
+		a.approvalReg.cancelAllPendingForAgent(id, denialReasonCancel)
+	}
 	// Audit the destructive action. Emitted after the write succeeds; a
 	// failed audit write is logged (not silently discarded) so audit-log
 	// gaps stay visible. The auditor is nil only in unit-test fixtures

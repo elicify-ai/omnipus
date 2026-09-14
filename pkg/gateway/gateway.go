@@ -4772,6 +4772,10 @@ func setupAndStartServices(
 	}
 	approvalReg := newApprovalRegistryV2(effectiveCap, approvalTimeoutDur)
 	wsHandler.approvalRegV2 = approvalReg
+	// Broadcast every pending→terminal transition, whatever caused it (a
+	// decision from any tab, timeout, Stop, agent deletion, shutdown), so no
+	// open tab keeps a dialog for an approval the server has already closed.
+	approvalReg.setResolutionListener(wsHandler.broadcastToolApprovalResolved)
 
 	// Wire the policy approver into the agent loop (FR-011, C3).
 	// The adapter bridges agent.PolicyApprover → approvalRegistryV2 + WSHandler.

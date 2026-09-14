@@ -31,7 +31,20 @@
 // Error handling:
 //   401 → re-auth toast (user must log in again)
 //   403 → "you must be an admin to approve this tool" toast
-//   410 → "this approval has already been resolved" → dismiss modal entry
+//   404 / 410 → the approval is no longer pending server-side (410 inside the
+//         registry's retention window, 404 after it) → markResolved: the
+//         card goes and cannot come back; an approve/always also gets a
+//         warning that it was not applied
+//
+// Dismissal: Cancel and Close/Escape/overlay remove the card from this tab
+// FIRST and unconditionally, then send their request — a failing request can
+// never leave a dialog the user cannot get rid of. Server-made resolutions
+// (another tab, timeout, Stop, agent deletion) arrive as tool_approval_resolved
+// frames and are applied by src/store/chat.ts → markResolved.
+//
+// Scope: only approvals whose workspace matches the active workspace (or that
+// have no workspace) are shown — see isApprovalInScope. Out-of-scope approvals
+// stay queued and appear when the user switches to their workspace.
 //
 // ADR-036 §3.4 note: this is now the ONLY tool-approval UI — the dedicated
 // exec-only flow (ExecApprovalBlock/ExecApprovalTool, WS
@@ -66,7 +79,8 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
-import { useToolApprovalStore } from '@/store/toolApproval'
+import { useToolApprovalStore, isApprovalInScope } from '@/store/toolApproval'
+import { useWorkspacesStore } from '@/store/workspacesStore'
 import { submitToolApproval, isApiError } from '@/lib/api'
 import type { Agent } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
@@ -137,6 +151,7 @@ function ToolApprovalCard({
   sessionId,
 }: ToolApprovalCardProps) {
   const dequeue = useToolApprovalStore((s) => s.dequeue)
+  const markResolved = useToolApprovalStore((s) => s.markResolved)
   const addToast = useUiStore((s) => s.addToast)
   const [submitting, setSubmitting] = useState(false)
   const { remainingMs, progressPct } = useCountdown(expiresAt)
@@ -150,9 +165,16 @@ function ToolApprovalCard({
     // Action union sourced from submitToolApproval's own signature (which in
     // turn is the generated ToolApprovalActionRequest['action']) rather than
     // a hand-rolled literal, per Constraint #8.
-    async (action: Parameters<typeof submitToolApproval>[1]) => {
+    //
+    // dismissFirst: take the card off THIS tab before the request goes out.
+    // Cancel and Close/Escape/overlay pass it — they must dismiss locally
+    // whatever the server answers. If the server still holds the approval
+    // open, the next session_state snapshot restores it (the agent is still
+    // waiting), so nothing is lost by dismissing early.
+    async (action: Parameters<typeof submitToolApproval>[1], opts?: { dismissFirst?: boolean }) => {
       if (submitting) return
       setSubmitting(true)
+      if (opts?.dismissFirst) dequeue(approvalId)
       try {
         const resp = await submitToolApproval(approvalId, action)
         if (action === 'always' && resp.grant_recorded !== true) {
@@ -161,7 +183,8 @@ function ToolApprovalCard({
             variant: 'warning',
           })
         }
-        dequeue(approvalId)
+        // The server resolved it: remember that, rather than only hiding it.
+        markResolved(approvalId)
       } catch (err) {
         if (isApiError(err)) {
           if (err.status === 401) {
@@ -181,9 +204,22 @@ function ToolApprovalCard({
               message: 'You must be an admin to approve this tool.',
               variant: 'error',
             })
-          } else if (err.status === 410) {
-            // Already resolved — silently dismiss
-            dequeue(approvalId)
+          } else if (err.status === 404 || err.status === 410) {
+            // No longer pending on the server. 410 = resolved within the
+            // registry's terminal-retention window; 404 = resolved longer
+            // ago than that (the entry was purged) or never existed. Nothing
+            // is left to decide, so the card must go and stay gone — before
+            // this, a 404 only toasted and left a dialog whose every button
+            // (Close included) re-sent a request that could only 404 again.
+            markResolved(approvalId)
+            if (action === 'approve' || action === 'always') {
+              // Deny/cancel stay silent (what the user asked for holds or no
+              // longer matters). An approval that did not land deserves a word.
+              addToast({
+                message: 'This request was already closed before your approval arrived, so your approval was not applied.',
+                variant: 'warning',
+              })
+            }
           } else {
             addToast({
               message: `Failed to submit approval: ${err.userMessage}`,
@@ -201,13 +237,15 @@ function ToolApprovalCard({
         setSubmitting(false)
       }
     },
-    [approvalId, dequeue, addToast, submitting],
+    [approvalId, dequeue, markResolved, addToast, submitting],
   )
 
   // Safe-default handler for Escape / overlay-click / X close. The Dialog
   // primitive requests a close; we translate that into the SAFE decision:
-  //   - not expired  → submit a DENY (never an approve, never a no-op dismiss
-  //     that would leave the agent hanging on a pending approval).
+  //   - not expired  → dismiss the card locally AND submit a DENY (never an
+  //     approve, never a silent dismiss that leaves the agent hanging). The
+  //     local dismissal is unconditional: a close must always close, even
+  //     when the deny request fails.
   //   - expired      → the decision is already made server-side; just dismiss
   //     the notice from the local queue.
   const handleDismissRequest = useCallback(() => {
@@ -215,7 +253,7 @@ function ToolApprovalCard({
     if (hasExpired) {
       dequeue(approvalId)
     } else {
-      void handleAction('deny')
+      void handleAction('deny', { dismissFirst: true })
     }
   }, [submitting, hasExpired, dequeue, approvalId, handleAction])
 
@@ -456,7 +494,7 @@ function ToolApprovalCard({
                   <Button
                     size="sm"
                     variant="ghost"
-                    onClick={() => handleAction('cancel')}
+                    onClick={() => handleAction('cancel', { dismissFirst: true })}
                     disabled={submitting}
                     className="h-8 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] ml-auto"
                   >
@@ -486,10 +524,14 @@ function ToolApprovalCard({
   )
 }
 
-// ToolApprovalModal renders the front-of-queue approval, if any.
+// ToolApprovalModal renders the front-of-queue approval that belongs to the
+// active workspace, if any. Out-of-scope approvals stay queued (not dropped)
+// and surface when the user switches to their workspace.
 export function ToolApprovalModal() {
   const queue = useToolApprovalStore((s) => s.queue)
-  const first = queue[0]
+  const activeWorkspaceId = useWorkspacesStore((s) => s.activeWorkspaceId)
+  const visible = queue.filter((a) => isApprovalInScope(a, activeWorkspaceId))
+  const first = visible[0]
 
   if (!first) return null
 
@@ -501,7 +543,7 @@ export function ToolApprovalModal() {
       args={first.args}
       agentId={first.agentId}
       expiresAt={first.expiresAt}
-      queueLength={queue.length}
+      queueLength={visible.length}
       toolCallId={first.toolCallId}
       turnId={first.turnId}
       sessionId={first.sessionId}

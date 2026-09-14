@@ -728,6 +728,8 @@ type SessionStatePendingApproval struct {
 	ExpiresInMs int    `json:"expires_in_ms"`
 	SessionId   string `json:"session_id"`
 	ToolName    string `json:"tool_name"`
+	// Same value and semantics as ToolApprovalRequiredFrame.workspace_id.
+	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
 // SubagentEndFrame — Server → client subagent span closed (FR-H-004). status MUST be one of the six allowed values — the SPA drops frames with invalid status (W4-6). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — emitted by the PARENT about the child (pkg/agent/subturn.go); FR-017 pins its SessionID to the routing key, so producing_session_id would equal session_id and is therefore absent (FR-013's "iff it differs"). Kept in sync by hand with components/schemas/SubagentEndFrame.yaml for the full shape — see that file for the per-value description (including "parked", ADR-057 UAT defect C2 fix).
@@ -840,6 +842,16 @@ type ToolApprovalRequiredFrame struct {
 	ToolName           string  `json:"tool_name"`
 	TurnId             string  `json:"turn_id"`
 	Type               string  `json:"type"`
+	// Workspace the requesting session belongs to (resolved server-side from session meta, walking up to the delegating parent). The SPA shows the approval only while that workspace is active. Omitted when the session belongs to no workspace (shown everywhere).
+	WorkspaceId *string `json:"workspace_id,omitempty"`
+}
+
+// ToolApprovalResolvedFrame — Server → client. Emitted once, to every connected client, when a pending tool approval leaves the pending state for ANY reason (a decision from any tab, timeout, Stop/cancel, agent deletion, batch short-circuit, shutdown). The SPA drops the matching queue entry and remembers the id so a late snapshot cannot resurrect it. THIS is the GENERATING copy; components/schemas/ToolApprovalResolvedFrame.yaml exists for the Constraint #8 process and the inboundschemas sync — keep both in sync by hand.
+type ToolApprovalResolvedFrame struct {
+	ApprovalId string  `json:"approval_id"`
+	SessionId  *string `json:"session_id,omitempty"`
+	State      string  `json:"state"`
+	Type       string  `json:"type"`
 }
 
 // ToolArgumentRefusal — ADR-066 D4 / spec FR-016 (T066-01 schema, T066-04 producer): structured tool-result payload returned INSTEAD of executing a tool call whose serialised arguments exceed the builtin success cap (ContextSettings.builtin_success_cap, 64,000 chars by default). The tool does not run, the turn is not fatal, and the model sees the refusal — naming the tool, the size it sent and the cap — so it can retry smaller. ADR-060 family member: inline schema with a const `error` discriminator, one exported *Code constant in pkg/tools/result.go, a single producer routed through marshalWithinBudget, and an entry in scripts/check-no-handwritten-wire-types.sh's KNOWN_STRUCTURED_FAILURE_DISCRIMINATORS register. toolResult-channel (ADR-060 D2): the refusal IS the tool's result, so it passes the D4 choke point like any other result (US-5.AC3) and flows through ToolCallResultFrame.result live and ToolCall.Error on replay — hence its entry in ToolCallResultFrame.result's oneOf below and in pkg/gateway/tool_result_store.go's allow-list (derived from pkg/tools.AllStructuredFailureCodes()). The SPA detector is stream B5's.
@@ -993,6 +1005,7 @@ const (
 	WsFrameTypeMedia                    WsFrameType = "media"
 	WsFrameTypeAgentSwitched            WsFrameType = "agent_switched"
 	WsFrameTypeToolApprovalRequired     WsFrameType = "tool_approval_required"
+	WsFrameTypeToolApprovalResolved     WsFrameType = "tool_approval_resolved"
 	WsFrameTypeSessionState             WsFrameType = "session_state"
 	WsFrameTypeSystemOverload           WsFrameType = "system_overload"
 	WsFrameTypeReplayWarning            WsFrameType = "replay_warning"

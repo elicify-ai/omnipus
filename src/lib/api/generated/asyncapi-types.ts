@@ -33,6 +33,7 @@ export type WsFrameType =
   | "media"
   | "agent_switched"
   | "tool_approval_required"
+  | "tool_approval_resolved"
   | "session_state"
   | "system_overload"
   | "replay_warning"
@@ -416,6 +417,14 @@ export interface ToolApprovalRequiredFrame {
   turn_id: string;
   expires_in_ms: number;
   producing_session_id?: string;
+  workspace_id?: string;
+}
+
+export interface ToolApprovalResolvedFrame {
+  type: "tool_approval_resolved";
+  approval_id: string;
+  state: "approved" | "denied_user" | "denied_timeout" | "denied_cancel" | "denied_restart" | "denied_batch_short_circuit";
+  session_id?: string;
 }
 
 export interface AskUserQuestionCard {
@@ -471,6 +480,7 @@ export interface SessionStatePendingApproval {
   tool_name: string;
   agent_id: string;
   expires_in_ms: number;
+  workspace_id?: string;
 }
 
 export interface SessionStateActiveTurn {
@@ -853,6 +863,7 @@ export type WsFrame =
   | MediaFrame
   | AgentSwitchedFrame
   | ToolApprovalRequiredFrame
+  | ToolApprovalResolvedFrame
   | AskUserQuestionFrame
   | AskUserAnswerFrame
   | SessionStateFrame
@@ -933,6 +944,7 @@ export type ServerFrame =
   | MediaFrame
   | AgentSwitchedFrame
   | ToolApprovalRequiredFrame
+  | ToolApprovalResolvedFrame
   | AskUserQuestionFrame
   | SessionStateFrame
   | SystemOverloadFrame

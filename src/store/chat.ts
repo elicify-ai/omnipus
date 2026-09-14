@@ -6124,6 +6124,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
           useToolApprovalStore.getState().enqueue(frame)
           break
 
+        case 'tool_approval_resolved':
+          // The server closed this approval (a decision from any tab, timeout,
+          // Stop, agent deletion, shutdown) — drop it here and keep it dropped.
+          useToolApprovalStore.getState().markResolved(frame.approval_id)
+          break
+
         case 'session_state': {
           useToolApprovalStore.getState().reconcileWithSessionState(frame)
           // askuserquestion-tool-spec v3 US-6 S1/FR-9: reconcile pending
