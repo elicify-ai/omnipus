@@ -46,6 +46,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -94,7 +95,7 @@ var restructureConfigureOps = map[string]struct{}{
 // unknownArgs sweep, and told the SPEC's reason rather than a generic
 // "unknown argument".
 var restructureArgNames = []string{
-	"op", "collection", "path", "new_name", "new_folder", "allow_ambiguity", "trashed_at",
+	"op", "collection", "path", "new_name", "new_folder", "allow_ambiguity", "trashed_at", "folder",
 }
 
 // Audit operation names, local to this file (matching authoring_tools.go's
@@ -130,7 +131,9 @@ func (t *RestructureTool) Description() string {
 		"note: every inbound link is rewritten, in bodies and frontmatter. Trash a note: a " +
 		"reversible soft delete — it moves out of the way but every link that pointed at it is " +
 		"left dangling, counted and named in the response, never silently repaired. Restore a " +
-		"trashed note to its original path. Never edits a note's own content (use knowledge_edit) " +
+		"trashed note to its original path. With folder=true, rename, move or trash a whole " +
+		"folder and everything inside it; restore finds a trashed folder by its original path. " +
+		"Never edits a note's own content (use knowledge_edit) " +
 		"and never authors or changes a record type or saved view (use knowledge_configure). " +
 		"Takes no version token: a single-file token cannot honestly guard a change whose blast " +
 		"radius is many notes."
@@ -181,6 +184,15 @@ func (t *RestructureTool) Parameters() map[string]any {
 					"naming a timestamp that has no copy is refused with every available " +
 					"timestamp for that path listed, which is the way to discover them. " +
 					"Leave unset for the most recently trashed copy.",
+			},
+			"folder": map[string]any{
+				"type": "boolean",
+				"description": "rename/move/trash: true to act on the whole FOLDER at 'path', with " +
+					"everything inside it. Links into the folder are rewritten (rename, move) or " +
+					"counted as dangling (trash). No '.md' is added to a folder path or its new name. " +
+					"Default false: 'path' then always means a note, so a folder is never touched by " +
+					"accident. restore takes no 'folder': it brings back a trashed folder by its " +
+					"original path whenever no trashed note has that same path.",
 			},
 		},
 		"required": []string{"op", "path"},
@@ -267,11 +279,16 @@ func (t *RestructureTool) execRenameMove(
 	ctx context.Context, target mutationTarget, args map[string]any, isMove bool,
 ) *tools.ToolResult {
 	op := restructureRenameOp
+	// A folder path never gets the ".md" habit: "Projects" with folder=true is
+	// the folder, and without it the note Projects.md, exactly as before.
+	folder := boolArg(args["folder"])
 	from, err := cleanNoteArg(stringArg(args["path"]))
 	if err != nil {
 		return t.deps.refuse(op, target, nil, err.Error())
 	}
-	from = ensureMarkdown(from)
+	if !folder {
+		from = ensureMarkdown(from)
+	}
 
 	newName := strings.TrimSpace(stringArg(args["new_name"]))
 	var to string
@@ -298,7 +315,9 @@ func (t *RestructureTool) execRenameMove(
 	if err != nil {
 		return t.deps.refuse(op, target, []string{from}, err.Error())
 	}
-	to = ensureMarkdown(to)
+	if !folder {
+		to = ensureMarkdown(to)
+	}
 
 	root, err := NewCollectionRoot(OSLinkFS(), target.col.Root)
 	if err != nil {
@@ -322,7 +341,7 @@ func (t *RestructureTool) execRenameMove(
 		Audit: restructureRenameAuditFunc(t.deps, target), Lock: target.lock,
 	}
 	res, err := renamer.Rename(RenameRequest{
-		From: from, To: to, AllowAmbiguity: boolArg(args["allow_ambiguity"]),
+		From: from, To: to, AllowAmbiguity: boolArg(args["allow_ambiguity"]), Folder: folder,
 	})
 	if err != nil {
 		// rename.go has already audited this outcome (including "incomplete",
@@ -340,15 +359,25 @@ func (t *RestructureTool) execRenameMove(
 	// inbound links were rewritten — is re-derived in one pass. See author.go's
 	// "Index freshness" section for why a refresh failure is a warning here,
 	// not a refusal: the rename itself has already fully applied.
+	//
+	// A folder's own path is not a file, and an index holds files: handing it
+	// to the one-path refresh fails with "is a directory, not a file". A folder
+	// rename therefore goes through the per-file refresh the Library's folder
+	// door uses, over every file that moved.
 	var indexWarning string
 	if !res.NoOp {
-		indexWarning = refreshIndexesForRename(ctx, t.deps.Home, target.col.Root, res.From, res.Touched)
+		if folder {
+			indexWarning = RefreshIndexesForFolderRename(ctx, t.deps.Home, target.col.Root, res)
+		} else {
+			indexWarning = refreshIndexesForRename(ctx, t.deps.Home, target.col.Root, res.From, res.Touched)
+		}
 	}
 	return tools.NewToolResult(RenderRestructureRename(RestructureRenameData{
 		Op: restructureOpFor(isMove), From: res.From, To: res.To, NoOp: res.NoOp,
 		FilesRewritten: res.FilesRewritten, LinksRewritten: res.LinksRewritten,
 		Ambiguity: res.Ambiguity, Skipped: res.Skipped, Incomplete: res.Incomplete,
 		IndexWarning: indexWarning, FolderCreated: folderCreated,
+		Folder: folder, FolderFiles: len(res.Moves),
 	}))
 }
 
@@ -492,7 +521,7 @@ func (t *RestructureTool) execTrash(ctx context.Context, target mutationTarget, 
 	if err != nil {
 		return t.deps.refuse(restructureTrashOp, target, nil, err.Error())
 	}
-	res, err := tr.Trash(TrashRequest{Path: stringArg(args["path"])})
+	res, err := tr.Trash(TrashRequest{Path: stringArg(args["path"]), Folder: boolArg(args["folder"])})
 	if err != nil {
 		// The Trasher has already audited this outcome — see execRenameMove's
 		// identical rule for Renamer.
@@ -504,12 +533,26 @@ func (t *RestructureTool) execTrash(ctx context.Context, target mutationTarget, 
 	// The note is now under .omnipus-vault/trash/, which scan.go already
 	// skips, so its OLD path leaves both indexes. See author.go's "Index
 	// freshness" section for why a refresh failure is a warning, not a
-	// refusal: the trash has already applied.
-	indexWarning := removeFromIndexesForNote(ctx, t.deps.Home, target.col.Root, res.OriginalPath)
+	// refusal: the trash has already applied. A trashed folder is not one
+	// indexed path, so every file that left with it is removed instead.
+	var indexWarning string
+	if res.Folder {
+		indexWarning = RemoveFromIndexesForFolderTrash(ctx, t.deps.Home, target.col.Root, res)
+	} else {
+		indexWarning = removeFromIndexesForNote(ctx, t.deps.Home, target.col.Root, res.OriginalPath)
+	}
 	return tools.NewToolResult(RenderRestructureTrash(*res, indexWarning))
 }
 
 func (t *RestructureTool) execRestore(ctx context.Context, target mutationTarget, args map[string]any) *tools.ToolResult {
+	// Restore has no folder switch to honour: the engine picks a trashed note
+	// over a trashed folder of the same path. Accepting folder=true would
+	// promise a choice it does not make, so the caller is told how it works.
+	if boolArg(args["folder"]) {
+		return t.deps.refuse(restructureRestoreOp, target, nil,
+			"restore takes no 'folder': give the folder's original path, and the trashed folder "+
+				"comes back whenever no trashed note has that same path")
+	}
 	tr, err := t.newTrasher(target)
 	if err != nil {
 		return t.deps.refuse(restructureRestoreOp, target, nil, err.Error())
@@ -522,9 +565,36 @@ func (t *RestructureTool) execRestore(ctx context.Context, target mutationTarget
 		return restructureFailure(restructureRestoreOp, err)
 	}
 	// The note is back at its original path with real content, so it is
-	// re-derived into both indexes exactly as a create would be.
-	indexWarning := refreshIndexesForNote(ctx, t.deps.Home, target.col.Root, res.OriginalPath)
+	// re-derived into both indexes exactly as a create would be. A restored
+	// FOLDER is not a file the index can hold ("is a directory, not a file"),
+	// so every file now under it is re-derived instead.
+	var indexWarning string
+	if res.Folder {
+		indexWarning = refreshIndexesForRestoredFolder(ctx, t.deps.Home, target.col.Root, tr, res.OriginalPath)
+	} else {
+		indexWarning = refreshIndexesForNote(ctx, t.deps.Home, target.col.Root, res.OriginalPath)
+	}
 	return tools.NewToolResult(RenderRestructureRestore(*res, indexWarning))
+}
+
+// refreshIndexesForRestoredFolder re-derives every file under a folder that
+// was just restored, through refreshIndexesForPaths (rename_folder.go), the
+// same per-file refresh the folder rename and trash doors use. The files are
+// listed from the link graph, the same walk that decided a folder trash's
+// Members, so a restore re-enters exactly the kind of files a trash removed.
+// Like every refresh here it returns a warning, never an error: the folder is
+// already back on disk.
+func refreshIndexesForRestoredFolder(ctx context.Context, home, collectionRoot string, tr *Trasher, folder string) string {
+	graph, err := BuildLinkGraph(tr.fs(), tr.Root)
+	if err != nil {
+		slog.Error("knowledge: could not list a restored folder's files to refresh the indexes; "+
+			"the folder is restored on disk, but a search issued right now may not find its files "+
+			"until the next scheduled reconcile",
+			"folder", folder, "error", err)
+		return fmt.Sprintf("the folder is restored, but its files could not be listed to make them "+
+			"instantly searchable (%v); a scheduled reconcile will pick them up", err)
+	}
+	return refreshIndexesForPaths(ctx, home, collectionRoot, nil, filesUnderFolder(graph.Files(), folder))
 }
 
 // restructureFailure renders an error from the Trasher as compact text
@@ -554,6 +624,10 @@ type RestructureRenameData struct {
 	// FolderCreated is the destination folder a move brought into being
 	// (D-53), "" when it already existed or this was a rename.
 	FolderCreated string
+	// Folder reports a whole-folder rename or move; FolderFiles is then how
+	// many files moved with it.
+	Folder      bool
+	FolderFiles int
 	// IndexWarning is refreshIndexesForRename's return value — empty when
 	// both indexes were fully refreshed, a sentence otherwise. See author.go's
 	// "Index freshness" section.
@@ -570,8 +644,13 @@ func RenderRestructureRename(d RestructureRenameData) string {
 		return b.String()
 	}
 	fmt.Fprintf(&b, "%s -> %s\n", d.From, d.To)
-	fmt.Fprintf(&b, "CASCADE: %d notes rewritten (inbound wikilinks), 1 note %s (%d links rewritten)\n",
-		d.FilesRewritten, restructureMoveVerb(d.Op), d.LinksRewritten)
+	if d.Folder {
+		fmt.Fprintf(&b, "CASCADE: %d notes rewritten (inbound wikilinks), 1 folder %s with %d file(s) inside (%d links rewritten)\n",
+			d.FilesRewritten, restructureMoveVerb(d.Op), d.FolderFiles, d.LinksRewritten)
+	} else {
+		fmt.Fprintf(&b, "CASCADE: %d notes rewritten (inbound wikilinks), 1 note %s (%d links rewritten)\n",
+			d.FilesRewritten, restructureMoveVerb(d.Op), d.LinksRewritten)
+	}
 	if d.FolderCreated != "" {
 		fmt.Fprintf(&b, "folder %s created (it did not exist yet)\n", d.FolderCreated)
 	}
@@ -604,6 +683,9 @@ func restructureMoveVerb(op string) string {
 func RenderRestructureTrash(r TrashResult, indexWarning string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s -> trashed at %s (%s)\n", r.OriginalPath, r.TrashID, r.TrashPath)
+	if r.Folder {
+		fmt.Fprintf(&b, "FOLDER: %d file(s) went to the trash with it\n", len(r.Members))
+	}
 	if r.RecordType != "" {
 		fmt.Fprintf(&b, "TYPE: %s", r.RecordType)
 		if r.RecordID != "" {
@@ -640,6 +722,9 @@ func RenderRestructureTrash(r TrashResult, indexWarning string) string {
 func RenderRestructureRestore(r RestoreResult, indexWarning string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s <- restored from trash (%s)\n", r.OriginalPath, r.RestoredFrom)
+	if r.Folder {
+		b.WriteString("FOLDER: restored with everything inside it\n")
+	}
 	if r.RecordType != "" {
 		fmt.Fprintf(&b, "TYPE: %s", r.RecordType)
 		if r.RecordID != "" {
