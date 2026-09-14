@@ -132,7 +132,9 @@ func (t *RestructureTool) Description() string {
 		"reversible soft delete — it moves out of the way but every link that pointed at it is " +
 		"left dangling, counted and named in the response, never silently repaired. Restore a " +
 		"trashed note to its original path. With folder=true, rename, move or trash a whole " +
-		"folder and everything inside it; restore finds a trashed folder by its original path. " +
+		"folder and everything inside it; restore brings a trashed folder back by its original " +
+		"path. If a trashed note and a trashed folder share a name, restore refuses the bare " +
+		"name: give 'Projects.md' for the note or 'Projects/' for the folder. " +
 		"Never edits a note's own content (use knowledge_edit) " +
 		"and never authors or changes a record type or saved view (use knowledge_configure). " +
 		"Takes no version token: a single-file token cannot honestly guard a change whose blast " +
@@ -158,8 +160,9 @@ func (t *RestructureTool) Parameters() map[string]any {
 			},
 			"collection": collectionParam(),
 			"path": pathParam(
-				"rename/move/trash: the note to change. restore: the note's ORIGINAL path, from " +
-					"before it was trashed — never a path inside .omnipus-vault/trash/"),
+				"rename/move/trash: the note (or, with folder=true, the folder) to change. restore: " +
+					"the note's or folder's ORIGINAL path, from before it was trashed — never a path " +
+					"inside .omnipus-vault/trash/"),
 			"new_name": map[string]any{
 				"type": "string",
 				"description": "rename: the note's new name, without a folder (required). move: " +
@@ -191,8 +194,8 @@ func (t *RestructureTool) Parameters() map[string]any {
 					"everything inside it. Links into the folder are rewritten (rename, move) or " +
 					"counted as dangling (trash). No '.md' is added to a folder path or its new name. " +
 					"Default false: 'path' then always means a note, so a folder is never touched by " +
-					"accident. restore takes no 'folder': it brings back a trashed folder by its " +
-					"original path whenever no trashed note has that same path.",
+					"accident. restore takes no 'folder': give the folder's original path, ending it " +
+					"with '/' (e.g. 'Projects/') when a trashed note has the same name.",
 			},
 		},
 		"required": []string{"op", "path"},
