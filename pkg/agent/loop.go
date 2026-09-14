@@ -4334,29 +4334,61 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 				return nil
 			}
 
-			// System messages are handled inline in a goroutine (no scope).
+			// System messages carrying a resolved async origin session
+			// (#505) run through the per-session sessionWorker so the
+			// reconstructed turn is serialized against the origin session's
+			// live turns, exactly like every other inbound message. Before
+			// this, FIX 5d's AsyncTranscriptSessionID threading made the bare
+			// goroutine below able to run a real turn concurrently against the
+			// SAME origin session as a live user turn (UAT A-17: five turns
+			// at once on one session, each started as a background delegation
+			// finished, ending in SIGKILL-recovered orphaned tool calls).
 			//
-			// FIX 5d follow-up — tracked as elicify-ai/omnipus#505 (filed,
-			// not fixed in this pass): before FIX 5d, an AsyncNotifier-
-			// originated system message was inert here w.r.t. the origin
-			// session (no TranscriptSessionID/TranscriptStore bound), so
-			// this lack of per-session serialization was harmless. FIX 5d
-			// now threads AsyncOriginAgentID/AsyncTranscriptSessionID
-			// through processSystemMessage, so this goroutine CAN run a real
-			// turn concurrently against the SAME origin session as a live
-			// user turn (unlike every other inbound message, which IS
-			// serialized per session via the sessionWorker pool below).
-			// File-level writes stay safe (UnifiedStore's mutex +
-			// WriteFileAtomic), so this is not a NEW corruption risk on its
-			// own, but the single-writer-per-session invariant other turn
-			// types rely on no longer holds for this specific path. See
-			// #505 for the suggested follow-up (route through sessionWorker,
-			// or prove file-level locking is sufficient and close it).
+			// Dispatch prefers a worker that already owns the session —
+			// matched on the one scope-shape guarantee resolveSteeringTarget
+			// makes unconditionally (a literal ":"+SessionID suffix; see
+			// cancel_prearm.go's matching rationale) — so serialization holds
+			// whichever agent-shaped key the live turn used (explicit
+			// dropdown, handoff pin, or default route). With no live worker,
+			// a probe message shaped like the session's own user traffic
+			// (origin channel/chatID + SessionID) resolves the scope the same
+			// way that traffic would, and a worker is spawned under it — the
+			// residual gap is a turn whose routing diverges from the probe's
+			// (e.g. an agent selected per-message via metadata while no worker
+			// is live): that pair still falls back to the bare goroutine
+			// below, no worse than before.
+			//
+			// sessionWorker.enqueue deliberately never steers a system message
+			// into a live turn (session_worker.go): it queues in the worker's
+			// inbox and runs as its own serialized turn after the live one —
+			// a live turn waiting on the very delegation whose completion this
+			// message carries can therefore never deadlock against it.
+			//
+			// Internal-channel origins and messages with no resolved origin
+			// session have nothing to serialize against and keep the bare
+			// goroutine.
+			if msg.Channel == "system" && msg.AsyncTranscriptSessionID != "" {
+				originChannel := "cli"
+				if idx := strings.Index(msg.ChatID, ":"); idx > 0 {
+					originChannel = msg.ChatID[:idx]
+				}
+				if !constants.IsInternalChannel(originChannel) && al.dispatchSystemMessageToSessionWorker(msg, originChannel) {
+					continue
+				}
+			}
+
+			// System messages with no session to serialize against are
+			// handled inline in a goroutine (no scope).
 			if msg.Channel == "system" {
 				// Track in activeRequests so graceful shutdown's
 				// WaitForActiveRequests drains this turn before teardown —
 				// otherwise its cost.json / session-context writes can outlive
 				// RunContext and race temp-dir cleanup (#265, macOS APFS).
+				// (The sessionWorker path above intentionally does NOT wrap
+				// the message: no other worker-dispatched message is wrapped
+				// either; each LLM call inside the turn tracks itself, and
+				// Close()/stopSessionWorkers cancels and drains the worker
+				// with a 5s budget.)
 				al.activeRequests.Add(1)
 				go func() {
 					defer al.activeRequests.Done()
@@ -4502,61 +4534,13 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			}
 
 			// If a worker already exists for this scope AND is not in the
-			// middle of exiting, enqueue into it. The exiting check closes
-			// the silent-drop race (pass-2 silent-failure-hunter N1) where
-			// the dispatcher Load'd a worker whose idleTimer had already
-			// fired but whose deferred sessionWorkers.Delete had not yet
-			// run — enqueue into the dying worker's inbox would never be
-			// drained. When exiting=true we fall through to the spawn path
-			// below, which will create a fresh worker.
-			if existing, ok := al.sessionWorkers.Load(scope); ok {
-				w, ok := existing.(*sessionWorker)
-				if !ok {
-					logger.ErrorCF("agent", "sessionWorkers: invariant violated — unexpected value type",
-						map[string]any{"scope": scope, "got_type": fmt.Sprintf("%T", existing)})
-					// Fall through to spawn a replacement, same as a dying worker.
-				} else if !w.exiting.Load() {
-					w.enqueue(msg)
-					continue
-				}
-				// Dying worker (or corrupted entry) — fall through to spawn replacement.
-			}
-
-			// No worker yet — atomically claim an admission slot for this scope.
-			// TryAdmit returns (true, release) when admitted; (false, nil) when at cap.
-			// Using TryAdmit rather than a separate ShouldAdmit+OnTurnStart pair
-			// closes the TOCTOU window where two concurrent dispatchers both pass
-			// the check and overshoot the cap.
-			admitted, release := al.admission.TryAdmit(scope)
-			if !admitted {
-				logger.WarnCF("agent", "At capacity — rejecting new session",
-					map[string]any{
-						"scope":    scope,
-						"active":   al.admission.ActiveScopes(),
-						"soft_cap": al.admission.SoftCap(),
-						"channel":  msg.Channel,
-						"chat_id":  msg.ChatID,
-					})
-				// Send user-visible capacity reply.
-				rejectCtx, rejectCancel := context.WithTimeout(runCtx, 3*time.Second)
-				if pubErr := al.bus.PublishOutbound(rejectCtx, bus.OutboundMessage{
-					Channel: msg.Channel,
-					ChatID:  msg.ChatID,
-					Content: "I'm at capacity right now — please try again in a few seconds.",
-				}); pubErr != nil {
-					logger.WarnCF("agent", "Failed to send capacity-rejection reply",
-						map[string]any{"channel": msg.Channel, "error": pubErr.Error()})
-				}
-				rejectCancel()
-				continue
-			}
-
-			// Spawn a new worker for this scope. The worker holds the admission
-			// slot via release() and calls it in its deferred runLoop cleanup.
-			w := newSessionWorker(scope, al, release)
-			al.sessionWorkers.Store(scope, w)
-			go w.runLoop()
-			w.enqueue(msg)
+			// middle of exiting, enqueue into it; otherwise spawn one under
+			// the admission controller. See dispatchSessionWorker
+			// (session_worker.go) — the same helper #505's system-message
+			// dispatch uses to serialize async-origin turns against the
+			// origin session's worker. On an admission refusal the helper has
+			// already published the capacity reply; nothing further to do.
+			al.dispatchSessionWorker(scope, msg)
 		}
 	}
 }
