@@ -75,6 +75,12 @@ func (a *restAPI) handleCopilotSignInStart(w http.ResponseWriter, _ *http.Reques
 // which no UI flow waits on.
 const copilotProbeCacheTTL = 5 * time.Minute
 
+// copilotSignInCheck runs one Copilot sign-in check. It is a variable only so a
+// test can make the check return a state this gateway does not recognise,
+// which the real providers.CopilotSignIn cannot be made to do. Tests that swap
+// it restore it in t.Cleanup and never run in parallel.
+var copilotSignInCheck = providers_pkg.CopilotSignIn
+
 // copilotProbeRetryAfterSeconds is the Retry-After a caller gets when another
 // probe is already running. Bounded by copilotSignInCheckTimeout above.
 const copilotProbeRetryAfterSeconds = 5
@@ -128,6 +134,15 @@ func (g *copilotProbeGuard) lastResult() (gen.SignInStatus, bool) {
 		return gen.SignInStatus{}, false
 	}
 	return *g.last, true
+}
+
+// forgetLast drops the remembered check result, so the provider row reports
+// nothing until the next check the gateway can interpret.
+func (g *copilotProbeGuard) forgetLast() {
+	g.mu.Lock()
+	g.last = nil
+	g.lastAt = time.Time{}
+	g.mu.Unlock()
 }
 
 // recordLast remembers a fresh check result, whatever its state, for the
@@ -233,7 +248,17 @@ func (a *restAPI) handleCopilotSignInStatus(w http.ResponseWriter, r *http.Reque
 	defer cancel()
 
 	res := a.runCopilotSignInCheck(ctx)
-	status := copilotSignInStatusResponse(res)
+	status, known := copilotSignInStatusResponse(res)
+	if !known {
+		// Nothing about an uninterpreted result is remembered: not cached for
+		// the next check, and not shown on the provider row. The response is
+		// an error, which the sign-in dialog shows as a failed check.
+		a.copilotProbe.forgetLast()
+		a.auditCopilotProbe(r, gen.SignInStatus{State: gen.SignInStatusState(res.State)}, false)
+		jsonErr(w, http.StatusInternalServerError,
+			"the Copilot sign-in check returned a result this gateway does not recognise; see the gateway log")
+		return
+	}
 	a.copilotProbe.store(status)
 	a.copilotProbe.recordLast(status)
 	a.auditCopilotProbe(r, status, false)
@@ -314,7 +339,7 @@ func (a *restAPI) runCopilotSignInCheck(ctx context.Context) providers_pkg.Copil
 		}
 	}
 	defer cleanup()
-	return providers_pkg.CopilotSignIn(ctx, "", workspace)
+	return copilotSignInCheck(ctx, "", workspace)
 }
 
 // copilotSignInStatusResponse maps the CLI's state onto the FR-009 wire enum.
@@ -331,7 +356,10 @@ func (a *restAPI) runCopilotSignInCheck(ctx context.Context) providers_pkg.Copil
 // field that could carry "the check itself failed". Until it does, the reason
 // is only in the server log below — every outcome other than signed_in and a
 // recognised not_signed_in is logged with the detail that produced it.
-func copilotSignInStatusResponse(res providers_pkg.CopilotSignInResult) gen.SignInStatus {
+//
+// known is false for a state this mapping has no case for. The caller must then
+// answer with an error, never with any sign-in state.
+func copilotSignInStatusResponse(res providers_pkg.CopilotSignInResult) (gen.SignInStatus, bool) {
 	status := gen.SignInStatus{State: gen.SignInStatusStateNotSignedIn}
 
 	switch res.State {
@@ -361,11 +389,16 @@ func copilotSignInStatusResponse(res providers_pkg.CopilotSignInResult) gen.Sign
 		// A recognised message needs no log; an unrecognised one was already
 		// logged, with its text, by the classifier.
 	default:
-		slog.Error("copilot sign-in check returned an unknown state; reporting not_signed_in",
+		// A state with no case here — for example one added to pkg/providers
+		// without a matching case. Nobody has interpreted it, so it must not
+		// be answered as not_signed_in ("run copilot login") or any other
+		// sign-in state.
+		slog.Error("copilot sign-in check returned a state this gateway does not recognise; answering with an error",
 			"provider", copilotProviderID, "state", string(res.State), "detail", res.Detail)
+		return status, false
 	}
 
-	return status
+	return status, true
 }
 
 // copilotRowSignInStatus is what a github-copilot provider ROW may say about the
