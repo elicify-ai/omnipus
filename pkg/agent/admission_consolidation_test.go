@@ -200,6 +200,14 @@ func TestOnlyOneGate_SessionConcurrencyBoundByCentralValueAlone(t *testing.T) {
 // proves every one of those sessions is admitted — the retired hardcoded
 // ceiling no longer binds at all.
 func TestRemovedGate1_HardcodedNumCPUCapNoLongerBinds(t *testing.T) {
+	// Pin the memory reading — this test is about the retired
+	// runtime.NumCPU()*4 cap no longer binding, not the live memory gate.
+	// Left unpinned it reads this machine's real memory state; on a loaded
+	// host the memory gate clamps admission to its floor of 2 well before
+	// oldHardcodedCap+10 scopes are admitted, failing for reasons unrelated
+	// to the property under test. See stubMemory (memory_admission_test.go).
+	stubMemory(t, false, true)
+
 	oldHardcodedCap := runtime.NumCPU() * 4
 	configuredCap := oldHardcodedCap + 25 // comfortably above the retired ceiling
 
