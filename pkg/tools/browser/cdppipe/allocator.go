@@ -229,6 +229,12 @@ func (l *launch) start(ctx context.Context) error {
 	if l.opts.Errf != nil {
 		cmd.Stderr = &lineWriter{fn: l.opts.Errf, prefix: "cdppipe: chrome: "}
 	}
+	// Teardown must stay bounded when a Chrome helper outlives the browser
+	// process and keeps the stderr pipe open: Wait gives up draining after
+	// stderrDrainDelay, and the own process group lets teardown kill such a
+	// helper instead of leaving it running (see reap.go).
+	cmd.WaitDelay = stderrDrainDelay
+	startInOwnProcessGroup(cmd)
 	cmd.ExtraFiles = []*os.File{browserInR, browserOutW} // → child fd 3, fd 4
 
 	if err := cmd.Start(); err != nil {
@@ -369,17 +375,30 @@ func (l *launch) teardown() {
 		}
 
 		if l.cmd != nil && l.cmd.Process != nil {
+			pid := l.cmd.Process.Pid
 			waited := make(chan struct{})
 			go func() {
+				// Wait's error carries nothing teardown can act on: a Chrome
+				// killed below exits with a signal status, and a helper that
+				// held stderr past stderrDrainDelay yields exec.ErrWaitDelay.
 				_ = l.cmd.Wait()
 				close(waited)
 			}()
 			select {
 			case <-waited:
 			case <-time.After(5 * time.Second):
-				_ = l.cmd.Process.Kill()
-				<-waited
+				if err := l.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+					l.errf("kill chrome (pid %d): %v", pid, err)
+				}
 			}
+			// Kill what is left of Chrome's process group. A helper that
+			// outlived the browser process otherwise keeps running — and keeps
+			// the stderr pipe open, which is what used to block the Wait above
+			// indefinitely (see reap.go).
+			if err := killProcessGroup(pid); err != nil {
+				l.errf("kill chrome process group (pgid %d): %v", pid, err)
+			}
+			<-waited
 		}
 
 		l.bridgeWG.Wait()

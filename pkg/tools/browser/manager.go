@@ -1861,8 +1861,10 @@ func (m *BrowserManager) registerFreshSessionLocked(
 	return snapshotTabsLocked(se)
 }
 
-// firstAttachTimeout bounds runFirstAttach's wait for the very first
-// chromedp.Run on a freshly created chromedp context — used by both
+// firstAttachTimeout bounds opening a tab: for a brand-new tab, creating,
+// activating AND attaching it share this one budget (openNewTab); for an
+// adopted tab it bounds runFirstAttach's wait for the very first chromedp.Run
+// on its freshly created chromedp context. Used by both
 // bootstrapBrowserCtx (a session's initial browser-owning context) and
 // createTab (every subsequent/adopted tab). Both sit on the cold-start
 // critical path a slow attach can push past the browser WS handler's 60s
@@ -1915,10 +1917,7 @@ func runFirstAttach(fn func() error, timeout time.Duration) error {
 	case err := <-done:
 		return err
 	case <-time.After(timeout):
-		return fmt.Errorf(
-			"browser: timed out after %s waiting for the browser to attach the tab (target may be unresponsive)",
-			timeout,
-		)
+		return &tabOpenTimeoutError{after: timeout, phase: "attach"}
 	}
 }
 
@@ -1963,9 +1962,18 @@ func (m *BrowserManager) bootstrapBrowserCtx(allocCtx context.Context) (context.
 	// context — the only one chrome.tabCapture can reach — and isolation is
 	// the workspace's own Chrome process and profile directory (FR-037), not
 	// a context id.
-	ctx, cancel := chromedp.NewContext(allocCtx)
-	if err := runFirstAttach(func() error { return chromedp.Run(ctx) }, firstAttachTimeout); err != nil {
-		cancel()
+	//
+	// The browser-owning context is a brand-new tab like any other: created,
+	// ACTIVATED, then attached, inside one bounded budget (openNewTab). This is
+	// exactly where the Chrome 153 un-activated-tab stall surfaced in the field,
+	// as "failed to launch browser: ... timed out after 20s waiting for the
+	// browser to attach the tab" — see openActivatedTarget.
+	steps, err := newTabStepsFor(allocCtx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("browser: failed to launch browser: %w", err)
+	}
+	ctx, cancel, err := openNewTab(allocCtx, firstAttachTimeout, steps)
+	if err != nil {
 		return nil, nil, fmt.Errorf("browser: failed to launch browser: %w", err)
 	}
 	return ctx, cancel, nil
@@ -2064,15 +2072,29 @@ func (m *BrowserManager) createTab(parentCtx context.Context, targetID target.ID
 	if m.createTabFn != nil {
 		return m.createTabFn(parentCtx, targetID)
 	}
-	var opts []chromedp.ContextOption
+	var (
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
 	if targetID != "" {
-		opts = append(opts, chromedp.WithTargetID(targetID))
-	}
-	ctx, cancel := chromedp.NewContext(parentCtx, opts...)
-
-	if err := runFirstAttach(func() error { return chromedp.Run(ctx) }, firstAttachTimeout); err != nil {
-		cancel()
-		return nil, err
+		// ADOPTING a target that already exists (a popup, window.open): attach
+		// only. Chrome created and showed it; the Chrome 153 activation stall
+		// openNewTab works around was measured on targets created over CDP, not
+		// on these.
+		ctx, cancel = chromedp.NewContext(parentCtx, chromedp.WithTargetID(targetID))
+		if err := runFirstAttach(func() error { return chromedp.Run(ctx) }, firstAttachTimeout); err != nil {
+			cancel()
+			return nil, err
+		}
+	} else {
+		steps, err := newTabStepsFor(parentCtx)
+		if err != nil {
+			return nil, err
+		}
+		ctx, cancel, err = openNewTab(parentCtx, firstAttachTimeout, steps)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Best-effort stealth on a bounded timeout CHILD of ctx — safe because
