@@ -25,6 +25,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/library"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/records"
+	"github.com/elicify-ai/omnipus/pkg/vaultimport"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -971,10 +972,80 @@ func (a *restAPI) handleLibraryContentPut(w http.ResponseWriter, r *http.Request
 	w.Header().Set("ETag", libraryETagValue(newToken))
 	a.logLibraryAudit(r, "library.write", workspaceID,
 		map[string]any{"path": rel, "bytes": len(content), "binary": false})
+	// C5 (Claude review 2026-09-14): a save INSIDE a knowledge base refreshes
+	// that note's rows in both indexes before the caller is told the save
+	// landed — the same read-your-own-write guarantee the REST record door
+	// (rest_knowledge_record.go, UAT D-67) and the agent door already give.
+	// The watcher is not enough here: it refreshes only the TEXT index, and
+	// the properties index's count-based self-heal cannot see an edit that
+	// leaves the row count unchanged, so an in-place frontmatter edit stayed
+	// invisible to every view indefinitely. A `.base` save is routed to the
+	// view re-derivation instead (D-119): its "index" is the view YAMLs the
+	// import pipeline writes, and a raw text edit of a base must reach them
+	// exactly as an import would.
+	if lockCfg.CollectionRoot != "" {
+		if isLibraryBasePath(rel) {
+			a.rederiveBaseViewsAfterSave(r, workspaceID, lockCfg.CollectionRoot, lockRel)
+		} else if knowledge.IsMarkdownPath(rel) {
+			a.refreshLibraryWriteIndexes(r, workspaceID, lockCfg.CollectionRoot, lockRel)
+		}
+	}
 	// D-107: the file's size/mtime in other tabs' listings is now wrong (and
 	// a first-time create adds a row).
 	a.emitLibraryChange(workspaceID, rel, "write")
 	jsonOK(w, library.EntryFromInfo(rel, fi))
+}
+
+// isLibraryBasePath reports whether rel names an Obsidian `.base` file — the
+// same rule rest_knowledge_base_views.go applies at its own door
+// (case-insensitive extension, matching Windows/APFS case-folding) rather
+// than a second, stricter spelling that would classify the same file
+// differently at two doors.
+func isLibraryBasePath(rel string) bool {
+	return strings.EqualFold(path.Ext(rel), ".base")
+}
+
+// refreshLibraryWriteIndexes re-derives one note's rows in the text and
+// properties indexes right after a Library save landed inside a knowledge
+// base — the same call, contract and failure posture as the record door's
+// refreshRecordIndexes (never a refusal: the write is already on disk; a
+// refresh that fails is logged at Error inside knowledge.RefreshIndexesForNote
+// and named again here, and the engine's own stale-record flag remains the
+// user-visible signal until the next scheduled reconcile).
+func (a *restAPI) refreshLibraryWriteIndexes(r *http.Request, workspaceID, collectionRoot, relInCollection string) {
+	if warning := knowledge.RefreshIndexesForNote(r.Context(), a.homePath, collectionRoot, relInCollection); warning != "" {
+		logger.WarnCF("rest", "library: write landed but an index could not be refreshed",
+			map[string]any{"workspace_id": workspaceID, "path": relInCollection, "warning": warning})
+	}
+}
+
+// rederiveBaseViewsAfterSave re-translates one `.base` file the Library text
+// editor just saved (D-119's index half, deferred here with a full spec in
+// FIX2-REPORT-index-find.md): the raw bytes on disk become the view YAMLs an
+// import would have written, so a text edit of a base reaches the view index
+// the same way an import does instead of being write-only.
+//
+// Like the index refresh it sits beside, NEVER a refusal: the save is already
+// on disk, and a re-derivation that fails or refuses is logged so an operator
+// can see the base no longer translates — the previously written views stay
+// as they were rather than being destroyed over a refusal.
+func (a *restAPI) rederiveBaseViewsAfterSave(r *http.Request, workspaceID, collectionRoot, relInCollection string) {
+	res, err := vaultimport.RederiveBase(collectionRoot, relInCollection)
+	if err != nil {
+		logger.ErrorCF("rest", "library: base save landed but its views could not be re-derived",
+			map[string]any{"workspace_id": workspaceID, "path": relInCollection, "error": err.Error()})
+		return
+	}
+	if res.Status == vaultimport.OutcomeRefused {
+		logger.WarnCF("rest", "library: base save landed but its views were not re-derived — the base no longer translates",
+			map[string]any{"workspace_id": workspaceID, "path": relInCollection, "reason": res.RefusedReason,
+				"kept_existing_views": len(res.KeptExisting)})
+		return
+	}
+	logger.InfoCF("rest", "library: base save re-derived its views",
+		map[string]any{"workspace_id": workspaceID, "path": relInCollection,
+			"written": len(res.Written), "unchanged": len(res.Unchanged), "deleted": len(res.Deleted),
+			"status": string(res.Status)})
 }
 
 // maxLibraryBinaryContentBytes is the decoded-byte cap for PUT
