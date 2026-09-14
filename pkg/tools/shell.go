@@ -48,6 +48,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -190,6 +191,12 @@ type ExecTool struct {
 	// timeout, background timeout, explicit kill action) shares one closure.
 	// Nil when auditLogger is nil.
 	killAuditFn func(pid int, killErr error, caller string)
+
+	// backgroundSweepFn, when non-nil, replaces sweepAfterRun on the
+	// background completion path ONLY (sweepBackgroundCompletion). It is nil
+	// in every production build; it exists so a test can make the sweep panic
+	// and prove the completion goroutine survives it.
+	backgroundSweepFn func(ctx context.Context, command, cwd, baseDir string, started time.Time, result *ToolResult) *ToolResult
 }
 
 // GodModeForTest exposes the resolved god-mode flag for white-box testing.
@@ -2335,7 +2342,7 @@ func (t *ExecTool) runBackground(
 		// lookup and the audit entry), so a turn that has since ended does
 		// not silence it.
 		completion := backgroundCompletionResult(sessionID, finalStatus, finalExitCode, outputSoFar)
-		completion = t.sweepAfterRun(ctx, command, cwd, baseDir, started, completion)
+		completion = t.sweepBackgroundCompletion(ctx, command, cwd, baseDir, sessionID, started, completion)
 		if cb != nil {
 			cb(context.Background(), completion)
 		}
@@ -2354,6 +2361,106 @@ func (t *ExecTool) runBackground(
 		ForLLM:  string(data),
 		ForUser: fmt.Sprintf("Session %s started", sessionID),
 		IsError: marshalErr != nil,
+	}
+}
+
+// sweepBackgroundCompletion runs the D-14 post-command sweep for a finished
+// background session, and cannot take the gateway down with it.
+//
+// WHY THE RECOVER (silent-failure review 2026-09-14, F9). The foreground sweep
+// runs inside a tool call, under the agent loop's own protection. This one
+// runs in runBackground's bare completion goroutine, after the turn that
+// started the command has usually ended — nothing above it catches a panic,
+// so a panic in the sweep or in the policy lookup it makes would crash the
+// whole gateway process, recorded only on stderr (gateway_panic.log covers
+// startup only). A crashed check must not cost the operator every other
+// session, and must not vanish either, so a panic here is turned into:
+//
+//   - the completion result STILL delivered through the callback, with a
+//     plain notice that this run was NOT checked (the agent must not read a
+//     missing sweep report as a clean one);
+//   - one ERROR log carrying the panic value and the stack;
+//   - an audit warning ("escaping_symlink_sweep_failed"), shaped like the
+//     sweep's own "escaping_symlinks" warning, so an operator reviewing audit
+//     sees the gap where a finding would have been.
+func (t *ExecTool) sweepBackgroundCompletion(
+	ctx context.Context,
+	command, cwd, baseDir, sessionID string,
+	started time.Time,
+	completion *ToolResult,
+) (out *ToolResult) {
+	sweep := t.sweepAfterRun
+	if t.backgroundSweepFn != nil {
+		sweep = t.backgroundSweepFn
+	}
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		panicText := fmt.Sprint(r)
+		slog.Error("bash: post-command symlink sweep panicked after a background command finished; delivering the result without the check",
+			"agent_id", ToolAgentID(ctx),
+			"session_id", sessionID,
+			"panic", panicText,
+			"stack", string(debug.Stack()))
+		t.auditBackgroundSweepFailure(ctx, command, cwd, sessionID, panicText)
+		out = completion
+		if completion == nil {
+			return
+		}
+		notice := backgroundSweepFailedNotice()
+		completion.ForLLM = completion.ContentForLLM() + notice
+		if completion.ForUser != "" {
+			completion.ForUser += notice
+		}
+	}()
+	return sweep(ctx, command, cwd, baseDir, started, completion)
+}
+
+// backgroundSweepFailedNotice is appended to a background completion whose
+// post-command sweep crashed. It deliberately carries no panic text: that is
+// internal detail for the operator log, not for the agent-facing result.
+func backgroundSweepFailedNotice() string {
+	return "\n\n[SAFETY GUARD: the post-command symlink check FAILED to run after this command finished, " +
+		"so this run was NOT checked for symlinks pointing outside the workspace. " +
+		"Do not treat the absence of a finding as a clean result. The failure has been recorded for the operator.]"
+}
+
+// auditBackgroundSweepFailure writes the audit warning for a crashed
+// background sweep. The audit write is itself guarded: sweepAfterRun writes
+// audit too, so a panicking audit logger is one plausible cause of the panic
+// being reported, and re-raising it here would crash the gateway after all.
+func (t *ExecTool) auditBackgroundSweepFailure(ctx context.Context, command, cwd, sessionID, panicText string) {
+	if t.auditLogger == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("bash: writing the audit entry for a failed post-command symlink sweep panicked as well",
+				"agent_id", ToolAgentID(ctx),
+				"session_id", sessionID,
+				"panic", fmt.Sprint(r))
+		}
+	}()
+	// Same shape as sweepAfterRun's "escaping_symlinks" entry: the command
+	// was allowed and ran; this is a warning attached to it.
+	if err := t.auditLogger.Log(&audit.Entry{
+		Event:    audit.EventExec,
+		Decision: audit.DecisionAllow,
+		AgentID:  ToolAgentID(ctx),
+		Tool:     t.Name(),
+		Command:  command,
+		Details: map[string]any{
+			"cwd":        cwd,
+			"session_id": sessionID,
+			"warning":    "escaping_symlink_sweep_failed",
+			"error":      panicText,
+			"reason": "the post-command check for symlinks pointing outside the workspace crashed after this background command finished; " +
+				"this run was NOT checked — operator review",
+		},
+	}); err != nil {
+		slog.Warn("bash: audit write failed", "agent_id", ToolAgentID(ctx), "error", err)
 	}
 }
 
