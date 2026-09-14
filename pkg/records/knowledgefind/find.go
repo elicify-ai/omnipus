@@ -6,8 +6,8 @@ package knowledgefind
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -622,15 +622,22 @@ func checkCursor(cursor string, epoch int64) *RefusalError {
 	return nil
 }
 
-// restoreCursorQuery completes a cursor-only request from the query sealed in
-// the cursor, and refuses a cursor sent alongside a different query (D-08).
+// restoreCursorQuery completes a cursor-bearing request from the query sealed
+// in the cursor, and refuses a cursor sent alongside a different query (D-08).
 //
-// "Cursor-only" is decided on the wire shape — every other field absent —
-// and "different" by comparing the JSON of the two requests with the cursor
-// stripped, so a caller who re-sends the identical query with the cursor
-// (the other natural way to page) is not refused for it. A cursor with no
-// carried query (an old two-part token, or one not issued by this system)
-// is left for checkCursor to judge.
+// "Different" is decided SEMANTICALLY, over the decoded structs, by
+// sameRememberedQuery: every field the follow-up SENT (besides the cursor)
+// must ask for the same thing the cursor remembers, under the engine's own
+// equivalences. A byte-level JSON comparison was the earlier rule, and it
+// refused a caller who re-sent the identical query with a different but
+// equivalent spelling — `direction: descending` where page one said `desc`
+// (both valid, both executed identically since D-10), or a default stated
+// explicitly against the same default left implicit (`kind: note`,
+// `limit: 50`) — and it refused the follow-up that re-sent only part of the
+// query (`cursor` + `limit` after `words` + `limit`) even though the cursor
+// itself already carries the whole of it. A cursor with no carried query (an
+// old two-part token, or one not issued by this system) is left for
+// checkCursor to judge.
 func restoreCursorQuery(req *generated.VaultFindRequest) *RefusalError {
 	if req.Cursor == nil || *req.Cursor == "" {
 		return nil
@@ -642,21 +649,307 @@ func restoreCursorQuery(req *generated.VaultFindRequest) *RefusalError {
 	cursor := *req.Cursor
 	sent := *req
 	sent.Cursor = nil
-	sentJSON, err1 := json.Marshal(sent)
-	carriedJSON, err2 := json.Marshal(*carried)
-	switch {
-	case err1 != nil || err2 != nil:
-		// Neither side could be compared; checkCursor judges the cursor on
-		// its own, as for a token that carries no query.
-	case string(sentJSON) == "{}":
-		*req = *carried
-		req.Cursor = &cursor
-	case string(sentJSON) != string(carriedJSON):
+	if !sameRememberedQuery(sent, *carried) {
 		return refuse(problem(generated.StaleCursor,
 			"that cursor was issued for a different query ("+rawEcho(*carried)+"), not for the one sent with it",
 			"send the cursor on its own to continue the original query, or drop the cursor to run the new one from its first page"), nil)
 	}
+	// The continuation runs the REMEMBERED query, so the next cursor this page
+	// issues seals the same one the first page did — page three is issued
+	// against what page one asked, not against how page two happened to spell
+	// it. Fields the caller did not send are inherited; fields the caller did
+	// send were just proven to ask for the same thing.
+	*req = *carried
+	req.Cursor = &cursor
 	return nil
+}
+
+// sameRememberedQuery reports whether the follow-up request `sent` (cursor
+// already stripped) asks for the same query the cursor remembers.
+//
+// Only fields PRESENT in the follow-up can disagree: the cursor carries the
+// whole query (encodeCursor), so a field the follow-up omits is simply
+// inherited from the remembered one — the cursor-only form is the empty
+// extreme of that, and needs no case of its own. Each present field is
+// compared under the same equivalence parse() executes the request under
+// (request.go): an omitted kind/limit/detail/explain is that field's default,
+// `desc` and `descending` are one direction, and words/view/near are compared
+// as parse trims them. A present field that asks for anything else — another
+// page size, another narrowing, a spelling no rule accepts — is a genuinely
+// different query, and the caller is refused for it rather than answered for
+// either (D-08).
+//
+// A direction spelling outside the four the engine accepts is treated as a
+// disagreement on purpose: this function's acceptance path replaces the
+// request with the remembered one, so an unusable spelling must not ride
+// through it. Dropping the cursor and re-sending reaches parse, which refuses
+// the spelling by name.
+func sameRememberedQuery(sent, remembered generated.VaultFindRequest) bool {
+	if !sameExactString(sent.Type, remembered.Type) ||
+		!sameExactString(sent.Collection, remembered.Collection) {
+		return false
+	}
+	if !sameKindField(sent.Kind, remembered.Kind) ||
+		!sameDetailField(sent.Detail, remembered.Detail) {
+		return false
+	}
+	if !sameTrimmedString(sent.Words, remembered.Words) ||
+		!sameTrimmedString(sent.View, remembered.View) ||
+		!sameTrimmedString(sent.Near, remembered.Near) {
+		return false
+	}
+	if !sameHops(sent.Hops, remembered.Hops, remembered.Near) {
+		return false
+	}
+	if !sameExplainField(sent.Explain, remembered.Explain) ||
+		!sameLimitField(sent.Limit, remembered.Limit) {
+		return false
+	}
+	if (sent.Filter == nil) != (remembered.Filter == nil) {
+		return false
+	}
+	if sent.Filter != nil && !reflect.DeepEqual(*sent.Filter, *remembered.Filter) {
+		return false
+	}
+	if !sameSortKeys(sent.Sort, remembered.Sort) || !sameGroupKeys(sent.GroupBy, remembered.GroupBy) {
+		return false
+	}
+	if !sameStringList(sent.Select, remembered.Select) || !sameStringList(sent.Join, remembered.Join) {
+		return false
+	}
+	return sameAggregates(sent.Aggregate, remembered.Aggregate)
+}
+
+// sameExactString compares one field the engine reads verbatim: nil on the
+// sent side means the field was not sent, so the remembered value stands.
+func sameExactString(sent, remembered *string) bool {
+	if sent == nil {
+		return true
+	}
+	return remembered != nil && *sent == *remembered
+}
+
+// sameTrimmedString compares a field the engine trims before executing
+// (request.go's parse), so whitespace alone is not a different query.
+func sameTrimmedString(sent, remembered *string) bool {
+	if sent == nil {
+		return true
+	}
+	want := ""
+	if remembered != nil {
+		want = *remembered
+	}
+	return strings.TrimSpace(*sent) == strings.TrimSpace(want)
+}
+
+// sameKindField compares the row kind. An omitted kind is the remembered one;
+// a stated kind must fold to the same kind parse executes — and an omitted
+// kind IS note, so stating `note` explicitly continues the same query.
+func sameKindField(sent, remembered *generated.VaultFindRequestKind) bool {
+	if sent == nil {
+		return true
+	}
+	return canonicalKind(sent) == canonicalKind(remembered)
+}
+
+// canonicalKind folds the kind field to what parse executes: omitted means
+// note.
+func canonicalKind(k *generated.VaultFindRequestKind) string {
+	if k == nil {
+		return KindNote
+	}
+	return string(*k)
+}
+
+// sameDetailField compares the rendering density; omitted means standard.
+func sameDetailField(sent, remembered *generated.VaultFindRequestDetail) bool {
+	if sent == nil {
+		return true
+	}
+	if remembered == nil {
+		return string(*sent) == "standard"
+	}
+	return string(*sent) == string(*remembered)
+}
+
+// sameExplainField compares the plan-only flag; omitted means false.
+func sameExplainField(sent, remembered *bool) bool {
+	if sent == nil {
+		return true
+	}
+	return *sent == (remembered != nil && *remembered)
+}
+
+// sameLimitField compares the page size. An omitted limit is the remembered
+// page; a stated limit must equal the remembered one folded to its default —
+// so stating the default page size (50) explicitly continues a query that
+// never stated one.
+func sameLimitField(sent, remembered *int) bool {
+	if sent == nil {
+		return true
+	}
+	return canonicalLimit(sent) == canonicalLimit(remembered)
+}
+
+// canonicalLimit folds the page size: omitted means the default page.
+func canonicalLimit(l *int) int {
+	if l == nil {
+		return DefaultLimit
+	}
+	return *l
+}
+
+// sameHops compares the link-step count. An omitted hops is the remembered
+// hops, and a remembered-omitted hops is parse's own default of 1 when the
+// remembered query carries a near (request.go's applyHops).
+func sameHops(sent, remembered *int, rememberedNear *string) bool {
+	if sent == nil {
+		return true
+	}
+	want := 0
+	if remembered != nil {
+		want = *remembered
+	} else if strings.TrimSpace(derefOrEmpty(rememberedNear)) != "" {
+		want = 1
+	}
+	return *sent == want
+}
+
+// derefOrEmpty reads a string pointer the way an absent field reads.
+func derefOrEmpty(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// sameSortKeys compares the sort keys: same length, same properties in
+// order, and directions folded to the meaning parse executes (D-10 made
+// `descending` and `desc` one direction, and `ascending` and `asc` one).
+func sameSortKeys(sent, remembered *[]generated.VaultFindSort) bool {
+	if sent == nil {
+		return true
+	}
+	if remembered == nil || len(*sent) != len(*remembered) {
+		return false
+	}
+	for i := range *sent {
+		sentDesc, sentOK := sortDirectionDesc((*sent)[i].Direction)
+		remDesc, remOK := sortDirectionDesc((*remembered)[i].Direction)
+		if !sentOK || !remOK || sentDesc != remDesc {
+			return false
+		}
+		if (*sent)[i].Property != (*remembered)[i].Property {
+			return false
+		}
+	}
+	return true
+}
+
+// sameGroupKeys is sameSortKeys for the grouping keys.
+func sameGroupKeys(sent, remembered *[]generated.VaultFindGroupBy) bool {
+	if sent == nil {
+		return true
+	}
+	if remembered == nil || len(*sent) != len(*remembered) {
+		return false
+	}
+	for i := range *sent {
+		sentDesc, sentOK := groupDirectionDesc((*sent)[i].Direction)
+		remDesc, remOK := groupDirectionDesc((*remembered)[i].Direction)
+		if !sentOK || !remOK || sentDesc != remDesc {
+			return false
+		}
+		if (*sent)[i].Property != (*remembered)[i].Property {
+			return false
+		}
+	}
+	return true
+}
+
+// sortDirectionDesc folds one sort-direction spelling to the meaning parse
+// executes. ok=false marks a spelling no rule accepts, which this package's
+// comparison treats as a disagreement (see sameRememberedQuery).
+func sortDirectionDesc(d *generated.VaultFindSortDirection) (desc, ok bool) {
+	if d == nil {
+		return false, true
+	}
+	switch *d {
+	case generated.VaultFindSortDirectionAsc, generated.VaultFindSortDirectionAscending:
+		return false, true
+	case generated.VaultFindSortDirectionDesc, generated.VaultFindSortDirectionDescending:
+		return true, true
+	}
+	return false, false
+}
+
+// groupDirectionDesc is sortDirectionDesc for the grouping direction.
+func groupDirectionDesc(d *generated.VaultFindGroupByDirection) (desc, ok bool) {
+	if d == nil {
+		return false, true
+	}
+	switch *d {
+	case generated.VaultFindGroupByDirectionAsc, generated.VaultFindGroupByDirectionAscending:
+		return false, true
+	case generated.VaultFindGroupByDirectionDesc, generated.VaultFindGroupByDirectionDescending:
+		return true, true
+	}
+	return false, false
+}
+
+// sameStringList compares a list field element by element; an omitted list is
+// the remembered one, and an explicitly empty list executes the same as none.
+func sameStringList(sent, remembered *[]string) bool {
+	if sent == nil {
+		return true
+	}
+	if len(*sent) != listLen(remembered) {
+		return false
+	}
+	for i, v := range *sent {
+		if v != (*remembered)[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// listLen reads a list pointer's length the way an absent list reads.
+func listLen(l *[]string) int {
+	if l == nil {
+		return 0
+	}
+	return len(*l)
+}
+
+// sameAggregates compares the totals: same ops in order, and the same
+// property each reduces (an absent property and an empty one execute the
+// same way in parse).
+func sameAggregates(sent, remembered *[]generated.VaultFindAggregate) bool {
+	if sent == nil {
+		return true
+	}
+	if len(*sent) != aggLen(remembered) {
+		return false
+	}
+	for i := range *sent {
+		if (*sent)[i].Op != (*remembered)[i].Op {
+			return false
+		}
+		if derefOrEmpty((*sent)[i].Property) != derefOrEmpty((*remembered)[i].Property) {
+			return false
+		}
+	}
+	return true
+}
+
+// aggLen reads an aggregate list pointer's length the way an absent list
+// reads.
+func aggLen(l *[]generated.VaultFindAggregate) int {
+	if l == nil {
+		return 0
+	}
+	return len(*l)
 }
 
 // ---------------------------------------------------------------------------
