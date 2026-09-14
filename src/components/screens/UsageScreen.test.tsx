@@ -28,11 +28,10 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchTokenStats: vi.fn(),
     fetchSessions: vi.fn(),
-    fetchTokenBudgetStatus: vi.fn(),
   }
 })
 
-import { fetchTokenStats, fetchSessions, fetchTokenBudgetStatus } from '@/lib/api'
+import { fetchTokenStats, fetchSessions } from '@/lib/api'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -130,17 +129,6 @@ describe('UsageScreen', () => {
   beforeEach(() => {
     vi.mocked(fetchTokenStats).mockResolvedValue(mockSummary)
     vi.mocked(fetchSessions).mockResolvedValue(mockSessions)
-    // FE-6: UsageScreen now mounts TokenBudgetSection, which fetches the
-    // app-level budget status. Give it a stable resolved mock so the budget
-    // card's own loading/error state doesn't bleed into the existing suites.
-    vi.mocked(fetchTokenBudgetStatus).mockResolvedValue({
-      budget: 0,
-      consumed: 0,
-      remaining: 0,
-      exhausted: false,
-      advisory: 'unbounded — set a budget',
-      by_scope: { owner: 0, member: 0, verifier: 0, judge: 0 },
-    })
   })
 
   it('shows loading skeleton while fetching', async () => {

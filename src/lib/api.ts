@@ -176,8 +176,6 @@ import {
   SlashCommand as SlashCommandSchema,
   // Memory/recap settings (workspace-heartbeat-memory-config-spec.md FR-019):
   MemorySettings as MemorySettingsSchema,
-  // ADR-053 D12/R§8.3 (FE-6) — app-level OVERALL token budget status:
-  TokenBudgetStatus as TokenBudgetStatusSchema,
   // ADR-066 D9 — global context-budget settings (Settings → Models):
   ContextSettings as ContextSettingsSchema,
   // M11 per-(agent, workspace) email mailbox account (contract-first #8):
@@ -405,8 +403,6 @@ import type {
   WorkspaceInstructionsResponse,
   WorkspaceInstructionsRequest,
   TokenUsageSummary,
-  // ADR-053 D12/R§8.3 (FE-6) — app-level OVERALL token budget status:
-  TokenBudgetStatus,
   // ADR-066 D9 — global context-budget settings (Settings → Models):
   ContextSettings,
   ContextSettingsUpdate,
@@ -602,8 +598,6 @@ export type {
   WorkspaceInstructionsResponse,
   WorkspaceInstructionsRequest,
   TokenUsageSummary,
-  // ADR-053 D12/R§8.3 (FE-6) — app-level OVERALL token budget status:
-  TokenBudgetStatus,
   // ADR-066 D9 — global context-budget settings (Settings → Models):
   ContextSettings,
   ContextSettingsUpdate,
@@ -2060,9 +2054,8 @@ export interface Config { // not-wire-format: SPA-internal configuration shape p
     // endpoint since Wave 3. This field is still populated on read for
     // backward compatibility but must NOT be sent on updateConfig calls.
     prompt_injection_level?: 'off' | 'low' | 'medium' | 'high'
-    // ADR-053 D12 retired the SEC-26 USD cap; the app-level spend brake is
-    // now the token budget (set via /api/v1/settings/token-budget). The
-    // daily_cost_cap field is gone from both the wire types and this Config.
+    // ADR-053 D12 retired the SEC-26 USD cap. The daily_cost_cap field is
+    // gone from both the wire types and this Config.
     exec_timeout_seconds?: number
     max_background_seconds?: number
     enable_deny_patterns?: boolean
@@ -2233,7 +2226,7 @@ function rawToFrontendConfig(raw: Record<string, unknown>): Config {
       // corrupted-but-truthy value would silently NaN out and strip the
       // guardrail on the next PUT rather than failing loudly. Runtime-checked
       // and dropped to undefined (== "not configured") instead.
-      // ADR-053 D12: daily_cost_cap is gone — token budget is the sole brake.
+      // ADR-053 D12: daily_cost_cap is gone.
       exec_timeout_seconds: castOptionalNumber(security.exec_timeout_seconds, 'security.exec_timeout_seconds'),
       max_background_seconds: castOptionalNumber(security.max_background_seconds, 'security.max_background_seconds'),
       enable_deny_patterns: security.enable_deny_patterns as boolean | undefined,
@@ -2299,8 +2292,7 @@ function frontendToRawConfig(data: Partial<Config>): Record<string, unknown> {
     if (data.security.exec_approval !== undefined) sec.exec_approval = data.security.exec_approval
     // prompt_injection_level intentionally omitted — owned by PUT /security/prompt-guard.
     // daily_cost_cap intentionally omitted — ADR-053 D12 retired the SEC-26
-    // USD cap; the app-level spend brake is the token budget, set via
-    // PUT /api/v1/settings/token-budget.
+    // USD cap.
     if (data.security.exec_timeout_seconds !== undefined) sec.exec_timeout_seconds = data.security.exec_timeout_seconds
     if (data.security.max_background_seconds !== undefined) sec.max_background_seconds = data.security.max_background_seconds
     if (data.security.enable_deny_patterns !== undefined) sec.enable_deny_patterns = data.security.enable_deny_patterns
@@ -5088,36 +5080,5 @@ export function putContextSettings(body: ContextSettingsUpdate): Promise<Context
     '/settings/context',
     { method: 'PUT', body: JSON.stringify(body) },
     ContextSettingsSchema as ZodType<ContextSettings>,
-  )
-}
-
-// ADR-053 D12/R§8.3 (FE-6) — app-level OVERALL token budget for the Usage
-// screen. ONE shared pool across all workloads (owner/member/verifier/Judge);
-// no per-plan cap, no money/USD cap, no IsPrivilegedAgent exemption (D12).
-// GET returns the live spend accounting (TokenBudgetStatus). PUT persists the
-// operator-set ceiling; the ceiling is restart-gated (R§8.3e — a live ceiling
-// change would straddle two budgets, the N-15 hazard; the live lever for
-// runaway spend is the existing Stop/cancel cascade, NOT a live token cut).
-// The PUT body is the single operator-set field (`budget`; 0 = unbounded
-// sentinel, R§8.3a) — no hand-written request wire type; the response is
-// zod-validated against the landed TokenBudgetStatus schema (contract-first #8).
-// See contracts/components/schemas/TokenBudgetStatus.yaml.
-export const tokenBudgetQueryKeys = {
-  status: ['token-budget', 'status'] as const,
-}
-
-export function fetchTokenBudgetStatus(): Promise<TokenBudgetStatus> {
-  return request<TokenBudgetStatus>(
-    '/settings/token-budget',
-    undefined,
-    TokenBudgetStatusSchema as ZodType<TokenBudgetStatus>,
-  )
-}
-
-export function updateTokenBudget(budget: number): Promise<TokenBudgetStatus> {
-  return request<TokenBudgetStatus>(
-    '/settings/token-budget',
-    { method: 'PUT', body: JSON.stringify({ budget }) },
-    TokenBudgetStatusSchema as ZodType<TokenBudgetStatus>,
   )
 }

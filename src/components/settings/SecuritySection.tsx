@@ -192,8 +192,6 @@ export function SecuritySection() {
   const [policyMode, setPolicyMode] = useState<'allow' | 'deny'>('deny')
   const [execApproval, setExecApproval] = useState<'auto' | 'ask' | 'deny'>('ask')
   // ADR-053 D12: dailyCostCap state retired alongside the SEC-26 USD cap.
-  // The app-level spend brake is the token budget (set via TokenBudgetSection
-  // on the Usage screen), not a money cap.
   const [agentLlmCallsPerHour, setAgentLlmCallsPerHour] = useState('')
   const [agentToolCallsPerMin, setAgentToolCallsPerMin] = useState('')
   const [execTimeoutSecs, setExecTimeoutSecs] = useState('')
@@ -324,9 +322,7 @@ export function SecuritySection() {
     return <p className="text-sm text-red-400">Failed to load security settings. Please try again.</p>
   }
 
-  // ADR-053 D12 retired the "Daily spending limit" UI block. The app-level
-  // spend brake is the token budget, configured in TokenBudgetSection on
-  // the Usage screen — money caps are no longer a thing in Omnipus.
+  // ADR-053 D12 retired the "Daily spending limit" UI block.
 
   // US-B2: badge derives from persisted config.security.policy_mode (not local state).
   // After save, the query is invalidated so persistedPolicyMode updates.

@@ -1700,7 +1700,7 @@ const UNKNOWN_FRAME_TOAST_THRESHOLD = 5
 // Authoritative terminal-state set per the wire contract
 // (contracts/components/schemas/GoalStatusFrame.yaml `state` enum, now 14
 // values after the joint ADR-084/ADR-085/ADR-086 delivery, C-39): `done`
-// (success), `failed` (a genuine budget/rounds-exhausted/idle-expired
+// (success), `failed` (a genuine rounds-exhausted/idle-expired
 // brake — pre-existing, now narrower now that `expired` has its own
 // value, see below), `cleared` (a deliberate user-initiated stop — added
 // post-ADR-053 so it does NOT collapse into `failed`), and `expired`
