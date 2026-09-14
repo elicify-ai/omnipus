@@ -528,28 +528,76 @@ func TestCopilotProbe_ConcurrentCallsAreRefusedNotSpawned(t *testing.T) {
 // TestCopilotProbe_ConcurrentHTTPCallsSpawnOneVendorProcess drives the same
 // guarantee through the real handler from many goroutines at once, counting
 // actual vendor execs.
+//
+// It used to assert only "at most one vendor process", and never looked at a
+// response. That also passes when NO call reached the probe — for example
+// when every call was refused by the per-IP rate limiter, which this test
+// shared with the rest of the package because it was the one provider test
+// not isolated — since 0 <= 1. The shared check below closes that.
 func TestCopilotProbe_ConcurrentHTTPCallsSpawnOneVendorProcess(t *testing.T) {
-	const path = "/api/v1/providers/github-copilot/sign-in/status"
 	api, _ := newAuthMethodOnboardingAPI(t)
 	counter := putCountingCopilotOnPath(t, "ok", "", 0)
+	requireConcurrentCopilotChecksSpawnOneProcess(t, api, counter, 25)
+}
+
+// requireConcurrentCopilotChecksSpawnOneProcess sends `calls` concurrent
+// Copilot sign-in checks as an admin and requires that the C2 guard, and only
+// the C2 guard, shaped every answer:
+//
+//   - every request carries this test's own rate-limit address, so the per-IP
+//     limiter can never be what refused it;
+//   - every answer is either signed_in (the one probe, or the C2 cache after
+//     it) or the C2 guard's own "already running" 429 — a rate-limiter 429 or
+//     anything else fails;
+//   - at least one call reached the probe, and exactly ONE vendor process ran.
+func requireConcurrentCopilotChecksSpawnOneProcess(t *testing.T, api *restAPI, counter string, calls int) {
+	t.Helper()
+	const path = "/api/v1/providers/github-copilot/sign-in/status"
 	cfg := api.agentLoop.GetConfig()
 
+	// Built up front: isolateRateLimit takes t, which a goroutine must not use
+	// to fail the test.
+	reqs := make([]*http.Request, calls)
+	recorders := make([]*httptest.ResponseRecorder, calls)
+	for i := range reqs {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		ctx := context.WithValue(req.Context(), UserContextKey{},
+			&config.UserConfig{Username: "admin"})
+		ctx = context.WithValue(ctx, ctxkey.ConfigContextKey{}, cfg)
+		reqs[i] = isolateRateLimit(t, req.WithContext(ctx))
+		recorders[i] = httptest.NewRecorder()
+	}
+
 	var wg sync.WaitGroup
-	for i := 0; i < 25; i++ {
+	for i := range reqs {
 		wg.Add(1)
-		go func() {
+		go func(i int) {
 			defer wg.Done()
-			req := httptest.NewRequest(http.MethodGet, path, nil)
-			ctx := context.WithValue(req.Context(), UserContextKey{},
-				&config.UserConfig{Username: "admin"})
-			ctx = context.WithValue(ctx, ctxkey.ConfigContextKey{}, cfg)
-			api.HandleProviders(httptest.NewRecorder(), req.WithContext(ctx))
-		}()
+			api.HandleProviders(recorders[i], reqs[i])
+		}(i)
 	}
 	wg.Wait()
 
-	assert.LessOrEqual(t, countInvocations(t, counter), 1,
-		"25 concurrent status calls must never spawn more than one vendor process")
+	signedIn, refusedByGuard := 0, 0
+	for i, w := range recorders {
+		switch w.Code {
+		case http.StatusOK:
+			var got gen.SignInStatus
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got), "call %d body=%s", i, w.Body.String())
+			require.Equal(t, gen.SignInStatusStateSignedIn, got.State, "call %d body=%s", i, w.Body.String())
+			signedIn++
+		case http.StatusTooManyRequests:
+			require.Contains(t, w.Body.String(), "a Copilot sign-in check is already running",
+				"call %d was refused by something other than the C2 single-flight guard: body=%s", i, w.Body.String())
+			refusedByGuard++
+		default:
+			require.Failf(t, "unexpected response", "call %d: status %d body=%s", i, w.Code, w.Body.String())
+		}
+	}
+	require.Equal(t, calls, signedIn+refusedByGuard)
+	require.GreaterOrEqual(t, signedIn, 1, "at least one concurrent call must have reached the probe")
+	assert.Equal(t, 1, countInvocations(t, counter),
+		"%d concurrent status calls must spawn exactly ONE vendor process", calls)
 }
 
 // writeFakeCopilot writes a `copilot` stand-in into dir. Split out of the
