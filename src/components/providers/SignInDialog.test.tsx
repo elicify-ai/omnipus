@@ -313,7 +313,15 @@ describe('SignInDialog — device_code', () => {
     vi.mocked(api.pollSignIn).mockResolvedValue({ state: 'pending' })
     renderDialog()
 
-    await waitFor(() => screen.getByTestId('sign-in-status'))
+    // Wait for the status TEXT, not just the element. The element exists from the
+    // first render (reading "Starting sign-in…") and only reads "approve" once the
+    // mocked startSignIn resolves, so waiting on existence alone raced on slow runners.
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('sign-in-status')).toHaveTextContent(/approve/i)
+      },
+      { timeout: 5000 },
+    )
     const live = screen.getByTestId('sign-in-status')
     expect(live).toHaveAttribute('aria-live', 'polite')
     expect(live).toHaveTextContent(/approve/i)
