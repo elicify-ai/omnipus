@@ -25,6 +25,7 @@ type DedicatedInputPeer struct {
 	queue           *dedicatedInputQueue
 	validate        func([]byte) error
 	state           func(string)
+	controlFailure  func(int, string)
 	cfg             Config
 	mu              sync.Mutex
 	channels        map[string]*pion.DataChannel
@@ -43,6 +44,9 @@ func NewDedicatedInputPeer(parent context.Context, cfg Config, epoch, control in
 	ctx, cancel := context.WithCancel(parent)
 	p := &DedicatedInputPeer{ctx: ctx, cancel: cancel, cfg: cfg, validate: validate, state: state, channels: make(map[string]*pion.DataChannel), opened: make(map[string]bool), closed: make(chan struct{})}
 	p.queue = newDedicatedInputQueue(ctx, epoch, control, sink, p.fail)
+	p.queue.mu.Lock()
+	p.queue.controlFailure = p.reportControlFailure
+	p.queue.mu.Unlock()
 	context.AfterFunc(ctx, p.Close)
 	return p
 }
@@ -99,6 +103,31 @@ func (p *DedicatedInputPeer) fail(reason string) {
 	if p.state != nil {
 		p.state(reason)
 	}
+}
+
+// SetControlFailureHandler allows an expired control source to be retired while
+// retaining its healthy peer. Install before Answer. Callers must fence the
+// supplied control epoch and explicitly advance control after joining/releasing
+// the old source; no queued action is replayed. Without a handler expiry remains
+// a visible fatal failure rather than silently leaving a caller paused.
+func (p *DedicatedInputPeer) SetControlFailureHandler(handler func(int, string)) {
+	p.mu.Lock()
+	p.controlFailure = handler
+	p.mu.Unlock()
+}
+func (p *DedicatedInputPeer) reportControlFailure(control int, reason string) {
+	p.mu.Lock()
+	handler := p.controlFailure
+	stopped := p.failed || p.ctx.Err() != nil
+	p.mu.Unlock()
+	if stopped {
+		return
+	}
+	if handler == nil {
+		p.fail(reason)
+		return
+	}
+	handler(control, reason)
 }
 
 // SetQueueTimingObserver observes admission time immediately before serial

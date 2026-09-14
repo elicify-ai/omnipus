@@ -33,6 +33,9 @@ export class BrowserInputWebRTCSession {
   private held = new Set<string>()
   private answered = false
   private applyingAnswer = false
+  private pressurePaused = false
+  private failedControl: number | null = null
+  private failedReleaseControl: number | null = null
   private wanted = false
   private timer: ReturnType<typeof setTimeout> | null = null
   private cancelGather: (() => void) | null = null
@@ -52,6 +55,7 @@ export class BrowserInputWebRTCSession {
   setICEServers(servers: RTCIceServer[]): void { this.iceServers = servers }
 
   start(): void {
+    if (this.pressurePaused) return
     this.wanted = true
     if (this.pc || this.retirementRejected || this.control !== this.acknowledgedControl) return
     this.cleanup()
@@ -64,6 +68,13 @@ export class BrowserInputWebRTCSession {
     this.change('connecting')
     this.armTimeout('Input connection timed out. Retry input.')
     void this.offer()
+  }
+
+  resume(): void {
+    if (!this.pressurePaused || this.awaitingControl) return
+    this.pressurePaused = false
+    this.wanted = true
+    this.updateReady()
   }
 
   private async offer(): Promise<void> {
@@ -121,10 +132,30 @@ export class BrowserInputWebRTCSession {
   }
 
   applyState(frame: BrowserInputStateFrame): void {
-    // Once locally retired, transport failure can race successful ordered
-    // cleanup. Only its control acknowledgment determines retirement success.
-    if (!this.pc || frame.input_epoch !== this.epoch || frame.offer_id !== this.epoch) return
-    if (frame.state === 'failed' || frame.state === 'closed') this.fail(frame.reason || 'Input connection unavailable. Retry input.')
+    if (frame.input_epoch !== this.epoch || frame.offer_id !== this.epoch) return
+    if (frame.state !== 'failed' && frame.state !== 'closed') return
+    // A native channel can close before its server cause arrives. Update only
+    // presentation for that retired control; the release ACK remains authoritative.
+    if (!this.pc) {
+      if (this.currentState === 'failed' && (frame.control_epoch === this.failedControl || (frame.control_epoch === this.failedReleaseControl)) && frame.reason) this.change('failed', frame.reason)
+      return
+    }
+    if (frame.control_epoch > this.control) return
+    if (frame.reason === 'reliable input queue expired') {
+      if (frame.control_epoch !== this.control || this.pressurePaused) return
+      if (this.reliable?.readyState !== 'open' || this.hover?.readyState !== 'open' || ['closed', 'failed', 'disconnected'].includes(this.pc.connectionState)) {
+        this.fail('Browser fell behind and the input connection closed. Retry input.')
+        return
+      }
+      this.pressurePaused = true
+      this.wanted = false
+      this.held.clear()
+      this.change('paused', 'Browser fell behind. Input paused.')
+      const previousControl = this.control
+      if (!this.options.onFailure?.() || this.control <= previousControl || !this.awaitingControl) this.fail('Could not pause browser input safely. Retry input.')
+      return
+    }
+    this.fail(frame.reason || 'Input connection unavailable. Retry input.')
   }
 
   beginControl(): number | null {
@@ -135,7 +166,7 @@ export class BrowserInputWebRTCSession {
     // Keep signaled peers alive: the original answer still completes their SDP.
     if (this.pc && this.signaledEpoch !== this.epoch) this.cleanup()
     this.held.clear() // Server retires and releases the preceding control epoch.
-    if (this.currentState !== 'failed') this.change('paused')
+    if (this.currentState !== 'failed') this.change('paused', this.pressurePaused ? 'Browser fell behind. Input paused.' : undefined)
     this.armTimeout('Browser control acknowledgment timed out. Retry input.')
     return this.control
   }
@@ -155,6 +186,7 @@ export class BrowserInputWebRTCSession {
     this.acknowledgedControl = this.control
     this.clearTimer()
     if (!this.pc && this.wanted) this.start()
+    else if (this.pc && this.pressurePaused) this.change('paused', 'Browser fell behind. Input paused.')
     else if (this.pc) {
       this.armTimeout('Input connection timed out. Retry input.')
       this.updateReady()
@@ -192,6 +224,9 @@ export class BrowserInputWebRTCSession {
 
   fail(reason: string): void {
     if (this.currentState === 'failed' && !this.pc && this.awaitingRetirement) return
+    this.failedControl = this.control
+    this.failedReleaseControl = null
+    this.pressurePaused = false
     this.wanted = false
     this.cleanup()
     this.change('failed', reason)
@@ -201,13 +236,13 @@ export class BrowserInputWebRTCSession {
       this.retiredEpoch = this.signaledEpoch
       const previousControl = this.control
       const sent = this.options.onFailure()
-      if (sent && this.control > previousControl && this.awaitingControl) this.retirementControl = this.control
+      if (sent && this.control > previousControl && this.awaitingControl) this.failedReleaseControl = this.retirementControl = this.control
       else this.retirementRejected = true
     }
   }
-  stop(): void { this.wanted = false; this.cleanup(); this.change('idle') }
+  stop(): void { this.pressurePaused = false; this.failedControl = this.failedReleaseControl = null; this.wanted = false; this.cleanup(); this.change('idle') }
   private updateReady(): void {
-    if (!this.pc || !this.answered || this.reliable?.readyState !== 'open' || this.hover?.readyState !== 'open') return
+    if (this.pressurePaused || !this.pc || !this.answered || this.reliable?.readyState !== 'open' || this.hover?.readyState !== 'open') return
     if (this.control !== this.acknowledgedControl) return
     this.clearTimer()
     this.change('ready')

@@ -297,3 +297,59 @@ it('sends versioned binary bytes on the actual reliable transport', async () => 
   ])
   s.machine.stop()
 })
+
+
+describe('recoverable queue pressure', () => {
+  it('preserves the healthy peer, drains control, and requires an explicit fresh resume', async () => {
+    const release = vi.fn(() => { s.machine.beginControl(); return true })
+    const s = setup(release); await s.connect()
+    s.machine.sendInput({ ...s.input, kind: 'key_down', key: 'ArrowLeft', code: 'ArrowLeft' })
+    s.machine.applyState({ type: 'browser_input_state', session_id: 'session', input_epoch: 1, offer_id: 1, control_epoch: 0, state: 'failed', reason: 'reliable input queue expired' })
+    expect(s.machine.state).toBe('paused')
+    expect(s.changed).toHaveBeenLastCalledWith('paused', 'Browser fell behind. Input paused.')
+    expect(s.pc.close).not.toHaveBeenCalled()
+    expect(release).toHaveBeenCalledTimes(1)
+    expect(s.machine.sendInput(s.input)).toBe(false)
+    s.machine.resume() // Resume is unavailable while release has not been acknowledged.
+    s.machine.applyControlAck({ type: 'browser_input_control_ack', session_id: 'session', input_epoch: 1, control_epoch: 1, ok: true })
+    expect(s.machine.state).toBe('paused')
+    expect(s.machine.sendInput(s.input)).toBe(false)
+    s.machine.start()
+    expect(s.machine.state).toBe('paused')
+    s.machine.resume()
+    expect(s.machine.state).toBe('ready')
+    expect(s.machine.sendInput({ ...s.input, kind: 'mouse_down', button: 'left' })).toBe(true)
+    expect(s.sent('input-reliable').map(f => [f.kind, f.control_epoch, f.reliable_seq])).toEqual([['key_down', 0, 1], ['mouse_down', 1, 1]])
+    s.machine.applyState({ type: 'browser_input_state', session_id: 'session', input_epoch: 1, offer_id: 1, control_epoch: 0, state: 'failed', reason: 'reliable input queue expired' })
+    expect(s.machine.state).toBe('ready')
+    expect(release).toHaveBeenCalledTimes(1)
+    s.machine.stop()
+  })
+  it.each([0, 1])('retains the backend cause at control %i after local closure without treating it as a control refusal', async (control) => {
+    const s = setup(() => { s.machine.beginControl(); return true }); await s.connect()
+    s.channels['input-reliable'].onclose?.()
+    expect(s.machine.state).toBe('failed')
+    const server = { type: 'browser_input_state' as const, session_id: 'session', input_epoch: 1, offer_id: 1, control_epoch: control, state: 'failed', reason: 'Input channels did not become ready. Retry input.' }
+    s.machine.applyState({ ...server, input_epoch: 0, offer_id: 0 })
+    expect(s.changed).toHaveBeenLastCalledWith('failed', 'Input connection closed. Retry input.')
+    s.machine.applyState(server)
+    expect(s.changed).toHaveBeenLastCalledWith('failed', server.reason)
+    expect(s.machine.awaitingRetirement).toBe(true)
+    s.machine.applyControlAck({ type: 'browser_input_control_ack', session_id: 'session', input_epoch: 1, control_epoch: 1, ok: true })
+    expect(s.machine.needsAttachmentRetry).toBe(false)
+    expect(s.machine.state).toBe('failed')
+    expect(s.pc.close).toHaveBeenCalledTimes(1)
+    s.machine.stop()
+  })
+})
+
+
+it('uses full Retry when queue expiry arrives after the native channel has already closed', async () => {
+  const s=setup(()=>{s.machine.beginControl();return true});await s.connect()
+  s.channels['input-reliable'].readyState='closed'
+  s.machine.applyState({type:'browser_input_state',session_id:'session',input_epoch:1,offer_id:1,control_epoch:0,state:'failed',reason:'reliable input queue expired'})
+  expect(s.machine.state).toBe('failed')
+  expect(s.pc.close).toHaveBeenCalledTimes(1)
+  expect(s.machine.sendInput(s.input)).toBe(false)
+  s.machine.stop()
+})

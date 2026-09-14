@@ -3,6 +3,8 @@ package webrtc
 import (
 	"context"
 	"math"
+	"reflect"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -679,4 +681,94 @@ func TestDedicatedInputQueueRetirementStopsExpiry(t *testing.T) {
 			})
 		})
 	}
+}
+
+// A bounded Chrome-command stall must retire the stale source, not make the
+// healthy peer permanently unusable. Recovery requires an explicit next control
+// epoch and joined dispatch; queued actions are never replayed into that epoch.
+func TestDedicatedInputQueueExpiryAllowsExplicitControlRecovery(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		entered, canceled, finish := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		var finishOnce sync.Once
+		release := func() { finishOnce.Do(func() { close(finish) }) }
+		defer release()
+		failures := make(chan string, 4)
+		var dispatched [][2]int
+		q := newDedicatedInputQueue(context.Background(), 1, 0, func(ctx context.Context, frame generated.BrowserInputFrame) {
+			dispatched = append(dispatched, [2]int{*frame.ControlEpoch, *frame.ReliableSeq})
+			if *frame.ControlEpoch == 0 {
+				close(entered)
+				select {
+				case <-time.After(1500 * time.Millisecond):
+					t.Error("stale source survived its queue deadline")
+				case <-ctx.Done():
+					close(canceled)
+				}
+				<-finish
+			}
+		}, func(reason string) { failures <- reason })
+		defer q.close()
+		frame := func(control, seq int, kind string) generated.BrowserInputFrame {
+			f := pressureWheel(seq, 0, 0)
+			f.Kind = kind
+			f.ControlEpoch = &control
+			key, code := "a", "KeyA"
+			f.Key, f.Code = &key, &code
+			barrier := seq
+			f.GestureBarrier = &barrier
+			return f
+		}
+		q.submit(false, frame(0, 1, "key_down"))
+		<-entered
+		q.submit(false, frame(0, 2, "key_up"))
+		time.Sleep(time.Second)
+		synctest.Wait()
+		select {
+		case <-canceled:
+		default:
+			t.Fatal("expired queue did not cancel its active source")
+		}
+		select {
+		case reason := <-failures:
+			if reason != "reliable input queue expired" {
+				t.Fatalf("failure=%q", reason)
+			}
+		default:
+			t.Fatal("queued actions were discarded without explicit failure")
+		}
+		if len(dispatched) != 1 {
+			t.Fatalf("expired key release was replayed: %v", dispatched)
+		}
+		// A same-epoch resume must not reopen old identity/sequence admission.
+		if err := q.resume(0); err == nil {
+			t.Fatal("expiry resumed without an explicit next control")
+		}
+		source, done, err := q.pause(1)
+		if err != nil {
+			release()
+			t.Fatalf("expiry destroyed explicit recovery: %v", err)
+		}
+		if source.Err() == nil {
+			t.Fatal("old source was not retired")
+		}
+		if err := q.resume(1); err == nil {
+			t.Fatal("new control resumed before old dispatch joined")
+		}
+		release()
+		<-done
+		if err := q.resume(1); err != nil {
+			t.Fatal(err)
+		}
+		q.submit(false, frame(0, 3, "key_down"))
+		q.submit(false, frame(1, 1, "key_down"))
+		q.submit(false, frame(1, 2, "key_up"))
+		synctest.Wait()
+		want := [][2]int{{0, 1}, {1, 1}, {1, 2}}
+		if !reflect.DeepEqual(dispatched, want) {
+			t.Fatalf("dispatch=%v want=%v", dispatched, want)
+		}
+		if len(failures) != 0 {
+			t.Fatal("expiry failure reported more than once")
+		}
+	})
 }

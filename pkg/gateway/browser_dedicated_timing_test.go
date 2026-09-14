@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"sync/atomic"
@@ -123,7 +124,7 @@ func TestDedicatedTimingKeepsFailureQuotaAfterHoverSamples(t *testing.T) {
 		finish("deadline_exceeded")
 	}
 	require.Equal(t, map[string]int{"completed": 512, "deadline_exceeded": 64}, counts)
-	require.Nil(t, sampling.begin(generated.BrowserInputFrame{Kind: "text"}, time.Now()), "exhausted diagnostics must stop allocating probes")
+	require.NotNil(t, sampling.begin(generated.BrowserInputFrame{Kind: "text"}, time.Now()), "rolling diagnostics must survive the initial sample budgets")
 }
 
 func TestDedicatedTimingReservesCriticalQuotaAfterBenignTraffic(t *testing.T) {
@@ -247,4 +248,167 @@ func TestDedicatedTimingCoversEveryGestureWithoutPayload(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDedicatedTimingRollingFailureWindowSurvivesInitialBudgets(t *testing.T) {
+	sampling := &browserInputTimingSampling{}
+	now := time.Unix(100, 0)
+	var records []map[string]any
+	emit := func(args ...any) {
+		record := map[string]any{}
+		for i := 0; i < len(args); i += 2 {
+			record[args[i].(string)] = args[i+1]
+		}
+		records = append(records, record)
+	}
+	finish := func(seq int, outcome string) {
+		private := "SECRET keyboard text https://private.example"
+		p := sampling.begin(generated.BrowserInputFrame{Kind: "wheel", ReliableSeq: &seq, Text: &private, Key: &private, Url: &private}, now)
+		require.NotNil(t, p, "long sessions must still retain a bounded failure window")
+		p.now = func() time.Time { return now }
+		p.emit = emit
+		p.outcome = outcome
+		p.mark("cdp_start")
+		p.finish()
+	}
+	for i := 1; i <= 512; i++ {
+		finish(i, "completed")
+	}
+	for i := 513; i <= 576; i++ {
+		finish(i, "deadline_exceeded")
+	}
+	require.Len(t, records, 576)
+	records = nil
+	now = now.Add(10 * time.Second)
+	for i := 577; i <= 596; i++ {
+		finish(i, "completed")
+	}
+	require.Empty(t, records, "ordinary post-budget traffic stays in fixed memory")
+	finish(597, "deadline_exceeded")
+	require.Len(t, records, 17, "exactly the preceding sixteen inputs plus the current failure")
+	for i, record := range records {
+		require.Equal(t, 581+i, record["reliable_seq"])
+	}
+	raw, err := json.Marshal(records)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "SECRET")
+	require.NotContains(t, string(raw), "private.example")
+	records = nil
+	finish(598, "dispatch_error")
+	require.Empty(t, records, "failure bursts must be rate limited")
+	now = now.Add(10 * time.Second)
+	finish(599, "dispatch_error")
+	require.Len(t, records, 17, "later failures retain a fresh rolling window, not a lifetime quota")
+	require.Equal(t, 599, records[16]["reliable_seq"])
+}
+
+func TestDedicatedTimingClosedConnectionFlushesWithoutActiveInput(t *testing.T) {
+	sampling := &browserInputTimingSampling{}
+	now := time.Unix(100, 0)
+	for seq := 1; seq <= 600; seq++ {
+		p := sampling.begin(generated.BrowserInputFrame{Kind: "wheel", ReliableSeq: &seq}, now)
+		require.NotNil(t, p)
+		p.now = func() time.Time { return now }
+		p.emit = func(...any) {}
+		p.outcome = "completed"
+		p.finish()
+	}
+	var records []map[string]any
+	emit := func(args ...any) {
+		record := map[string]any{}
+		for i := 0; i < len(args); i += 2 {
+			record[args[i].(string)] = args[i+1]
+		}
+		records = append(records, record)
+	}
+	sampling.failure("input connection closed", now, emit)
+	require.Len(t, records, 17, "connection closure must flush sixteen prior inputs even with no active dispatch")
+	for i := 0; i < 16; i++ {
+		require.Equal(t, 585+i, records[i]["reliable_seq"])
+	}
+	require.Equal(t, map[string]any{"event": "failure_window", "reason": "connection_closed"}, records[16])
+	records = nil
+	sampling.failure("PRIVATE key text https://secret.example", now, emit)
+	require.Empty(t, records, "duplicate callbacks cannot produce unbounded windows")
+	sampling.failure("PRIVATE key text https://secret.example", now.Add(10*time.Second), emit)
+	require.Len(t, records, 17)
+	require.Equal(t, map[string]any{"event": "failure_window", "reason": "other"}, records[16])
+}
+
+func TestDedicatedTimingSlowCanceledWindowBoundary(t *testing.T) {
+	for _, elapsed := range []time.Duration{249 * time.Millisecond, 250 * time.Millisecond} {
+		t.Run(elapsed.String(), func(t *testing.T) {
+			sampling := &browserInputTimingSampling{}
+			now := time.Unix(100, 0)
+			for range 512 {
+				p := sampling.begin(generated.BrowserInputFrame{Kind: "wheel"}, now)
+				p.now = func() time.Time { return now }
+				p.emit = func(...any) {}
+				p.outcome = "completed"
+				p.finish()
+			}
+			p := sampling.begin(generated.BrowserInputFrame{Kind: "wheel"}, now)
+			now = now.Add(elapsed)
+			p.now = func() time.Time { return now }
+			count := 0
+			p.emit = func(...any) { count++ }
+			p.outcome = "canceled"
+			p.finish()
+			expected := 0
+			if elapsed == 250*time.Millisecond {
+				expected = 17
+			}
+			require.Equal(t, expected, count)
+			for _, snapshot := range sampling.recent {
+				require.Nil(t, snapshot.now)
+				require.Nil(t, snapshot.emit)
+				require.Nil(t, snapshot.sampling)
+				require.Nil(t, snapshot.offsets)
+			}
+		})
+	}
+}
+
+func TestDedicatedTimingFailureWindowIncludesCanceledInFlightCompletion(t *testing.T) {
+	sampling := &browserInputTimingSampling{}
+	now := time.Unix(100, 0)
+	for i := 0; i < 576; i++ {
+		p := sampling.begin(generated.BrowserInputFrame{Kind: "wheel"}, now)
+		p.now = func() time.Time { return now }
+		p.emit = func(...any) {}
+		p.outcome = "completed"
+		if i >= 512 {
+			p.outcome = "deadline_exceeded"
+		}
+		p.finish()
+	}
+	now = now.Add(10 * time.Second)
+	seq := 577
+	active := sampling.begin(generated.BrowserInputFrame{Kind: "wheel", ReliableSeq: &seq}, now)
+	active.now = func() time.Time { return now }
+	active.mark("cdp_start")
+	var records []map[string]any
+	emit := func(args ...any) {
+		record := map[string]any{}
+		for i := 0; i < len(args); i += 2 {
+			record[args[i].(string)] = args[i+1]
+		}
+		records = append(records, record)
+	}
+	active.emit = emit
+	sampling.failure("reliable input queue expired", now, emit)
+	require.Len(t, records, 17)
+	now = now.Add(35 * time.Millisecond)
+	active.outcome = "canceled"
+	active.finish()
+	require.Len(t, records, 18, "retain the one already-running completion despite the just-flushed window")
+	require.Equal(t, 577, records[17]["reliable_seq"])
+	require.Equal(t, "canceled", records[17]["outcome"])
+	require.Equal(t, map[string]float64{"cdp_start": 0, "finished": 35}, records[17]["stage_offsets_ms"])
+	fresh := sampling.begin(generated.BrowserInputFrame{Kind: "wheel"}, now)
+	fresh.now = func() time.Time { return now }
+	fresh.emit = emit
+	fresh.outcome = "canceled"
+	fresh.finish()
+	require.Len(t, records, 18, "the completion allowance must not leak into fresh input")
 }

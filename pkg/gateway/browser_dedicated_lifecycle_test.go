@@ -135,3 +135,33 @@ func TestDedicatedStateUsesCurrentControlEpochAndRetainsPeerScope(t *testing.T) 
 	default:
 	}
 }
+
+func TestDedicatedQueueFailureRetainsExactControlScope(t *testing.T) {
+	wc := newTestBrowserWSConn()
+	ctx := context.Background()
+	d := &browserDedicatedInput{epoch: 1, offer: 1, control: 2}
+	offer := generated.BrowserInputOfferFrame{InputEpoch: 1, OfferId: 1, SessionId: "chat"}
+	send := d.stateSender(wc, browserAttachmentRequest{ctx: ctx}, "viewer", offer, ctx, 2)
+	send("reliable input queue expired")
+	var queued browserOutboundFrame
+	select {
+	case queued = <-wc.sendCh:
+	default:
+		t.Fatal("current control expiry was not delivered")
+	}
+	if !wc.canSendFrame(queued) {
+		t.Fatal("current expiry was rejected")
+	}
+	d.mu.Lock()
+	d.control = 3
+	d.mu.Unlock()
+	if wc.canSendFrame(queued) {
+		t.Fatal("queued expiry remained authorized after advancing control")
+	}
+	send("reliable input queue expired")
+	select {
+	case envelope := <-wc.sendCh:
+		t.Fatalf("late expiry mislabeled a new control: %s", envelope.data)
+	default:
+	}
+}

@@ -40,7 +40,7 @@ type dedicatedInputQueue struct {
 	peer, control                    int
 	reliable, hoverSequence, barrier int
 	held                             map[string]bool
-	paused, closed                   bool
+	paused, closed, expired          bool
 	ctx                              context.Context
 	cancel                           context.CancelFunc
 	done                             chan struct{}
@@ -49,6 +49,7 @@ type dedicatedInputQueue struct {
 	hover                            *queuedDedicatedInput
 	sink                             func(context.Context, generated.BrowserInputFrame)
 	fail                             func(string)
+	controlFailure                   func(int, string)
 	expiry                           *time.Timer
 	observeQueue                     func(generated.BrowserInputFrame, InputQueueTiming)
 }
@@ -75,11 +76,10 @@ func (q *dedicatedInputQueue) run(ctx context.Context, done chan struct{}, wake 
 		var queued queuedDedicatedInput
 		found := false
 		if len(q.frames) > 0 && time.Since(q.frames[0].enqueued) >= reliableInputMaxWait {
+			control, handler := q.control, q.controlFailure
 			q.expireLocked()
 			q.mu.Unlock()
-			if q.fail != nil {
-				q.fail("reliable input queue expired")
-			}
+			q.reportExpiry(control, handler)
 			return
 		}
 		if len(q.frames) > 0 {
@@ -128,11 +128,10 @@ func (q *dedicatedInputQueue) armExpiryLocked() {
 			q.mu.Unlock()
 			return
 		}
+		control, handler := q.control, q.controlFailure
 		q.expireLocked()
 		q.mu.Unlock()
-		if q.fail != nil {
-			q.fail("reliable input queue expired")
-		}
+		q.reportExpiry(control, handler)
 	})
 }
 func (q *dedicatedInputQueue) stopExpiryLocked() {
@@ -141,8 +140,15 @@ func (q *dedicatedInputQueue) stopExpiryLocked() {
 		q.expiry = nil
 	}
 }
+func (q *dedicatedInputQueue) reportExpiry(control int, handler func(int, string)) {
+	if handler != nil {
+		handler(control, "reliable input queue expired")
+	} else if q.fail != nil {
+		q.fail("reliable input queue expired")
+	}
+}
 func (q *dedicatedInputQueue) expireLocked() {
-	q.closed = true
+	q.paused, q.expired = true, true
 	q.cancel()
 	q.frames = nil
 	q.hover = nil
@@ -299,6 +305,7 @@ func (q *dedicatedInputQueue) pause(next int) (context.Context, <-chan struct{},
 		return nil, nil, errors.New("invalid control epoch")
 	}
 	q.control = next
+	q.expired = false
 	// Control can overtake packets on the separate data connection. Its new
 	// epoch starts an independent sequence, so abandoned packets leave no gaps.
 	q.reliable, q.hoverSequence, q.barrier = 0, 0, 0
@@ -313,7 +320,7 @@ func (q *dedicatedInputQueue) pause(next int) (context.Context, <-chan struct{},
 func (q *dedicatedInputQueue) resume(next int) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if q.closed || q.parent.Err() != nil || !q.paused || next != q.control {
+	if q.closed || q.expired || q.parent.Err() != nil || !q.paused || next != q.control {
 		return errors.New("input epoch is not resumable")
 	}
 	select {

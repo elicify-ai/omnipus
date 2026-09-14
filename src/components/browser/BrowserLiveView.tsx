@@ -388,6 +388,7 @@ export function BrowserLiveView({
   const inputRef = useRef<BrowserInputWebRTCSession | null>(null)
   const cancelTextRef = useRef<() => void>(() => {})
   const [inputState, setInputState] = useState<BrowserInputState>('idle')
+  const [inputCanResume, setInputCanResume] = useState(false)
   const [inputError, setInputError] = useState<string | null>(null)
   const inputFrameRequirementRef = useRef<{ id: string; generation: number } | null | undefined>(undefined)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -957,8 +958,9 @@ export function BrowserLiveView({
       onState: (state, reason) => {
         if (state !== 'ready') cancelTextRef.current()
         setInputState(state)
-        setInputError(state === 'failed' ? reason || 'Input connection failed.' : null)
-        if (state === 'failed') {
+        setInputCanResume(state === 'paused' && !inputMachine.awaitingControl)
+        setInputError(state === 'failed' ? reason || 'Input connection failed.' : state === 'paused' && reason ? reason : null)
+        if (state === 'failed' || state === 'paused') {
           pressedInputsRef.current.clear()
           pendingMoveRef.current = pendingWheelRef.current = null
         }
@@ -2377,10 +2379,11 @@ export function BrowserLiveView({
     <div data-input-mode="dedicated" data-input-state={inputState} className={cn('relative flex h-full min-h-0 flex-col bg-[var(--color-primary)]', className)}>
       {inputError && <div role="alert" data-testid="browser-input-error" className="absolute bottom-2 left-2 right-2 z-30 rounded bg-[var(--color-primary)] p-2 text-sm">
         <span>{inputError}</span>{' '}
-        <button type="button" tabIndex={0} onClick={() => {
+        <button type="button" tabIndex={0} disabled={inputState === 'paused' && !inputCanResume} onClick={() => {
           if (inputRef.current?.needsAttachmentRetry) setConnectionAttempt((attempt) => attempt + 1)
+          else if (inputState === 'paused') inputRef.current?.resume()
           else inputRef.current?.start()
-        }}>Retry input</button>
+        }}>{inputState === 'paused' ? 'Resume input' : 'Retry input'}</button>
       </div>}
       {/* == Row A: tabs + window controls =============================
           Header consolidation (operator direction, 2026-08-04): the panel used

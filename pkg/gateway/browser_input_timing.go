@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -101,9 +102,19 @@ func boundedTimingCounter(v *int) int {
 	return 0
 }
 
-// Independent quotas reserve critical diagnostics despite routine rejections or cancellations.
-// Unsampled inputs retain only fixed-size numeric arrays, never maps or payloads.
-type browserInputTimingSampling struct{ general, critical, ordinal atomic.Uint64 }
+// Initial quotas reserve critical diagnostics despite routine rejections or cancellations.
+// Later inputs retain fixed-size summaries for a rate-limited rolling failure window.
+type browserInputTimingSampling struct {
+	general, critical, ordinal atomic.Uint64
+	inFlight                   atomic.Int64
+	mu                         sync.Mutex
+	// Fixed-size sanitized snapshots only: no callbacks, contexts, or raw inputs.
+	recent            [16]browserInputTiming
+	next, count       int
+	lastWindow        time.Time
+	completionThrough uint64
+	completionPending bool
+}
 
 func takeBrowserTimingQuota(counter *atomic.Uint64, limit uint64) bool {
 	for {
@@ -117,11 +128,13 @@ func takeBrowserTimingQuota(counter *atomic.Uint64, limit uint64) bool {
 	}
 }
 func (s *browserInputTimingSampling) begin(in generated.BrowserInputFrame, received time.Time) *browserInputTiming {
-	if !browserTimingGesture(in.Kind) || (s.general.Load() >= browserInputTimingLimit && s.critical.Load() >= browserInputCriticalTimingLimit) {
+	if !browserTimingGesture(in.Kind) {
 		return nil
 	}
 	p := makeBrowserInputTiming(in, received)
 	p.compact, p.sampling = true, s
+	p.ordinal = s.ordinal.Add(1)
+	s.inFlight.Add(1)
 	return p
 }
 func (p *browserInputTiming) mark(stage string) {
@@ -187,17 +200,62 @@ func (p *browserInputTiming) finish() {
 	if p == nil {
 		return
 	}
-	if p.sampling != nil {
-		counter, limit := &p.sampling.general, uint64(browserInputTimingLimit)
-		if p.outcome == "deadline_exceeded" || p.outcome == "dispatch_error" {
-			counter, limit = &p.sampling.critical, browserInputCriticalTimingLimit
-		}
-		if !takeBrowserTimingQuota(counter, limit) {
-			return
-		}
-		p.ordinal = p.sampling.ordinal.Add(1)
-	}
 	p.mark("finished")
+	if p.sampling != nil {
+		p.sampling.finish(p)
+		return
+	}
+	p.emitRecord()
+}
+
+// finish keeps normal logging finite while retaining a small recent window for
+// failures or slow dispatches later in a long connection. Emission is outside
+// the mutex and uses the current caller's logger, never a retained callback.
+func (s *browserInputTimingSampling) finish(p *browserInputTiming) {
+	critical := p.outcome == "deadline_exceeded" || p.outcome == "dispatch_error"
+	counter, limit := &s.general, uint64(browserInputTimingLimit)
+	if critical {
+		counter, limit = &s.critical, browserInputCriticalTimingLimit
+	}
+	admitted := takeBrowserTimingQuota(counter, limit)
+	now := p.now()
+	slow := now.Sub(p.received) >= 250*time.Millisecond
+	var window []browserInputTiming
+	s.mu.Lock()
+	completion := s.completionPending && p.ordinal <= s.completionThrough
+	if completion {
+		s.completionPending = false
+	}
+	s.inFlight.Add(-1)
+	if critical && s.lastWindow.IsZero() {
+		s.lastWindow = now
+	}
+	if !admitted && !completion && (critical || slow) && (s.lastWindow.IsZero() || now.Sub(s.lastWindow) >= 10*time.Second) {
+		window = make([]browserInputTiming, 0, s.count+1)
+		for i := 0; i < s.count; i++ {
+			window = append(window, s.recent[(s.next-s.count+i+len(s.recent))%len(s.recent)])
+		}
+		window = append(window, *p)
+		s.lastWindow = now
+	}
+	snapshot := *p
+	snapshot.now, snapshot.emit, snapshot.sampling, snapshot.offsets = nil, nil, nil, nil
+	s.recent[s.next] = snapshot
+	s.next = (s.next + 1) % len(s.recent)
+	if s.count < len(s.recent) {
+		s.count++
+	}
+	s.mu.Unlock()
+	if admitted || completion {
+		p.emitRecord()
+	}
+	for i := range window {
+		window[i].emit = p.emit
+		window[i].emitRecord()
+	}
+}
+
+func (p *browserInputTiming) emitRecord() {
 	if p.compact {
 		p.offsets = make(map[string]float64, len(browserTimingStages))
 		for i, name := range browserTimingStages {
@@ -217,4 +275,28 @@ func (p *browserInputTiming) finish() {
 		args = append(args, "cdp_remaining_budget_ms", p.budget[1])
 	}
 	p.emit(args...)
+}
+
+// failure is the connection-level hook; it must also work without an in-flight input.
+func (s *browserInputTimingSampling) failure(reason string, now time.Time, emit func(...any)) {
+	s.mu.Lock()
+	if !s.lastWindow.IsZero() && now.Sub(s.lastWindow) < 10*time.Second {
+		s.mu.Unlock()
+		return
+	}
+	window := make([]browserInputTiming, 0, s.count)
+	for i := 0; i < s.count; i++ {
+		window = append(window, s.recent[(s.next-s.count+i+len(s.recent))%len(s.recent)])
+	}
+	s.lastWindow = now
+	// One completion already admitted before this callback may arrive afterward
+	// when source cancellation unblocks Chrome. Keep that final measurement too.
+	s.completionThrough = s.ordinal.Load()
+	s.completionPending = s.inFlight.Load() > 0
+	s.mu.Unlock()
+	for i := range window {
+		window[i].emit = emit
+		window[i].emitRecord()
+	}
+	emit("event", "failure_window", "reason", dedicatedFailureLogReason(reason))
 }

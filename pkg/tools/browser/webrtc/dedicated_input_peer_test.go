@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -186,4 +187,63 @@ func TestDedicatedInputPeerChannelsAndRetirement(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDedicatedInputPeerExpiryPreservesPeerAndCapturesControl(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		entered, notify, releaseNotify := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		var releaseOnce sync.Once
+		release := func() { releaseOnce.Do(func() { close(releaseNotify) }) }
+		defer release()
+		callbacks := make(chan int, 1)
+		peer := NewDedicatedInputPeer(context.Background(), Config{}, 1, 4, func(ctx context.Context, frame generated.BrowserInputFrame) {
+			if *frame.ControlEpoch == 4 {
+				close(entered)
+				<-ctx.Done()
+			}
+		}, nil, func(reason string) { t.Errorf("recoverable expiry called fatal state: %s", reason) })
+		defer peer.Close()
+		peer.SetControlFailureHandler(func(control int, reason string) {
+			close(notify)
+			<-releaseNotify
+			if reason != "reliable input queue expired" {
+				t.Errorf("reason=%q", reason)
+			}
+			callbacks <- control
+		})
+		first, second := pressureWheel(1, 0, 10), pressureWheel(2, 0, 10)
+		control := 4
+		first.ControlEpoch, second.ControlEpoch = &control, &control
+		peer.queue.submit(false, first)
+		<-entered
+		peer.queue.submit(false, second)
+		time.Sleep(time.Second)
+		<-notify
+		if peer.ctx.Err() != nil {
+			t.Fatal("queue expiry destroyed the peer")
+		}
+		<-peer.queue.done
+		if err := peer.ResumeControl(4); err == nil {
+			t.Fatal("joined expired source resumed without a fresh control epoch")
+		}
+		source, done, err := peer.PauseControl(5)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if source.Err() == nil {
+			t.Fatal("expired source is live")
+		}
+		<-done
+		if err := peer.ResumeControl(5); err != nil {
+			t.Fatal(err)
+		}
+		release()
+		synctest.Wait()
+		if got := <-callbacks; got != 4 {
+			t.Fatalf("expired callback relabeled with new control: %d", got)
+		}
+		if peer.ctx.Err() != nil {
+			t.Fatal("late expiry callback canceled resumed peer")
+		}
+	})
 }

@@ -17,13 +17,14 @@ import (
 
 // browserDedicatedInput is attachment-local ownership, never a wire payload.
 type browserDedicatedInput struct {
-	mu                             sync.Mutex
-	closed                         bool
-	epoch, offer, control, applied int
-	peer                           *webrtc.DedicatedInputPeer
-	cancel                         context.CancelFunc
-	controlChanged                 chan struct{}
-	failureLoggedEpoch             int
+	mu                                   sync.Mutex
+	closed                               bool
+	epoch, offer, control, applied       int
+	peer                                 *webrtc.DedicatedInputPeer
+	cancel                               context.CancelFunc
+	controlChanged                       chan struct{}
+	failureLoggedEpoch                   int
+	pauseLoggedEpoch, pauseLoggedControl int
 }
 
 func (s *browserConnState) dedicatedInput() *browserDedicatedInput {
@@ -84,13 +85,27 @@ func dedicatedFailureLogReason(reason string) string {
 	}
 }
 
-// stateSender reads the current control epoch when a connection event occurs.
-func (d *browserDedicatedInput) stateSender(wc *browserWSConn, request browserAttachmentRequest, viewer string, f generated.BrowserInputOfferFrame, source context.Context) func(string) {
+// stateSender keeps fatal peer failures connection-wide. A recoverable queue
+// failure supplies its immutable control and is fenced again before delivery.
+func (d *browserDedicatedInput) stateSender(wc *browserWSConn, request browserAttachmentRequest, viewer string, f generated.BrowserInputOfferFrame, source context.Context, failedControl ...int) func(string) {
 	return func(reason string) {
 		d.mu.Lock()
 		control := d.control
+		if len(failedControl) > 0 {
+			control = failedControl[0]
+		}
+		valid := !d.closed && d.epoch == f.InputEpoch && d.offer == f.OfferId && (len(failedControl) == 0 || d.control == control)
+		if !valid {
+			d.mu.Unlock()
+			return
+		}
 		logFailure := reason != "ready" && !d.closed && d.epoch == f.InputEpoch && d.offer == f.OfferId && d.failureLoggedEpoch != f.InputEpoch
-		if logFailure {
+		if len(failedControl) > 0 {
+			logFailure = reason != "ready" && (d.pauseLoggedEpoch != f.InputEpoch || d.pauseLoggedControl != control)
+			if logFailure {
+				d.pauseLoggedEpoch, d.pauseLoggedControl = f.InputEpoch, control
+			}
+		} else if logFailure {
 			d.failureLoggedEpoch = f.InputEpoch
 		}
 		d.mu.Unlock()
@@ -104,7 +119,11 @@ func (d *browserDedicatedInput) stateSender(wc *browserWSConn, request browserAt
 		} else {
 			detail = &reason
 		}
-		wc.sendCriticalScopedGen(generated.BrowserInputStateFrame{Type: "browser_input_state", SessionId: f.SessionId, InputEpoch: f.InputEpoch, OfferId: f.OfferId, ControlEpoch: control, State: stateName, Reason: detail}, dropContext(f.SessionId, viewer, "input-state"), request.ctx, func() bool { return d.current(f.InputEpoch, f.OfferId) && (reason != "ready" || source.Err() == nil) })
+		wc.sendCriticalScopedGen(generated.BrowserInputStateFrame{Type: "browser_input_state", SessionId: f.SessionId, InputEpoch: f.InputEpoch, OfferId: f.OfferId, ControlEpoch: control, State: stateName, Reason: detail}, dropContext(f.SessionId, viewer, "input-state"), request.ctx, func() bool {
+			d.mu.Lock()
+			defer d.mu.Unlock()
+			return !d.closed && d.epoch == f.InputEpoch && d.offer == f.OfferId && (len(failedControl) == 0 || d.control == control) && (reason != "ready" || source.Err() == nil)
+		})
 	}
 }
 
@@ -145,7 +164,19 @@ func (h *BrowserWSHandler) dispatchDedicatedInputOffer(wc *browserWSConn, state 
 		ctx, stop := context.WithTimeout(source, 30*time.Second)
 		defer stop()
 		current := func() bool { return source.Err() == nil && d.current(f.InputEpoch, f.OfferId) }
-		sendState := d.stateSender(wc, request, viewer, f, source)
+		sampling := &browserInputTimingSampling{}
+		flushFailure := func(reason string) {
+			if h.inputTimingEnabled && d.current(f.InputEpoch, f.OfferId) {
+				sampling.failure(reason, time.Now(), func(args ...any) { slog.Info("browser input timing", args...) })
+			}
+		}
+		stateSender := d.stateSender(wc, request, viewer, f, source)
+		sendState := func(reason string) {
+			if reason != "ready" {
+				flushFailure(reason)
+			}
+			stateSender(reason)
+		}
 		if old != nil {
 			select {
 			case <-old.Closed():
@@ -172,7 +203,7 @@ func (h *BrowserWSHandler) dispatchDedicatedInputOffer(wc *browserWSConn, state 
 			}
 		}
 		var queueTiming webrtc.InputQueueTiming
-		sink := newWebRTCContextInputSink(true, func() webrtc.InputQueueTiming { return queueTiming })
+		sink := newWebRTCContextInputSinkWithSampling(true, sampling, func() webrtc.InputQueueTiming { return queueTiming })
 		route, err := withWebRTCInputRoute(source, mgr, a.panelSessionID, func(origin context.Context, kind string, err error) {
 			wc.sendCriticalScopedGen(operationErrorStatus(a.sessionID, fmt.Sprintf("browser input failed: %s", err)), dropContext(a.sessionID, viewer, "dedicated-input-error"), origin, current)
 		})
@@ -207,6 +238,16 @@ func (h *BrowserWSHandler) dispatchDedicatedInputOffer(wc *browserWSConn, state 
 			cancel()
 			return
 		}
+		peer.SetControlFailureHandler(func(control int, reason string) {
+			d.mu.Lock()
+			currentControl := !d.closed && d.epoch == f.InputEpoch && d.offer == f.OfferId && d.control == control
+			d.mu.Unlock()
+			if !currentControl {
+				return
+			}
+			flushFailure(reason)
+			d.stateSender(wc, request, viewer, f, source, control)(reason)
+		})
 		if h.inputTimingEnabled {
 			peer.SetQueueTimingObserver(func(_ generated.BrowserInputFrame, timing webrtc.InputQueueTiming) { queueTiming = timing })
 		}

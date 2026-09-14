@@ -41,7 +41,11 @@ func withWebRTCInputRoute(parent context.Context, mgr *browser.BrowserManager, p
 }
 
 func newWebRTCContextInputSink(validateInbound bool, enqueued ...func() webrtc.InputQueueTiming) webrtc.ContextInputSink {
-	return newWebRTCContextInputSinkWithDispatch(validateInbound, func(ctx context.Context, mgr *browser.BrowserManager, panel, viewer string, in browser.LiveInput) error {
+	return newWebRTCContextInputSinkWithSampling(validateInbound, nil, enqueued...)
+}
+
+func newWebRTCContextInputSinkWithSampling(validateInbound bool, sampling *browserInputTimingSampling, enqueued ...func() webrtc.InputQueueTiming) webrtc.ContextInputSink {
+	return newWebRTCContextInputSinkWithDispatchSampling(validateInbound, sampling, func(ctx context.Context, mgr *browser.BrowserManager, panel, viewer string, in browser.LiveInput) error {
 		return mgr.Live().InputContext(ctx, panel, viewer, in)
 	}, enqueued...)
 }
@@ -49,8 +53,14 @@ func newWebRTCContextInputSink(validateInbound bool, enqueued ...func() webrtc.I
 // The dispatch function is the existing browser-input module boundary. Route,
 // validation and source ownership remain in this gateway adapter.
 func newWebRTCContextInputSinkWithDispatch(validateInbound bool, dispatch func(context.Context, *browser.BrowserManager, string, string, browser.LiveInput) error, enqueued ...func() webrtc.InputQueueTiming) webrtc.ContextInputSink {
+	return newWebRTCContextInputSinkWithDispatchSampling(validateInbound, nil, dispatch, enqueued...)
+}
+
+func newWebRTCContextInputSinkWithDispatchSampling(validateInbound bool, sampling *browserInputTimingSampling, dispatch func(context.Context, *browser.BrowserManager, string, string, browser.LiveInput) error, enqueued ...func() webrtc.InputQueueTiming) webrtc.ContextInputSink {
 	timingEnabled := os.Getenv("OMNIPUS_BROWSER_INPUT_TIMING") == "1"
-	sampling := &browserInputTimingSampling{}
+	if sampling == nil {
+		sampling = &browserInputTimingSampling{}
+	}
 	return func(ctx context.Context, viewerID string, raw []byte) {
 		if ctx == nil || ctx.Err() != nil {
 			return
