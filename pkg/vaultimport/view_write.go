@@ -605,15 +605,6 @@ func (r leafResolver) resolveTree(n *rawNode, pos LossPosition, neg bool) (*gene
 // FR-109 — a view's LAYOUT is part of what must not be lost silently
 // ---------------------------------------------------------------------------
 
-// renderedLayouts are the two layouts this product actually draws. Every
-// other value of ViewDefLayout exists in the contract precisely BECAUSE it
-// is not drawn: the importer has to be able to say what an Obsidian view
-// actually asked for.
-var renderedLayouts = map[string]bool{
-	string(generated.ViewDefLayoutTable): true,
-	string(generated.ViewDefLayoutCards): true,
-}
-
 // knownLayouts is every value ViewDefLayout declares — the set this
 // importer may legally write into a view file's `layout:` key.
 var knownLayouts = map[string]bool{
@@ -658,10 +649,13 @@ func translateLayout(vraw map[string]any) (layout string, losses []string) {
 		return layout, []string{lossf(LossLayout,
 			"the Obsidian view asked for layout %q, which this release's view format has no value for; it imports as a table and the request is recorded here rather than lost",
 			layout)}
-	case !renderedLayouts[layout]:
-		// Carried faithfully into the file, but the product draws only
-		// table and cards — so the operator is told, by name, that they
-		// will see a table.
+	case !records.ViewLayoutIsRendered(generated.ViewDefLayout(layout)):
+		// Carried faithfully into the file, but the product draws no part
+		// for this layout (only `map`, today) — so the operator is told, by
+		// name, that they will see a table. records.ViewLayoutIsRendered is
+		// the same authority the renderer's own part-for-layout mapping
+		// (records.viewPartForLayout) uses, so this can never again name a
+		// layout — like board or calendar — that the SPA actually draws.
 		return layout, []string{lossf(LossLayout,
 			"the Obsidian view asked for layout %q, which this product does not render; the request is carried in the view's `layout:` field and will be drawn as a table until it is",
 			layout)}

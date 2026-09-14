@@ -861,10 +861,13 @@ func renderViewClauses(v *records.SavedView, r *viewBodyRender) {
 	}
 	if v.Def.Layout != nil {
 		layout := string(*v.Def.Layout)
-		// FR-109: only `table` and `cards` are drawn. A layout this product
-		// cannot draw is NAMED, because the failure that put this field in the
+		// FR-109: a layout this product cannot draw a part for (today, only
+		// `map`) is NAMED, because the failure that put this field in the
 		// contract was an Obsidian cards view importing as a table, recording
-		// no loss, and scoring clean.
+		// no loss, and scoring clean. viewLayoutIsRendered defers to
+		// records.ViewLayoutIsRendered so this can't independently drift from
+		// what the renderer (records.viewPartForLayout / ViewPartsRenderer.tsx)
+		// actually draws.
 		if !viewLayoutIsRendered(*v.Def.Layout) {
 			layout += " (this product does not draw this layout; it shows as a table)"
 		}
@@ -1022,10 +1025,16 @@ func renderViewFilterLeaf(n generated.VaultFilterNode) string {
 }
 
 // viewLayoutIsRendered reports whether the SPA draws this layout. FR-109
-// declares six and draws two; the other four exist so an import can RECORD
-// what the original asked for.
+// declares six; today only `map` (and any layout a later contract adds
+// without a matching part) has none. This delegates to
+// records.ViewLayoutIsRendered — the same authority the Obsidian importer
+// (pkg/vaultimport/view_write.go) and the renderer's own part-for-layout
+// mapping (records.viewPartForLayout) use — so this tool description and
+// the importer's own loss notes cannot again drift into two different
+// answers for the same layout, as they did when both kept an independent
+// two-entry table/cards-only list.
 func viewLayoutIsRendered(l generated.ViewDefLayout) bool {
-	return l == generated.ViewDefLayoutTable || l == generated.ViewDefLayoutCards
+	return records.ViewLayoutIsRendered(l)
 }
 
 // ---------------------------------------------------------------------------

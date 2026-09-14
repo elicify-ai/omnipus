@@ -128,10 +128,15 @@ func TestLayout_TableLosesNothing(t *testing.T) {
 // something we cannot draw" sends nobody anywhere; "this view wanted a
 // calendar" is actionable.
 func TestLayout_UnrenderableLayoutsAreNamedIndividually(t *testing.T) {
-	// `cards` is deliberately absent: the contract lists table and cards as
-	// the two layouts this product RENDERS, so a cards view is carried rather
-	// than named as a loss. It has its own test above.
-	for _, layout := range []string{"board", "calendar", "gallery", "map", "list"} {
+	// `table`, `cards`, `board`, `calendar` and `gallery` are deliberately
+	// absent: records.viewPartForLayout maps every one of them to a part
+	// ViewPartsRenderer.tsx actually draws (table/columns/calendar/tiles), so
+	// each is carried rather than named as a loss. `board` and `calendar`
+	// have their own test (TestLayout_RenderedLayoutsCarryNoLossNote) — this
+	// is the S3 regression: the importer used to name them as losses anyway.
+	// Only `map` (declared but no part exists for it) and `list` (not a
+	// declared layout at all, an Obsidian-only value) remain unrenderable.
+	for _, layout := range []string{"map", "list"} {
 		t.Run(layout, func(t *testing.T) {
 			vo, _ := layoutVault(t, layout)
 			var found bool
@@ -142,6 +147,38 @@ func TestLayout_UnrenderableLayoutsAreNamedIndividually(t *testing.T) {
 			}
 			if !found {
 				t.Errorf("layout %q produced no loss naming it; losses were %v", layout, vo.Losses)
+			}
+		})
+	}
+}
+
+// TestLayout_RenderedLayoutsCarryNoLossNote is the S3 regression fix
+// (2026-09-14, TRIAGE-view-tabs-crosstab.md item 3): the `.base` re-derive
+// path wrote a false "will be drawn as a table" note into a board view even
+// though records.viewPartForLayout maps board to the `columns` part and
+// ViewPartsRenderer.tsx draws it (and U-29 confirms boards render in the
+// UI). The bug was two independent stale lists — view_write.go's
+// `renderedLayouts` and knowledge_describe.go's `viewLayoutIsRendered` —
+// that named only table and cards, never updated when board, calendar and
+// gallery gained parts. Both now defer to records.ViewLayoutIsRendered.
+//
+// `map` is excluded here on purpose: it is the one layout
+// records.viewPartForLayout genuinely has no part for, and it keeps its own
+// coverage in TestLayout_UnrenderableLayoutsAreNamedIndividually above.
+func TestLayout_RenderedLayoutsCarryNoLossNote(t *testing.T) {
+	for _, layout := range []string{"table", "cards", "board", "calendar", "gallery"} {
+		t.Run(layout, func(t *testing.T) {
+			vo, written := layoutVault(t, layout)
+			for _, l := range vo.Losses {
+				if pos, ok := parseLossPosition(l); ok && pos == LossLayout {
+					t.Errorf("layout %q is drawn by the SPA (records.viewPartForLayout says so) but the importer recorded a layout loss for it anyway: %q", layout, l)
+				}
+			}
+			if layout != "table" {
+				want := "layout: " + layout
+				if !strings.Contains(written, want) {
+					t.Errorf("layout %q should be carried verbatim into the written file (%q), got:\n%s", layout, want, written)
+				}
 			}
 		})
 	}
