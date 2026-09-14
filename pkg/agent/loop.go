@@ -8701,20 +8701,54 @@ func (al *AgentLoop) processSystemMessage(
 	// is known. This is the confirmed, exact cause of a live "Worker vs Jim"
 	// speaker-attribution flip: an async result from a non-default agent used
 	// to be silently reattributed to whichever agent happens to be default.
-	// GetDefaultAgent() remains the fallback for messages with no async
-	// origin (or a named agent that has since been deleted) — a genuine
-	// last resort, not the primary path.
+	// GetDefaultAgent() remains the fallback ONLY for messages with no async
+	// origin at all — a genuine last resort, not the primary path.
+	//
+	// UAT E-3: a NAMED origin that no longer resolves (the agent was deleted)
+	// is NOT re-homed onto the default agent any more. That fallback handed a
+	// deleted agent's goal-keeper push to Mia, who then worked and parked a
+	// goal that was never hers, delegating real work in the process — the
+	// same "no inheritance" identity violation ADR-032 forbids for delegation.
+	// The result is discarded, loudly: a WARN naming the missing agent, and a
+	// system note in the originating session so the user sees that a
+	// background update was dropped and why.
 	var agent *AgentInstance
 	if msg.AsyncOriginAgentID != "" {
-		if named, ok := al.GetRegistry().GetAgent(msg.AsyncOriginAgentID); ok && named != nil {
-			agent = named
-		} else {
+		named, ok := al.GetRegistry().GetAgent(msg.AsyncOriginAgentID)
+		if !ok || named == nil {
 			logger.WarnCF(
 				"agent",
-				"processSystemMessage: named async origin agent not found; falling back to default agent",
-				map[string]any{"agent_id": msg.AsyncOriginAgentID},
+				"processSystemMessage: async origin agent no longer exists; background result discarded rather than handed to another agent",
+				map[string]any{
+					"agent_id":   msg.AsyncOriginAgentID,
+					"sender_id":  msg.Sender.CanonicalID,
+					"session_id": msg.AsyncTranscriptSessionID,
+				},
 			)
+			if msg.AsyncTranscriptSessionID != "" {
+				if store := al.ResolveSessionStore(msg.AsyncTranscriptSessionID); store != nil {
+					now := time.Now().UTC()
+					if werr := store.AppendTranscriptStrict(msg.AsyncTranscriptSessionID, session.TranscriptEntry{
+						ID:   fmt.Sprintf("async-origin-missing-%s-%d", msg.AsyncTranscriptSessionID, now.UnixNano()),
+						Type: session.EntryTypeSystem,
+						Role: "system",
+						Content: fmt.Sprintf(
+							"A background update for agent %q was not delivered: that agent no longer exists, "+
+								"so the update was discarded instead of being handed to a different agent.",
+							msg.AsyncOriginAgentID),
+						Timestamp: now,
+					}); werr != nil {
+						logger.WarnCF("agent", "processSystemMessage: could not record the discarded-update note in the session",
+							map[string]any{"session_id": msg.AsyncTranscriptSessionID, "error": werr.Error()})
+					}
+				} else {
+					logger.WarnCF("agent", "processSystemMessage: discarded update's session not found; no note written",
+						map[string]any{"session_id": msg.AsyncTranscriptSessionID})
+				}
+			}
+			return "", nil
 		}
+		agent = named
 	}
 	if agent == nil {
 		agent = al.GetRegistry().GetDefaultAgent()

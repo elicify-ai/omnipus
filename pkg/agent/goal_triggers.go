@@ -1783,12 +1783,29 @@ func (al *AgentLoop) dispatchGoalAsyncFollowUp(sessionID, goalID, sourceKind, co
 		al.goalMarkIdleSettling(goalID, false)
 		return
 	}
+	// UAT E-3 sibling: a route rehydrated from the persisted record carries no
+	// agent id (FR-033 folded it into the owner), and an event with an EMPTY
+	// AgentID reaches processSystemMessage as "no origin known", which runs the
+	// push as the DEFAULT agent — a different agent silently working this goal.
+	// Resolve the goal's own working agent instead, and refuse to dispatch
+	// rather than dispatch anonymously when it cannot be resolved.
+	agentID := route.agentID
+	if agentID == "" {
+		resolved, rerr := goalWorkingAgentID(sessionID, al.goalSessionStoreFor(sessionID))
+		if rerr != nil {
+			logger.WarnCF("agent", "goal: follow-up not dispatched — the agent working this goal cannot be resolved, and it must not run as another agent",
+				map[string]any{"session_id": sessionID, "goal_id": goalID, "source": sourceKind, "error": rerr.Error()})
+			al.goalMarkIdleSettling(goalID, false)
+			return
+		}
+		agentID = resolved
+	}
 	notifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := al.asyncNotifier.Notify(notifyCtx, AsyncNotifyEvent{
 		Channel:             route.channel,
 		ChatID:              route.chatID,
-		AgentID:             route.agentID,
+		AgentID:             agentID,
 		TranscriptSessionID: sessionID,
 		SourceKind:          sourceKind,
 		SenderCanonicalID:   goalLoopFollowUpSenderID,

@@ -692,6 +692,13 @@ func (al *AgentLoop) clearGoalStatus(sessionID string, store *session.UnifiedSto
 	case strings.HasPrefix(note, goalIdleExpiredNotePrefix):
 		pillState = goalPillExpired
 		goalState = generated.GoalStateExpired
+	case strings.HasPrefix(note, goalAgentDeletedNotePrefix):
+		// UAT E-3 (goal_owner_deleted.go): the operator deleted the agent
+		// working this goal. That is an explicit operator action ending the
+		// goal — `cleared` — not a met, an exhaustion or an idle expiry; the
+		// note (stored as the terminal reason) names the deleted agent.
+		pillState = goalPillCleared
+		goalState = generated.GoalStateCleared
 	}
 
 	// ADR-086 GOAL-FR-027/FR-028: the goal ends by a STATUS TRANSITION on

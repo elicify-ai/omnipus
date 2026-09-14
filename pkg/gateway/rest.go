@@ -3248,6 +3248,21 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, id string) {
 	// post-delete reload is rejected and the in-memory roster keeps serving
 	// the agent we just deleted from disk.
 	forgetRosterBaseline(a.homePath)
+	// UAT E-3 / ADR-086 D9: end the active goals this agent was working as an
+	// honest `cleared` transition naming the deleted agent — never leave them
+	// active for the keeper to push at a missing agent (which re-homed them
+	// onto the default agent), and never erase them. Done BEFORE the reload so
+	// no keeper tick can see a live goal whose agent has already left the
+	// registry. The entity delete above already succeeded and cannot be rolled
+	// back, so a failure here is logged at Error rather than failing the
+	// request; goals that could not be ended stay active and are named in the
+	// error.
+	if ended, gerr := a.agentLoop.EndGoalsOfDeletedAgent(id, deletedName); gerr != nil {
+		slog.Error("rest: deleteAgent: could not end every active goal the deleted agent was working",
+			"agent_id", id, "goals_ended", ended, "error", gerr)
+	} else if ended > 0 {
+		slog.Info("rest: deleteAgent: ended the deleted agent's active goals", "agent_id", id, "goals_ended", ended)
+	}
 	// Reload the live config so the deleted agent is no longer in memory.
 	// triggerReloadAndWait polls until reload completes (or 5s deadline) so the in-memory config is
 	// updated before the 204 response is sent back to the caller (prevents a
