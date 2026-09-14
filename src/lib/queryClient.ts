@@ -149,6 +149,51 @@ export function shouldRetryMutation(failureCount: number, err: unknown): boolean
 }
 
 /**
+ * F4 (SILENT-FAILURES-rate-limits-dd25339bf.md): the shared knowledge
+ * (Library base view / query-fence) rate limiter's `Retry-After` can be up
+ * to 60s. The plain query retryDelay curve below (2s/4s/8s across 3 retries)
+ * ignores it entirely — all three retries land inside ~14s and are refused
+ * again, behind a spinner that never says why. This is the cap on how long a
+ * SINGLE retry honours the server's stated wait: long enough to genuinely
+ * respect a real rate limit, short enough that the UI is never silently
+ * stuck waiting the full server-stated window with nothing on screen (the
+ * query-level UI shows a live "retrying in Ns" message for exactly this
+ * wait — see `rateLimitedRetryDelayMs`, the SAME function both the retry
+ * timer and that message read, so the two can never disagree).
+ */
+export const RATE_LIMITED_QUERY_RETRY_DELAY_CAP_MS = 15_000
+
+/**
+ * The actual delay (ms) a 429 retry will honour, or `undefined` when this
+ * error carries nothing to honour (not a 429, or no parsed `retryAfterMs`) —
+ * callers fall back to their own default curve in that case. Exported as the
+ * ONE place both `rateLimitAwareQueryRetryDelay` (the real retryDelay wired
+ * into BasePreview's view-result query and KbQueryFenceEmbed's search query)
+ * and those components' own "Busy — retrying in Ns" throttled-state text
+ * read from — the UI's stated wait must never be a different number from the
+ * wait actually being honoured.
+ */
+export function rateLimitedRetryDelayMs(err: unknown): number | undefined {
+  if (err instanceof ApiError && err.status === 429 && typeof err.retryAfterMs === 'number' && err.retryAfterMs > 0) {
+    return Math.min(err.retryAfterMs, RATE_LIMITED_QUERY_RETRY_DELAY_CAP_MS)
+  }
+  return undefined
+}
+
+/**
+ * Retry delay for the two knowledge queries that opt into Retry-After-aware
+ * retry timing (BasePreview's view-result query, KbQueryFenceEmbed's search
+ * query — see those files for why only these two). A 429 with a parsed
+ * `retryAfterMs` honours the server's stated wait (capped, see
+ * `rateLimitedRetryDelayMs`); every other error falls back to the EXACT SAME
+ * curve the app-wide query default (`queryClient`'s own `retryDelay` below)
+ * uses — non-429 retry timing must not change.
+ */
+export function rateLimitAwareQueryRetryDelay(attempt: number, err: unknown): number {
+  return rateLimitedRetryDelayMs(err) ?? Math.min(1000 * 2 ** attempt, 30_000)
+}
+
+/**
  * Retry delay for MUTATIONS. Honours a server `Retry-After` header when the
  * failing error carries one (`ApiError.retryAfterMs`, populated by
  * `ApiError.fromResponse` — e.g. the cli-validate in-flight-cap 429 sets

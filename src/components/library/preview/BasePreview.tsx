@@ -51,6 +51,12 @@ import {
   libraryQueryKeys,
 } from '@/lib/api'
 import type { LibraryEntry } from '@/lib/api'
+import { ApiError } from '@/lib/api-error'
+import {
+  shouldRetryQuery,
+  rateLimitAwareQueryRetryDelay,
+  rateLimitedRetryDelayMs,
+} from '@/lib/queryClient'
 import type {
   KnowledgeBaseView,
   KnowledgeBaseViews,
@@ -407,6 +413,15 @@ export function BasePreview({
     enabled: collectionId !== undefined && selected !== undefined,
     staleTime: 60_000,
     refetchOnWindowFocus: false,
+    // F4 (SILENT-FAILURES-rate-limits-dd25339bf.md): this query previously
+    // inherited the app-wide default retry timing, which ignores a 429's
+    // Retry-After entirely — set explicitly here (rather than relying on
+    // the ambient QueryClient's defaultOptions) so it is correct wherever
+    // this component mounts, and independently testable. Retry COUNT/
+    // exclusions are unchanged (shouldRetryQuery, the same predicate every
+    // other query uses); only the DELAY for a 429 changes.
+    retry: shouldRetryQuery,
+    retryDelay: rateLimitAwareQueryRetryDelay,
   })
 
   const resolveImageUrl = useMemo(
@@ -448,6 +463,26 @@ export function BasePreview({
   // view's own rows — never `unresolved`, which this view cannot honestly
   // claim about the whole collection.
   const result = resultQuery.data
+
+  // F4 — while WAITING on a retry after a 429, name the real wait instead of
+  // the generic "Evaluating view…" spinner. `undefined` whenever there is
+  // nothing (yet) to retry, or the last failure wasn't a 429 with a usable
+  // Retry-After — those cases fall back to the generic spinner. Reads the
+  // SAME function the retryDelay above is built from (rateLimitedRetryDelayMs)
+  // so the displayed wait can never contradict the wait actually honoured.
+  const resultThrottledRetryDelayMs =
+    resultQuery.isLoading && resultQuery.failureCount > 0
+      ? rateLimitedRetryDelayMs(resultQuery.failureReason)
+      : undefined
+
+  // F5b — a query that once had data keeps that data through a FAILED
+  // background refetch (TanStack Query does not clear `data` on a
+  // background error); `result !== undefined` is therefore exactly "we have
+  // something to show", regardless of whether the query's CURRENT fetch
+  // attempt is erroring. Used below to keep the pane's rows (and any open
+  // RecordFieldEditor) mounted through a refused background reload instead
+  // of tearing the whole pane down to the full error state.
+  const resultIsBackgroundRefreshFailure = result !== undefined && resultQuery.isError
 
   // ── WL-1 remaining half: a collection-wide resolver for the standalone pane ─
   // See COLLECTION_LINK_ROW_QUERY_CAP's doc comment above for the full
@@ -801,19 +836,71 @@ export function BasePreview({
               will run automatically once another finishes or scrolls out of view.
             </span>
           </Centered>
+        ) : resultThrottledRetryDelayMs !== undefined ? (
+          // F4: waiting on a retry the query is going to make anyway, honouring
+          // (a capped) Retry-After — say so plainly, with the real wait, rather
+          // than the indistinguishable-from-hung generic spinner.
+          <Centered>
+            <span data-testid="base-preview-result-throttled" className="flex items-center gap-2">
+              <SpinnerGap size={16} className="animate-spin" />
+              Busy — retrying in {Math.ceil(resultThrottledRetryDelayMs / 1000)}s
+            </span>
+          </Centered>
         ) : resultQuery.isLoading ? (
           <Centered>
             <SpinnerGap size={16} className="animate-spin" /> Evaluating view…
           </Centered>
-        ) : resultQuery.isError ? (
-          <QueryErrorState
-            layout="fill"
-            message="Could not evaluate this view."
-            onRetry={() => void resultQuery.refetch()}
-            testId="base-preview-result-error"
-          />
+        ) : resultQuery.isError && result === undefined ? (
+          // F4: no data has EVER loaded for this view — a real failure, shown
+          // in full. A rate-limited refusal is named as such (never the
+          // generic message), because "Could not evaluate this view." reads
+          // as broken when the view is merely throttled.
+          resultQuery.error instanceof ApiError && resultQuery.error.isRateLimited() ? (
+            <QueryErrorState
+              layout="fill"
+              message="This view is rate-limited by the knowledge workspace limit. Wait a moment and retry."
+              onRetry={() => void resultQuery.refetch()}
+              testId="base-preview-result-rate-limited"
+            />
+          ) : (
+            <QueryErrorState
+              layout="fill"
+              message="Could not evaluate this view."
+              onRetry={() => void resultQuery.refetch()}
+              testId="base-preview-result-error"
+            />
+          )
         ) : result !== undefined ? (
-          <ViewPartsRenderer
+          <>
+            {/* F5b: we ALREADY have good data — a failed BACKGROUND refetch
+                (e.g. a library_changed reload refused by the same rate
+                limiter while a reader has a cell editor open) must not tear
+                the pane down to the full error state, which would unmount
+                any open RecordFieldEditor and its unsaved text/error message
+                along with it. Say so in a small notice instead; the rows
+                (and any open editor) stay exactly as they were. */}
+            {resultIsBackgroundRefreshFailure && (
+              <div
+                data-testid="base-preview-result-refresh-failed"
+                className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-warning)]/10 px-3 py-2 text-[11px] leading-snug text-[var(--color-warning)]"
+              >
+                <span>
+                  {resultQuery.error instanceof ApiError && resultQuery.error.isRateLimited()
+                    ? 'A refresh of this view was rate-limited by the knowledge workspace limit. Showing the last loaded data.'
+                    : 'A refresh of this view failed. Showing the last loaded data.'}
+                </span>
+                <button
+                  type="button"
+                  tabIndex={0}
+                  onClick={() => void resultQuery.refetch()}
+                  data-testid="base-preview-result-refresh-retry"
+                  className="shrink-0 rounded border border-current px-2 py-0.5 text-[10px] uppercase tracking-wide hover:opacity-80"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+            <ViewPartsRenderer
             result={result}
             resolveImageUrl={resolveImageUrl}
             {...(onOpenPath ? { onOpenPath } : {})}
@@ -894,7 +981,8 @@ export function BasePreview({
                 exact: true,
               })
             }}
-          />
+            />
+          </>
         ) : null}
       </div>
     </div>

@@ -121,15 +121,28 @@ describe('KbQueryFenceEmbed', () => {
   })
 
   it('shows a visible, named error and a working retry when the search request fails', async () => {
-    vi.mocked(searchVault).mockRejectedValue(new Error('network down'))
-    renderEmbed()
+    // F4 fix round: this query now sets its OWN retry/retryDelay explicitly
+    // (see KbQueryFenceEmbed.rateLimit.test.tsx) rather than depending on
+    // whatever the ambient QueryClient happens to default to — so a plain
+    // (non-429) Error genuinely retries up to 3 times before settling into
+    // isError, exactly like it already does in production via the app-wide
+    // default. Fake timers fast-forward through that real backoff curve
+    // instead of slowing this test down or papering over the new behaviour.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      vi.mocked(searchVault).mockRejectedValue(new Error('network down'))
+      renderEmbed()
 
-    const error = await screen.findByTestId('kb-query-fence-error')
-    expect(error).toHaveTextContent(/could not run this query/i)
+      await vi.advanceTimersByTimeAsync(1_000 + 2_000 + 4_000 + 500)
+      const error = await vi.waitFor(() => screen.getByTestId('kb-query-fence-error'))
+      expect(error).toHaveTextContent(/could not run this query/i)
 
-    vi.mocked(searchVault).mockResolvedValueOnce(emptyResponse({ notes: [{ path: 'a.md', title: 'A' }] }))
-    error.querySelector('button')?.click()
-    await screen.findByTestId('kb-query-fence-results')
+      vi.mocked(searchVault).mockResolvedValueOnce(emptyResponse({ notes: [{ path: 'a.md', title: 'A' }] }))
+      error.querySelector('button')?.click()
+      await vi.waitFor(() => screen.getByTestId('kb-query-fence-results'))
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('honestly reports an incomplete (still-indexing) answer rather than reading it as "no results"', async () => {

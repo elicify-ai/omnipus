@@ -1488,6 +1488,38 @@ function schedulePlanStatusInvalidate(planId: string): void {
   planStatusInvalidateTimer = setTimeout(flushPlanStatusInvalidation, PLAN_STATUS_INVALIDATE_DEBOUNCE_MS)
 }
 
+// F3 (SILENT-FAILURES-rate-limits-dd25339bf.md): `library_changed` fires on
+// EVERY Library write — a bulk operation (e.g. trashing 54 files) or several
+// tabs writing at once broadcasts a burst of these in quick succession. Each
+// one used to trigger its OWN full invalidation pass (the listing prefix for
+// its workspace, plus the shared workspaces list), so a burst of N frames
+// cost N full reload passes — competing with the very same shared
+// per-workspace knowledge rate limiter this fix round exists to stop
+// tripping. Mirrors `schedulePlanStatusInvalidate` above exactly: same
+// trailing-edge debounce shape, same "collect ids, flush once" pattern.
+const LIBRARY_CHANGED_INVALIDATE_DEBOUNCE_MS = 1000
+let libraryChangedInvalidateTimer: ReturnType<typeof setTimeout> | undefined
+const pendingLibraryChangedWorkspaceIds = new Set<string>()
+
+function flushLibraryChangedInvalidation(): void {
+  const workspaceIds = Array.from(pendingLibraryChangedWorkspaceIds)
+  pendingLibraryChangedWorkspaceIds.clear()
+  libraryChangedInvalidateTimer = undefined
+  for (const workspaceId of workspaceIds) {
+    queryClient.invalidateQueries({ queryKey: ['library', workspaceId] })
+  }
+  // The workspaces list carries entry_count for every workspace — one shared
+  // invalidation covers all of them, fired once per flush regardless of how
+  // many distinct workspaces' frames arrived in this window.
+  queryClient.invalidateQueries({ queryKey: libraryQueryKeys.workspaces() })
+}
+
+function scheduleLibraryChangedInvalidate(workspaceId: string): void {
+  pendingLibraryChangedWorkspaceIds.add(workspaceId)
+  if (libraryChangedInvalidateTimer) return
+  libraryChangedInvalidateTimer = setTimeout(flushLibraryChangedInvalidation, LIBRARY_CHANGED_INVALIDATE_DEBOUNCE_MS)
+}
+
 // UAT (browser-panel "Take over"): session ids with an explicit
 // cancelStream(sessionId) sent to the server but no terminal (done/error)
 // frame acknowledging it yet. Populated by cancelStream(), drained by the
@@ -4763,9 +4795,16 @@ export const useChatStore = create<ChatStore>((set, get) => {
         // The originating tab's redundant invalidate is a no-op (its own
         // mutation already invalidated), and the focus-path pull half lives
         // in useLibraryCrossTabRefresh for tabs that never see a WS event.
+        //
+        // F3 (2026-09-14, SILENT-FAILURES-rate-limits-dd25339bf.md): routed
+        // through scheduleLibraryChangedInvalidate rather than invalidating
+        // synchronously here — a burst of these frames (bulk trash, several
+        // tabs writing at once) used to cost one full reload pass PER FRAME.
+        // See that function's own doc comment for the debounce/coalesce
+        // rationale; a real change still refreshes every open view, just
+        // once per short window instead of once per frame.
         case 'library_changed':
-          queryClient.invalidateQueries({ queryKey: ['library', frame.workspace_id] })
-          queryClient.invalidateQueries({ queryKey: libraryQueryKeys.workspaces() })
+          scheduleLibraryChangedInvalidate(frame.workspace_id)
           break
 
         // Per-task run history (ADR-050 / task-run-history-spec §3.8): fires
