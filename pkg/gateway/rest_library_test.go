@@ -70,14 +70,9 @@ func seedLibraryWorkspace(t *testing.T, api *restAPI, name string) string {
 	return id
 }
 
-var ulidCounter int
-
-// ulidLikeID returns a short, unique, path-safe id for test workspaces.
-func ulidLikeID(t *testing.T) string {
-	t.Helper()
-	ulidCounter++
-	return time.Now().Format("20060102150405") + "X" + string(rune('A'+ulidCounter%26))
-}
+// ulidLikeID lives in test_rate_limit_isolation_test.go: the workspace ID is
+// the knowledge limiter's bucket key, so its uniqueness is an isolation
+// guarantee and is pinned there.
 
 func workDir(api *restAPI, workspaceID string) string {
 	return filepath.Join(api.homePath, "workspaces", workspaceID, "work")

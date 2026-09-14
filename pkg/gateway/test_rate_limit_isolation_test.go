@@ -3,12 +3,25 @@
 //
 // Copyright (c) 2026 Omnipus contributors
 
-// test_rate_limit_isolation_test.go — per-test source addresses, so one
-// test's traffic can never be charged to another's rate-limit budget.
+// test_rate_limit_isolation_test.go — one test's traffic must never be
+// charged to another test's rate-limit budget.
 //
-// THE TRAP THIS EXISTS TO CLOSE. Every limiter in this package
-// (rest_auth.go's `var` block) is a process-global sliding window keyed on
-// the CLIENT IP, and httptest.NewRequest gives every request it builds the
+// THIS PACKAGE HAS TWO KINDS OF LIMITER, KEYED DIFFERENTLY, AND EACH NEEDS
+// ITS OWN ISOLATION. Applying the wrong one isolates nothing.
+//
+//  1. IP-keyed limiters — rest_auth.go's `var` block, plus the few declared
+//     beside their own routes (smokeTestLimiter, the libraryPreview*
+//     limiters). Keyed on the CLIENT IP. Isolated by isolateRateLimit below,
+//     which gives each test its own source address.
+//
+//  2. The knowledge limiter — knowledgeRESTLimiter in rest_knowledge.go.
+//     Keyed on the WORKSPACE ID (knowledgeRateKey); it never reads the
+//     address, so isolateRateLimit does nothing for it. Isolated by
+//     ulidLikeID below, which hands every test workspace an ID no other call
+//     in the process can receive.
+//
+// THE TRAP, FIRST KEY. Every IP-keyed limiter is a process-global sliding
+// window keyed on the CLIENT IP, and httptest.NewRequest gives every request it builds the
 // same RemoteAddr: 192.0.2.1:1234. So by default the whole package shares one
 // bucket per limiter. Nothing goes wrong while the per-limiter request count
 // across the package stays under the ceiling — and then someone adds a test,
@@ -43,6 +56,19 @@
 // uniqueTestSourceIP is left as it is: it hands out an address per REQUEST
 // rather than per test, which is what that file's assertions rely on, and its
 // 203.0.113.x range cannot collide with the 198.18.x.y handed out here.
+//
+// THE SAME TRAP, SECOND KEY (CI on dd25339bf). ulidLikeID used to return the
+// current second plus 'A'+counter%26, so the 27th workspace ID made inside
+// one second equalled the 1st. Each test has its own temp home, so nothing on
+// disk collided — only the in-memory knowledge limiter key did, and nothing
+// reported it. TestVaultSearch_RateLimiterOrderingClosesTheScopeProbeOracle
+// drains its workspace's knowledge budget; exactly 26 IDs later in the
+// package's fixed test order, TestRecordWrite_VersionTokenOnCreateIsRefused
+// received the SAME ID whenever the tests between finished inside one
+// second, and its first and only request was refused `429 too many knowledge
+// requests` for traffic it never sent. It passed on slow runs and failed on
+// fast ones with no code change. TestUlidLikeID_NeverRepeatsWithinOneSecond
+// pins the fix.
 
 package gateway
 
@@ -50,7 +76,9 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // httptestDefaultRemoteAddr is the address net/http/httptest stamps on every
@@ -58,6 +86,22 @@ import (
 // the whole package one bucket, and it is also the signal that a test has NOT
 // deliberately chosen an address of its own.
 const httptestDefaultRemoteAddr = "192.0.2.1:1234"
+
+// testWorkspaceIDCounter numbers every test workspace ID this process hands
+// out. It never wraps and is safe to advance from parallel tests.
+var testWorkspaceIDCounter atomic.Uint64
+
+// ulidLikeID returns a path-safe workspace ID that no other call in this test
+// process returns.
+//
+// Uniqueness comes from the counter ALONE. The time prefix is kept only so an
+// ID in failure output says roughly when it was made; it is not what keeps
+// two IDs apart, and nothing may rely on it for that — a one-second prefix
+// plus a short repeating suffix is exactly the shape that collided.
+func ulidLikeID(t *testing.T) string {
+	t.Helper()
+	return fmt.Sprintf("%sX%06d", time.Now().Format("20060102150405"), testWorkspaceIDCounter.Add(1))
+}
 
 var (
 	testClientIPMu   sync.Mutex
@@ -143,5 +187,66 @@ func TestRateLimitIsolation_RespectsADeliberateAddress(t *testing.T) {
 	r.RemoteAddr = httptestDefaultRemoteAddr
 	if got := isolateRateLimit(t, r).RemoteAddr; got == httptestDefaultRemoteAddr {
 		t.Fatalf("httptest's shared default must be replaced; got %q", got)
+	}
+}
+
+// TestUlidLikeID_NeverRepeatsWithinOneSecond is the guard for the dd25339bf
+// flake (see this file's header). 200 IDs made back to back all land inside a
+// second or two, which is exactly the burst the old helper could not survive:
+// with a one-second prefix and a suffix of 26 letters it can produce at most
+// 26 distinct IDs per second, so this fails on it deterministically — however
+// the burst falls across a second boundary, one side holds 100 or more calls.
+//
+// The assertion is on the KNOWLEDGE LIMITER KEY, not only the raw ID, because
+// the key is what two tests actually share; a future change that made IDs
+// distinct but mapped them to one bucket would still be the same defect.
+func TestUlidLikeID_NeverRepeatsWithinOneSecond(t *testing.T) {
+	const n = 200
+	seenID := make(map[string]int, n)
+	seenKey := make(map[string]int, n)
+	for i := 0; i < n; i++ {
+		id := ulidLikeID(t)
+		if err := validateEntityID(id); err != nil {
+			t.Fatalf("call %d returned %q, which the gateway would refuse as a workspace ID: %v", i, id, err)
+		}
+		if prev, dup := seenID[id]; dup {
+			t.Fatalf("call %d returned %q, already returned by call %d — two tests would share one workspace's knowledge budget", i, id, prev)
+		}
+		seenID[id] = i
+		key := knowledgeRateKey(id)
+		if prev, dup := seenKey[key]; dup {
+			t.Fatalf("call %d maps to knowledge limiter key %q, already used by call %d", i, key, prev)
+		}
+		seenKey[key] = i
+	}
+}
+
+// TestUlidLikeID_UniqueUnderConcurrentUse pins the other half of the helper's
+// contract: parallel tests may call it at the same moment. Under -race the
+// old unguarded int counter is also a reported data race.
+func TestUlidLikeID_UniqueUnderConcurrentUse(t *testing.T) {
+	const workers, perWorker = 8, 100
+	ids := make(chan string, workers*perWorker)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < perWorker; i++ {
+				ids <- ulidLikeID(t)
+			}
+		}()
+	}
+	wg.Wait()
+	close(ids)
+	seen := make(map[string]struct{}, workers*perWorker)
+	for id := range ids {
+		if _, dup := seen[id]; dup {
+			t.Fatalf("concurrent callers were both handed %q", id)
+		}
+		seen[id] = struct{}{}
+	}
+	if len(seen) != workers*perWorker {
+		t.Fatalf("expected %d distinct IDs, got %d", workers*perWorker, len(seen))
 	}
 }
