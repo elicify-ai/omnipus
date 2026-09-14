@@ -10,6 +10,17 @@
 // jsdom has no IntersectionObserver, so this suite fakes one (the same shape
 // LazyEmbedMount.test.tsx documents) — that is what lets the D-101 test
 // prove the mount gate rather than lean on LazyEmbedMount's fail-open path.
+//
+// D-101 ROUND 2 (UAT re-test, row U-48): the mount gate alone was not
+// enough — see KbMarkdownImage.downloadCap.test.tsx for the dedicated,
+// many-instance proof of the page-wide download ceiling this round added
+// (kbImageDownloadPool). That ceiling grants a slot ASYNCHRONOUSLY (even
+// the immediate-grant path resolves via a microtask, matching
+// viewEvaluationPool/pdfWorkerPool's own contract) — every test below that
+// reads `kb-markdown-image` after `fireIntersection` now flushes that
+// microtask first via `grantDownloadSlot()`, since with only one instance
+// per test it is always under the ceiling and always granted, just no
+// longer synchronously with the mount.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
@@ -67,8 +78,16 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+/** Flushes the microtask kbImageDownloadPool's own `.then()` resolves on —
+ *  see this file's own header, D-101 ROUND 2. */
+async function grantDownloadSlot() {
+  await act(async () => {
+    await Promise.resolve()
+  })
+}
+
 describe('KbMarkdownImage — UAT D-101: the mount budget applies to plain pictures', () => {
-  it('renders NO img until the picture is near the viewport — the download waits for the mount', () => {
+  it('renders NO img until the picture is near the viewport — the download waits for the mount', async () => {
     render(<KbMarkdownImage src="https://example.test/a.png" alt="a" />)
     const mount = screen.getByTestId('lazy-embed-mount')
     expect(mount).toHaveAttribute('data-mounted', 'false')
@@ -78,6 +97,11 @@ describe('KbMarkdownImage — UAT D-101: the mount budget applies to plain pictu
     expect(mount.querySelector('img')).toBeNull()
     fireIntersection(0, true)
     expect(mount).toHaveAttribute('data-mounted', 'true')
+    // Mounted, but the download itself still waits one more microtask for
+    // kbImageDownloadPool to grant its slot (D-101 round 2) — well under
+    // the ceiling here (one instance), so it is granted, just not
+    // synchronously with the mount.
+    await grantDownloadSlot()
     expect(screen.getByTestId('kb-markdown-image')).toBeInTheDocument()
   })
 
@@ -88,9 +112,10 @@ describe('KbMarkdownImage — UAT D-101: the mount budget applies to plain pictu
 })
 
 describe('KbMarkdownImage — UAT D-40: the |N width hint is honoured', () => {
-  it('applies the hint carried by the AST (data-kb-embed-width) as the rendered width', () => {
+  it('applies the hint carried by the AST (data-kb-embed-width) as the rendered width', async () => {
     render(<KbMarkdownImage src="https://example.test/a.png" alt="a" data-kb-embed-width="400" />)
     fireIntersection(0, true)
+    await grantDownloadSlot()
     const img = screen.getByTestId('kb-markdown-image')
     // DIES ON the old code: chat's MarkdownImage/ChatImage read only
     // src/alt — the hint data reached the img slot and was dropped.
@@ -98,18 +123,20 @@ describe('KbMarkdownImage — UAT D-40: the |N width hint is honoured', () => {
     expect(img.style.maxWidth).toBe('100%')
   })
 
-  it('no hint, no invented width — the picture renders at its own size, capped by the container', () => {
+  it('no hint, no invented width — the picture renders at its own size, capped by the container', async () => {
     render(<KbMarkdownImage src="https://example.test/a.png" alt="a" />)
     fireIntersection(0, true)
+    await grantDownloadSlot()
     const img = screen.getByTestId('kb-markdown-image')
     expect(img.style.width).toBe('')
   })
 })
 
 describe('KbMarkdownImage — UAT D-134: an intrinsically-sizeless picture gets a bounded box', () => {
-  it('a load reporting naturalWidth 0 switches to an explicit bounded box instead of laying out at 0×0', () => {
+  it('a load reporting naturalWidth 0 switches to an explicit bounded box instead of laying out at 0×0', async () => {
     render(<KbMarkdownImage src="https://example.test/mark.svg" alt="mark" data-kb-embed-width="180" />)
     fireIntersection(0, true)
+    await grantDownloadSlot()
     const img = screen.getByTestId('kb-markdown-image')
     expect(img.style.width).toBe('180px')
     expect(img.style.height).toBe('')
@@ -125,9 +152,10 @@ describe('KbMarkdownImage — UAT D-134: an intrinsically-sizeless picture gets 
     expect(img.style.objectFit).toBe('contain')
   })
 
-  it('no hint: the bounded box defaults to its own size, not 0', () => {
+  it('no hint: the bounded box defaults to its own size, not 0', async () => {
     render(<KbMarkdownImage src="https://example.test/mark.svg" alt="mark" />)
     fireIntersection(0, true)
+    await grantDownloadSlot()
     const img = screen.getByTestId('kb-markdown-image')
     Object.defineProperty(img, 'naturalWidth', { value: 0 })
     Object.defineProperty(img, 'naturalHeight', { value: 0 })
@@ -136,9 +164,10 @@ describe('KbMarkdownImage — UAT D-134: an intrinsically-sizeless picture gets 
     expect(img.style.height).toBe('240px')
   })
 
-  it('a picture WITH natural size never gets the fallback box (control)', () => {
+  it('a picture WITH natural size never gets the fallback box (control)', async () => {
     render(<KbMarkdownImage src="https://example.test/a.png" alt="a" />)
     fireIntersection(0, true)
+    await grantDownloadSlot()
     const img = screen.getByTestId('kb-markdown-image')
     Object.defineProperty(img, 'naturalWidth', { value: 200 })
     Object.defineProperty(img, 'naturalHeight', { value: 100 })
@@ -149,9 +178,10 @@ describe('KbMarkdownImage — UAT D-134: an intrinsically-sizeless picture gets 
 })
 
 describe('KbMarkdownImage — honest failure and unsafe sources', () => {
-  it('a failed load is a stated unavailability, never the browser\'s broken-image glyph', () => {
+  it('a failed load is a stated unavailability, never the browser\'s broken-image glyph', async () => {
     render(<KbMarkdownImage src="https://example.test/gone.png" alt="gone.png" />)
     fireIntersection(0, true)
+    await grantDownloadSlot()
     fireEvent.error(screen.getByTestId('kb-markdown-image'))
     expect(screen.getByTestId('kb-markdown-image-unavailable')).toHaveTextContent('gone.png')
   })
