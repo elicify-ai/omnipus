@@ -344,3 +344,99 @@ func fixedClockSeq(offsetSeconds int) func() time.Time {
 	base := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 	return func() time.Time { return base.Add(time.Duration(offsetSeconds) * time.Second) }
 }
+
+// --- Attachments: addressed exactly, never given a ".md" suffix -------------
+//
+// Round-4 attachment cascade (UAT 2026-09-13 cut list, deferred from
+// fix3/spa-fixes finding 7): Trash and Restore used to run ensureMarkdown on
+// every path, so "assets/diagram.png" became "assets/diagram.png.md", which
+// does not exist — a Library delete of an attachment inside a knowledge base
+// could never reach the trash. Expected values follow the trash convention
+// (bytes untouched, original relative path preserved under the timestamp
+// directory, dangling citations counted) applied to a non-markdown file.
+
+func TestTrash_AttachmentIsTrashedAndRestoredAtItsExactPath(t *testing.T) {
+	pngBytes := "\x89PNG\r\n\x1a\n\x00\x00binary"
+	dir, root := a2Collection(t, map[string]string{
+		"assets/diagram.png": pngBytes,
+		"Projects/Atlas.md":  "# Atlas\n\nSee ![[assets/diagram.png]].\n",
+	})
+	tr := rtTrasher(t, root)
+
+	res, err := tr.Trash(TrashRequest{Path: "assets/diagram.png"})
+	require.NoError(t, err, "an attachment inside a knowledge base must be trashable at its own path")
+	assert.Equal(t, "assets/diagram.png", res.OriginalPath, "no .md suffix may be appended to an attachment")
+	assert.Equal(t, ".omnipus-vault/trash/"+res.TrashID+"/assets/diagram.png", res.TrashPath)
+	assert.NoFileExists(t, filepath.Join(dir, "assets", "diagram.png"))
+	assert.NoFileExists(t, filepath.Join(dir, "assets", "diagram.png.md"))
+	trashed, rerr := os.ReadFile(filepath.Join(dir, filepath.FromSlash(res.TrashPath)))
+	require.NoError(t, rerr)
+	assert.Equal(t, pngBytes, string(trashed), "the attachment's bytes are untouched")
+	assert.Equal(t, 1, res.DanglingLinkCount, "the one embed citing it is counted")
+	assert.Equal(t, []string{"Projects/Atlas.md"}, res.DanglingNotes)
+	assert.Empty(t, res.RecordType, "an attachment has no frontmatter, so no record type")
+	assert.Empty(t, res.RecordID)
+
+	raw, rerr := os.ReadFile(filepath.Join(dir, ".omnipus-vault", "trash", res.TrashID, "entry.json"))
+	require.NoError(t, rerr)
+	var receipt trashReceipt
+	require.NoError(t, json.Unmarshal(raw, &receipt))
+	assert.Equal(t, "assets/diagram.png", receipt.OriginalPath)
+
+	restored, err := tr.Restore(RestoreRequest{Path: "assets/diagram.png"})
+	require.NoError(t, err, "the trashed attachment must be restorable by its original path")
+	assert.Equal(t, "assets/diagram.png", restored.OriginalPath)
+	assert.Equal(t, res.TrashID, restored.RestoredFrom)
+	back, rerr := os.ReadFile(filepath.Join(dir, "assets", "diagram.png"))
+	require.NoError(t, rerr)
+	assert.Equal(t, pngBytes, string(back))
+	assert.Equal(t, 1, restored.ResolvedLinksCount, "the embed resolves again after the restore")
+	assert.NoFileExists(t, filepath.Join(dir, "assets", "diagram.png.md"))
+}
+
+// An attachment's bytes are never a record, even when a text attachment opens
+// with a front-matter-shaped block. Oracle: only markdown notes carry record
+// identity (FR-005), so the text file reports no type or identifier, and its
+// restore cannot be refused as "colliding" with the live record P-1 that it
+// merely mentions.
+func TestTrashRestore_TextAttachmentWithFrontmatterShapeIsNotARecord(t *testing.T) {
+	txt := "---\nid: P-1\ntype: Person\n---\nexported list\n"
+	dir, root := a2Collection(t, map[string]string{
+		"exports/ids.txt": txt,
+		"People/Pat.md":   "---\nid: P-1\ntype: Person\n---\n# Pat\n",
+	})
+	tr := rtTrasher(t, root)
+
+	res, err := tr.Trash(TrashRequest{Path: "exports/ids.txt"})
+	require.NoError(t, err)
+	assert.Equal(t, "exports/ids.txt", res.OriginalPath)
+	assert.Empty(t, res.RecordType, "an attachment is not a record")
+	assert.Empty(t, res.RecordID, "an attachment is not a record")
+
+	restored, err := tr.Restore(RestoreRequest{Path: "exports/ids.txt"})
+	require.NoError(t, err, "a text attachment cannot collide with a live record's identifier")
+	assert.Empty(t, restored.RecordID)
+	back, rerr := os.ReadFile(filepath.Join(dir, "exports", "ids.txt"))
+	require.NoError(t, rerr)
+	assert.Equal(t, txt, string(back))
+}
+
+// The agent door's habit — "Weekly Review" means "Weekly Review.md" — must
+// survive the attachment change: the suffix is still appended when the
+// as-given path is not an existing regular file.
+func TestTrash_ExtensionlessNoteNameStillResolvesToMarkdown(t *testing.T) {
+	dir, root := a2Collection(t, map[string]string{
+		"Weekly Review.md": "# Weekly\n",
+	})
+	tr := rtTrasher(t, root)
+
+	res, err := tr.Trash(TrashRequest{Path: "Weekly Review"})
+	require.NoError(t, err)
+	assert.Equal(t, "Weekly Review.md", res.OriginalPath)
+	assert.NoFileExists(t, filepath.Join(dir, "Weekly Review.md"))
+
+	restored, err := tr.Restore(RestoreRequest{Path: "Weekly Review"})
+	require.NoError(t, err)
+	assert.Equal(t, "Weekly Review.md", restored.OriginalPath)
+	assert.FileExists(t, filepath.Join(dir, "Weekly Review.md"))
+}
