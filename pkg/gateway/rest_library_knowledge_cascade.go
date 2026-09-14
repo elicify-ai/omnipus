@@ -214,6 +214,23 @@ func (a *restAPI) resolveLibraryCollectionFile(root *library.Root, rel string, k
 	}, true, nil
 }
 
+// releaseKnowledgeBaseIfDemoted runs after a PLAIN Library delete, rename or
+// move of fromRel has landed. When fromRel was a marker folder
+// (`.omnipus-vault` or `.obsidian`), its parent may have just stopped being a
+// knowledge base, and the knowledge lifecycle must stop indexing it
+// (ReleaseDemotedCollection decides, from the folder itself, whether it did).
+// UAT re-test U-58: "records stop indexing".
+func (a *restAPI) releaseKnowledgeBaseIfDemoted(root *library.Root, fromRel string) {
+	parent, base := "", fromRel
+	if i := strings.LastIndexByte(fromRel, '/'); i >= 0 {
+		parent, base = fromRel[:i], fromRel[i+1:]
+	}
+	if base != knowledge.MarkerDirName && base != knowledge.ObsidianMarkerDirName {
+		return
+	}
+	a.knowledgeLifecycle().ReleaseDemotedCollection(root.HostPath(parent))
+}
+
 // sameCollectionDestination reports whether toRel (workspace-relative) lands
 // inside the SAME knowledge base as entry, as the same kind of entry: a
 // markdown note stays a markdown note, an attachment stays a non-markdown

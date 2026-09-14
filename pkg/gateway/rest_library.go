@@ -801,6 +801,9 @@ func (a *restAPI) handleLibraryEntryDelete(w http.ResponseWriter, r *http.Reques
 		mapLibraryErr(w, "delete entry", workspaceID, err)
 		return
 	}
+	// U-58: deleting a knowledge base's last marker demotes the folder, so
+	// stop indexing it now rather than at the next restart.
+	a.releaseKnowledgeBaseIfDemoted(root, rel)
 	// ADR-067 FR-003d: the granted path is gone, so any preview token naming it
 	// — or naming something beneath it — must stop working now rather than in
 	// fifteen minutes. InvalidatePath covers the beneath-it half: deleting the
@@ -1834,6 +1837,8 @@ func (a *restAPI) handleLibraryRename(w http.ResponseWriter, r *http.Request, wo
 		mapLibraryErr(w, "rename", workspaceID, err)
 		return
 	}
+	// U-58: renaming a knowledge base's last marker away demotes the folder.
+	a.releaseKnowledgeBaseIfDemoted(root, fromRel)
 	// ADR-067 FR-003d: the granted path has MOVED, so every token naming it —
 	// or naming something beneath it — must stop working now.
 	//
@@ -2017,6 +2022,9 @@ func (a *restAPI) handleLibraryTransfer(w http.ResponseWriter, r *http.Request, 
 	// destination (409) and a token can only be minted over a path that exists.
 	if mode == transferModeMove {
 		a.revokePreviewTokensForPath(req.FromWorkspaceId, fromRel)
+		// U-58: moving a knowledge base's last marker away demotes the folder
+		// it left.
+		a.releaseKnowledgeBaseIfDemoted(fromRoot, fromRel)
 	}
 
 	entry := library.EntryFromInfo(toRel, fi)
