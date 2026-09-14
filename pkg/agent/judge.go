@@ -971,8 +971,6 @@ func (al *AgentLoop) evidenceStore() *task.EvidenceStore {
 // out-of-turn call. Privileged agents (core-only, ADR-049 D3) are exempt, but
 // the Judge is type "system" — never privileged — so this always applies in a
 // real install.
-//
-// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
 func (al *AgentLoop) checkJudgeSEC26(agentType, agentID string) (allowed bool, retryAfter time.Duration, reason string) {
 	cfg := al.GetConfig()
 	if al.rateLimiter == nil || cfg == nil || security.IsPrivilegedAgent(agentType) {

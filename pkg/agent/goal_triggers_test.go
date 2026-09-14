@@ -747,48 +747,6 @@ func TestGoalAdjudication_RoundAdvancePersistFailure_Aborts_M3(t *testing.T) {
 // call above and by TestRunGoalAdjudication_RejectsEmptyClaimText in
 // goal_triggers_adr084_test.go.
 
-// ===================== corr-MAJOR-1: idle-path budget brake ================
-
-// TestIdleSettle_BudgetExhausted_Brakes_corrMAJOR1 proves corr-MAJOR-1: the
-// IDLE adjudication path must consult TokenBudget().Exhausted() (the CLAIM
-// path already did). When exhausted, the idle settle must NOT fire the Judge
-// (no round burned past the cap); instead the goal brakes honestly — cleared
-// with failed_reason=budget_exhausted and a handover transcript, mirroring the
-// claim path's brake. No double-debit: the Judge never runs.
-func TestIdleSettle_BudgetExhausted_Brakes_corrMAJOR1(t *testing.T) {
-	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
-	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	// Exhaust the overall token budget (cap 100, debited 100 → consumed >= cap).
-	al.tokenBudget = NewTokenBudget(100, nil)
-	al.tokenBudget.Debit(100)
-	if !al.TokenBudget().Exhausted() {
-		t.Fatal("setup invariant: budget must be exhausted")
-	}
-	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
-	store, sid := newGoalTestSession(t, al, agentInst.ID)
-	al.recordGoalRouting(sid, "", "webchat", "c1", "sk1", agentInst.ID)
-	goalID := setGoalRoundsArmed(t, store, sid, "goal brake", 0, time.Now().Add(-1*time.Hour))
-
-	cp := unmetJudgeProvider("x")
-	judgeInst.Provider = cp
-
-	al.goalQuietWindowSettle(time.Now())
-	if cp.callCount() != 0 {
-		t.Fatalf("corr-MAJOR-1: idle settle with exhausted budget invoked Judge %d times, want 0 (idle must brake on Exhausted)", cp.callCount())
-	}
-	if after := goalRecordForSessionOrNil(sid); after != nil {
-		t.Fatalf("corr-MAJOR-1: goal must be cleared (budget_exhausted) on the idle brake, still ACTIVE: %q", after.Prompt)
-	}
-	// idleSettling must NOT be set: the brake returns before the mark, so no
-	// wedge can follow a budget-exhausted settle. Keyed by GOAL ID (DD-7(b)) —
-	// ADR-086 gives the armed goal a REAL record id, so check THAT key rather
-	// than the empty string the retired session-meta fixture left behind.
-	if al.goalIsIdleSettling(goalID) {
-		t.Fatal("corr-MAJOR-1: idleSettling must not be set when the budget brake fires")
-	}
-}
-
 // =============== corr-MAJOR-3: concurrent deferred claims → one Judge ======
 
 // TestConcurrentDeferredClaims_OneJudge_corrMAJOR3 is corr-MAJOR-3's D13

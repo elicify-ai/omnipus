@@ -662,8 +662,8 @@ const (
 //     for the enum extension this required per Constraint #8).
 //   - note has the goalIdleExpiredNotePrefix prefix → pill "expired", record
 //     state expired: the 7-day idle-expiry calendar brake (D-A), distinct
-//     from a genuine round/budget exhaustion.
-//   - anything else (round bound reached, budget exhausted) → pill "failed",
+//     from a genuine round exhaustion.
+//   - anything else (round bound reached) → pill "failed",
 //     record state exhausted: a genuine terminal failure, not a user choice.
 //
 // clearGoal returns the reply ONLY. Callers that must know whether the
@@ -969,8 +969,8 @@ var goalJudgeRoundTimeout = planJudgeRoundTimeout //nolint:gochecknoglobals
 // the turn's session carries an active goal.
 //
 // D13 (JUDGE-FR-098): this hook stays cheap and synchronous for everything
-// that always was — the origin gate, the token-budget brake, the
-// waiting_on_user/blocked park, the activity bump, the ADR-081 D3 post-turn
+// that always was — the origin gate, the waiting_on_user/blocked park, the
+// activity bump, the ADR-081 D3 post-turn
 // correction — but it no longer calls runGoalAdjudication itself. On a
 // resolved `met` claim it records a DEFERRED dispatch on result (the
 // goalDeferredAdjudication field, turn.go) instead: runAgentLoop performs
@@ -1258,29 +1258,6 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 	if (opts.UserInitiated || opts.IsTaskRun) && al.liftGoalKeeperStopPauseIfNewTurn(store, sessionID) {
 		logger.InfoCF("agent", "goal: a user message arrived after the Stop — the Stop-pause on the goal keeper is lifted",
 			map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID})
-	}
-
-	// ADR-053 Phase-2 / D12 (R§8.3c/FR-174): graceful wind-down at the
-	// adjudication boundary. If the ONE app-level OVERALL token pool is
-	// exhausted, this scope transitions to failed(budget_exhausted) with a
-	// handover summary — the current turn already finished (we are AT the
-	// boundary), so this is NOT a mid-turn hard-fail. No new adjudication
-	// starts once exhausted.
-	if tb := al.TokenBudget(); tb != nil && tb.Exhausted() {
-		// silent-SF-7 (review), same shape as the idle-expiry sweep below:
-		// transition first, write the handover only once the goal has
-		// actually ended. A handover written ahead of a refused transition
-		// tells the user the goal stopped while it is still running.
-		if _, ok := al.clearGoalStatus(sessionID, store, FailedReasonBudgetExhausted); !ok {
-			logger.WarnCF("agent", "goal: budget-exhausted termination failed; no handover written (the goal is still active)",
-				map[string]any{"session_id": sessionID, "goal_id": rec.GoalID})
-			return
-		}
-		handover := fmt.Sprintf(
-			"Goal %q stopped: the overall token budget is exhausted (consumed %d tokens).",
-			rec.Prompt, tb.Consumed())
-		al.writeGoalSystemTranscript(store, sessionID, agentInst.ID, handover)
-		return
 	}
 
 	// ADR-053 Phase-2 §1 (FR-101, superseded in shape but not in spirit by

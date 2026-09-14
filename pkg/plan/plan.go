@@ -346,12 +346,6 @@ const (
 	FailedReasonJudgeRoundsExhausted FailedReason = "judge_rounds_exhausted"
 	FailedReasonStoppedByUser        FailedReason = "stopped_by_user"
 	FailedReasonIdleExpired          FailedReason = "idle_expired"
-	// FailedReasonBudgetExhausted is the ADR-053 D12/R§8.3c/FR-174 graceful
-	// wind-down terminal for a plan/task scope that crosses the app-level
-	// OVERALL token budget at a dispatch/adjudication boundary (the same brake
-	// the goal loop surfaces). The contract enum
-	// (contracts/components/schemas/Plan.yaml failed_reason) already lists it.
-	FailedReasonBudgetExhausted FailedReason = "budget_exhausted"
 	// FailedReasonDoDUnreachable (ADR-055/FR-035) is the honest-exit terminal:
 	// the Definition of Done cannot be reached from the plan's current state,
 	// either because an applied correction left the plan unable to progress or
@@ -378,7 +372,6 @@ var validFailedReasons = map[FailedReason]bool{ //nolint:gochecknoglobals
 	FailedReasonJudgeRoundsExhausted:   true,
 	FailedReasonStoppedByUser:          true,
 	FailedReasonIdleExpired:            true,
-	FailedReasonBudgetExhausted:        true,
 	FailedReasonDoDUnreachable:         true,
 	FailedReasonSupervisionUnavailable: true,
 }

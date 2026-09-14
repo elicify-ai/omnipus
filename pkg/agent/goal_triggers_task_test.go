@@ -406,24 +406,24 @@ func TestKeeperSweepsTaskOwnedGoals(t *testing.T) {
 // ================ FR-016 + JUDGE-FR-096: the union suppression matrix =====
 
 // TestKeeperSuppressionsApplyToTasks is the UNION table the joint delivery
-// plan's wave T2 row requires: goal-entity-spec.md FR-016's six keeper
-// suppressions merged with judge-active-reviewer-spec.md FR-096's eight
-// surviving keeper behaviours. They overlap on six rows and are not
+// plan's wave T2 row requires: goal-entity-spec.md FR-016's keeper
+// suppressions merged with judge-active-reviewer-spec.md FR-096's surviving
+// keeper behaviours. They overlap on the suppression rows and are not
 // identical — FR-096 adds the two ACTION rows (the recordless nudge ladder
 // and the zero-output continue-push), which are not suppressions at all but
 // belong in the same table because they are what must still happen once no
 // suppression holds.
 //
 // Every row runs against a TASK-OWNED goal, which is the whole point:
-// FR-016's wording is "All six existing keeper suppressions MUST apply
-// UNCHANGED to a task-owned goal".
+// FR-016 requires every existing keeper suppression to apply UNCHANGED to a
+// task-owned goal.
 //
 // Given a running task with <the row's condition>
 // When the engine tick sweeps
 // Then the keeper takes <the row's expected action>.
 //
 // Traces to: goal-entity-spec.md line 429 (FR-016), lines 638/644 (S-07,
-// S-08); judge-active-reviewer-spec.md line 2497 (FR-096's eight-row table);
+// S-08); judge-active-reviewer-spec.md line 2497 (FR-096's keeper table);
 // adr-084-086-joint-delivery-plan.md line 384 (wave T2's "one table-driven
 // test whose rows are the union").
 func TestKeeperSuppressionsApplyToTasks(t *testing.T) {
@@ -449,9 +449,6 @@ func TestKeeperSuppressionsApplyToTasks(t *testing.T) {
 		wantPushes int
 		// wantContent, when non-empty, must be the dispatched content.
 		wantContent string
-		// wantStillActive is false only for the token-budget brake, which is
-		// the one row whose keeper action is a TERMINAL transition.
-		wantStillActive bool
 		// wantActivityRearmed asserts the keeper pushed the activity clock
 		// forward without acting (the live-turn row's second half, S-07's
 		// "and the activity clock is re-armed").
@@ -467,7 +464,7 @@ func TestKeeperSuppressionsApplyToTasks(t *testing.T) {
 				h.al.SetAskUserRegistry(reg)
 				return func() { reg.pending[h.sid] = false }
 			},
-			wantDispatches: 0, wantPushes: 0, wantStillActive: true,
+			wantDispatches: 0, wantPushes: 0,
 		},
 		{
 			name:   "waiting_on_user marker suppresses the keeper",
@@ -476,7 +473,7 @@ func TestKeeperSuppressionsApplyToTasks(t *testing.T) {
 				h.al.goalSetWaitingOnUser(h.gid, true)
 				return func() { h.al.goalSetWaitingOnUser(h.gid, false) }
 			},
-			wantDispatches: 0, wantPushes: 0, wantStillActive: true,
+			wantDispatches: 0, wantPushes: 0,
 		},
 		{
 			name:   "the fire-once re-arm marker suppresses a second action in one quiet spell",
@@ -485,7 +482,7 @@ func TestKeeperSuppressionsApplyToTasks(t *testing.T) {
 				h.al.goalMarkIdleSettling(h.gid, true)
 				return func() { h.al.goalMarkIdleSettling(h.gid, false) }
 			},
-			wantDispatches: 0, wantPushes: 0, wantStillActive: true,
+			wantDispatches: 0, wantPushes: 0,
 		},
 		{
 			name:   "an in-flight adjudication suppresses the keeper",
@@ -497,7 +494,7 @@ func TestKeeperSuppressionsApplyToTasks(t *testing.T) {
 				pe.VerifierRegistry().Register(verifierUnitForGoal(h.sid), "fake-verifier-session")
 				return func() { pe.VerifierRegistry().Unregister(verifierUnitForGoal(h.sid)) }
 			},
-			wantDispatches: 0, wantPushes: 0, wantStillActive: true,
+			wantDispatches: 0, wantPushes: 0,
 		},
 		{
 			name:   "a live turn suppresses the keeper and re-arms the activity clock",
@@ -513,35 +510,20 @@ func TestKeeperSuppressionsApplyToTasks(t *testing.T) {
 				t.Cleanup(func() { h.al.activeTurnStates.Delete(h.sid) })
 				return func() { h.al.activeTurnStates.Delete(h.sid) }
 			},
-			wantDispatches: 0, wantPushes: 0, wantStillActive: true, wantActivityRearmed: true,
-		},
-		{
-			name:   "an exhausted token budget brakes the goal instead of pushing it",
-			matrix: "GOAL-FR-016 #6 / JUDGE-FR-096 #6 (TokenBudget().Exhausted())",
-			// No lift: this row's keeper action IS the terminal brake, which
-			// is a state change and therefore already non-vacuous.
-			arrange: func(t *testing.T, h *taskKeeperHarness) func() {
-				h.al.tokenBudget = NewTokenBudget(100, nil)
-				h.al.tokenBudget.Debit(100)
-				if !h.al.TokenBudget().Exhausted() {
-					t.Fatal("setup invariant: the token budget must be exhausted")
-				}
-				return nil
-			},
-			wantDispatches: 0, wantPushes: 0, wantStillActive: false,
+			wantDispatches: 0, wantPushes: 0, wantActivityRearmed: true,
 		},
 		{
 			name:   "the recordless nudge ladder is not entered — a task goal always has criteria",
 			matrix: "JUDGE-FR-096 #7 (settleRecordlessGoal / goalNudgePrompt) / GOAL-FR-020 / S-11",
 			// No suppression: the point is which BRANCH the keeper takes.
 			arrange:        func(_ *testing.T, _ *taskKeeperHarness) func() { return nil },
-			wantDispatches: 1, wantPushes: 1, wantContent: continuePushFor(taskGoalCondition), wantStillActive: true,
+			wantDispatches: 1, wantPushes: 1, wantContent: continuePushFor(taskGoalCondition),
 		},
 		{
 			name:           "with nothing suppressing it the keeper dispatches the bounded continue-push",
 			matrix:         "JUDGE-FR-096 #8 (settleZeroOutputRecordedGoal / goalContinuePushPrompt) / GOAL-FR-017",
 			arrange:        func(_ *testing.T, _ *taskKeeperHarness) func() { return nil },
-			wantDispatches: 1, wantPushes: 1, wantContent: continuePushFor(taskGoalCondition), wantStillActive: true,
+			wantDispatches: 1, wantPushes: 1, wantContent: continuePushFor(taskGoalCondition),
 		},
 	}
 
@@ -577,10 +559,9 @@ func TestKeeperSuppressionsApplyToTasks(t *testing.T) {
 				t.Fatalf("[%s] JUDGE-FR-097: no keeper path may consume a round; rounds_used = %d, want 0",
 					tc.matrix, after.Round)
 			}
-			isActive := after.State == generated.GoalStateActive
-			if isActive != tc.wantStillActive {
-				t.Fatalf("[%s] goal state = %q (active=%v), want active=%v",
-					tc.matrix, after.State, isActive, tc.wantStillActive)
+			if after.State != generated.GoalStateActive {
+				t.Fatalf("[%s] goal state = %q, want active — no keeper row in this table ends the goal",
+					tc.matrix, after.State)
 			}
 			if tc.wantActivityRearmed && !after.LastActivityAt.After(h.armedAt.UTC()) {
 				t.Fatalf("[%s] S-07: a suppressing live turn must RE-ARM the activity clock; last_activity_at = %s, "+

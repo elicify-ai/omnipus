@@ -431,8 +431,7 @@ type OmnipusSandboxConfig struct {
 
 	// RateLimits configures per-agent LLM/tool call limits (SEC-26). All
 	// fields default to 0 (no limit). The global daily USD cost cap that used
-	// to live here (DailyCostCapUSD) was retired by ADR-053 D12 — the only
-	// app-level spend brake is now pkg/agent.TokenBudget (PlanningConfig.TokenBudget).
+	// to live here (DailyCostCapUSD) was retired by ADR-053 D12.
 	RateLimits OmnipusRateLimitsConfig `json:"rate_limits,omitempty"`
 
 	// ToolPolicies holds global per-tool access policies. Keys are tool names;
@@ -546,10 +545,8 @@ type OmnipusSSRFConfig struct {
 // All fields default to 0, meaning no limit is enforced.
 //
 // ADR-053 D12 ("no money caps") retires the SEC-26 global daily USD cost
-// cap that previously lived here as DailyCostCapUSD. The only app-level
-// spend brake is now pkg/agent.TokenBudget (the operator-set token ceiling
-// in PlanningConfig.TokenBudgetTokens). Per-agent sliding-window rate
-// limits (LLM/hr, tool/min) remain.
+// cap that previously lived here as DailyCostCapUSD. Per-agent
+// sliding-window rate limits (LLM/hr, tool/min) remain.
 type OmnipusRateLimitsConfig struct {
 	// MaxAgentLLMCallsPerHour limits LLM calls per agent per hour. 0 = no limit.
 	MaxAgentLLMCallsPerHour int `json:"max_agent_llm_calls_per_hour,omitempty"`

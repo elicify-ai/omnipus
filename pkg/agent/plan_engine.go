@@ -1245,27 +1245,6 @@ func (pe *PlanEngine) processPlan(ctx context.Context, planID string) {
 		return // FR-065: a paused plan neither dispatches nor judges
 	}
 
-	// silent-M1 (Phase-2 review): ADR-053 D12/R§8.3c/FR-174 graceful wind-down
-	// for the plan/task scope. The ONE app-level OVERALL token pool is debited
-	// by ALL workloads (member turns via dispatchReadyMembers, the plan-level
-	// Judge via beginPlanJudgeRound) but only the GOAL loop surfaced
-	// failed(budget_exhausted); without this brake the plan engine + its
-	// members would drain the pool without ever hitting the terminal. Mirror
-	// the goal loop's boundary gate (goal_loop.go) exactly: we are at the
-	// dispatch/adjudication boundary (NOT mid-turn — the current turn already
-	// finished), so this is a graceful wind-down, not a hard-fail. Checked here
-	// at the single dispatch chokepoint so it covers BOTH member dispatch AND
-	// plan-level judge rounds. No new debit — just the brake at the boundary;
-	// TokenBudget() nil-guards a nil agentLoop (the struct-literal test harness
-	// leaves agentLoop nil), so existing tests are unaffected.
-	if tb := pe.agentLoop.TokenBudget(); tb != nil && tb.Exhausted() {
-		handover := fmt.Sprintf(
-			"Plan %q stopped: the overall token budget is exhausted (consumed %d tokens).",
-			p.Title, tb.Consumed())
-		pe.failPlanLocked(p.ID, plan.FailedReasonBudgetExhausted, handover)
-		return
-	}
-
 	switch p.EffectivePlanPhase() {
 	case plan.PhaseJudging:
 		_, inFlight := pe.registry().Lookup(verifierUnitForPlan(p.ID))

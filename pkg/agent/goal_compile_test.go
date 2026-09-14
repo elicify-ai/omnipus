@@ -3,16 +3,14 @@
 // Copyright (c) 2026 Omnipus contributors
 
 // goal_compile_test.go covers the ADR-053 Phase-2 SMART compiler, feasibility
-// gate, echo-&-confirm / amendment, non-verdict classifier, escalate-once, and
-// the app-level OVERALL token budget (§1/§6, G-7/G-8/G-14, D9/D11/D12, N-6/N-12).
+// gate, echo-&-confirm / amendment, non-verdict classifier, and escalate-once
+// (§1/§6, G-7/G-8, D9/D11, N-6/N-12).
 // Scoped unit tests — run with -tags goolm,stdjson -run '^Test...$' -p 1.
 package agent
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
@@ -370,131 +368,6 @@ func TestGoalClear_AfterRestate_ClearsEverything(t *testing.T) {
 	if after := goalRecordForSessionOrNil(sid); after != nil {
 		t.Errorf("after clear, no goal may remain ACTIVE: condition=%q criteria=%q",
 			after.Prompt, goalRecordCompiledJSON(after))
-	}
-}
-
-// --- FR-171..FR-174/D12: app-level OVERALL token budget ---------------------
-
-func TestTokenBudgetDebit_AtomicOnePool(t *testing.T) {
-	t.Run("atomic_one_pool_ignores_IsPrivilegedAgent", func(t *testing.T) {
-		// cap 1000 tokens; the pool is agent-agnostic (FR-172 — no IsPrivilegedAgent).
-		tb := NewTokenBudget(1000, nil)
-		if tb.Cap() != 1000 {
-			t.Fatalf("Cap=%d want 1000", tb.Cap())
-		}
-		// Debit accumulates in one pool regardless of caller.
-		if consumed, _ := tb.Debit(400); consumed != 400 {
-			t.Errorf("after 400 debit, consumed=%d want 400", consumed)
-		}
-		if consumed, _ := tb.Debit(400); consumed != 800 {
-			t.Errorf("after 800 total, consumed=%d want 800", consumed)
-		}
-		// Not yet exhausted at 800/1000.
-		if tb.Exhausted() {
-			t.Error("at 800/1000, must not be exhausted")
-		}
-		// Cross the cap → exhausted (graceful-wind-down gate tripped at boundary).
-		if _, exhausted := tb.Debit(250); !exhausted {
-			t.Error("at 1050/1000, Debit must report exhausted=true")
-		}
-		if !tb.Exhausted() {
-			t.Error("Exhausted() must report true after crossing the cap")
-		}
-		// Overshoot is bounded (1050, not unbounded) and the counter is not corrupted (FR-173/M5).
-		if tb.Consumed() != 1050 {
-			t.Errorf("consumed=%d want 1050 (bounded overshoot, counter intact)", tb.Consumed())
-		}
-		if tb.Remaining() != 0 {
-			t.Errorf("Remaining=%d want 0 when over cap", tb.Remaining())
-		}
-	})
-
-	t.Run("concurrent_debits_race_clean", func(t *testing.T) {
-		// 100 goroutines each debiting 10 tokens → consumed must be exactly 1000
-		// (no lost debits / counter corruption — FR-173 atomic RMW under one lock).
-		tb := NewTokenBudget(0, nil) // unbounded; accounting only
-		var wg sync.WaitGroup
-		for i := 0; i < 100; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				tb.Debit(10)
-			}()
-		}
-		wg.Wait()
-		if got := tb.Consumed(); got != 1000 {
-			t.Fatalf("concurrent debit: consumed=%d want 1000 (counter corrupted)", got)
-		}
-	})
-
-	t.Run("graceful_wind_down_not_mid_turn", func(t *testing.T) {
-		// FR-174/R§8.3c: the brake is consulted at a BOUNDARY (Exhausted), never
-		// mid-turn. Debit never blocks/hard-fails — it always returns, recording
-		// the spend; the caller checks Exhausted() at the next boundary.
-		tb := NewTokenBudget(100, nil)
-		// A single huge debit still completes (no panic/hard-fail).
-		consumed, _ := tb.Debit(500)
-		if consumed != 500 {
-			t.Fatalf("debit must always complete (no mid-turn hard-fail): consumed=%d", consumed)
-		}
-		if !tb.Exhausted() {
-			t.Error("after overshoot, Exhausted() must be true (boundary gate)")
-		}
-	})
-}
-
-// --- FR-175/FR-176: default 0 = unbounded + advisory + token≠dollar ---------
-
-func TestTokenBudget_UnsetUnbounded_Advisory(t *testing.T) {
-	// FR-175: default cap 0 == unbounded sentinel.
-	tb := NewTokenBudget(0, nil)
-	if !tb.IsUnbounded() {
-		t.Error("cap 0 must be unbounded")
-	}
-	if tb.Exhausted() {
-		t.Error("unbounded pool must never report exhausted")
-	}
-	tb.Debit(1_000_000)
-	if tb.Exhausted() {
-		t.Error("unbounded pool must never brake even after a large debit")
-	}
-	if tb.Remaining() != -1 {
-		t.Errorf("unbounded Remaining=%d want -1", tb.Remaining())
-	}
-
-	// FR-176/R§8.3b: set-time token≠dollar warning is surfaced.
-	warn := SetTimeWarning()
-	if !strings.Contains(warn, "token") || !strings.Contains(strings.ToLower(warn), "dollar") {
-		t.Errorf("SetTimeWarning must mention token vs dollar, got: %s", warn)
-	}
-	// R§8.3a: unbounded advisory is surfaced.
-	adv := UnboundedAdvisory()
-	if !strings.Contains(strings.ToLower(adv), "unbounded") {
-		t.Errorf("UnboundedAdvisory must mention unbounded, got: %s", adv)
-	}
-}
-
-// --- FR-177: restart-gated ceiling + boot reconciliation -------------------
-
-func TestTokenBudget_RestartGatedPersister(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "tb.json")
-	// First instance: debit some, persist.
-	tb1 := NewTokenBudget(1000, NewTokenBudgetPersister(path))
-	tb1.Debit(300)
-	// Second instance (restart): reconciles consumed from disk.
-	tb2 := NewTokenBudget(1000, NewTokenBudgetPersister(path))
-	if got := tb2.Consumed(); got != 300 {
-		t.Fatalf("after restart, consumed=%d want reconciled 300", got)
-	}
-	// The ceiling is restart-gated: a SetCap change does not carry live debits
-	// backward, but the consumed counter is preserved across it (FR-177).
-	tb2.SetCap(500)
-	if tb2.Cap() != 500 {
-		t.Fatalf("SetCap(500): Cap=%d", tb2.Cap())
-	}
-	if tb2.Consumed() != 300 {
-		t.Fatalf("consumed must be preserved across cap change: %d", tb2.Consumed())
 	}
 }
 

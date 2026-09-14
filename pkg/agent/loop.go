@@ -398,17 +398,7 @@ type AgentLoop struct {
 	// NewAgentLoop so per-call sites add a defensive nil-check that is
 	// structurally unreachable. The per-call sites check
 	// cfg.Sandbox.RateLimits.* > 0 to decide whether to enforce.
-	// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
 	rateLimiter *security.RateLimiterRegistry
-
-	// tokenBudget is the ADR-053 Phase-2 / D12 app-level OVERALL token budget
-	// (R§8.3): ONE atomic pool debited by ALL workloads (owner/member/verifier/
-	// Judge) from provider-reported usage, deliberately NOT honoring
-	// IsPrivilegedAgent (FR-172). Default cap 0 = unbounded (FR-175). The
-	// ceiling is restart-gated (FR-177). Always non-nil after NewAgentLoop so
-	// the debit path is a unconditional no-op when unbounded. The persisted
-	// consumed counter is reconciled at boot from system/token_budget.json.
-	tokenBudget *TokenBudget
 
 	// approvalGrants tracks per-session "Always Allow" tool-approval grants,
 	// scoped by (session_id, agent_id, tool_name). Always non-nil after
@@ -1267,9 +1257,8 @@ func (al *AgentLoop) flushContinuationAccumulator(ts *turnState, continuationCha
 }
 
 // debitLLMUsage is the ONE accounting path for a provider call's reported
-// usage: turnState.lastUsage, the app-level token budget (ADR-053 D12 /
-// R§8.3d), and the turn's own stats — collapsed total + cost, the cache
-// read/write split, and the prompt/completion split.
+// usage: turnState.lastUsage and the turn's own stats — collapsed total +
+// cost, the cache read/write split, and the prompt/completion split.
 //
 // It exists because ADR-087 D3.9 must debit a REFUSED attempt's billed usage
 // (common.ToolArgumentsError.Usage) exactly the way the success arm debits a
@@ -1280,9 +1269,6 @@ func (al *AgentLoop) debitLLMUsage(ts *turnState, llmModel string, usage *provid
 		return
 	}
 	ts.SetLastUsage(usage)
-	if al.tokenBudget != nil && usage.TotalTokens > 0 {
-		al.tokenBudget.Debit(int64(usage.TotalTokens))
-	}
 	ts.AddTurnStats(int64(usage.TotalTokens), estimateLLMCallCost(llmModel, usage))
 	ts.AddTurnCacheStats(usage.CacheReadTokens, usage.CacheWriteTokens)
 	ts.AddTurnIOStats(usage.PromptTokens, usage.CompletionTokens)
@@ -1767,16 +1753,7 @@ func NewAgentLoop(
 
 	// SEC-26: Initialize rate limiter registry. The registry always exists
 	// so per-agent windows can be created even when no limit is configured.
-	// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
 	al.rateLimiter = security.NewRateLimiterRegistry()
-
-	// ADR-053 Phase-2 / D12 (R§8.3): app-level OVERALL token budget — the
-	// sole app-level spend brake. The ceiling is restart-gated (FR-177) —
-	// read ONCE at boot from PlanningConfig and never live-reloaded; the
-	// live spend lever is Stop/cancel. The persister reconciles the
-	// consumed counter across restarts. cap 0 = unbounded (FR-175).
-	tbPath := filepath.Join(homePath, "system", "token_budget.json")
-	al.tokenBudget = NewTokenBudget(cfg.Planning.EffectiveTokenBudget(), NewTokenBudgetPersister(tbPath))
 	logger.InfoCF("agent", "Rate limiter initialized",
 		map[string]any{
 			"max_agent_llm_calls_per_hour":    cfg.Sandbox.RateLimits.MaxAgentLLMCallsPerHour,
@@ -1971,17 +1948,6 @@ func (al *AgentLoop) RateLimiter() *security.RateLimiterRegistry {
 		return nil
 	}
 	return al.rateLimiter
-}
-
-// TokenBudget returns the ADR-053 Phase-2 app-level OVERALL token budget
-// (D12/R§8.3). Always non-nil after NewAgentLoop (a nil AgentLoop returns
-// nil). Used by the goal loop's graceful-wind-down brake (checkGoalLoopAfterTurn)
-// and by gateway Usage handlers that report spend / set the restart-gated ceiling.
-func (al *AgentLoop) TokenBudget() *TokenBudget {
-	if al == nil {
-		return nil
-	}
-	return al.tokenBudget
 }
 
 // ApprovalGrants returns the session-scoped "Always Allow" tool-approval
@@ -11500,18 +11466,9 @@ turnLoop:
 		}
 		logger.DebugCF("agent", "LLM response", llmResponseFields)
 
-		// ADR-053 Phase-2 / D12 (R§8.3d/FR-171/FR-172/FR-173): debit the ONE
-		// app-level OVERALL token pool from provider-reported usage. Agent-agnostic
-		// by design (no agentType arg) — the IsPrivilegedAgent exemption is removed
-		// so core-agent turns debit the same pool. Atomic RMW under one lock; the
-		// graceful-wind-down gate (Exhausted) is consulted at the next turn/
-		// adjudication boundary, NEVER mid-turn (FR-174). The debit is unconditional
-		// even when unbounded (cap 0) so Usage accounting stays correct.
-		//
-		// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
-		//
-		// debitLLMUsage also records ts.lastUsage — the write that used to sit
-		// ~90 lines above this block, guarded by its own
+		// Record the provider-reported usage on the turn. debitLLMUsage also
+		// records ts.lastUsage — the write that used to sit ~90 lines above
+		// this block, guarded by its own
 		// turnStateFromContext(turnCtx) lookup that resolves to this very same
 		// ts (withTurnState(turnCtx, ts) is how turnCtx was built). Two copies
 		// of one accounting step is how the ADR-087 D3.9 refused-attempt debit

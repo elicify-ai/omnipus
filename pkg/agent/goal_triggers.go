@@ -1359,31 +1359,6 @@ func (al *AgentLoop) maybeSettleGoalIdle(now time.Time, store *session.UnifiedSt
 		return
 	}
 
-	// corr-MAJOR-1 (idle-path budget brake): the CLAIM path already brakes on
-	// TokenBudget().Exhausted() (goal_loop.go's checkGoalLoopAfterTurn), but
-	// the IDLE adjudication path did NOT — it would burn a Judge turn PAST the
-	// cap. Gate the idle adjudication the same way: when exhausted, do NOT fire
-	// (the goal brakes honestly instead of silently over-spending). Surface
-	// the budget-exhausted pill/handover, mirroring the claim path's brake
-	// exactly. No double-debit: the Judge never runs (we return before
-	// runGoalAdjudication), so zero rounds are consumed here.
-	if tb := al.TokenBudget(); tb != nil && tb.Exhausted() {
-		// silent-SF-7 (review): transition FIRST and honour the result — a
-		// handover written ahead of a refused transition tells the user the
-		// goal stopped while the record is still active and the keeper keeps
-		// sweeping it.
-		if _, ok := al.clearGoalStatus(sessionID, store, FailedReasonBudgetExhausted); !ok {
-			logger.WarnCF("agent", "goal idle settle: budget-exhausted termination failed; no handover written (the goal is still active)",
-				map[string]any{"session_id": sessionID, "goal_id": rec.GoalID})
-			return
-		}
-		handover := fmt.Sprintf(
-			"Goal %q stopped: the overall token budget is exhausted (consumed %d tokens).",
-			rec.Prompt, tb.Consumed())
-		al.writeGoalSystemTranscript(store, sessionID, agentInst.ID, handover)
-		return
-	}
-
 	// FR-102: mark fired + bump activity so the next tick (still inside this
 	// quiet spell) does NOT fire a second adjudication/nudge/push. The mark
 	// clears once a dispatched follow-up turn completes (genuine activity);

@@ -5798,12 +5798,6 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// settings are non-sensitive operational knobs without blast-radius risk).
 	cm.RegisterHTTPHandler("/api/v1/settings/memory", a.withAuth(a.HandleMemorySettings))
 
-	// Token-budget settings endpoint (ADR-053 D12/R§8.3, FE-6 / US-13): readable
-	// by any authenticated user, same posture as /settings/memory. GET returns
-	// the live spend accounting; PUT persists the restart-gated ceiling (the live
-	// spend lever is Stop/cancel, not a live token cut — R§8.3e/FR-177).
-	cm.RegisterHTTPHandler("/api/v1/settings/token-budget", a.withAuth(a.HandleTokenBudgetSettings))
-
 	// Context-budget settings endpoint (ADR-066 D9, FR-036 / US-11): the D4
 	// per-surface caps, the D6 absolute trigger, the D10 ingest bound, the D2
 	// global default window and the per-(provider, model) overrides. Same
