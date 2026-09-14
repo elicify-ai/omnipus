@@ -100,7 +100,7 @@ const DEFAULT_GOAL_MAX_ROUNDS = 20
 // and only budget control in the product, governing task goals and chat
 // goals identically.
 const INVALID_GOAL_MAX_ROUNDS_MESSAGE =
-  'Goal round budget must be a whole number of at least 1.'
+  'Tries per goal must be a whole number of at least 1.'
 
 export function PerformanceSection(): React.ReactElement {
   const { addToast } = useUiStore()
@@ -578,15 +578,13 @@ export function PerformanceSection(): React.ReactElement {
         </div>
 
         <p className="text-xs text-[var(--color-muted)] leading-relaxed">
-          The maximum number of adjudication rounds a goal may run before it is judged
-          unmet for insufficient progress. This is the only budget control in the
-          product — it applies to every goal, task and chat alike, identically. There is
-          no per-goal override.
+          How many times an agent may try to finish a goal before it stops and reports the
+          goal as not met. This applies to goals set in chat and to goals on tasks.
         </p>
 
         <div className="flex items-center gap-3">
           <label className="text-xs font-medium text-[var(--color-secondary)] w-44 shrink-0">
-            Goal round budget
+            Tries per goal
           </label>
           <Input
             type="number"
@@ -594,14 +592,14 @@ export function PerformanceSection(): React.ReactElement {
             value={goalMaxRoundsInput}
             onChange={(e) => handleGoalInputChange(e.target.value)}
             className="w-24 h-7 text-sm"
-            aria-label="Goal round budget"
+            aria-label="Tries per goal"
             data-testid="performance-goal-max-rounds-input"
           />
         </div>
 
         <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">
-          Governs task goals and chat goals identically — every goal in the product uses
-          this one setting. Changes apply after re-authentication.
+          Goals already running keep the limit they started with. Saving asks you to
+          re-enter your password to confirm it's really you.
         </p>
       </div>
 

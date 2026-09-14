@@ -82,7 +82,7 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
     vi.useRealTimers()
     renderSection()
     await waitFor(() => {
-      expect(screen.getByLabelText('Goal round budget')).toHaveValue(20)
+      expect(screen.getByLabelText('Tries per goal')).toHaveValue(20)
     })
   })
 
@@ -97,23 +97,24 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
     } as never)
     renderSection()
     await waitFor(() => {
-      expect(screen.getByLabelText('Goal round budget')).toHaveValue(20)
+      expect(screen.getByLabelText('Tries per goal')).toHaveValue(20)
     })
   })
 
-  it('the label and help text state plainly that the setting applies to every goal, and that there is no per-goal override', async () => {
+  it('the label and help text state plainly, in non-engineer language, that the setting applies to goals in chat and on tasks', async () => {
     vi.useRealTimers()
     renderSection()
-    await waitFor(() => screen.getByLabelText('Goal round budget'))
+    await waitFor(() => screen.getByLabelText('Tries per goal'))
 
     expect(screen.getByText('Goal completion budget')).toBeInTheDocument()
+    const explanation = screen.getByText(/how many times an agent may try to finish a goal/i)
+    expect(explanation).toBeInTheDocument()
+    expect(explanation).toHaveTextContent(/applies to goals set in chat and to goals on tasks/i)
     expect(
-      screen.getByText(/applies to every goal, task and chat alike, identically/i),
+      screen.getByText(/goals already running keep the limit they started with/i),
     ).toBeInTheDocument()
-    expect(screen.getByText(/no per-goal override/i)).toBeInTheDocument()
-    expect(
-      screen.getByText(/governs task goals and chat goals identically/i),
-    ).toBeInTheDocument()
+    // No internal jargon leaks into the user-facing copy.
+    expect(document.body.textContent).not.toMatch(/adjudication|owner loop|verifiers|sentinel/i)
   })
 
   it('S-34 adapted: raising the global budget in the interface opens re-auth, and confirming saves ONLY goal_max_rounds', async () => {
@@ -122,10 +123,10 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
 
     vi.useRealTimers()
     renderSection()
-    await waitFor(() => screen.getByLabelText('Goal round budget'))
+    await waitFor(() => screen.getByLabelText('Tries per goal'))
 
     vi.useFakeTimers()
-    fireEvent.change(screen.getByLabelText('Goal round budget'), { target: { value: '30' } })
+    fireEvent.change(screen.getByLabelText('Tries per goal'), { target: { value: '30' } })
 
     // Before the debounce fires, no PUT and no dialog yet.
     expect(screen.queryByTestId('reauth-confirm')).not.toBeInTheDocument()
@@ -154,17 +155,17 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
 
   it('S-35 adapted: entering 0 is refused and no write occurs', async () => {
     renderSection()
-    await waitFor(() => screen.getByLabelText('Goal round budget'))
+    await waitFor(() => screen.getByLabelText('Tries per goal'))
 
     vi.useFakeTimers()
-    fireEvent.change(screen.getByLabelText('Goal round budget'), { target: { value: '0' } })
+    fireEvent.change(screen.getByLabelText('Tries per goal'), { target: { value: '0' } })
     await act(async () => { vi.advanceTimersByTime(700) })
     vi.useRealTimers()
 
     await waitFor(() => {
       expect(addToast).toHaveBeenCalledWith({
         variant: 'error',
-        message: 'Goal round budget must be a whole number of at least 1.',
+        message: 'Tries per goal must be a whole number of at least 1.',
       })
     })
     expect(screen.queryByTestId('reauth-confirm')).not.toBeInTheDocument()
@@ -173,17 +174,17 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
 
   it('rejects a negative value the same way', async () => {
     renderSection()
-    await waitFor(() => screen.getByLabelText('Goal round budget'))
+    await waitFor(() => screen.getByLabelText('Tries per goal'))
 
     vi.useFakeTimers()
-    fireEvent.change(screen.getByLabelText('Goal round budget'), { target: { value: '-5' } })
+    fireEvent.change(screen.getByLabelText('Tries per goal'), { target: { value: '-5' } })
     await act(async () => { vi.advanceTimersByTime(700) })
     vi.useRealTimers()
 
     await waitFor(() => {
       expect(addToast).toHaveBeenCalledWith({
         variant: 'error',
-        message: 'Goal round budget must be a whole number of at least 1.',
+        message: 'Tries per goal must be a whole number of at least 1.',
       })
     })
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
@@ -191,17 +192,17 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
 
   it('rejects a blank value', async () => {
     renderSection()
-    await waitFor(() => screen.getByLabelText('Goal round budget'))
+    await waitFor(() => screen.getByLabelText('Tries per goal'))
 
     vi.useFakeTimers()
-    fireEvent.change(screen.getByLabelText('Goal round budget'), { target: { value: '' } })
+    fireEvent.change(screen.getByLabelText('Tries per goal'), { target: { value: '' } })
     await act(async () => { vi.advanceTimersByTime(700) })
     vi.useRealTimers()
 
     await waitFor(() => {
       expect(addToast).toHaveBeenCalledWith({
         variant: 'error',
-        message: 'Goal round budget must be a whole number of at least 1.',
+        message: 'Tries per goal must be a whole number of at least 1.',
       })
     })
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
@@ -213,10 +214,10 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
 
     vi.useRealTimers()
     renderSection()
-    await waitFor(() => screen.getByLabelText('Goal round budget'))
+    await waitFor(() => screen.getByLabelText('Tries per goal'))
 
     vi.useFakeTimers()
-    fireEvent.change(screen.getByLabelText('Goal round budget'), { target: { value: '1' } })
+    fireEvent.change(screen.getByLabelText('Tries per goal'), { target: { value: '1' } })
     await act(async () => { vi.advanceTimersByTime(700) })
     vi.useRealTimers()
 
@@ -243,10 +244,10 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
 
     vi.useRealTimers()
     renderSection()
-    await waitFor(() => screen.getByLabelText('Goal round budget'))
+    await waitFor(() => screen.getByLabelText('Tries per goal'))
 
     vi.useFakeTimers()
-    fireEvent.change(screen.getByLabelText('Goal round budget'), { target: { value: '45' } })
+    fireEvent.change(screen.getByLabelText('Tries per goal'), { target: { value: '45' } })
     await act(async () => { vi.advanceTimersByTime(700) })
     vi.useRealTimers()
 
@@ -268,15 +269,15 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
   it('cancelling re-auth reverts the input to the last-known server value and does not save', async () => {
     vi.useRealTimers()
     renderSection()
-    await waitFor(() => screen.getByLabelText('Goal round budget'))
+    await waitFor(() => screen.getByLabelText('Tries per goal'))
 
     vi.useFakeTimers()
-    fireEvent.change(screen.getByLabelText('Goal round budget'), { target: { value: '99' } })
+    fireEvent.change(screen.getByLabelText('Tries per goal'), { target: { value: '99' } })
     await act(async () => { vi.advanceTimersByTime(700) })
     vi.useRealTimers()
 
     await waitFor(() => screen.getByTestId('reauth-confirm'))
-    expect(screen.getByLabelText('Goal round budget')).toHaveValue(99)
+    expect(screen.getByLabelText('Tries per goal')).toHaveValue(99)
 
     fireEvent.click(screen.getByTestId('reauth-cancel'))
 
@@ -284,14 +285,14 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
       expect(screen.queryByTestId('reauth-confirm')).not.toBeInTheDocument()
     })
     await waitFor(() => {
-      expect(screen.getByLabelText('Goal round budget')).toHaveValue(20)
+      expect(screen.getByLabelText('Tries per goal')).toHaveValue(20)
     })
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
   })
 
   // ── Review finding 15: two debounces, one pending slot ──────────────────
   //
-  // "Max parallel agents" and "Goal round budget" each run their own 600 ms
+  // "Max parallel agents" and "Tries per goal" each run their own 600 ms
   // debounce but both write into the SAME pending slot. Before the fix the
   // second timer REPLACED the first control's body, so only the later edit
   // was ever PUT — while onSuccess cleared both dirty flags and the sync
@@ -311,14 +312,14 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
 
     vi.useRealTimers()
     renderSection()
-    await waitFor(() => screen.getByLabelText('Goal round budget'))
+    await waitFor(() => screen.getByLabelText('Tries per goal'))
 
     vi.useFakeTimers()
     // Max parallel agents first…
     fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '9' } })
     await act(async () => { vi.advanceTimersByTime(300) })
     // …then the goal budget, while the first debounce is still pending.
-    fireEvent.change(screen.getByLabelText('Goal round budget'), { target: { value: '30' } })
+    fireEvent.change(screen.getByLabelText('Tries per goal'), { target: { value: '30' } })
     // Past both timers (first fires at 600 ms, second at 900 ms).
     await act(async () => { vi.advanceTimersByTime(1000) })
     vi.useRealTimers()
@@ -356,12 +357,12 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
 
     vi.useRealTimers()
     renderSection()
-    await waitFor(() => screen.getByLabelText('Goal round budget'))
+    await waitFor(() => screen.getByLabelText('Tries per goal'))
 
     vi.useFakeTimers()
     fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '9' } })
     await act(async () => { vi.advanceTimersByTime(300) })
-    fireEvent.change(screen.getByLabelText('Goal round budget'), { target: { value: '30' } })
+    fireEvent.change(screen.getByLabelText('Tries per goal'), { target: { value: '30' } })
     await act(async () => { vi.advanceTimersByTime(1000) })
     vi.useRealTimers()
 
@@ -379,21 +380,21 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
     })
     await waitFor(() => {
       expect(screen.getByLabelText('Max parallel agents')).toHaveValue(9)
-      expect(screen.getByLabelText('Goal round budget')).toHaveValue(30)
+      expect(screen.getByLabelText('Tries per goal')).toHaveValue(30)
     })
   })
 
   it('exactly one goal-round-budget control exists on the whole screen — no per-goal override surface (D-E)', async () => {
     vi.useRealTimers()
     renderSection()
-    await waitFor(() => screen.getByLabelText('Goal round budget'))
+    await waitFor(() => screen.getByLabelText('Tries per goal'))
 
-    // Exactly one goal-round-budget control on the whole screen — not one
-    // per goal, not a second field for an "override". The card's own copy
-    // states this plainly ("There is no per-goal override" — asserted
-    // above), so the negative here is structural: a single input, not a
-    // list or a per-item field.
-    expect(screen.getAllByLabelText('Goal round budget')).toHaveLength(1)
+    // Exactly one "Tries per goal" control on the whole screen — not one
+    // per goal, not a second field for an "override". The preceding test
+    // asserts the card's own copy explains this control applies to goals in
+    // chat and on tasks, so the negative here is structural: a single input,
+    // not a list or a per-item field.
+    expect(screen.getAllByLabelText('Tries per goal')).toHaveLength(1)
     expect(screen.queryAllByRole('spinbutton')).toHaveLength(2) // max-parallel-agents + goal round budget
   })
 })
