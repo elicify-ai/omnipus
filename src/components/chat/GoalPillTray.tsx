@@ -175,6 +175,14 @@ function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
   const config = describePillState(frame.state)
   const { Icon } = config
 
+  // UAT E-14: the Judge can retry in the background after the chat turn has
+  // already ended, and its retry reason (e.g. "…did not answer in time.
+  // Trying again in 60 s (try 2).") is otherwise only visible by expanding
+  // the pill. Surface it as a muted, truncated subtitle under the collapsed
+  // pill for the two states where the Judge is actively working —
+  // `judging` and `judge_unavailable` — so it's visible without a click.
+  const showSubtitle = !expanded && (frame.state === 'judging' || frame.state === 'judge_unavailable') && !!frame.latest_reason
+
   return (
     <div className="flex flex-col items-end" data-testid="goal-pill-wrapper">
       <button
@@ -204,6 +212,16 @@ function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
         </span>
         {expanded ? <CaretUp size={11} aria-hidden="true" /> : <CaretDown size={11} aria-hidden="true" />}
       </button>
+
+      {showSubtitle && (
+        <p
+          data-testid="goal-pill-subtitle"
+          title={frame.latest_reason}
+          className="mt-0.5 max-w-[260px] truncate text-[10px] text-[var(--color-muted)]"
+        >
+          {frame.latest_reason}
+        </p>
+      )}
 
       {expanded && (
         <div

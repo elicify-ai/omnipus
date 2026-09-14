@@ -349,6 +349,45 @@ describe('GoalPillTray — terminal pill display window (regression fix, bc66345
 // OTHER test in this file (each state's own dedicated testId still
 // renders), so this coverage asserts the display-window BEHAVIOUR
 // specifically, not just presence.
+// ── Judge retry reason subtitle (UAT E-14) ──────────────────────────────────
+//
+// While a goal is being judged, the Judge can retry in the background after
+// the chat turn has already ended (e.g. "…did not answer in time. Trying
+// again in 60 s (try 2)."). That reason was previously only visible by
+// expanding the pill. It now also renders as a muted, truncated subtitle
+// under the COLLAPSED pill for the two states where the Judge is actively
+// working — `judging` and `judge_unavailable` — so it's visible at a glance.
+describe('GoalPillTray — Judge retry reason subtitle (UAT E-14)', () => {
+  beforeEach(() => {
+    useChatStore.setState({ goalPills: {} })
+    useJudgeActivityStore.getState().reset()
+  })
+
+  it.each(['judging', 'judge_unavailable'] as const)(
+    'shows the latest_reason as a truncated muted subtitle under the collapsed %s pill',
+    (state) => {
+      useChatStore.setState({
+        goalPills: { g1: makeGoal({ goal_id: 'g1', state, latest_reason: 'its model did not answer in time. Trying again in 60 s (try 2).' }) },
+      })
+      render(<GoalPillTray />)
+      const subtitle = screen.getByTestId('goal-pill-subtitle')
+      expect(subtitle).toHaveTextContent('its model did not answer in time. Trying again in 60 s (try 2).')
+      expect(subtitle).toHaveAttribute('title', 'its model did not answer in time. Trying again in 60 s (try 2).')
+    },
+  )
+
+  it.each(['active', 'waiting_on_user', 'done', 'failed', 'cleared'] as const)(
+    'does NOT show a subtitle under the collapsed pill for %s',
+    (state) => {
+      useChatStore.setState({
+        goalPills: { g1: makeGoal({ goal_id: 'g1', state, latest_reason: 'some reason' }) },
+      })
+      render(<GoalPillTray />)
+      expect(screen.queryByTestId('goal-pill-subtitle')).not.toBeInTheDocument()
+    },
+  )
+})
+
 describe('GoalPillTray — terminal-set membership for the five new states (OQ-17)', () => {
   beforeEach(() => {
     useChatStore.setState({ goalPills: {} })
