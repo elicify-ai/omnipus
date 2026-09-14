@@ -3805,6 +3805,13 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// on) never reaches either, so without a rebuild the two ladders would
 	// keep disagreeing exactly as this bug fix set out to close.
 	var defaultAgentIDChanged bool
+	// modelIdentityChanged is set INSIDE the persist closure below, iff this
+	// request actually changed the stored primary model, its provider, or the
+	// fallback chain. Compared against the stored record rather than keyed on
+	// req.Model/req.Provider/req.FallbackModels being present, for the same
+	// reason as defaultAgentIDChanged: AgentProfile.tsx's autosave resends all
+	// three on every save, and an unchanged model must not rebuild the agent.
+	var modelIdentityChanged bool
 	// CLAUDE.md hard constraint 6 — same caller-side completeness check
 	// createAgent performs, for the same reason: a tools_cfg.builtin sent here
 	// REPLACES the agent's builtin policy map wholesale, so an incomplete map
@@ -3883,6 +3890,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 					conflictErr = errConflict
 					return errConflict
 				}
+				storedModelBefore, storedFallbacksBefore := agentModelIdentity(agentRec)
 				if req.Name != nil {
 					agentRec.Name = newName
 				}
@@ -4086,6 +4094,9 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 				// wall-clock second collide on an identical truncated timestamp,
 				// defeating the ordinal comparison (reopening the P-F2
 				// fallback_models data-loss class this fix wave closed).
+				storedModelAfter, storedFallbacksAfter := agentModelIdentity(agentRec)
+				modelIdentityChanged = !sameAgentModelIdentity(
+					storedModelBefore, storedFallbacksBefore, storedModelAfter, storedFallbacksAfter)
 				agentRec.UpdatedAt = &now
 				return nil
 			})
@@ -4172,10 +4183,12 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 			return
 		}
 	}
-	// Only trigger a full reload when structural changes require it (SOUL.md,
-	// agent creation/deletion). Model, rate limit, timeout, and steering mode changes are
-	// config-only and do NOT need a reload — avoiding the WebSocket drop and context loss
-	// that a full reload causes mid-conversation.
+	// Rebuild the running agent only when a changed field is one the
+	// AgentInstance caches at construction (soul, skills, model params, context
+	// window, the model/provider/fallbacks, or a default-agent flip). Fields the
+	// turn path reads from config on every call need no rebuild. The rebuild is
+	// fastAgentUpsert's single-agent swap, not a full reload, so the WebSocket
+	// and mid-conversation context survive.
 	//
 	// ADR-037: delegation_policy is retired, so it no longer appears in this
 	// condition. Delegation edits now go exclusively through the per-workspace
@@ -4234,34 +4247,38 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// that now reads agentCfg.ModelParams, so folding this into needsReload
 	// is sufficient; no separate live-apply path (like ApplyAgentModel) is
 	// needed.
-	needsReload := req.Soul != nil || defaultAgentIDChanged || contextWindowOverrideChanged || req.Skills != nil || req.ModelParams != nil
-	var reloadWarning string
+	//
+	// modelIdentityChanged (UAT E-7): a change to the primary model, its
+	// provider, or the fallback chain is applied the same way — by rebuilding
+	// this one AgentInstance from the just-saved record with NewAgentInstance,
+	// the constructor boot uses. It used to be applied in place through
+	// AgentLoop.ApplyAgentModel, which ran only when `model` itself was sent (a
+	// provider-only or fallback-only change never reached the running agent),
+	// resolved candidates without the agent's pinned provider or its saved
+	// fallbacks, and on any resolution failure left the running agent on the
+	// previous model while this handler answered 200 with a warning: the
+	// saved-but-changed-nothing pattern ADR-037 bans. A model or provider the
+	// install cannot serve is still saved AND applied: the rebuilt agent refuses
+	// turns with a typed error, and this response carries needs_model /
+	// degraded_reason (ADR-068 FR-014, ADR-067 US-6), so the saved config and
+	// the running agent always describe the same model. fastAgentUpsert swaps
+	// only this agent, never a full reload, so the WebSocket survives (#73).
+	needsReload := req.Soul != nil || defaultAgentIDChanged || contextWindowOverrideChanged ||
+		req.Skills != nil || req.ModelParams != nil || modelIdentityChanged
 	if needsReload {
-		reloadWarning = a.fastAgentUpsert(id)
-	}
-
-	// #73: a model-only change is intentionally config-only (no reload above, so
-	// the WebSocket and conversation context survive). But persisting to config +
-	// SwapConfig does NOT touch the already-constructed agent instance — its
-	// cached provider/model would keep serving the OLD model until a restart.
-	// Apply the change in place so it takes effect on the next turn while the
-	// live session context is preserved. Skip when needsReload fired, since
-	// TriggerReload already rebuilt the instance with the new model.
-	if req.Model != nil && newModel != "" && !needsReload {
-		if _, err := a.agentLoop.ApplyAgentModel(id, newModel); err != nil {
-			// Error, not Warn: a live-apply failure means the running agent keeps
-			// serving the OLD model despite a 200 response. The cause (bad model
-			// config, provider init / API-key failure, no candidates) typically
-			// recurs on the next reload too, so this is not reliably "applies
-			// later" — surface it loudly and in the response so it is not silent.
-			slog.Error("updateAgent: live model apply failed; running agent still on previous model",
-				"agent_id", id, "model", newModel, "error", err)
-			if reloadWarning == "" {
-				reloadWarning = fmt.Sprintf(
-					"model saved to config but could not be applied to the running agent (still serving the previous model): %v",
-					err,
-				)
-			}
+		// fastAgentUpsert returns a non-empty message only when neither the
+		// single-agent swap nor its full-reload fallback could publish the
+		// rebuilt agent. The change is saved but the running agent still serves
+		// the old settings, so this is not a success: fail the request, as
+		// updateConfigJSONLocked does when config is written but the in-memory
+		// refresh fails.
+		if rebuildErr := a.fastAgentUpsert(id); rebuildErr != "" {
+			slog.Error("updateAgent: change saved but the running agent could not be rebuilt",
+				"agent_id", id, "error", rebuildErr)
+			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf(
+				"agent %q was saved but the running agent could not be updated (%s); restart the gateway to apply the change",
+				id, rebuildErr))
+			return
 		}
 	}
 	// Re-read the files so the response reflects what was just persisted.
@@ -4325,9 +4342,6 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		soul = ""
 	}
 	ag.Soul = soul
-	if reloadWarning != "" {
-		ag.Warning = &reloadWarning
-	}
 	// Populate Default, Skills, and Executor from the live config after the write
 	// (handles both the req.Default=true case and the leave-unchanged case, and
 	// ensures a GET→edit→PUT round-trip echoes the persisted executor).

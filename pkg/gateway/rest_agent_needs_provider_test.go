@@ -193,6 +193,13 @@ func TestAgentRepair_PUTProvider_NoRestart(t *testing.T) {
 	require.NotNil(t, gotDegraded,
 		"an agent bound to an unknown provider must be degraded on the very next GET")
 	assert.Equal(t, gen.AgentDegradedReasonNeedsProvider, *gotDegraded)
+	// degraded_reason is derived from the SAVED config, so on its own it cannot
+	// show that the running agent changed. The running agent's primary
+	// candidate is what a turn actually routes through (a pinned provider routes
+	// the primary directly, O3), so it is the runtime half of the proof.
+	require.NotEmpty(t, liveAgent(t, api, created.Id).Candidates)
+	require.Equal(t, "z-ai", liveAgent(t, api, created.Id).Candidates[0].Provider,
+		"precondition: the running agent must start routed to the unknown provider")
 
 	// The repair: re-point the agent at a real provider.
 	w := httptest.NewRecorder()
@@ -207,6 +214,12 @@ func TestAgentRepair_PUTProvider_NoRestart(t *testing.T) {
 
 	assert.Nil(t, getAgentResp(t, api, created.Id).DegradedReason,
 		"and the next GET must agree — no restart, no second action")
+
+	repaired := liveAgent(t, api, created.Id)
+	require.NotEmpty(t, repaired.Candidates)
+	assert.Equal(t, "openrouter", repaired.Candidates[0].Provider,
+		"the running agent must route through the repaired provider; a response that says repaired "+
+			"while the agent still routes to the unknown provider is the saved-but-changed-nothing failure")
 }
 
 // TestAgentDegradedReason_AbsentCatalogNeverDegrades pins the E7 posture the
