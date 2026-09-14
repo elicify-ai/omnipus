@@ -520,10 +520,21 @@ let control: ControlOrigin;
 let api: APIRequestContext;
 let workspaceID: string;
 let previewToken: string;
+/**
+ * A FILE-scope token for FILE_UNKNOWN_EXT.
+ *
+ * UAT 2026-09-13 D-105 narrowed a bundle token to its entry document and the
+ * web assets a page loads, so the bundle token answers 404 for an extension on
+ * no table. FR-015c's default is a property of the token PATH, not of bundle
+ * scope, so that one fixture is reached through a token scoped to exactly that
+ * file. Every other fixture here is a web asset and stays on the bundle token.
+ */
+let unknownExtToken: string;
 
 /** Gateway-relative token URL for one file in the fixture bundle. */
 function tokenURL(name: string): string {
-  return `/library-preview/${previewToken}/${FIXTURE_DIR}/${name}`;
+  const token = name === FILE_UNKNOWN_EXT ? unknownExtToken : previewToken;
+  return `/library-preview/${token}/${FIXTURE_DIR}/${name}`;
 }
 
 /** Absolute token URL, for `page.goto` and `page.route`. */
@@ -620,10 +631,12 @@ test.beforeAll(async () => {
     SANDBOX_ONLY_POLICY,
   );
 
-  // ONE token for the whole directory. Bundle scope, so every fixture above is
-  // reachable through it — and, just as importantly, only ONE credential is
-  // minted per run: the store caps live tokens per session (FR-003k), and three
-  // engine projects share this suite's one admin session.
+  // ONE bundle token for the whole directory, so every web-asset fixture above
+  // is reachable through it, plus one file token for FILE_UNKNOWN_EXT (see
+  // unknownExtToken). Re-minting the same scope in the same session replaces the
+  // previous token, so the three engine projects sharing this suite's one admin
+  // session hold two live tokens between them, not six (FR-003k caps a session
+  // at eight).
   const mint = await api.post('/api/v1/library/preview-token', {
     headers: { ...csrf, 'Content-Type': 'application/json' },
     data: { workspace_id: workspaceID, path: FIXTURE_DIR, scope: 'bundle', entry_path: FILE_INDEX_HTML },
@@ -634,6 +647,14 @@ test.beforeAll(async () => {
   const minted = (await mint.json()) as { token: string; url: string };
   previewToken = minted.token;
   expect(previewToken, 'minted token').toBeTruthy();
+
+  const mintUnknown = await api.post('/api/v1/library/preview-token', {
+    headers: { ...csrf, 'Content-Type': 'application/json' },
+    data: { workspace_id: workspaceID, path: `${FIXTURE_DIR}/${FILE_UNKNOWN_EXT}`, scope: 'file' },
+  });
+  expect(mintUnknown.status(), `mint file token for ${FILE_UNKNOWN_EXT}: ${await mintUnknown.text()}`).toBe(201);
+  unknownExtToken = ((await mintUnknown.json()) as { token: string }).token;
+  expect(unknownExtToken, 'minted token').toBeTruthy();
 });
 
 test.afterAll(async () => {

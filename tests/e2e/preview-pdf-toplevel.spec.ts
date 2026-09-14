@@ -436,10 +436,25 @@ let sink: Sink;
 let control: ControlOrigin;
 let api: APIRequestContext;
 let workspaceID: string;
-let previewToken: string;
+/** The bundle token, minted against FILE_INDEX_HTML. Used by the D-105 witness. */
+let bundleToken: string;
+/**
+ * One FILE-scope token per attachment fixture.
+ *
+ * UAT 2026-09-13 D-105 narrowed a BUNDLE token to its entry document and the
+ * web assets a page loads. A sibling `.pdf` is content in its own right, so a
+ * bundle token now answers 404 for it (the D-105 test at the end of this file
+ * asserts exactly that). What this file measures — extension typing, nosniff,
+ * attachment, the §10.3 policy — is a property of the TOKEN PATH, not of bundle
+ * scope, so each PDF is reached through a token scoped to exactly that file.
+ * Three live tokens, well under FR-003k's eight.
+ */
+const fileTokens = new Map<string, string>();
 
 function tokenURL(name: string): string {
-  return `/library-preview/${previewToken}/${FIXTURE_DIR}/${name}`;
+  const token = fileTokens.get(name);
+  if (!token) throw new Error(`no file-scope preview token was minted for ${name}`);
+  return `/library-preview/${token}/${FIXTURE_DIR}/${name}`;
 }
 
 function tokenHref(name: string): string {
@@ -537,24 +552,24 @@ test.beforeAll(async () => {
     disposition: 'inline',
   });
 
-  // ONE token for the whole directory. Bundle scope, so every fixture above is
-  // reachable through it — and, just as importantly, only ONE credential is
-  // minted per run: the store caps live tokens per session at eight (FR-003k).
-  const mint = await api.post('/api/v1/library/preview-token', {
-    headers: { ...csrf, 'Content-Type': 'application/json' },
-    data: {
-      workspace_id: workspaceID,
-      path: FIXTURE_DIR,
-      scope: 'bundle',
-      entry_path: FILE_INDEX_HTML,
-    },
-  });
-  // 201, from contracts/openapi.yaml's `/library/preview-token` — the only
-  // success status that operation declares.
-  expect(mint.status(), `mint preview token: ${await mint.text()}`).toBe(201);
-  const minted = (await mint.json()) as { token: string; url: string };
-  previewToken = minted.token;
-  expect(previewToken, 'minted token must be the 43-char base64url shape (FR-003h)').toHaveLength(43);
+  // Every token is minted through the real authenticated endpoint. 201, from
+  // contracts/openapi.yaml's `/library/preview-token` — the only success status
+  // that operation declares.
+  async function mint(data: Record<string, string>): Promise<string> {
+    const res = await api.post('/api/v1/library/preview-token', {
+      headers: { ...csrf, 'Content-Type': 'application/json' },
+      data: { workspace_id: workspaceID, ...data },
+    });
+    expect(res.status(), `mint preview token ${JSON.stringify(data)}: ${await res.text()}`).toBe(201);
+    const minted = (await res.json()) as { token: string; url: string };
+    expect(minted.token, 'minted token must be the 43-char base64url shape (FR-003h)').toHaveLength(43);
+    return minted.token;
+  }
+  // The bundle token — only the D-105 witness uses it (see fileTokens).
+  bundleToken = await mint({ path: FIXTURE_DIR, scope: 'bundle', entry_path: FILE_INDEX_HTML });
+  for (const name of [FILE_CONFUSED_PDF, FILE_GENUINE_PDF]) {
+    fileTokens.set(name, await mint({ path: `${FIXTURE_DIR}/${name}`, scope: 'file' }));
+  }
 });
 
 test.afterAll(async () => {
@@ -892,5 +907,29 @@ test.describe('ADR-067 test 58 — HTML bytes named .pdf, top level, headed Chro
       browserPdfViewerFrames(page),
       'the browser\'s own PDF viewer received a Library PDF — `.pdf` must not be inline (§10.4, FR-018)',
     ).toEqual([]);
+  });
+
+  /**
+   * UAT 2026-09-13 D-105, witnessed end to end: the BUNDLE token does not reach
+   * a sibling PDF, fetched or navigated. This is why every test above reaches
+   * its PDF through a file-scope token, and it is what goes red if a bundle
+   * token ever regains every file in its directory.
+   */
+  test('D-105 — the bundle token does not serve a sibling PDF, fetched or navigated', async ({ page }) => {
+    // Positive control: the same token DOES serve its entry, so the 404s below
+    // are the scope rule and not a dead token.
+    const entry = await api.get(`/library-preview/${bundleToken}/${FIXTURE_DIR}/${FILE_INDEX_HTML}`);
+    expect(entry.status(), 'the bundle token must still serve its own entry').toBe(200);
+
+    const siblingURL = `/library-preview/${bundleToken}/${FIXTURE_DIR}/${FILE_GENUINE_PDF}`;
+    const res = await api.get(siblingURL);
+    expect(res.status()).toBe(404);
+    expect((await res.body()).subarray(0, 5).toString('latin1')).not.toBe('%PDF-');
+
+    const downloads: string[] = [];
+    page.on('download', (d) => downloads.push(d.suggestedFilename()));
+    const nav = await page.goto(`${BASE_URL}${siblingURL}`);
+    expect(nav?.status(), 'a top-level navigation must not reach the sibling either').toBe(404);
+    expect(downloads).toEqual([]);
   });
 });
