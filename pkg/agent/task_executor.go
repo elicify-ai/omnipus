@@ -1170,6 +1170,17 @@ func (te *TaskExecutor) finishTaskRun(
 					map[string]any{"task_id": t.ID, "error": setErr.Error()})
 			}
 		}
+		// FR-045 applied to the error branch: an attempt that ended on
+		// malformed tool-call output (typed *common.ToolArgumentsError —
+		// CodeToolArgs / CodeToolCallTruncated) consumes one attempt and
+		// re-dispatches with a note instead of failing the task. Every other
+		// error falls through to the terminal path below, unchanged. Checked
+		// BEFORE the lifecycle transition: a re-dispatched attempt's session is
+		// superseded (LifecycleCancelled) by consumeAttemptOrExhaust, not
+		// failed. See task_attempt_turn_error.go.
+		if redispatch, handled := te.retryAttemptAfterMalformedToolOutput(ctx, t, taskSessionID, err, run); handled {
+			return redispatch
+		}
 		// FR-118/G-13: a genuine run-time execution error (distinct from the
 		// boot sweep's own "interrupted" reason for a crash-stranded session —
 		// this run actually completed, badly) terminates the durable lifecycle
