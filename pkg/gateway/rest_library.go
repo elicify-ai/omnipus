@@ -983,7 +983,7 @@ func (a *restAPI) handleLibraryContentPut(w http.ResponseWriter, r *http.Request
 	// view re-derivation instead (D-119): its "index" is the view YAMLs the
 	// import pipeline writes, and a raw text edit of a base must reach them
 	// exactly as an import would.
-	if lockCfg.CollectionRoot != "" {
+	if lockCfg.CollectionRoot != "" && knowledgeIndexerSeesPath(lockRel) {
 		if isLibraryBasePath(rel) {
 			a.rederiveBaseViewsAfterSave(r, workspaceID, lockCfg.CollectionRoot, lockRel)
 		} else if knowledge.IsMarkdownPath(rel) {
@@ -1003,6 +1003,35 @@ func (a *restAPI) handleLibraryContentPut(w http.ResponseWriter, r *http.Request
 // differently at two doors.
 func isLibraryBasePath(rel string) bool {
 	return strings.EqualFold(path.Ext(rel), ".base")
+}
+
+// knowledgeIndexerSeesPath reports whether a collection-relative path is one
+// the collection WALKER indexes — every path is, except those inside the four
+// directories the walk skips. The post-save index refresh and the `.base`
+// re-derivation must not run for a save inside those directories (a trashed
+// note re-saved through the text editor would otherwise re-enter the LIVE
+// index from `.omnipus-vault/trash/`, which the next full sync would then
+// strip again as drift), and equally must not be broader than the walk: a
+// refresh the walker cannot confirm is a row the next sync must delete.
+//
+// The authority for the four names is pkg/knowledge/scan.go's
+// scanSkippedDirNames, which is UNEXPORTED — the two marker names are taken
+// from the exported constants the markers themselves define, and `.git` and
+// `.trash` are spelled here with this comment naming their home. If that set
+// grows, this one must grow with it; a future change that wants the check in
+// one place should export the predicate from pkg/knowledge and delete this
+// copy (it could not be made in this change without editing a file this
+// change does not own).
+func knowledgeIndexerSeesPath(relInCollection string) bool {
+	seg := relInCollection
+	if i := strings.IndexByte(seg, '/'); i >= 0 {
+		seg = seg[:i]
+	}
+	switch seg {
+	case records.VaultMarkerDirName, knowledge.ObsidianMarkerDirName, ".git", ".trash":
+		return false
+	}
+	return true
 }
 
 // refreshLibraryWriteIndexes re-derives one note's rows in the text and

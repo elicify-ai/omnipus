@@ -270,3 +270,30 @@ views:
 	_, ok := vs.Get("projects--open")
 	assert.True(t, ok, "the previously derived view must survive the broken edit")
 }
+
+// TestLibraryContentPut_SaveInsideTheMarkerDirIsNotIndexed — the guard on the
+// post-save refresh: a note saved under the knowledge base's own
+// .omnipus-vault/ directory (a trashed note re-saved through the text editor,
+// reachable because the listing serves hidden entries on request) must NOT
+// re-enter the live properties index. The walker never descends into that
+// directory, so a row for it would be a live-searchable entry the next full
+// sync strips again as drift.
+func TestLibraryContentPut_SaveInsideTheMarkerDirIsNotIndexed(t *testing.T) {
+	api, ws, vault, _ := buildIndexedRecordVault(t)
+
+	trashed := recordTestWidgetNote("WD-0001", "Zombie", "open")
+	writeNote(t, vault, ".omnipus-vault/trash/w1.md", trashed)
+	w := putLibraryNoteContent(t, api, ws, "vault/.omnipus-vault/trash/w1.md", trashed,
+		libraryContentToken(t, api, ws, "vault/.omnipus-vault/trash/w1.md"))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	// The oracle is a RAW read of the properties store, not a typed find:
+	// the find revalidates coverage against a fresh walker scan and would
+	// silently self-heal the bogus row away (a full Sync that deletes it)
+	// before serving — which would pass this test for the wrong reason. The
+	// store itself is where the row would be written, and it does not heal.
+	text, found := storedPropText(t, api.homePath, vault, ".omnipus-vault/trash/w1.md", "name")
+	assert.False(t, found,
+		"a save inside the marker directory must not become a live properties-index row — the walker never descends there")
+	assert.Empty(t, text)
+}
