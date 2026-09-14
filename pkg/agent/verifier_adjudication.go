@@ -23,6 +23,8 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1531,7 +1533,39 @@ func (al *AgentLoop) runVerifierAdjudication(
 		cancel()
 		reportVerifierInjectionFlags(unitID, adjudicationID, flagged)
 
+		// UAT E-7: a verdict cut off at the Judge's output-token limit was never
+		// delivered. Before this branch the partial text went straight to
+		// parseJudgeResponse, failed as "unclosed JSON object", and every prose
+		// criterion was scored unmet as criterion_unjudgeable — consuming the
+		// goal's round and steering the worker with a raw parser error about
+		// work it had already finished. Withheld instead (see the
+		// "Judge-unavailable classification" section below), unless the partial
+		// still carries a complete verdict and only text after it was cut.
+		var truncated *verifierTruncatedTurnError
+		if errors.As(callErr, &truncated) {
+			if !truncatedVerdictIsComplete(truncated.partial, proseCriteria) {
+				reason = JudgeOutputTruncatedReasonPrefix + "the Judge's verdict was cut off at its output-token limit " +
+					"before it was complete, so no verdict was recorded; raise the Judge's max tokens or narrow the criteria"
+				logger.ErrorCF("agent",
+					"verifier: adjudication withheld — the Judge's verdict was truncated at its output-token limit",
+					map[string]any{"unit_id": unitID, "scope": in.Scope, "partial_chars": len(truncated.partial)})
+				return nil, "", "", true, reason, nil
+			}
+			content, callErr = truncated.partial, nil
+		}
+
 		if callErr != nil {
+			// UAT E-7: a refusal only an operator can clear is withheld at once,
+			// never retried on judgeRetryBackoff — waiting cannot fix it, and the
+			// retry loop only held the goal card on "judging" until the round
+			// timeout (the god-mode refusal above is the precedent).
+			if code, message, needsOperator := judgeDispatchNeedsOperator(callErr); needsOperator {
+				reason = JudgeMisconfiguredReasonPrefix + string(code) + ": " + message
+				logger.ErrorCF("agent",
+					"verifier: adjudication withheld — the Judge cannot run until an operator fixes its configuration",
+					map[string]any{"unit_id": unitID, "scope": in.Scope, "code": string(code), "error": callErr.Error()})
+				return nil, "", "", true, reason, nil
+			}
 			logger.WarnCF("agent", "verifier: turn failed; pausing (D7 unavailability)",
 				map[string]any{"error": callErr.Error()})
 			if waitErr := al.judgeBackoffWait(ctx, attempt, callErr.Error()); waitErr != nil {
@@ -1611,6 +1645,108 @@ func (al *AgentLoop) runVerifierAdjudication(
 		)
 		return out, judgeInst.Model, judgeInst.ID, false, "", missing
 	}
+}
+
+// --- Judge-unavailable classification (UAT E-7) -----------------------------
+//
+// Two verifier-dispatch outcomes mean the Judge is UNAVAILABLE, not that it
+// judged, and runVerifierAdjudication withholds both immediately — no verdict,
+// the round not consumed, the caller surfacing its own unavailable state (the
+// goal loop's judge_unavailable pill) — instead of entering the
+// judgeRetryBackoff loop, because waiting clears neither:
+//
+//   - the turn was refused for a cause only an operator can fix: the Judge's
+//     provider or model is not configured, its context window is unknown, or
+//     the provider rejected its credentials. Retrying only held the goal card
+//     on "judging" until the round timeout (the god-mode refusal above is the
+//     precedent for refusing to spin);
+//   - the turn ended at the output-token limit before its verdict was
+//     complete. The same request truncates the same way again (ADR-087 D1's
+//     rationale, translate_error.go's isRetryable).
+//
+// Transient failures (rate limit, network, 5xx, timeout, unclassified) keep the
+// existing backoff, bounded by the caller's ctx.
+
+// JudgeMisconfiguredReasonPrefix prefixes the Reason of an adjudication withheld
+// because the Judge's turn was refused for a cause only an operator can clear.
+// Distinct from VerifierGodModeRefusalReasonPrefix and from a transient-outage
+// reason, so the three are never merged in what the operator sees.
+const JudgeMisconfiguredReasonPrefix = "judge_misconfigured: "
+
+// JudgeOutputTruncatedReasonPrefix prefixes the Reason of an adjudication
+// withheld because the Judge's verdict was cut off at its output-token limit.
+const JudgeOutputTruncatedReasonPrefix = "judge_output_truncated: "
+
+// verifierTruncatedTurnError is dispatchVerifierTurn's report that the verifier
+// turn ended at the output-token limit — turnState.truncationReason ==
+// truncationReasonMaxOutputTokens (ADR-087 D4a/D4b) — with no turn error.
+// partial is whatever text the turn produced, possibly empty.
+type verifierTruncatedTurnError struct{ partial string }
+
+func (e *verifierTruncatedTurnError) Error() string {
+	return fmt.Sprintf("verifier turn ended at the output-token limit before its verdict was complete (%d chars produced)",
+		len(e.partial))
+}
+
+// judgeDispatchNeedsOperator reports whether a verifier turn error is a refusal
+// only an operator can clear, with its code and a Judge-specific message naming
+// the fix — never the raw provider body (ADR-051 §RD5 CRIT-001).
+//
+// Deliberately NOT llm.Message: the shared catalog copy for needs_provider is
+// the device-code "your sign-in expired" text (translate_error.go records that
+// ADR-067's pre-turn-gate producer of the same code is unreconciled), which
+// told an operator whose Judge names an unknown provider to sign in again —
+// observed live on the E-7 reproduction. The two needs_provider causes are
+// told apart by their sentinels.
+func judgeDispatchNeedsOperator(callErr error) (code LLMErrorCode, message string, needsOperator bool) {
+	llm := TranslateTurnError(callErr)
+	switch llm.Code {
+	case CodeNeedsProvider:
+		if errors.Is(callErr, providers.ErrProviderNeedsSignIn) {
+			return llm.Code, "the Judge's provider sign-in expired; sign in again under Settings → Providers", true
+		}
+		return llm.Code, "the Judge's provider is not configured; give the Judge agent a configured provider and model", true
+	case CodeModelUnassigned:
+		return llm.Code, "the Judge has no model assigned; assign one on the Judge agent", true
+	case CodeContextWindowUnknown:
+		return llm.Code, "the Judge's model reports no context window; set a context-window override for it", true
+	case CodeProviderAuthFailed:
+		return llm.Code, "the provider rejected the Judge's credentials; update the key under Settings → Providers", true
+	}
+	return llm.Code, "", false
+}
+
+// truncatedVerdictIsComplete reports whether a truncated turn's partial text
+// still carries a closed verdict object naming every prose criterion — the case
+// where the cap cut only text written after the verdict. A coverage check only:
+// the ordinary parse path still runs on the content afterwards, so dedupe,
+// grounding reports and the missing-criterion handling apply unchanged.
+func truncatedVerdictIsComplete(partial string, proseCriteria []task.AcceptanceCriterion) bool {
+	if len(proseCriteria) == 0 {
+		return false
+	}
+	jsonStr, err := extractJudgeJSON(partial)
+	if err != nil {
+		return false
+	}
+	var shape struct {
+		Criteria []struct {
+			ID string `json:"id"`
+		} `json:"criteria"`
+	}
+	if err := json.Unmarshal([]byte(jsonStr), &shape); err != nil {
+		return false
+	}
+	named := make(map[string]bool, len(shape.Criteria))
+	for _, c := range shape.Criteria {
+		named[c.ID] = true
+	}
+	for _, c := range proseCriteria {
+		if !named[c.ID] {
+			return false
+		}
+	}
+	return true
 }
 
 // --- the verifier turn's own dispatch (JUDGE-FR-030/FR-051/FR-052) ---------
@@ -1778,6 +1914,14 @@ func (al *AgentLoop) dispatchVerifierTurn(
 		// returned a non-nil error above). The caller treats empty content as
 		// criterion_unjudgeable, which is the honest classification.
 		return "", flagged, nil
+	}
+	// UAT E-7: a turn that ended at the output-token limit (ADR-087 D4a/D4b)
+	// returns NO error and its partial text as finalContent. Returning that as a
+	// finished answer is what scored a cut-off verdict "unclosed JSON object" →
+	// criterion_unjudgeable → unmet. Report it as what it is; the caller decides
+	// whether the partial still holds a complete verdict.
+	if ts.getTruncationReason() == truncationReasonMaxOutputTokens {
+		return "", flagged, &verifierTruncatedTurnError{partial: result.finalContent}
 	}
 	return result.finalContent, flagged, nil
 }

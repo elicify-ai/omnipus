@@ -74,6 +74,10 @@ const judgeCallTimeout = 120 * time.Second
 // cost-capped, a provider error, a timeout, or the Judge System Agent not
 // being resolvable at all) — never when it ran and produced no/invalid
 // verdict (that is fail-closed unmet, NFR-2, and DOES consume the attempt).
+// Two unavailable causes skip this schedule and are withheld at once, because
+// waiting clears neither: a refusal only an operator can fix, and a verdict cut
+// off at the output-token limit (which is NOT an invalid verdict — it was never
+// delivered). See verifier_adjudication.go's "Judge-unavailable classification".
 // Retries beyond the last entry repeat at the last (longest) interval — the
 // "normal cadence" the spec's Judge-unavailability dataset describes for the
 // 4th+ occurrence. Package vars (not consts) so tests can substitute a
@@ -264,12 +268,18 @@ type JudgeCriteriaResult struct {
 	// Verdict is set iff !Unavailable. A non-nil Verdict is ALWAYS a real
 	// verdict — never synthesized as "met" on absence of evidence (NFR-2).
 	Verdict *task.JudgeVerdict
-	// Unavailable means the Judge LLM call could not be completed AND the
-	// caller's ctx was canceled while JudgeCriteria was retrying with
-	// backoff (D7) — the caller MUST NOT consume an attempt/round or record
-	// a verdict for this outcome. JudgeCriteria itself retries forever on
-	// judge-unavailability (bounded only by ctx), so Unavailable is only
-	// ever observed when ctx was already canceled.
+	// Unavailable means no verdict could be produced — the caller MUST NOT
+	// consume an attempt/round or record a verdict for this outcome. It is
+	// returned when (a) the caller's ctx was canceled while JudgeCriteria was
+	// retrying a transient failure with backoff (D7); or, immediately and
+	// without any backoff, when (b) the Judge's turn was refused for a cause
+	// only an operator can clear (JudgeMisconfiguredReasonPrefix — unknown
+	// provider, no model, unknown context window, rejected credentials), (c)
+	// its verdict was cut off at the output-token limit
+	// (JudgeOutputTruncatedReasonPrefix), (d) god mode is active
+	// (VerifierGodModeRefusalReasonPrefix), or (e) a concurrent adjudication
+	// holds the unit. See verifier_adjudication.go's "Judge-unavailable
+	// classification" section (UAT E-7).
 	Unavailable bool
 	// Reason is a short, human-readable cause (unavailability cause, or a
 	// summary of the produced verdict).
@@ -288,15 +298,19 @@ type JudgeCriteriaResult struct {
 // judging standards are its SOUL (not a manually-injected system message —
 // the standard turn machinery injects it, exactly like any other agent).
 //
-// Unavailability (D7): if the Judge LLM call cannot be completed — SEC-26
-// rate-limited, daily-cost-capped, a provider error, a timeout, or the Judge
-// agent is not registered at all (e.g. a raw pkg/agent harness that never
-// ran coreagent.SeedConfig) — JudgeCriteria retries internally on the
-// cron-style backoff schedule (judgeRetryBackoff) FOREVER, respecting ctx
-// cancellation, and returns Unavailable=true ONLY if ctx is canceled
-// mid-backoff. Callers therefore see AT MOST ONE JudgeCriteria call per
-// attempt/round; internal judge-unavailability retries never surface as a
-// second, attempt-consuming call.
+// Unavailability (D7): if the Judge LLM call cannot be completed for a
+// TRANSIENT reason — SEC-26 rate-limited, daily-cost-capped, a network/5xx or
+// unclassified provider error, a timeout, or the Judge agent is not
+// registered at all (e.g. a raw pkg/agent harness that never ran
+// coreagent.SeedConfig) — JudgeCriteria retries internally on the cron-style
+// backoff schedule (judgeRetryBackoff), respecting ctx cancellation, and
+// returns Unavailable=true when ctx is canceled mid-backoff. A cause waiting
+// cannot clear returns Unavailable=true IMMEDIATELY, with no backoff: a refusal
+// only an operator can fix (unknown provider, no model, unknown context
+// window, rejected credentials) or a verdict cut off at the output-token limit
+// (UAT E-7 — see JudgeCriteriaResult.Unavailable). Callers therefore see AT
+// MOST ONE JudgeCriteria call per attempt/round; internal judge-unavailability
+// retries never surface as a second, attempt-consuming call.
 //
 // If Criteria contains no prose criterion, the Judge LLM is never called at
 // all — machine-only criteria adjudicate purely from real exit codes, and
