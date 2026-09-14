@@ -274,6 +274,12 @@ func (a *restAPI) copilotCheckWorkspace() string {
 // the operator hint (see listProviders). On this endpoint it degrades to
 // not_signed_in, which is exactly what SignInStatus.yaml prescribes for a login
 // that cannot be read.
+//
+// `check_failed` (the CLI could not be started, or timed out) degrades to
+// not_signed_in the same way, because the contract has no state or reason
+// field that could carry "the check itself failed". Until it does, the reason
+// is only in the server log below — every outcome other than signed_in and a
+// recognised not_signed_in is logged with the detail that produced it.
 func copilotSignInStatusResponse(res providers_pkg.CopilotSignInResult) gen.SignInStatus {
 	status := gen.SignInStatus{State: gen.SignInStatusStateNotSignedIn}
 
@@ -290,10 +296,22 @@ func copilotSignInStatusResponse(res providers_pkg.CopilotSignInResult) gen.Sign
 		}
 	case providers_pkg.CopilotSignInExpired:
 		status.State = gen.SignInStatusStateExpired
+		// This is the answer that sends the operator to sign in again, so the
+		// text that produced it must be findable afterwards.
+		slog.Warn("copilot sign-in check: the CLI's login was rejected; reporting expired",
+			"provider", copilotProviderID, "detail", res.Detail)
+	case providers_pkg.CopilotCheckFailed:
+		slog.Warn("copilot sign-in check could not run; reporting not_signed_in, which says nothing about the login",
+			"provider", copilotProviderID, "detail", res.Detail)
 	case providers_pkg.CopilotCLIMissing:
 		slog.Warn("copilot sign-in status requested but the CLI is not installed",
 			"provider", copilotProviderID, "hint", providers_pkg.CopilotCLIMissingHint)
 	case providers_pkg.CopilotNotSignedIn:
+		// A recognised message needs no log; an unrecognised one was already
+		// logged, with its text, by the classifier.
+	default:
+		slog.Error("copilot sign-in check returned an unknown state; reporting not_signed_in",
+			"provider", copilotProviderID, "state", string(res.State), "detail", res.Detail)
 	}
 
 	return status

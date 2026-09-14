@@ -8,6 +8,7 @@ package providers
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"os/exec"
 	"regexp"
@@ -32,6 +33,12 @@ const (
 	// CopilotSignInExpired — the CLI has a credential and the vendor rejected
 	// it (expired, revoked or otherwise invalid).
 	CopilotSignInExpired CopilotSignInState = "expired"
+	// CopilotCheckFailed — the check never produced an answer about the login:
+	// the CLI could not be started, or it did not finish before the deadline.
+	// That is a fact about this run, not the account, so it is never classified
+	// into a sign-in state. SignInStatus has no wire state or reason field for
+	// it; the gateway answers not_signed_in and logs why.
+	CopilotCheckFailed CopilotSignInState = "check_failed"
 )
 
 // CopilotCLIMissingHint is the operator-facing reason shown on the provider row
@@ -176,6 +183,21 @@ func CopilotSignIn(ctx context.Context, command, workspace string) CopilotSignIn
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
+		// A run that never answered says nothing about the login, and its Go
+		// error names the binary's path: never hand it to the classifier.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return CopilotSignInResult{
+				State:  CopilotCheckFailed,
+				Detail: "the copilot cli sign-in check did not finish: " + ctxErr.Error(),
+			}
+		}
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			return CopilotSignInResult{
+				State:  CopilotCheckFailed,
+				Detail: "could not start the copilot cli: " + err.Error(),
+			}
+		}
 		detail := strings.TrimSpace(stderr.String())
 		if detail == "" {
 			detail = err.Error()
