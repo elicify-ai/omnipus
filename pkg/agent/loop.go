@@ -12910,6 +12910,9 @@ turnLoop:
 			// toolCBSig computed before dispatch/hooks so a hook renaming the
 			// tool does not fragment the streak it is meant to track.
 			if toolResult.IsError {
+				// A failure ends any identical-SUCCESS run; identical failures
+				// are the failure streak's job.
+				ts.resetToolSuccessRepeat()
 				streak := ts.recordToolFailure(toolCBSig)
 				switch {
 				case streak >= toolFailureCircuitBreakThreshold:
@@ -12921,6 +12924,16 @@ turnLoop:
 				}
 			} else {
 				ts.recordToolSuccess(toolCBSig)
+				// Identical SUCCESSFUL repetition (tool_failure_circuit_breaker.go):
+				// warn the model, and at the stop threshold end the turn after
+				// this round (the takeToolRepeatStop check after the tool loop).
+				switch run := ts.recordToolSuccessRepeat(toolCBSig); {
+				case run >= toolRepeatStopThreshold:
+					ts.requestToolRepeatStop(toolRepeatStopNotice(toolName, run))
+					toolResult.ForLLM = toolResult.ContentForLLM() + toolRepeatWarnNotice(toolName, run)
+				case run >= toolRepeatWarnThreshold:
+					toolResult.ForLLM = toolResult.ContentForLLM() + toolRepeatWarnNotice(toolName, run)
+				}
 			}
 			// Always deliver any media the tool produced AND tag the result with
 			// artifact references so the LLM can reason about them in the
@@ -13437,6 +13450,29 @@ turnLoop:
 		logger.DebugCF("agent", "TTL tick after tool execution", map[string]any{
 			"agent_id": ts.agent.ID, "iteration": iteration,
 		})
+
+		// Identical SUCCESSFUL repetition reached toolRepeatStopThreshold this
+		// round (tool_failure_circuit_breaker.go). Every tool result of the
+		// round is already recorded, so the history stays well-formed; end the
+		// turn through the same finalization path the iteration cap uses, with
+		// a visible final message instead of another provider round. A queued
+		// user message is new input: let it through and restart the count.
+		if notice := ts.takeToolRepeatStop(); notice != "" {
+			if len(pendingMessages) > 0 {
+				ts.resetToolSuccessRepeat()
+			} else {
+				logger.WarnCF("agent", "Turn stopped: an identical tool call kept succeeding without progress",
+					map[string]any{
+						"agent_id":  ts.agent.ID,
+						"turn_id":   ts.turnID,
+						"iteration": iteration,
+						"threshold": toolRepeatStopThreshold,
+					})
+				finalContent = notice
+				ts.markTurnFailed()
+				break turnLoop
+			}
+		}
 	}
 
 	// ADR-071 §4.3.1(a): advance and sweep this bucket's search-promotion

@@ -585,6 +585,18 @@ type turnState struct {
 	// loop.go's SEC-26-adjacent circuit-breaker check right before the
 	// tool dispatch call.
 	toolCircuitBroken map[string]string
+
+	// toolRepeatSig and toolRepeatRun track the current run of consecutive
+	// SUCCESSFUL dispatches of one identical (tool name + arguments)
+	// signature, with no other dispatched tool call in between (see
+	// tool_failure_circuit_breaker.go). Any different signature or any failure
+	// ends the run. toolRepeatStopNotice is set once the run reaches
+	// toolRepeatStopThreshold and is consumed at the end of that round, which
+	// ends the turn with the notice as its final content. All three are
+	// guarded by mu, like the failure-streak fields above.
+	toolRepeatSig        string
+	toolRepeatRun        int
+	toolRepeatStopNotice string
 }
 
 // atomicToolCallProgress is the atomics-based store for turnState's live
