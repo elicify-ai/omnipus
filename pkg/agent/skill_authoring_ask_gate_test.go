@@ -113,7 +113,17 @@ func TestRunTurn_AvaCreateSkillAskPolicy_RealSeed(t *testing.T) {
 	// resolution ladder.
 	cfg.Agents.Defaults.DefaultAgentID = string(coreagent.IDAva)
 
+	// DefaultConfig ships tools-on-demand ON, and create_skill is a lazy tool:
+	// on a compressed request it is offered to the model only after ToolSearch
+	// loads it (ADR-071: "callable only after load_tool promotes it"). A real
+	// model therefore loads it first — the offered-tool gate
+	// (tool_offer_gate.go) refuses a direct call to a never-loaded lazy tool
+	// before any approval prompt, which would never reach the ask gate this
+	// test exists to prove. Script that real production sequence: ToolSearch
+	// (seeded allow for every core agent, pkg/coreagent/core.go) loads
+	// create_skill, then create_skill is called and must go to the approver.
 	provider := testutil.NewScenario().
+		WithToolCall("ToolSearch", `{"names":["create_skill"]}`).
 		WithToolCall("create_skill", `{"name":"uat-s67","content":"---\nname: uat-s67\ndescription: debug\n---\nbody"}`).
 		WithText("done")
 

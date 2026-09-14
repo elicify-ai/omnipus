@@ -158,6 +158,17 @@ func newNestedDelegationAgentLoop(t *testing.T) *AgentLoop {
 		},
 	}
 	cfg := &config.Config{
+		// ToolSearch as real seeded allow data on the global ceiling — the same
+		// grant subturn_transcript_nesting_test.go carries, for the same reason.
+		// CLAUDE.md hard constraint 6: a bare config with no entry for a tool on
+		// either side fails closed to deny, and ToolSearch's former code-level
+		// force-allow is gone (#438). Without this grant ray's ToolSearch call
+		// was denied at execution time by the policy re-check ("permission_denied
+		// (mid-turn policy change)") — so these tests were not exercising the
+		// ToolSearch-then-delegate path even before the offered-tool gate.
+		Sandbox: config.OmnipusSandboxConfig{
+			ToolPolicies: map[string]string{"ToolSearch": "allow"},
+		},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:              tmpDir,
@@ -189,6 +200,18 @@ func newNestedDelegationAgentLoop(t *testing.T) *AgentLoop {
 			},
 		},
 	}
+	// Tools-on-demand ON, the shipped default (pkg/config/defaults.go:
+	// Manifest.Compressed = true). Every test on this helper scripts ray to
+	// call ToolSearch before delegating — the UAT repro's "successful
+	// ToolSearch(names=["delegate"])". ToolSearch is only OFFERED to the model
+	// on a compressed request (buildCompressedToolDefs force-includes it; the
+	// non-compressed path strips it: "has no function when compression is
+	// off, so the model never sees it there"). With this config at its zero
+	// value (off) the offered-tool gate (tool_offer_gate.go) correctly refused
+	// that ToolSearch call, and these tests quietly stopped exercising the
+	// ToolSearch-then-delegate path they were written for. delegate is a
+	// full-tier tool, so it is offered on every compressed request either way.
+	cfg.Tools.Manifest.Compressed = true
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
 
@@ -281,6 +304,29 @@ func assertNoDelegateDeniedByPolicy(t *testing.T, c *eventCollector) {
 		assert.NotEqual(t, "delegate", p.Tool,
 			"delegate must never be denied by the FR-079 TOCTOU policy gate inside a "+
 				"delegated sub-turn — reason: %q (this is the exact live-bug signature)", p.Reason)
+	}
+}
+
+// assertToolSearchNotRefused fails the test if ray's scripted ToolSearch call
+// was skipped instead of executed. Without it, every test on this helper kept
+// passing after the offered-tool gate (tool_offer_gate.go) started refusing
+// that call on a non-compressed request: the delegate hop still succeeded, so
+// nothing noticed the ToolSearch-then-delegate path this file exists to cover
+// had quietly stopped running.
+func assertToolSearchNotRefused(t *testing.T, c *eventCollector) {
+	t.Helper()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, e := range c.events {
+		if e.Kind != EventKindToolExecSkipped {
+			continue
+		}
+		p, ok := e.Payload.(ToolExecSkippedPayload)
+		if !ok {
+			continue
+		}
+		assert.NotEqual(t, "ToolSearch", p.Tool,
+			"ray's ToolSearch call must execute, not be skipped — reason: %q", p.Reason)
 	}
 }
 
@@ -389,6 +435,7 @@ func TestNestedDelegate_Await(t *testing.T) {
 	assert.Contains(t, ids, "planner", "must have spawned planner (hop 2, ray's own nested delegate call)")
 
 	assertNoDelegateDeniedByPolicy(t, collector)
+	assertToolSearchNotRefused(t, collector)
 
 	assert.Equal(t, 0, raySeq.Remaining(), "ray's full scripted sequence must have been consumed")
 	assert.Equal(t, 0, plannerSeq.Remaining(), "planner's full scripted sequence must have been consumed")
@@ -465,6 +512,7 @@ func TestNestedDelegate_Background(t *testing.T) {
 	assert.Contains(t, ids, "planner", "must have spawned planner (hop 2, ray's own nested async delegate call)")
 
 	assertNoDelegateDeniedByPolicy(t, collector)
+	assertToolSearchNotRefused(t, collector)
 
 	// planner's turn runs in a detached background goroutine (Critical: true,
 	// per DelegateTool.executeAsync's doc comment) — give it a moment to
@@ -585,6 +633,7 @@ func TestNestedDelegate_TrustGraphDenialDoesNotPoisonSubsequentCalls(t *testing.
 	// ToolExecSkipped event for "delegate" — this is the DelegationDeniedResult
 	// out-of-scope boundary named by ADR-058 §1.
 	assertNoDelegateDeniedByPolicy(t, collector)
+	assertToolSearchNotRefused(t, collector)
 
 	assert.Equal(t, 0, raySeq.Remaining(),
 		"ray's full 4-step scripted sequence must have been consumed — a stuck remainder "+
