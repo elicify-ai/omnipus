@@ -1,0 +1,33 @@
+<!doctype html><meta charset="utf-8"><title>Shared CPU mixed input stress</title>
+<style>
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#151515;color:white;font:16px sans-serif}canvas{position:fixed;inset:0;width:100%;height:100%;pointer-events:none}input,button,#scroll,#drag{position:fixed;box-sizing:border-box}input{left:8%;top:64%;width:38%;height:9%;font-size:20px}button{left:54%;top:64%;width:38%;height:9%;font-size:20px}#scroll{left:8%;top:78%;width:38%;height:17%;overflow:auto;background:#183650}#scroll>div{height:2000px;background:repeating-linear-gradient(#183650 0px,#183650 49px,#276c91 50px,#276c91 99px)}#drag{left:54%;top:78%;width:38%;height:17%;background:#335522;touch-action:none;user-select:none}
+</style>
+<canvas id="pixels"></canvas><input id="text" aria-label="Exact Unicode text"><button id="click">Count click</button><div id="scroll"><div>Scroll exactly 300 CSS pixels</div></div><div id="drag">Drag left to right</div>
+<script>
+const nonce=Number(new URL(location.href).searchParams.get('nonce'));
+if(!Number.isInteger(nonce)||nonce<1||nonce>65535)throw Error('Valid fixture nonce required');
+const text=document.getElementById('text'),button=document.getElementById('click'),scroll=document.getElementById('scroll'),drag=document.getElementById('drag'),canvas=document.getElementById('pixels'),ctx=canvas.getContext('2d');
+const state={nonce,clicks:0,downs:0,ups:0,held:0,scroll:0,drags:0,errors:0};
+let dragging=false;
+const delay=Number(new URL(location.href).searchParams.get('delay')||0);
+if(![0,120].includes(delay))throw Error('Invalid deliberate delay');
+function busy(ms){const end=performance.now()+ms;while(performance.now()<end){}}
+function paint(){
+ const w=canvas.width=innerWidth,h=canvas.height=innerHeight;
+ ctx.fillStyle='#ff00ff';ctx.fillRect(0,0,w,h);ctx.fillStyle='#151515';ctx.fillRect(w*.025,h*.025,w*.95,h*.95);
+ const words=[...Object.values(state),...Array.from({length:32},(_,i)=>text.value.charCodeAt(i)||0)];
+ const bits=[];words.forEach((v,index)=>{for(let i=0;i<(index<8?32:16);i++)bits.push((v>>>i)&1)});
+ bits.forEach((b,i)=>{ctx.fillStyle=b?'#fff':'#000';ctx.fillRect(w*(.1+(i%32)*.8/32),h*(.06+Math.floor(i/32)*.5/24),w*.8/32,h*.5/24)});
+}
+function trusted(e){if(!e.isTrusted)state.errors++;}
+button.addEventListener('click',e=>{trusted(e);state.clicks++;paint()});
+text.addEventListener('input',e=>{trusted(e);if(text.value.length>32)state.errors++;paint()});
+scroll.addEventListener('wheel',e=>{trusted(e);e.preventDefault();busy(delay?75:0);state.scroll+=e.deltaY;paint()},{passive:false});
+addEventListener('mousedown',e=>{trusted(e);state.downs++;state.held|=1;paint()});
+addEventListener('mouseup',e=>{trusted(e);state.ups++;state.held&=~1;paint()});
+addEventListener('keydown',e=>{if(e.code==='ArrowLeft'){trusted(e);e.preventDefault();busy(delay);state.downs++;state.held|=2;paint()}});
+addEventListener('keyup',e=>{if(e.code==='ArrowLeft'){trusted(e);e.preventDefault();state.ups++;state.held&=~2;paint()}});
+drag.addEventListener('pointerdown',e=>{trusted(e);const r=drag.getBoundingClientRect();dragging=e.clientX<r.left+r.width*.35;drag.setPointerCapture(e.pointerId)});
+drag.addEventListener('pointerup',e=>{trusted(e);const r=drag.getBoundingClientRect();if(dragging&&e.clientX>r.left+r.width*.7)state.drags++;else state.errors++;dragging=false;paint()});
+addEventListener('resize',paint);paint();
+</script>

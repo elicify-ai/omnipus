@@ -715,7 +715,7 @@ export interface BrowserCaptureAnswerFrame {
 
 export interface BrowserCaptureControlFrame {
   type: "browser_capture_control";
-  action: "recapture" | "shutdown" | "ping" | "adapt_reset" | "set_bitrate";
+  action: "recapture" | "shutdown" | "ping" | "adapt_reset" | "set_bitrate" | "input_pressure";
   reason?: string;
   max_bitrate?: number;
   expected_width?: number;

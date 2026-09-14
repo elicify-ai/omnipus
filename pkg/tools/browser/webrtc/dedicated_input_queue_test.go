@@ -772,3 +772,98 @@ func TestDedicatedInputQueueExpiryAllowsExplicitControlRecovery(t *testing.T) {
 		}
 	})
 }
+
+// Bounded-work contract: merging a compatible pending wheel consumes no new
+// slot, but adding any distinct action must still respect the capacity limit.
+func TestDedicatedInputQueueWheelCapacityAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		pending     int
+		kind        string
+		delta       float64
+		gap         bool
+		wantFailure string
+	}{
+		{"merge at capacity", inputQueueCapacity, "wheel", 20, false, ""},
+		{"distinct below capacity", inputQueueCapacity - 1, "wheel", -20, false, ""},
+		{"distinct at capacity", inputQueueCapacity, "wheel", -20, false, "reliable input queue full"},
+		{"text at capacity", inputQueueCapacity, "text", 20, false, "reliable input queue full"},
+		{"sequence gap cannot merge", inputQueueCapacity, "wheel", 20, true, "invalid reliable sequence"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				entered, release := make(chan struct{}), make(chan struct{})
+				var delivered []generated.BrowserInputFrame
+				var failures []string
+				q := newDedicatedInputQueue(context.Background(), 1, 0, func(ctx context.Context, f generated.BrowserInputFrame) {
+					if *f.ReliableSeq == 1 {
+						close(entered)
+						select {
+						case <-release:
+						case <-ctx.Done():
+							return
+						}
+					}
+					delivered = append(delivered, f)
+				}, func(reason string) { failures = append(failures, reason) })
+				defer q.close()
+				q.submit(false, pressureWheel(1, 0, 1))
+				<-entered
+				for seq := 2; seq <= tc.pending; seq++ {
+					f := pressureWheel(seq, 0, 0)
+					f.Kind = "text"
+					text := "@日本"
+					f.Text = &text
+					q.submit(false, f)
+				}
+				q.submit(false, pressureWheel(tc.pending+1, 0, 10))
+				seq := tc.pending + 2
+				if tc.gap {
+					seq++
+				}
+				next := pressureWheel(seq, 0, tc.delta)
+				next.Kind = tc.kind
+				q.submit(false, next)
+				if tc.wantFailure != "" {
+					if !reflect.DeepEqual(failures, []string{tc.wantFailure}) {
+						t.Fatalf("failures=%v want [%s]", failures, tc.wantFailure)
+					}
+					synctest.Wait()
+					if len(delivered) != 0 {
+						t.Fatalf("canceled queue delivered %d actions", len(delivered))
+					}
+					return
+				}
+				if len(failures) != 0 {
+					t.Fatalf("compatible admission failed: %v", failures)
+				}
+				close(release)
+				synctest.Wait()
+				wantCount := tc.pending + 2
+				if tc.delta > 0 {
+					wantCount--
+				}
+				if len(delivered) != wantCount {
+					t.Fatalf("delivered=%d want %d", len(delivered), wantCount)
+				}
+				for i := 1; i < tc.pending; i++ {
+					if delivered[i].Kind != "text" || *delivered[i].Text != "@日本" || *delivered[i].ReliableSeq != i+1 {
+						t.Fatalf("typed text or ordering changed at %d", i)
+					}
+				}
+				wantDelta := tc.delta
+				if tc.delta > 0 {
+					wantDelta += 10
+				}
+				if got := *delivered[len(delivered)-1].DeltaY; got != wantDelta {
+					t.Fatalf("last wheel delta=%v want %v", got, wantDelta)
+				}
+				q.submit(false, pressureWheel(seq+1, 0, 5))
+				synctest.Wait()
+				if len(failures) != 0 || len(delivered) != wantCount+1 || *delivered[len(delivered)-1].ReliableSeq != seq+1 {
+					t.Fatalf("next sequential input lost: failures=%v count=%d", failures, len(delivered))
+				}
+			})
+		})
+	}
+}

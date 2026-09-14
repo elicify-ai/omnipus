@@ -11,6 +11,8 @@ interface Options { // not-wire-format: local dependency injection and lifecycle
   sendOffer: (offer: BrowserInputOffer) => boolean
   onState: (state: BrowserInputState, reason?: string) => void
   onFailure?: () => boolean
+  automaticRecoveryIdentity?: (ack?: BrowserInputControlAckFrame) => string | null
+  onAutomaticRecovery?: () => void
 }
 
 /** Data-only peer owned by one socket attachment. Failed actions are never replayed. */
@@ -34,6 +36,9 @@ export class BrowserInputWebRTCSession {
   private answered = false
   private applyingAnswer = false
   private pressurePaused = false
+  private automaticRecoveryUsed = false
+  private automaticIdentity: string | null = null
+  private automaticControl: number | null = null
   private failedControl: number | null = null
   private failedReleaseControl: number | null = null
   private wanted = false
@@ -61,6 +66,8 @@ export class BrowserInputWebRTCSession {
     this.cleanup()
     if (!Number.isSafeInteger(this.epoch + 1)) { this.fail('Input connection identity exhausted.'); return }
     this.epoch++
+    this.automaticRecoveryUsed = false
+    this.cancelAutomaticRecovery()
     this.offeredControl = this.control
     this.reliableSequence = this.hoverSequence = this.barrier = 0
     this.held.clear()
@@ -70,9 +77,15 @@ export class BrowserInputWebRTCSession {
     void this.offer()
   }
 
+  cancelAutomaticRecovery(): void {
+    this.automaticIdentity = null
+    this.automaticControl = null
+  }
+
   resume(): void {
     if (!this.pressurePaused || this.awaitingControl) return
     this.pressurePaused = false
+    this.cancelAutomaticRecovery()
     this.wanted = true
     this.updateReady()
   }
@@ -147,6 +160,9 @@ export class BrowserInputWebRTCSession {
         this.fail('Browser fell behind and the input connection closed. Retry input.')
         return
       }
+      // Snapshot before paused-state callbacks clear local held bookkeeping.
+      this.automaticIdentity = !this.automaticRecoveryUsed && this.held.size === 0 ? this.options.automaticRecoveryIdentity?.() ?? null : null
+      this.automaticControl = this.automaticIdentity ? this.control + 1 : null
       this.pressurePaused = true
       this.wanted = false
       this.held.clear()
@@ -161,6 +177,7 @@ export class BrowserInputWebRTCSession {
   beginControl(): number | null {
     if (!Number.isSafeInteger(this.control + 1)) { this.fail('Input control identity exhausted.'); return null }
     this.control++
+    if (this.automaticControl !== this.control) this.cancelAutomaticRecovery()
     this.reliableSequence = this.hoverSequence = this.barrier = 0
     // A local attempt has no server identity until its offer is on the socket.
     // Keep signaled peers alive: the original answer still completes their SDP.
@@ -186,7 +203,17 @@ export class BrowserInputWebRTCSession {
     this.acknowledgedControl = this.control
     this.clearTimer()
     if (!this.pc && this.wanted) this.start()
-    else if (this.pc && this.pressurePaused) this.change('paused', 'Browser fell behind. Input paused.')
+    else if (this.pc && this.pressurePaused) {
+      const eligible = !this.automaticRecoveryUsed && this.automaticControl === this.control && this.automaticIdentity !== null
+        && this.options.automaticRecoveryIdentity?.(frame) === this.automaticIdentity
+        && this.pc.connectionState === 'connected' && this.reliable?.readyState === 'open' && this.hover?.readyState === 'open'
+      this.cancelAutomaticRecovery()
+      if (eligible) {
+        this.automaticRecoveryUsed = true
+        this.resume()
+        this.options.onAutomaticRecovery?.()
+      } else this.change('paused', 'Browser fell behind. Input paused.')
+    }
     else if (this.pc) {
       this.armTimeout('Input connection timed out. Retry input.')
       this.updateReady()
@@ -195,6 +222,7 @@ export class BrowserInputWebRTCSession {
   }
 
   sendInput(input: Input): boolean {
+    if (this.pressurePaused) this.cancelAutomaticRecovery()
     if (this.currentState !== 'ready' || !this.pc) return false
     const transition = ['mouse_down', 'mouse_up', 'key_down', 'key_up'].includes(input.kind)
     const hover = input.kind === 'mouse_move' && this.held.size === 0 && (input.modifiers ?? 0) === 0
@@ -224,6 +252,7 @@ export class BrowserInputWebRTCSession {
 
   fail(reason: string): void {
     if (this.currentState === 'failed' && !this.pc && this.awaitingRetirement) return
+    this.cancelAutomaticRecovery()
     this.failedControl = this.control
     this.failedReleaseControl = null
     this.pressurePaused = false
@@ -240,7 +269,7 @@ export class BrowserInputWebRTCSession {
       else this.retirementRejected = true
     }
   }
-  stop(): void { this.pressurePaused = false; this.failedControl = this.failedReleaseControl = null; this.wanted = false; this.cleanup(); this.change('idle') }
+  stop(): void { this.cancelAutomaticRecovery(); this.pressurePaused = false; this.failedControl = this.failedReleaseControl = null; this.wanted = false; this.cleanup(); this.change('idle') }
   private updateReady(): void {
     if (this.pressurePaused || !this.pc || !this.answered || this.reliable?.readyState !== 'open' || this.hover?.readyState !== 'open') return
     if (this.control !== this.acknowledgedControl) return

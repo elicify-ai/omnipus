@@ -22,7 +22,7 @@
 //   -> {type: 'browser_capture_hello',   token, ext_version}
 //   -> {type: 'browser_capture_offer',   sdp, capture_generation, target_id, offer_id}
 //   <- {type: 'browser_capture_answer',  sdp, capture_generation, target_id, offer_id}
-//   <-  {type: 'browser_capture_control', action: recapture|shutdown|adapt_reset|set_bitrate, reason?, capture_generation?, target_id?, expected_width?, expected_height?, capture_scale?, max_bitrate?}  (server -> client)
+//   <-  {type: 'browser_capture_control', action: recapture|shutdown|adapt_reset|set_bitrate|input_pressure, reason?, capture_generation?, target_id?, expected_width?, expected_height?, capture_scale?, max_bitrate?}  (server -> client)
 //   ->  {type: 'browser_capture_control', action: ping, capture_generation?, target_id?, capture_health?}                        (client -> server)
 //
 // expected_width/expected_height (2026-07-31 follow-up,
@@ -393,6 +393,85 @@ function clearOfferAnswerTimeout() {
 // The gateway sees the real receiver reports and sends the answer down.
 let viewerBitrateCeiling = 0;
 
+// Browser command pressure takes priority over video detail. Signals are
+// server-local Chrome response delays, not a measurement of network latency.
+const INPUT_PRESSURE_FPS = [0, 20, 15];
+const INPUT_PRESSURE_SETTLE_MS = 1000;
+const INPUT_PRESSURE_RECOVER_MS = 10000;
+let inputPressureIndex = 0;
+let inputPressureChangedAt = 0;
+let inputPressureLastAt = 0;
+let inputPressureApplying = null;
+let inputPressureNeedsApply = false;
+const inputPressureTrackConstraints = new WeakMap();
+
+async function applyInputPressure(pc) {
+  // One worker applies the latest desired state; signals never queue a new
+  // getParameters/applyConstraints pair for every delayed input.
+  if (inputPressureApplying) return inputPressureApplying;
+  const generation = captureGeneration;
+  const current = () => currentPC === pc && captureGeneration === generation && !shuttingDown;
+  inputPressureApplying = (async () => {
+    let applied;
+    do {
+      const index = inputPressureIndex;
+      const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
+      if (!sender || !current()) return;
+      const track = sender.track;
+      if (!inputPressureTrackConstraints.has(track)) {
+        inputPressureTrackConstraints.set(track, track.getConstraints());
+      }
+      const original = inputPressureTrackConstraints.get(track);
+      const constraints = { ...original };
+      if (index > 0) {
+        const rate = typeof original.frameRate === 'object' ? original.frameRate : {};
+        const ceiling = Math.min(INPUT_PRESSURE_FPS[index], typeof rate.max === 'number' ? rate.max : 30);
+        constraints.frameRate = { ...rate, max: ceiling };
+        if (typeof rate.min === 'number') constraints.frameRate.min = Math.min(rate.min, ceiling);
+      }
+      await track.applyConstraints(constraints);
+      if (!current() || sender.track !== track) return;
+      await queueSenderParams(async () => {
+        if (!current() || sender.track !== track) return;
+        const params = sender.getParameters();
+        if (!encodingsNegotiated(params)) return;
+        if (index > 0) params.encodings[0].maxFramerate = INPUT_PRESSURE_FPS[index];
+        else delete params.encodings[0].maxFramerate;
+        await sender.setParameters(params);
+      });
+      if (!current()) return;
+      applied = index;
+      inputPressureNeedsApply = index !== inputPressureIndex;
+      window.__omnipusState.inputPressure = { maxFramerate: INPUT_PRESSURE_FPS[index], at: Date.now() };
+      record('input pressure: video ceiling ' + (INPUT_PRESSURE_FPS[index] || 'normal'));
+    } while (applied !== inputPressureIndex && current());
+  })().catch(e => {
+    if (current()) reportAdaptFailure('input pressure constraints failed: ' + String(e));
+  }).finally(() => { inputPressureApplying = null; });
+  return inputPressureApplying;
+}
+
+async function noteInputPressure(pc) {
+  const now = Date.now();
+  inputPressureLastAt = now;
+  inputPressureNeedsApply = true;
+  if (inputPressureIndex === 0 || now - inputPressureChangedAt >= INPUT_PRESSURE_SETTLE_MS) {
+    inputPressureIndex = Math.min(inputPressureIndex + 1, INPUT_PRESSURE_FPS.length - 1);
+    inputPressureChangedAt = now;
+  }
+  if (pc) await applyInputPressure(pc);
+}
+
+async function recoverInputPressure(pc) {
+  const now = Date.now();
+  if (inputPressureIndex > 0 && now - Math.max(inputPressureLastAt, inputPressureChangedAt) >= INPUT_PRESSURE_RECOVER_MS) {
+    inputPressureIndex -= 1;
+    inputPressureChangedAt = now;
+    inputPressureNeedsApply = true;
+  }
+  if (inputPressureNeedsApply) await applyInputPressure(pc);
+}
+
 let senderParamsChain = Promise.resolve();
 function queueSenderParams(fn) {
   const run = function () { return Promise.resolve().then(fn); };
@@ -434,6 +513,12 @@ function applyVideoSenderConstraints(pc, opts) {
     return;
   }
   const videoTrack = sender.track;
+  // Same-PC recapture replaces the source track without restarting the
+  // adaptation timer. Carry current pressure onto that new source too.
+  if (inputPressureIndex > 0 && !inputPressureTrackConstraints.has(videoTrack)) {
+    inputPressureNeedsApply = true;
+    applyInputPressure(pc);
+  }
 
   const cfg = window.__omnipusCapture || {};
   const baseBitrate =
@@ -473,6 +558,8 @@ function applyVideoSenderConstraints(pc, opts) {
       return;
     }
     params.encodings[0].maxBitrate = maxBitrate;
+    if (inputPressureIndex > 0) params.encodings[0].maxFramerate = INPUT_PRESSURE_FPS[inputPressureIndex];
+    else delete params.encodings[0].maxFramerate;
     // degradationPreference 'maintain-resolution' (previously 'balanced' --
     // see docs/internal/browser-viewport-input-rootcause-2026-07-31.md,
     // fault 2). The original rationale for 'balanced' was that the captured
@@ -999,6 +1086,8 @@ async function adaptTick(pcOverride, nowOverride) {
     captureGeneration === generation && adaptEpoch === epoch;
   adaptTickInFlight = true;
   try {
+    await recoverInputPressure(pc);
+    if (!current()) return null;
     let sample;
     try {
       sample = await readVideoSenderSample(pc, current);
@@ -1066,6 +1155,7 @@ async function adaptTick(pcOverride, nowOverride) {
 }
 
 function startQualityAdaptLoop() {
+  if (inputPressureIndex > 0) inputPressureNeedsApply = true;
   if (adaptTimer) return;
   noteAdaptCycleStarted();
   adaptTimer = setInterval(() => {
@@ -1736,13 +1826,18 @@ function sendFrame(frame) {
 }
 
 // handleControlFrame handles the SERVER -> CLIENT control actions
-// (recapture, shutdown, adapt_reset, set_bitrate). `ping` is this page's own CLIENT -> SERVER health
+// (recapture, shutdown, adapt_reset, set_bitrate, input_pressure). `ping` is this page's own CLIENT -> SERVER health
 // beacon (see startPingBeacon) — the gateway never sends ping to us, and
 // there is no `pong` action in the schema, so neither is handled as an
 // inbound case here.
 async function handleControlFrame(msg) {
   const action = msg.action;
   record('control frame: action=' + action + (msg.reason ? ' reason=' + msg.reason : ''));
+
+  if (action === 'input_pressure') {
+    await noteInputPressure(currentPC);
+    return;
+  }
 
   if (action === 'set_bitrate') {
     const bps = typeof msg.max_bitrate === 'number' && isFinite(msg.max_bitrate) ? msg.max_bitrate : 0;

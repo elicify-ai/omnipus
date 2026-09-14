@@ -250,6 +250,12 @@ func (q *dedicatedInputQueue) enqueueLocked(hover bool, f generated.BrowserInput
 		if nextBarrier > maxInputSequence || *f.GestureBarrier != nextBarrier {
 			return "invalid gesture barrier"
 		}
+		// A compatible pending wheel adds no waiting work, even at capacity.
+		// Validate sequence/barrier first and retain the oldest queue deadline.
+		if len(q.frames) > 0 && len(q.held) == 0 && mergePendingWheel(&q.frames[len(q.frames)-1], f) {
+			q.reliable = *f.ReliableSeq
+			return ""
+		}
 		if len(q.frames) >= inputQueueCapacity {
 			return "reliable input queue full"
 		}
@@ -274,9 +280,6 @@ func (q *dedicatedInputQueue) enqueueLocked(hover bool, f generated.BrowserInput
 			} else {
 				delete(q.held, key)
 			}
-		}
-		if len(q.frames) > 0 && len(q.held) == 0 && mergePendingWheel(&q.frames[len(q.frames)-1], f) {
-			return ""
 		}
 		q.frames = append(q.frames, queuedDedicatedInput{frame: f, enqueued: time.Now(), firstReliableSeq: *f.ReliableSeq, lastReliableSeq: *f.ReliableSeq, inputCount: 1})
 		if len(q.frames) == 1 {

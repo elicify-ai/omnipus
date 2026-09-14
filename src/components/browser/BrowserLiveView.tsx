@@ -955,6 +955,17 @@ export function BrowserLiveView({
     const inputMachine = new BrowserInputWebRTCSession({
       sendOffer: (offer) => wsRef.current?.sendInputOffer(offer) ?? false,
       onFailure: () => wsRef.current?.sendControl('release') ?? false,
+      automaticRecoveryIdentity: (ack) => {
+        const current = captureRef.current
+        if (!connectedRef.current || document.visibilityState !== 'visible' || !document.hasFocus()
+          || document.activeElement !== textInputRef.current || textComposition.composing()
+          || !['idle', 'you-driving'].includes(driveModeRef.current)
+          || useChatStore.getState().sessionsById[sessionId]?.isStreaming
+          || !current.id || current.gate.read(performance.now()).status !== 'ready') return null
+        if (ack && (ack.capture_id !== current.id || ack.capture_generation !== current.generation)) return null
+        return `${current.id}:${current.generation}`
+      },
+      onAutomaticRecovery: () => useUiStore.getState().addToast({ message: 'Input resumed. Some recent actions were not sent; they were not replayed.', variant: 'error' }),
       onState: (state, reason) => {
         if (state !== 'ready') cancelTextRef.current()
         setInputState(state)
@@ -1458,6 +1469,7 @@ export function BrowserLiveView({
   cancelTextRef.current = textComposition.cancel
   const textInputRef = textComposition.inputRef
   const releasePressedInputs = useCallback(() => {
+    inputRef.current?.cancelAutomaticRecovery()
     cancelTextRef.current()
     releasePhysicalInputs()
   }, [releasePhysicalInputs])
@@ -2696,6 +2708,11 @@ export function BrowserLiveView({
             onPointerMove={handlePointerMove}
             onPointerDown={handlePointerDown}
             onPointerUp={handlePointerUp}
+            onKeyDownCapture={() => inputRef.current?.cancelAutomaticRecovery()}
+            onPointerDownCapture={() => inputRef.current?.cancelAutomaticRecovery()}
+            onWheelCapture={() => inputRef.current?.cancelAutomaticRecovery()}
+            onInputCapture={() => inputRef.current?.cancelAutomaticRecovery()}
+            onPasteCapture={() => inputRef.current?.cancelAutomaticRecovery()}
             onKeyDown={handleKeyDown}
             onKeyUp={handleKeyUp}
             onFocus={(event) => { if (event.target === event.currentTarget) textInputRef.current?.focus({ preventScroll: true }) }}

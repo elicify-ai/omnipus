@@ -4600,7 +4600,8 @@ components:
         bookkeeping, ADR-047 D2) and `shutdown` (the capture session is ending — last viewer detached past
         the grace period, or the gateway is stopping the stream); client (extension) → server (gateway) for `ping`, the encoder
         page''s periodic health beacon / reconnect-watchdog signal. `reason` is an optional human-readable note (e.g. why
-        shutdown was requested).
+        shutdown was requested). Server → extension `input_pressure` reports slow interactive Chrome command processing;
+        the extension temporarily lowers capture and encoding frame rate, then restores it gradually after pressure stops.
 
         '
       type: object
@@ -4620,6 +4621,7 @@ components:
           - ping
           - adapt_reset
           - set_bitrate
+          - input_pressure
         reason:
           type: string
           maxLength: 512

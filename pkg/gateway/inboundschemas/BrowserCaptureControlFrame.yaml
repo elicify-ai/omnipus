@@ -33,6 +33,7 @@ properties:
       - ping
       - adapt_reset
       - set_bitrate
+      - input_pressure
   reason:
     type: string
     maxLength: 512

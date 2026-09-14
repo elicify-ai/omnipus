@@ -166,3 +166,24 @@ it('shows the real backlog pause and enables explicit resume only after release 
   expect(s.video.srcObject).toBe(media)
   expect(s.socket.frames.filter(f => f.type === 'browser_input')).toEqual([])
 })
+
+it.each(['focused', 'blurred', 'hidden', 'new capture', 'input during pause'])('automatically recovers pressure only with continuous safe remote focus: %s', async scenario => {
+  const s = await connected()
+  s.peer.connectionState = 'connected'
+  vi.spyOn(document, 'hasFocus').mockReturnValue(true)
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+  const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)
+  const sink = screen.getByRole('textbox', { name: 'Remote browser text input' })
+  act(() => sink.focus())
+  act(() => s.socket.receive({ type: 'browser_input_state', session_id: 's1', input_epoch: 1, offer_id: 1, control_epoch: 0, state: 'failed', reason: 'reliable input queue expired' }))
+  expect(document.querySelector('[data-input-state="paused"]')).not.toBeNull()
+  if (scenario === 'blurred') { fireEvent.blur(s.frame); act(() => sink.focus()) }
+  if (scenario === 'hidden') { visibility.mockReturnValue('hidden'); hidden.mockReturnValue(true); fireEvent(document, new Event('visibilitychange')); visibility.mockReturnValue('visible'); hidden.mockReturnValue(false) }
+  if (scenario === 'input during pause') fireEvent.keyDown(sink, { key: 'a', code: 'KeyA', keyCode: 65 })
+  act(() => s.socket.receive({ type: 'browser_input_control_ack', session_id: 's1', input_epoch: 1, control_epoch: 1, ok: true, capture_id: capture, capture_generation: scenario === 'new capture' ? 2 : 1 }))
+  expect(document.querySelector(`[data-input-state="${scenario === 'focused' ? 'ready' : 'paused'}"]`)).not.toBeNull()
+  expect(s.peer.channels['input-reliable'].send).not.toHaveBeenCalled()
+  expect(Peer.instances).toHaveLength(1)
+  expect(s.socket.frames.filter(f => f.type === 'browser_control')).toEqual([{ type: 'browser_control', action: 'release', input_epoch: 1, control_epoch: 1 }])
+  vi.restoreAllMocks()
+})

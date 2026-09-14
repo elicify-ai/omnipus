@@ -8,7 +8,7 @@ const fixture = fs.readFileSync(fileURLToPath(new URL('./queue-pause-fixture.htm
 const target = new URL(JSON.parse(fs.readFileSync(process.env.BROWSER_INPUT_FIXTURE_CONFIG!, 'utf8')).url);
 if (target.origin !== 'https://uat-omnipus.fly.dev' || !target.pathname.startsWith('/preview/') || target.search || target.hash || target.username || target.password) throw Error('Exact approved fixture URL required');
 const provenance = JSON.parse(fs.readFileSync(process.env.BROWSER_INPUT_PROVENANCE!, 'utf8'));
-test('renderer queue expiry pauses without replacing peer and resumes only fresh input', async ({ page }, info) => {
+for (const automatic of [false, true]) test(`renderer queue expiry preserves peer and fresh input with ${automatic ? 'safe automatic' : 'explicit held-key'} recovery`, async ({ page }, info) => {
   const nonce = randomInt(1, 65535);
   let state: InputState = { nonce, clicks: 0, downs: 0, ups: 0, held: 0, scroll: 0, drags: 0, errors: 0, text: '' };
   const errors: string[] = [], marks: Array<{ label: string; at: string }> = [];
@@ -40,17 +40,26 @@ test('renderer queue expiry pauses without replacing peer and resumes only fresh
     });
     marks.push({ label: 'busy-key-start', at: new Date().toISOString() });
     await page.keyboard.down('b'); await page.waitForTimeout(250);
-    await page.keyboard.down('a'); await page.keyboard.up('a'); await page.keyboard.up('b');
-    await expect(page.locator('[data-input-mode="dedicated"]')).toHaveAttribute('data-input-state', 'paused');
+    await page.keyboard.down('a'); await page.keyboard.up('a');
+    if (automatic) await page.keyboard.up('b');
     const resume = page.getByRole('button', { name: 'Resume input', exact: true });
-    await expect(resume).toBeEnabled();
+    if (automatic) {
+      await expect(page.getByText('Input resumed. Some recent actions were not sent; they were not replayed.', { exact: true })).toBeVisible();
+      await ready();
+      await expect(resume).toHaveCount(0);
+    } else {
+      await expect(page.locator('[data-input-mode="dedicated"]')).toHaveAttribute('data-input-state', 'paused');
+      await expect(resume).toBeEnabled();
+      await page.keyboard.up('b');
+    }
     state = { ...state, downs: 1, ups: 1, held: 0 }; await stateIs(page, state);
     await page.waitForTimeout(400); await stateIs(page, state);
     const paused = await routeEvidence(page);
     expect(paused.sameMedia).toBe(true);
     expect(paused.peers.filter(peer => peer.labels.includes('input-reliable'))).toEqual(before.peers.filter(peer => peer.labels.includes('input-reliable')));
     expect(await page.evaluate(() => (window as unknown as { __queuePauseNewChannels: number }).__queuePauseNewChannels)).toBe(0);
-    await resume.click(); await ready();
+    if (!automatic) await resume.click();
+    await ready();
     await browserLiveFrame(page).focus();
     await page.keyboard.down('c'); state = { ...state, downs: 2, clicks: 1, held: 1 }; await stateIs(page, state);
     await page.keyboard.up('c'); state = { ...state, ups: 2, held: 0 }; await stateIs(page, state);
@@ -63,7 +72,7 @@ test('renderer queue expiry pauses without replacing peer and resumes only fresh
   } finally {
     const final = await page.evaluate(() => (window as unknown as { __inputSmoke?: { sample(): { state: InputState } | null } }).__inputSmoke?.sample()?.state).catch(() => null);
     const route = await routeEvidence(page).catch(() => null);
-    fs.writeFileSync(info.outputPath('queue-pause-evidence.json'), JSON.stringify({ provenance, marks, final, route, errors }, null, 2));
+    fs.writeFileSync(info.outputPath('queue-pause-evidence.json'), JSON.stringify({ provenance, automatic, marks, final, route, errors }, null, 2));
     await info.attach('queue-pause-evidence', { path: info.outputPath('queue-pause-evidence.json'), contentType: 'application/json' });
     await page.getByRole('button', { name: 'Close live browser panel', exact: true }).click({ timeout: 5000 }).catch(() => {});
   }

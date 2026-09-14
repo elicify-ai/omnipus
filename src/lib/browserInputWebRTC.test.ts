@@ -2,7 +2,7 @@ import { browserInputProtocol, decodeBrowserInput } from './browserInputCodec'
 import { describe, it, expect, vi } from 'vitest'
 import { BrowserInputWebRTCSession } from './browserInputWebRTC'
 
-function setup(onFailure?: () => boolean) {
+function setup(onFailure?: () => boolean, automatic: { automaticRecoveryIdentity?: () => string | null; onAutomaticRecovery?: () => void } = {}) {
   const channels: Record<string, { readyState: string; bufferedAmount: number; send: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn>; onopen?: () => void; onclose?: () => void }> = {}
   const pc = {
     iceGatheringState: 'complete', connectionState: 'new', localDescription: { sdp: 'offer-sdp' },
@@ -13,7 +13,7 @@ function setup(onFailure?: () => boolean) {
   }
   const offer = vi.fn(() => true)
   const changed = vi.fn()
-  const machine = new BrowserInputWebRTCSession({ pcFactory: () => pc as unknown as RTCPeerConnection, sendOffer: offer, onState: changed, onFailure })
+  const machine = new BrowserInputWebRTCSession({ pcFactory: () => pc as unknown as RTCPeerConnection, sendOffer: offer, onState: changed, onFailure, ...automatic })
   async function connect() {
     machine.start()
     await vi.waitFor(() => expect(offer).toHaveBeenCalledTimes(1))
@@ -352,4 +352,59 @@ it('uses full Retry when queue expiry arrives after the native channel has alrea
   expect(s.pc.close).toHaveBeenCalledTimes(1)
   expect(s.machine.sendInput(s.input)).toBe(false)
   s.machine.stop()
+})
+
+const pressureFailure = { type: 'browser_input_state' as const, session_id: 'session', input_epoch: 1, offer_id: 1, control_epoch: 0, state: 'failed' as const, reason: 'reliable input queue expired' }
+const pressureAck = { type: 'browser_input_control_ack' as const, session_id: 'session', input_epoch: 1, control_epoch: 1, ok: true }
+
+it('automatically admits only fresh input after the exact safe pressure-release acknowledgment', async () => {
+ const notice = vi.fn()
+ const s = setup(() => { s.machine.beginControl(); return true }, { automaticRecoveryIdentity: () => 'focused-capture-1', onAutomaticRecovery: notice })
+ await s.connect(); s.pc.connectionState = 'connected'
+ expect(s.machine.sendInput({ ...s.input, kind: 'wheel', delta_x: 0, delta_y: 10 })).toBe(true)
+ s.machine.applyState(pressureFailure)
+ expect(s.machine.state).toBe('paused')
+ expect(notice).not.toHaveBeenCalled()
+ s.machine.applyControlAck({ ...pressureAck, control_epoch: 0 })
+ expect(s.machine.state).toBe('paused')
+ s.machine.applyControlAck(pressureAck)
+ expect(s.machine.state).toBe('ready')
+ expect(notice).toHaveBeenCalledExactlyOnceWith()
+ expect(s.pc.close).not.toHaveBeenCalled()
+ expect(s.offer).toHaveBeenCalledTimes(1)
+ expect(s.sent('input-reliable').map(f => [f.kind, f.control_epoch, f.reliable_seq])).toEqual([['wheel', 0, 1]])
+ expect(s.machine.sendInput({ ...s.input, kind: 'key_down', key: 'a', code: 'KeyA', text: 'a' })).toBe(true)
+ expect(s.sent('input-reliable').map(f => [f.kind, f.control_epoch, f.reliable_seq])).toEqual([['wheel', 0, 1], ['key_down', 1, 1]])
+ s.machine.stop()
+})
+
+it.each(['key held', 'button held', 'identity changed', 'eligibility lost', 'intervening input', 'additional control'])('keeps pressure recovery manual when %s', async scenario => {
+ let identity: string | null = 'focused-capture-1'
+ const notice = vi.fn()
+ const s = setup(() => { s.machine.beginControl(); return true }, { automaticRecoveryIdentity: () => identity, onAutomaticRecovery: notice })
+ await s.connect(); s.pc.connectionState = 'connected'
+ if (scenario === 'key held') s.machine.sendInput({ ...s.input, kind: 'key_down', key: 'a', code: 'KeyA' })
+ if (scenario === 'button held') s.machine.sendInput({ ...s.input, kind: 'mouse_down', button: 'left' })
+ s.machine.applyState(pressureFailure)
+ if (scenario === 'identity changed') identity = 'focused-capture-2'
+ if (scenario === 'eligibility lost') identity = null
+ if (scenario === 'intervening input') expect(s.machine.sendInput({ ...s.input, kind: 'text', text: 'never replay' })).toBe(false)
+ if (scenario === 'additional control') s.machine.beginControl()
+ s.machine.applyControlAck({ ...pressureAck, control_epoch: scenario === 'additional control' ? 2 : 1 })
+ expect(s.machine.state).toBe('paused')
+ expect(notice).not.toHaveBeenCalled()
+ s.machine.stop()
+})
+
+it('permits only one automatic pressure recovery per peer even when both pauses are eligible', async () => {
+ const notice = vi.fn()
+ const s = setup(() => { s.machine.beginControl(); return true }, { automaticRecoveryIdentity: () => 'focused-capture-1', onAutomaticRecovery: notice })
+ await s.connect(); s.pc.connectionState = 'connected'
+ s.machine.applyState(pressureFailure); s.machine.applyControlAck(pressureAck)
+ expect(s.machine.state).toBe('ready')
+ s.machine.applyState({ ...pressureFailure, control_epoch: 1 })
+ s.machine.applyControlAck({ ...pressureAck, control_epoch: 2 })
+ expect(s.machine.state).toBe('paused')
+ expect(notice).toHaveBeenCalledTimes(1)
+ s.machine.stop()
 })

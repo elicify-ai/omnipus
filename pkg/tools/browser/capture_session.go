@@ -313,18 +313,20 @@ type CaptureSession struct {
 
 	mu sync.Mutex
 	// startDone publishes the sole startup attempt; each waiter retains its own cancellation.
-	startDone          chan struct{}
-	startCancel        context.CancelFunc
-	startErr           error
-	extVersion         string
-	lastPingAt         time.Time
-	captureHealth      CaptureHealthObservation
-	frames             captureFrameTracker
-	documentTransition *captureDocumentTransition
-	onFrameState       func(CaptureFrameState)
-	tabCtx             context.Context
-	tabCancel          context.CancelFunc
-	started            bool
+	startDone            chan struct{}
+	startCancel          context.CancelFunc
+	startErr             error
+	extVersion           string
+	lastPingAt           time.Time
+	inputPressureLastAt  time.Time
+	inputPressureSending bool
+	captureHealth        CaptureHealthObservation
+	frames               captureFrameTracker
+	documentTransition   *captureDocumentTransition
+	onFrameState         func(CaptureFrameState)
+	tabCtx               context.Context
+	tabCancel            context.CancelFunc
+	started              bool
 	// starting is true only for the narrow window between Start() entering
 	// its sole startup attempt and cs.startEncoder returning (success
 	// or failure) — see IsStarting's doc comment for why the gateway's

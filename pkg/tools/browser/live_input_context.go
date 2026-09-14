@@ -288,8 +288,13 @@ func (lv *LiveView) dispatchTrackedInput(ctx, targetCtx context.Context, viewerI
 	if in.Timing != nil && in.Timing.ObserveBudget != nil {
 		in.Timing.ObserveBudget("cdp_start", inputRemaining(ctx))
 	}
+	cdpStarted := time.Now()
 	err = lv.runCDP(ctx, inputRemaining(ctx), action)
+	cdpElapsed := time.Since(cdpStarted)
 	in.observeTiming("cdp_done")
+	if capture := lv.mgr.CaptureSessionForPanel(lv.sessionID); capture != nil {
+		capture.noteInputPressure(in.Kind, cdpElapsed, time.Now())
+	}
 	// Only an explicit protocol rejection proves a press was not accepted.
 	// Other transport failures have uncertain delivery; remember the possible
 	// hold for cleanup without replaying the press or typed content.
