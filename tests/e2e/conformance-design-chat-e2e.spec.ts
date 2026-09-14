@@ -144,29 +144,58 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
 
   // ASK FOR THE CLAIM, AND KEEP ASKING.
   //
-  // A single steer was not enough. On CI the first attempt spent its whole
-  // budget without reaching done and only the retry passed — which this repo
-  // correctly treats as a failure, not a pass ("retries: 3 masked a real
-  // failure", docs/internal/false-green-patterns.md).
+  // A single steer was not enough on CI, and the root cause was a genuine
+  // test bug, not model noise: the previous version of this steer told the
+  // model to pass "the exact text of the check criterion you were given" as
+  // its goal_claim evidence — i.e. to paste the `[check: true exit:0]`
+  // marker back verbatim. That is not a verification claim, it is an echo.
+  // Every compiled goal automatically carries the floor DoD criterion
+  // "goal-dod-floor-grounded-claims" — "Every factual claim is grounded, not
+  // assumed" (pkg/agent/goal_compile.go's newFloorDoD) — alongside whatever
+  // the operator asked for, and the Judge adjudicates ALL of them on a
+  // claim, not just the one the operator wrote. Under ADR-084 revision 9
+  // D2b–D2d an evidence string that only restates the criterion text grounds
+  // nothing (D2c requires a quote/claim traceable to this turn's own tool
+  // results, and D2d explicitly rejects "a quote that merely proves [the
+  // criterion] exists" as verification), so the Judge correctly ruled that
+  // claim ungrounded and sent the worker back to rework it — confirmed in
+  // the CI gateway log as a verdict disagreement on
+  // goal-dod-floor-grounded-claims with previous_met=false. The worker then
+  // (correctly) refused to repeat an ungrounded claim and spent the rest of
+  // its budget arguing instead of reaching done. The retry on CI passed only
+  // because that run's model happened to ground its evidence on the first
+  // try — a coin flip, not a fix, which is exactly the kind of flake
+  // docs/internal/false-green-patterns.md says CI is right to reject
+  // ("retries: 3 masked a real failure").
   //
-  // The reason is structural, not a bug: adjudication has exactly one trigger
-  // now (a `met` claim — D13/JUDGE-FR-095), and whether a real model emits
-  // that claim on any given turn is not deterministic. Worse, a BARE claim is
-  // bounced by design (G-4, goal_triggers.go's handleBareGoalClaim) and costs
-  // a round instead of adjudicating, so a half-formed first attempt buys
-  // nothing.
+  // The fix is to ask for evidence the Judge can actually ground: have the
+  // model verify the check itself with a real tool call and cite what it
+  // observed, matching goal_claim's own contract ("your own one-line
+  // statement of what you verified", pkg/tools/goal_claim.go's
+  // Description/Parameters) instead of parroting the marker text.
   //
-  // Steering repeatedly is a legitimate user action and is how a real
-  // operator would drive this, so ask up to three times with a full
+  // A BARE claim (no evidence, or one that fails goal_claim's own non-empty
+  // check) is separately bounced by design (G-4,
+  // goal_triggers.go's handleBareGoalClaim) and costs a round instead of
+  // adjudicating — that mechanism is untouched here.
+  //
+  // Steering repeatedly is still a legitimate user action and is how a real
+  // operator would drive this if a first grounded attempt is somehow still
+  // rejected, so this keeps asking up to three times with a full
   // adjudication budget after each. What is being tested is unchanged: the
-  // walk from a met claim through the Judge to a done pill. Only the number
-  // of chances the model gets to issue the claim has changed.
+  // walk from a met claim through the Judge to a done pill.
   const STEER_ATTEMPTS = 3
   for (let attempt = 1; attempt <= STEER_ATTEMPTS && !sawDone; attempt++) {
+    // Grounded evidence, not an echo of the criterion — see the block
+    // comment above this loop for why.
     await input.fill(
-      'Call the goal_claim tool right now. Use status "met". For the evidence argument, pass ' +
-        'the exact text of the check criterion you were given. Do not reply with prose instead — ' +
-        'the tool call itself is what is required.',
+      'Verify the goal\'s check criterion yourself, then claim it. First call the bash tool ' +
+        'with the command `true; echo $?` and read the exit code it reports. Then call the ' +
+        'goal_claim tool with status "met" and, for the evidence argument, your own one-line ' +
+        'statement of what you personally observed from that bash call (for example: "ran ' +
+        '`true` via bash and observed exit code 0, as the check requires"). Do not pass the ' +
+        'criterion text itself as evidence — describe what you verified. Do not reply with ' +
+        'prose only — the tool calls are what is required.',
     )
     await input.press('Enter')
 
