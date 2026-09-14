@@ -14,14 +14,21 @@ func TestNewTargetViewportConvergesBeforeRecapture(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newViewportFrameFixture(t)
 		f.measuredW, f.measuredH, f.measuredScale = 1426, 575, 2
-		f.atWrite = func() {
-			require.Empty(t, f.commands, "temporary geometry reached capture before convergence")
-			if f.bounds == 3 {
-				f.measuredH = 718
+		contentsCalls := 0
+		original := f.lv.runCDP
+		f.lv.runCDP = func(ctx context.Context, timeout time.Duration, actions ...chromedp.Action) error {
+			for _, action := range actions {
+				if _, ok := action.(windowContentsSizeAction); ok {
+					require.Empty(t, f.commands, "temporary geometry reached capture before convergence")
+					contentsCalls++
+					f.measuredH = 718
+				}
 			}
+			return original(ctx, timeout, actions...)
 		}
 		f.lv.reapplyViewportPass(f.lv.tabCtx, 1426, 718, 2)
-		require.Equal(t, 3, f.bounds, "one bounded reapply must follow the initial compensated attempt")
+		require.Equal(t, 2, f.bounds, "outer bounds must not be repeated")
+		require.Equal(t, 1, contentsCalls, "one contents correction must follow the initial compensated attempt")
 		require.Len(t, f.commands, 1)
 		require.Equal(t, 1426, f.commands[0].Width)
 		require.Equal(t, 718, f.commands[0].Height)
@@ -33,8 +40,19 @@ func TestNewTargetViewportPersistentMismatchNeverRecaptures(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newViewportFrameFixture(t)
 		f.measuredW, f.measuredH, f.measuredScale = 1426, 575, 2
+		contentsCalls := 0
+		original := f.lv.runCDP
+		f.lv.runCDP = func(ctx context.Context, timeout time.Duration, actions ...chromedp.Action) error {
+			for _, action := range actions {
+				if _, ok := action.(windowContentsSizeAction); ok {
+					contentsCalls++
+				}
+			}
+			return original(ctx, timeout, actions...)
+		}
 		f.lv.reapplyViewportPass(f.lv.tabCtx, 1426, 718, 2)
-		require.Equal(t, 4, f.bounds, "convergence must stop after two compensated attempts")
+		require.Equal(t, 1, contentsCalls, "convergence must stop after one contents correction")
+		require.Equal(t, 2, f.bounds, "outer bounds must not be repeated")
 		require.Empty(t, f.commands, "unconverged target geometry was captured")
 		require.False(t, f.cs.FrameState().Ready)
 	})

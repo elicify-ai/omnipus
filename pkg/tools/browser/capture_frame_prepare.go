@@ -109,7 +109,7 @@ func (cs *CaptureSession) measureEncoderFrameWithGate(ctx context.Context, panel
 	if live := cs.mgr.Live(); live != nil {
 		if lv, ok := live.lookup(panelID); ok {
 			measured := CaptureFrameState{TargetID: string(targetID), Width: width, Height: height, Scale: scale}
-			if err := lv.acceptViewportConvergence(targetCtx, measured, false); err != nil {
+			if err := lv.acceptViewportConvergence(measureCtx, targetCtx, measured, false); err != nil {
 				return CaptureFrameState{}, err
 			}
 		}

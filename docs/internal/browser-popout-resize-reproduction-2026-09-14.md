@@ -77,3 +77,17 @@ A pending-target fence is installed synchronously when viewport reapplication is
 Final focused new-target, viewport, document and encoder-preparation regression tests passed in 15.878 seconds. The refresh and encoder regressions first failed on their unfenced paths. A document recovery fixture initially omitted the new navigation start event, so its unexpected commit was correctly rejected as stale; the fixture now emits the real start-then-commit sequence. No production stale-event protection was relaxed. Independent final review found no blockers.
 
 Six deliberate fault variants were rejected: bypassing size convergence, allowing extra retries, accepting unconverged capture, omitting the synchronous fence, bypassing document validation and retaining the fence after legitimate manual clamp. Restored-source regression checks passed. Live verification remains pending at this source commit.
+
+## First live convergence candidate: failed
+
+Amsterdam source22524f822 passed installed/running binary verification with unchanged machine configuration. The first image lookup returned a transient manifest404; retry deployed the identical image. Exact Google→YouTube live retest failed at16:53:12UTC before any manual resize. A new target existed but never recovered its picture; the prior Google frame remained visible at16:53:18. The guard prevented undersized capture but did not fix window sizing.
+
+Server evidence: first bounds pass remained1426×575 after compensation. The second pass briefly logged1426×718, but immediate fresh measurement again saw1426×575. This rules out declaring the reapplication sufficient; the narrow next correction uses Chrome’s content-area sizing operation instead of repeating outer bounds. Failed evidence retained at `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/.local/browser-input-final-validation/popout-google-youtube-failed-22524f822`.
+
+An isolated Chrome152.0.7977.82 process on Amsterdam reproduced the exact143-pixel difference with the deployed headless mode and DPR2: Browser.setWindowBounds1426×718 yielded inner1426×575 and outer1426×718 across six samples over one second. Browser.setContentsSize1426×718 instead yielded inner1426×718 and outer1426×861 immediately and throughout the same sampling interval. The owned process and private profile were removed; no live session target was changed. Evidence: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/.local/browser-input-final-validation/contents-size-probe-linux.log`.
+
+## Direct content correction
+
+The ineffective second outer-window pass is replaced with one Browser.setContentsSize operation for the measured mismatch on a newly selected target. Normal viewer resizes keep their existing path. Capture still requires fresh measured geometry. If CSS dimensions differ only because of scrollbars, fresh inner dimensions must match the requested size and a second CSS sample must remain consistent with the capture sample; the target and capture identity are revalidated after the additional reads. No fixed scrollbar width or wider generic tolerance is introduced.
+
+The actual-command regression first failed with zero contents-size calls. Focused contents/convergence, scrollbar, viewport, document and encoder-preparation checks passed together in15.285seconds. Independent review found no blockers. The initial GREEN attempt encountered the old fake executor’s unhandled new measurement action; the test boundary was updated to provide actual inner/client values without changing the production requirement.
