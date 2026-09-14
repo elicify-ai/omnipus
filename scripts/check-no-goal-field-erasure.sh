@@ -231,6 +231,88 @@ run_scan() {
   fi
 }
 
+# ─── Clause C narrow exemption — Goal.Restate's retention-then-reset ───────
+#
+# GOAL-FR-006 requires a goal record carry "the superseded-criteria history",
+# and goal-entity-spec.md §5's merge table ("Superseded-criteria history
+# moves onto the goal for both") makes restating an active goal's intent a
+# RETENTION operation by design: pkg/goal/criteria.go's Goal.Restate moves
+# the prior compiled ladder into SupersededCriteria — restate_test.go's
+# TestRestate_SupersedesTheCompiledDefinition pins exactly this — and only
+# THEN empties Criteria so a fresh ladder can be registered for the new
+# prompt (Restate's own doc comment: "moved into SupersededCriteria
+# (history, never erased — D9's spirit)"). That is the same retain-then-
+# reset shape Reactivate already uses for LatestReason/LatestVerdict below;
+# Criteria stays in clause C's guarded field list (unlike LatestReason/
+# LatestVerdict) because zeroing it WITHOUT retention is exactly the
+# clearGoal erasure GOAL-FR-027/028 deleted, so this exemption is scoped as
+# narrowly as bash+grep can make it rather than removing the field outright:
+#
+#   1. Only the single file pkg/goal/criteria.go.
+#   2. Only the exact line range of `func (g *Goal) Restate(`, computed FROM
+#      THE FILE at scan time — never a hardcoded line number, so it cannot
+#      silently widen if the function moves or grows a new zeroing.
+#   3. Only a `.Criteria = nil` hit (DoD is never zeroed in Restate — it is
+#      set to the caller-supplied floorDoD, a real value clause C never
+#      flags).
+#   4. Only when that SAME line range also contains a
+#      `SupersededCriteria = append(...)` retention statement — the
+#      exemption disappears the moment retention is removed, so a
+#      regression that deletes the append but keeps the reset still trips
+#      this guard (proven by check-no-goal-field-erasure.test.sh).
+#
+# Nothing outside this exact shape is exempted. A `.Criteria = nil` anywhere
+# else in pkg/goal or pkg/agent/goal_*.go — including elsewhere in
+# criteria.go outside Restate's own line range — is still clause C's
+# business.
+restate_line_range() {
+  local file="$1"
+  [ -f "$file" ] || return 1
+  awk '
+    /^func \(g \*Goal\) Restate\(/ { start = NR }
+    start && /^}/ { print start "," NR; exit }
+  ' "$file"
+}
+
+restate_has_retention() {
+  local file="$1" start="$2" end="$3"
+  awk -v s="$start" -v e="$end" '
+    NR >= s && NR <= e && $0 ~ /SupersededCriteria[[:space:]]*=[[:space:]]*append\(/ { found = 1 }
+    END { exit(found ? 0 : 1) }
+  ' "$file"
+}
+
+# filter_clause_c_restate_exemption reads path:line:content hit records on
+# stdin (the same format scan()/drop_comment_lines use) and drops the ones
+# matching the narrow shape documented above.
+filter_clause_c_restate_exemption() {
+  local restate_file="pkg/goal/criteria.go"
+  local range start end
+  range="$(restate_line_range "$restate_file")"
+  if [ -z "$range" ]; then
+    cat
+    return
+  fi
+  start="${range%,*}"
+  end="${range#*,}"
+  if ! restate_has_retention "$restate_file" "$start" "$end"; then
+    cat
+    return
+  fi
+  awk -F: -v f="$restate_file" -v s="$start" -v e="$end" '
+    {
+      path = $1
+      line = $2 + 0
+      content = ""
+      for (i = 3; i <= NF; i++) content = content (i > 3 ? ":" : "") $i
+      if (path == f && line >= s && line <= e && content ~ /\.Criteria[[:space:]]*=[[:space:]]*nil/) {
+        next
+      }
+      print $0
+    }
+  '
+}
+
 # ─── Clause A ───────────────────────────────────────────────────────────────
 
 run_scan "clause A (retired session-meta goal-field group)" "$CLAUSE_A_PATTERN" "$HITS_FILE" pkg/session
@@ -256,7 +338,7 @@ while IFS= read -r f; do
 done < <(find pkg/agent -maxdepth 1 -name 'goal_*.go' ! -name '*_test.go' 2>/dev/null | sort)
 
 run_scan "clause C (retained goal-record field zeroing)" "$CLAUSE_C_PATTERN" "$HITS_FILE" "${C_PATHS[@]}"
-C_HITS="$(cat "$HITS_FILE")"
+C_HITS="$(filter_clause_c_restate_exemption < "$HITS_FILE")"
 
 # ─── Verdict ────────────────────────────────────────────────────────────────
 

@@ -37,6 +37,17 @@
 #       pkg/session — the one global Settings -> Performance budget (D-D/D-E).
 #    9. pkg/goal/status.go::Reactivate's legitimate reset of LatestReason and
 #       LatestVerdict, taken AFTER appending the prior run to TerminalHistory.
+#   9b. pkg/goal/criteria.go::Restate's retention-then-reset of Criteria,
+#       taken AFTER moving the prior compiled ladder into SupersededCriteria
+#       (GOAL-FR-006; goal-entity-spec.md §5's "Superseded-criteria history
+#       moves onto the goal for both") — the narrow, function-scoped,
+#       evidence-checked exemption this file adds.
+#   9c. (MUST STILL BE CAUGHT) the same file with the SupersededCriteria
+#       append removed — proves the 9b exemption requires actual retention
+#       evidence, not just being inside Restate.
+#   9d. (MUST STILL BE CAUGHT) a second, unrelated function in the same file
+#       zeroing Criteria with no retention — proves the exemption is scoped
+#       to Restate's own line range, not to the whole file.
 #   10. Real-value assignments to Criteria/DoD/Prompt (goal_compile.go and
 #       pkg/goal/criteria.go do this on every compile).
 #   11. Comparisons: `rec.GoalRef == ""`, `cfg.GoalMaxRounds == 0`,
@@ -297,6 +308,100 @@ func (g *Goal) Reactivate(sessionID string, now time.Time) error {
 OUTPUT=$(REPO_ROOT="$TMP_DIR" bash "$LINT_SCRIPT" 2>&1)
 EXIT_CODE=$?
 assert_exit_code "reactivate-exit" 0 "$EXIT_CODE"
+
+# --- Test 9b: Goal.Restate's retention-then-reset — NOT caught -------------
+#
+# GOAL-FR-006 / goal-entity-spec.md §5 ("Superseded-criteria history moves
+# onto the goal for both"): a prose restate of an active goal moves the
+# prior compiled ladder into SupersededCriteria BEFORE emptying Criteria for
+# the new prompt. That is retention, not the clearGoal erasure FR-027/028
+# deleted — the guard must recognise this exact shape and only this shape.
+
+echo ""
+echo "Test 9b: Restate's retention-then-reset in pkg/goal/criteria.go is NOT caught"
+setup_skeleton
+setup_fixture "pkg/goal/criteria.go" '
+package goal
+
+func (g *Goal) Restate(prompt string, floorDoD []task.AcceptanceCriterion, now time.Time) (changed bool, err error) {
+	if len(g.Criteria) > 0 {
+		g.SupersededCriteria = append(g.SupersededCriteria, SupersededCriteriaEntry{
+			SupersededAt: now,
+			Criteria:     g.Criteria,
+			DoD:          g.DoD,
+		})
+	}
+	g.Prompt = prompt
+	g.Definition = ""
+	g.Criteria = nil
+	g.DoD = floorDoD
+	g.LatestVerdict = nil
+	g.LatestReason = ""
+	return true, nil
+}
+'
+OUTPUT=$(REPO_ROOT="$TMP_DIR" bash "$LINT_SCRIPT" 2>&1)
+EXIT_CODE=$?
+assert_exit_code "restate-retention-exit" 0 "$EXIT_CODE"
+
+# --- Test 9c: the same reset WITHOUT the retention append — still CAUGHT ---
+#
+# The exemption must disappear the moment retention is removed — otherwise
+# it is a hole, not a narrow carve-out. A hand-edit (or a bad merge) that
+# drops the SupersededCriteria append but keeps `g.Criteria = nil` inside
+# Restate is exactly the erasure clause C exists to catch.
+
+echo ""
+echo "Test 9c: the same file WITHOUT the SupersededCriteria append is still CAUGHT"
+setup_skeleton
+setup_fixture "pkg/goal/criteria.go" '
+package goal
+
+func (g *Goal) Restate(prompt string, floorDoD []task.AcceptanceCriterion, now time.Time) (changed bool, err error) {
+	g.Prompt = prompt
+	g.Definition = ""
+	g.Criteria = nil
+	g.DoD = floorDoD
+	return true, nil
+}
+'
+OUTPUT=$(REPO_ROOT="$TMP_DIR" bash "$LINT_SCRIPT" 2>&1)
+EXIT_CODE=$?
+assert_exit_code "restate-no-retention-exit" 1 "$EXIT_CODE"
+assert_output_contains "restate-no-retention-finding" "criteria.go" "$OUTPUT"
+
+# --- Test 9d: a `.Criteria = nil` OUTSIDE Restate's own range — still CAUGHT
+#
+# Proves the exemption is scoped to Restate's line range, not to the whole
+# file: a second function in the same file with retention-free zeroing must
+# still be flagged even though the file also contains a compliant Restate.
+
+echo ""
+echo "Test 9d: a plain erasure elsewhere in criteria.go (outside Restate) is still CAUGHT"
+setup_skeleton
+setup_fixture "pkg/goal/criteria.go" '
+package goal
+
+func (g *Goal) Restate(prompt string, floorDoD []task.AcceptanceCriterion, now time.Time) (changed bool, err error) {
+	if len(g.Criteria) > 0 {
+		g.SupersededCriteria = append(g.SupersededCriteria, SupersededCriteriaEntry{
+			SupersededAt: now,
+			Criteria:     g.Criteria,
+		})
+	}
+	g.Criteria = nil
+	g.DoD = floorDoD
+	return true, nil
+}
+
+func wipeUnrelated(g *Goal) {
+	g.Criteria = nil
+}
+'
+OUTPUT=$(REPO_ROOT="$TMP_DIR" bash "$LINT_SCRIPT" 2>&1)
+EXIT_CODE=$?
+assert_exit_code "restate-outside-range-exit" 1 "$EXIT_CODE"
+assert_output_contains "restate-outside-range-finding" "criteria.go" "$OUTPUT"
 
 # --- Test 10: real-value assignments to the guarded fields — NOT caught -----
 
