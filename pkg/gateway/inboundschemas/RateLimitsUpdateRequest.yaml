@@ -6,8 +6,7 @@ description: >
   negative values, NaN/Inf, and overflow. Changes are hot-reloaded.
 
   Per ADR-053 D12 the SEC-26 daily_cost_cap_usd field was retired; the
-  endpoint rejects that field with HTTP 400. Use
-  /api/v1/settings/token-budget to set the app-level token spend brake.
+  endpoint rejects that field with HTTP 400.
 type: object
 additionalProperties: false
 properties:

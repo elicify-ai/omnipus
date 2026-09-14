@@ -3,9 +3,7 @@ description: >
   Rate limit configuration returned by GET /api/v1/security/rate-limits and
   accepted by PUT /api/v1/security/rate-limits.
   Per-agent sliding-window rate limits only (LLM/hr, tool/min). The
-  app-level spend brake (token budget) is set separately via
-  /api/v1/settings/token-budget; the SEC-26 USD cap was retired per
-  ADR-053 D12.
+  SEC-26 USD cap was retired per ADR-053 D12.
 type: object
 properties:
   enabled:

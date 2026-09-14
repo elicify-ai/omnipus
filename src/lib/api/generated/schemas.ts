@@ -1184,7 +1184,6 @@ type Plan = {
         | "judge_rounds_exhausted"
         | "stopped_by_user"
         | "idle_expired"
-        | "budget_exhausted"
         | "dod_unreachable"
         | "supervision_unavailable"
       )
@@ -3755,7 +3754,6 @@ export const Plan: z.ZodType<Plan> = z.object({
       "judge_rounds_exhausted",
       "stopped_by_user",
       "idle_expired",
-      "budget_exhausted",
       "dod_unreachable",
       "supervision_unavailable",
     ])
@@ -4274,19 +4272,6 @@ export const Goal: z.ZodType<Goal> = z.object({
   question_rounds_used: z.number().int().gte(0),
   route_channel: z.string().optional(),
   route_chat_id: z.string().optional(),
-});
-export const TokenBudgetStatus = z.object({
-  budget: z.number().int().gte(0),
-  consumed: z.number().int().gte(0),
-  remaining: z.number().int(),
-  exhausted: z.boolean(),
-  advisory: z.string().optional(),
-  by_scope: z.object({
-    owner: z.number().int().gte(0),
-    member: z.number().int().gte(0),
-    verifier: z.number().int().gte(0),
-    judge: z.number().int().gte(0),
-  }),
 });
 export const PlanRestartResponse: z.ZodType<PlanRestartResponse> = z.object({
   plan: Plan,

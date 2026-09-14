@@ -3769,7 +3769,6 @@ func (e PlanDodStatus) Valid() bool {
 
 // Defines values for PlanFailedReason.
 const (
-	PlanFailedReasonBudgetExhausted        PlanFailedReason = "budget_exhausted"
 	PlanFailedReasonDodUnreachable         PlanFailedReason = "dod_unreachable"
 	PlanFailedReasonIdleExpired            PlanFailedReason = "idle_expired"
 	PlanFailedReasonJudgeRoundsExhausted   PlanFailedReason = "judge_rounds_exhausted"
@@ -3780,8 +3779,6 @@ const (
 // Valid indicates whether the value is a known member of the PlanFailedReason enum.
 func (e PlanFailedReason) Valid() bool {
 	switch e {
-	case PlanFailedReasonBudgetExhausted:
-		return true
 	case PlanFailedReasonDodUnreachable:
 		return true
 	case PlanFailedReasonIdleExpired:
@@ -4102,7 +4099,6 @@ func (e PlanListResponsePlansDodStatus) Valid() bool {
 
 // Defines values for PlanListResponsePlansFailedReason.
 const (
-	PlanListResponsePlansFailedReasonBudgetExhausted        PlanListResponsePlansFailedReason = "budget_exhausted"
 	PlanListResponsePlansFailedReasonDodUnreachable         PlanListResponsePlansFailedReason = "dod_unreachable"
 	PlanListResponsePlansFailedReasonIdleExpired            PlanListResponsePlansFailedReason = "idle_expired"
 	PlanListResponsePlansFailedReasonJudgeRoundsExhausted   PlanListResponsePlansFailedReason = "judge_rounds_exhausted"
@@ -4113,8 +4109,6 @@ const (
 // Valid indicates whether the value is a known member of the PlanListResponsePlansFailedReason enum.
 func (e PlanListResponsePlansFailedReason) Valid() bool {
 	switch e {
-	case PlanListResponsePlansFailedReasonBudgetExhausted:
-		return true
 	case PlanListResponsePlansFailedReasonDodUnreachable:
 		return true
 	case PlanListResponsePlansFailedReasonIdleExpired:
@@ -4312,7 +4306,6 @@ func (e PlanRestartResponsePlanDodStatus) Valid() bool {
 
 // Defines values for PlanRestartResponsePlanFailedReason.
 const (
-	PlanRestartResponsePlanFailedReasonBudgetExhausted        PlanRestartResponsePlanFailedReason = "budget_exhausted"
 	PlanRestartResponsePlanFailedReasonDodUnreachable         PlanRestartResponsePlanFailedReason = "dod_unreachable"
 	PlanRestartResponsePlanFailedReasonIdleExpired            PlanRestartResponsePlanFailedReason = "idle_expired"
 	PlanRestartResponsePlanFailedReasonJudgeRoundsExhausted   PlanRestartResponsePlanFailedReason = "judge_rounds_exhausted"
@@ -4323,8 +4316,6 @@ const (
 // Valid indicates whether the value is a known member of the PlanRestartResponsePlanFailedReason enum.
 func (e PlanRestartResponsePlanFailedReason) Valid() bool {
 	switch e {
-	case PlanRestartResponsePlanFailedReasonBudgetExhausted:
-		return true
 	case PlanRestartResponsePlanFailedReasonDodUnreachable:
 		return true
 	case PlanRestartResponsePlanFailedReasonIdleExpired:
@@ -10651,7 +10642,7 @@ type DelegateStatusResponse struct {
 		// CreatedAt RFC3339 timestamp this session record was created.
 		CreatedAt time.Time `json:"created_at"`
 
-		// FailedReason Set only when `state == failed`. An open string, not a closed enum — the spec enumerates this non-exhaustively ("e.g. `interrupted`, `budget_exhausted`, `judge_rounds_exhausted`"), unlike `Plan.failed_reason`'s closed enum, so this field is left open rather than guessing at a complete set (flagged for review).
+		// FailedReason Set only when `state == failed`. An open string, not a closed enum — the spec enumerates this non-exhaustively (e.g. `interrupted`, `judge_rounds_exhausted`), unlike `Plan.failed_reason`'s closed enum, so this field is left open rather than guessing at a complete set (flagged for review).
 		FailedReason *string `json:"failed_reason,omitempty"`
 
 		// Generation This session's generation number. A `follow_up`/Play mints a new generation via `resumed_from` rather than mutating a terminal record.
@@ -13248,7 +13239,7 @@ type Plan struct {
 		Text string `json:"text"`
 	} `json:"dod,omitempty"`
 
-	// FailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
+	// FailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
 	FailedReason *PlanFailedReason `json:"failed_reason,omitempty"`
 
 	// Goal Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
@@ -13345,7 +13336,7 @@ type PlanDodProvenance string
 // PlanDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
 type PlanDodStatus string
 
-// PlanFailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
+// PlanFailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
 type PlanFailedReason string
 
 // PlanPlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`). `awaiting_supervision` (ADR-053 C1/R§8.8/INV-2/INV-7; ADR-055/FR-062 — the adjudicator is the `plansupervisor` System Agent, not the plan's owner) — the plan reached all-terminal-but-unmet; it durably holds here (persisting `last_unmet_terminal_signature`) until a correction is applied or a budget is spent. The engine does NOT re-judge unchanged state while in this phase (F2 fix) and the boot sweep EXEMPTS the plan's owner session — sitting at durable lifecycle `paused` — from the `failed(interrupted)` sweep while this phase holds (INV-9). This does NOT add a 9th session-lifecycle state — it is a plan condition only. `stalled` (swimlane-board UAT fix, round-1 finding #5 "ALSO" half) — the plan is `running` with a NON-terminal member DAG (real work remains) but no member is currently dispatchable (`next`) or in flight (`in_progress`) — e.g. a member blocked on a dependency this plan's own dispatch loop can never itself resolve. The engine wakes the supervisor exactly once per distinct condition and reverts to `dispatching` once something becomes dispatchable/in-flight again. `awaiting_supervision` and `stalled` together form the supervision-eligible phase set (ADR-055/FR-029) — the only two phases from which a correction may be applied. PRECEDENCE: `awaiting_supervision` is a strictly more specific condition (a plan-judge dead end on an all-terminal DAG) and is NEVER masked by `stalled` — the two are mutually exclusive by construction (the former requires an all-terminal DAG, the latter a non-terminal one), and the engine additionally refuses to touch `plan_phase` while `awaiting_supervision` holds, belt-and-suspenders.
@@ -13574,7 +13565,7 @@ type PlanListResponse struct {
 			Text string `json:"text"`
 		} `json:"dod,omitempty"`
 
-		// FailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
+		// FailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
 		FailedReason *PlanListResponsePlansFailedReason `json:"failed_reason,omitempty"`
 
 		// Goal Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
@@ -13675,7 +13666,7 @@ type PlanListResponsePlansDodProvenance string
 // PlanListResponsePlansDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
 type PlanListResponsePlansDodStatus string
 
-// PlanListResponsePlansFailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
+// PlanListResponsePlansFailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
 type PlanListResponsePlansFailedReason string
 
 // PlanListResponsePlansPlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`). `awaiting_supervision` (ADR-053 C1/R§8.8/INV-2/INV-7; ADR-055/FR-062 — the adjudicator is the `plansupervisor` System Agent, not the plan's owner) — the plan reached all-terminal-but-unmet; it durably holds here (persisting `last_unmet_terminal_signature`) until a correction is applied or a budget is spent. The engine does NOT re-judge unchanged state while in this phase (F2 fix) and the boot sweep EXEMPTS the plan's owner session — sitting at durable lifecycle `paused` — from the `failed(interrupted)` sweep while this phase holds (INV-9). This does NOT add a 9th session-lifecycle state — it is a plan condition only. `stalled` (swimlane-board UAT fix, round-1 finding #5 "ALSO" half) — the plan is `running` with a NON-terminal member DAG (real work remains) but no member is currently dispatchable (`next`) or in flight (`in_progress`) — e.g. a member blocked on a dependency this plan's own dispatch loop can never itself resolve. The engine wakes the supervisor exactly once per distinct condition and reverts to `dispatching` once something becomes dispatchable/in-flight again. `awaiting_supervision` and `stalled` together form the supervision-eligible phase set (ADR-055/FR-029) — the only two phases from which a correction may be applied. PRECEDENCE: `awaiting_supervision` is a strictly more specific condition (a plan-judge dead end on an all-terminal DAG) and is NEVER masked by `stalled` — the two are mutually exclusive by construction (the former requires an all-terminal DAG, the latter a non-terminal one), and the engine additionally refuses to touch `plan_phase` while `awaiting_supervision` holds, belt-and-suspenders.
@@ -13786,7 +13777,7 @@ type PlanRestartResponse struct {
 			Text string `json:"text"`
 		} `json:"dod,omitempty"`
 
-		// FailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
+		// FailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
 		FailedReason *PlanRestartResponsePlanFailedReason `json:"failed_reason,omitempty"`
 
 		// Goal Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
@@ -13887,7 +13878,7 @@ type PlanRestartResponsePlanDodProvenance string
 // PlanRestartResponsePlanDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
 type PlanRestartResponsePlanDodStatus string
 
-// PlanRestartResponsePlanFailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
+// PlanRestartResponsePlanFailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
 type PlanRestartResponsePlanFailedReason string
 
 // PlanRestartResponsePlanPlanPhase Runtime-only sub-phase while `state == running` (R1) — NOT itself a `state` value. `dispatching` the engine is dispatching ready tasks off the `blocked_by` DAG. `judging` the plan-level judge is evaluating the DoD. `synthesizing` writing the completion/handover summary. `idle` no active phase (default; also the value while `state != running`). `awaiting_supervision` (ADR-053 C1/R§8.8/INV-2/INV-7; ADR-055/FR-062 — the adjudicator is the `plansupervisor` System Agent, not the plan's owner) — the plan reached all-terminal-but-unmet; it durably holds here (persisting `last_unmet_terminal_signature`) until a correction is applied or a budget is spent. The engine does NOT re-judge unchanged state while in this phase (F2 fix) and the boot sweep EXEMPTS the plan's owner session — sitting at durable lifecycle `paused` — from the `failed(interrupted)` sweep while this phase holds (INV-9). This does NOT add a 9th session-lifecycle state — it is a plan condition only. `stalled` (swimlane-board UAT fix, round-1 finding #5 "ALSO" half) — the plan is `running` with a NON-terminal member DAG (real work remains) but no member is currently dispatchable (`next`) or in flight (`in_progress`) — e.g. a member blocked on a dependency this plan's own dispatch loop can never itself resolve. The engine wakes the supervisor exactly once per distinct condition and reverts to `dispatching` once something becomes dispatchable/in-flight again. `awaiting_supervision` and `stalled` together form the supervision-eligible phase set (ADR-055/FR-029) — the only two phases from which a correction may be applied. PRECEDENCE: `awaiting_supervision` is a strictly more specific condition (a plan-judge dead end on an all-terminal DAG) and is NEVER masked by `stalled` — the two are mutually exclusive by construction (the former requires an all-terminal DAG, the latter a non-terminal one), and the engine additionally refuses to touch `plan_phase` while `awaiting_supervision` holds, belt-and-suspenders.
@@ -14321,7 +14312,7 @@ type ProvidersCatalogSchemaVersion string
 // ProvidersCatalogServedFrom Gateway envelope (FR-017): "embedded" when serving the committed build-time snapshot, "pulled" when serving a release fetched at startup or by the 24 h refresh.
 type ProvidersCatalogServedFrom string
 
-// RateLimitConfig Rate limit configuration returned by GET /api/v1/security/rate-limits and accepted by PUT /api/v1/security/rate-limits. Per-agent sliding-window rate limits only (LLM/hr, tool/min). The app-level spend brake (token budget) is set separately via /api/v1/settings/token-budget; the SEC-26 USD cap was retired per ADR-053 D12.
+// RateLimitConfig Rate limit configuration returned by GET /api/v1/security/rate-limits and accepted by PUT /api/v1/security/rate-limits. Per-agent sliding-window rate limits only (LLM/hr, tool/min). The SEC-26 USD cap was retired per ADR-053 D12.
 type RateLimitConfig struct {
 	// Enabled True when any rate limit cap is configured. Derived from whether any limit field is non-zero. Only present in GET responses.
 	Enabled *bool `json:"enabled,omitempty"`
@@ -14333,7 +14324,7 @@ type RateLimitConfig struct {
 	MaxAgentToolCallsPerMinute *int64 `json:"max_agent_tool_calls_per_minute,omitempty"`
 }
 
-// RateLimitsResponse Response from GET /api/v1/security/rate-limits. Returns the current per-agent sliding-window rate-limit configuration. Per ADR-053 D12 the SEC-26 USD cost cap was retired; the app-level spend brake (token budget) is set via /api/v1/settings/token-budget.
+// RateLimitsResponse Response from GET /api/v1/security/rate-limits. Returns the current per-agent sliding-window rate-limit configuration. Per ADR-053 D12 the SEC-26 USD cost cap was retired.
 type RateLimitsResponse struct {
 	Enabled bool `json:"enabled"`
 
@@ -14345,7 +14336,7 @@ type RateLimitsResponse struct {
 }
 
 // RateLimitsUpdateRequest Request body for PUT /api/v1/security/rate-limits. Partial update — any subset of the two sliding-window cap fields. Strict type validation rejects JSON strings in numeric fields, floats in integer fields, negative values, NaN/Inf, and overflow. Changes are hot-reloaded.
-// Per ADR-053 D12 the SEC-26 daily_cost_cap_usd field was retired; the endpoint rejects that field with HTTP 400. Use /api/v1/settings/token-budget to set the app-level token spend brake.
+// Per ADR-053 D12 the SEC-26 daily_cost_cap_usd field was retired; the endpoint rejects that field with HTTP 400.
 type RateLimitsUpdateRequest struct {
 	// MaxAgentLlmCallsPerHour Maximum LLM calls per hour. 0 = unlimited.
 	MaxAgentLlmCallsPerHour *int64 `json:"max_agent_llm_calls_per_hour,omitempty"`
@@ -15495,7 +15486,7 @@ type SessionLifecycleRecord struct {
 	// CreatedAt RFC3339 timestamp this session record was created.
 	CreatedAt time.Time `json:"created_at"`
 
-	// FailedReason Set only when `state == failed`. An open string, not a closed enum — the spec enumerates this non-exhaustively ("e.g. `interrupted`, `budget_exhausted`, `judge_rounds_exhausted`"), unlike `Plan.failed_reason`'s closed enum, so this field is left open rather than guessing at a complete set (flagged for review).
+	// FailedReason Set only when `state == failed`. An open string, not a closed enum — the spec enumerates this non-exhaustively (e.g. `interrupted`, `judge_rounds_exhausted`), unlike `Plan.failed_reason`'s closed enum, so this field is left open rather than guessing at a complete set (flagged for review).
 	FailedReason *string `json:"failed_reason,omitempty"`
 
 	// Generation This session's generation number. A `follow_up`/Play mints a new generation via `resumed_from` rather than mutating a terminal record.
@@ -17416,39 +17407,6 @@ type Todo struct {
 
 // TodoStatus Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 type TodoStatus string
-
-// TokenBudgetStatus App-level OVERALL token budget status for the Usage screen (ADR-053 §Contract Surface, D12/R§8.3, FE-6). ONE shared pool across the whole install — no per-plan budgets, no money caps, no `IsPrivilegedAgent` exemption (D12 deliberately removes the core-agent exemption). Debited by owner + member + verifier + Judge turns from provider-reported usage via a single atomic `debitTokenBudget(n)` critical section (INV-8).
-type TokenBudgetStatus struct {
-	// Advisory Present (non-empty) only when `budget == 0` — the persistent "unbounded — set a budget" Usage-screen advisory (R§8.3a). Also used for the one-time token≠dollar-cap warning surfaced when an operator first sets a budget (R§8.3b).
-	Advisory *string `json:"advisory,omitempty"`
-
-	// Budget The operator-set overall token budget. `0` is the unbounded sentinel (R§8.3a — default on a fresh install) — the Usage screen shows `advisory` persistently while this is 0.
-	Budget int `json:"budget"`
-
-	// ByScope Per-scope spend accounting (owner/member/verifier/Judge turns each debit the SAME shared pool — this breakdown is display-only, not a separate budget per scope).
-	ByScope struct {
-		// Judge Tokens consumed by the Judge's own adjudication calls.
-		Judge int `json:"judge"`
-
-		// Member Tokens consumed by plan-member / delegated-child turns.
-		Member int `json:"member"`
-
-		// Owner Tokens consumed by plan-owner / goal-owner turns.
-		Owner int `json:"owner"`
-
-		// Verifier Tokens consumed by verifier/Judge-adjacent worker turns.
-		Verifier int `json:"verifier"`
-	} `json:"by_scope"`
-
-	// Consumed Total tokens debited so far this budget period, reconciled from the persisted counter at boot. May overshoot `budget` by up to the sum of in-flight turn costs at the moment of exhaustion (INV-8 — post-turn provider-reported debit, graceful wind-down, never a mid-tool hard cut).
-	Consumed int `json:"consumed"`
-
-	// Exhausted True once the pool has crossed zero. Every running scope brakes to `failed(budget_exhausted)` at its next turn/adjudication boundary (INV-8) — never mid-tool.
-	Exhausted bool `json:"exhausted"`
-
-	// Remaining `budget - consumed`, floored at 0. Meaningless (ignore) when `budget == 0` (unbounded).
-	Remaining int `json:"remaining"`
-}
 
 // TokenUsageSummary Per-agent token usage summary for a given time period. Aggregated from SessionMeta.Stats across all session files. subagent_3p (external CLI workers) are excluded — they run on a separate engine and their tokens are not tracked.
 type TokenUsageSummary struct {

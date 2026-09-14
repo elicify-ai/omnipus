@@ -854,8 +854,6 @@ components:
       $ref: ./components/schemas/SessionLifecycleRecord.yaml
     Goal:
       $ref: ./components/schemas/Goal.yaml
-    TokenBudgetStatus:
-      $ref: ./components/schemas/TokenBudgetStatus.yaml
     PlanRestartResponse:
       $ref: ./components/schemas/PlanRestartResponse.yaml
     # NOTE: SubagentMessageFrame/SubagentStateFrame are deliberately NOT

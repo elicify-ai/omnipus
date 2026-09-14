@@ -150,14 +150,11 @@ properties:
       - judge_rounds_exhausted
       - stopped_by_user
       - idle_expired
-      - budget_exhausted
       - dod_unreachable
       - supervision_unavailable
     description: >
       Set only when `state == failed` (R1) — distinguishes
-      judge-rounds-exhausted vs user-stopped vs idle-expired vs the
-      ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted`
-      — added §Contract Surface "Budget / bounds") so they don't
+      judge-rounds-exhausted vs user-stopped vs idle-expired so they don't
       collapse to one generic "Failed" badge. ADR-055/FR-035 adds two
       more so every terminal cause supervision can produce is
       machine-distinguishable rather than string-distinguishable:

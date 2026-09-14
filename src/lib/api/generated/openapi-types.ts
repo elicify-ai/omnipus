@@ -5674,7 +5674,7 @@ export interface components {
         };
         /**
          * RateLimitConfig
-         * @description Rate limit configuration returned by GET /api/v1/security/rate-limits and accepted by PUT /api/v1/security/rate-limits. Per-agent sliding-window rate limits only (LLM/hr, tool/min). The app-level spend brake (token budget) is set separately via /api/v1/settings/token-budget; the SEC-26 USD cap was retired per ADR-053 D12.
+         * @description Rate limit configuration returned by GET /api/v1/security/rate-limits and accepted by PUT /api/v1/security/rate-limits. Per-agent sliding-window rate limits only (LLM/hr, tool/min). The SEC-26 USD cap was retired per ADR-053 D12.
          */
         RateLimitConfig: {
             /**
@@ -7766,7 +7766,7 @@ export interface components {
         };
         /**
          * RateLimitsResponse
-         * @description Response from GET /api/v1/security/rate-limits. Returns the current per-agent sliding-window rate-limit configuration. Per ADR-053 D12 the SEC-26 USD cost cap was retired; the app-level spend brake (token budget) is set via /api/v1/settings/token-budget.
+         * @description Response from GET /api/v1/security/rate-limits. Returns the current per-agent sliding-window rate-limit configuration. Per ADR-053 D12 the SEC-26 USD cost cap was retired.
          */
         RateLimitsResponse: {
             /** @example true */
@@ -7787,7 +7787,7 @@ export interface components {
         /**
          * RateLimitsUpdateRequest
          * @description Request body for PUT /api/v1/security/rate-limits. Partial update — any subset of the two sliding-window cap fields. Strict type validation rejects JSON strings in numeric fields, floats in integer fields, negative values, NaN/Inf, and overflow. Changes are hot-reloaded.
-         *     Per ADR-053 D12 the SEC-26 daily_cost_cap_usd field was retired; the endpoint rejects that field with HTTP 400. Use /api/v1/settings/token-budget to set the app-level token spend brake.
+         *     Per ADR-053 D12 the SEC-26 daily_cost_cap_usd field was retired; the endpoint rejects that field with HTTP 400.
          */
         RateLimitsUpdateRequest: {
             /**
@@ -9774,11 +9774,11 @@ export interface components {
              */
             owner_session_id?: string;
             /**
-             * @description Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
+             * @description Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
              * @example judge_rounds_exhausted
              * @enum {string}
              */
-            failed_reason?: "judge_rounds_exhausted" | "stopped_by_user" | "idle_expired" | "budget_exhausted" | "dod_unreachable" | "supervision_unavailable";
+            failed_reason?: "judge_rounds_exhausted" | "stopped_by_user" | "idle_expired" | "dod_unreachable" | "supervision_unavailable";
             /** @description ADR-055/FR-050 — the durable PlanSupervisor adjudication state for this plan. Server-set only; never accepted from a create or update body. Absent until the plan first enters the supervision-eligible phase set (`awaiting_supervision`, `stalled`). Every field is optional and independently written — the engine's write path is five discrete `plan.Patch` pointers, not one whole-object pointer, so a concurrent REST update of an unrelated field can never clobber a counter (FR-050, r3 M3-16). */
             supervision?: {
                 /**
@@ -11402,7 +11402,7 @@ export interface components {
                 reconstructable: boolean;
             };
             /**
-             * @description Set only when `state == failed`. An open string, not a closed enum — the spec enumerates this non-exhaustively ("e.g. `interrupted`, `budget_exhausted`, `judge_rounds_exhausted`"), unlike `Plan.failed_reason`'s closed enum, so this field is left open rather than guessing at a complete set (flagged for review).
+             * @description Set only when `state == failed`. An open string, not a closed enum — the spec enumerates this non-exhaustively (e.g. `interrupted`, `judge_rounds_exhausted`), unlike `Plan.failed_reason`'s closed enum, so this field is left open rather than guessing at a complete set (flagged for review).
              * @example interrupted
              */
             failed_reason?: string;
@@ -11578,60 +11578,6 @@ export interface components {
              * @example 123456789
              */
             route_chat_id?: string;
-        };
-        /**
-         * TokenBudgetStatus
-         * @description App-level OVERALL token budget status for the Usage screen (ADR-053 §Contract Surface, D12/R§8.3, FE-6). ONE shared pool across the whole install — no per-plan budgets, no money caps, no `IsPrivilegedAgent` exemption (D12 deliberately removes the core-agent exemption). Debited by owner + member + verifier + Judge turns from provider-reported usage via a single atomic `debitTokenBudget(n)` critical section (INV-8).
-         */
-        TokenBudgetStatus: {
-            /**
-             * @description The operator-set overall token budget. `0` is the unbounded sentinel (R§8.3a — default on a fresh install) — the Usage screen shows `advisory` persistently while this is 0.
-             * @example 5000000
-             */
-            budget: number;
-            /**
-             * @description Total tokens debited so far this budget period, reconciled from the persisted counter at boot. May overshoot `budget` by up to the sum of in-flight turn costs at the moment of exhaustion (INV-8 — post-turn provider-reported debit, graceful wind-down, never a mid-tool hard cut).
-             * @example 1250000
-             */
-            consumed: number;
-            /**
-             * @description `budget - consumed`, floored at 0. Meaningless (ignore) when `budget == 0` (unbounded).
-             * @example 3750000
-             */
-            remaining: number;
-            /**
-             * @description True once the pool has crossed zero. Every running scope brakes to `failed(budget_exhausted)` at its next turn/adjudication boundary (INV-8) — never mid-tool.
-             * @example false
-             */
-            exhausted: boolean;
-            /**
-             * @description Present (non-empty) only when `budget == 0` — the persistent "unbounded — set a budget" Usage-screen advisory (R§8.3a). Also used for the one-time token≠dollar-cap warning surfaced when an operator first sets a budget (R§8.3b).
-             * @example unbounded — set a budget
-             */
-            advisory?: string;
-            /** @description Per-scope spend accounting (owner/member/verifier/Judge turns each debit the SAME shared pool — this breakdown is display-only, not a separate budget per scope). */
-            by_scope: {
-                /**
-                 * @description Tokens consumed by plan-owner / goal-owner turns.
-                 * @example 200000
-                 */
-                owner: number;
-                /**
-                 * @description Tokens consumed by plan-member / delegated-child turns.
-                 * @example 900000
-                 */
-                member: number;
-                /**
-                 * @description Tokens consumed by verifier/Judge-adjacent worker turns.
-                 * @example 100000
-                 */
-                verifier: number;
-                /**
-                 * @description Tokens consumed by the Judge's own adjudication calls.
-                 * @example 50000
-                 */
-                judge: number;
-            };
         };
         /**
          * PlanRestartResponse
@@ -18988,7 +18934,6 @@ export type SessionMessageRespond = components["schemas"]["SessionMessageRespond
 export type RevisionEntry = components["schemas"]["RevisionEntry"];
 export type SessionLifecycleRecord = components["schemas"]["SessionLifecycleRecord"];
 export type Goal = components["schemas"]["Goal"];
-export type TokenBudgetStatus = components["schemas"]["TokenBudgetStatus"];
 export type PlanRestartResponse = components["schemas"]["PlanRestartResponse"];
 export type DelegateActionRequest = components["schemas"]["DelegateActionRequest"];
 export type DelegateRunAction = components["schemas"]["DelegateRunAction"];
