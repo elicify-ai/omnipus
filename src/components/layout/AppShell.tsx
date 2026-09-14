@@ -4,6 +4,7 @@ import { Sidebar } from './Sidebar'
 import { NotificationPanel } from './NotificationPanel'
 import { ToastContainer } from '@/components/ui/toast-container'
 import { ToolApprovalModal } from '@/components/agents/ToolApprovalModal'
+import { CrossWorkspaceApprovalBanner } from '@/components/layout/CrossWorkspaceApprovalBanner'
 import { MediaLightbox } from '@/components/chat/MediaLightbox'
 import { BrowserLivePanel } from '@/components/browser/BrowserLivePanel'
 import { LibraryPanel } from '@/components/library/LibraryPanel'
@@ -232,6 +233,13 @@ export function AppShell() {
               </span>
             </div>
           )}
+
+          {/* Cross-workspace tool-approval notice — founder decision
+              2026-09-14. Ambient, non-blocking: an approval waiting in a
+              workspace other than the one open right now is otherwise
+              invisible (ToolApprovalModal below only shows in-scope
+              approvals). See CrossWorkspaceApprovalBanner.tsx. */}
+          <CrossWorkspaceApprovalBanner />
 
           {/* Screen content — relative so children can use absolute inset-0 for bounded scrolling */}
           <main id="main-content" tabIndex={-1} className="flex-1 relative min-h-0 overflow-hidden">
