@@ -59,19 +59,19 @@ function makePlan(overrides: Partial<Plan> = {}): Plan {
 
 describe('goalLoopStatusLabel — pure fn', () => {
   it('returns null when attempt_count is absent', () => {
-    expect(goalLoopStatusLabel({ attempt_count: undefined, max_attempts: null }, false)).toBeNull()
+    expect(goalLoopStatusLabel({ attempt_count: undefined, max_attempts: null, status: 'failed' }, false)).toBeNull()
   })
 
   it('returns null when attempt_count is 0', () => {
-    expect(goalLoopStatusLabel({ attempt_count: 0, max_attempts: null }, false)).toBeNull()
+    expect(goalLoopStatusLabel({ attempt_count: 0, max_attempts: null, status: 'failed' }, false)).toBeNull()
   })
 
-  it('renders "attempt N/M" against max_attempts when present', () => {
-    expect(goalLoopStatusLabel({ attempt_count: 2, max_attempts: 5 }, false)).toBe('attempt 2/5')
+  it('renders "attempt N/M" against max_attempts when present (terminal task — the used-up count)', () => {
+    expect(goalLoopStatusLabel({ attempt_count: 2, max_attempts: 5, status: 'failed' }, false)).toBe('attempt 2/5')
   })
 
   it('falls back to the default max attempts when max_attempts is absent', () => {
-    expect(goalLoopStatusLabel({ attempt_count: 1, max_attempts: null }, false)).toBe(`attempt 1/${DEFAULT_TASK_MAX_ATTEMPTS}`)
+    expect(goalLoopStatusLabel({ attempt_count: 1, max_attempts: null, status: 'failed' }, false)).toBe(`attempt 1/${DEFAULT_TASK_MAX_ATTEMPTS}`)
   })
 
   // Anti-drift oracle. Every other assertion in this file uses
@@ -89,15 +89,54 @@ describe('goalLoopStatusLabel — pure fn', () => {
     expect(DEFAULT_TASK_MAX_ATTEMPTS).toBe(Number(m![1]))
   })
 
-  it('appends "· paused" when paused is true, without incrementing the attempt', () => {
-    expect(goalLoopStatusLabel({ attempt_count: 2, max_attempts: 3 }, true)).toBe('attempt 2/3 · paused')
+  it('appends "· paused" when paused is true, without incrementing the attempt (task not in_progress)', () => {
+    expect(goalLoopStatusLabel({ attempt_count: 2, max_attempts: 3, status: 'blocked' }, true)).toBe('attempt 2/3 · paused')
+  })
+
+  // Live UAT: AttemptCount counts attempts already CONSUMED — the backend's
+  // sole writer (consumeAttemptOrExhaust) persists it only once an attempt's
+  // outcome is known, AFTER that attempt finished, but hands the judge
+  // `AttemptCount + 1` as the LIVE attempt's own number. Showing the raw,
+  // not-yet-caught-up count for the whole duration of attempt 2 read as a
+  // stuck counter ("attempt 1/20"). This is the fix: `status: 'in_progress'`
+  // shows the attempt actually in flight.
+  it('shows the IN-FLIGHT attempt (AttemptCount + 1) while status is in_progress', () => {
+    expect(goalLoopStatusLabel({ attempt_count: 1, max_attempts: 20, status: 'in_progress' }, false)).toBe('attempt 2/20')
+  })
+
+  it('shows the plain used-up count once the task is terminal (done)', () => {
+    expect(goalLoopStatusLabel({ attempt_count: 1, max_attempts: 20, status: 'done' }, false)).toBe('attempt 1/20')
+  })
+
+  it('shows the plain used-up count once the task is terminal (failed)', () => {
+    expect(goalLoopStatusLabel({ attempt_count: 1, max_attempts: 20, status: 'failed' }, false)).toBe('attempt 1/20')
+  })
+
+  it('the in_progress increment composes with the paused suffix', () => {
+    expect(goalLoopStatusLabel({ attempt_count: 1, max_attempts: 20, status: 'in_progress' }, true)).toBe(
+      'attempt 2/20 · paused',
+    )
   })
 })
 
 describe('TaskCard — goal-loop status affordance (FR-090)', () => {
-  it('shows "attempt N/M" when the task has a real attempt_count', () => {
-    render(<TaskCard task={makeTask({ attempt_count: 2, max_attempts: 3 })} onClick={() => {}} showActions={false} />)
+  it('shows "attempt N/M" — the used-up count — for a terminal task with a real attempt_count', () => {
+    render(
+      <TaskCard
+        task={makeTask({ attempt_count: 2, max_attempts: 3, status: 'failed' })}
+        onClick={() => {}}
+        showActions={false}
+      />,
+    )
     expect(screen.getByText('attempt 2/3')).toBeInTheDocument()
+  })
+
+  // Live UAT regression: `makeTask()` defaults to `status: 'in_progress'` —
+  // an ACTIVELY RUNNING goal loop, the affordance's actual use case. AttemptCount
+  // (2) counts attempts already consumed; the live attempt in flight is 3.
+  it('shows the IN-FLIGHT attempt (AttemptCount + 1) while the task is actively running', () => {
+    render(<TaskCard task={makeTask({ attempt_count: 2, max_attempts: 3 })} onClick={() => {}} showActions={false} />)
+    expect(screen.getByText('attempt 3/3')).toBeInTheDocument()
   })
 
   it('shows nothing when attempt_count is absent (task not running a goal loop)', () => {
@@ -105,15 +144,20 @@ describe('TaskCard — goal-loop status affordance (FR-090)', () => {
     expect(screen.queryByText(/attempt \d/)).toBeNull()
   })
 
+  // The four paused-suffix tests below pin `status: 'blocked'` (not the
+  // in_progress default) deliberately — they exercise the PAUSE-suffix
+  // composition, independent of the in-flight-attempt increment (covered by
+  // its own tests above and in the pure-fn describe block), so the expected
+  // count stays the raw, un-incremented `attempt_count`.
   it('shows the paused suffix when the owning plan is running and paused', () => {
-    const task = makeTask({ attempt_count: 1, max_attempts: 3, plan_id: 'plan-1' })
+    const task = makeTask({ attempt_count: 1, max_attempts: 3, plan_id: 'plan-1', status: 'blocked' })
     const plans = [makePlan({ id: 'plan-1', state: 'running', paused_reason: 'owner agent disabled' })]
     render(<TaskCard task={task} plans={plans} onClick={() => {}} showActions={false} />)
     expect(screen.getByText('attempt 1/3 · paused')).toBeInTheDocument()
   })
 
   it('does NOT show paused when the owning plan is running but not paused', () => {
-    const task = makeTask({ attempt_count: 1, max_attempts: 3, plan_id: 'plan-1' })
+    const task = makeTask({ attempt_count: 1, max_attempts: 3, plan_id: 'plan-1', status: 'blocked' })
     const plans = [makePlan({ id: 'plan-1', state: 'running' })]
     render(<TaskCard task={task} plans={plans} onClick={() => {}} showActions={false} />)
     expect(screen.getByText('attempt 1/3')).toBeInTheDocument()
@@ -121,14 +165,14 @@ describe('TaskCard — goal-loop status affordance (FR-090)', () => {
   })
 
   it('does NOT show paused when the plans prop is absent entirely (no fabricated state)', () => {
-    const task = makeTask({ attempt_count: 1, max_attempts: 3, plan_id: 'plan-1' })
+    const task = makeTask({ attempt_count: 1, max_attempts: 3, plan_id: 'plan-1', status: 'blocked' })
     render(<TaskCard task={task} onClick={() => {}} showActions={false} />)
     expect(screen.getByText('attempt 1/3')).toBeInTheDocument()
     expect(screen.queryByText(/paused/)).toBeNull()
   })
 
   it('does NOT show paused when the owning plan is done/failed even with a stale paused_reason', () => {
-    const task = makeTask({ attempt_count: 1, max_attempts: 3, plan_id: 'plan-1' })
+    const task = makeTask({ attempt_count: 1, max_attempts: 3, plan_id: 'plan-1', status: 'blocked' })
     const plans = [makePlan({ id: 'plan-1', state: 'done' })]
     render(<TaskCard task={task} plans={plans} onClick={() => {}} showActions={false} />)
     expect(screen.queryByText(/paused/)).toBeNull()

@@ -33,7 +33,7 @@ import {
   tasksQueryKeys,
   workspacesQueryKeys,
   plansQueryKeys,
-  isApiError,
+  getErrorMessage,
 } from '@/lib/api'
 import type { Task, TaskCreateRequest, Todo, AcceptanceCriterion } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
@@ -46,6 +46,7 @@ import { JoinMemberCheckbox, WriteSetField } from './PlanMemberFields'
 import { AcceptanceCriteriaEditor } from './AcceptanceCriteriaEditor'
 import { DefinitionOfDoneEditor } from './DefinitionOfDoneEditor'
 import { datetimeLocalToIso, datetimeLocalToDate, dateToDatetimeLocal } from './taskFormFields'
+import { fieldFromValidationError } from './taskValidationError'
 
 interface CreateTaskSlideOverProps {
   open: boolean
@@ -146,6 +147,11 @@ export function CreateTaskSlideOver({
   const [goalError, setGoalError] = useState('')
   const [criteriaError, setCriteriaError] = useState('')
   const [dodError, setDodError] = useState('')
+  // Server-side rejection of Create/Create & Run that doesn't name a
+  // specific criteria[N]/dod[N] item (see `handleMutationError` below) —
+  // rendered as a banner above the footer buttons so it's visible without
+  // scrolling, distinct from the two field-scoped errors above.
+  const [submitError, setSubmitError] = useState('')
   const [newTodo, setNewTodo] = useState('')
 
   // Sync due date + inherited plan pre-fill when the slide-over opens or the
@@ -282,6 +288,26 @@ export function CreateTaskSlideOver({
       .map((text) => ({ text, status: 'pending' as const }))
   }
 
+  // Shared by Create and Create & Run (including the latter's PATCH-to-
+  // start step): a failed mutation must never leave the dialog silent. The
+  // server's own message is always toasted, and additionally routed inline
+  // — next to the named criteria/dod editor when the message identifies
+  // one, otherwise into the submit-error banner above the footer buttons.
+  // Never closes the dialog or touches `form` — the user's input stays put.
+  function handleMutationError(err: unknown) {
+    const msg = getErrorMessage(err, 'Failed to create task')
+    const field = fieldFromValidationError(msg)
+    // This dialog only has editors for `criteria`/`dod` — there is no
+    // per-field control for the third recognized shape ('blocked_by', a
+    // dependency cycle; see TaskDetailPanel's dependency editor for where
+    // that one IS inline-routable), so it falls back to the same banner a
+    // null (unrecognized) field does.
+    setCriteriaError(field === 'criteria' ? msg : '')
+    setDodError(field === 'dod' ? msg : '')
+    setSubmitError(field === 'criteria' || field === 'dod' ? '' : msg)
+    addToast({ message: msg, variant: 'error' })
+  }
+
   // Create only — lands in inbox
   const createMutation = useMutation({
     mutationFn: () => createTask(buildBody()),
@@ -291,10 +317,7 @@ export function CreateTaskSlideOver({
       addToast({ message: 'Task created', variant: 'success' })
       resetAndClose()
     },
-    onError: (err) => {
-      const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to create task'
-      addToast({ message: msg, variant: 'error' })
-    },
+    onError: handleMutationError,
   })
 
   // Create & Run now — create then PATCH to in_progress
@@ -309,10 +332,7 @@ export function CreateTaskSlideOver({
       addToast({ message: 'Task created and started', variant: 'success' })
       resetAndClose()
     },
-    onError: (err) => {
-      const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to create task'
-      addToast({ message: msg, variant: 'error' })
-    },
+    onError: handleMutationError,
   })
 
   // GOAL-FR-047/FR-053/FR-056: Title, Goal, at least one acceptance
@@ -321,6 +341,10 @@ export function CreateTaskSlideOver({
   // rather than stopping at the first failure.
   function handleSubmit(runNow: boolean) {
     let blocked = false
+    // Every resubmission attempt clears the previous server-rejection
+    // banner — the client-side checks below reassert titleError/goalError/
+    // criteriaError/dodError independently either way.
+    setSubmitError('')
 
     if (!form.title.trim()) {
       setTitleError('Title is required')
@@ -365,6 +389,7 @@ export function CreateTaskSlideOver({
     setGoalError('')
     setCriteriaError('')
     setDodError('')
+    setSubmitError('')
     setNewTodo('')
     onOpenChange(false)
   }
@@ -785,6 +810,19 @@ export function CreateTaskSlideOver({
             )}
           </div>
         </div>
+
+        {/* Server rejection of Create/Create & Run that doesn't name a
+            specific criteria/dod item (see handleMutationError) — sits
+            outside the scrollable body so it's visible without scrolling,
+            right above the buttons that triggered it. */}
+        {submitError && (
+          <p
+            role="alert"
+            className="px-6 pt-3 text-xs text-[var(--color-error)] flex-shrink-0"
+          >
+            {submitError}
+          </p>
+        )}
 
         <SheetFooter className="flex-row gap-2 px-6 py-4 flex-shrink-0">
           <Button

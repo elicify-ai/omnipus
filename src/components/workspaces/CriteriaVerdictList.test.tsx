@@ -95,6 +95,37 @@ describe('CriteriaVerdictList — attempt counter', () => {
     expect(screen.queryByTestId('attempt-counter')).toBeNull()
   })
 
+  // Live UAT (E-10's sibling defect, TaskDetailPanel side): `attemptCount`
+  // counts attempts already CONSUMED — the backend's sole writer
+  // (consumeAttemptOrExhaust, pkg/agent/task_executor.go) persists it only
+  // once an attempt's outcome is known, AFTER that attempt finished, while
+  // handing the judge `AttemptCount + 1` as the LIVE attempt's own number.
+  // Without `isRunning`, the panel showed the stale, not-yet-caught-up count
+  // for the whole duration of the attempt actually in flight.
+  it('shows the IN-FLIGHT attempt (attemptCount + 1) when isRunning is true', () => {
+    render(
+      <CriteriaVerdictList
+        criteria={[makeCriterion()]}
+        attemptCount={1}
+        maxAttempts={20}
+        isRunning
+      />,
+    )
+    expect(screen.getByTestId('attempt-counter')).toHaveTextContent('attempt 2/20')
+  })
+
+  it('shows the plain used-up count once the task is terminal (isRunning false/omitted)', () => {
+    render(
+      <CriteriaVerdictList
+        criteria={[makeCriterion()]}
+        attemptCount={1}
+        maxAttempts={20}
+        isRunning={false}
+      />,
+    )
+    expect(screen.getByTestId('attempt-counter')).toHaveTextContent('attempt 1/20')
+  })
+
   it('renders nothing at all when there are zero criteria', () => {
     const { container } = render(<CriteriaVerdictList criteria={[]} attemptCount={1} />)
     expect(container.firstChild).toBeNull()

@@ -29,13 +29,26 @@ import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/
 // it has not reached. Raised 3 → 20 alongside the backend constant.
 export const DEFAULT_TASK_MAX_ATTEMPTS = 20
 
+// `Task.attempt_count` counts attempts already CONSUMED — the sole writer,
+// `consumeAttemptOrExhaust` (pkg/agent/task_executor.go), increments and
+// persists it only once an attempt's outcome is known, AFTER that attempt
+// finished. While `status === 'in_progress'`, a new attempt is already
+// running that this count doesn't reflect yet — the same function hands the
+// judge `AttemptCount + 1` as the live attempt's own number
+// (task_executor.go's `Attempt: t.AttemptCount + 1`). Displaying the raw,
+// not-yet-caught-up count for the whole duration of that attempt reads as a
+// stuck counter (live UAT: "attempt 1/20" for the entirety of attempt 2).
+// `status` omitted/anything else terminal (done/failed) or otherwise not
+// actively running renders the plain used-up count, which is the correct
+// reading once no attempt is in flight.
 export function goalLoopStatusLabel(
-  task: Pick<Task, 'attempt_count' | 'max_attempts'>,
+  task: Pick<Task, 'attempt_count' | 'max_attempts' | 'status'>,
   paused: boolean,
 ): string | null {
   if (task.attempt_count == null || task.attempt_count <= 0) return null
   const max = task.max_attempts ?? DEFAULT_TASK_MAX_ATTEMPTS
-  return `attempt ${task.attempt_count}/${max}${paused ? ' · paused' : ''}`
+  const current = task.status === 'in_progress' ? task.attempt_count + 1 : task.attempt_count
+  return `attempt ${current}/${max}${paused ? ' · paused' : ''}`
 }
 
 // Priority badge config: P1 red, P2 orange, P3 yellow, P4 blue, P5 muted

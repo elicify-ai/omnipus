@@ -24,10 +24,20 @@ interface CriteriaVerdictListProps {
   verdicts?: JudgeVerdict[]
   /** Evidence records for this task — the latest attempt's record per criterion is shown, expandable. */
   evidence?: EvidenceRecord[]
-  /** `Task.attempt_count` (contract C17) — the current run's attempt index. */
+  /** `Task.attempt_count` (contract C17) — the count of CONSUMED attempts (see `isRunning`). */
   attemptCount?: number
   /** `Task.max_attempts`, or the inherited PlanningConfig default (20) when absent. */
   maxAttempts?: number | null
+  /**
+   * `task.status === 'in_progress'` — a new attempt is currently running
+   * that `attemptCount` doesn't reflect yet (it's the sole writer,
+   * consumeAttemptOrExhaust in pkg/agent/task_executor.go, and only
+   * increments it once an attempt's outcome is known, same as
+   * TaskCard.tsx's `goalLoopStatusLabel`). When true, the counter shown is
+   * `attemptCount + 1` — the in-flight attempt — instead of the stale,
+   * already-used count.
+   */
+  isRunning?: boolean
 }
 
 /**
@@ -50,9 +60,12 @@ export function CriteriaVerdictList({
   evidence = [],
   attemptCount,
   maxAttempts,
+  isRunning = false,
 }: CriteriaVerdictListProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const effectiveMax = maxAttempts ?? DEFAULT_TASK_MAX_ATTEMPTS
+  const displayedAttempt =
+    typeof attemptCount === 'number' && isRunning ? attemptCount + 1 : attemptCount
 
   const latestVerdict = verdicts
     .filter((v) => v.scope === 'task')
@@ -82,9 +95,9 @@ export function CriteriaVerdictList({
 
   return (
     <div className="flex flex-col gap-1.5">
-      {typeof attemptCount === 'number' && (
+      {typeof displayedAttempt === 'number' && (
         <p className="text-xs text-[var(--color-muted)]" data-testid="attempt-counter">
-          attempt {attemptCount}/{effectiveMax}
+          attempt {displayedAttempt}/{effectiveMax}
         </p>
       )}
       {criteria.length > 0 && (

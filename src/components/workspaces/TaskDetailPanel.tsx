@@ -16,6 +16,7 @@ import {
   stopTaskGoalLoop,
   runTaskNow,
   isApiError,
+  getErrorMessage,
   workspacesQueryKeys,
   tasksQueryKeys,
   plansQueryKeys,
@@ -138,6 +139,13 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   // calendar editor (CalendarEventSlideOver) owns that validation now.)
   const [dueError, setDueError] = useState('')
   const [statusError, setStatusError] = useState('')
+  // E-10 (live UAT): a rejected dependency PUT (most often the
+  // blocked_by-cycle guard) used to only toast — the checkbox visually
+  // never applied (blockedBy renders from `task.blocked_by`, the server's
+  // own value, not an optimistic draft — see handleToggleDep below) and
+  // there was no reason on screen for why. This is the inline echo of that
+  // rejection, next to the "Depends on" field it belongs to.
+  const [depError, setDepError] = useState('')
   // DateTimePicker is fully controlled (value/onChange) — day, hour, and minute
   // picks each fire a separate onChange that must compose on top of the prior
   // pick, so this holds the in-progress edit and is re-synced from the task
@@ -419,7 +427,14 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   // Todos checklist — see TaskChecklistField (shared with the calendar's
   // recurring-task edit slide-over) for the setTaskTodos mutation + handlers.
 
-  // Dependencies — replace atomically via PUT /tasks/{id}/dependencies
+  // Dependencies — replace atomically via PUT /tasks/{id}/dependencies.
+  // E-10: the server's own rejection (most often the blocked_by-cycle
+  // guard — pkg/task's cycle check, never reimplemented client-side) must
+  // reach the user, not just the console. This editor has only one target
+  // to route to, so unlike CreateTaskSlideOver it doesn't need
+  // `fieldFromValidationError`'s classification — but it uses the same
+  // `getErrorMessage` extraction (see taskValidationError.ts's header for
+  // why the two call sites share one recognizer, not a copy per component).
   const { mutate: doSetDeps } = useMutation({
     mutationFn: (blockedBy: string[]) => {
       if (!task) return Promise.reject(new Error('No task selected'))
@@ -427,9 +442,13 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
+      setDepError('')
     },
-    onError: (err: unknown) =>
-      addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to update dependencies', variant: 'error' }),
+    onError: (err: unknown) => {
+      const msg = getErrorMessage(err, 'Failed to update dependencies')
+      setDepError(msg)
+      addToast({ message: msg, variant: 'error' })
+    },
   })
 
   // "Start" = PATCH status to in_progress (no /start endpoint in unified model)
@@ -886,6 +905,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
             evidence={taskEvidence}
             attemptCount={task.attempt_count}
             maxAttempts={task.max_attempts}
+            isRunning={isRunning}
           />
         </div>
       </Field>
@@ -1077,6 +1097,9 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
               )
             })}
           </div>
+        )}
+        {depError && (
+          <p role="alert" className="text-xs text-[var(--color-error)] mt-1.5">{depError}</p>
         )}
       </Field>
 
