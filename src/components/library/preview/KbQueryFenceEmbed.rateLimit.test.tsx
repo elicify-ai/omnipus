@@ -41,7 +41,7 @@ describe('KbQueryFenceEmbed — 429 retry timing and throttled state (F4)', () =
       vi.mocked(searchVault).mockImplementation(async () => {
         calls += 1
         if (calls === 1) throw new ApiError(429, 'rate limited', { retryAfterMs: 5_000 })
-        return { notes: [], records: [], views: [], attachments: [], complete: true }
+        return { collection_id: 'kb-test', notes: [], records: [], views: [], attachments: [], complete: true }
       })
       renderEmbed()
 
@@ -65,7 +65,7 @@ describe('KbQueryFenceEmbed — 429 retry timing and throttled state (F4)', () =
       vi.mocked(searchVault).mockImplementation(async () => {
         calls += 1
         if (calls === 1) throw new ApiError(429, 'rate limited', { retryAfterMs: 3_000 })
-        return { notes: [], records: [], views: [], attachments: [], complete: true }
+        return { collection_id: 'kb-test', notes: [], records: [], views: [], attachments: [], complete: true }
       })
       renderEmbed()
 

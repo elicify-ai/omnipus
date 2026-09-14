@@ -62,6 +62,12 @@ vi.mock('@/store/ui', () => ({
 // arrived", which is the state this file is asserting the pane in: the rails
 // have no data, so what is proven is the reading COLUMN and its composition.
 vi.mock('@tanstack/react-query', () => ({
+  QueryClient: class {
+    // queryClient.ts subscribes to both caches at module scope; these tests
+    // mock react-query to keep the real client out, so hand it inert caches.
+    getQueryCache() { return { subscribe: () => () => {} } }
+    getMutationCache() { return { subscribe: () => () => {} } }
+  },
   useQuery: () => ({ data: null }),
   useQueries: () => [],
 }))

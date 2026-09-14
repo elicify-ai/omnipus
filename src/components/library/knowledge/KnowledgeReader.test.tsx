@@ -40,6 +40,12 @@ vi.mock('@/components/chat/ChatImage', () => ({
 }))
 vi.mock('@/store/ui', () => ({ useUiStore: { getState: () => ({ addToast: vi.fn() }) } }))
 vi.mock('@tanstack/react-query', () => ({
+  QueryClient: class {
+    // queryClient.ts subscribes to both caches at module scope; these tests
+    // mock react-query to keep the real client out, so hand it inert caches.
+    getQueryCache() { return { subscribe: () => () => {} } }
+    getMutationCache() { return { subscribe: () => () => {} } }
+  },
   useQuery: () => ({ data: null }),
   useQueries: () => [],
 }))

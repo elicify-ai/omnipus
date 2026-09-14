@@ -58,7 +58,12 @@ vi.mock('@/components/chat/ChatImage', () => ({
   ChatImage: ({ src, alt }: { src: string; alt?: string }) => <img data-testid="chat-image" src={src} alt={alt} />,
 }))
 vi.mock('@/store/ui', () => ({ useUiStore: { getState: () => ({ addToast: vi.fn() }) } }))
-vi.mock('@tanstack/react-query', () => ({ useQuery: () => ({ data: null }) }))
+vi.mock('@tanstack/react-query', () => ({ QueryClient: class {
+    // queryClient.ts subscribes to both caches at module scope; these tests
+    // mock react-query to keep the real client out, so hand it inert caches.
+    getQueryCache() { return { subscribe: () => () => {} } }
+    getMutationCache() { return { subscribe: () => () => {} } }
+  }, useQuery: () => ({ data: null }) }))
 
 // The view shell is replaced by a pass-through — LibraryTextPreview /
 // LibraryPreviewPane are being changed concurrently by other work, and churn
