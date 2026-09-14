@@ -264,7 +264,7 @@ func (tr *Trasher) Trash(req TrashRequest) (*TrashResult, error) {
 		tr.emit(trashOpTrash, "refused", nil, err.Error())
 		return nil, err
 	}
-	from = ensureMarkdown(from)
+	from = tr.trashSourcePath(fsys, from)
 
 	// F6: a trash source already inside .omnipus-vault/ (or .obsidian/,
 	// .git/) would move our own bookkeeping into our own trash. Refused by
@@ -331,10 +331,10 @@ func (tr *Trasher) Trash(req TrashRequest) (*TrashResult, error) {
 			return fmt.Errorf("knowledge: move %q to trash: %w", from, mvErr)
 		}
 
-		rec := records.ParseRecord(from, content)
+		recordType, recordID := recordIdentity(from, content)
 		receipt := trashReceipt{
 			OriginalPath: from, Collection: tr.Root.Path(), TrashedAt: now.UTC().Format(time.RFC3339),
-			AgentID: tr.AgentID, RecordType: rec.TypeName(), RecordID: rec.ID(),
+			AgentID: tr.AgentID, RecordType: recordType, RecordID: recordID,
 			SourceVersion: string(before.Token), DanglingLinks: len(backlinks), DanglingNotes: danglingNotes,
 		}
 		receiptBytes, jerr := json.MarshalIndent(receipt, "", "  ")
@@ -357,7 +357,7 @@ func (tr *Trasher) Trash(req TrashRequest) (*TrashResult, error) {
 		result = TrashResult{
 			OriginalPath: from, TrashID: trashID, TrashPath: trashFileRel,
 			DanglingLinkCount: len(backlinks), DanglingNotes: danglingNotes, DanglingNotesTruncated: truncated,
-			RecordType: rec.TypeName(), RecordID: rec.ID(), PriorTrashings: priors,
+			RecordType: recordType, RecordID: recordID, PriorTrashings: priors,
 		}
 		return nil
 	})
@@ -367,6 +367,55 @@ func (tr *Trasher) Trash(req TrashRequest) (*TrashResult, error) {
 	}
 	tr.emit(trashOpTrash, "applied", []string{from, result.TrashPath}, "")
 	return &result, nil
+}
+
+// trashSourcePath decides which file Trash acts on. The path exactly as given
+// wins when it names an existing regular file, so an attachment
+// ("assets/diagram.png") is trashed at its own path. Only otherwise does the
+// agent door's habit apply: "Weekly Review" means "Weekly Review.md".
+//
+// Before round 4 every path was given the ".md" suffix unconditionally, so a
+// Library delete of an attachment inside a knowledge base looked for
+// "assets/diagram.png.md", found nothing, and could never reach the trash.
+func (tr *Trasher) trashSourcePath(fsys LinkFS, rel string) string {
+	if IsMarkdownPath(rel) {
+		return rel
+	}
+	if abs, err := tr.Root.ResolveContainedNoSymlink(fsys, rel); err == nil {
+		if info, lerr := fsys.Lstat(abs); lerr == nil && info.Mode().IsRegular() {
+			return rel
+		}
+	}
+	return ensureMarkdown(rel)
+}
+
+// restoreSourcePath is trashSourcePath for a path that is no longer live: the
+// path as given wins when a trashed copy of exactly that file exists (an
+// attachment), otherwise the ".md" habit applies. The copies found for the
+// chosen path are returned so the caller does not enumerate the trash twice.
+func (tr *Trasher) restoreSourcePath(fsys LinkFS, rel string) (string, []trashCopy, error) {
+	if !IsMarkdownPath(rel) {
+		copies, err := tr.findTrashCopies(fsys, rel)
+		if err != nil || len(copies) > 0 {
+			return rel, copies, err
+		}
+		rel = ensureMarkdown(rel)
+	}
+	copies, err := tr.findTrashCopies(fsys, rel)
+	return rel, copies, err
+}
+
+// recordIdentity reads a trashed or restored file's record type and
+// identifier. Only a markdown note can be a record: an attachment's bytes are
+// never parsed, so a text attachment that happens to open with a
+// front-matter-shaped block cannot be reported as a record, nor refused on
+// restore for "colliding" with a live record's identifier it merely mentions.
+func recordIdentity(rel string, content []byte) (typeName, id string) {
+	if !IsMarkdownPath(rel) {
+		return "", ""
+	}
+	rec := records.ParseRecord(rel, content)
+	return rec.TypeName(), rec.ID()
 }
 
 // dedupeAndCapNotePaths reduces a set of inbound ResolvedLinks to the sorted,
@@ -595,18 +644,23 @@ func (tr *Trasher) Restore(req RestoreRequest) (*RestoreResult, error) {
 		tr.emit(trashOpRestore, "refused", nil, err.Error())
 		return nil, err
 	}
-	orig = ensureMarkdown(orig)
+
+	// Discovery only looks inside .omnipus-vault/trash/, so choosing the
+	// address before the reserved-name check below cannot reach anything the
+	// check protects: Trash refuses a reserved source, so no trashed copy can
+	// sit at a reserved path, and a reserved as-given path therefore falls
+	// through to its ".md" form exactly as it did before.
+	orig, copies, err := tr.restoreSourcePath(fsys, orig)
+	if err != nil {
+		tr.emit(trashOpRestore, "refused", []string{orig}, err.Error())
+		return nil, err
+	}
 
 	if rerr := authorRefuseReserved(orig); rerr != nil {
 		tr.emit(trashOpRestore, "refused", []string{orig}, rerr.Error())
 		return nil, rerr
 	}
 
-	copies, err := tr.findTrashCopies(fsys, orig)
-	if err != nil {
-		tr.emit(trashOpRestore, "refused", []string{orig}, err.Error())
-		return nil, err
-	}
 	if len(copies) == 0 {
 		// NOT "knowledge_describe reports the trash contents" — it does not.
 		// knowledge_describe renders four sections (index, types, views,
@@ -671,8 +725,8 @@ func (tr *Trasher) Restore(req RestoreRequest) (*RestoreResult, error) {
 		tr.emit(trashOpRestore, "refused", []string{orig}, wrapped.Error())
 		return nil, wrapped
 	}
-	rec := records.ParseRecord(orig, content)
-	if id := rec.ID(); id != "" {
+	recordType, recordID := recordIdentity(orig, content)
+	if id := recordID; id != "" {
 		collidingPath, found, cerr := tr.findLiveRecordByID(fsys, id)
 		if cerr != nil {
 			tr.emit(trashOpRestore, "refused", []string{orig}, cerr.Error())
@@ -719,7 +773,7 @@ func (tr *Trasher) Restore(req RestoreRequest) (*RestoreResult, error) {
 		}
 		result = RestoreResult{
 			OriginalPath: orig, RestoredFrom: chosen.TrashID, OtherAvailable: other,
-			RecordType: rec.TypeName(), RecordID: rec.ID(), ResolvedLinksCount: resolvedLinks,
+			RecordType: recordType, RecordID: recordID, ResolvedLinksCount: resolvedLinks,
 		}
 		return nil
 	})
