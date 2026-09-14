@@ -39,6 +39,12 @@ import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { MagnifyingGlass, Warning } from '@phosphor-icons/react'
 import { searchVault } from '@/lib/api'
+import { ApiError } from '@/lib/api-error'
+import {
+  shouldRetryQuery,
+  rateLimitAwareQueryRetryDelay,
+  rateLimitedRetryDelayMs,
+} from '@/lib/queryClient'
 import type { components } from '@/lib/api/generated/openapi-types'
 import { LazyEmbedMount } from './LazyEmbedMount'
 import { stripWikilinkNotation } from './wikilinkNotation'
@@ -100,7 +106,21 @@ function KbQueryFenceEmbedContent({ workspaceId, collectionId, query }: KbQueryF
     queryFn: () => searchVault(workspaceId, { query: trimmed, collection_id: collectionId, limit: QUERY_FENCE_RESULT_LIMIT }),
     enabled: trimmed.length > 0,
     staleTime: 15_000,
+    // F4 (SILENT-FAILURES-rate-limits-dd25339bf.md): honour a 429's
+    // (capped) Retry-After instead of the blind app-wide curve — see
+    // BasePreview.tsx's view-result query for the sibling fix and the full
+    // rationale. Retry count/exclusions unchanged; only the 429 DELAY.
+    retry: shouldRetryQuery,
+    retryDelay: rateLimitAwareQueryRetryDelay,
   })
+
+  // While WAITING on a retry after a 429, name the real wait instead of the
+  // generic "Searching…" spinner — reads the SAME function the retryDelay
+  // above is built from, so the two can never disagree.
+  const throttledRetryDelayMs =
+    searchQuery.isLoading && searchQuery.failureCount > 0
+      ? rateLimitedRetryDelayMs(searchQuery.failureReason)
+      : undefined
 
   const totalHits = useMemo(() => {
     const d = searchQuery.data
@@ -119,6 +139,21 @@ function KbQueryFenceEmbedContent({ workspaceId, collectionId, query }: KbQueryF
     )
   }
 
+  if (throttledRetryDelayMs !== undefined) {
+    // F4: waiting on a retry the query is going to make anyway, honouring
+    // (a capped) Retry-After — say so plainly, with the real wait, rather
+    // than the indistinguishable-from-hung generic spinner.
+    return (
+      <div
+        data-testid="kb-query-fence-throttled"
+        className="flex items-center gap-2 rounded-md border border-[var(--color-border)] px-3 py-4 text-xs text-[var(--color-muted)]"
+      >
+        <MagnifyingGlass size={14} className="animate-pulse" /> Busy — retrying in{' '}
+        {Math.ceil(throttledRetryDelayMs / 1000)}s
+      </div>
+    )
+  }
+
   if (searchQuery.isLoading) {
     return (
       <div
@@ -131,13 +166,18 @@ function KbQueryFenceEmbedContent({ workspaceId, collectionId, query }: KbQueryF
   }
 
   if (searchQuery.isError) {
+    // F4: a rate-limited refusal is named as such (never the generic
+    // "Could not run this query."), which reads as broken when the query is
+    // merely throttled.
+    const rateLimited = searchQuery.error instanceof ApiError && searchQuery.error.isRateLimited()
     return (
       <div
-        data-testid="kb-query-fence-error"
+        data-testid={rateLimited ? 'kb-query-fence-rate-limited' : 'kb-query-fence-error'}
         className="flex flex-col items-start gap-2 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 px-3 py-3 text-xs text-[var(--color-warning)]"
       >
         <span className="flex items-center gap-1.5">
-          <Warning size={14} /> Could not run this query.
+          <Warning size={14} />
+          {rateLimited ? 'This query is rate-limited by the knowledge workspace limit.' : 'Could not run this query.'}
         </span>
         <button
           type="button"
