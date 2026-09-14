@@ -11977,6 +11977,50 @@ turnLoop:
 				return al.abortTurn(ts, "tool_loop", hardInterruptAbortReason)
 			}
 
+			// A done turn context (the agent's own turn timeout, or any other
+			// cancellation of turnCtx that is not a hard abort) means no further
+			// tool call in this batch may start. ExecuteWithContext does not
+			// consult the context itself, so before this check a batch that began
+			// before the deadline kept dispatching every queued call after it.
+			// Mirrors the hard-abort check above (end the turn now) and the
+			// steering/graceful-interrupt skip at the end of this loop (every call
+			// that will not run still gets a synthetic result, so each tool_call
+			// in the assistant message keeps its paired tool result). The turn
+			// then ends through typedTurnExit — the same typed cancel/timeout exit
+			// the provider call uses when this context is done — instead of
+			// spending a provider round that can only fail on the same context.
+			if ctxErr := turnCtx.Err(); ctxErr != nil {
+				const ctxDoneSkipMessage = "Skipped: this turn ran out of time or was cancelled before this tool call could start."
+				skipReason := "turn context done (" + ctxErr.Error() + ")"
+				logger.InfoCF("agent", "Turn checkpoint: turn context done, skipping remaining tools",
+					map[string]any{
+						"agent_id":  ts.agent.ID,
+						"completed": i,
+						"skipped":   len(normalizedToolCalls) - i,
+						"reason":    skipReason,
+					})
+				for j := i; j < len(normalizedToolCalls); j++ {
+					skippedTC := normalizedToolCalls[j]
+					al.emitEvent(
+						EventKindToolExecSkipped,
+						ts.eventMeta("runTurn", "turn.tool.skipped"),
+						ToolExecSkippedPayload{
+							Tool:   skippedTC.Name,
+							Reason: skipReason,
+						},
+					)
+					// ADR-066 D4: a synthetic skipped result is a builtin-failure
+					// surface result like any other skip (FR-009).
+					skippedMsg := al.admitToolResult(ts, toolResultAdmission{
+						Tool: skippedTC.Name, ToolCallID: skippedTC.ID, Content: ctxDoneSkipMessage, IsError: true, ParallelN: len(normalizedToolCalls),
+					}).Message
+					messages = append(messages, skippedMsg)
+				}
+				res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, ctxErr)
+				turnStatus = status
+				return res, exitErr
+			}
+
 			// Unsanitize tool name from LLM — dots were replaced with underscores
 			// for Anthropic/Azure API compatibility (e.g., "browser_navigate" → "browser.navigate").
 			toolName := ts.agent.Tools.UnsanitizeToolName(tc.Name)
