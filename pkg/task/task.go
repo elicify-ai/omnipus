@@ -259,9 +259,20 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	// own ephemeral tracking cards from real create_task tasks even when they share
 	// the same Title, preventing the hijack bug where set_todos overwrites a real
 	// user task's checklist.
-	Scratchpad bool   `json:"scratchpad,omitempty"`
-	Action     Action `json:"action"`
-	Status     Status `json:"status"`
+	Scratchpad bool `json:"scratchpad,omitempty"`
+	// OriginSessionID is the transcript session the set_todos call that created
+	// this scratchpad card ran in. The facade's lookup, archival and the agent
+	// loop's scratchpad note all scope to it, so one agent's concurrent sessions
+	// never share, overwrite or archive each other's checklists (UAT B-1 runs 3
+	// and 5: buildScratchpadNote(agentID) used to inject the agent's most recent
+	// open checklist from ANY session, which the model treated as conversation
+	// context). DISK-ONLY, mirroring Scratchpad: the REST mapper (toWireTask)
+	// does NOT copy it to the wire type, and it MUST NOT be added to any schema
+	// in contracts/. Empty on every card created before this field existed —
+	// a session-scoped caller simply does not match those legacy cards.
+	OriginSessionID string `json:"origin_session_id,omitempty"`
+	Action          Action `json:"action"`
+	Status          Status `json:"status"`
 	// CancelReason is set on a Status=failed task cancelled via a user Stop
 	// (ADR-052 FR-028); empty for a genuine failure (e.g. attempt-limit
 	// exhaustion) and for every non-failed status. Cleared on restart/re-run.

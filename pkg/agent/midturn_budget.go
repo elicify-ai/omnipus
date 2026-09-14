@@ -138,7 +138,7 @@ func (al *AgentLoop) ephemeralSystemNoteTokens(ts *turnState) int {
 			tokens += estimateMessageTokens(providers.Message{Role: "system", Content: note})
 		}
 	}
-	add(al.buildScratchpadNote(ts.agent.ID))
+	add(al.buildScratchpadNote(ts.agent.ID, ts.opts.TranscriptSessionID))
 	add(buildWorkspaceInstructionsNote(ts.opts.WorkspaceID))
 	add(buildWebRenderingNote(ts.channel))
 	// ADR-081 D4 (spec FR-011): the goal rubric note. The ADR-078 D2

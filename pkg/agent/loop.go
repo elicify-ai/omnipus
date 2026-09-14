@@ -10380,7 +10380,7 @@ turnLoop:
 		// always sees its plan at the top of the turn. The note is NOT persisted
 		// to history — it is rebuilt fresh each turn from the task store.
 		if ts.agent != nil {
-			if note := al.buildScratchpadNote(ts.agent.ID); note != "" && len(callMessages) > 0 {
+			if note := al.buildScratchpadNote(ts.agent.ID, ts.opts.TranscriptSessionID); note != "" && len(callMessages) > 0 {
 				// Insert after callMessages[0] (the system prompt) so it immediately
 				// follows the agent's identity, before the conversation history.
 				injected := make([]providers.Message, 0, len(callMessages)+1)
@@ -15842,7 +15842,13 @@ func (al *AgentLoop) emitScheduledAutoDenyAudit(
 // returns the note string. Returns "" when there is nothing to inject (no
 // store, no active goal-task with todos). This is rebuilt fresh every turn so
 // it survives context compression without polluting the persisted transcript.
-func (al *AgentLoop) buildScratchpadNote(agentID string) string {
+//
+// sessionID scopes the note to the checklist the CURRENT session's own
+// set_todos calls created (Task.OriginSessionID). Without the scoping the note
+// carried the agent's most recent open checklist from ANY session or workspace
+// (UAT B-1 runs 3 and 5), which the model treated as this conversation's
+// context. An empty sessionID keeps the pre-scoping agent-wide selection.
+func (al *AgentLoop) buildScratchpadNote(agentID, sessionID string) string {
 	if al.taskStore == nil || agentID == "" {
 		return ""
 	}
@@ -15866,6 +15872,9 @@ func (al *AgentLoop) buildScratchpadNote(agentID string) string {
 			continue
 		}
 		if len(tk.Todos) == 0 {
+			continue
+		}
+		if sessionID != "" && tk.OriginSessionID != sessionID {
 			continue
 		}
 		// List is sorted priority ASC then created_at ASC; last match is

@@ -7,6 +7,7 @@ package agent
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
@@ -25,7 +26,7 @@ func newAlWithTaskStore(dir string) *AgentLoop {
 // TestBuildScratchpadNote_NilStore proves that a nil taskStore returns "".
 func TestBuildScratchpadNote_NilStore(t *testing.T) {
 	al := &AgentLoop{taskStore: nil}
-	note := al.buildScratchpadNote("agent-a")
+	note := al.buildScratchpadNote("agent-a", "")
 	if note != "" {
 		t.Errorf("nil store must return empty string, got: %q", note)
 	}
@@ -34,7 +35,7 @@ func TestBuildScratchpadNote_NilStore(t *testing.T) {
 // TestBuildScratchpadNote_EmptyAgentID proves that an empty agentID returns "".
 func TestBuildScratchpadNote_EmptyAgentID(t *testing.T) {
 	al := newAlWithTaskStore(t.TempDir())
-	note := al.buildScratchpadNote("")
+	note := al.buildScratchpadNote("", "")
 	if note != "" {
 		t.Errorf("empty agentID must return empty string, got: %q", note)
 	}
@@ -63,7 +64,7 @@ func TestBuildScratchpadNote_NonScratchpadTaskIgnored(t *testing.T) {
 	}
 
 	// buildScratchpadNote must NOT pick up this non-scratchpad card.
-	note := al.buildScratchpadNote("agent-a")
+	note := al.buildScratchpadNote("agent-a", "")
 	if note != "" {
 		t.Errorf("non-scratchpad task must not be injected; got note: %q", note)
 	}
@@ -95,7 +96,7 @@ func TestBuildScratchpadNote_ScratchpadCardReturnsNote(t *testing.T) {
 		t.Fatalf("create scratchpad: %v", err)
 	}
 
-	note := al.buildScratchpadNote("agent-a")
+	note := al.buildScratchpadNote("agent-a", "")
 	if note == "" {
 		t.Fatal("expected a non-empty scratchpad note")
 	}
@@ -157,7 +158,7 @@ func TestBuildScratchpadNote_AfterArchivePreviousPicksActive(t *testing.T) {
 		t.Fatalf("create active card: %v", err)
 	}
 
-	note := al.buildScratchpadNote("agent-a")
+	note := al.buildScratchpadNote("agent-a", "")
 	if note == "" {
 		t.Fatal("expected a non-empty note for the active scratchpad")
 	}
@@ -194,8 +195,73 @@ func TestBuildScratchpadNote_ScratchpadCardWithNoTodosIgnored(t *testing.T) {
 		t.Fatalf("create empty scratchpad: %v", err)
 	}
 
-	note := al.buildScratchpadNote("agent-a")
+	note := al.buildScratchpadNote("agent-a", "")
 	if note != "" {
 		t.Errorf("scratchpad card with no todos must not produce a note, got: %q", note)
+	}
+}
+
+// TestBuildScratchpadNote_SessionScoped_NeverLeaksAcrossSessions is the UAT
+// B-1 runs 3 and 5 regression: buildScratchpadNote(agentID) used to return
+// the agent's most recent open checklist from ANY session or workspace, and
+// the model treated that unrelated checklist as this conversation's context.
+// With a session id the note must only ever carry that session's OWN card.
+func TestBuildScratchpadNote_SessionScoped_NeverLeaksAcrossSessions(t *testing.T) {
+	al := newAlWithTaskStore(t.TempDir())
+
+	seed := func(sessionID, goal, step string) {
+		t.Helper()
+		card := &task.Task{
+			Title:           goal,
+			Action:          task.ActionLLM,
+			AgentID:         "agent-a",
+			CreatedBy:       "agent-a",
+			WorkspaceID:     "ws-1",
+			Status:          task.StatusInProgress,
+			Priority:        3,
+			Scratchpad:      true,
+			OriginSessionID: sessionID,
+			Todos:           []task.Todo{{Text: step, Status: task.TodoPending}},
+		}
+		if err := al.taskStore.Create(card); err != nil {
+			t.Fatalf("create scratchpad for %q: %v", sessionID, err)
+		}
+	}
+	// Session A's card is created FIRST — without the session filter the
+	// loop's "last match wins" would hand session B the exact card below.
+	seed("session-a", "session A goal", "step written in session A")
+	// created_at is RFC 3339 (second precision, pkg/task/store.go): sleep past
+	// the boundary so B's card is strictly more recent than A's and the
+	// unscoped legacy assertion below ("most recent active card") is
+	// deterministic rather than relying on the store's tie-break order.
+	time.Sleep(1100 * time.Millisecond)
+	seed("session-b", "session B goal", "step written in session B")
+
+	noteA := al.buildScratchpadNote("agent-a", "session-a")
+	if !strings.Contains(noteA, "session A goal") || !strings.Contains(noteA, "step written in session A") {
+		t.Errorf("session A's note must carry its own checklist, got: %q", noteA)
+	}
+	if strings.Contains(noteA, "session B") {
+		t.Errorf("REGRESSION (UAT B-1 runs 3/5): session A's note leaked session B's checklist: %q", noteA)
+	}
+
+	noteB := al.buildScratchpadNote("agent-a", "session-b")
+	if !strings.Contains(noteB, "session B goal") || !strings.Contains(noteB, "step written in session B") {
+		t.Errorf("session B's note must carry its own checklist, got: %q", noteB)
+	}
+	if strings.Contains(noteB, "session A") {
+		t.Errorf("REGRESSION (UAT B-1 runs 3/5): session B's note leaked session A's checklist: %q", noteB)
+	}
+
+	// A session with no card of its own gets NO note, not the other session's.
+	if note := al.buildScratchpadNote("agent-a", "session-c"); note != "" {
+		t.Errorf("a session with no checklist of its own must get no note, got: %q", note)
+	}
+
+	// Empty session id keeps the pre-scoping agent-wide behavior (the most
+	// recent active card — here session B's, created last).
+	legacy := al.buildScratchpadNote("agent-a", "")
+	if !strings.Contains(legacy, "session B goal") {
+		t.Errorf("an unscoped caller must keep the agent-wide behavior, got: %q", legacy)
 	}
 }
