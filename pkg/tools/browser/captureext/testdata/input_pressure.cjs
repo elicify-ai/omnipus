@@ -7,8 +7,13 @@ const trackChanges = [];
 const senderChanges = [];
 const track = {
   kind: 'video', readyState: 'live',
-  getConstraints: () => ({ width: { max: 1280 }, frameRate: { min: 15, max: 30 } }),
-  applyConstraints: async value => { trackChanges.push(value); },
+  // tabCapture exposes the consumed selection token in getConstraints while
+  // getSettings identifies the already-bound web-contents source instead.
+  getConstraints: () => ({ deviceId: { exact: 'consumed-tab-capture-token' }, width: { min: 1280, max: 1280 }, height: { min: 720, max: 720 }, frameRate: { min: 15, max: 30 } }),
+  applyConstraints: async value => {
+    if (value.deviceId !== undefined) throw new Error('OverconstrainedError: deviceId');
+    trackChanges.push(value);
+  },
 };
 const sender = {
   track,
@@ -34,6 +39,7 @@ async function signal() { await run("handleControlFrame({action:'input_pressure'
   assert.equal(params.encodings[0].maxFramerate, 20, 'first slow input reduces encoder to 20 fps');
   assert.equal(trackChanges.at(-1).frameRate.max, 20, 'capture delivery is reduced too');
   assert.equal(trackChanges.at(-1).width.max, 1280, 'capture geometry stays unchanged');
+  assert.deepEqual(JSON.parse(JSON.stringify(trackChanges.at(-1))), { width: { min: 1280, max: 1280 }, height: { min: 720, max: 720 }, frameRate: { min: 15, max: 20 } }, 'pressure preserves exact geometry and minimum rate without reusing source token');
   now += 999;
   await signal();
   assert.equal(params.encodings[0].maxFramerate, 20, 'pressure burst cannot immediately take second step');
@@ -56,6 +62,7 @@ async function signal() { await run("handleControlFrame({action:'input_pressure'
   await run('recoverInputPressure(currentPC)');
   assert.equal(params.encodings[0].maxFramerate, undefined, 'normal encoder ceiling restored');
   assert.equal(trackChanges.at(-1).frameRate.max, 30, 'normal capture ceiling restored');
+  assert.deepEqual(JSON.parse(JSON.stringify(trackChanges.at(-1))), { width: { min: 1280, max: 1280 }, height: { min: 720, max: 720 }, frameRate: { min: 15, max: 30 } }, 'restore preserves original geometry and min/max rate without consumed source token');
   await run("handleControlFrame({action:'unknown'})");
   assert.equal(params.encodings[0].maxFramerate, undefined, 'unknown controls cannot reduce quality');
   let release;
@@ -79,9 +86,11 @@ async function signal() { await run("handleControlFrame({action:'input_pressure'
   track.applyConstraints = async () => { throw new Error('controlled capture failure'); };
   await run('recoverInputPressure(currentPC)');
   assert.equal(params.encodings[0].maxFramerate, 20, 'failed restore must not claim encoder recovery');
+  assert.equal(box.window.__omnipusState.inputPressureError, 'input pressure constraints failed: Error: controlled capture failure');
   track.applyConstraints = previousApply;
   await run('recoverInputPressure(currentPC)');
   assert.equal(params.encodings[0].maxFramerate, undefined, 'failed restoration retries even at normal target');
+  assert.equal(box.window.__omnipusState.inputPressureError, null, 'successful retry clears pressure error');
   now += 1000;
   await signal();
   const replacements = [];

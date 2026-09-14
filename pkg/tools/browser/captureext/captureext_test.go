@@ -401,6 +401,8 @@ func TestSeed_AtomicNoPartialLeftovers(t *testing.T) {
 // embedded/manifest.json's "version" together, then ADD a new entry here —
 // never edit an existing entry, the history is the point.
 var versionContentHashes = map[string]string{
+	// 1.0.24: do not reuse consumed tabCapture tokens during rate adaptation.
+	"1.0.24": "74d54e984ef52558d51096dce78bedcc1df2e41debfbb53b31b48cd46137ccb9",
 	// 1.0.23: bounded video frame-rate reduction during slow input processing.
 	"1.0.23": "272745b88016cca53364b64d1b505eeee2a02c43e8b1aed09e42c9b5dbfe44b9",
 	// 1.0.22: local numeric encoder and packet-send timing diagnostics.

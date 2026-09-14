@@ -423,6 +423,10 @@ async function applyInputPressure(pc) {
       }
       const original = inputPressureTrackConstraints.get(track);
       const constraints = { ...original };
+      // tabCapture's original deviceId is a consumed stream-selection token,
+      // not the bound track's device ID. Reapplying it rejects the entire
+      // update. Track identity is fixed here; retain its geometry and rates.
+      delete constraints.deviceId;
       if (index > 0) {
         const rate = typeof original.frameRate === 'object' ? original.frameRate : {};
         const ceiling = Math.min(INPUT_PRESSURE_FPS[index], typeof rate.max === 'number' ? rate.max : 30);
@@ -442,11 +446,17 @@ async function applyInputPressure(pc) {
       if (!current()) return;
       applied = index;
       inputPressureNeedsApply = index !== inputPressureIndex;
+      window.__omnipusState.inputPressureError = null;
       window.__omnipusState.inputPressure = { maxFramerate: INPUT_PRESSURE_FPS[index], at: Date.now() };
       record('input pressure: video ceiling ' + (INPUT_PRESSURE_FPS[index] || 'normal'));
     } while (applied !== inputPressureIndex && current());
   })().catch(e => {
-    if (current()) reportAdaptFailure('input pressure constraints failed: ' + String(e));
+    if (current()) {
+      const message = 'input pressure constraints failed: ' + String(e);
+      window.__omnipusState.inputPressureError = message;
+      record(message);
+      reportAdaptFailure(message);
+    }
   }).finally(() => { inputPressureApplying = null; });
   return inputPressureApplying;
 }

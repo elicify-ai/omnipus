@@ -68,9 +68,17 @@ func TestCaptureInputPressureRealChrome(t *testing.T) {
 			Source        float64
 			Sender        float64
 			Width, Height int
+			Diagnostics   string
 		}
-		expression := `(async()=>{` + step.action + `const s=currentPC.getSenders().find(s=>s.track&&s.track.kind==='video');const c=s.track.getSettings();return {Source:c.frameRate,Sender:s.getParameters().encodings[0].maxFramerate||0,Width:c.width,Height:c.height};})()`
+		expression := `(async()=>{` + step.action + `const s=currentPC.getSenders().find(s=>s.track&&s.track.kind==='video');const c=s.track.getSettings();return {Source:c.frameRate,Sender:s.getParameters().encodings[0].maxFramerate||0,Width:c.width,Height:c.height,Diagnostics:JSON.stringify({constraints:s.track.getConstraints(),settings:c,parameters:s.getParameters(),index:inputPressureIndex,needsApply:inputPressureNeedsApply,pressure:window.__omnipusState.inputPressure,pressureError:window.__omnipusState.inputPressureError,lastError:window.__omnipusState.lastError,history:window.__omnipusState.history.slice(-8)})};})()`
 		require.NoError(t, chromedp.Run(ctx, chromedp.Evaluate(expression, &actual, func(p *runtime.EvaluateParams) *runtime.EvaluateParams { return p.WithAwaitPromise(true) })))
+		t.Logf("pressure diagnostics: %s", actual.Diagnostics)
+		if actual.Source != float64(step.source) {
+			var experiments string
+			probe := `(async()=>{const t=currentPC.getSenders().find(s=>s.track&&s.track.kind==='video').track;await new Promise(r=>setTimeout(r,200));const out={after200ms:t.getSettings(),probes:[]};for(const mode of ['standard-only','legacy-updated']){const c=t.clone();const original=c.getConstraints();const constraints=mode==='standard-only'?{frameRate:{max:20}}:{...original,mandatory:{...(original.mandatory||{}),maxFrameRate:20}};try{await c.applyConstraints(constraints);await new Promise(r=>setTimeout(r,200));out.probes.push({mode,constraints:c.getConstraints(),settings:c.getSettings()});}catch(e){out.probes.push({mode,error:String(e),name:e.name,constraint:e.constraint});}finally{c.stop();}}return JSON.stringify(out);})()`
+			require.NoError(t, chromedp.Run(ctx, chromedp.Evaluate(probe, &experiments, func(p *runtime.EvaluateParams) *runtime.EvaluateParams { return p.WithAwaitPromise(true) })))
+			t.Logf("capture constraint experiments: %s", experiments)
+		}
 		require.Equal(t, float64(step.source), actual.Source, "actual capture frame-rate setting")
 		require.Equal(t, float64(step.sender), actual.Sender, "actual encoder frame-rate setting")
 		require.Equal(t, original.Width, actual.Width)
