@@ -441,6 +441,15 @@ type Store interface {
 	// self-deadlocks, because the public write methods take the very lock fn
 	// is running under.
 	//
+	// THE SAME LOCK, TWO MORE RULES (silent-failure review 2026-09-14, F7).
+	// Opening a file written by a different schema version drops and
+	// re-creates every table, and that rebuild takes this lock too, so it can
+	// never run underneath a reconcile. And a single-path write WAITING for
+	// the lock gives up when its own context ends, returning an error that
+	// wraps ctx.Err() — a request queued behind a very large reconcile fails
+	// visibly instead of hanging past the gateway's write timeout. Reconcile's
+	// own wait takes no context and is unchanged.
+	//
 	// A caller with no whole-store work to do never calls this: it exists for
 	// reconcile-shaped operations (vaultprops.Sync's scan-and-reconcile body).
 	Reconcile(fn func(Store) error) error

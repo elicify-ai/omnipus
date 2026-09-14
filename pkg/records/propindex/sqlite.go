@@ -439,7 +439,9 @@ func (ix *Index) init(ctx context.Context) error {
 	}
 	fresh := have == 0
 	if have != 0 && have != schemaVersion {
-		if err := ix.dropAll(ctx); err != nil {
+		// The rebuild runs under the index write lock and re-reads the
+		// version once it holds it — see discardIncompatible.
+		if err := ix.discardIncompatible(ctx); err != nil {
 			return err
 		}
 		fresh = true
@@ -464,6 +466,57 @@ func (ix *Index) init(ctx context.Context) error {
 	return nil
 }
 
+// discardIncompatible rebuilds an index file written by a different schema
+// version: drop every table, re-create the schema, stamp the version — all
+// under the index write lock (reconcile.go).
+//
+// WHY UNDER THE LOCK (silent-failure review 2026-09-14, F7). Dropping the
+// tables is the most destructive write this package makes. Without the lock,
+// an Open on one handle could drop them under another handle's reconcile —
+// between the reconcile's scan and its deletion pass, or mid-batch — and the
+// reconcile would either write into tables that no longer exist or report a
+// store it never finished. The lock covers the re-create and the stamp too,
+// not only the DROP: a reconcile let in between the drop and the re-create
+// would hit "no such table".
+//
+// WHY THE RE-READ. Two handles opening the same old file at once both read
+// the old version before either takes the lock. The one that waits must not
+// drop what the first already rebuilt (and may already have started filling),
+// so the version is read again once the lock is held, and a file that is now
+// current is left alone.
+//
+// The wait honours ctx: an Open whose context ends while a reconcile holds the
+// lock fails with the lock-wait error instead of hanging.
+func (ix *Index) discardIncompatible(ctx context.Context) error {
+	lk := reconcileLockFor(ix.path)
+	if err := lk.lock(ctx, ix.path); err != nil {
+		return err
+	}
+	defer lk.unlock()
+
+	var have int
+	if err := ix.queryRow(ctx, PhaseOpen, "PRAGMA user_version").Scan(&have); err != nil {
+		return fmt.Errorf("propindex: re-reading the schema version before discarding an incompatible index: %w", err)
+	}
+	if have == schemaVersion {
+		// Another handle rebuilt this file while this one waited for the lock.
+		return nil
+	}
+	if err := ix.dropAll(ctx); err != nil {
+		return err
+	}
+	if _, err := ix.exec(ctx, PhaseOpen, ddl); err != nil {
+		return fmt.Errorf("propindex: re-creating the schema of a discarded index: %w", err)
+	}
+	stmt := fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)
+	if _, err := ix.exec(ctx, PhaseOpen, stmt); err != nil {
+		return fmt.Errorf("propindex: stamping the schema version of a discarded index: %w", err)
+	}
+	return nil
+}
+
+// dropAll drops every table. Its only caller is discardIncompatible, which
+// holds the index write lock; never call it without that lock.
 func (ix *Index) dropAll(ctx context.Context) error {
 	const drop = `
 DROP TABLE IF EXISTS note_links;
@@ -506,10 +559,17 @@ func (ix *Index) Close() error {
 // scan-and-reconcile in flight, so it can never commit inside the reconcile's
 // scan-to-deletion window and be deleted as "not on disk" by a scan that ran
 // before the file existed.
+//
+// The wait for that lock honours ctx: if ctx ends first, nothing is written
+// and the error names the lock and wraps ctx.Err(), so a request queued behind
+// a very large reconcile fails visibly instead of hanging past its deadline.
+// The same holds for UpsertNotes, DeleteNote and RefreshNoteStat.
 func (ix *Index) UpsertNote(ctx context.Context, rows NoteRows) error {
-	mu := reconcileMutexFor(ix.path)
-	mu.Lock()
-	defer mu.Unlock()
+	lk := reconcileLockFor(ix.path)
+	if err := lk.lock(ctx, ix.path); err != nil {
+		return err
+	}
+	defer lk.unlock()
 	return ix.upsertNotesDirect(ctx, []NoteRows{rows})
 }
 
@@ -520,9 +580,11 @@ func (ix *Index) UpsertNote(ctx context.Context, rows NoteRows) error {
 // turns a rebuild into one commit per note. The single-note path routes through
 // here so there is one write path to reason about, not two.
 func (ix *Index) UpsertNotes(ctx context.Context, batch []NoteRows) error {
-	mu := reconcileMutexFor(ix.path)
-	mu.Lock()
-	defer mu.Unlock()
+	lk := reconcileLockFor(ix.path)
+	if err := lk.lock(ctx, ix.path); err != nil {
+		return err
+	}
+	defer lk.unlock()
 	return ix.upsertNotesDirect(ctx, batch)
 }
 
@@ -657,9 +719,11 @@ func (ix *Index) upsertOne(ctx context.Context, tx *sql.Tx, rows NoteRows) error
 // DeleteNote removes a note and every child row it owns, under the index's
 // per-write reconcile lock (reconcile.go) — same rule as UpsertNote.
 func (ix *Index) DeleteNote(ctx context.Context, path string) (err error) {
-	mu := reconcileMutexFor(ix.path)
-	mu.Lock()
-	defer mu.Unlock()
+	lk := reconcileLockFor(ix.path)
+	if err = lk.lock(ctx, ix.path); err != nil {
+		return err
+	}
+	defer lk.unlock()
 	return ix.deleteNoteDirect(ctx, path)
 }
 
@@ -724,9 +788,11 @@ func (ix *Index) deleteNoteDirect(ctx context.Context, path string) (err error) 
 // birth-time support must not erase what a macOS pass over the same synced
 // vault already established.
 func (ix *Index) RefreshNoteStat(ctx context.Context, path string, size, mtimeNanos, ctimeNanos int64, hasCtime bool) (changed bool, err error) {
-	mu := reconcileMutexFor(ix.path)
-	mu.Lock()
-	defer mu.Unlock()
+	lk := reconcileLockFor(ix.path)
+	if err = lk.lock(ctx, ix.path); err != nil {
+		return false, err
+	}
+	defer lk.unlock()
 	return ix.refreshNoteStatDirect(ctx, path, size, mtimeNanos, ctimeNanos, hasCtime)
 }
 
