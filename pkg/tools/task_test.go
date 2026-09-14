@@ -868,6 +868,10 @@ func TestTaskUpdate_BlockedByRejectsCycle(t *testing.T) {
 	if !errors.Is(res.Err, task.ErrBlockedByCycle) {
 		t.Errorf("refusal must carry task.ErrBlockedByCycle, got err=%v (message: %s)", res.Err, res.ForLLM)
 	}
+	// The plain-language message must still name the rule it enforces.
+	if !strings.Contains(res.ForLLM, "loop") {
+		t.Errorf("refusal must say the edit would create a dependency loop, got: %s", res.ForLLM)
+	}
 
 	// a must NOT have acquired the cyclic edge.
 	got, _ := store.Get(a.ID)

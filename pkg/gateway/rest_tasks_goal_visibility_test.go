@@ -146,7 +146,12 @@ func TestPatchTaskAddingDoDAloneFailsVisibly(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code,
 		"supplying only one of criteria/dod when bootstrapping a record is the caller's "+
 			"to fix, so it is a 400: body=%s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "BOTH together",
+	// GOAL-FR-048: the error must tell the caller how to succeed — supply both
+	// lists together. Asserted on the words that carry that instruction, not
+	// on one exact phrasing of it.
+	assert.Contains(t, w.Body.String(), "acceptance criteria",
+		"the error must tell the caller how to succeed (GOAL-FR-048)")
+	assert.Contains(t, w.Body.String(), "together",
 		"the error must tell the caller how to succeed (GOAL-FR-048)")
 
 	// And nothing landed: a follow-up GET must not carry a dod.

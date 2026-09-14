@@ -51,35 +51,40 @@ func TestCreateTaskRejectsEmptyCriteria(t *testing.T) {
 		criteria   string // JSON fragment, or "" to omit the key entirely
 		dod        string
 		wantStatus int
-		wantSubstr string // substring expected in the 400 body's error message
+		wantField  string // the wire ErrorResponse.field the 400 is routed to
+		wantWords  string // plain words the message must use to name the rule
 	}{
 		{
 			name:       "criteria absent",
 			criteria:   "",
 			dod:        validDoDJSON,
 			wantStatus: http.StatusBadRequest,
-			wantSubstr: "criteria is required",
+			wantField:  "criteria",
+			wantWords:  "acceptance criterion",
 		},
 		{
 			name:       "criteria empty array",
 			criteria:   `[]`,
 			dod:        validDoDJSON,
 			wantStatus: http.StatusBadRequest,
-			wantSubstr: "criteria is required",
+			wantField:  "criteria",
+			wantWords:  "acceptance criterion",
 		},
 		{
 			name:       "dod absent",
 			criteria:   validCriteriaJSON,
 			dod:        "",
 			wantStatus: http.StatusBadRequest,
-			wantSubstr: "dod is required",
+			wantField:  "dod",
+			wantWords:  "Definition of Done",
 		},
 		{
 			name:       "dod empty array",
 			criteria:   validCriteriaJSON,
 			dod:        `[]`,
 			wantStatus: http.StatusBadRequest,
-			wantSubstr: "dod is required",
+			wantField:  "dod",
+			wantWords:  "Definition of Done",
 		},
 		{
 			name:       "both present — accepted",
@@ -117,8 +122,8 @@ func TestCreateTaskRejectsEmptyCriteria(t *testing.T) {
 
 			require.Equal(t, tc.wantStatus, w.Code, "body=%s", w.Body.String())
 			if tc.wantStatus == http.StatusBadRequest {
-				assert.Contains(t, w.Body.String(), tc.wantSubstr,
-					"the 400 body must name WHICH of criteria/dod is missing (GOAL-MV-6)")
+				// GOAL-MV-6: the 400 must name WHICH of criteria/dod is missing.
+				assertTaskErrorField(t, w, tc.wantField, tc.wantWords)
 			}
 		})
 	}
@@ -239,12 +244,12 @@ func TestPatchTaskRejectsEmptyCriteriaOrDoD(t *testing.T) {
 	// A PATCH that reduces criteria to zero is rejected.
 	wBadCriteria := patch(`{"criteria":[]}`)
 	require.Equal(t, http.StatusBadRequest, wBadCriteria.Code, "body=%s", wBadCriteria.Body.String())
-	assert.Contains(t, wBadCriteria.Body.String(), "criteria must not be empty")
+	assertTaskErrorField(t, wBadCriteria, "criteria", "acceptance criteria")
 
 	// A PATCH that reduces dod to zero is rejected.
 	wBadDoD := patch(`{"dod":[]}`)
 	require.Equal(t, http.StatusBadRequest, wBadDoD.Code, "body=%s", wBadDoD.Body.String())
-	assert.Contains(t, wBadDoD.Body.String(), "dod must not be empty")
+	assertTaskErrorField(t, wBadDoD, "dod", "Definition of Done")
 
 	// A PATCH that does not touch criteria/dod at all (e.g. a title rename)
 	// is unaffected by the gate.
@@ -288,4 +293,16 @@ func TestPatchTaskUpdatesGoalRecordCriteria(t *testing.T) {
 	// dod was untouched by this PATCH — must survive unchanged on the goal record.
 	require.Len(t, g.DoD, 1)
 	assert.Equal(t, "no secrets in the output", g.DoD[0].Text)
+}
+
+// assertTaskErrorField asserts a 400 refusal is routed to the given wire field
+// and names its rule in plain words. It checks identity (the structured field),
+// not the exact message: the messages are plain language and may be reworded.
+func assertTaskErrorField(t *testing.T, w *httptest.ResponseRecorder, field, words string) {
+	t.Helper()
+	var errBody gen.ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errBody), "body=%s", w.Body.String())
+	require.NotNil(t, errBody.Field, "the refusal must name the offending field; body=%s", w.Body.String())
+	assert.Equal(t, field, *errBody.Field, "the refusal must be routed to the %s field; body=%s", field, w.Body.String())
+	assert.Contains(t, w.Body.String(), words, "the refusal must name the rule in plain words")
 }

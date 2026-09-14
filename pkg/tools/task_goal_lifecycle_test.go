@@ -115,6 +115,8 @@ func TestTaskCreateRefusesDoDIdenticalToCriteria_GOALFR021(t *testing.T) {
 	// so a later rewording of the plain-language message cannot break this.
 	assert.ErrorIs(t, res.Err, task.ErrDoDNotDistinct,
 		"the refusal must be the DoD-duplicate rule, not some other failure: %s", res.ForLLM)
+	assert.Contains(t, res.ForLLM, "repeats an acceptance criterion",
+		"the refusal must state the rule in the words it is advertised in")
 	assert.Contains(t, res.ForLLM, uatDuplicateSentence,
 		"the refusal must name the offending item so the agent can fix it rather than retry blindly")
 
@@ -149,6 +151,7 @@ func TestTaskUpdateRefusesDoDIdenticalToCriteria_GOALFR048(t *testing.T) {
 	require.True(t, res.IsError,
 		"an edit that makes the DoD restate an existing criterion must be refused: %s", res.ForLLM)
 	assert.ErrorIs(t, res.Err, task.ErrDoDNotDistinct, "the refusal must be the DoD-duplicate rule: %s", res.ForLLM)
+	assert.Contains(t, res.ForLLM, "repeats an acceptance criterion", "the refusal must state the rule in plain words")
 
 	g, err := gs.GetByOwner(generated.GoalOwnerKindTask, id)
 	require.NoError(t, err)
@@ -174,6 +177,7 @@ func TestTaskUpdateRefusesCriteriaThatRestateThePersistedDoD_GOALFR048(t *testin
 	require.True(t, res.IsError,
 		"new criteria that restate the persisted DoD must be refused: %s", res.ForLLM)
 	assert.ErrorIs(t, res.Err, task.ErrDoDNotDistinct, "the refusal must be the DoD-duplicate rule: %s", res.ForLLM)
+	assert.Contains(t, res.ForLLM, "repeats an acceptance criterion", "the refusal must state the rule in plain words")
 
 	stored, err := store.Get(id)
 	require.NoError(t, err)
