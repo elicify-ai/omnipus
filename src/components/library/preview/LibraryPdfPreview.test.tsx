@@ -1151,19 +1151,58 @@ describe('LibraryPdfPreview — D-63 the signature dialog defaults to the page o
   it('firstVisiblePdfPage picks the first page whose bottom is below the scroll top', async () => {
     const { firstVisiblePdfPage } = await import('./LibraryPdfPreview')
     const container = document.createElement('div')
-    const mk = (n: number, top: number, height: number) => {
+    // Visual rectangles, scrolled 900px down: page 1 has scrolled fully past
+    // the container's top edge, page 2's bottom is still below it.
+    const mk = (n: number, rectTop: number, height: number) => {
       const el = document.createElement('div')
       el.setAttribute('data-page-number', String(n))
-      Object.defineProperty(el, 'offsetTop', { value: top })
-      Object.defineProperty(el, 'offsetHeight', { value: height })
+      Object.defineProperty(el, 'getBoundingClientRect', {
+        value: () => ({ top: rectTop, bottom: rectTop + height, height, left: 0, right: 0, width: 0, x: 0, y: rectTop, toJSON: () => ({}) }),
+      })
       container.appendChild(el)
     }
-    mk(1, 0, 800)
-    mk(2, 816, 800)
-    mk(3, 1632, 800)
-    Object.defineProperty(container, 'scrollTop', { value: 900, writable: true })
+    Object.defineProperty(container, 'getBoundingClientRect', {
+      value: () => ({ top: 300, bottom: 1200, height: 900, left: 0, right: 0, width: 0, x: 0, y: 300, toJSON: () => ({}) }),
+    })
+    mk(1, -600, 800)
+    mk(2, 216, 800)
+    mk(3, 1032, 800)
     expect(firstVisiblePdfPage(container)).toBe(2)
     expect(firstVisiblePdfPage(document.createElement('div'))).toBe(1)
+  })
+
+  // Claude review 2026-09-14, cut-list: offsetTop is measured against the
+  // nearest POSITIONED ancestor, which in the real layout is a wrapper well
+  // above the scroll container (the preview header sits between them), so
+  // comparing it against scrollTop over-reports every page's position and
+  // the signature default lands on an EARLIER page than the one on screen.
+  // The function must measure relative to the scroll container itself.
+  it('firstVisiblePdfPage measures against the scroll container, not a distant positioned ancestor', async () => {
+    const { firstVisiblePdfPage } = await import('./LibraryPdfPreview')
+    const container = document.createElement('div')
+    // The positioned ancestor starts 44px above the scroll container, so
+    // offsetTop is inflated by 44 relative to the container's own
+    // coordinate space. The reader has scrolled 830px: page 1's bottom sits
+    // at 800 inside the container — fully scrolled past — but 800 + 44 > 830,
+    // so an offsetTop-based check would still answer page 1.
+    const mk = (n: number, offsetTop: number, rectTop: number, height: number) => {
+      const el = document.createElement('div')
+      el.setAttribute('data-page-number', String(n))
+      Object.defineProperty(el, 'offsetTop', { value: offsetTop })
+      Object.defineProperty(el, 'offsetHeight', { value: height })
+      Object.defineProperty(el, 'getBoundingClientRect', {
+        value: () => ({ top: rectTop, bottom: rectTop + height, height, left: 0, right: 0, width: 0, x: 0, y: rectTop, toJSON: () => ({}) }),
+      })
+      container.appendChild(el)
+    }
+    Object.defineProperty(container, 'scrollTop', { value: 830, writable: true })
+    Object.defineProperty(container, 'getBoundingClientRect', {
+      value: () => ({ top: 300, bottom: 1200, height: 900, left: 0, right: 0, width: 0, x: 0, y: 300, toJSON: () => ({}) }),
+    })
+    mk(1, 44, -530, 800)
+    mk(2, 860, 286, 800)
+    mk(3, 1676, 1102, 800)
+    expect(firstVisiblePdfPage(container)).toBe(2)
   })
 })
 

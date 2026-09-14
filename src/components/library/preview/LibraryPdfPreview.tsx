@@ -180,12 +180,21 @@ export function nextPdfZoom(current: number, direction: 'in' | 'out'): number {
 /** UAT D-63 (2026-09-13): the page a reader is LOOKING AT — the first
  *  rendered page whose bottom edge is below the container's scroll top — so
  *  the signature dialog defaults to it rather than to the last page of the
- *  document. Falls back to 1 when nothing is rendered yet. */
+ *  document. Falls back to 1 when nothing is rendered yet.
+ *
+ *  Claude review 2026-09-14, cut-list: measured with getBoundingClientRect
+ *  against the CONTAINER's own rect, never with offsetTop. offsetTop is
+ *  relative to the nearest positioned ancestor, which in this layout is a
+ *  wrapper above the preview header — dozens of pixels above the scroll
+ *  container — so comparing it against scrollTop over-reported every page
+ *  and the answer landed on an earlier page than the one on screen. The
+ *  rect pair is also correct under the D-37 CSS `zoom`, where offsetTop's
+ *  coordinate space is not the container's. */
 export function firstVisiblePdfPage(container: HTMLElement): number {
   const pages = container.querySelectorAll<HTMLElement>('[data-page-number]')
-  const top = container.scrollTop
+  const viewTop = container.getBoundingClientRect().top
   for (const el of pages) {
-    if (el.offsetTop + el.offsetHeight > top) {
+    if (el.getBoundingClientRect().bottom > viewTop) {
       const n = Number(el.getAttribute('data-page-number'))
       if (Number.isInteger(n) && n >= 1) return n
     }
