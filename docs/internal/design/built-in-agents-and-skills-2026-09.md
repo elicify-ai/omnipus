@@ -3,7 +3,7 @@
 **Status:** proposed (founder direction 2026-09-13; isolation rules added 2026-09-14)  
 **Branch home:** `docs/internal/design/` on the release lineage (not a spec).  
 **Supersedes:** the five-core README story (Mia, Jim, Ava, Ray, Max) and the compiled seed where it disagrees.  
-**Related:** vault note `Feature design — Workspace packs`; ADR-082 v9 (worktree isolation, branch `feat/lsp-and-native-worktrees`).
+**Related:** vault note `Feature design — Workspace packs`; ADR-082 v10 (worktree isolation, branch `feat/lsp-and-native-worktrees`).
 
 This is what the default install **must** be. Packs are extra. Code today does not yet match this document.
 
@@ -185,7 +185,7 @@ There is no native Office tool in the catalogue. The four authoring skills teach
 
 ## 7. Isolation for parallel coding
 
-Source of truth: **ADR-082 v9**, decisions D11 (background delegates) and D12 (plan steps). This section is what Jim, Planner, the `plan` and `orchestrate` skills, and the Planner’s and Jim’s instructions must teach.
+Source of truth: **ADR-082 v10**, decisions D11 (background delegates), D12 (plan steps) and D13 (delegate contracts). This section is what Jim, Planner, the `plan` and `orchestrate` skills, and the Planner’s and Jim’s instructions must teach.
 
 **What it is.** An isolated step works in its own copy of a git repository, on its own branch. The engine commits the step’s work, the Judge scores that commit, and the engine merges it into the repository **before** any step that depends on it starts. Without isolation, steps running at the same time write into the same folder and overwrite each other.
 
@@ -219,7 +219,7 @@ Once one step on a repository is isolated, **every** step in the plan that chang
 
 **Blind spot.** A step with no file list and no `project_root` that still edits code is invisible to lint. The Planner must opt such a step in; lint cannot catch the omission.
 
-**What happens at run time** (engine, not agents): a repository with uncommitted changes refuses the step before it starts (no attempt used). A merge conflict does not mark the step done: the step retries from the repository’s new state, and the Plan Supervisor is told.
+**What happens at run time** (engine, not agents): a repository with uncommitted changes refuses the step before it starts (no attempt used); the engine retries after one minute, up to three attempts, then parks the step as blocked and tells the Plan Supervisor (founder ruling). A merge conflict does not mark the step done: the step retries from the repository’s new state, and the Plan Supervisor is told. Pressing Stop while a judged step is being merged lets the merge finish first — no judged work is thrown away (founder ruling).
 
 ### 7.4 Plan skill text to install
 
@@ -253,7 +253,7 @@ Not in this roster, but required for a Software pack / serious coding:
 - Merge existing **`grep`** (ADR-081, unmerged) — names + content + globs.
 - First-party **`lsp` tool** (pure Go client, `go.lsp.dev/jsonrpc2` + `protocol`). Exec **host** language servers (`gopls`, etc.). Do not embed servers; do not use Tree-sitter (wrong layer + CGo).
 - Claude Code LSP = plugin maps `.go` → `gopls` **and** the binary on PATH; **session start** discovery (installing `gopls` mid-session is not enough).
-- Worktree isolation for parallel coding — ADR-082 v9 (§7).
+- Worktree isolation for parallel coding — ADR-082 v10 (§7).
 
 Skip: NotebookEdit.
 
@@ -273,5 +273,5 @@ Default box does **not** include domain packs. See vault **Feature design — Wo
 4. Pin Judge to `verify`.
 5. Merge grep; design `lsp` separately.
 6. Do not compile Salesforce / Zendesk / gopls into the binary.
-7. Implement ADR-082 v9 D12: `project_root` on plan steps, the plan-lint rules in §7.3, merge before dependents.
+7. Implement ADR-082 v10 D12: `project_root` on plan steps, the plan-lint rules in §7.3, merge before dependents.
 8. When item 7 ships: install §7.4 in the `plan` skill and the Planner’s instructions, §7.5 in the `orchestrate` skill and Jim’s instructions, and add the isolation question to Jim’s interview checklist. Not before — a skill must never describe a field that does not work.
