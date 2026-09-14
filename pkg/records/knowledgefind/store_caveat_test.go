@@ -28,7 +28,7 @@ func TestFind_StoreCoverageCaveatMarksTheAnswerIncomplete(t *testing.T) {
 
 	d := f.deps()
 	d.StoreCoverageCaveat = "this knowledge base was not fully evaluated: every readable file is " +
-		"indexed, but 1 of the 2 files Sync saw could not be read, so records in them cannot " +
+		"indexed, but 1 of the 2 files on disk could not be read, so records in them cannot " +
 		"appear in any answer: garden/locked.md"
 
 	req := generated.VaultFindRequest{Type: strPtrTo("plant")}
