@@ -1,0 +1,52 @@
+title: GoalOutcomeFrame
+description: >
+  Server → client. The goal outcome line (founder decision 2026-09-14): one
+  push per goal ENDING — met, not met (rounds/budget/idle/other), or stopped
+  (by the user, or because the working agent was deleted) — carrying the
+  structured `GoalOutcome`. Session-scoped (registered in
+  `SESSION_SCOPED_FRAME_TYPES`). Emitted live by the terminal transition
+  (`pkg/agent/goal_loop.go::clearGoalStatus`) right after it persists the
+  SAME outcome as a `type: system, system_subtype: goal_outcome` transcript
+  entry (`Message.yaml`), and re-emitted as this same frame type by
+  `pkg/gateway/replay.go` from that entry — discriminating on the stamped
+  `system_subtype`, never on `content` prefix-matching (the
+  `BrowserHandoverNoticeFrame` BROWSER-FR-043a precedent). THIS FILE EXISTS
+  ONLY for the Constraint #8 5-step process and the
+  `pkg/gateway/inboundschemas/` sync — the GENERATING copy for codegen is
+  the inline schema in `contracts/asyncapi.yaml`; this frame is NEVER
+  registered in `contracts/openapi.yaml` (doing so would emit the same
+  exported TypeScript name twice and break the build). Keep both copies in
+  sync by hand.
+type: object
+required:
+  - type
+  - session_id
+  - message_id
+  - outcome
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: goal_outcome
+  session_id:
+    type: string
+    minLength: 1
+    description: The chat session the goal ran in.
+    example: "session_01M2F71KJAG5F06FBF2Q0T20JY"
+  message_id:
+    type: string
+    minLength: 1
+    description: >
+      Stable id for THIS ending, minted once by the writer and stamped
+      verbatim onto both the persisted transcript entry's own `id` and
+      every frame for it (live and replay), e.g.
+      `goal-outcome-<goal_id>-<terminal unix nanos>`. goal_id alone is not
+      unique per ending — a task-owned goal can be re-run and end again —
+      so the id must carry something minted at the ending itself; it is
+      never a per-process counter (it must survive a gateway restart). The
+      live push, the replayed frame and the cold-loaded entry therefore
+      converge on ONE thread line; the SPA drops a frame whose id it
+      already holds.
+    example: "goal-outcome-goal_01M2F71KTWW6B2ADSGB3XVMS69-1789367371829960000"
+  outcome:
+    $ref: ./GoalOutcome.yaml

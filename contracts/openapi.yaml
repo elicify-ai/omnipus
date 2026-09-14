@@ -756,6 +756,8 @@ components:
       $ref: ./components/schemas/JudgeVerdict.yaml
     CriterionVerdict:
       $ref: ./components/schemas/CriterionVerdict.yaml
+    GoalOutcome:
+      $ref: ./components/schemas/GoalOutcome.yaml
     PlanApproveError:
       $ref: ./components/schemas/PlanApproveError.yaml
     AgentTokenEntry:

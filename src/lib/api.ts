@@ -288,6 +288,7 @@ if ((import.meta.env.DEV || import.meta.env.MODE === 'test' || (typeof navigator
 // Types whose generated shape is canonical (no local body) — import into scope
 // so function return-type annotations compile, then re-export for consumers.
 import type {
+  GoalOutcome as WireGoalOutcome,
   LoginResponse,
   ProbeProviderRequest,
   ProbeProviderResponse,
@@ -1247,6 +1248,15 @@ interface MessageBase { // not-wire-format
   /** The verdict payload when `type === 'judge_verdict'` (wire `Message.verdict`, same shape as the live `JudgeVerdictFrame` push minus the `type`/`session_id` discriminator fields). */
   verdict?: JudgeVerdict
   /**
+   * Goal outcome line (founder decision 2026-09-14): set on a `role: 'system'`
+   * message that records how a goal ENDED — from the persisted
+   * `system_subtype: goal_outcome` transcript entry on a cold REST load
+   * (`rawToMessage`), or from the live/replayed `goal_outcome` WS frame
+   * (store/chat.ts → `buildGoalOutcomeInsertion`, src/lib/goalOutcome.ts).
+   * Renderers show `GoalOutcomeRow` for it, regardless of Verbose chat.
+   */
+  goalOutcome?: WireGoalOutcome
+  /**
    * ADR-087 D2 — set on the last assistant entry of an incomplete turn.
    * Only populated for assistant messages (only role the backend ever
    * stamps this on — `MarkLastEntryTruncated` writes the last assistant
@@ -1426,6 +1436,12 @@ interface RawMessage { // not-wire-format: adapter alias over the generated Mess
    * this field existed predates it and was always a cancel).
    */
   truncation_reason?: TruncationReason
+  /**
+   * Goal outcome line — present on a `type: system, system_subtype:
+   * goal_outcome` entry (contracts/components/schemas/GoalOutcome.yaml).
+   * Forwarded by rawToMessage so a reloaded thread shows how a goal ended.
+   */
+  goal_outcome?: WireGoalOutcome
 }
 
 function rawToToolCall(raw: RawToolCall): ToolCall {
@@ -1494,6 +1510,7 @@ function rawToMessage(raw: RawMessage): Message {
       cost: raw.cost,
       agentId: raw.agent_id || undefined,
       status: 'done',
+      ...(raw.goal_outcome ? { goalOutcome: raw.goal_outcome } : {}),
     } satisfies SystemMessage
   }
   // role === 'assistant' (default)

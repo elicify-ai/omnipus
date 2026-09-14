@@ -2783,6 +2783,30 @@ func (e GoalTerminalHistoryVerdictScope) Valid() bool {
 	}
 }
 
+// Defines values for GoalOutcomeEnding.
+const (
+	GoalOutcomeEndingMet             GoalOutcomeEnding = "met"
+	GoalOutcomeEndingOther           GoalOutcomeEnding = "other"
+	GoalOutcomeEndingRoundsExhausted GoalOutcomeEnding = "rounds_exhausted"
+	GoalOutcomeEndingStoppedByUser   GoalOutcomeEnding = "stopped_by_user"
+)
+
+// Valid indicates whether the value is a known member of the GoalOutcomeEnding enum.
+func (e GoalOutcomeEnding) Valid() bool {
+	switch e {
+	case GoalOutcomeEndingMet:
+		return true
+	case GoalOutcomeEndingOther:
+		return true
+	case GoalOutcomeEndingRoundsExhausted:
+		return true
+	case GoalOutcomeEndingStoppedByUser:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for HealthResponseAuditLogger.
 const (
 	HealthResponseAuditLoggerOk          HealthResponseAuditLogger = "ok"
@@ -3077,6 +3101,30 @@ func (e MessageCancelMethod) Valid() bool {
 	}
 }
 
+// Defines values for MessageGoalOutcomeEnding.
+const (
+	MessageGoalOutcomeEndingMet             MessageGoalOutcomeEnding = "met"
+	MessageGoalOutcomeEndingOther           MessageGoalOutcomeEnding = "other"
+	MessageGoalOutcomeEndingRoundsExhausted MessageGoalOutcomeEnding = "rounds_exhausted"
+	MessageGoalOutcomeEndingStoppedByUser   MessageGoalOutcomeEnding = "stopped_by_user"
+)
+
+// Valid indicates whether the value is a known member of the MessageGoalOutcomeEnding enum.
+func (e MessageGoalOutcomeEnding) Valid() bool {
+	switch e {
+	case MessageGoalOutcomeEndingMet:
+		return true
+	case MessageGoalOutcomeEndingOther:
+		return true
+	case MessageGoalOutcomeEndingRoundsExhausted:
+		return true
+	case MessageGoalOutcomeEndingStoppedByUser:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MessageRole.
 const (
 	MessageRoleAssistant MessageRole = "assistant"
@@ -3122,12 +3170,15 @@ func (e MessageStatus) Valid() bool {
 // Defines values for MessageSystemSubtype.
 const (
 	MessageSystemSubtypeBrowserHandoverNotice MessageSystemSubtype = "browser_handover_notice"
+	MessageSystemSubtypeGoalOutcome           MessageSystemSubtype = "goal_outcome"
 )
 
 // Valid indicates whether the value is a known member of the MessageSystemSubtype enum.
 func (e MessageSystemSubtype) Valid() bool {
 	switch e {
 	case MessageSystemSubtypeBrowserHandoverNotice:
+		return true
+	case MessageSystemSubtypeGoalOutcome:
 		return true
 	default:
 		return false
@@ -5678,6 +5729,30 @@ func (e SessionDetailMessagesCancelMethod) Valid() bool {
 	}
 }
 
+// Defines values for SessionDetailMessagesGoalOutcomeEnding.
+const (
+	SessionDetailMessagesGoalOutcomeEndingMet             SessionDetailMessagesGoalOutcomeEnding = "met"
+	SessionDetailMessagesGoalOutcomeEndingOther           SessionDetailMessagesGoalOutcomeEnding = "other"
+	SessionDetailMessagesGoalOutcomeEndingRoundsExhausted SessionDetailMessagesGoalOutcomeEnding = "rounds_exhausted"
+	SessionDetailMessagesGoalOutcomeEndingStoppedByUser   SessionDetailMessagesGoalOutcomeEnding = "stopped_by_user"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesGoalOutcomeEnding enum.
+func (e SessionDetailMessagesGoalOutcomeEnding) Valid() bool {
+	switch e {
+	case SessionDetailMessagesGoalOutcomeEndingMet:
+		return true
+	case SessionDetailMessagesGoalOutcomeEndingOther:
+		return true
+	case SessionDetailMessagesGoalOutcomeEndingRoundsExhausted:
+		return true
+	case SessionDetailMessagesGoalOutcomeEndingStoppedByUser:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SessionDetailMessagesRole.
 const (
 	SessionDetailMessagesRoleAssistant SessionDetailMessagesRole = "assistant"
@@ -5723,12 +5798,15 @@ func (e SessionDetailMessagesStatus) Valid() bool {
 // Defines values for SessionDetailMessagesSystemSubtype.
 const (
 	SessionDetailMessagesSystemSubtypeBrowserHandoverNotice SessionDetailMessagesSystemSubtype = "browser_handover_notice"
+	SessionDetailMessagesSystemSubtypeGoalOutcome           SessionDetailMessagesSystemSubtype = "goal_outcome"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailMessagesSystemSubtype enum.
 func (e SessionDetailMessagesSystemSubtype) Valid() bool {
 	switch e {
 	case SessionDetailMessagesSystemSubtypeBrowserHandoverNotice:
+		return true
+	case SessionDetailMessagesSystemSubtypeGoalOutcome:
 		return true
 	default:
 		return false
@@ -6775,13 +6853,13 @@ func (e TaskAction) Valid() bool {
 
 // Defines values for TaskCancelReason.
 const (
-	TaskCancelReasonStoppedByUser TaskCancelReason = "stopped_by_user"
+	StoppedByUser TaskCancelReason = "stopped_by_user"
 )
 
 // Valid indicates whether the value is a known member of the TaskCancelReason enum.
 func (e TaskCancelReason) Valid() bool {
 	switch e {
-	case TaskCancelReasonStoppedByUser:
+	case StoppedByUser:
 		return true
 	default:
 		return false
@@ -11660,6 +11738,36 @@ type GoalTerminalHistoryVerdictPerCriterionProvenance string
 // GoalTerminalHistoryVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 type GoalTerminalHistoryVerdictScope string
 
+// GoalOutcome How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written EXACTLY ONCE per goal ending, by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
+type GoalOutcome struct {
+	// CriteriaTotal Number of criteria the deciding Judge verdict evaluated (`per_criterion` length). OPTIONAL — present only when a verdict exists. With `ending: met` every one of them was confirmed.
+	CriteriaTotal *int `json:"criteria_total,omitempty"`
+
+	// EndedAt RFC 3339 UTC timestamp of the terminal transition.
+	EndedAt time.Time `json:"ended_at"`
+
+	// Ending WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
+	Ending GoalOutcomeEnding `json:"ending"`
+
+	// GoalId The goal that ended (`Goal.goal_id`).
+	GoalId string `json:"goal_id"`
+
+	// GoalText The goal's own text, verbatim (`Goal.prompt`) — what the user asked for. Rendered after the outcome headline.
+	GoalText string `json:"goal_text"`
+
+	// JudgeReason The Judge's most recent reason — for a not-met ending, the last UNMET reason fed back to the worker; for `met`, the deciding verdict's reasoning. OPTIONAL: absent when no Judge round ever ran or no reason was recorded. The writer MUST omit the field rather than send a placeholder (e.g. the internal "(no reason recorded)" sentinel).
+	JudgeReason *string `json:"judge_reason,omitempty"`
+
+	// MaxRounds The goal's round limit at the time it ended (`Goal.max_rounds`).
+	MaxRounds int `json:"max_rounds"`
+
+	// RoundsUsed Adjudication rounds consumed when the goal ended (shown to the user as "tries"). For `rounds_exhausted` this is the round that hit the limit (normally equal to `max_rounds`); for every other ending it is the number of rounds actually completed. Always the real persisted count — never defaulted to `max_rounds`.
+	RoundsUsed int `json:"rounds_used"`
+}
+
+// GoalOutcomeEnding WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
+type GoalOutcomeEnding string
+
 // GodModeStatus O14 god-mode runtime state, returned by GET /api/v1/gateway/god-mode. God mode is the single global "bypass-permissions" switch: when enabled every agent's tool policy is floored at "allow" (no prompts), the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting are never disabled. The per-agent overrides are non-destructive: switching god mode off restores prior behavior exactly.
 type GodModeStatus struct {
 	// Available Whether god mode is ACTIVE-CAPABLE in this boot: the build supports it (`supported` is true) AND authorization was granted before this process started, either via the legacy --allow-god-mode boot flag or via sandbox.god_mode_allowed persisted config (set by a prior UI enable + restart). Authorization is evaluated once at boot, so granting it via the UI (POST enabled=true while available=false) does not flip this to true until the gateway restarts — see GodModeUpdateResponse.restart_required.
@@ -12466,6 +12574,33 @@ type Message struct {
 	// DescendantsCanceled IDs of descendant turns that were canceled in cascade — present only on type="turn_canceled" entries (FR-6a).
 	DescendantsCanceled *[]string `json:"descendants_canceled,omitempty"`
 
+	// GoalOutcome How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written EXACTLY ONCE per goal ending, by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
+	GoalOutcome *struct {
+		// CriteriaTotal Number of criteria the deciding Judge verdict evaluated (`per_criterion` length). OPTIONAL — present only when a verdict exists. With `ending: met` every one of them was confirmed.
+		CriteriaTotal *int `json:"criteria_total,omitempty"`
+
+		// EndedAt RFC 3339 UTC timestamp of the terminal transition.
+		EndedAt time.Time `json:"ended_at"`
+
+		// Ending WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
+		Ending MessageGoalOutcomeEnding `json:"ending"`
+
+		// GoalId The goal that ended (`Goal.goal_id`).
+		GoalId string `json:"goal_id"`
+
+		// GoalText The goal's own text, verbatim (`Goal.prompt`) — what the user asked for. Rendered after the outcome headline.
+		GoalText string `json:"goal_text"`
+
+		// JudgeReason The Judge's most recent reason — for a not-met ending, the last UNMET reason fed back to the worker; for `met`, the deciding verdict's reasoning. OPTIONAL: absent when no Judge round ever ran or no reason was recorded. The writer MUST omit the field rather than send a placeholder (e.g. the internal "(no reason recorded)" sentinel).
+		JudgeReason *string `json:"judge_reason,omitempty"`
+
+		// MaxRounds The goal's round limit at the time it ended (`Goal.max_rounds`).
+		MaxRounds int `json:"max_rounds"`
+
+		// RoundsUsed Adjudication rounds consumed when the goal ended (shown to the user as "tries"). For `rounds_exhausted` this is the round that hit the limit (normally equal to `max_rounds`); for every other ending it is the number of rounds actually completed. Always the real persisted count — never defaulted to `max_rounds`.
+		RoundsUsed int `json:"rounds_used"`
+	} `json:"goal_outcome,omitempty"`
+
 	// Id Unique message identifier.
 	Id string `json:"id"`
 
@@ -12484,7 +12619,7 @@ type Message struct {
 	// Summary Compaction summary text (present only on type=compaction entries).
 	Summary *string `json:"summary,omitempty"`
 
-	// SystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not a browser-handover notice. Enum of exactly one value today so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same `BrowserHandoverNoticeFrame` type on replay as was emitted live (BROWSER-FR-043a).
+	// SystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`).
 	SystemSubtype *MessageSystemSubtype `json:"system_subtype,omitempty"`
 
 	// Timestamp RFC3339 timestamp when this entry was recorded.
@@ -12612,13 +12747,16 @@ type MessageAttachmentsType string
 // MessageCancelMethod How the cancel was applied — present only on type="turn_canceled" entries (FR-15). "graceful" lets the in-flight tool finish; "hard" interrupts immediately.
 type MessageCancelMethod string
 
+// MessageGoalOutcomeEnding WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
+type MessageGoalOutcomeEnding string
+
 // MessageRole Author role. Absent on compaction entries.
 type MessageRole string
 
 // MessageStatus Completion status of this message turn.
 type MessageStatus string
 
-// MessageSystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not a browser-handover notice. Enum of exactly one value today so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same `BrowserHandoverNoticeFrame` type on replay as was emitted live (BROWSER-FR-043a).
+// MessageSystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`).
 type MessageSystemSubtype string
 
 // MessageToolCallsContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
@@ -15028,6 +15166,33 @@ type SessionDetail struct {
 		// DescendantsCanceled IDs of descendant turns that were canceled in cascade — present only on type="turn_canceled" entries (FR-6a).
 		DescendantsCanceled *[]string `json:"descendants_canceled,omitempty"`
 
+		// GoalOutcome How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written EXACTLY ONCE per goal ending, by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
+		GoalOutcome *struct {
+			// CriteriaTotal Number of criteria the deciding Judge verdict evaluated (`per_criterion` length). OPTIONAL — present only when a verdict exists. With `ending: met` every one of them was confirmed.
+			CriteriaTotal *int `json:"criteria_total,omitempty"`
+
+			// EndedAt RFC 3339 UTC timestamp of the terminal transition.
+			EndedAt time.Time `json:"ended_at"`
+
+			// Ending WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
+			Ending SessionDetailMessagesGoalOutcomeEnding `json:"ending"`
+
+			// GoalId The goal that ended (`Goal.goal_id`).
+			GoalId string `json:"goal_id"`
+
+			// GoalText The goal's own text, verbatim (`Goal.prompt`) — what the user asked for. Rendered after the outcome headline.
+			GoalText string `json:"goal_text"`
+
+			// JudgeReason The Judge's most recent reason — for a not-met ending, the last UNMET reason fed back to the worker; for `met`, the deciding verdict's reasoning. OPTIONAL: absent when no Judge round ever ran or no reason was recorded. The writer MUST omit the field rather than send a placeholder (e.g. the internal "(no reason recorded)" sentinel).
+			JudgeReason *string `json:"judge_reason,omitempty"`
+
+			// MaxRounds The goal's round limit at the time it ended (`Goal.max_rounds`).
+			MaxRounds int `json:"max_rounds"`
+
+			// RoundsUsed Adjudication rounds consumed when the goal ended (shown to the user as "tries"). For `rounds_exhausted` this is the round that hit the limit (normally equal to `max_rounds`); for every other ending it is the number of rounds actually completed. Always the real persisted count — never defaulted to `max_rounds`.
+			RoundsUsed int `json:"rounds_used"`
+		} `json:"goal_outcome,omitempty"`
+
 		// Id Unique message identifier.
 		Id string `json:"id"`
 
@@ -15046,7 +15211,7 @@ type SessionDetail struct {
 		// Summary Compaction summary text (present only on type=compaction entries).
 		Summary *string `json:"summary,omitempty"`
 
-		// SystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not a browser-handover notice. Enum of exactly one value today so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same `BrowserHandoverNoticeFrame` type on replay as was emitted live (BROWSER-FR-043a).
+		// SystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`).
 		SystemSubtype *SessionDetailMessagesSystemSubtype `json:"system_subtype,omitempty"`
 
 		// Timestamp RFC3339 timestamp when this entry was recorded.
@@ -15283,13 +15448,16 @@ type SessionDetailMessagesAttachmentsType string
 // SessionDetailMessagesCancelMethod How the cancel was applied — present only on type="turn_canceled" entries (FR-15). "graceful" lets the in-flight tool finish; "hard" interrupts immediately.
 type SessionDetailMessagesCancelMethod string
 
+// SessionDetailMessagesGoalOutcomeEnding WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
+type SessionDetailMessagesGoalOutcomeEnding string
+
 // SessionDetailMessagesRole Author role. Absent on compaction entries.
 type SessionDetailMessagesRole string
 
 // SessionDetailMessagesStatus Completion status of this message turn.
 type SessionDetailMessagesStatus string
 
-// SessionDetailMessagesSystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not a browser-handover notice. Enum of exactly one value today so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same `BrowserHandoverNoticeFrame` type on replay as was emitted live (BROWSER-FR-043a).
+// SessionDetailMessagesSystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`).
 type SessionDetailMessagesSystemSubtype string
 
 // SessionDetailMessagesToolCallsContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.

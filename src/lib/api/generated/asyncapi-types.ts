@@ -66,7 +66,8 @@ export type WsFrameType =
   | "judge_verdict"
   | "ask_user_question"
   | "ask_user_answer"
-  | "browser_handover_notice";
+  | "browser_handover_notice"
+  | "goal_outcome";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
@@ -826,6 +827,24 @@ export interface BrowserHandoverNoticeFrame {
   text: string;
 }
 
+export interface GoalOutcomeFrameOutcome {
+  goal_id: string;
+  goal_text: string;
+  ending: "met" | "rounds_exhausted" | "stopped_by_user" | "other";
+  rounds_used: number;
+  max_rounds: number;
+  judge_reason?: string;
+  criteria_total?: number;
+  ended_at: string;
+}
+
+export interface GoalOutcomeFrame {
+  type: "goal_outcome";
+  session_id: string;
+  message_id: string;
+  outcome: GoalOutcomeFrameOutcome;
+}
+
 export interface ErrorPayload {
   llm_error: LLMError;
 }
@@ -896,7 +915,8 @@ export type WsFrame =
   | LoopStatusFrame
   | PlanStatusFrame
   | JudgeVerdictFrame
-  | BrowserHandoverNoticeFrame;
+  | BrowserHandoverNoticeFrame
+  | GoalOutcomeFrame;
 
 // ── Client → server frames ──────────────────────────────────────────────────
 
@@ -969,4 +989,5 @@ export type ServerFrame =
   | LoopStatusFrame
   | PlanStatusFrame
   | JudgeVerdictFrame
-  | BrowserHandoverNoticeFrame;
+  | BrowserHandoverNoticeFrame
+  | GoalOutcomeFrame;

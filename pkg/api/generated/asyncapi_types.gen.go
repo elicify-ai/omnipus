@@ -393,6 +393,27 @@ type FileExistsRefusal struct {
 	Tool string `json:"tool"`
 }
 
+// GoalOutcomeFrame — Server → client. The goal outcome line (founder decision 2026-09-14): one push per goal ENDING (met / round limit reached / stopped by the user / other). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Emitted live by the terminal transition right after it persists the SAME outcome as a `type: system, system_subtype: goal_outcome` transcript entry, and re-emitted as this same frame type by pkg/gateway/replay.go from that entry (discriminating on the stamped system_subtype, never on content). THIS is the GENERATING copy; components/schemas/GoalOutcomeFrame.yaml exists only for the Constraint #8 5-step process and the inboundschemas sync — keep both in sync by hand.
+type GoalOutcomeFrame struct {
+	// Stable id for THIS ending, minted once by the writer and stamped verbatim onto both the persisted transcript entry's `id` and every frame for it (live and replay), e.g. `goal-outcome-<goal_id>-<terminal unix nanos>` — goal_id alone is not unique per ending (a task-owned goal can be re-run and end again). The SPA inserts at most one line per id.
+	MessageId string                  `json:"message_id"`
+	Outcome   GoalOutcomeFrameOutcome `json:"outcome"`
+	SessionId string                  `json:"session_id"`
+	Type      string                  `json:"type"`
+}
+
+// GoalOutcomeFrameOutcome — Hand-synced WS copy of contracts/components/schemas/GoalOutcome.yaml (the REST/transcript carrier — see it for every field's meaning). Named differently because pkg/api/generated holds the OpenAPI and AsyncAPI Go types in one package and cannot declare `GoalOutcome` twice. Any field edit MUST be mirrored in GoalOutcome.yaml.
+type GoalOutcomeFrameOutcome struct {
+	CriteriaTotal *int    `json:"criteria_total,omitempty"`
+	EndedAt       string  `json:"ended_at"`
+	Ending        string  `json:"ending"`
+	GoalId        string  `json:"goal_id"`
+	GoalText      string  `json:"goal_text"`
+	JudgeReason   *string `json:"judge_reason,omitempty"`
+	MaxRounds     int     `json:"max_rounds"`
+	RoundsUsed    int     `json:"rounds_used"`
+}
+
 // GoalStatusFrame — Server → client. Status push for a session's active /goal loop (ADR-049 D6/D7/US-8; state enum + goal_id extended by ADR-053 §Contract Surface — "Pill-state enum"/R§8.10). Emitted on round completion, state change, and clear/stop. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Canonical copy — keep in sync by hand with components/schemas/GoalStatusFrame.yaml. Class not yet assigned by the ADR-057 W5 audit (FR-089) — do not assume presence or absence of producing_session_id until the audit classifies it.
 type GoalStatusFrame struct {
 	ActiveLoops int    `json:"active_loops"`
@@ -1039,4 +1060,5 @@ const (
 	WsFrameTypeAskUserQuestion          WsFrameType = "ask_user_question"
 	WsFrameTypeAskUserAnswer            WsFrameType = "ask_user_answer"
 	WsFrameTypeBrowserHandoverNotice    WsFrameType = "browser_handover_notice"
+	WsFrameTypeGoalOutcome              WsFrameType = "goal_outcome"
 )

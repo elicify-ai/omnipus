@@ -22,6 +22,7 @@ import type {
   AskUserAnswerFrame,
   SessionStateFrame,
   BrowserHandoverNoticeFrame,
+  GoalOutcomeFrame,
 } from '@/lib/api/generated/asyncapi-types'
 import { useJudgeActivityStore } from '@/store/judgeActivity'
 import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/schemas'
@@ -33,6 +34,7 @@ import { reconcilePendingAsks } from '@/store/pendingAskReconcile'
 import { registerSyncChatForeground } from '@/store/session'
 import { logDiagnostic } from '@/lib/telemetry'
 import { normalizeTruncationReason } from '@/lib/truncation'
+import { buildGoalOutcomeInsertion } from '@/lib/goalOutcome'
 import {
   getLLMErrorDisplay,
   readEntryIdFromFrame,
@@ -1627,6 +1629,9 @@ const SESSION_SCOPED_FRAME_TYPES = new Set([
   // carries a required, min(1) `session_id` (contracts/components/schemas/
   // BrowserHandoverNoticeFrame.yaml) — session-scoped like goal_status.
   'browser_handover_notice',
+  // Goal outcome line (founder decision 2026-09-14): GoalOutcomeFrame carries
+  // a required, min(1) `session_id` — session-scoped like goal_status.
+  'goal_outcome',
 ])
 
 // F-S3: frame types that can carry a turn-cancellation acknowledgment
@@ -6049,6 +6054,19 @@ export const useChatStore = create<ChatStore>((set, get) => {
           if (!targetSid) break
           const handoverFrame = frame as BrowserHandoverNoticeFrame
           withBucket(targetSid, (b) => buildBrowserHandoverInsertion(b, handoverFrame) ?? {})
+          break
+        }
+
+        case 'goal_outcome': {
+          // Goal outcome line (founder decision 2026-09-14) — how a goal ended,
+          // pushed live at the ending or re-sent by replay from the persisted
+          // `system_subtype: goal_outcome` entry. Session-scoped (in
+          // SESSION_SCOPED_FRAME_TYPES above). buildGoalOutcomeInsertion
+          // (src/lib/goalOutcome.ts) drops a frame whose id the bucket already
+          // holds, so live + replay + cold load converge on one line.
+          if (!targetSid) break
+          const outcomeFrame = frame as GoalOutcomeFrame
+          withBucket(targetSid, (b) => buildGoalOutcomeInsertion(b, outcomeFrame) ?? {})
           break
         }
 

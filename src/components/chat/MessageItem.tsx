@@ -13,6 +13,7 @@ import { fetchAgents } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { splitMessageParts } from '@/lib/messageParts'
 import { getMessageStatusSuffix } from '@/lib/truncation'
+import { GoalOutcomeRow } from './GoalOutcomeRow'
 
 // ADR-051 — cap on the verbose-only "Technical details" disclosure content.
 // Keeps a runaway provider error payload from blowing out the chat scroll.
@@ -141,6 +142,14 @@ export function MessageItem({ message }: MessageItemProps) {
   const agentName = agent?.name ?? (message.agentId ? message.agentId : null)
 
   if (isSystem) {
+    // Goal outcome line (founder decision 2026-09-14) — always shown.
+    if (message.goalOutcome) {
+      return (
+        <div className="flex justify-center px-4 py-2">
+          <GoalOutcomeRow outcome={message.goalOutcome} />
+        </div>
+      )
+    }
     return (
       <div className="flex justify-center py-2">
         <span className="text-xs text-[var(--color-muted)] bg-[var(--color-surface-2)] px-3 py-1 rounded-full">

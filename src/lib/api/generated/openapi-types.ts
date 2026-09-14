@@ -3777,11 +3777,12 @@ export interface components {
             model?: string;
             verdict?: components["schemas"]["JudgeVerdict"];
             /**
-             * @description BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not a browser-handover notice. Enum of exactly one value today so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same `BrowserHandoverNoticeFrame` type on replay as was emitted live (BROWSER-FR-043a).
+             * @description BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`).
              * @example browser_handover_notice
              * @enum {string}
              */
-            system_subtype?: "browser_handover_notice";
+            system_subtype?: "browser_handover_notice" | "goal_outcome";
+            goal_outcome?: components["schemas"]["GoalOutcome"];
         };
         /** @description A single tool invocation recorded in a transcript entry. Maps to session.ToolCall on the Go side and ToolCall interface in src/lib/api.ts. */
         ToolCall: {
@@ -10403,6 +10404,54 @@ export interface components {
                  */
                 quote: string;
             }[];
+        };
+        /**
+         * GoalOutcome
+         * @description How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written EXACTLY ONCE per goal ending, by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
+         */
+        GoalOutcome: {
+            /**
+             * @description The goal that ended (`Goal.goal_id`).
+             * @example goal_01M2F71KTWW6B2ADSGB3XVMS69
+             */
+            goal_id: string;
+            /**
+             * @description The goal's own text, verbatim (`Goal.prompt`) — what the user asked for. Rendered after the outcome headline.
+             * @example write a file called e4-marker.txt containing the word RELOAD, then read it back to confirm
+             */
+            goal_text: string;
+            /**
+             * @description WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
+             * @example rounds_exhausted
+             * @enum {string}
+             */
+            ending: "met" | "rounds_exhausted" | "stopped_by_user" | "other";
+            /**
+             * @description Adjudication rounds consumed when the goal ended (shown to the user as "tries"). For `rounds_exhausted` this is the round that hit the limit (normally equal to `max_rounds`); for every other ending it is the number of rounds actually completed. Always the real persisted count — never defaulted to `max_rounds`.
+             * @example 20
+             */
+            rounds_used: number;
+            /**
+             * @description The goal's round limit at the time it ended (`Goal.max_rounds`).
+             * @example 20
+             */
+            max_rounds: number;
+            /**
+             * @description The Judge's most recent reason — for a not-met ending, the last UNMET reason fed back to the worker; for `met`, the deciding verdict's reasoning. OPTIONAL: absent when no Judge round ever ran or no reason was recorded. The writer MUST omit the field rather than send a placeholder (e.g. the internal "(no reason recorded)" sentinel).
+             * @example The file e8-impossible.txt is 5 bytes; the criterion also requires exactly 500 bytes, which cannot hold at the same time.
+             */
+            judge_reason?: string;
+            /**
+             * @description Number of criteria the deciding Judge verdict evaluated (`per_criterion` length). OPTIONAL — present only when a verdict exists. With `ending: met` every one of them was confirmed.
+             * @example 4
+             */
+            criteria_total?: number;
+            /**
+             * Format: date-time
+             * @description RFC 3339 UTC timestamp of the terminal transition.
+             * @example 2026-09-14T06:29:31Z
+             */
+            ended_at: string;
         };
         /**
          * PlanApproveError
@@ -18902,6 +18951,7 @@ export type AcceptanceCriterionInput = components["schemas"]["AcceptanceCriterio
 export type EvidenceRecord = components["schemas"]["EvidenceRecord"];
 export type JudgeVerdict = components["schemas"]["JudgeVerdict"];
 export type CriterionVerdict = components["schemas"]["CriterionVerdict"];
+export type GoalOutcome = components["schemas"]["GoalOutcome"];
 export type PlanApproveError = components["schemas"]["PlanApproveError"];
 export type AgentTokenEntry = components["schemas"]["AgentTokenEntry"];
 export type TokenUsageSummary = components["schemas"]["TokenUsageSummary"];

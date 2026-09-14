@@ -125,6 +125,8 @@ channels:
         $ref: '#/components/messages/AskUserAnswerFrame'
       BrowserHandoverNoticeFrame:
         $ref: '#/components/messages/BrowserHandoverNoticeFrame'
+      GoalOutcomeFrame:
+        $ref: '#/components/messages/GoalOutcomeFrame'
   browser:
     address: /api/v1/browser/ws
     description: 'Live interactive browser channel (ADR-038). A dedicated WebSocket, separate from the chat channel, carrying
@@ -607,6 +609,21 @@ operations:
       type on replay (FR-043a).
     messages:
       - $ref: '#/channels/chat/messages/BrowserHandoverNoticeFrame'
+
+  receiveGoalOutcome:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      The goal outcome line (founder decision 2026-09-14) — one push per
+      goal ENDING (met, round limit reached, stopped by the user, or any
+      other terminal brake), carrying the structured GoalOutcome.
+      Session-scoped. The same outcome is persisted as a `type: system,
+      system_subtype: goal_outcome` transcript entry and re-emitted as this
+      same frame type on replay. An intermediate unmet Judge round is not
+      an ending and never produces one.
+    messages:
+      - $ref: '#/channels/chat/messages/GoalOutcomeFrame'
 
   receivePlanStatus:
     action: receive
@@ -1117,6 +1134,14 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/BrowserHandoverNoticeFrame'
+    GoalOutcomeFrame:
+      name: GoalOutcomeFrame
+      title: goal_outcome
+      summary: >
+        Goal outcome line — how a goal ended (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/GoalOutcomeFrame'
     PlanStatusFrame:
       name: PlanStatusFrame
       title: plan_status
@@ -1317,6 +1342,7 @@ components:
       - ask_user_question
       - ask_user_answer
       - browser_handover_notice
+      - goal_outcome
     AuthFrame:
       title: AuthFrame
       description: Client → server authentication frame.
@@ -5172,6 +5198,95 @@ components:
             BROWSER-FR-041/FR-048a. Includes the browser_handover tool's
             reason (plain text, truncated to 200 runes) when that is the
             producer.
+
+    GoalOutcomeFrameOutcome:
+      title: GoalOutcomeFrameOutcome
+      description: >
+        Hand-synced WS copy of contracts/components/schemas/GoalOutcome.yaml
+        (the REST/transcript carrier — see it for every field's meaning).
+        Named differently because pkg/api/generated holds the OpenAPI and
+        AsyncAPI Go types in one package and cannot declare `GoalOutcome`
+        twice. Any field edit MUST be mirrored in GoalOutcome.yaml.
+      type: object
+      required:
+        - goal_id
+        - goal_text
+        - ending
+        - rounds_used
+        - max_rounds
+        - ended_at
+      additionalProperties: false
+      properties:
+        goal_id:
+          type: string
+          minLength: 1
+        goal_text:
+          type: string
+          minLength: 1
+        ending:
+          type: string
+          enum:
+            - met
+            - rounds_exhausted
+            - stopped_by_user
+            - other
+        rounds_used:
+          type: integer
+          minimum: 0
+        max_rounds:
+          type: integer
+          minimum: 1
+        judge_reason:
+          type: string
+          minLength: 1
+        criteria_total:
+          type: integer
+          minimum: 1
+        ended_at:
+          type: string
+          format: date-time
+
+    GoalOutcomeFrame:
+      title: GoalOutcomeFrame
+      description: >
+        Server → client. The goal outcome line (founder decision
+        2026-09-14): one push per goal ENDING (met / round limit reached /
+        stopped by the user / other). Session-scoped (registered in
+        SESSION_SCOPED_FRAME_TYPES). Emitted live by the terminal
+        transition right after it persists the SAME outcome as a
+        `type: system, system_subtype: goal_outcome` transcript entry, and
+        re-emitted as this same frame type by pkg/gateway/replay.go from
+        that entry (discriminating on the stamped system_subtype, never on
+        content). THIS is the GENERATING copy;
+        components/schemas/GoalOutcomeFrame.yaml exists only for the
+        Constraint #8 5-step process and the inboundschemas sync — keep
+        both in sync by hand.
+      type: object
+      required:
+        - type
+        - session_id
+        - message_id
+        - outcome
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: goal_outcome
+        session_id:
+          type: string
+          minLength: 1
+        message_id:
+          type: string
+          minLength: 1
+          description: >
+            Stable id for THIS ending, minted once by the writer and stamped
+            verbatim onto both the persisted transcript entry's `id` and
+            every frame for it (live and replay), e.g.
+            `goal-outcome-<goal_id>-<terminal unix nanos>` — goal_id alone is
+            not unique per ending (a task-owned goal can be re-run and end
+            again). The SPA inserts at most one line per id.
+        outcome:
+          $ref: '#/components/schemas/GoalOutcomeFrameOutcome'
 
     ErrorPayload:
       title: ErrorPayload

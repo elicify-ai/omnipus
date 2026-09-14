@@ -75,6 +75,7 @@ import { messageSetsGoal } from '@/lib/goalCommandMessage'
 import { getMessageStatusSuffix, INTERRUPTED_SUFFIX_TEXT, CUT_OFF_SUFFIX_TEXT } from '@/lib/truncation'
 import { GoalCommandMarker } from '@/components/chat/GoalCommandMarker'
 import { GoalSetupFailureLine } from './tools/GoalSetupFailureLine'
+import { GoalOutcomeRow } from './GoalOutcomeRow'
 import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
 import type { SlashCommand, Skill, Agent } from '@/lib/api'
 import { AttachmentCard, AttachmentRemoveX, useFilePreview } from './AttachmentCard'
@@ -254,6 +255,15 @@ function SystemMessage() {
   // (tests/e2e/browser-control-handover.spec.ts) names this discriminator
   // as its positive observable.
   const isBrowserHandoverNotice = !!storeMsg?.browserHandoverNoticeId
+  // Goal outcome line (founder decision 2026-09-14): how a goal ended —
+  // always shown, never gated by Verbose chat. See src/lib/goalOutcome.ts.
+  if (storeMsg?.goalOutcome) {
+    return (
+      <MessagePrimitive.Root className="flex justify-center px-4 py-2">
+        <GoalOutcomeRow outcome={storeMsg.goalOutcome} />
+      </MessagePrimitive.Root>
+    )
+  }
   return (
     <MessagePrimitive.Root
       className="flex justify-center py-2"
@@ -1144,6 +1154,14 @@ function VirtualSystemMessageRow({ message }: { message: ChatMessage }) {
   // ADR-085 BROWSER-FR-042/FR-044 (wave B8, C-90): see SystemMessage's
   // identical isBrowserHandoverNotice discriminator for the full rationale.
   const isBrowserHandoverNotice = !!message.browserHandoverNoticeId
+  // Goal outcome line — see SystemMessage's identical branch (live path).
+  if (message.goalOutcome) {
+    return (
+      <div data-message-role="system" data-message-id={message.id} className="flex justify-center px-4 py-2">
+        <GoalOutcomeRow outcome={message.goalOutcome} />
+      </div>
+    )
+  }
   return (
     <div
       data-message-role="system"
