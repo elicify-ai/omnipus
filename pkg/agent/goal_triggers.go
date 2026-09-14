@@ -29,12 +29,12 @@ package agent
 import (
 	"context"
 	"fmt"
-	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/goal"
