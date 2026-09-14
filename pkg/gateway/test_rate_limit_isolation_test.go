@@ -16,9 +16,11 @@
 //
 //  2. The knowledge limiter — knowledgeRESTLimiter in rest_knowledge.go.
 //     Keyed on the WORKSPACE ID (knowledgeRateKey); it never reads the
-//     address, so isolateRateLimit does nothing for it. Isolated by
-//     ulidLikeID below, which hands every test workspace an ID no other call
-//     in the process can receive.
+//     address, so isolateRateLimit does nothing for it. Isolated twice:
+//     ulidLikeID below hands every test workspace an ID no other call in the
+//     process can receive, and a test that DRAINS the limiter does it on a
+//     private one via useFreshKnowledgeLimiter, so a full bucket can never
+//     outlive the test that filled it.
 //
 // THE TRAP, FIRST KEY. Every IP-keyed limiter is a process-global sliding
 // window keyed on the CLIENT IP, and httptest.NewRequest gives every request it builds the
@@ -79,7 +81,27 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/knowledge"
 )
+
+// useFreshKnowledgeLimiter gives this test a private knowledge limiter and
+// puts the process-wide one back when the test ends.
+//
+// A test that DRAINS the knowledge limiter to prove that a full one refuses
+// must call this first. A drain on the process-wide limiter stays full for a
+// minute, and any later request that reaches the same key is refused for
+// traffic it never sent. Unique workspace IDs make that unlikely; a private
+// limiter makes it impossible, whatever key the drain used.
+//
+// It swaps a package variable the handlers read, so it is not for tests that
+// call t.Parallel.
+func useFreshKnowledgeLimiter(t *testing.T) {
+	t.Helper()
+	shared := knowledgeRESTLimiter
+	knowledgeRESTLimiter = knowledge.NewRetrievalRateLimiter(knowledge.RetrievalRateLimitConfig{})
+	t.Cleanup(func() { knowledgeRESTLimiter = shared })
+}
 
 // httptestDefaultRemoteAddr is the address net/http/httptest stamps on every
 // request built by httptest.NewRequest. It is the shared default that makes
@@ -248,5 +270,37 @@ func TestUlidLikeID_UniqueUnderConcurrentUse(t *testing.T) {
 	}
 	if len(seen) != workers*perWorker {
 		t.Fatalf("expected %d distinct IDs, got %d", workers*perWorker, len(seen))
+	}
+}
+
+// TestUseFreshKnowledgeLimiter_DrainNeverOutlivesTheTest pins the helper the
+// two drain tests rely on: the drain lands on a private limiter sized like
+// production, that limiter really refuses once full, and when the test ends
+// the process-wide limiter is back and was never touched.
+func TestUseFreshKnowledgeLimiter_DrainNeverOutlivesTheTest(t *testing.T) {
+	ws := ulidLikeID(t)
+	shared := knowledgeRESTLimiter
+
+	t.Run("drain on a private limiter", func(t *testing.T) {
+		useFreshKnowledgeLimiter(t)
+		if knowledgeRESTLimiter == shared {
+			t.Fatal("the helper must install a private limiter; the drain below would hit the process-wide one")
+		}
+		if got, want := knowledgeRESTLimiter.Limit(), shared.Limit(); got != want {
+			t.Fatalf("the private limiter must be sized like production: limit %d, production %d", got, want)
+		}
+		for i := 0; i < knowledgeRESTLimiter.Limit(); i++ {
+			knowledgeRESTLimiter.Allow(knowledgeRateKey(ws))
+		}
+		if knowledgeRESTLimiter.Allow(knowledgeRateKey(ws)).Allowed {
+			t.Fatal("a drained private limiter must refuse, or the drain tests assert nothing")
+		}
+	})
+
+	if knowledgeRESTLimiter != shared {
+		t.Fatal("the process-wide knowledge limiter must be put back when the test ends")
+	}
+	if !knowledgeRESTLimiter.Allow(knowledgeRateKey(ws)).Allowed {
+		t.Fatal("a drain inside a test leaked into the process-wide knowledge limiter")
 	}
 }

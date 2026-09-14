@@ -142,12 +142,15 @@ func TestLibraryFilesSearch_ErrTaxonomy(t *testing.T) {
 	})
 
 	// MV-11/FR-017: files/search sits behind the SAME knowledge-retrieval-
-	// class limiter as its sibling knowledge routes — exhaust the shared
-	// singleton for this workspace's own bucket directly, the same call the
-	// handler itself makes, rather than firing dozens of real requests.
+	// class limiter as its sibling knowledge routes — exhaust this
+	// workspace's own bucket directly, the same call the handler itself
+	// makes, rather than firing dozens of real requests. The drain runs on a
+	// private limiter (useFreshKnowledgeLimiter) so a full bucket can never
+	// outlive this subtest and be inherited by a later test.
 	t.Run("429 rate limited", func(t *testing.T) {
 		api, ws := buildLibraryTestAPI(t)
 		require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+		useFreshKnowledgeLimiter(t)
 		for i := 0; i < knowledgeRESTLimiter.Limit(); i++ {
 			knowledgeRESTLimiter.Allow(knowledgeRateKey(ws))
 		}
