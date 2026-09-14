@@ -628,12 +628,51 @@ export function BrowserLiveView({
   const publishedFrameGateStateRef = useRef(frameGateState)
   const [frameCallbacksUnavailable, setFrameCallbacksUnavailable] = useState(false)
   const [frameGeometryReady, setFrameGeometryReady] = useState(false)
+  const [viewportHandoffState, setViewportHandoffState] = useState<'idle' | 'resizing' | 'failed'>('idle')
+  const viewportHandoffRef = useRef<{
+    previousId: string | null; previousGeneration: number; target: { w: number; h: number } | null
+    control?: { input_epoch: number; control_epoch: number }; completed?: { id: string; generation: number }
+    failed: boolean; timer: ReturnType<typeof setTimeout> | null
+  } | null>(null)
+  const finishViewportHandoff = useCallback(() => {
+    const pending = viewportHandoffRef.current
+    if (pending?.timer) clearTimeout(pending.timer)
+    viewportHandoffRef.current = null
+    setViewportHandoffState('idle')
+  }, [])
+  const beginViewportHandoff = useCallback(() => {
+    if (viewportHandoffRef.current || !captureRef.current.id) return
+    flushWheelBeforeActionRef.current()
+    const current = captureRef.current
+    const pending = { previousId: current.id, previousGeneration: current.generation, target: null as { w: number; h: number } | null, failed: false, timer: null as ReturnType<typeof setTimeout> | null }
+    viewportHandoffRef.current = pending
+    setViewportHandoffState('resizing')
+    pending.timer = setTimeout(() => {
+      if (viewportHandoffRef.current !== pending) return
+      pending.failed = true
+      setViewportHandoffState('failed')
+    }, 15000)
+  }, [])
+  useEffect(() => {
+    finishViewportHandoff()
+    return () => {
+      if (viewportHandoffRef.current?.timer) clearTimeout(viewportHandoffRef.current.timer)
+      viewportHandoffRef.current = null
+    }
+  }, [sessionId, agentId, connectionAttempt, finishViewportHandoff])
+
   const framePresentationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const suppliedStreamRef = useRef(mediaStreamProp)
   suppliedStreamRef.current = mediaStreamProp
   const refreshFrameGate = useCallback((): void => {
     const gate = captureRef.current.gate
     const state = gate.read(performance.now())
+    const handoff = viewportHandoffRef.current
+    const capture = captureRef.current
+    if (handoff && !handoff.failed && handoff.target && inputRef.current?.state === 'ready' && state.status === 'ready' &&
+      (capture.id !== handoff.previousId || state.generation > handoff.previousGeneration) &&
+      handoff.completed?.id === capture.id && handoff.completed.generation === state.generation &&
+      capture.css && capture.css.width > 0 && capture.css.height > 0) finishViewportHandoff()
     if (framePresentationTimerRef.current !== null) clearTimeout(framePresentationTimerRef.current)
     framePresentationTimerRef.current = null
     if (state.status === 'presenting') {
@@ -655,7 +694,7 @@ export function BrowserLiveView({
       requiresFreshViewerRef.current = true
       requestFreshViewerRef.current()
     }
-  }, [])
+  }, [finishViewportHandoff])
   const acceptCapture = useCallback((id: string, generation: number): boolean => {
     const current = captureRef.current
     if (current.retired.has(id)) return false
@@ -967,6 +1006,7 @@ export function BrowserLiveView({
       },
       onAutomaticRecovery: () => useUiStore.getState().addToast({ message: 'Input resumed. Some recent actions were not sent; they were not replayed.', variant: 'error' }),
       onState: (state, reason) => {
+        if (state === 'ready') queueMicrotask(refreshFrameGate)
         if (state !== 'ready') cancelTextRef.current()
         setInputState(state)
         setInputCanResume(state === 'paused' && !inputMachine.awaitingControl)
@@ -1055,8 +1095,13 @@ export function BrowserLiveView({
       onInputState: (f) => inputMachine?.applyState(f),
       onInputControlAck: (f) => {
         if (!inputMachine?.applyControlAck(f) || !f.ok) return
+        const handoff = viewportHandoffRef.current
+        if (handoff?.control?.input_epoch === f.input_epoch && handoff.control.control_epoch === f.control_epoch && f.capture_id && f.capture_generation !== undefined) {
+          handoff.completed = { id: f.capture_id, generation: f.capture_generation }
+        }
         inputFrameRequirementRef.current = f.capture_id && f.capture_generation !== undefined
           ? { id: f.capture_id, generation: f.capture_generation } : null
+        refreshFrameGate()
       },
       onTabs: (f) => {
         setTabState({ tabs: f.tabs, activeIndex: f.active_index })
@@ -1403,7 +1448,7 @@ export function BrowserLiveView({
     return true
   }, [])
   const canDispatchInput = useCallback(() => {
-    return canIssueCommands() && (inputRef.current?.state === 'ready' && dedicatedFrameReady()) && captureRef.current.gate.read(performance.now()).status === 'ready'
+    return !viewportHandoffRef.current && canIssueCommands() && (inputRef.current?.state === 'ready' && dedicatedFrameReady()) && captureRef.current.gate.read(performance.now()).status === 'ready'
   }, [canIssueCommands, dedicatedFrameReady])
 
   // Gestures use only the dedicated input peer; navigation stays on the socket. A successful send is local
@@ -1418,7 +1463,7 @@ export function BrowserLiveView({
       const initiating = ['navigate', 'navigate_back', 'reload', 'stop_loading'].includes(input.kind)
       const current = captureRef.current
       const proof = current.gate.read(performance.now())
-      if (!initiating && !cleanup && (proof.status !== 'ready' || !dedicatedFrameReady())) return false
+      if (!initiating && !cleanup && (viewportHandoffRef.current || proof.status !== 'ready' || !dedicatedFrameReady())) return false
       if (!cleanup && input.kind !== 'wheel' && input.kind !== 'mouse_move') flushWheelBeforeActionRef.current()
       const payload = !initiating && !cleanup && proof.status === 'ready' && current.id
         ? { ...input, capture_id: current.id, capture_generation: proof.generation }
@@ -1447,7 +1492,7 @@ export function BrowserLiveView({
           if (release.kind === 'mouse_up') held.set(key, { ...release, x: input.x, y: input.y })
         }
       }
-      if ((input.kind === 'key_up' || input.kind === 'mouse_up') && held.size === 0) resumeViewportRef.current()
+      if (!cleanup && (input.kind === 'key_up' || input.kind === 'mouse_up') && held.size === 0) resumeViewportRef.current()
       return true
     }, [dedicatedFrameReady],
   )
@@ -1457,7 +1502,7 @@ export function BrowserLiveView({
     const releases = [...pressedInputsRef.current.values()]
     pressedInputsRef.current.clear()
     for (const release of releases) dispatchInput(release, true)
-    resumeViewportRef.current()
+    queueMicrotask(() => queueMicrotask(() => resumeViewportRef.current()))
   }, [dispatchInput])
   const textComposition = useBrowserTextComposition({
     identity: () => {
@@ -1572,7 +1617,10 @@ export function BrowserLiveView({
       // A rebuild costs a visible blip, so ignore sub-threshold jitter (a
       // scrollbar appearing, a 1px layout settle). 8px is below what a user
       // would notice as wrong aspect but well above incidental churn.
-      if (prev && Math.abs(prev.w - w) < 8 && Math.abs(prev.h - h) < 8 && prev.dpr === dpr) return
+      if (prev && Math.abs(prev.w - w) < 8 && Math.abs(prev.h - h) < 8 && prev.dpr === dpr) {
+        if (viewportHandoffRef.current?.target === null) finishViewportHandoff()
+        return
+      }
 
       // SETTLE CHECK: only commit a size that has held still. A drag, an
       // animated sidebar, or a transient overlay produces a stream of
@@ -1640,10 +1688,23 @@ export function BrowserLiveView({
             Math.abs(settled.h - nh) < 8 &&
             settled.dpr === settleDpr
           ) {
+            if (viewportHandoffRef.current?.target === null) finishViewportHandoff()
             return
           }
+          const css = captureRef.current.css
+          if (!css || css.width !== nw || css.height !== nh || (settled && settled.dpr !== settleDpr)) beginViewportHandoff()
+          const handoff = viewportHandoffRef.current
+          if (handoff) { handoff.target = { w: nw, h: nh }; handoff.completed = undefined }
           if (wsRef.current?.sendViewport(nw, nh, settleDpr)) {
+            if (handoff) {
+              const control = inputRef.current?.controlIdentity
+              handoff.control = control?.input_epoch !== undefined && control.control_epoch !== undefined
+                ? { input_epoch: control.input_epoch, control_epoch: control.control_epoch } : undefined
+            }
             lastSentViewportRef.current = { w: nw, h: nh, dpr: settleDpr }
+          } else if (handoff) {
+            handoff.failed = true
+            setViewportHandoffState('failed')
           }
         }, VIEWPORT_SETTLE_MS)
       }
@@ -1664,6 +1725,7 @@ export function BrowserLiveView({
     const resumeAfterInput = () => {
       if (!deferredForInput || resizeInputBusyRef.current()) return
       deferredForInput = false
+      beginViewportHandoff()
       schedule()
     }
     resumeViewportRef.current = resumeAfterInput
@@ -1731,7 +1793,7 @@ export function BrowserLiveView({
     // fresh open and the capture stayed at its hardcoded default. Same
     // dependency shape the wheel listener below already uses, for the same
     // reason.
-  }, [connected, attached])
+  }, [connected, attached, beginViewportHandoff, finishViewportHandoff])
 
   const flushPendingMove = useCallback(() => {
     const pending = pendingMoveRef.current
@@ -2410,7 +2472,7 @@ export function BrowserLiveView({
   }
 
   return (
-    <div data-input-mode="dedicated" data-input-state={inputState} className={cn('relative flex h-full min-h-0 flex-col bg-[var(--color-primary)]', className)}>
+    <div data-input-mode="dedicated" data-input-state={viewportHandoffState !== 'idle' && !inputError && (inputState === 'ready' || inputState === 'paused') ? viewportHandoffState : inputState} className={cn('relative flex h-full min-h-0 flex-col bg-[var(--color-primary)]', className)}>
       {inputError && <div role="alert" data-testid="browser-input-error" className="absolute bottom-2 left-2 right-2 z-30 rounded bg-[var(--color-primary)] p-2 text-sm">
         <span>{inputError}</span>{' '}
         <button type="button" tabIndex={0} disabled={inputState === 'paused' && !inputCanResume} onClick={() => {
@@ -2419,6 +2481,11 @@ export function BrowserLiveView({
           else inputRef.current?.start()
         }}>{inputState === 'paused' ? 'Resume input' : 'Retry input'}</button>
       </div>}
+      {viewportHandoffState !== 'idle' && (inputState === 'ready' || inputState === 'paused') && !inputError && !displayError && (
+        <div role={viewportHandoffState === 'failed' ? 'alert' : 'status'} className="absolute bottom-2 left-2 right-2 z-30 rounded bg-[var(--color-primary)] p-2 text-sm">
+          {viewportHandoffState === 'failed' ? <>Browser resize did not finish. <button type="button" onClick={() => setConnectionAttempt(attempt => attempt + 1)}>Retry browser</button></> : 'Resizing browser. Input will resume when the new picture is ready.'}
+        </div>
+      )}
       {/* == Row A: tabs + window controls =============================
           Header consolidation (operator direction, 2026-08-04): the panel used
           to spend FOUR rows on chrome -- identity/controls, handback hint,
@@ -2764,8 +2831,8 @@ export function BrowserLiveView({
               style={{ pointerEvents: 'none' }}
               onFocus={textComposition.onFocus}
               onCompositionStart={textComposition.onCompositionStart}
-              onCompositionEnd={(event) => { textComposition.onCompositionEnd(event); resumeViewportRef.current() }}
-              onInput={(event) => { textComposition.onInput(event); resumeViewportRef.current() }}
+              onCompositionEnd={(event) => { textComposition.onCompositionEnd(event); queueMicrotask(() => resumeViewportRef.current()) }}
+              onInput={(event) => { textComposition.onInput(event); queueMicrotask(() => resumeViewportRef.current()) }}
               onPaste={textComposition.onPaste}
             />
             {/* The ONLY video sink — mounted the instant a WebRTC stream is

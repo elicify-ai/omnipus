@@ -17,6 +17,7 @@ test('one slow wheel retains every continuation and subsequent input', async ({ 
   await instrumentRoutes(page);
   const ready = async () => {
     await expect(page.locator('[data-input-mode="dedicated"]')).toHaveAttribute('data-input-state', 'ready');
+    await expect(browserLivePanel(page).getByRole('status').filter({ hasText: /Waiting for the current page|Pointer input is unavailable|Browser input is unavailable|Reconnecting video to restore browser input/ })).toHaveCount(0);
     await expect(browserLivePanel(page).getByRole('alert')).toHaveCount(0);
   };
   try {
