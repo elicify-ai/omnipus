@@ -472,8 +472,8 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 	if got := counts[u19BucketPreArm]; got != 3 {
 		t.Errorf("pre-arm key reads = %d, want 3 (FR-016's three direct sites: cancel_prearm.go x2, subturn.go x1)", got)
 	}
-	if got := counts[u19BucketWSStamping]; got != 19 {
-		t.Errorf("WS-payload-stamping reads = %d, want 19 (loop.go x17, subturn.go x2: SubTurnSpawnPayload + "+
+	if got := counts[u19BucketWSStamping]; got != 20 {
+		t.Errorf("WS-payload-stamping reads = %d, want 20 (loop.go x18, subturn.go x2: SubTurnSpawnPayload + "+
 			"SubTurnEndPayload). loop.go grew from 2 to 13 in the 2026-08 UAT remediation, then to 14 when "+
 			"ADR-066 D7 (T066-11) added typedTurnExit's ErrorPayload stamp for the typed turn exits, then to 15 "+
 			"when ADR-066 D3 (T066-09) added runTurn's context_window_unknown pre-turn refusal (the same "+
@@ -481,7 +481,10 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 			"(T067-09) added runTurn's needs_provider pre-turn refusal — the FIRST of the three pre-turn "+
 			"gates — then to 17 when ADR-068 FR-015 (T068-12) added runTurn's model_unassigned "+
 			"pre-turn refusal, the SECOND of those three, completing the ladder "+
-			"(needs_provider → model_unassigned → context_window_unknown). Each emits that same "+
+			"(needs_provider → model_unassigned → context_window_unknown), then to 18 when commit b6ca6055 "+
+			"(2026-09-13, the orphan tool-call markup fix) added runTurn's orphan_tool_markup terminal "+
+			"ErrorPayload stamp — the 'repair budget spent' error emitted after maxOrphanToolMarkupRepairs "+
+			"re-prompts when a model's tool call keeps arriving as unparseable text. Each emits that same "+
 			"ErrorPayload shape: every live "+
 			"ErrorPayload and RateLimitPayload emit site now stamps SessionID with routingSessionID, "+
 			"because ServeHTTP mints a fresh webchat: uuid per connection — an error carrying only the "+
@@ -499,18 +502,22 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 			"browserRootChatSessionID — ADR-085 BROWSER-FR-022, added by wave B123)", got)
 	}
 
-	// 7 role-B + 3 pre-arm + 19 WS-stamping + 1 inheritance + 1 browser
-	// control-gate = 31. Was 30 before wave B123 (ADR-085 BROWSER-FR-022)
-	// added the fifth bucket. Before that: 9 role-B (32 total) before
-	// ADR-082 D1 deleted the two role-B predicates (hasLiveCriticalDelegate,
-	// getActiveRootTurnStateForSession) that existed solely for the
-	// now-retired orphan-foreground-turn watchdog. Before that: 17 before
-	// the 2026-08 UAT remediation widened the WS-stamping bucket (see
-	// above), 28 before ADR-066 D7's typedTurnExit stamp, 29 before ADR-066
-	// D3's context_window_unknown refusal stamp (T066-09), 30 before
-	// ADR-067 FR-016's needs_provider refusal stamp (T067-09), and 31
-	// before ADR-068 FR-015's model_unassigned refusal stamp (T068-12).
-	const wantTotal = 31
+	// 7 role-B + 3 pre-arm + 20 WS-stamping + 1 inheritance + 1 browser
+	// control-gate = 32. Was 31 before commit b6ca6055 (2026-09-13, the
+	// orphan tool-call markup fix) added runTurn's orphan_tool_markup
+	// terminal ErrorPayload stamp, widening the WS-stamping bucket to 18
+	// loop.go reads (see above). Was 30 before wave B123 (ADR-085
+	// BROWSER-FR-022) added the fifth bucket. Before that: 9 role-B (32
+	// total) before ADR-082 D1 deleted the two role-B predicates
+	// (hasLiveCriticalDelegate, getActiveRootTurnStateForSession) that
+	// existed solely for the now-retired orphan-foreground-turn watchdog.
+	// Before that: 17 before the 2026-08 UAT remediation widened the
+	// WS-stamping bucket (see above), 28 before ADR-066 D7's typedTurnExit
+	// stamp, 29 before ADR-066 D3's context_window_unknown refusal stamp
+	// (T066-09), 30 before ADR-067 FR-016's needs_provider refusal stamp
+	// (T067-09), and 31 before ADR-068 FR-015's model_unassigned refusal
+	// stamp (T068-12).
+	const wantTotal = 32
 	if len(all) != wantTotal {
 		t.Fatalf("total routingSessionID reads = %d, want exactly %d (the closed consumer set) — "+
 			"either a new read was added outside the four named buckets, or one of the buckets "+
