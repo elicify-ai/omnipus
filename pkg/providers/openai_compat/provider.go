@@ -269,6 +269,7 @@ func parseStreamResponse(
 	var finishReason string
 	var usage *UsageInfo
 	var totalArgsBytes int
+	var totalReasoningBytes int
 
 	// Tool call assembly: OpenAI streams tool calls as incremental deltas
 	type toolAccum struct {
@@ -300,8 +301,14 @@ func parseStreamResponse(
 		var chunk struct {
 			Choices []struct {
 				Delta struct {
-					Content   string `json:"content"`
-					ToolCalls []struct {
+					Content string `json:"content"`
+					// Reasoning ("thinking") deltas — see
+					// reasoningDeltaBytes for the three spellings. Only
+					// their length is ever used.
+					Reasoning        string                  `json:"reasoning"`
+					ReasoningContent string                  `json:"reasoning_content"`
+					ReasoningDetails []streamReasoningDetail `json:"reasoning_details"`
+					ToolCalls        []struct {
 						Index    int    `json:"index"`
 						ID       string `json:"id"`
 						Function *struct {
@@ -338,6 +345,22 @@ func parseStreamResponse(
 			}
 		}
 
+		// Reasoning deltas count as forward progress (founder decision
+		// 2026-09-14, UAT E-15c): a model can reason for many minutes before
+		// its first content or tool-call byte, and ignoring these deltas made
+		// that indistinguishable from a hung call. The reasoning TEXT is not
+		// kept or forwarded — only its byte count reaches the callback.
+		if n := reasoningDeltaBytes(
+			choice.Delta.Reasoning, choice.Delta.ReasoningContent, choice.Delta.ReasoningDetails,
+		); n > 0 {
+			totalReasoningBytes += n
+			protocoltypes.SafeInvoke(onProgress, protocoltypes.ToolCallProgress{
+				Index:          protocoltypes.ReasoningProgressIndex,
+				TotalArgsBytes: totalArgsBytes,
+				ReasoningBytes: totalReasoningBytes,
+			})
+		}
+
 		// Accumulate tool call deltas.
 		//
 		// Every argument delta also emits a progress signal. Without it a
@@ -369,6 +392,7 @@ func parseStreamResponse(
 						Name:           acc.name,
 						ArgsBytes:      acc.argsJSON.Len(),
 						TotalArgsBytes: totalArgsBytes,
+						ReasoningBytes: totalReasoningBytes,
 					})
 				}
 			}
@@ -444,6 +468,40 @@ func parseStreamResponse(
 		FinishReason: finishReason,
 		Usage:        usage,
 	}, nil
+}
+
+// streamReasoningDetail is one element of OpenRouter's structured
+// `reasoning_details` delta. Its type decides which field is populated:
+// `reasoning.text` fills Text, `reasoning.summary` fills Summary, and
+// `reasoning.encrypted` fills Data. Only the lengths are read.
+type streamReasoningDetail struct {
+	Text    string `json:"text"`
+	Summary string `json:"summary"`
+	Data    string `json:"data"`
+}
+
+// reasoningDeltaBytes returns how many reasoning bytes one streamed delta
+// carries. OpenAI-compatible providers spell reasoning three ways:
+//
+//   - `reasoning` — OpenRouter's normalised string;
+//   - `reasoning_content` — Z.AI (GLM) and DeepSeek;
+//   - `reasoning_details` — OpenRouter's structured array.
+//
+// OpenRouter sends `reasoning` AND `reasoning_details` in the same delta with
+// the same text, so the first non-empty spelling wins rather than summing all
+// three — otherwise that provider would report every byte twice.
+func reasoningDeltaBytes(reasoning, reasoningContent string, details []streamReasoningDetail) int {
+	if reasoning != "" {
+		return len(reasoning)
+	}
+	if reasoningContent != "" {
+		return len(reasoningContent)
+	}
+	n := 0
+	for _, d := range details {
+		n += len(d.Text) + len(d.Summary) + len(d.Data)
+	}
+	return n
 }
 
 func buildToolsList(tools []ToolDefinition, nativeSearch bool) []any {

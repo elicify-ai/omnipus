@@ -616,6 +616,7 @@ type atomicToolCallProgress struct {
 	lastActivityUnixNano atomic.Int64
 	argsBytes            atomic.Int64
 	totalArgsBytes       atomic.Int64
+	reasoningBytes       atomic.Int64
 	// name is an atomic.Pointer rather than an atomic.Value: the callback
 	// stores a fresh *string on every delta (even once the name has
 	// stabilized, since the SSE loop doesn't know that), and
@@ -628,8 +629,10 @@ type atomicToolCallProgress struct {
 // recordToolCallProgress is the write side of G1's progress signal, called
 // synchronously from the provider's SSE read loop via the
 // protocoltypes.OnToolCallProgress callback loop.go passes to ChatStream.
-// Four atomic stores, no lock, no I/O, no allocation beyond the one string
-// copy for Name — safe to call on every argument delta of a live stream.
+// Five atomic stores, no lock, no I/O, no allocation beyond the one string
+// copy for Name — safe to call on every argument or reasoning delta of a live
+// stream. A reasoning event stores its empty Name and zero ArgsBytes as-is, so
+// the snapshot always describes the kind of delta that arrived last.
 // Nil-safe so a callback captured before a turn is fully constructed (should
 // never happen, but costs nothing to guard) degrades to a no-op instead of a
 // panic.
@@ -641,6 +644,7 @@ func (ts *turnState) recordToolCallProgress(p protocoltypes.ToolCallProgress) {
 	ts.toolCallProgress.name.Store(&name)
 	ts.toolCallProgress.argsBytes.Store(int64(p.ArgsBytes))
 	ts.toolCallProgress.totalArgsBytes.Store(int64(p.TotalArgsBytes))
+	ts.toolCallProgress.reasoningBytes.Store(int64(p.ReasoningBytes))
 	// Stamped LAST, deliberately: a concurrent reader that observes a fresh
 	// lastActivityUnixNano is guaranteed to also observe the argsBytes/name
 	// stores that happened-before it (each is its own atomic op, so there is
@@ -707,6 +711,7 @@ func (ts *turnState) ToolCallProgress() tools.ToolCallProgressSnapshot {
 		Name:           name,
 		ArgsBytes:      int(ts.toolCallProgress.argsBytes.Load()),
 		TotalArgsBytes: int(ts.toolCallProgress.totalArgsBytes.Load()),
+		ReasoningBytes: int(ts.toolCallProgress.reasoningBytes.Load()),
 		LastActivity:   lastActivity,
 		Age:            time.Since(lastActivity),
 	}

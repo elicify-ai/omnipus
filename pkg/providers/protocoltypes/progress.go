@@ -16,6 +16,15 @@ package protocoltypes
 // delegated worker 75 times over 46 seconds, saw no activity, concluded the
 // worker was stalled, and killed it mid-generation — repeatedly. Progress
 // reporting exists so "still generating" can be told apart from "hung".
+//
+// Reasoning counts too (founder decision 2026-09-14, UAT E-15c). A reasoning
+// model can "think" for many minutes before it emits a single content or
+// tool-call byte — one task attempt was observed reasoning for up to ~21
+// minutes per call — and while only content and tool-call deltas were read,
+// those minutes looked exactly like a hung call. Providers therefore also emit
+// a REASONING event (Index == ReasoningProgressIndex) for every reasoning
+// delta. Like argument content, the reasoning TEXT is never carried here —
+// only its byte count.
 type ToolCallProgress struct {
 	// Index identifies WHICH concurrent tool call this progress belongs to,
 	// within one response, from one provider. It is NOT a stable tool-call
@@ -30,6 +39,9 @@ type ToolCallProgress struct {
 	// The only contract a consumer may rely on is that two progress events
 	// with the same Index, within the same response, describe the same tool
 	// call. Use Name if you need to know what is being called.
+	//
+	// A reasoning event describes no tool call at all: it carries
+	// Index == ReasoningProgressIndex, an empty Name and ArgsBytes 0.
 	Index int
 	// Name is the tool being called, once the stream has revealed it. It may
 	// be empty for the first few deltas, since providers commonly send the
@@ -41,7 +53,18 @@ type ToolCallProgress struct {
 	// TotalArgsBytes is the number of argument bytes accumulated across every
 	// tool call in this response so far.
 	TotalArgsBytes int
+	// ReasoningBytes is the number of reasoning ("thinking") bytes the model
+	// has streamed so far in this response. Monotonically increasing within a
+	// single response, and carried on EVERY event — tool-call events too — so
+	// a consumer can store each event's fields as they arrive. A count only:
+	// the reasoning text itself never travels through this type.
+	ReasoningBytes int
 }
+
+// ReasoningProgressIndex is the Index a reasoning event carries. It is
+// negative so it can never collide with a real tool-call or content-block
+// index, both of which start at 0.
+const ReasoningProgressIndex = -1
 
 // OnToolCallProgress is the callback shape passed to a provider's ChatStream.
 //

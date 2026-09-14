@@ -438,12 +438,17 @@ type ToolCallProgressSnapshot struct {
 	// empty for the first few deltas of a call.
 	Name string
 	// ArgsBytes is the byte count accumulated so far for the tool call that
-	// produced the most recent delta.
+	// produced the most recent delta. Zero when the most recent delta was
+	// reasoning rather than a tool-call argument.
 	ArgsBytes int
 	// TotalArgsBytes is the byte count accumulated across every tool call in
 	// the current LLM response so far (may exceed ArgsBytes when more than
 	// one tool call is in flight in the same response).
 	TotalArgsBytes int
+	// ReasoningBytes is the reasoning ("thinking") byte count streamed so far
+	// in the current LLM response. A count only — the reasoning text is never
+	// recorded (see protocoltypes.ToolCallProgress).
+	ReasoningBytes int
 	// LastActivity is the wall-clock time of the most recent recorded delta.
 	// Zero when no progress has ever been recorded for the turn.
 	LastActivity time.Time
@@ -2903,6 +2908,17 @@ const maxToolCallProgressStaleness = 5 * time.Minute
 // delegateStatusExtra's call site and DelegateProgressReader's doc comment
 // for the incident this closes.
 func formatToolCallProgressLine(snap ToolCallProgressSnapshot) string {
+	// The most recent delta was reasoning, not a tool-call argument: the
+	// model is thinking. Saying "generating tool call" here would be false —
+	// there is no tool call yet (founder decision 2026-09-14).
+	if snap.ArgsBytes == 0 && snap.ReasoningBytes > 0 {
+		verb := "thinking"
+		if snap.Age > maxToolCallProgressStaleness {
+			verb = "stale — no update recently, may have stalled while thinking"
+		}
+		return fmt.Sprintf("  progress: %s — %d bytes of reasoning so far this round, last update %s ago",
+			verb, snap.ReasoningBytes, snap.Age.Round(time.Second))
+	}
 	name := snap.Name
 	if name == "" {
 		name = "(name pending)"

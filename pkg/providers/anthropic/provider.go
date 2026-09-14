@@ -172,6 +172,7 @@ func (p *Provider) streamWithCallbacks(
 
 	var msg anthropic.Message
 	var lastTextLen int
+	var lastReasoningLen int
 	lastArgsLen := map[int]int{}
 
 	for stream.Next() {
@@ -189,6 +190,7 @@ func (p *Provider) streamWithCallbacks(
 		argsLen := make(map[int]int, len(msg.Content))
 		names := make(map[int]string, len(msg.Content))
 		totalArgs := 0
+		reasoning := 0
 		for i, block := range msg.Content {
 			// Read the union's DIRECT fields, never the As*() accessors.
 			//
@@ -211,6 +213,13 @@ func (p *Provider) streamWithCallbacks(
 				argsLen[i] = n
 				names[i] = block.Name
 				totalArgs += n
+			case "thinking":
+				// Extended thinking counts as progress (founder decision
+				// 2026-09-14): minutes of thinking with no text or tool
+				// bytes must not read as a hung call. Length only.
+				reasoning += len(block.Thinking)
+			case "redacted_thinking":
+				reasoning += len(block.Data)
 			}
 		}
 
@@ -226,6 +235,15 @@ func (p *Provider) streamWithCallbacks(
 			onChunk(text.String())
 		}
 		if onProgress != nil {
+			// Same growth-only rule as text and arguments.
+			if reasoning > lastReasoningLen {
+				lastReasoningLen = reasoning
+				protocoltypes.SafeInvoke(onProgress, protocoltypes.ToolCallProgress{
+					Index:          protocoltypes.ReasoningProgressIndex,
+					TotalArgsBytes: totalArgs,
+					ReasoningBytes: reasoning,
+				})
+			}
 			for i, n := range argsLen {
 				if n <= lastArgsLen[i] {
 					continue
@@ -238,6 +256,7 @@ func (p *Provider) streamWithCallbacks(
 					Name:           names[i],
 					ArgsBytes:      n,
 					TotalArgsBytes: totalArgs,
+					ReasoningBytes: reasoning,
 				})
 			}
 		}
