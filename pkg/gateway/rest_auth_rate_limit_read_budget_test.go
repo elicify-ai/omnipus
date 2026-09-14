@@ -126,3 +126,68 @@ func TestWithRateLimit_WritesNeverBorrowTheReadBudget(t *testing.T) {
 	assert.False(t, rateLimitAllows(w, rateLimitTestRequest(http.MethodPost, ip, true), limiter))
 	assertRefusedWithRetryAfter(t, w, "rateLimitAllows write after the strict budget is gone")
 }
+
+// TestWithRateLimit_ReadSizedLimiterNeverGetsCompanionBudget: a limiter
+// whose declared ceiling was already chosen for reads (taskReadLimiter's
+// 240/min is the contract for the calendar and task-run read routes) must
+// count authenticated GET/HEAD against that ceiling directly. Before the fix
+// withRateLimit multiplied every limiter's ceiling by readBudgetMultiplier
+// for authenticated reads, silently turning 240/min into 1200/min
+// (TestRestTasks_OccurrencesEndpoint's 241st-request 429 regression).
+func TestWithRateLimit_ReadSizedLimiterNeverGetsCompanionBudget(t *testing.T) {
+	const limit = 4
+	limiter := newReadSizedAPIRateLimiter(limit, time.Minute)
+	h := withRateLimit(limiter, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	const ip = "198.51.100.61"
+	for i := 1; i <= limit; i++ {
+		w := serveRateLimited(t, h, rateLimitTestRequest(http.MethodGet, ip, true))
+		require.Equal(t, http.StatusOK, w.Code, "authenticated GET %d of %d must pass", i, limit)
+	}
+	assertRefusedWithRetryAfter(t, serveRateLimited(t, h, rateLimitTestRequest(http.MethodGet, ip, true)), "authenticated GET beyond a read-sized limit")
+	assertRefusedWithRetryAfter(t, serveRateLimited(t, h, rateLimitTestRequest(http.MethodHead, ip, true)), "authenticated HEAD beyond a read-sized limit")
+	// No companion bucket may exist, whatever path asks for one.
+	assert.Same(t, limiter, limiter.readBudget(), "a read-sized limiter is its own read budget")
+	assert.Nil(t, limiter.reads, "a read-sized limiter must never allocate a companion budget")
+
+	// The inline form used by dispatcher switches inherits the same rule.
+	w := httptest.NewRecorder()
+	assert.False(t, rateLimitAllows(w, rateLimitTestRequest(http.MethodGet, ip, true), limiter))
+	assertRefusedWithRetryAfter(t, w, "rateLimitAllows authenticated GET beyond a read-sized limit")
+}
+
+// TestAPIRateLimiters_ReadSizedClassification pins the per-limiter audit
+// (fix4 rate-limit-reads): a limiter is read-sized when every request it
+// counts is a GET, so its declared number IS the read ceiling and a
+// companion budget would make that number dead. Limiters that guard writes,
+// pre-auth traffic, or mixed read/write routes keep the D-109 companion
+// budget (configLimiter is the D-109 limiter itself).
+func TestAPIRateLimiters_ReadSizedClassification(t *testing.T) {
+	readSized := map[string]*apiRateLimiter{
+		"taskReadLimiter":            taskReadLimiter,
+		"validateLimiter":            validateLimiter,
+		"signInStatusLimiter":        signInStatusLimiter,
+		"libraryPreviewServeLimiter": libraryPreviewServeLimiter,
+	}
+	for name, l := range readSized {
+		assert.Truef(t, l.readSized, "%s guards GET-only routes and must be read-sized", name)
+	}
+	writeOrPreAuthSized := map[string]*apiRateLimiter{
+		"configLimiter":              configLimiter,
+		"onboardingCompleteLimiter":  onboardingCompleteLimiter,
+		"reauthLimiter":              reauthLimiter,
+		"cliValidateLimiter":         cliValidateLimiter,
+		"signInStartLimiter":         signInStartLimiter,
+		"signInPollLimiter":          signInPollLimiter,
+		"signInImportLimiter":        signInImportLimiter,
+		"signInSignOutLimiter":       signInSignOutLimiter,
+		"providerListAnonLimiter":    providerListAnonLimiter,
+		"providerConfigWriteLimiter": providerConfigWriteLimiter,
+		"providerTestLimiter":        providerTestLimiter,
+		"providerEntitlementLimiter": providerEntitlementLimiter,
+		"smokeTestLimiter":           smokeTestLimiter,
+		"libraryPreviewMintLimiter":  libraryPreviewMintLimiter,
+	}
+	for name, l := range writeOrPreAuthSized {
+		assert.Falsef(t, l.readSized, "%s is write/pre-auth-sized and keeps the companion read budget", name)
+	}
+}
