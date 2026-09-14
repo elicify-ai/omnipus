@@ -4,48 +4,45 @@
  * Shared by every task-mutation call site that needs to route a server
  * rejection to the specific control it names, instead of a single generic
  * banner — currently CreateTaskSlideOver's Create/Create & Run (POST
- * /api/v1/tasks) and TaskDetailPanel's dependency editor (PUT
- * /api/v1/tasks/{id}/dependencies). One recognizer, not a copy per
- * component — see the live-UAT defects this closes:
+ * /api/v1/tasks). One recognizer, not a copy per component — see the
+ * live-UAT defects this closes:
  *
- *   - A-11: a duplicate definition-of-done item ("dod[N]: ... restates the
- *     acceptance criterion ...", GOAL-FR-021/FR-048) rejected the Create
- *     dialog with no visible message.
- *   - E-10: a dependency cycle ("blocked_by cycle detected: ...") rejected
- *     the "Depends on" editor's PUT with no visible message — the checkbox
- *     just failed to apply.
+ *   - A-11: a duplicate definition-of-done item rejected the Create dialog
+ *     with no visible message.
+ *   - E-10: a dependency cycle rejected the "Depends on" editor's PUT with
+ *     no visible message — the checkbox just failed to apply.
  *
- * GOAL-FR-021/FR-048 and the blocked_by cycle guard are backend rules
- * (pkg/task/dod_distinct.go, pkg/task/*.go's cycle check) — the SPA is
- * never the authority for either and must not reimplement them. This file
- * only recognizes the SHAPE of the server's own message well enough to
- * decide where to display it; the message text displayed is always the
- * server's, verbatim (via `getErrorMessage` from '@/lib/api').
+ * The DoD-distinctness rule and the blocked_by cycle guard are backend
+ * rules (pkg/task/dod_distinct.go, pkg/task/blocked_by.go's cycle check) —
+ * the SPA is never the authority for either and must not reimplement them.
+ * The MESSAGE TEXT displayed is always the server's, verbatim, and is now
+ * plain, human-facing prose with no machine prefix to parse (fix wave:
+ * task-validation-message-register — a raw "task validation: dod[0]: ..."
+ * string used to reach the dialog unedited). This file only recognizes
+ * WHICH control to route that text to, via the structured
+ * `field` property on the server's `ErrorResponse`
+ * (`contracts/components/schemas/ErrorResponse.yaml`) — the SAME channel
+ * `jsonErrField`/`ApiError.field` already carry elsewhere (ADR-068) — never
+ * by parsing the message.
  */
+
+import { isApiError } from '@/lib/api'
 
 export type TaskValidationErrorField = 'criteria' | 'dod' | 'blocked_by'
 
-// pkg/task/store.go's `ErrValidation = errors.New("task validation")` +
-// `verr()` wraps every per-item/per-edge task validator into
-// "task validation: <detail>". Per-item validators (pkg/task/criterion.go,
-// pkg/task/dod_distinct.go) name the offending item as `criteria[N]: ...` /
-// `dod[N]: ...`; the dependency-cycle guard instead states
-// "blocked_by cycle detected: ...". Both prefixes are matched literally
-// rather than parsed further — the SPA only needs to know WHICH control to
-// show the message next to, never anything about the message's content.
-const FIELD_VALIDATION_ERROR_RE = /task validation: (criteria|dod)\[\d+\]:/
-const CYCLE_VALIDATION_ERROR_RE = /task validation: blocked_by cycle detected:/
+const RECOGNIZED_FIELDS: readonly TaskValidationErrorField[] = ['criteria', 'dod', 'blocked_by']
 
 /**
  * Identifies which control a task-validation rejection names, from the
- * server's own message text. Returns null when the message names no
- * specific control (e.g. a workspace-membership rejection, a 5xx, or a
- * network failure) — callers fall back to a generic banner/toast for that
- * case.
+ * server's structured `field` property (never from the message text — the
+ * message is plain prose meant for a reader, not a machine format). Returns
+ * null when the error carries no recognized field (e.g. a workspace-
+ * membership rejection, a 5xx, a network failure, or a non-ApiError) —
+ * callers fall back to a generic banner/toast for that case.
  */
-export function fieldFromValidationError(message: string): TaskValidationErrorField | null {
-  const fieldMatch = FIELD_VALIDATION_ERROR_RE.exec(message)
-  if (fieldMatch) return fieldMatch[1] === 'dod' ? 'dod' : 'criteria'
-  if (CYCLE_VALIDATION_ERROR_RE.test(message)) return 'blocked_by'
-  return null
+export function fieldFromValidationError(err: unknown): TaskValidationErrorField | null {
+  if (!isApiError(err) || !err.field) return null
+  return (RECOGNIZED_FIELDS as readonly string[]).includes(err.field)
+    ? (err.field as TaskValidationErrorField)
+    : null
 }

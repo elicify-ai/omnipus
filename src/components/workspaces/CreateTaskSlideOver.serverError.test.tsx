@@ -2,15 +2,17 @@
  * CreateTaskSlideOver.serverError.test.tsx
  *
  * Live-UAT defect (lane L2b, scenario A-11 step 4): a 400 rejection from
- * `POST /api/v1/tasks` — e.g. GOAL-FR-021/FR-048's "a definition-of-done
- * item must be distinct from every acceptance criterion" check — rendered
- * NOTHING in the dialog. No toast, no inline message, no field highlight;
- * only the console logged the 400. This file locks in the fix: the
- * server's own validation message is always shown, routed inline next to
- * the named `criteria[N]`/`dod[N]` editor when the message identifies one,
- * otherwise into a submit-error banner — for both Create and Create & Run
- * (including the latter's PATCH-to-start step), and for non-400 failures
- * too. The dialog stays open and the user's input is never discarded.
+ * `POST /api/v1/tasks` — e.g. the rule that a definition-of-done item must
+ * be distinct from every acceptance criterion — rendered NOTHING in the
+ * dialog. No toast, no inline message, no field highlight; only the
+ * console logged the 400. This file locks in the fix: the server's own
+ * validation message (now plain, human-facing prose — see
+ * pkg/task/dod_distinct.go) is always shown, routed inline next to the
+ * criteria/dod editor the server's structured `field` property names
+ * (`fieldFromValidationError`), otherwise into a submit-error banner — for
+ * both Create and Create & Run (including the latter's PATCH-to-start
+ * step), and for non-400 failures too. The dialog stays open and the
+ * user's input is never discarded.
  *
  * Per CLAUDE.md Constraint #2: the SPA does not re-implement the
  * distinctness rule — the server is the sole authority. This file only
@@ -84,9 +86,14 @@ function makeCreatedTask(overrides: Record<string, unknown> = {}) {
   }
 }
 
-/** A real `ApiError` instance, exactly as `request()` would throw it. */
-function fakeApiError(userMessage: string) {
-  return new ApiError(400, userMessage)
+/**
+ * A real `ApiError` instance, exactly as `request()` would throw it. `field`
+ * mirrors the wire `ErrorResponse.field` property (ADR-068) the server now
+ * attaches to a criteria/dod/blocked_by rejection — see
+ * `jsonErrField`/`jsonTaskValidationErr` in `pkg/gateway/rest_tasks.go`.
+ */
+function fakeApiError(userMessage: string, field?: string) {
+  return new ApiError(400, userMessage, { field })
 }
 
 function renderSlideOver() {
@@ -107,12 +114,12 @@ function addItem(inputLabel: RegExp, text: string) {
 const CRITERION_INPUT = /what must be true when this is done\?/i
 const DOD_INPUT = /definition of done item/i
 
-// The exact rejection body reproduced in live UAT A-11 step 4.
+// The plain-language rejection the server now sends for the A-11 case (a
+// duplicate DoD item) — see pkg/task/dod_distinct.go's ValidateDoDDistinct.
 const DOD_RESTATES_CRITERION_MESSAGE =
-  'task validation: dod[0]: "greet.py exists and prints Hello World" restates the acceptance ' +
-  'criterion "greet.py exists and prints Hello World" — a definition-of-done item must be ' +
-  'distinct from every acceptance criterion (GOAL-FR-021/FR-048). Say what must be TRUE of the ' +
-  'finished work that the criteria do not already say'
+  'This Definition of Done item repeats an acceptance criterion ' +
+  '("greet.py exists and prints Hello World"). Make it say something the criteria don\'t ' +
+  'already cover.'
 
 function fillValidForm() {
   fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Greet script' } })
@@ -130,24 +137,38 @@ beforeEach(() => {
 // ── fieldFromValidationError (pure helper) ─────────────────────────────────────
 
 describe('fieldFromValidationError', () => {
-  it('identifies a dod[N] validation message', () => {
-    expect(fieldFromValidationError(DOD_RESTATES_CRITERION_MESSAGE)).toBe('dod')
+  it('identifies a dod-field validation error via the structured field property', () => {
+    expect(fieldFromValidationError(fakeApiError(DOD_RESTATES_CRITERION_MESSAGE, 'dod'))).toBe(
+      'dod',
+    )
   })
 
-  it('identifies a criteria[N] validation message', () => {
-    expect(fieldFromValidationError('task validation: criteria[2]: text is required')).toBe(
+  it('identifies a criteria-field validation error via the structured field property', () => {
+    expect(fieldFromValidationError(fakeApiError('text is required', 'criteria'))).toBe(
       'criteria',
     )
   })
 
-  it('returns null for a message naming no field', () => {
+  it('returns null for an ApiError with no field', () => {
     expect(
-      fieldFromValidationError('agent "builder" is not a member of workspace "proj-test"'),
+      fieldFromValidationError(
+        fakeApiError('agent "builder" is not a member of workspace "proj-test"'),
+      ),
     ).toBeNull()
   })
 
+  it('returns null for an ApiError with an unrecognized field', () => {
+    expect(fieldFromValidationError(fakeApiError('parent chain too deep', 'parent_task_id'))).toBeNull()
+  })
+
   it('returns null for a generic server error', () => {
-    expect(fieldFromValidationError('The server is unavailable. Please try again in a moment.')).toBeNull()
+    expect(
+      fieldFromValidationError(fakeApiError('The server is unavailable. Please try again in a moment.')),
+    ).toBeNull()
+  })
+
+  it('returns null for a non-ApiError value', () => {
+    expect(fieldFromValidationError(new Error('boom'))).toBeNull()
   })
 })
 
@@ -155,7 +176,7 @@ describe('fieldFromValidationError', () => {
 
 describe('CreateTaskSlideOver — surfaces server validation rejections (Create)', () => {
   it('renders the server dod[0] message inline and keeps the dialog open with input intact', async () => {
-    vi.mocked(createTask).mockRejectedValueOnce(fakeApiError(DOD_RESTATES_CRITERION_MESSAGE))
+    vi.mocked(createTask).mockRejectedValueOnce(fakeApiError(DOD_RESTATES_CRITERION_MESSAGE, 'dod'))
     renderSlideOver()
 
     fillValidForm()
@@ -182,7 +203,7 @@ describe('CreateTaskSlideOver — surfaces server validation rejections (Create)
   })
 
   it('clears the inline dod error once the user edits the DoD list', async () => {
-    vi.mocked(createTask).mockRejectedValueOnce(fakeApiError(DOD_RESTATES_CRITERION_MESSAGE))
+    vi.mocked(createTask).mockRejectedValueOnce(fakeApiError(DOD_RESTATES_CRITERION_MESSAGE, 'dod'))
     renderSlideOver()
 
     fillValidForm()
@@ -232,7 +253,7 @@ describe('CreateTaskSlideOver — surfaces server validation rejections (Create)
 
 describe('CreateTaskSlideOver — surfaces server validation rejections (Create & Run)', () => {
   it('renders the server dod[0] message inline for Create & Run and keeps the dialog open', async () => {
-    vi.mocked(createTask).mockRejectedValueOnce(fakeApiError(DOD_RESTATES_CRITERION_MESSAGE))
+    vi.mocked(createTask).mockRejectedValueOnce(fakeApiError(DOD_RESTATES_CRITERION_MESSAGE, 'dod'))
     renderSlideOver()
 
     fillValidForm()

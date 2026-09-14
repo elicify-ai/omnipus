@@ -296,7 +296,7 @@ export function CreateTaskSlideOver({
   // Never closes the dialog or touches `form` — the user's input stays put.
   function handleMutationError(err: unknown) {
     const msg = getErrorMessage(err, 'Failed to create task')
-    const field = fieldFromValidationError(msg)
+    const field = fieldFromValidationError(err)
     // This dialog only has editors for `criteria`/`dod` — there is no
     // per-field control for the third recognized shape ('blocked_by', a
     // dependency cycle; see TaskDetailPanel's dependency editor for where

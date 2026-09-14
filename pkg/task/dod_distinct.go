@@ -90,9 +90,21 @@ import "strings"
 // blank items never "collide" — emptiness is caught by validateCriterion's own
 // text-length rule, and reporting it here would name the wrong defect.
 //
-// Returns an ErrValidation-wrapped error naming the offending text, so every
-// caller can map it to the same refusal (HTTP 400 on the REST surface) and the
-// author can see WHICH item to change. Returns nil when either list is empty —
+// ErrDoDNotDistinct is returned when a definition-of-done item restates an
+// acceptance criterion (GOAL-FR-021/FR-047/FR-048, D-C). It wraps
+// ErrValidation so the REST seam maps it to HTTP 400 via errors.Is, exactly
+// like every other verr()-built refusal; callers that need to attribute the
+// rejection to the wire ErrorResponse.field="dod" (rather than parsing the
+// message text — the message is plain, human-facing prose, not a machine
+// format) use errors.Is(err, ErrDoDNotDistinct).
+var ErrDoDNotDistinct = verrf(ErrValidation, "a definition-of-done item must be distinct from "+
+	"every acceptance criterion")
+
+// Returns an ErrDoDNotDistinct-wrapped error naming the offending acceptance
+// criterion in plain language a non-engineer can act on — no spec ID, no
+// array index, no internal field name — so every caller can map it to the
+// same refusal (HTTP 400 on the REST surface) and the author can see WHICH
+// criterion the new item restates. Returns nil when either list is empty —
 // the count rule owns that case and reports it in its own words.
 func ValidateDoDDistinct(criteria, dod []AcceptanceCriterion) error {
 	if len(criteria) == 0 || len(dod) == 0 {
@@ -110,16 +122,15 @@ func ValidateDoDDistinct(criteria, dod []AcceptanceCriterion) error {
 			byText[key] = c.Text
 		}
 	}
-	for i, d := range dod {
+	for _, d := range dod {
 		key := comparableCriterionText(d.Text)
 		if key == "" {
 			continue
 		}
 		if criterionText, clash := byText[key]; clash {
-			return verr("dod[%d]: %q restates the acceptance criterion %q — a definition-of-done "+
-				"item must be distinct from every acceptance criterion (GOAL-FR-021/FR-048). "+
-				"Say what must be TRUE of the finished work that the criteria do not already say",
-				i, d.Text, criterionText)
+			return verrf(ErrDoDNotDistinct, "This Definition of Done item repeats an acceptance "+
+				"criterion (%q). Make it say something the criteria don't already cover.",
+				criterionText)
 		}
 	}
 	return nil

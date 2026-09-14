@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
@@ -33,21 +34,38 @@ import (
 // traversal on every status change is bounded.
 const maxBlockedByDepth = 50
 
-// ErrBlockedByCycle is returned when a blocked_by update would create a cycle.
-// It wraps ErrValidation so the REST seam maps it to HTTP 400 via errors.Is.
-var ErrBlockedByCycle = fmt.Errorf("%w: blocked_by cycle detected", ErrValidation)
+// ErrBlockedByCycle is returned when a "Depends on" edit would create a
+// dependency loop. It is attributable to ErrValidation via errors.Is so the
+// REST seam maps it to HTTP 400; REST call sites use
+// errors.Is(err, ErrBlockedByCycle) to attribute the wire
+// ErrorResponse.field="blocked_by" without parsing message text (E-10).
+var ErrBlockedByCycle = verrf(ErrValidation, "this would create a dependency loop")
 
 // ErrBlockedByDepthExceeded is returned when the chain exceeds maxBlockedByDepth.
-var ErrBlockedByDepthExceeded = fmt.Errorf("%w: blocked_by dependency chain too deep (max 50)", ErrValidation)
+var ErrBlockedByDepthExceeded = verrf(ErrValidation,
+	"this task's dependency chain would be more than %d tasks deep", maxBlockedByDepth)
 
-// ErrBlockedBySelfEdge is returned when a task lists itself in blocked_by.
-var ErrBlockedBySelfEdge = fmt.Errorf("%w: task cannot be blocked by itself", ErrValidation)
+// ErrBlockedBySelfEdge is returned when a task lists itself as its own dependency.
+var ErrBlockedBySelfEdge = verrf(ErrValidation, "a task cannot depend on itself")
 
-// ErrParentCycle is returned when a parent_task_id edge would create a cycle.
-var ErrParentCycle = fmt.Errorf("%w: parent_task_id edge would create a cycle", ErrValidation)
+// ErrParentCycle is returned when a proposed parent task would create a cycle.
+var ErrParentCycle = verrf(ErrValidation, "this would create a parent/subtask loop")
 
 // maxParentDepth bounds the parent chain walk.
 const maxParentDepth = 50
+
+// titleOrFallback returns id's task title for use in a user-facing
+// validation message, quoted-ready — or "another task" when the task cannot
+// be loaded or its title is blank. Validation messages must never surface a
+// raw task ID to a person; the title (or this fallback) is what an author
+// actually recognizes.
+func (s *Store) titleOrFallback(id string) string {
+	t, err := s.load(id)
+	if err != nil || strings.TrimSpace(t.Title) == "" {
+		return "another task"
+	}
+	return t.Title
+}
 
 // validateBlockedByLocked validates a proposed blocked_by set for taskID. The
 // caller must hold the per-task lock for taskID. It rejects self-edges, missing
@@ -61,21 +79,26 @@ func (s *Store) validateBlockedByLocked(taskID string, newBlockedBy []string) er
 			return ErrBlockedBySelfEdge
 		}
 		if err := validateID(dep); err != nil {
-			return fmt.Errorf("%w: blocked_by contains invalid ID %q: %w", ErrValidation, dep, err)
+			return verrf(ErrValidation, "%q is not a valid task ID: %v", dep, err)
 		}
 		if _, err := s.load(dep); err != nil {
 			if errors.Is(err, ErrNotFound) {
-				return fmt.Errorf("%w: blocked_by task %q not found", ErrValidation, dep)
+				return verrf(ErrValidation, "no task with ID %q was found", dep)
 			}
 			return fmt.Errorf("blocked_by: could not verify task %q: %w", dep, err)
 		}
 	}
 
 	// Cycle detection: if taskID is reachable from any proposed dep through the
-	// existing blocked_by graph, the new edge closes a cycle.
+	// existing blocked_by graph, the new edge closes a cycle. origDepID (the
+	// top-level candidate from this loop, not whatever intermediate node the
+	// recursion is currently visiting) is threaded through so the refusal
+	// names the two tasks the AUTHOR actually acted on — the task being
+	// edited and the dependency they just added — never a buried
+	// intermediate hop.
 	visited := make(map[string]bool)
 	for _, dep := range newBlockedBy {
-		if err := s.detectCycleDFS(dep, taskID, visited, 0); err != nil {
+		if err := s.detectCycleDFS(dep, taskID, dep, visited, 0); err != nil {
 			return err
 		}
 	}
@@ -89,7 +112,10 @@ func (s *Store) validateBlockedByLocked(taskID string, newBlockedBy []string) er
 }
 
 // detectCycleDFS searches the blocked_by graph from startID for targetID.
-func (s *Store) detectCycleDFS(startID, targetID string, visited map[string]bool, depth int) error {
+// origDepID is the dependency the author actually proposed adding to
+// targetID's blocked_by list (see validateBlockedByLocked) — used only for
+// the human-facing refusal message, never for the search itself.
+func (s *Store) detectCycleDFS(startID, targetID, origDepID string, visited map[string]bool, depth int) error {
 	if depth > maxBlockedByDepth+1 {
 		return nil
 	}
@@ -107,9 +133,13 @@ func (s *Store) detectCycleDFS(startID, targetID string, visited map[string]bool
 	}
 	for _, dep := range t.BlockedBy {
 		if dep == targetID {
-			return fmt.Errorf("%w: %q is reachable from %q through blocked_by", ErrBlockedByCycle, targetID, startID)
+			targetTitle := s.titleOrFallback(targetID)
+			depTitle := s.titleOrFallback(origDepID)
+			return verrf(ErrBlockedByCycle,
+				"%q can't depend on %q: %q already depends on it, which would create a loop",
+				targetTitle, depTitle, depTitle)
 		}
-		if err := s.detectCycleDFS(dep, targetID, visited, depth+1); err != nil {
+		if err := s.detectCycleDFS(dep, targetID, origDepID, visited, depth+1); err != nil {
 			return err
 		}
 	}
@@ -144,19 +174,20 @@ func (s *Store) forwardDepth(ids []string, depth int, seen map[string]bool) int 
 // if the parent does not exist. The caller must hold the per-task lock for newID.
 func (s *Store) checkParentAcyclicLocked(newID, parentID string) error {
 	if parentID == newID {
-		return fmt.Errorf("%w: task %q cannot be its own parent", ErrParentCycle, newID)
+		return verrf(ErrParentCycle, "%q cannot be its own parent task", s.titleOrFallback(newID))
 	}
 	if err := validateID(parentID); err != nil {
-		return fmt.Errorf("parent_task_id invalid: %w", err)
+		return verrf(ErrValidation, "%q is not a valid parent task ID: %v", parentID, err)
 	}
 	visited := map[string]bool{newID: true}
 	cur := parentID
 	for depth := 0; cur != ""; depth++ {
 		if depth >= maxParentDepth {
-			return fmt.Errorf("%w: parent chain exceeds max depth %d", ErrParentCycle, maxParentDepth)
+			return verrf(ErrParentCycle, "this task's parent chain would be more than %d tasks deep", maxParentDepth)
 		}
 		if visited[cur] {
-			return fmt.Errorf("%w: parent edge %q → %q closes a loop at %q", ErrParentCycle, newID, parentID, cur)
+			return verrf(ErrParentCycle, "%q can't be set as %q's parent: %q already sits below %q in the task tree, which would create a loop",
+				s.titleOrFallback(parentID), s.titleOrFallback(newID), s.titleOrFallback(newID), s.titleOrFallback(parentID))
 		}
 		visited[cur] = true
 		parent, err := s.load(cur)

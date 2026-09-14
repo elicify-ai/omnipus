@@ -3,8 +3,9 @@
  *
  * Live-UAT defect (lane W2-L4, scenario E-10): creating a dependency cycle
  * in the "Depends on" editor (A depends on B, then B depends on A) sends
- * `PUT /api/v1/tasks/{A}/dependencies` → HTTP 400
- * `{"error":"task validation: blocked_by cycle detected: ..."}` and the UI
+ * `PUT /api/v1/tasks/{A}/dependencies` → HTTP 400 with a plain-language
+ * rejection (`{"error":"...\"Research task\" can't depend on ...","field":
+ * "blocked_by"}` — see pkg/task/blocked_by.go's cycle check) and the UI
  * showed NOTHING — the checkbox just failed to apply, with only the
  * console logging the 400. This is the same defect class as A-11
  * (CreateTaskSlideOver.serverError.test.tsx): the server is the sole
@@ -104,8 +105,12 @@ function fakeApiError(userMessage: string) {
   return new ApiError(400, userMessage)
 }
 
+// The plain-language rejection the server now sends for a dependency cycle
+// (task-1's title is "Research task", other-1's is "Other Task One") — see
+// pkg/task/blocked_by.go's detectCycleDFS.
 const CYCLE_MESSAGE =
-  'task validation: blocked_by cycle detected: "task-1" is reachable from "other-1" through blocked_by'
+  '"Research task" can\'t depend on "Other Task One": "Other Task One" already depends on it, ' +
+  'which would create a loop'
 
 beforeEach(async () => {
   const api = await import('@/lib/api')

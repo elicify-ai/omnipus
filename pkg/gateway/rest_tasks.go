@@ -49,7 +49,9 @@ import (
 // record for a task that never had one requires both criteria and dod, so a
 // request that supplies only one of them is a 400, not a 500. Every other
 // failure out of syncTaskGoalRecord is a server-side write/read problem.
-var errGoalRecordNeedsBothLists = errors.New("criteria and dod must be supplied together")
+var errGoalRecordNeedsBothLists = errors.New("this task doesn't have a Definition of Done yet — the " +
+	"first time you set one, you need to supply both the acceptance criteria and the " +
+	"definition-of-done items together")
 
 // frozenTaskDefinitionFields reports which fields of a PATCH body belong to the
 // JUDGED CONTRACT — the definition the Judge measures the finished work
@@ -200,9 +202,7 @@ func (a *restAPI) syncTaskGoalRecord(
 			return fmt.Errorf("load paired goal record: %w", err)
 		}
 		if !criteriaProvided || !dodProvided {
-			return fmt.Errorf("%w: this task has no existing Definition of Done — saving "+
-				"criteria or dod for the first time requires supplying BOTH together "+
-				"(GOAL-FR-048)", errGoalRecordNeedsBothLists)
+			return errGoalRecordNeedsBothLists
 		}
 		maxRounds := config.DefaultGoalMaxRounds
 		if a.agentLoop != nil {
@@ -702,6 +702,21 @@ func (a *restAPI) toWireTask(t task.Task, idx rollupIndex, gidx taskGoalIndex) (
 	if t.MaxAttempts != nil {
 		out.MaxAttempts = ptr(*t.MaxAttempts)
 	}
+	// effective_max_attempts (founder decision 2026-09-14, D-D/D-E): the
+	// ceiling this task actually runs under, resolved by the SAME function the
+	// task executor enforces (tools.EffectiveTaskMaxAttempts) from the task's
+	// own max_attempts, the goal try limit snapshotted onto its paired goal
+	// record (g, already resolved above) when its run started, or the live
+	// Settings -> Performance goal try limit. Clients render this instead of a
+	// hardcoded default, so the displayed "attempt N/M" cannot drift from the
+	// enforced bound.
+	var planning config.PlanningConfig
+	if a.agentLoop != nil {
+		if cfg := a.agentLoop.GetConfig(); cfg != nil {
+			planning = cfg.Planning
+		}
+	}
+	out.EffectiveMaxAttempts = ptr(tools.EffectiveTaskMaxAttempts(planning, &t, g))
 	if t.Trigger != nil {
 		out.Trigger = toWireTrigger(t.Trigger)
 	}
@@ -1823,16 +1838,17 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 	// one definition-of-done item — naming explicitly which is missing.
 	var criteria, dod []task.AcceptanceCriterion
 	if req.Criteria == nil || len(*req.Criteria) == 0 {
-		jsonErr(w, http.StatusBadRequest,
-			"criteria is required: a task must have at least one acceptance criterion (GOAL-FR-021)")
+		jsonErrField(w, http.StatusBadRequest,
+			"Add at least one acceptance criterion — what must be true for this task to be done.",
+			"criteria")
 		return
 	}
 	criteria = criteriaFromCreateWire(*req.Criteria)
 	t.Criteria = criteria
 	if req.Dod == nil || len(*req.Dod) == 0 {
-		jsonErr(w, http.StatusBadRequest,
-			"dod is required: a task must have at least one definition-of-done item, distinct from "+
-				"its acceptance criteria (GOAL-FR-021/FR-048)")
+		jsonErrField(w, http.StatusBadRequest,
+			"Add at least one Definition of Done item, distinct from the acceptance criteria.",
+			"dod")
 		return
 	}
 	dod = dodFromCreateWire(*req.Dod)
@@ -1883,7 +1899,7 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 
 	if err := a.taskStore.Create(t); err != nil {
 		if isTaskValidationErr(err) {
-			jsonErr(w, http.StatusBadRequest, err.Error())
+			jsonTaskValidationErr(w, err)
 			return
 		}
 		slog.Error("rest: task create failed", "error", err)
@@ -2173,9 +2189,9 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	if req.Criteria != nil {
 		criteriaProvided = true
 		if len(*req.Criteria) == 0 {
-			jsonErr(w, http.StatusBadRequest,
-				"criteria must not be empty: an update that supplies criteria must include at "+
-					"least one acceptance criterion (GOAL-FR-021/D-C)")
+			jsonErrField(w, http.StatusBadRequest,
+				"An update that changes the acceptance criteria must leave at least one.",
+				"criteria")
 			return
 		}
 		patchCriteria = criteriaFromUpdateWire(*req.Criteria)
@@ -2184,9 +2200,9 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	if req.Dod != nil {
 		dodProvided = true
 		if len(*req.Dod) == 0 {
-			jsonErr(w, http.StatusBadRequest,
-				"dod must not be empty: an update that supplies dod must include at least one "+
-					"definition-of-done item (GOAL-FR-021/D-C)")
+			jsonErrField(w, http.StatusBadRequest,
+				"An update that changes the Definition of Done must leave at least one item.",
+				"dod")
 			return
 		}
 		patchDoD = dodFromUpdateWire(*req.Dod)
@@ -2332,7 +2348,7 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 			return
 		}
 		if isTaskValidationErr(err) {
-			jsonErr(w, http.StatusBadRequest, err.Error())
+			jsonTaskValidationErr(w, err)
 			return
 		}
 		slog.Error("rest: task update failed", "id", id, "error", err)
@@ -2643,7 +2659,7 @@ func (a *restAPI) applyTaskFieldUpdate(w http.ResponseWriter, id string, patch t
 			return
 		}
 		if isTaskValidationErr(err) {
-			jsonErr(w, http.StatusBadRequest, err.Error())
+			jsonTaskValidationErr(w, err)
 			return
 		}
 		slog.Error("rest: task "+what+" update failed", "id", id, "error", err)
@@ -3183,6 +3199,38 @@ func (a *restAPI) auditTriggerChange(taskID string, priorTrigger, newTrigger *ta
 // separately as 404 by every caller — it must NOT match here.
 func isTaskValidationErr(err error) bool {
 	return errors.Is(err, task.ErrValidation)
+}
+
+// taskValidationField attributes a task-validation error to the wire
+// ErrorResponse.field a client should route it to inline, via errors.Is
+// against the specific sentinel each rule raises — never by parsing the
+// (now plain-language, human-facing) message text. Returns "" for a
+// validation error that names no single field (e.g. an illegal status
+// transition), which callers use to fall back to jsonErr's fieldless body.
+func taskValidationField(err error) string {
+	switch {
+	case errors.Is(err, task.ErrDoDNotDistinct):
+		return "dod"
+	case errors.Is(err, task.ErrBlockedByCycle),
+		errors.Is(err, task.ErrBlockedBySelfEdge),
+		errors.Is(err, task.ErrBlockedByDepthExceeded):
+		return "blocked_by"
+	default:
+		return ""
+	}
+}
+
+// jsonTaskValidationErr writes a task-validation error (already confirmed via
+// isTaskValidationErr) as a 400, attaching the wire `field` property when
+// taskValidationField recognizes the rejection's sentinel (ADR-068 body
+// shape) so the SPA can route the (plain-language) message inline without
+// parsing it.
+func jsonTaskValidationErr(w http.ResponseWriter, err error) {
+	if field := taskValidationField(err); field != "" {
+		jsonErrField(w, http.StatusBadRequest, err.Error(), field)
+		return
+	}
+	jsonErr(w, http.StatusBadRequest, err.Error())
 }
 
 // errTaskAgentLoopUnavailable is returned by validateTaskAgentID's early

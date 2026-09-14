@@ -131,9 +131,9 @@ func TestValidateDoDDistinct(t *testing.T) {
 					t.Errorf("refusal must be an ErrValidation so every surface maps it to the same "+
 						"400, got %T: %v", err, err)
 				}
-				if !strings.Contains(err.Error(), "distinct") {
-					t.Errorf("refusal must state the rule in the same word it is advertised in; got %q",
-						err.Error())
+				if !errors.Is(err, ErrDoDNotDistinct) {
+					t.Errorf("refusal must be attributable to ErrDoDNotDistinct so the REST seam can "+
+						"route it to the \"dod\" field without parsing message text; got %T: %v", err, err)
 				}
 				for _, name := range tc.wantNames {
 					if !strings.Contains(err.Error(), name) {
