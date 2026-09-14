@@ -60,6 +60,13 @@ var (
 	// every record of the type must carry a value and a write door must not
 	// create the check_integrity finding it exists to prevent.
 	ErrRequiredProperty = errors.New("knowledge: required property cannot be removed")
+	// ErrUndeclaredRecordType is C7's guard on the discriminator: a `type`
+	// write (set_property, or create's frontmatter argument) must name a
+	// record type this collection's schemas actually declare. A typo or an
+	// undeclared name would otherwise produce a note that claims to be a
+	// record of a type nobody defined — ungoverned, invisible to the record
+	// doors, and (on a retype) still carrying its old-type identifier.
+	ErrUndeclaredRecordType = errors.New("knowledge: record type is not declared in this knowledge base")
 	// ErrReservedProperty is UAT 2026-09-13 D-51: a write to the record's
 	// identity (`id` / `omni_id`), to a `file.*` virtual property or to a
 	// `formula.*` derived column. All three used to fall through to the
@@ -462,12 +469,37 @@ func knowledgeEditValidateValue(set *records.SchemaSet, report *records.SchemaLo
 	// schema declares it as one of its own properties (the assembled-
 	// frontmatter check on create exempts it for the same reason), so it is
 	// written as sent: a scalar naming the type the note is (becoming).
+	//
+	// C7 (Claude review round 3): "as sent" used to mean "unchecked", which
+	// let a record be retyped to a typo (`dael`) keeping its old-type
+	// identifier — pre-D-28 the generic unknown-property refusal caught this
+	// by accident, and the short-circuit lost that. The name is now checked
+	// against the collection's OWN declarations: writing `type` is always the
+	// claim "this note IS a <name> record", and that claim is only verifiable
+	// against a schema that loaded. A miss is refused naming the declared
+	// types (or the load failure, when the name matches a schema file the
+	// loader rejected — the G4 distinction, so a broken schema does not read
+	// like a typo); a hit falls through to the caller's own identity rule
+	// (knowledgeEditRefuseTypeChange, 2faacf492) exactly as before.
 	if property == records.RecordTypeKey {
 		if isList {
 			return nil, nil, fmt.Errorf("%w: 'type' holds one record type name, not a list", ErrPropertyArity)
 		}
+		want := strings.TrimSpace(values[0])
+		if _, ok := set.Get(want); !ok {
+			if reason, rejected := knowledgeEditRejectedSchemaDetail(report, want); rejected {
+				return nil, nil, fmt.Errorf("%w: %s's schema file failed to load (%s), so a note cannot be made a %s record until it is fixed — fix the schema with knowledge_configure, then retry",
+					ErrUndeclaredRecordType, want, reason, want)
+			}
+			if types := set.Types(); len(types) > 0 {
+				return nil, nil, fmt.Errorf("%w: %q is not one of them; this knowledge base declares %s. 'type' must name a declared record type — create the type first with knowledge_configure (op create_record_type)",
+					ErrUndeclaredRecordType, want, strings.Join(types, ", "))
+			}
+			return nil, nil, fmt.Errorf("%w: no record types are declared in this knowledge base yet, so there is nothing to make a record of — create the type first with knowledge_configure (op create_record_type)",
+				ErrUndeclaredRecordType)
+		}
 		if gov != nil {
-			*gov = knowledgeEditGovernance{Reason: knowledgeEditGoverned, TypeName: strings.TrimSpace(values[0])}
+			*gov = knowledgeEditGovernance{Reason: knowledgeEditGoverned, TypeName: want}
 		}
 		return values, nil, nil
 	}

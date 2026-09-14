@@ -279,7 +279,8 @@ func (t *EditTool) Parameters() map[string]any {
 				"type": "string",
 				"description": "set_property: the property name, e.g. 'status'. relation: the " +
 					"relation or person property to change, e.g. 'company'. Setting 'type' on a " +
-					"plain note PROMOTES it to a record of that type and mints its id; a note that " +
+					"plain note PROMOTES it to a record of that type and mints its id — the type " +
+					"must be one this knowledge base declares (the refusal lists them); a note that " +
 					"is already a record cannot have its type changed here (its id belongs to its " +
 					"own type's sequence) — create a record of the new type with op 'create' and " +
 					"trash the old note with knowledge_restructure instead.",
