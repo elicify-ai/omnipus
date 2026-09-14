@@ -1207,6 +1207,12 @@ func (t *DelegateTool) Name() string {
 
 func (t *DelegateTool) Description() string {
 	return "Delegate a task to a subagent, and control/monitor it afterward. " +
+		"For a goal with two or more independent parts meant to run in parallel (for example several " +
+		"files or deliverables written by different agents), prefer a plan over several parallel run " +
+		"calls: load create_plan and execute_plan with ToolSearch (if your policy allows them). A plan's " +
+		"members declare write_sets that plan-lint checks for overlap before anything runs, and the whole " +
+		"plan is judged against one Definition of Done and can be stopped as a unit; parallel delegate " +
+		"calls get no overlap check. Delegate directly for a single self-contained piece of work. " +
 		"action=\"run\" (default) delegates a new task — by default in the background " +
 		"(async=true), returning immediately with a task_id/session_id; set async=false to " +
 		"block and receive the result inline. A delegation is force-cancelled after " +

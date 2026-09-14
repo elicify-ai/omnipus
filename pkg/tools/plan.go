@@ -171,7 +171,11 @@ func (t *PlanCreateTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *PlanCreateTool) Description() string {
 	return "Create a draft Plan to decompose / break down a complex, multi-step goal — a " +
-		"Definition-of-Done-driven grouping of tasks. Attach member tasks afterward with " +
+		"Definition-of-Done-driven grouping of tasks. Use a plan instead of several parallel delegate " +
+		"calls when a goal has two or more independent parts meant to run in parallel (for example " +
+		"several files or deliverables written by different agents): each member declares a write_set, " +
+		"and plan-lint rejects overlapping parallel write_sets before anything runs. " +
+		"Attach member tasks afterward with " +
 		"create_task(plan_id=..., write_set=..., stream=..., is_join=...). Requires at least one " +
 		"Definition-of-Done criterion (dod) — an agent-authored plan with none is rejected. " +
 		"Before authoring acceptance criteria, load the define-goal skill (via the Skill tool) " +
