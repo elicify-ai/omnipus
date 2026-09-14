@@ -720,6 +720,7 @@ type Task = {
   updated_at: string;
   started_at?: string | undefined;
   completed_at?: string | undefined;
+  last_activity_at?: string | undefined;
   rollup?:
     | Array<{
         agent_id: string;
@@ -3251,6 +3252,7 @@ export const Task: z.ZodType<Task> = z
     updated_at: z.string().datetime({ offset: true }),
     started_at: z.string().datetime({ offset: true }).optional(),
     completed_at: z.string().datetime({ offset: true }).optional(),
+    last_activity_at: z.string().datetime({ offset: true }).optional(),
     rollup: z
       .array(
         z.object({

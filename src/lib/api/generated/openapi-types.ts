@@ -7161,6 +7161,12 @@ export interface components {
              * @example 2026-06-20T10:05:30Z
              */
             completed_at?: string;
+            /**
+             * Format: date-time
+             * @description Read-time only, never stored: the most recent moment this task's run showed any sign of work, so a long run can be told apart from a stuck one without a fixed time limit (founder decision 2026-09-14). The later of (a) the live progress stamp of the task's running turn or any turn it delegated to — which moves on every streamed reasoning or tool-call argument delta — and (b) the last write to the task session's transcript (a tool result, an assistant message). Present only while `status` is `in_progress` and the run has produced such evidence; absent otherwise. Nothing is written to produce it (it is not a heartbeat). Unrelated to `Plan.last_activity_at`, which is a plan's idle-expiry clock.
+             * @example 2026-06-20T10:04:55Z
+             */
+            readonly last_activity_at?: string;
             /** @description Read-time only (Detail #6): derived list of live child sub-agent runs used to render board roll-up badges ("▸ N sub-agents running"). COMPUTED on read from the children whose `parent_task_id` equals this task's id — NEVER stored on the task record. Absent when the task has no live children. */
             rollup?: {
                 /**

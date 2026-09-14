@@ -5172,6 +5172,7 @@ func setupAndStartServices(
 		homePath:               homePath,
 		taskStore:              tStore,
 		taskExecutor:           tExecutor,
+		liveTaskActivity:       tExecutor, // founder decision 2026-09-14: Task.last_activity_at
 		planStore:              planStore, // ADR-049 D1: Plans REST surface (rest_plans.go) + plan_id FK check
 		credStore:              credStore,
 		mediaStore:             runningServices.MediaStore,

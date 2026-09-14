@@ -63,6 +63,7 @@ import { TaskChecklistField } from '@/components/workspaces/TaskChecklistField'
 import { TaskResultField } from '@/components/workspaces/TaskResultField'
 import { OpenInChatButton } from '@/components/workspaces/OpenInChatButton'
 import { TaskRunsList } from '@/components/workspaces/TaskRunsList'
+import { TaskActivityChip } from '@/components/workspaces/TaskActivityChip'
 import { STATUS_OPTIONS, STATUS_BADGE } from '@/components/workspaces/taskStatusConfig'
 import { formatDateTime } from '@/lib/dateFormat'
 import {
@@ -762,9 +763,13 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       {/* Status */}
       <Field label="Status">
         {isRunning ? (
-          <Badge className="h-8 text-xs bg-[var(--color-warning)]/10 text-[color:var(--color-warning)] border-transparent rounded-md px-2 inline-flex items-center">
-            In Progress
-          </Badge>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge className="h-8 text-xs bg-[var(--color-warning)]/10 text-[color:var(--color-warning)] border-transparent rounded-md px-2 inline-flex items-center">
+              In Progress
+            </Badge>
+            {/* "Last activity 5 s ago" (founder decision 2026-09-14). */}
+            <TaskActivityChip task={task} variant="panel" />
+          </div>
         ) : task.status === 'blocked' ? (
           // blocked is backend-derived (unmet dependency) — show read-only, not selectable
           <Badge className="h-8 text-xs bg-[var(--color-warning)]/10 text-[color:var(--color-warning)] border-transparent rounded-md px-2 inline-flex items-center">

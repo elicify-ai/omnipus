@@ -5,6 +5,7 @@ import { CheckSquare } from '@phosphor-icons/react'
 import { RollupBadge } from './RollupBadge'
 import { TaskChildren } from './TaskChildren'
 import { TaskActionButton } from './TaskActionButton'
+import { TaskActivityChip } from './TaskActivityChip'
 import { taskDisplayColor, taskDisplayLabel } from '@/lib/statusColors'
 import type { BoardAltitude } from '@/store/workspacesStore'
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core'
@@ -339,6 +340,10 @@ export function TaskCard({
           </span>
         </div>
       )}
+
+      {/* "In progress · last activity 5 s ago" (founder decision 2026-09-14) —
+          renders only while in progress with server-reported activity. */}
+      <TaskActivityChip task={task} />
 
       {/* Nested children — only when altitude = 'show-all' */}
       {showChildren && (

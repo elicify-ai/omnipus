@@ -116,6 +116,13 @@ type restAPI struct {
 	configMu     sync.Mutex          // guards safeUpdateConfigJSON (read-modify-write cycle)
 	taskStore    *task.Store         // unified task persistence
 	taskExecutor *agent.TaskExecutor // task execution engine
+	// liveTaskActivity (founder decision 2026-09-14) is the read seam
+	// Task.last_activity_at is stamped from: the live progress stamp of a
+	// running task's turn (advancing on streamed reasoning as well as
+	// tool-call deltas). Normally the shared TaskExecutor (wired at boot via
+	// its SetLiveTaskActivitySource); overridable per-test. Nil is valid and
+	// common in test constructions — the stamp is then simply absent.
+	liveTaskActivity LiveTaskActivityReader
 	// planStore is the Plan entity persistence (ADR-049 D1, pkg/plan), shared
 	// with the pkg/agent PlanEngine (both hold the SAME *plan.Store instance,
 	// constructed once at boot — setupAndStartServices). Nil in test setups

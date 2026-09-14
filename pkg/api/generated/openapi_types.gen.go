@@ -16499,6 +16499,9 @@ type Task struct {
 	// JudgeRounds ADR-053 §Contract Surface — "Budget / bounds". Per-task adjudication rounds consumed so far, mirroring `Plan.judge_rounds` at task/goal scope (R§8.9 — one round = one adjudication, claim-triggered or idle-settled). Distinct from `attempt_count`, which tracks retry attempts, not adjudications.
 	JudgeRounds *int `json:"judge_rounds,omitempty"`
 
+	// LastActivityAt Read-time only, never stored: the most recent moment this task's run showed any sign of work, so a long run can be told apart from a stuck one without a fixed time limit (founder decision 2026-09-14). The later of (a) the live progress stamp of the task's running turn or any turn it delegated to — which moves on every streamed reasoning or tool-call argument delta — and (b) the last write to the task session's transcript (a tool result, an assistant message). Present only while `status` is `in_progress` and the run has produced such evidence; absent otherwise. Nothing is written to produce it (it is not a heartbeat). Unrelated to `Plan.last_activity_at`, which is a plan's idle-expiry clock.
+	LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
+
 	// MaxAttempts Per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9, R-03). Null/absent inherits the single global goal try limit (`PerformanceSettings.goal_max_rounds`, Settings → Performance, default 20) — the same setting that bounds a chat goal (founder decision 2026-09-14, D-D/D-E). There is no separate global task-attempts setting.
 	MaxAttempts *int `json:"max_attempts,omitempty"`
 

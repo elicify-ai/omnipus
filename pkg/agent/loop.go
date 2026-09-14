@@ -661,6 +661,14 @@ type processOptions struct {
 	// second, parallel injection path.
 	IsTaskRun bool
 
+	// RunningTaskID names the unified task this turn is executing (founder
+	// decision 2026-09-14: last-activity on task cards). processTaskDirect
+	// sets it from the tools.WithRunningTaskID context the task executor
+	// already stamps on the run; AgentLoop.TaskLiveLastActivity matches on
+	// it to expose the turn's live progress stamp for exactly this task.
+	// Empty for every non-task turn.
+	RunningTaskID string
+
 	// UserInitiated threads bus.InboundMessage.UserInitiated into the turn
 	// (ADR-049 Gap #8/r2, spec Part B FR-075/SD-B6/R6) — see that field's doc
 	// comment for the fail-closed origin contract. handleCommand reads this
@@ -1545,6 +1553,11 @@ func NewAgentLoop(
 	al.homePath = homePath
 	al.taskStore = task.New(filepath.Join(homePath, "tasks"))
 	al.taskExecutor = newTaskExecutor(al, al.taskStore)
+	// Founder decision 2026-09-14: expose the running task's live progress
+	// stamp (reasoning counts) so the REST tasks surface can stamp
+	// Task.last_activity_at. The loop is the authority; the executor is the
+	// holder because the REST side already reaches the task engine here.
+	al.taskExecutor.SetLiveTaskActivitySource(al)
 
 	// Initialize shared session store at $OMNIPUS_HOME/sessions/.
 	// All new chat sessions are created here (joined session model).
@@ -7202,6 +7215,7 @@ func (al *AgentLoop) processTaskDirect(
 		TranscriptStore:        al.GetAgentStore(agentID),
 		InitialDelegationDepth: delegationDepth,
 		IsTaskRun:              true,
+		RunningTaskID:          tools.ToolRunningTaskID(taskCtx),
 		// WorkspaceID is already on taskCtx via tools.WithWorkspaceID (the task
 		// executor sets it on ctx before calling processTaskDirect — see
 		// runTask/runTaskFromInProgress's tools.WithWorkspaceID(ctx, t.WorkspaceID)

@@ -589,6 +589,59 @@ func (a *restAPI) buildTaskGoalIndex() (taskGoalIndex, error) {
 	return idx, nil
 }
 
+// LiveTaskActivityReader is the narrow gateway-side seam for a running
+// task's live last-activity stamp (founder decision 2026-09-14). Implemented
+// by *agent.TaskExecutor (forwarding to the AgentLoop's turn-progress
+// atomics); kept as a local interface so tests wire a stub without
+// constructing an executor.
+type LiveTaskActivityReader interface {
+	LiveTaskLastActivity(taskID string) (time.Time, bool)
+}
+
+// taskLastActivityAt resolves Task.last_activity_at for an in-progress task:
+// the LATER of (a) the live progress stamp of its running turn — which moves
+// on every streamed reasoning and tool-call-argument delta (UAT E-15c) — and
+// (b) the last write to its session transcript (a tool result, an assistant
+// message; the session store's cached UpdatedAt moves on every append).
+// Returns ok=false when the task is not in progress or no evidence exists —
+// the field is then simply absent on the wire, never fabricated.
+func (a *restAPI) taskLastActivityAt(t task.Task) (time.Time, bool) {
+	if t.Status != task.StatusInProgress {
+		return time.Time{}, false
+	}
+	var live, transcript time.Time
+	if a.liveTaskActivity != nil {
+		if at, ok := a.liveTaskActivity.LiveTaskLastActivity(t.ID); ok {
+			live = at
+		}
+	}
+	if t.SessionID != "" {
+		if store := a.resolveSessionStore(t.SessionID); store != nil {
+			if meta, err := store.GetMeta(t.SessionID); err == nil && meta != nil && !meta.UpdatedAt.IsZero() {
+				transcript = meta.UpdatedAt
+			}
+		}
+	}
+	// Local-time skew defence: a stamp from the future (clock jump between
+	// nodes) still renders as "just now", never a negative age.
+	now := time.Now()
+	switch {
+	case live.After(transcript) && !live.After(now):
+		return live, true
+	case transcript.After(live) && !transcript.After(now):
+		return transcript, true
+	case live.After(now) || transcript.After(now):
+		// Both candidates in the future — fall back to the later one anyway;
+		// the SPA clamps negative ages to "just now".
+		if live.After(transcript) {
+			return live, true
+		}
+		return transcript, true
+	default:
+		return time.Time{}, false
+	}
+}
+
 // toWireTask converts an internal task.Task to the generated wire type, filling
 // the read-time agent_name and rollup fields from the registry / store. idx is
 // an optional shared rollupIndex (see its doc comment) for batch callers; pass
@@ -757,6 +810,12 @@ func (a *restAPI) toWireTask(t task.Task, idx rollupIndex, gidx taskGoalIndex) (
 		if ts, err := time.Parse(time.RFC3339, t.CompletedAt); err == nil {
 			out.CompletedAt = &ts
 		}
+	}
+	// Founder decision 2026-09-14: last_activity_at, read-time only, only
+	// while the task is in progress (see taskLastActivityAt).
+	if at, ok := a.taskLastActivityAt(t); ok {
+		at = at.UTC()
+		out.LastActivityAt = &at
 	}
 
 	// Read-time rollup: live child sub-agent runs (parent_task_id == t.ID).

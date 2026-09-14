@@ -95,6 +95,14 @@ type TaskExecutor struct {
 	// parentFollowUp is a test seam ONLY — production leaves it nil.
 	parentFollowUp func(parentID string)
 
+	// liveTaskActivity (founder decision 2026-09-14) is the REST surface's
+	// read seam for a running task's live last-activity stamp: the AgentLoop
+	// itself, wired once at boot via SetLiveTaskActivitySource, answering
+	// from the running turn's progress atomics (which advance on streamed
+	// reasoning as well as tool-call deltas, UAT E-15c). Nil in test
+	// harnesses; LiveTaskLastActivity then reports false.
+	liveTaskActivity TaskLiveActivitySource
+
 	// evidence records the write-set-scoped boundary commit that Play later
 	// resumes a member from (D13/G-12). Wired at the gateway boot seam
 	// alongside PlanEngine.SetCommitResolver — the two are the producer and
@@ -244,6 +252,28 @@ type TaskExecutor struct {
 const evidenceGateMaxConsecutiveRejections = 2
 
 // newTaskExecutor creates a TaskExecutor over the unified task store.
+// SetLiveTaskActivitySource wires the executor's live last-activity seam
+// (founder decision 2026-09-14). Called once at boot, right after
+// newTaskExecutor, with the AgentLoop itself (which implements
+// TaskLiveActivitySource); the REST tasks surface reads through
+// TaskExecutor.LiveTaskLastActivity to stamp Task.last_activity_at on the
+// wire. Nil-safe no-op so partial test constructions keep working.
+func (te *TaskExecutor) SetLiveTaskActivitySource(src TaskLiveActivitySource) {
+	if te == nil {
+		return
+	}
+	te.liveTaskActivity = src
+}
+
+// LiveTaskLastActivity forwards to the wired source, returning false when
+// none is wired (test harnesses) — honest absence, never a fabricated stamp.
+func (te *TaskExecutor) LiveTaskLastActivity(taskID string) (time.Time, bool) {
+	if te == nil || te.liveTaskActivity == nil {
+		return time.Time{}, false
+	}
+	return te.liveTaskActivity.TaskLiveLastActivity(taskID)
+}
+
 func newTaskExecutor(al *AgentLoop, store *task.Store) *TaskExecutor {
 	// Resolve from the central authority. When al.cfg is nil (test seams
 	// only — production always supplies a config), fall back to what a
