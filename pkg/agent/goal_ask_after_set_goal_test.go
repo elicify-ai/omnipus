@@ -27,28 +27,20 @@ import (
 )
 
 func TestGoalTurn_SetGoalAndAskInOneResponse_RefusesTheAsk(t *testing.T) {
-	provider := &narrowedDoorCaptureProvider{
-		firstCallToolCalls: []providers.ToolCall{
-			{
-				ID: "call_goal", Type: "function", Name: tools.SetGoalToolName,
-				Function: &providers.FunctionCall{
-					Name: tools.SetGoalToolName,
-					Arguments: `{"definition":"Plan a weekly schedule","criteria":[` +
-						`{"text":"a schedule exists","judgment":"boolean"}],` +
-						`"assessment":{"clarity":"clear"}}`,
-				},
-			},
-			{
-				ID: "call_ask", Type: "function", Name: tools.AskUserQuestionToolName,
-				Function: &providers.FunctionCall{
-					Name: tools.AskUserQuestionToolName,
-					Arguments: `{"questions":[{"header":"Placeholder","question":"Placeholder question - not used",` +
-						`"options":[{"label":"A","description":"a"},{"label":"B","description":"b"}]}]}`,
-				},
-			},
-		},
-		finalMsg: "working on it now",
-	}
+	// offerGateCaptureProvider (tool_offer_gate_test.go): scripted responses
+	// in order, every request's messages recorded.
+	provider := &offerGateCaptureProvider{responses: []*providers.LLMResponse{
+		{ToolCalls: []providers.ToolCall{
+			scriptedToolCall("call_goal", tools.SetGoalToolName,
+				`{"definition":"Plan a weekly schedule","criteria":[`+
+					`{"text":"a schedule exists","judgment":"boolean"}],`+
+					`"assessment":{"clarity":"clear"}}`),
+			scriptedToolCall("call_ask", tools.AskUserQuestionToolName,
+				`{"questions":[{"header":"Placeholder","question":"Placeholder question - not used",`+
+					`"options":[{"label":"A","description":"a"},{"label":"B","description":"b"}]}]}`),
+		}},
+		{Content: "working on it now"},
+	}}
 	al, _ := newGoalLoopTestLoop(t, provider, nil)
 	agentInst, ok := al.GetRegistry().GetAgent("native-agent")
 	require.True(t, ok, "native-agent not registered")
@@ -83,7 +75,7 @@ func TestGoalTurn_SetGoalAndAskInOneResponse_RefusesTheAsk(t *testing.T) {
 	assert.Equal(t, 0, rec.QuestionRoundsUsed,
 		"the refused ask must not spend the FR-010 question-round budget")
 
-	secondMsgs, ok := provider.msgsAt(1)
+	secondMsgs, _, ok := provider.request(1)
 	require.True(t, ok, "the turn must reach a second provider request after the refusal")
 	askResult, found := toolResultFor(secondMsgs, "call_ask")
 	require.True(t, found, "the refused ask must have a paired tool result")
@@ -99,17 +91,13 @@ func TestGoalTurn_AskAloneStillParks(t *testing.T) {
 	// Control for the refusal above: an AskUserQuestion WITHOUT a same-response
 	// set_goal keeps its genuine success path (park + budget bump) — the gate
 	// must not have broken the real ask door.
-	provider := &narrowedDoorCaptureProvider{
-		firstCallToolCalls: []providers.ToolCall{{
-			ID: "call_ask", Type: "function", Name: tools.AskUserQuestionToolName,
-			Function: &providers.FunctionCall{
-				Name: tools.AskUserQuestionToolName,
-				Arguments: `{"questions":[{"header":"Scope","question":"Single or multiplayer?",` +
-					`"options":[{"label":"Single","description":"one player"},{"label":"Multi","description":"two players"}]}]}`,
-			},
+	provider := &offerGateCaptureProvider{responses: []*providers.LLMResponse{
+		{ToolCalls: []providers.ToolCall{
+			scriptedToolCall("call_ask", tools.AskUserQuestionToolName,
+				`{"questions":[{"header":"Scope","question":"Single or multiplayer?",`+
+					`"options":[{"label":"Single","description":"one player"},{"label":"Multi","description":"two players"}]}]}`),
 		}},
-		finalMsg: "unused — the turn parks",
-	}
+	}}
 	al, _ := newGoalLoopTestLoop(t, provider, nil)
 	agentInst, ok := al.GetRegistry().GetAgent("native-agent")
 	require.True(t, ok, "native-agent not registered")
