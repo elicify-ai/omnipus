@@ -273,6 +273,20 @@ func (al *AgentLoop) RequestCancel(
 		sessionID = al.resolveSessionIDByChannelChat(scope.Channel, scope.ChatID)
 	}
 
+	// Founder decision 2026-09-14 (UAT B-1 run 4): an explicit Stop/cancel on a
+	// session pauses that session's goal keeper — the keeper must not start a
+	// new turn on its own after the user stopped one. Placed at the very top
+	// (like the background-kill cascade below) so it covers a Fired, Armed and
+	// even a no-op Stop alike: every RequestCancel call IS an explicit stop
+	// request. The pause holds until a new turn runs on the session
+	// (checkGoalLoopAfterTurn lifts it) and the goal itself stays active; it is
+	// in-memory, mirroring the waiting_on_user park. The cron watchdog is
+	// excluded inside pauseGoalKeeperForStop: a deadline reaper is not the
+	// user. A cancel aimed at a goal-less session (e.g. a verifier session) is
+	// an inert no-op — the keeper only consults the flag for goal-bearing
+	// sessions.
+	al.pauseGoalKeeperForStop(sessionID, canceller.Channel)
+
 	// --- Background-session kill cascade (FR-B10/FR-B11, User Story 5) —
 	// decoupled from the active-turn gate ---
 	//

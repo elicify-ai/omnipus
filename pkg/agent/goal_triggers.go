@@ -313,6 +313,31 @@ type goalTriggerState struct {
 	// so there is no registered turn left to have an opinion about.
 	liveTurnWork map[string]goalLiveTurnWork
 
+	// keeperPausedByStop marks a SESSION whose goal keeper is paused because
+	// the user explicitly stopped a turn on it (RequestCancel — founder
+	// decision 2026-09-14, UAT B-1 run 4: ~66 s after the user pressed Stop
+	// the idle keeper started a new turn on its own and worked 9 minutes).
+	// The value is the time of the (latest) Stop. While an entry exists,
+	// maybeSettleGoalIdle skips the goal bound to this session entirely — no
+	// quiet-window settle, no nudge, no continue-push. The goal itself stays
+	// ACTIVE (a Stop is not an ending; /goal clear is the way to end one).
+	// Keyed by SESSION id because the Stop is on the session; the keeper
+	// consults it via the goal record's ActiveSessionID.
+	//
+	// Lifted only once a user message saved AFTER the Stop exists in the
+	// session transcript (liftGoalKeeperStopPauseIfNewTurn). Deliberately not
+	// "any user-initiated turn finished": a graceful Stop lets the stopped turn
+	// run one last tool-less round and end as a normal completion, so that very
+	// turn reaches the after-turn hook with UserInitiated=true — keying on it
+	// would lift the pause the instant the user pressed Stop. Every user
+	// message is saved with its arrival time before its turn starts (the web
+	// handler, and processMessage for other channels), which is what makes the
+	// timestamp comparison a true "a new turn was asked for after the Stop".
+	// In-memory, mirroring waitingOnUser: a restart forgets it, which re-arms
+	// the keeper — the same accepted restart gap every park on this singleton
+	// documents.
+	keeperPausedByStop map[string]time.Time
+
 	// sessionStoreResolver is FR-031's session-store seam for routeFor's
 	// persisted-routing rehydration. routeFor is called as a bare
 	// goalTriggers().routeFor(sessionID) — no *AgentLoop receiver, by
@@ -341,6 +366,7 @@ var goalTriggersSingleton = &goalTriggerState{
 	blocked:             make(map[string]bool),
 	claimScanWatermarks: make(map[string]time.Time),
 	liveTurnWork:        make(map[string]goalLiveTurnWork),
+	keeperPausedByStop:  make(map[string]time.Time),
 }
 
 // goalLiveTurnWork is one observation of what a goal's live turn(s) were
@@ -379,6 +405,7 @@ func resetGoalTriggerStateForTest() {
 	s.blocked = make(map[string]bool)
 	s.claimScanWatermarks = make(map[string]time.Time)
 	s.liveTurnWork = make(map[string]goalLiveTurnWork)
+	s.keeperPausedByStop = make(map[string]time.Time)
 	s.sessionStoreResolver = nil
 }
 
@@ -476,6 +503,97 @@ func (al *AgentLoop) clearGoalTriggerState(sessionID, goalID string) {
 	}
 	delete(s.routing, sessionID)
 	delete(s.diffBoundaryHash, sessionID)
+	// A goal that ENDED has no keeper left to pause — but the session may
+	// mint a fresh goal later, and a Stop-pause from the ended goal's lifetime
+	// must not silently suppress that new goal's keeper (only a NEW Stop may
+	// pause it).
+	delete(s.keeperPausedByStop, sessionID)
+}
+
+// goalKeeperPausedByStop reports whether the user explicitly stopped a turn on
+// sessionID and the pause has not been lifted by a newer user message since
+// (founder decision 2026-09-14 — see keeperPausedByStop's own doc comment).
+func (al *AgentLoop) goalKeeperPausedByStop(sessionID string) bool {
+	s := goalTriggers()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, paused := s.keeperPausedByStop[sessionID]
+	return paused
+}
+
+// goalKeeperStopPausedAt returns the time of the Stop that paused sessionID's
+// keeper, and whether a pause is held at all.
+func (al *AgentLoop) goalKeeperStopPausedAt(sessionID string) (time.Time, bool) {
+	s := goalTriggers()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	at, paused := s.keeperPausedByStop[sessionID]
+	return at, paused
+}
+
+// pauseGoalKeeperForStop is RequestCancel's goal-keeper half (founder decision
+// 2026-09-14, UAT B-1 run 4): an explicit Stop on a session pauses the goal
+// keeper for the goal bound to that session until a user message arrives after
+// the Stop. The cron watchdog (Channel "cron") is excluded — a deadline reaper
+// stopping a stuck turn is not the user choosing to stop the work. A repeated
+// Stop moves the pause time forward, so only a message sent after the LATEST
+// Stop lifts it. Logs the transition from un-paused once.
+func (al *AgentLoop) pauseGoalKeeperForStop(sessionID, cancellerChannel string) {
+	if sessionID == "" || cancellerChannel == "cron" {
+		return
+	}
+	s := goalTriggers()
+	s.mu.Lock()
+	_, already := s.keeperPausedByStop[sessionID]
+	s.keeperPausedByStop[sessionID] = time.Now().UTC()
+	s.mu.Unlock()
+	if already {
+		return
+	}
+	logger.InfoCF("agent", "goal: Stop paused the goal keeper for this session until the user sends a new message (the goal stays active)",
+		map[string]any{"component": "goal", "session_id": sessionID, "canceller_channel": cancellerChannel})
+}
+
+// liftGoalKeeperStopPauseIfNewTurn lifts sessionID's Stop-pause when the
+// session transcript holds a user message saved after the Stop — the durable
+// "the user asked for a new turn" signal (see keeperPausedByStop's doc comment
+// for why the finishing turn itself is not that signal). Returns whether it
+// lifted. A transcript that cannot be read keeps the pause, loudly: failing
+// toward "the keeper stays quiet" honours the user's Stop, and the next turn
+// re-checks.
+func (al *AgentLoop) liftGoalKeeperStopPauseIfNewTurn(store *session.UnifiedStore, sessionID string) bool {
+	pausedAt, paused := al.goalKeeperStopPausedAt(sessionID)
+	if !paused || store == nil {
+		return false
+	}
+	entries, err := store.ReadTranscript(sessionID)
+	if err != nil {
+		logger.WarnCF("agent", "goal: could not read the transcript to decide whether to lift the Stop-pause — the keeper stays paused",
+			map[string]any{"component": "goal", "session_id": sessionID, "error": err.Error()})
+		return false
+	}
+	newer := false
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
+		if e.Role == "user" && e.Timestamp.After(pausedAt) {
+			newer = true
+			break
+		}
+	}
+	if !newer {
+		return false
+	}
+	s := goalTriggers()
+	s.mu.Lock()
+	// Only lift the pause we evaluated: a Stop that landed while the
+	// transcript was being read moved pausedAt forward and still holds.
+	if cur, ok := s.keeperPausedByStop[sessionID]; ok && cur.Equal(pausedAt) {
+		delete(s.keeperPausedByStop, sessionID)
+		s.mu.Unlock()
+		return true
+	}
+	s.mu.Unlock()
+	return false
 }
 
 // goalIsWaitingOnUser reports whether goalID is currently paused via a
@@ -1129,6 +1247,18 @@ func (al *AgentLoop) maybeSettleGoalIdle(now time.Time, store *session.UnifiedSt
 	// agent said it cannot proceed and it is not a question the operator can
 	// answer, so there is nothing for the keeper to push toward.
 	if al.goalIsBlocked(rec.GoalID) {
+		return
+	}
+	// Founder decision 2026-09-14 (UAT B-1 run 4): the user Stopped a turn on
+	// this session — the keeper does not dispatch anything (no settle, no
+	// nudge, no continue-push) until a new turn runs here. The goal stays
+	// active; this is a pause, not an ending. Silent like the parks above: a
+	// paused goal is a routine, long-lived state, and pauseGoalKeeperForStop
+	// already logged the transition when it happened. The multi-day
+	// idle-expiry sweep (goalIdleExpirySweep, this function's caller) is
+	// deliberately NOT paused: it is D-A's sole terminator for a goal that
+	// stays quiet forever, Stop or no Stop.
+	if al.goalKeeperPausedByStop(sessionID) {
 		return
 	}
 	// FR-102 re-arm: a previous quiet-window adjudication already fired for

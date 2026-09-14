@@ -1234,6 +1234,20 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 		return // no active goal — fast path
 	}
 
+	// Founder decision 2026-09-14 (UAT B-1 run 4): lift the Stop-pause once a
+	// genuine new turn was asked for on this session — a user message saved
+	// after the Stop (liftGoalKeeperStopPauseIfNewTurn). The turn that was
+	// itself Stopped can finish here as a normal completion (a graceful Stop's
+	// last tool-less round); its user message predates the Stop, so it does
+	// not lift. The keeper's own follow-ups (SenderID ==
+	// goalLoopFollowUpSenderID) are never eligible. A task run saves no user
+	// message of its own (processTaskDirect), so on a task session the pause
+	// lifts only once the user messages that thread.
+	if (opts.UserInitiated || opts.IsTaskRun) && al.liftGoalKeeperStopPauseIfNewTurn(store, sessionID) {
+		logger.InfoCF("agent", "goal: a user message arrived after the Stop — the Stop-pause on the goal keeper is lifted",
+			map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID})
+	}
+
 	// ADR-053 Phase-2 / D12 (R§8.3c/FR-174): graceful wind-down at the
 	// adjudication boundary. If the ONE app-level OVERALL token pool is
 	// exhausted, this scope transitions to failed(budget_exhausted) with a
