@@ -54,6 +54,7 @@ import { LibraryNewVaultDialog } from './LibraryNewVaultDialog'
 import { LibraryNewFolderDialog } from './LibraryNewFolderDialog'
 import { LibraryTransferDialog } from './LibraryTransferDialog'
 import { LibraryAddMountDialog } from './LibraryAddMountDialog'
+import { LibraryRenameDialog } from './LibraryRenameDialog'
 
 const mockedHostFolders = vi.mocked(fetchHostFolders)
 
@@ -310,6 +311,44 @@ describe('D-117 — Add-mount renders the SERVER response (broad warning / 403 r
     // the path retires it.
     fireEvent.change(screen.getByTestId('library-add-mount-path'), { target: { value: '/tmp' } })
     await waitFor(() => expect(screen.queryByTestId('library-add-mount-dialog-refused')).not.toBeInTheDocument())
+  })
+})
+
+describe('Rename — a dot-prefixed name would hide the entry (Claude review 2026-09-14)', () => {
+  // The listing's visibility rule is library-spec.md D-8, applied once in
+  // pkg/library/entries.go::List: a name beginning with "." is hidden and is
+  // omitted unless "Show hidden" is on. The rename dialog used to accept
+  // ".hidden" — the server renamed onto it, and the entry then simply
+  // vanished from the default listing with no explanation.
+  it('refuses a name starting with a dot, names the reason, and keeps a plain rename working', () => {
+    const onSubmit = vi.fn()
+    render(
+      <LibraryRenameDialog
+        open
+        onOpenChange={vi.fn()}
+        entry={entry({ name: 'notes.md', path: 'notes.md' })}
+        siblingNames={new Set()}
+        onSubmit={onSubmit}
+        isPending={false}
+      />,
+    )
+    const input = screen.getByTestId('library-rename-input')
+
+    fireEvent.change(input, { target: { value: '.hidden' } })
+    expect(screen.getByTestId('library-rename-hidden')).toHaveTextContent(/wouldn't show in the list/i)
+    expect(screen.getByTestId('library-rename-confirm')).toBeDisabled()
+    expect(onSubmit).not.toHaveBeenCalled()
+
+    // "." / ".." are refused as names, same as the New-knowledge-base rule.
+    fireEvent.change(input, { target: { value: '..' } })
+    expect(screen.getByTestId('library-rename-dot')).toBeInTheDocument()
+    expect(screen.getByTestId('library-rename-confirm')).toBeDisabled()
+
+    // Positive control: a plain rename still submits the joined path.
+    fireEvent.change(input, { target: { value: 'notes-2.md' } })
+    expect(screen.queryByTestId('library-rename-hidden')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('library-rename-confirm'))
+    expect(onSubmit).toHaveBeenCalledWith('notes-2.md')
   })
 })
 
