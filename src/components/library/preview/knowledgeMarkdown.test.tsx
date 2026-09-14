@@ -19,7 +19,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, act } from '@testing-library/react'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
@@ -101,6 +101,22 @@ function resolvedEmbed(
     workspacePath: 'work/files/target',
     ...over,
   }
+}
+
+/** UAT D-101 (round 2, U-48): `KbMarkdownImage` no longer renders its
+ *  `<img src>` the instant `LazyEmbedMount` mounts it — it also waits for a
+ *  page-wide slot from `kbImageDownloadPool` (KbMarkdownImage.tsx). This
+ *  suite's global IntersectionObserver double mounts synchronously
+ *  (`src/test/intersectionObserver.ts`'s `auto-visible` mode), so a single
+ *  image is always under the pool's ceiling and always granted — just not
+ *  synchronously with the mount, since even the immediate-grant path
+ *  resolves via a microtask (the same contract viewEvaluationPool.ts /
+ *  pdfWorkerPool.ts already have). Await this once after `render()` for any
+ *  assertion that reads `kb-markdown-image`. */
+async function grantDownloadSlot() {
+  await act(async () => {
+    await Promise.resolve()
+  })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -309,8 +325,9 @@ describe('the composition inherits chat’s renderers (FR-013a/b — spec test 8
     expect(screen.getByTestId('mermaid-diagram').textContent).toBe('graph TD')
   })
 
-  it('renders images through the KB\'s own image renderer, never chat\'s (UAT D-40/D-134/D-101)', () => {
+  it('renders images through the KB\'s own image renderer, never chat\'s (UAT D-40/D-134/D-101)', async () => {
     render(<KnowledgeBaseMarkdown content={'![alt](https://example.test/a.png)'} />)
+    await grantDownloadSlot()
     expect(screen.getByTestId('kb-markdown-image').getAttribute('src')).toBe('https://example.test/a.png')
     expect(screen.queryByTestId('chat-image')).not.toBeInTheDocument()
   })
@@ -499,17 +516,18 @@ describe('wikilinks and embeds (FR-060, US-7 AS-1/AS-2)', () => {
     expect(onNavigate).toHaveBeenCalledWith('folder/Note', 'H')
   })
 
-  it('renders ![[image.png]] as an image when the collection can resolve it', () => {
+  it('renders ![[image.png]] as an image when the collection can resolve it', async () => {
     render(
       <KnowledgeBaseMarkdown
         content={'![[diagram.png]]'}
         resolveEmbedUrl={() => resolvedEmbed('https://example.test/diagram.png')}
       />,
     )
+    await grantDownloadSlot()
     expect(screen.getByTestId('kb-markdown-image').getAttribute('src')).toBe('https://example.test/diagram.png')
   })
 
-  it('renders ![[diagram.svg]] as an image, never as an inline <svg> (EMB-031)', () => {
+  it('renders ![[diagram.svg]] as an image, never as an inline <svg> (EMB-031)', async () => {
     // A scripted SVG injected inline would execute; drawn inside <img> (the
     // KB image slot, secure static mode) it never does. DIES ON: routing `.svg`
     // through a different node type than other image extensions.
@@ -519,6 +537,7 @@ describe('wikilinks and embeds (FR-060, US-7 AS-1/AS-2)', () => {
         resolveEmbedUrl={() => resolvedEmbed('https://example.test/logo.svg')}
       />,
     )
+    await grantDownloadSlot()
     expect(screen.getByTestId('kb-markdown-image').getAttribute('src')).toBe('https://example.test/logo.svg')
     expect(document.querySelector('svg')).toBeNull()
   })

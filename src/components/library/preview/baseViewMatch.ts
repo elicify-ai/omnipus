@@ -19,7 +19,7 @@
 // step first produced one is `ambiguous` (EMB-042) — refused, naming every
 // view that matched, never silently picking the first.
 
-import type { KnowledgeBaseView } from '@/lib/api/generated/openapi-types'
+import type { KnowledgeBaseUnloadableView, KnowledgeBaseView } from '@/lib/api/generated/openapi-types'
 
 export type BaseViewMatch =
   | { kind: 'matched'; view: KnowledgeBaseView; chosenByDefault: boolean }
@@ -62,4 +62,34 @@ export function matchBaseView(
   if (byName.length > 1) return { kind: 'ambiguous', label: fragment, matches: byName }
 
   return { kind: 'not_found' }
+}
+
+/**
+ * UAT U-32 (S3, retest validation): when a fragment matches no LOADED view
+ * (`matchBaseView` above answered `not_found`), it can still name a view
+ * that DOES exist in the file but failed to load — telling the reader "no
+ * view named X" would then be a wrong reason, not merely an unhelpful one.
+ *
+ * `KnowledgeBaseUnloadableView` carries only a machine NAME for a rejected
+ * view (`pkg/records/view.go`'s `ViewRejection.Name`, the `name:` key) —
+ * never a display label; the server does not track one for a view it never
+ * finished validating far enough to safely surface (see this function's
+ * call site in knowledgeMarkdown.tsx for the fuller note on that gap). So
+ * this can only catch a fragment written as the view's machine name, the
+ * same case-insensitive tolerance `matchBaseView`'s label ladder already
+ * gives — a fragment written as the view's intended LABEL (the exact UAT
+ * repro) is not resolvable from today's wire shape and correctly falls
+ * through to the generic "No view named" answer, same as before.
+ */
+export function matchUnloadableBaseView(
+  unloadable: readonly KnowledgeBaseUnloadableView[] | undefined,
+  fragment: string | undefined,
+): KnowledgeBaseUnloadableView | undefined {
+  if (fragment === undefined || fragment === '' || !unloadable || unloadable.length === 0) return undefined
+
+  const exact = unloadable.find((u) => u.name === fragment)
+  if (exact) return exact
+
+  const lower = fragment.toLowerCase()
+  return unloadable.find((u) => u.name !== undefined && u.name.toLowerCase() === lower)
 }
