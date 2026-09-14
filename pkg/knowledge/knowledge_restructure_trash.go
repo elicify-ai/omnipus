@@ -115,6 +115,10 @@ var (
 	// note's original path. Restoring would silently overwrite it, which
 	// this package never does to any write (version.go's whole header).
 	ErrRestoreDestinationExists = errors.New("knowledge: restore destination already exists")
+
+	// ErrRestoreAmbiguous means the path names both a trashed note (through
+	// the ".md" habit) and a trashed folder, so restoring it would be a guess.
+	ErrRestoreAmbiguous = errors.New("knowledge: restore is ambiguous")
 )
 
 // trashReceipt is entry.json's shape (design note §7). It is read back by
@@ -185,6 +189,11 @@ type RestoreRequest struct {
 	// design note settles on (§4, resolving F3): the caller names the note
 	// the way it would have named it before trashing it, never a path inside
 	// .omnipus-vault/trash/.
+	//
+	// A trailing slash ("Projects/") asks for a trashed FOLDER only, and is
+	// the way to pick the folder when a trashed note "Projects.md" shares its
+	// name; "Projects.md" picks the note. The bare name "Projects" is refused
+	// when both exist (ErrRestoreAmbiguous).
 	Path string
 	// TrashedAt optionally selects an older copy when the path was trashed
 	// more than once. Empty means the most recently trashed copy.
@@ -421,6 +430,12 @@ func (tr *Trasher) restoreSourcePath(fsys LinkFS, rel string) (string, []trashCo
 	}
 	copies, err := tr.findTrashCopies(fsys, rel)
 	return rel, copies, err
+}
+
+// restorePathNamesFolder reports whether a restore path ends in a slash (either
+// spelling cleanNoteArg accepts), the explicit "this is a folder" form.
+func restorePathNamesFolder(raw string) bool {
+	return strings.HasSuffix(strings.ReplaceAll(strings.TrimSpace(raw), "\\", "/"), "/")
 }
 
 // recordIdentity reads a trashed or restored file's record type and
@@ -696,6 +711,23 @@ func (tr *Trasher) Restore(req RestoreRequest) (*RestoreResult, error) {
 		return nil, err
 	}
 
+	// The folder form: "Projects/" means the trashed folder and nothing else,
+	// so it never falls back to a note. restoreFolder makes the reserved-name
+	// check itself.
+	if restorePathNamesFolder(req.Path) {
+		folderCopies, ferr := tr.findTrashFolderCopies(fsys, orig)
+		if ferr != nil {
+			tr.emit(trashOpRestore, "refused", []string{orig}, ferr.Error())
+			return nil, ferr
+		}
+		if len(folderCopies) == 0 {
+			rerr := fmt.Errorf("%w: no trashed folder at %s; a path ending in '/' restores only a folder, so leave the '/' off to restore a note", ErrRestoreNotFound, orig)
+			tr.emit(trashOpRestore, "refused", []string{orig}, rerr.Error())
+			return nil, rerr
+		}
+		return tr.restoreFolder(fsys, orig, folderCopies, req.TrashedAt)
+	}
+
 	// Discovery only looks inside .omnipus-vault/trash/, so choosing the
 	// address before the reserved-name check below cannot reach anything the
 	// check protects: Trash refuses a reserved source, so no trashed copy can
@@ -713,10 +745,29 @@ func (tr *Trasher) Restore(req RestoreRequest) (*RestoreResult, error) {
 		return nil, rerr
 	}
 
+	// A note found only through the ".md" habit ("Projects" -> "Projects.md")
+	// while a trashed folder "Projects" also exists: either could be meant, so
+	// nothing is restored and the caller is told how to pick. A path spelled
+	// exactly as the trashed file ("Projects.md") never reaches this check.
+	if len(copies) > 0 && orig != asGiven {
+		folderCopies, ferr := tr.findTrashFolderCopies(fsys, asGiven)
+		if ferr != nil {
+			tr.emit(trashOpRestore, "refused", []string{asGiven}, ferr.Error())
+			return nil, ferr
+		}
+		if len(folderCopies) > 0 {
+			rerr := fmt.Errorf("%w: the trash holds both a note %q and a folder %q, so nothing was restored; "+
+				"give path %q to restore the note, or give path %q (with the trailing slash) to restore the folder",
+				ErrRestoreAmbiguous, orig, asGiven, orig, asGiven+"/")
+			tr.emit(trashOpRestore, "refused", []string{orig, asGiven}, rerr.Error())
+			return nil, rerr
+		}
+	}
+
 	if len(copies) == 0 {
-		// A trashed FOLDER answers only when no trashed file does
-		// (knowledge_restructure_trash_folder.go), so a path that names a
-		// trashed note keeps meaning that note.
+		// A trashed FOLDER answers by its bare name only when no trashed file
+		// does (knowledge_restructure_trash_folder.go); a tie with a trashed
+		// note was refused above.
 		folderCopies, ferr := tr.findTrashFolderCopies(fsys, asGiven)
 		if ferr != nil {
 			tr.emit(trashOpRestore, "refused", []string{asGiven}, ferr.Error())

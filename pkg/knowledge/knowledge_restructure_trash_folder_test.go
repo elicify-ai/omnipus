@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -140,6 +141,164 @@ func TestRestore_OneFileOutOfATrashedFolderKeepsTheFolderRestorable(t *testing.T
 	require.NoError(t, err, "the rest of the folder is still restorable by the folder's name")
 	assert.True(t, rest.Folder)
 	assert.Equal(t, "# Plan\n", a2Read(t, dir, "Projects/Atlas/Plan.md"))
+}
+
+// tieFixture puts BOTH a note "Projects.md" and a folder "Projects" (holding
+// Atlas.md) into the trash, so the bare name "Projects" could mean either.
+func tieFixture(t *testing.T) (dir string, tr *Trasher, folderTrashID, noteTrashID string) {
+	t.Helper()
+	dir, root := a2Collection(t, map[string]string{
+		"Projects.md":       "# Projects index\n",
+		"Projects/Atlas.md": "# Atlas\n",
+	})
+	tr = rtTrasher(t, root)
+	folderRes, err := tr.Trash(TrashRequest{Path: "Projects", Folder: true})
+	require.NoError(t, err)
+	noteRes, err := tr.Trash(TrashRequest{Path: "Projects.md"})
+	require.NoError(t, err)
+	require.NotEqual(t, folderRes.TrashID, noteRes.TrashID)
+	require.NoFileExists(t, filepath.Join(dir, "Projects.md"))
+	require.NoDirExists(t, filepath.Join(dir, "Projects"))
+	return dir, tr, folderRes.TrashID, noteRes.TrashID
+}
+
+// A trashed note "Projects.md" and a trashed folder "Projects": restoring
+// "Projects" must not guess. It is refused, the refusal names both and says
+// how to pick each one, and nothing on disk changes (trash included).
+func TestRestore_NoteAndFolderWithTheSameNameIsRefusedNamingBoth(t *testing.T) {
+	dir, tr, _, _ := tieFixture(t)
+	before := a2Snapshot(t, dir)
+
+	res, err := tr.Restore(RestoreRequest{Path: "Projects"})
+	require.Error(t, err, "restoring an ambiguous name must be refused, got %+v", res)
+	assert.Nil(t, res)
+	assert.ErrorIs(t, err, ErrRestoreAmbiguous)
+	assert.Contains(t, err.Error(), `note "Projects.md"`)
+	assert.Contains(t, err.Error(), `folder "Projects"`)
+	assert.Contains(t, err.Error(), `give path "Projects.md" to restore the note`)
+	assert.Contains(t, err.Error(), `give path "Projects/"`)
+	assert.Equal(t, before, a2Snapshot(t, dir), "a refused restore changes nothing, in the collection or the trash")
+}
+
+func TestRestore_TieExplicitNotePathRestoresOnlyTheNote(t *testing.T) {
+	dir, tr, folderTrashID, _ := tieFixture(t)
+
+	res, err := tr.Restore(RestoreRequest{Path: "Projects.md"})
+	require.NoError(t, err)
+	assert.False(t, res.Folder)
+	assert.Equal(t, "Projects.md", res.OriginalPath)
+	assert.Equal(t, "# Projects index\n", a2Read(t, dir, "Projects.md"))
+	assert.NoDirExists(t, filepath.Join(dir, "Projects"))
+	assert.FileExists(t, filepath.Join(dir, ".omnipus-vault", "trash", folderTrashID, "Projects", "Atlas.md"),
+		"the folder stays in the trash")
+}
+
+func TestRestore_TieTrailingSlashRestoresOnlyTheFolder(t *testing.T) {
+	dir, tr, folderTrashID, noteTrashID := tieFixture(t)
+
+	res, err := tr.Restore(RestoreRequest{Path: "Projects/"})
+	require.NoError(t, err)
+	assert.True(t, res.Folder)
+	assert.Equal(t, "Projects", res.OriginalPath)
+	assert.Equal(t, folderTrashID, res.RestoredFrom)
+	assert.Equal(t, "# Atlas\n", a2Read(t, dir, "Projects/Atlas.md"))
+	assert.NoFileExists(t, filepath.Join(dir, "Projects.md"))
+	assert.FileExists(t, filepath.Join(dir, ".omnipus-vault", "trash", noteTrashID, "Projects.md"),
+		"the note stays in the trash")
+}
+
+// Without a tie every form behaves as it did before the tie refusal existed,
+// and the folder form "Projects/" never falls back to a note.
+func TestRestore_WithoutATieEachFormRestoresAsBefore(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		trashAs    TrashRequest
+		restore    string
+		wantFolder bool
+		wantPath   string
+	}{
+		{"lone note by bare name", TrashRequest{Path: "Projects.md"}, "Projects", false, "Projects.md"},
+		{"lone note by .md name", TrashRequest{Path: "Projects.md"}, "Projects.md", false, "Projects.md"},
+		{"lone folder by bare name", TrashRequest{Path: "Projects", Folder: true}, "Projects", true, "Projects"},
+		{"lone folder by trailing slash", TrashRequest{Path: "Projects", Folder: true}, "Projects/", true, "Projects"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, root := a2Collection(t, map[string]string{
+				"Projects.md":       "# Projects index\n",
+				"Projects/Atlas.md": "# Atlas\n",
+			})
+			before := a2Snapshot(t, dir)
+			tr := rtTrasher(t, root)
+			trashed, err := tr.Trash(tc.trashAs)
+			require.NoError(t, err)
+
+			res, err := tr.Restore(RestoreRequest{Path: tc.restore})
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantFolder, res.Folder)
+			assert.Equal(t, tc.wantPath, res.OriginalPath)
+			assert.Equal(t, trashed.TrashID, res.RestoredFrom)
+			after := a2Snapshot(t, dir)
+			for k := range after {
+				if strings.HasPrefix(k, ".omnipus-vault/") {
+					delete(after, k)
+				}
+			}
+			assert.Equal(t, before, after, "the collection is back exactly as it was")
+		})
+	}
+}
+
+// "Projects/" asks for a folder. With only a trashed NOTE of that name it is
+// refused rather than quietly restoring the note, and nothing changes.
+func TestRestore_TrailingSlashNeverRestoresANote(t *testing.T) {
+	dir, root := a2Collection(t, map[string]string{"Projects.md": "# Projects index\n"})
+	tr := rtTrasher(t, root)
+	_, err := tr.Trash(TrashRequest{Path: "Projects.md"})
+	require.NoError(t, err)
+	before := a2Snapshot(t, dir)
+
+	_, err = tr.Restore(RestoreRequest{Path: "Projects/"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrRestoreNotFound)
+	assert.Contains(t, err.Error(), "no trashed folder")
+	assert.Equal(t, before, a2Snapshot(t, dir))
+}
+
+// The same tie, driven through knowledge_restructure: the agent sees both
+// names and both ways out, and each way out works through the tool.
+func TestRestructureTool_RestoreTieIsRefusedAndEachFormWorks(t *testing.T) {
+	home, ws, root := a4Fixture(t, "KB")
+	require.NoError(t, os.WriteFile(filepath.Join(root, "Projects.md"), []byte("# Projects index\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "Projects"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "Projects", "Atlas.md"), []byte("# Atlas\n"), 0o644))
+	deps, _ := a4Deps(home)
+	tool := NewRestructureTool(deps)
+	ctx := a4Ctx("mia", ws)
+	run := func(args map[string]any) string {
+		t.Helper()
+		args["collection"] = "KB"
+		res := tool.Execute(ctx, args)
+		require.False(t, res.IsError, "unexpected refusal for %v: %s", args, res.ForLLM)
+		return res.ForLLM
+	}
+	run(map[string]any{"op": "trash", "path": "Projects", "folder": true})
+	run(map[string]any{"op": "trash", "path": "Projects.md"})
+
+	tie := tool.Execute(ctx, map[string]any{"op": "restore", "collection": "KB", "path": "Projects"})
+	require.True(t, tie.IsError, "the tie must be refused, got: %s", tie.ForLLM)
+	assert.Contains(t, tie.ForLLM, `give path "Projects.md" to restore the note`)
+	assert.Contains(t, tie.ForLLM, `give path "Projects/"`)
+	assert.NoFileExists(t, filepath.Join(root, "Projects.md"))
+	assert.NoDirExists(t, filepath.Join(root, "Projects"))
+
+	out := run(map[string]any{"op": "restore", "path": "Projects/"})
+	assert.Contains(t, out, "FOLDER: restored")
+	assert.FileExists(t, filepath.Join(root, "Projects", "Atlas.md"))
+	assert.NoFileExists(t, filepath.Join(root, "Projects.md"))
+
+	out = run(map[string]any{"op": "restore", "path": "Projects.md"})
+	assert.Contains(t, out, "Projects.md <- restored from trash")
+	assert.FileExists(t, filepath.Join(root, "Projects.md"))
 }
 
 // The trash-side twin of TestRenameFolder_SourceSpelledDifferentlyOnDiskIsRefused.
