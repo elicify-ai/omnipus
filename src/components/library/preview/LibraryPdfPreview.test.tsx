@@ -1134,6 +1134,49 @@ describe('LibraryPdfPreview — D-37 the reader can magnify a page', () => {
     expect(pages).toHaveAttribute('data-zoom', '2')
     expect(screen.getByTestId('library-pdf-zoom-in')).toBeDisabled()
   })
+
+  // Claude review 2026-09-14, cut-list: the zoom gesture called preventDefault
+  // inside React's onWheel, which React attaches PASSIVELY at the root — the
+  // call is a no-op-with-console-error there, so Ctrl/Cmd+wheel zoomed the
+  // PDF *and* the whole browser page. The gesture must be a native
+  // non-passive wheel listener on the pages container itself, where
+  // preventDefault actually cancels the browser zoom.
+  it('registers the Ctrl/Cmd+wheel zoom as a non-passive native wheel listener, and the gesture still zooms', async () => {
+    const addEventListenerSpy = vi.spyOn(HTMLElement.prototype, 'addEventListener')
+    try {
+      await renderPreview()
+      const pages = await screen.findByTestId('library-pdf-pages')
+      // SOME wheel listener must be registered with passive: false — the
+      // React-prop form never registers one at all (React delegates wheel
+      // passively at the root), which is exactly the defect.
+      const nonPassiveWheel = addEventListenerSpy.mock.calls.filter((call) => {
+        if (call[0] !== 'wheel') return false
+        const opts = call[2] as AddEventListenerOptions | undefined
+        return !!opts && opts.passive === false
+      })
+      expect(nonPassiveWheel.length).toBeGreaterThan(0)
+
+      // The gesture itself still works through the native listener, and a
+      // Ctrl+wheel still calls preventDefault (cancelable event, cancelled).
+      expect(pages).toHaveAttribute('data-zoom', '1')
+      const wheelEvent = new WheelEvent('wheel', { deltaY: -100, ctrlKey: true, bubbles: true, cancelable: true })
+      act(() => {
+        pages.dispatchEvent(wheelEvent)
+      })
+      expect(pages).toHaveAttribute('data-zoom', '1.25')
+      expect(wheelEvent.defaultPrevented).toBe(true)
+      // A plain wheel (no Ctrl/Cmd) is scrolling, not zooming, and is never
+      // cancelled.
+      const plainEvent = new WheelEvent('wheel', { deltaY: -100, bubbles: true, cancelable: true })
+      act(() => {
+        pages.dispatchEvent(plainEvent)
+      })
+      expect(pages).toHaveAttribute('data-zoom', '1.25')
+      expect(plainEvent.defaultPrevented).toBe(false)
+    } finally {
+      addEventListenerSpy.mockRestore()
+    }
+  })
 })
 
 describe('LibraryPdfPreview — D-63 the signature dialog defaults to the page on screen', () => {

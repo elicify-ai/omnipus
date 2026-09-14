@@ -550,6 +550,26 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
     }
   }, [])
 
+  // D-37's zoom gesture, as a NATIVE non-passive listener (Claude review
+  // 2026-09-14, cut-list). It used to live in the container's onWheel prop,
+  // and React attaches delegated wheel listeners PASSIVELY at the root —
+  // calling preventDefault() there cannot cancel anything, so Ctrl/Cmd+wheel
+  // zoomed the PDF *and* the whole browser page at once. Registered directly
+  // on the pages container with { passive: false }, preventDefault actually
+  // suppresses the browser's own zoom gesture for the container. Only the
+  // Ctrl/Cmd case is cancelled — a plain wheel is ordinary scrolling.
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const onWheel = (event: WheelEvent) => {
+      if (!(event.ctrlKey || event.metaKey)) return
+      event.preventDefault()
+      setZoom((z) => nextPdfZoom(z, event.deltaY < 0 ? 'in' : 'out'))
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [])
+
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
@@ -1811,11 +1831,6 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
         // scroll extents follow the magnified content.
         style={{ zoom }}
         data-zoom={zoom}
-        onWheel={(event) => {
-          if (!(event.ctrlKey || event.metaKey)) return
-          event.preventDefault()
-          setZoom((z) => nextPdfZoom(z, event.deltaY < 0 ? 'in' : 'out'))
-        }}
         data-testid="library-pdf-pages"
         aria-label={
           pageFragment !== undefined
