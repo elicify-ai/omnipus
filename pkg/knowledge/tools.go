@@ -186,10 +186,11 @@ type RetrievalRateLimitConfig struct {
 // pkg/tools.MemoryRateLimiter's: evict timestamps older than the window, then
 // admit if what remains is under the limit.
 //
-// Unlike that one, a nil *RetrievalRateLimiter is NOT a bypass — the
-// constructors never hand out nil. FR-055 is a requirement, and "the limiter
-// was nil in production" is precisely the kind of silent disablement this
-// project has been bitten by.
+// The constructors never hand out nil, and that is the whole guarantee: a nil
+// *RetrievalRateLimiter IS a bypass (Allow admits every call and logs
+// nothing — see the nil branch there). FR-055 is a requirement, and "the
+// limiter was nil in production" is precisely the kind of silent disablement
+// this project has been bitten by, so never construct one any other way.
 type RetrievalRateLimiter struct {
 	mu     sync.Mutex
 	agents map[string][]time.Time
@@ -234,8 +235,14 @@ func (l *RetrievalRateLimiter) Window() time.Duration { return l.window }
 // unattributable traffic is the case a limiter most needs to bound.
 func (l *RetrievalRateLimiter) Allow(agentID string) RetrievalRateDecision {
 	if l == nil {
-		// Defensive only — the constructors never produce nil. A nil limiter
-		// must still not admit unlimited traffic silently.
+		// Defensive only: the constructors never produce nil, and the
+		// gateway's limiter is a non-nil package variable.
+		//
+		// WHAT THIS BRANCH ACTUALLY DOES: it ADMITS the call and logs nothing,
+		// so a nil limiter enforces no limit at all. It exists to avoid a
+		// nil-pointer panic, not to bound traffic. Any code path that could
+		// ever hand out a nil *RetrievalRateLimiter must be fixed where the
+		// nil comes from; nothing may rely on this branch to refuse.
 		return RetrievalRateDecision{Allowed: true}
 	}
 	if strings.TrimSpace(agentID) == "" {

@@ -75,9 +75,12 @@ func TestVaultSearch_OutOfScopeIndistinguishableFromInScopeEmpty(t *testing.T) {
 func TestVaultSearch_RateLimiterOrderingClosesTheScopeProbeOracle(t *testing.T) {
 	api, ws, colID := buildVaultSearchVault(t)
 
-	for i := 0; i < knowledgeRESTLimiter.Limit(); i++ {
-		knowledgeRESTLimiter.Allow(knowledgeRateKey(ws))
-	}
+	// The drain happens on a private limiter that is discarded when this test
+	// ends. Draining the process-wide one left this workspace's bucket full
+	// for a minute, and a later test handed the same workspace ID inherited
+	// it (the dd25339bf flake — see test_rate_limit_isolation_test.go).
+	useFreshKnowledgeLimiter(t)
+	drainKnowledgeBudget(t, "", ws, knowledgeRead) // vaultFindPost carries no signed-in account
 
 	inScope := vaultFindPost(t, api, ws, map[string]any{
 		"query": "seccomp", "collection_id": colID,

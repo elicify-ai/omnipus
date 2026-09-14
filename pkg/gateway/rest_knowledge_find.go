@@ -146,7 +146,7 @@ func (a *restAPI) handleKnowledgeVaultSearch(w http.ResponseWriter, r *http.Requ
 	// through allowKnowledgeRetrieval first, so a drained limiter answers 429
 	// for either, and an available one lets both continue to their
 	// respective (body-indistinguishable-when-empty) responses.
-	if !a.allowKnowledgeRetrieval(w, workspaceID) {
+	if !a.allowKnowledgeRetrieval(w, r, workspaceID, knowledgeRead) {
 		return
 	}
 

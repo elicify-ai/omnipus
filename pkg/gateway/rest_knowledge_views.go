@@ -70,7 +70,7 @@ func (a *restAPI) handleKnowledgeViews(w http.ResponseWriter, r *http.Request, w
 		return
 	}
 
-	if !a.allowKnowledgeRetrieval(w, workspaceID) {
+	if !a.allowKnowledgeRetrieval(w, r, workspaceID, knowledgeRead) {
 		return
 	}
 
