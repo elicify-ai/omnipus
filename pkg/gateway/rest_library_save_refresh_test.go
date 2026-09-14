@@ -25,6 +25,7 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/knowledge"
+	"github.com/elicify-ai/omnipus/pkg/records"
 	"github.com/elicify-ai/omnipus/pkg/records/knowledgefind"
 	"github.com/elicify-ai/omnipus/pkg/vaultprops"
 )
@@ -197,4 +198,75 @@ func TestLibraryContentPut_IndexRefreshFailureIsHonestAboutCompleteness(t *testi
 			"the row the failed refresh left behind must be flagged stale, not served as fresh")
 		assert.True(t, *row.Stale)
 	}
+}
+
+// TestLibraryContentPut_BaseSaveReDerivesViews — D-119's web half: PUT a
+// `.base` inside a knowledge base through the Library text door, and the raw
+// bytes must become the view YAMLs an import would have written — the file
+// loads as a view with `source` naming the base, instead of the save being
+// write-only.
+func TestLibraryContentPut_BaseSaveReDerivesViews(t *testing.T) {
+	api, ws, vault := buildRecordTestVault(t)
+
+	baseBody := `
+filters:
+  and:
+    - type == "widget"
+views:
+  - type: table
+    name: Open
+    filters:
+      and:
+        - status == "open"
+`
+	w := putLibraryNoteContent(t, api, ws, "vault/Projects.base", baseBody, "v1:absent")
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	set, _, err := records.LoadSchemas(vault)
+	require.NoError(t, err)
+	vs, report, err := records.LoadViews(vault, set)
+	require.NoError(t, err)
+	require.True(t, report.OK(), "the re-derived views must load cleanly: %+v", report.Rejections)
+
+	open, ok := vs.Get("projects--open")
+	require.True(t, ok, "the saved base's view must exist; names: %v", vs.Names())
+	require.NotNil(t, open.Def.Source)
+	assert.Equal(t, "Projects.base", *open.Def.Source,
+		"the view's source must name the saved base by its collection-relative path")
+	require.NotNil(t, open.Def.Label)
+	assert.Equal(t, "Open", *open.Def.Label)
+}
+
+// TestLibraryContentPut_BrokenBaseSaveKeepsExistingViews — the non-destructive
+// refusal half at the DOOR level: saving a `.base` that no longer parses still
+// answers 200 (the bytes are the operator's own edit and are already on disk)
+// and leaves the previously derived views untouched.
+func TestLibraryContentPut_BrokenBaseSaveKeepsExistingViews(t *testing.T) {
+	api, ws, vault := buildRecordTestVault(t)
+
+	good := `
+filters:
+  and:
+    - type == "widget"
+views:
+  - type: table
+    name: Open
+    filters:
+      and:
+        - status == "open"
+`
+	w := putLibraryNoteContent(t, api, ws, "vault/Projects.base", good, "v1:absent")
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	broken := "not: a: valid: base: file"
+	w = putLibraryNoteContent(t, api, ws, "vault/Projects.base", broken, libraryContentToken(t, api, ws, "vault/Projects.base"))
+	require.Equal(t, http.StatusOK, w.Code,
+		"a base that no longer parses is the operator's own saved edit, not a refused save; body: %s", w.Body.String())
+
+	set, _, err := records.LoadSchemas(vault)
+	require.NoError(t, err)
+	vs, _, err := records.LoadViews(vault, set)
+	require.NoError(t, err)
+	_, ok := vs.Get("projects--open")
+	assert.True(t, ok, "the previously derived view must survive the broken edit")
 }

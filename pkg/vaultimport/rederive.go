@@ -99,17 +99,6 @@ func RederiveBase(vaultRoot, baseRelPath string) (*RederiveBaseResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("vaultimport: reading the base file %q: %w", baseRelPath, err)
 	}
-	pb, parseErr := ParseBaseFile(data)
-	if parseErr != nil {
-		// A base that no longer parses is a REFUSAL about content, not an
-		// infrastructure error: the existing views stay, and the caller is
-		// told why in the operator's own terms.
-		return &RederiveBaseResult{
-			BaseRelPath:   baseRelPath,
-			Status:        OutcomeRefused,
-			RefusedReason: parseErr.Error(),
-		}, nil
-	}
 
 	// The CURRENT on-disk schemas — the same set records.LoadViews validates
 	// against below and every query resolves against at serve time. Re-inferring
@@ -139,6 +128,22 @@ func RederiveBase(vaultRoot, baseRelPath string) (*RederiveBaseResult, error) {
 			continue
 		}
 		slugs.Reserve(v.Name())
+	}
+
+	pb, parseErr := ParseBaseFile(data)
+	if parseErr != nil {
+		// A base that no longer parses is a REFUSAL about content, not an
+		// infrastructure error: the existing views stay, and the caller is
+		// told why in the operator's own terms. KeptExisting is populated
+		// because the refusal's own contract is to NAME what it deliberately
+		// left on disk — an operator told only "refused" cannot tell a
+		// non-destructive refusal from one that deleted their views.
+		return &RederiveBaseResult{
+			BaseRelPath:   baseRelPath,
+			Status:        OutcomeRefused,
+			RefusedReason: parseErr.Error(),
+			KeptExisting:  mine,
+		}, nil
 	}
 
 	outcome, produced := TranslateBase(pb, baseRelPath, schemaIdx, slugs)
