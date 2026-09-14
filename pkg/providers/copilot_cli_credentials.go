@@ -10,6 +10,7 @@ import (
 	"context"
 	"log/slog"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -85,34 +86,53 @@ const copilotSignInProbePrompt = "Reply with only the word: ok"
 // on a poll or a page-load path.
 //
 // Still unverified, because it needs a live Copilot subscription: the exact
-// stderr wording of an EXPIRED or revoked session. The marker sets below are
-// deliberately ordered so an unrecognised failure degrades to `not_signed_in`
-// with a warning (the state SignInStatus.yaml prescribes for an unreadable
-// login) rather than to a confident wrong answer.
+// stderr wording of an EXPIRED or revoked session. So the patterns below accept
+// only PHRASE-LEVEL evidence — a sign-in noun next to "expired" or "revoked",
+// GitHub's own "Bad credentials", or 401 in an HTTP-status form — and an
+// unrecognised failure degrades to `not_signed_in` with a warning (the state
+// SignInStatus.yaml prescribes for an unreadable login) rather than to a
+// confident wrong answer.
+//
+// A bare "401" or "expired" never counts. Both turn up in text that has nothing
+// to do with the login — a file path (the Omnipus home is passed with -C), a
+// request id, a duration, "certificate has expired" — and answering those with
+// "expired" sends the operator to run `copilot login`, which fixes none of them.
+// A random "401" in a test's temp folder path did exactly that on CI.
 
-// copilotExpiredMarkers are checked first: an expired-session message is likely
+// copilotExpiredPatterns are checked first: an expired-session message is likely
 // to also tell the operator to log in again, so "expired" must win over the
-// not-signed-in markers.
-var copilotExpiredMarkers = []string{
-	"expired",
-	"invalid token",
-	"bad credentials",
-	"revoked",
-	"unauthorized",
-	"401",
-	"re-authenticate",
-	"reauthenticate",
+// not-signed-in patterns. They run against the lower-cased detail.
+var copilotExpiredPatterns = []*regexp.Regexp{
+	// "session has expired", "token expired", "credentials have expired". The
+	// noun is required, so "certificate has expired" never matches.
+	regexp.MustCompile(`\b(?:session|token|credentials?|login)\s+(?:has\s+|have\s+|is\s+|was\s+)?(?:now\s+)?expired\b`),
+	// "expired session", "expired token", "expired credentials".
+	regexp.MustCompile(`\bexpired\s+(?:session|token|credentials?|login)\b`),
+	// "invalid token", "invalid oauth token".
+	regexp.MustCompile(`\binvalid\s+(?:oauth\s+|access\s+|auth\s+|github\s+)?token\b`),
+	// GitHub's API message for a rejected credential.
+	regexp.MustCompile(`\bbad\s+credentials\b`),
+	// "token has been revoked", "credentials were revoked".
+	regexp.MustCompile(`\b(?:token|credentials?|session|authori[sz]ation)\s+(?:has\s+been\s+|have\s+been\s+|was\s+|were\s+|is\s+)?revoked\b`),
+	// 401 only as an HTTP status: "401 Unauthorized", "HTTP 401",
+	// "HTTP/1.1 401", "status 401", "status code: 401".
+	regexp.MustCompile(`\b401\s+unauthori[sz]ed\b`),
+	regexp.MustCompile(`\b(?:http(?:/\d(?:\.\d)?)?|status(?:\s+code)?|response\s+code)(?:\s*[:=]\s*|\s+)401\b`),
+	// An explicit request to authenticate again.
+	regexp.MustCompile(`\bre-?authenticate\b`),
 }
 
-// copilotNotSignedInMarkers match the verified no-credential message and the
-// guidance the CLI prints beside it.
-var copilotNotSignedInMarkers = []string{
-	"no authentication information found",
-	"not authenticated",
-	"copilot login",
-	"'/login'",
-	"/login",
-	"gh auth login",
+// copilotNotSignedInPatterns match the verified no-credential message and the
+// guidance the CLI prints beside it. They run against the lower-cased detail.
+var copilotNotSignedInPatterns = []*regexp.Regexp{
+	// The verified @github/copilot 1.0.80 message.
+	regexp.MustCompile(`\bno authentication information found\b`),
+	regexp.MustCompile(`\bnot authenticated\b`),
+	regexp.MustCompile(`\bcopilot login\b`),
+	regexp.MustCompile(`\bgh auth login\b`),
+	// The '/login' slash command as a word of its own — quoted, back-ticked or
+	// space-separated — never a path segment such as /srv/login/omnipus.
+	regexp.MustCompile("(?:^|[\\s'\"`])/login(?:$|[\\s'\"`.,;:!?)])"),
 }
 
 // CopilotSignIn asks the GitHub Copilot CLI whether it holds a usable login
@@ -179,8 +199,8 @@ func classifyCopilotSignInFailure(detail string) CopilotSignInState {
 }
 
 // MatchCopilotSignInFailure reports the sign-in state a failed Copilot CLI
-// invocation EXPLICITLY names, and whether any marker matched at all. It walks
-// the same two marker sets classifyCopilotSignInFailure does — it is where that
+// invocation EXPLICITLY names, and whether any pattern matched at all. It walks
+// the same two pattern sets classifyCopilotSignInFailure does — it is where that
 // function's matching now lives — so there is one copy to keep current when the
 // vendor rewords an error.
 //
@@ -197,13 +217,13 @@ func classifyCopilotSignInFailure(detail string) CopilotSignInState {
 // uses its own wording.
 func MatchCopilotSignInFailure(detail string) (CopilotSignInState, bool) {
 	lower := strings.ToLower(detail)
-	for _, m := range copilotExpiredMarkers {
-		if strings.Contains(lower, m) {
+	for _, p := range copilotExpiredPatterns {
+		if p.MatchString(lower) {
 			return CopilotSignInExpired, true
 		}
 	}
-	for _, m := range copilotNotSignedInMarkers {
-		if strings.Contains(lower, m) {
+	for _, p := range copilotNotSignedInPatterns {
+		if p.MatchString(lower) {
 			return CopilotNotSignedIn, true
 		}
 	}
