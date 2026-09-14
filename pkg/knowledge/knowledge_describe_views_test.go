@@ -277,24 +277,55 @@ grouping:
 	}
 }
 
-// TestDescribeViews_UnrenderableLayoutIsNamed — FR-109 declares six layouts
-// and this product draws two. The field exists BECAUSE an Obsidian cards view
-// once imported as a table, recorded no loss, and scored clean under the
-// parity criterion. A description that prints `layout board` without saying it
-// is not drawn re-tells that same half-truth.
+// TestDescribeViews_UnrenderableLayoutIsNamed — FR-109 declares six layouts;
+// records.viewPartForLayout draws a part for every one of them except `map`.
+// The field exists BECAUSE an Obsidian cards view once imported as a table,
+// recorded no loss, and scored clean under the parity criterion. A
+// description that prints `layout map` without saying it is not drawn
+// re-tells that same half-truth.
+//
+// `map` (not `board`) is the fixture here as of the 2026-09-14 S3 fix: board
+// is one of the layouts records.viewPartForLayout DOES draw a part for
+// (`columns`), so asserting "does not draw" against it would pin the exact
+// bug this test used to encode. See TestDescribeViews_RenderedLayoutIsNotNamedUnrenderable.
 func TestDescribeViews_UnrenderableLayoutIsNamed(t *testing.T) {
-	v := describeViewVault(t, "board.yaml", `
-name: board-view
+	v := describeViewVault(t, "map.yaml", `
+name: map-view
 type: widget
-layout: board
+layout: map
 `)
 	body := renderViewBody(v)
-	if !strings.Contains(body, "layout board") {
+	if !strings.Contains(body, "layout map") {
 		t.Fatalf("the declared layout is missing from the description entirely.\nrendered:\n%s", body)
 	}
 	if !strings.Contains(body, "does not draw") {
-		t.Errorf("`board` is one of the four layouts FR-109 declares and this product does not draw; "+
+		t.Errorf("`map` is the one layout records.viewPartForLayout has no part for; "+
 			"the description must say so rather than let a reader assume it renders.\nrendered:\n%s", body)
+	}
+}
+
+// TestDescribeViews_RenderedLayoutIsNotNamedUnrenderable is the S3 regression
+// test (TRIAGE-view-tabs-crosstab.md item 3): knowledge_describe used to keep
+// its own stale table/cards-only list and told an agent that a board or
+// calendar view "does not draw", when records.viewPartForLayout (and
+// ViewPartsRenderer.tsx) draw both. knowledge_describe's viewLayoutIsRendered
+// now defers to records.ViewLayoutIsRendered, so this can't drift again.
+func TestDescribeViews_RenderedLayoutIsNotNamedUnrenderable(t *testing.T) {
+	for _, layout := range []string{"table", "cards", "board", "calendar", "gallery"} {
+		t.Run(layout, func(t *testing.T) {
+			v := describeViewVault(t, layout+".yaml", `
+name: `+layout+`-view
+type: widget
+layout: `+layout+`
+`)
+			body := renderViewBody(v)
+			if !strings.Contains(body, "layout "+layout) {
+				t.Fatalf("the declared layout is missing from the description entirely.\nrendered:\n%s", body)
+			}
+			if strings.Contains(body, "does not draw") {
+				t.Errorf("layout %q is drawn by the SPA (records.viewPartForLayout) but the description told the agent it is not.\nrendered:\n%s", layout, body)
+			}
+		})
 	}
 }
 

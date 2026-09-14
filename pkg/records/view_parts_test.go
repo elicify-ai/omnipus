@@ -427,6 +427,53 @@ func TestViewParts_PartPropertyNamesAreCheckedAgainstTheSchema(t *testing.T) {
 	}
 }
 
+// TestViewLayoutIsRendered_AgreesWithViewPartForLayout is the direct
+// contract test for the exported ViewLayoutIsRendered — the single source of
+// truth pkg/vaultimport (the Obsidian importer's loss notes) and
+// pkg/knowledge (the agent-facing describe tool) both now defer to, replacing
+// two independent copies that both hardcoded "only table and cards" and went
+// stale the moment board, calendar and gallery gained parts (2026-09-14 S3
+// fix, TRIAGE-view-tabs-crosstab.md item 3).
+//
+// It is asserted against viewPartForLayout directly (not against a
+// hand-written expected set) so the two functions cannot silently diverge:
+// this test would keep passing even if a future layout's part support
+// changed, as long as both functions agree.
+func TestViewLayoutIsRendered_AgreesWithViewPartForLayout(t *testing.T) {
+	for _, layout := range []generated.ViewDefLayout{
+		generated.ViewDefLayoutTable,
+		generated.ViewDefLayoutCards,
+		generated.ViewDefLayoutBoard,
+		generated.ViewDefLayoutCalendar,
+		generated.ViewDefLayoutGallery,
+		generated.ViewDefLayoutMap,
+	} {
+		t.Run(string(layout), func(t *testing.T) {
+			_, wantOK := viewPartForLayout(layout)
+			if got := ViewLayoutIsRendered(layout); got != wantOK {
+				t.Errorf("ViewLayoutIsRendered(%q) = %v, want %v (viewPartForLayout's own answer)", layout, got, wantOK)
+			}
+		})
+	}
+
+	// Pinned literally, not just relatively: only `map` may ever answer
+	// false among the six declared layouts. If this ever needs to change,
+	// change it here on purpose rather than by a copy-paste drift elsewhere.
+	rendered := map[generated.ViewDefLayout]bool{
+		generated.ViewDefLayoutTable:    true,
+		generated.ViewDefLayoutCards:    true,
+		generated.ViewDefLayoutBoard:    true,
+		generated.ViewDefLayoutCalendar: true,
+		generated.ViewDefLayoutGallery:  true,
+		generated.ViewDefLayoutMap:      false,
+	}
+	for layout, want := range rendered {
+		if got := ViewLayoutIsRendered(layout); got != want {
+			t.Errorf("ViewLayoutIsRendered(%q) = %v, want %v", layout, got, want)
+		}
+	}
+}
+
 // equalStrings is a local helper: the fixtures compare short, ordered column
 // lists and the ORDER is part of what is asserted.
 func equalStrings(got, want []string) bool {

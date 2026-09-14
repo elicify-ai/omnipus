@@ -365,6 +365,22 @@ func viewPartForLayout(layout generated.ViewDefLayout) (generated.ViewPartPart, 
 	}
 }
 
+// ViewLayoutIsRendered reports whether the SPA draws a part for this layout.
+//
+// It is the single source of truth for that question — the Obsidian importer
+// (deciding whether to warn that a layout "will be drawn as a table") and the
+// agent-facing describe tool (deciding whether to tell an agent a layout is
+// unrendered) both used to keep their own copy of a two-entry list naming
+// only table and cards, which went stale the moment board and calendar
+// gained parts (viewPartForLayout, above) and neither copy was updated. Both
+// now call this instead, so there is exactly one place that can drift from
+// viewPartForLayout. Only `map` (and any layout a later contract adds
+// without a matching part) is truly undrawn.
+func ViewLayoutIsRendered(layout generated.ViewDefLayout) bool {
+	_, ok := viewPartForLayout(layout)
+	return ok
+}
+
 // ViewSet is every saved view a vault declares.
 type ViewSet struct {
 	byName map[string]*SavedView
