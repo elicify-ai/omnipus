@@ -1,5 +1,7 @@
 # Goal as a First-Class Entity — Specification
 
+> **Update 2026-09-14:** the app-level token budget referenced here (and the per-delegation token budget) has been deleted from the product by founder decision. Token usage accounting is tracked in #707.
+
 - **Implements:** [ADR-086 revision 2](../architecture/ADR-086-goal-as-a-first-class-entity.md)
 - **Depends on:** ADR-081 (work-first goal flow), ADR-084 **revision 9** (the Judge as an active reviewer; §10 withdraws the three-state outcome), ADR-080 (criterion types and DoD provenance), ADR-057 (session unification and the striped session lock), ADR-054 D3 (`pkg/entity`), ADR-082 (session-bound streaming)
 - **Status:** Draft for review — 2026-09-10

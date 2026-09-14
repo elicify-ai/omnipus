@@ -1,5 +1,7 @@
 # Adversarial Review: ADR-066 — Context budget and tool-result routing
 
+> **Update 2026-09-14:** the app-level token budget referenced here (and the per-delegation token budget) has been deleted from the product by founder decision. Token usage accounting is tracked in #707.
+
 **Document reviewed**: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-context-budget/docs/internal/architecture/ADR-066-context-budget-and-tool-result-routing.md` (375 lines, Proposed 2026-08-21)
 **Review date**: 2026-08-22
 **Review mode**: generic-markdown (ADR / prose design document — no formal requirement IDs, no traceability matrix)

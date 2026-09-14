@@ -1,5 +1,7 @@
 # Feature Specification: Unified Goal / Plan / Subagent System (ADR-053)
 
+> **Update 2026-09-14:** the app-level token budget described here (and the per-delegation token budget) has been deleted from the product by founder decision. Token usage accounting is tracked in #707.
+
 **Created**: 2026-07-22
 **Status**: Draft (ratification spec — requirements LOCKED by ADR-053 + twice-grilled v2.2 design + 17 interview decisions D1–D17)
 **Input**: `docs/internal/architecture/ADR-053-unified-goal-plan-subagent.md` (Accepted, grill PASS) · `docs/internal/design/unified-goal-plan-subagent-target-design-v2.2.html` (the *what*) · `docs/internal/design/unified-goal-plan-subagent-DELIVERY-GOAL.md` (the *how/order/proof*).

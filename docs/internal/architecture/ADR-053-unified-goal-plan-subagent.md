@@ -1,5 +1,7 @@
 # ADR-053: Unified goal / plan / subagent system — one goal core, three bindings
 
+> **Update 2026-09-14:** the app-level token budget described here (and the per-delegation token budget) has been deleted from the product by founder decision. Token usage accounting is tracked in #707.
+
 - **Status:** **Accepted** (2026-07-22), **superseded in part by [ADR-057](ADR-057-session-parent-child-parity.md)** (see banner below) — **amended 2026-08-30: `launch_profile` removed (see Amendment below)**. This ADR ratifies an interview-locked, twice-grilled design; it does not re-open it. The `/grill-spec` gate returned **PASS** (0 CRITICAL / 0 MAJOR / 0 MINOR after one REVISE cycle addressing F-1..F-6; review file adjacent), satisfying delivery-brief DoD-1.
 - **Superseded in part by:** [ADR-057](ADR-057-session-parent-child-parity.md) §8 — **D1** (superseded outright), **D5**, **D15**, **D16** (each changed). Details in the banner immediately below.
 - **Date:** 2026-07-22

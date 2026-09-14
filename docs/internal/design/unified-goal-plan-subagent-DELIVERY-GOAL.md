@@ -1,5 +1,7 @@
 # Delivery Brief — Unified Goal/Plan/Subagent System (integrated layers)
 
+> **Update 2026-09-14:** the app-level token budget described here (and the per-delegation token budget) has been deleted from the product by founder decision. Token usage accounting is tracked in #707.
+
 **Delivery brief v2 (integrated-layers; completeness-audited) · 2026-07-22** · **Branch base:** `feature/plan-swimlane-board`
 **Authoritative design (the *what*):** [`unified-goal-plan-subagent-target-design-v2.2.html`](./unified-goal-plan-subagent-target-design-v2.2.html)
 **Assessment (context):** [`…-v2.1-assessment.html`](./unified-goal-plan-subagent-target-design-v2.1-assessment.html)

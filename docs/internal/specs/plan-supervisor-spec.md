@@ -1,5 +1,7 @@
 # Feature Specification: PlanSupervisor — closing the plan correction loop
 
+> **Update 2026-09-14:** the app-level token budget referenced here (and the per-delegation token budget) has been deleted from the product by founder decision. Token usage accounting is tracked in #707.
+
 **Created**: 2026-07-27
 **Revised**: 2026-07-28 (rev 4 — the plan-wake delivery fix, operator ruling 9: N15 promoted from a
 recorded dependency to a first-class, fully-specified fix. Rev 3: closes spec-grill r3 and the

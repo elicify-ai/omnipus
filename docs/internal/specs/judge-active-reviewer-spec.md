@@ -1,5 +1,7 @@
 # Feature Specification: The Judge as an active reviewer
 
+> **Update 2026-09-14:** the app-level token budget referenced here (and the per-delegation token budget) has been deleted from the product by founder decision. Token usage accounting is tracked in #707.
+
 **Created**: 2026-09-09
 **Status**: Draft
 **Source of truth**: [`docs/internal/architecture/ADR-084-judge-as-an-active-reviewer.md`](../architecture/ADR-084-judge-as-an-active-reviewer.md) **revision 7** (greenfield — the rubric migration is removed at revision 4; revision 5 corrects four factual premises; revision 6 §7 narrows D4's residual-risk acceptance and D10's confinement scope; **revision 7 §8 makes completion a tool call (D12), makes the Judge claim-triggered and off the critical path (D13), and replaces the exit-code gate with a three-tier evidence model (D14)**)

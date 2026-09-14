@@ -1,5 +1,7 @@
 # ADR-086 — A goal is its own entity, with a definition phase and an active phase
 
+> **Update 2026-09-14:** the app-level token budget referenced here (and the per-delegation token budget) has been deleted from the product by founder decision. Token usage accounting is tracked in #707.
+
 - **Status:** Proposed (revision 2 — corrected against an adversarial review, 2026-09-10; five blockers and seven majors addressed, §7 records what changed and why. Revision 1 — 2026-09-09.)
 - **Relates to:** ADR-081 (work-first goal flow), ADR-084 **revision 9** (the Judge as an active reviewer; revision 9 withdraws the three-state outcome), ADR-049/ADR-052/ADR-055 (task and plan adjudication), ADR-080 (criterion types and DoD provenance), ADR-057 (session unification, the striped session lock), ADR-054 D3 (`pkg/entity`, the per-entity store precedent)
 - **Changes the ground under:** `docs/internal/specs/judge-active-reviewer-spec.md`, which currently assumes a chat goal lives on the session

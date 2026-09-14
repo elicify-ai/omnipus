@@ -63,7 +63,7 @@ The loop is a classic ReAct-style tool-using loop, implemented inline rather tha
 ### 1.7 Audit and rate limiting
 
 - `audit.Logger` is wired into the tool registry and the loop (`pkg/agent/loop.go:259-289`); policy decisions, prompt-guard mutations, and rate-limit denials are logged. `cfg.Sandbox.AuditLog=false` disables logging but **not** policy enforcement.
-- Per-agent token budgets and per-minute LLM/tool call counts are tracked via `rateLimiter.GetOrCreate` (`pkg/agent/loop.go:2883-2890`); a daily cost cap is enforced at `:2913-2935`.
+- Per-agent sliding-window rate limits — LLM calls per hour and tool calls per minute — are tracked via `rateLimiter.GetOrCreate` (`pkg/agent/loop.go`).
 
 ---
 
@@ -433,7 +433,7 @@ Any other order is a constraint violation and will trip `make verify-contracts` 
 
 ### 11.1 The thesis — one goal core, three bindings
 
-A goal is `prompt + goal definition + acceptance criteria` (criteria in three kinds: machine / behavior / prose). **One core owns the goal shape, the claim-or-idle trigger, the question→pause, the evidence ladder, feedback steering, typed messaging, the cancel cascade, and the count/token bounds.** The core is bound three times — chat goal (agent-compiled from user intent, blue goal pill), standalone task (Board/List/Graph), plan Definition-of-Done (plan tile → Graph) — differing only in (a) the deterministic DAG dispatch engine (plan-only) and (b) the UI/data-model binding. Anti-parallel-systems discipline (delivery brief DoD-11): a second goal store, messaging envelope, claim-marker parser, or budget path is a blocking review finding.
+A goal is `prompt + goal definition + acceptance criteria` (criteria in three kinds: machine / behavior / prose). **One core owns the goal shape, the claim-or-idle trigger, the question→pause, the evidence ladder, feedback steering, typed messaging, the cancel cascade, and the count bounds.** The core is bound three times — chat goal (agent-compiled from user intent, blue goal pill), standalone task (Board/List/Graph), plan Definition-of-Done (plan tile → Graph) — differing only in (a) the deterministic DAG dispatch engine (plan-only) and (b) the UI/data-model binding. Anti-parallel-systems discipline (delivery brief DoD-11): a second goal store, messaging envelope, claim-marker parser, or bounds path is a blocking review finding.
 
 ### 11.2 The shared spine — S1–S6 (six built-once seams)
 
@@ -443,7 +443,7 @@ A goal is `prompt + goal definition + acceptance criteria` (criteria in three ki
 | **S2** | Durable session record + 8-state lifecycle | one persisted per-entity JSONL record; enum `queued / running / needs_input / paused / completed / failed / cancelled / timed_out` | `pkg/session` (`LifecycleRecord`, `MessageInboxStore`); plan phase `awaiting_owner_correction` at `pkg/plan/plan.go:190` |
 | **S3** | SessionMessage envelope family | one inline `oneOf` + discriminator envelope (ADR-034 precedent) over `pkg/bus`'s 4th channel | `pkg/agent/session_messaging_wire.go:61,125,228` (bus consumer, per-agent wiring, content-egress filter) |
 | **S4** | Owner ↔ Judge ↔ messaging ↔ plan-engine interlock | the wiring contract: Judge feedback = a `steer`; member telemetry = owner inbox; waiting-on-owner = `question(wait=true)` | `pkg/agent/plan_engine.go:2209` (`AppendCorrection`, the S4 correction handler); `pkg/plan/plan.go:325` (`OwnerSessionID` durable linkage) |
-| **S5** | Budget triple | attempts + JudgeRounds + **one app-level OVERALL token budget** (D12) | `pkg/agent/budget.go:59` (`TokenBudget`, single shared pool, one lock); brake `FailedReasonBudgetExhausted` at `:52` |
+| **S5** | Count bounds | attempts + JudgeRounds | `pkg/config/planning.go` (`EffectiveTaskMaxAttempts`, `EffectivePlanJudgeMaxRounds`) |
 | **S6** | Claim / marker family | `[goal:evidence]` + `GOAL_STATUS: met / waiting_on_user` | `pkg/agent/goal_triggers.go:102` (`goalTriggerState`: `bareClaimStreak`, `waitingOnUser`, `idleSettling`) |
 
 ### 11.3 Claim-or-idle trigger discipline (replaces after-every-turn)
@@ -483,18 +483,14 @@ A `kill -9` mid-plan no longer wedges: `pkg/agent/plan_engine.go:70` (`PlanEngin
 
 Owner correction (`pkg/agent/plan_engine.go:2209`, `AppendCorrection`) supports three verbs — **append** (tail + revision entry), **supersede** (mark a done member's outcome ignored-by-Judge; the record stays immutable), **targeted retry** (retry a transient/frozen member without a full Stop/Play, D4) — each recording a revision entry, committed transactionally via the intent-log (INV-6/N-8). After commit, append/supersede auto-reset all live-round failed members (excludes frozen/done, G-10); the durable unmet signature is cleared (INV-7); the DoD stays immutable (G-11). **Play = a new `resumed_from` generation** (`pkg/agent/plan_engine.go:2499`, D13/G-12): a cancelled/failed member resumes from its **last git commit** (JudgeRounds reset to 0); a no-commit member falls back to a fresh attempt. Plan members have **no individual start/cancel/resume** (D7) — the plan owns lifecycle.
 
-### 11.9 Token budget — one app-level OVERALL pool (D12)
-
-SEC-26's app-level USD cap is converted to **one app-level OVERALL token budget** covering ALL workloads including core agents (D12 removes the `IsPrivilegedAgent` exemption). `pkg/agent/budget.go:59` (`TokenBudget`): every debit is a single read-modify-write under one lock (FR-173); usage is debited POST-turn from provider-reported counts, so `Consumed` may exceed `Cap` by the sum of in-flight turn costs. The ceiling is **restart-gated** (FR-177, `SetCap` at `:89` — called once at boot from config; a live ceiling change would straddle two budgets, the N-15 hazard); the live runaway-spend lever is the existing Stop/cancel cascade (per-goal-id or global), not a live token cut. Brake = `failed(budget_exhausted)` at `:52`, applied at the next turn/adjudication boundary (never mid-turn, FR-174).
-
-### 11.10 The 9-action delegate set + message_parent
+### 11.9 The 9-action delegate set + message_parent
 
 `delegate` (`pkg/tools/delegate.go`) was expanded from `run | status` to a **9-action set**: `run, status, inbox, inbox_ack, steer, respond, cancel, follow_up, peek` (enum at `:598`). A subagent can now ask its parent a question, report a checkpoint, hand back structured results, and be steered mid-run — delegation is no longer fire-and-collect-only. The child-side counterpart is **`message_parent`** (`pkg/tools/message_parent.go:5`, ADR-053 §5.1) — the first-class tool a child uses to post to its parent's durable inbox (the parent routes `correlation_id`; only a direct session/plan owner asks the human, conversationally in chat — D2). 3P (external-CLI) workers are honest fire-and-collect: `respond` = corrective re-dispatch (a new session), `needs_input`/`question` never advertised to 3P (D5). Delegation depth is configurable with a shipped backstop of 3 (D6).
 
-### 11.11 Sandbox guard — `.git` denied by operation (D17)
+### 11.10 Sandbox guard — `.git` denied by operation (D17)
 
 Because a go-git repo is a byte-identical `.git` the real `git` CLI could `--amend`, D17 denies `.git` **by operation, not by path**: `pkg/sandbox/gitguard.go` allows `log / blame / show / diff` and denies `commit / amend / rebase / rm` (plus a kernel/Landlock + bash-policy `.git/` block so the bypass through `bash`/exec is denied, not just the tool surface). This is the security-lead Phase-1 dependency that makes the in-scope git layer safe.
 
-### 11.12 As-built deferrals (accepted-with-issue, tracked)
+### 11.11 As-built deferrals (accepted-with-issue, tracked)
 
-Four deferrals were accepted with tracked issues rather than blocking delivery (zero live callers today; each is safe until its trigger-to-fix): the AppendCorrection **owner-authority gate** (sec-MAJOR-2), **per-member work-tree checkout** for Play-from-commit (the D13 baseline is persisted; the per-member git checkout/restore defers to the D10 worktree-isolation rung), **SetCap one-shot enforcement** (sec-MINOR-2), and the intent-log **tamper-evidence/HMAC + dir 0700 + fsync** hardening (sec-MINOR-3). See the issues linked from the delivery brief.
+Three deferrals were accepted with tracked issues rather than blocking delivery (zero live callers today; each is safe until its trigger-to-fix): the AppendCorrection **owner-authority gate** (sec-MAJOR-2), **per-member work-tree checkout** for Play-from-commit (the D13 baseline is persisted; the per-member git checkout/restore defers to the D10 worktree-isolation rung), and the intent-log **tamper-evidence/HMAC + dir 0700 + fsync** hardening (sec-MINOR-3). See the issues linked from the delivery brief.
