@@ -15,10 +15,10 @@ test('native composition commits Unicode once and discards canceled or blurred c
   page.on('pageerror', error => errors.push(error.message));
   await instrumentRoutes(page);
   await page.addInitScript(() => {
-    const counts = { starts: 0, ends: 0, canceled: 0, untrusted: 0 };
+    const counts = { starts: 0, ends: 0, canceled: 0, lifecycle: [] as Array<{ type: string; trusted: boolean }> };
     Object.assign(window, { __internationalComposition: counts });
-    document.addEventListener('compositionstart', event => { counts.starts++; if (!event.isTrusted) counts.untrusted++; }, true);
-    document.addEventListener('compositionend', event => { counts.ends++; if (!event.data) counts.canceled++; if (!event.isTrusted) counts.untrusted++; }, true);
+    document.addEventListener('compositionstart', event => { counts.starts++; counts.lifecycle.push({ type: 'start', trusted: event.isTrusted }); }, true);
+    document.addEventListener('compositionend', event => { counts.ends++; if (!event.data) counts.canceled++; counts.lifecycle.push({ type: 'end', trusted: event.isTrusted }); }, true);
   });
   const ready = async () => {
     await expect(page.locator('[data-input-mode="dedicated"]')).toHaveAttribute('data-input-state', 'ready');
@@ -72,8 +72,13 @@ test('native composition commits Unicode once and discards canceled or blurred c
       await unchangedFor(600);
       marks.push({ label: 'blur-rejected-late-text', at: new Date().toISOString() });
     } finally { await cdp.detach(); }
-    const composition = await page.evaluate(() => (window as unknown as { __internationalComposition: { starts: number; ends: number; canceled: number; untrusted: number } }).__internationalComposition);
-    expect(composition.starts).toBe(3); expect(composition.ends).toBe(3); expect(composition.canceled).toBeGreaterThanOrEqual(1); expect(composition.untrusted).toBe(0);
+    const composition = await page.evaluate(() => (window as unknown as { __internationalComposition: { starts: number; ends: number; canceled: number; lifecycle: Array<{ type: string; trusted: boolean }> } }).__internationalComposition);
+    expect(composition.starts).toBe(3); expect(composition.ends).toBe(3); expect(composition.canceled).toBeGreaterThanOrEqual(1);
+    // Pristine Chromium characterization: the CDP IME driver emits trusted
+    // starts and untrusted ends. This asserts the test driver, not OS IME trust.
+    expect(composition.lifecycle).toEqual(Array.from({ length: 3 }, () => [
+      { type: 'start', trusted: true }, { type: 'end', trusted: false },
+    ]).flat());
     const routes = (await routeEvidence(page)).routes;
     expect(routes.filter(row => row.route === 'websocket')).toEqual([]);
     expect(routes.length).toBeGreaterThan(0);

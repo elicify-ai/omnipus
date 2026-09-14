@@ -70,8 +70,34 @@ The final 240 composition/routing/focus regressions and 65 binary transport/code
 checks passed. Relevant lint and the production frontend build passed. Three
 isolated composition faults (duplicate commit, stale-focus commit and candidate
 key leakage) were caught. Two independent composition reviews found no remaining
-concrete defect in the tested browser event-order scope. Deployed verification
-remains pending.
+concrete defect in the tested browser event-order scope.
+
+Amsterdam runtime `027306f0952e7752f5c1494063e29b740ca6f437` was deployed. Installed
+and running binary SHA256
+`ac929510214b744e6d287ecd95ec04b8d987dc8c438bfb279ed9a761134a877e` matched, and
+machine configuration was preserved.
+
+The original Space/A/arrow/logical Option-L regression passed in 21.2 seconds
+using exclusively binary dedicated gestures. International composition passed
+in 27.8 seconds: exact final text `a@日本é🙂🙂`, four insertions, three balanced
+physical key pairs, no held keys or page/fixture errors, no provisional/canceled
+or late-after-blur insertion, and ten binary reliable messages.
+
+The first new-candidate run passed the functional checks but failed the test's
+assumption that CDP composition-end events are trusted. A separate pristine
+Chromium probe demonstrated trusted starts and untrusted ends for the same CDP
+operations. The test now checks that exact six-event driver lifecycle, explicitly
+as characterization of the automation API, while retaining all behavioral
+oracles. No runtime change was needed for this test correction.
+
+The broader normal-URL smoke passed in 50.7 seconds: 13 clicks, exact Unicode
+text `Zażółć 世界`, 300 scroll pixels, one drag, tab return/resize, held-key
+release on connection loss, and successful post-recovery input. All 57 gestures
+were binary (55 reliable, two hover), with zero page/fixture/cleanup errors.
+The bounded log capture contained no dispatch-failure or deadline-exceeded
+messages. Physical OS input-method and keyboard hardware combinations remain
+a manual test dimension;
+these tests establish browser composition handling, not exhaustive device coverage.
 
 References: [UI Events](https://www.w3.org/TR/uievents/),
 [Input Events](https://www.w3.org/TR/input-events-2/),
