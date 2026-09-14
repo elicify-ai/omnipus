@@ -219,7 +219,52 @@ func (al *AgentLoop) buildCompressedToolDefs(ts *turnState, policyFiltered []too
 		}
 	}
 
+	sent = al.appendGoalDoorsAfterEscape(ts, policyFiltered, sent)
+
 	return tools.ToolsToProviderDefs(sent)
+}
+
+// appendGoalDoorsAfterEscape keeps ADR-081 D3's first-move doors callable
+// once the bounded escape (goalForcingMaxNarrowAttempts, loop.go) has
+// released the narrowed request surface while the goal STILL has no record.
+//
+// The escape's documented purpose is to widen the surface ("offers the FULL
+// tool surface for the remainder of the turn", turnState.goalNarrowEscaped),
+// and the D4 rubric note keeps telling the model to call set_goal on every
+// later request. But on this compressed path set_goal and AskUserQuestion are
+// ManifestLazy: unless a ToolSearch loaded them earlier in the session, the
+// widened surface silently REMOVES both doors. UAT 2026-09-14 (B-1 run 4,
+// session_01M2FBEJ5DA37MF63PFRCJJV4N): the escape fired at iteration 4 after
+// a refused set_goal call; from then on the model wrote "Register the improved
+// goal record via set_goal (mode: register)" into set_todos 137 times — the
+// one always-callable tool that matched its plan — and never registered the
+// record, because set_goal was no longer in its tool list.
+//
+// Only the doors are added, only from policyFiltered (never bypassing tool
+// policy, unlike the infra force-include above), and only while the D3 base
+// predicate still holds. The ask door follows evaluateGoalForcing's own rule:
+// webchat origin and the per-goal question budget unspent.
+func (al *AgentLoop) appendGoalDoorsAfterEscape(ts *turnState, policyFiltered, sent []tools.Tool) []tools.Tool {
+	if ts == nil || !ts.goalNarrowIsEscaped() {
+		return sent
+	}
+	holds, rec := goalTurnRecordState(al, ts)
+	if !holds || rec == nil {
+		return sent
+	}
+	includeAsk := ts.channel == goalForcingWebChannel && rec.QuestionRoundsUsed < 1
+	present := make(map[string]bool, len(sent))
+	for _, t := range sent {
+		present[t.Name()] = true
+	}
+	for _, door := range goalForcingNarrowTools(policyFiltered, includeAsk) {
+		if present[door.Name()] {
+			continue
+		}
+		sent = append(sent, door)
+		present[door.Name()] = true
+	}
+	return sent
 }
 
 // buildToolManifestNote renders the compact "More tools" manifest block for

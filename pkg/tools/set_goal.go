@@ -321,7 +321,8 @@ func (t *SetGoalTool) Description() string {
 		"goal, or after the operator has answered your clarifying questions. Use mode:update to steer an " +
 		"already-registered record when the operator's message or your own judgment changes it: the whole " +
 		"record is re-validated and REPLACED, and a change summary (what was added/changed/dropped) is " +
-		"returned in the result — there is no approval step to wait for. Every criterion and DoD item " +
+		"returned in the result — there is no approval step to wait for. An update sent before any record " +
+		"exists is applied as register. Every criterion and DoD item " +
 		"needs an explicit judgment (\"boolean\", \"quantitative\", or \"artifact\") — never omit it and " +
 		"expect a default. Leave dod empty to get a built-in floor DoD automatically; anything you do " +
 		"supply must also carry an explicit provenance (\"stated\", \"workspace\", \"floor\", or " +
@@ -346,8 +347,8 @@ func (t *SetGoalTool) Parameters() map[string]any {
 					"the normal choice on a freshly activated goal, or right after the operator answers " +
 					"your clarifying questions. update: steering an ALREADY-registered record — " +
 					"re-validates and REPLACES it, and a change summary (what was added/changed/dropped) " +
-					"is returned in the result. update fails if no record has been registered yet — " +
-					"call register first.",
+					"is returned in the result. An update sent before any record has been registered is " +
+					"applied as register, and the result reports mode register.",
 			},
 			"definition": map[string]any{
 				"type": "string",
@@ -462,8 +463,22 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		mode = setGoalModeUpdate
 	}
 	if mode == setGoalModeUpdate && !hadExistingRecord {
-		return ErrorResult("set_goal(mode:update) refuses: no record has been registered on this goal yet " +
-			"— call set_goal(mode:register) first")
+		// The mirror image of the GX-B rule above, for the same reason. UAT
+		// 2026-09-14 (B-1 run 4): on a freshly activated goal the model sent a
+		// complete, valid record with mode:update. The old hard refusal here
+		// consumed one of the turn's bounded narrowed first-move attempts
+		// (goalForcingMaxNarrowAttempts, pkg/agent/loop.go), the escape then
+		// restored a surface on which set_goal is a lazy tool, and the turn
+		// never registered the record — it spent 137 consecutive rounds
+		// re-writing a set_todos checklist whose only open item was "register
+		// via set_goal". An update submitted before any record exists has one
+		// unambiguous meaning — author this goal's record — so it is applied
+		// as register (floor DoD, no diff, no superseded history), and the
+		// result reports mode:register so the SPA renders a new-goal card
+		// rather than a revision of a record that never existed.
+		logger.InfoCF("goal", "set_goal: update normalised to register — no record has been registered on this goal yet",
+			map[string]any{"session_id": sessionID})
+		mode = setGoalModeRegister
 	}
 
 	authorID := ToolAgentID(ctx)

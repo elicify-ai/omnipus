@@ -376,21 +376,57 @@ func TestSetGoalTool_UpdateDiffs(t *testing.T) {
 	const sessionID = "session_goal_update"
 	const agentID = "mia"
 
-	t.Run("update with no prior record is refused", func(t *testing.T) {
+	// UAT 2026-09-14 (B-1 run 4): a complete, valid record sent with
+	// mode:update on a freshly activated goal (no record yet) used to be
+	// refused, which started a 137-round no-progress loop. It is now applied
+	// as register — the mirror of TestSetGoalTool_RegisterExistingRecordNormalisesToUpdate.
+	t.Run("update with no prior record is applied as register", func(t *testing.T) {
 		access := newFakeGoalRecordAccess()
 		access.condition[sessionID] = "an active goal"
 		tool := newSetGoalTool(access)
+		diffCalls := 0
+		tool.SetDiffFn(func(_, _ string) string {
+			diffCalls++
+			return "must-not-appear"
+		})
 
 		res := tool.Execute(setGoalCtx(sessionID, agentID), map[string]any{
 			"mode":       "update",
 			"definition": "Ship it.",
 			"criteria":   minimalCriteriaArg(),
 		})
-		if !res.IsError {
-			t.Fatal("want a refusal for mode:update with no prior record")
+		if res.IsError {
+			t.Fatalf("mode:update with no prior record must register, not refuse: %s", res.ForLLM)
 		}
-		if !strings.Contains(res.ForLLM, "no record has been registered") {
-			t.Fatalf("error should name the missing record: %q", res.ForLLM)
+		if access.writes != 1 {
+			t.Fatalf("want exactly 1 write (the registration), got %d", access.writes)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(res.ForLLM), &payload); err != nil {
+			t.Fatalf("result does not parse: %v (%q)", err, res.ForLLM)
+		}
+		if payload["mode"] != "register" {
+			t.Fatalf("the applied mode must be reported as register (there was nothing to update), got %v", payload["mode"])
+		}
+		if _, hasDiff := payload["diff"]; hasDiff {
+			t.Fatalf("a registration carries no diff key, got %v", payload["diff"])
+		}
+		if diffCalls != 0 {
+			t.Fatalf("the update diff seam must not run for a registration, ran %d times", diffCalls)
+		}
+		var persisted struct {
+			Definition string            `json:"definition"`
+			Criteria   []json.RawMessage `json:"criteria"`
+			DoD        []json.RawMessage `json:"dod"`
+		}
+		if err := json.Unmarshal([]byte(access.record[sessionID]), &persisted); err != nil {
+			t.Fatalf("persisted record does not parse: %v (%q)", err, access.record[sessionID])
+		}
+		if persisted.Definition != "Ship it." || len(persisted.Criteria) != 1 {
+			t.Fatalf("the submitted record must be the one persisted, got %q", access.record[sessionID])
+		}
+		if len(persisted.DoD) == 0 {
+			t.Fatal("a registration with no dod must carry the built-in floor DoD")
 		}
 	})
 

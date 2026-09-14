@@ -373,6 +373,48 @@ func TestGoalRubricInjection_OncePerGoalTurn(t *testing.T) {
 		}
 	})
 
+	t.Run("both_variants_carry_the_referent_rule", func(t *testing.T) {
+		// UAT 2026-09-14 (B-1 runs 3 and 5): "/goal improve it" in a fresh
+		// session was resolved from an agent-wide scratchpad checklist left by
+		// another session. Both the working agent's first-move note and the D7
+		// fallback compile must say that such surfaces are not evidence of the
+		// referent, and that an unidentified target means ask.
+		for name, note := range map[string]string{
+			"tool_calling_injection": buildGoalRubricInjectionNote(true, true),
+			"channel_injection":      buildGoalRubricInjectionNote(true, false),
+			"raw_json_compile":       buildGoalRubricNote(false),
+		} {
+			for _, want := range []string{
+				"ONLY from what the user has said in this conversation",
+				"A scratchpad checklist, board tasks, workspace files, or another goal's record are NOT evidence",
+				"ask before registering a record or doing any work",
+			} {
+				if !strings.Contains(note, want) {
+					t.Fatalf("%s: rubric note must carry %q", name, want)
+				}
+			}
+		}
+	})
+
+	t.Run("tool_calling_note_says_one_door_never_both", func(t *testing.T) {
+		// UAT 2026-09-14 (W4 B-9 run 4): set_goal and a placeholder
+		// AskUserQuestion in one response parked a clear goal's turn for 18
+		// minutes. The tool-calling note must say the doors are alternatives
+		// and forbid placeholder questions; the D7 raw-JSON compile has no
+		// tools and must not carry it.
+		for _, want := range []string{
+			"Call exactly ONE of the two, never both in the same response",
+			"never a placeholder, a test question, or a request for permission to proceed",
+		} {
+			if !strings.Contains(buildGoalRubricInjectionNote(true, true), want) {
+				t.Fatalf("the tool-calling rubric note must carry %q", want)
+			}
+		}
+		if strings.Contains(buildGoalRubricNote(false), "Call exactly ONE of the two") {
+			t.Fatal("the D7 raw-JSON compile note has no tools and must not carry the one-door rule")
+		}
+	})
+
 	t.Run("inject_at_index_1_noop_on_empty_note", func(t *testing.T) {
 		msgs := []providers.Message{
 			{Role: "system", Content: "sys"},

@@ -313,6 +313,26 @@ func TestAskUserQuestion_RecommendedIsQuestionScoped(t *testing.T) {
 	}
 }
 
+// TestAskUserQuestion_DescriptionForbidsPlaceholderQuestions pins the guidance
+// added after UAT 2026-09-14 (W4 B-9 run 4): on a clear goal the model sent
+// set_goal and, in the same response, a card whose question read "Placeholder
+// question - not used." with options "Proceed"/"Clarify". The card parked the
+// turn for 18 minutes. Validation only rejects EMPTY question text
+// (askuser.ValidateQuestions), so the description is where the model learns
+// that a question must name a real unknown.
+func TestAskUserQuestion_DescriptionForbidsPlaceholderQuestions(t *testing.T) {
+	desc := NewAskUserQuestionTool(nil).Description()
+	for _, want := range []string{
+		"Ask only about a real unknown in the user's request whose answer changes what you will do next",
+		"never a placeholder, a test question, or a request for permission to proceed",
+		"never set_goal and a question together",
+	} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("Description must carry %q; got: %q", want, desc)
+		}
+	}
+}
+
 // askQuestionItemProps returns the per-question schema properties map from the
 // tool's Parameters() (properties.questions.items.properties).
 func askQuestionItemProps(t *testing.T, params map[string]any) map[string]any {

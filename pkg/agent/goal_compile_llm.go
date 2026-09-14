@@ -514,7 +514,8 @@ func buildGoalRubricNote(forTool bool) string {
 				"straight into the work in this SAME turn — there is no confirmation step to wait for. When " +
 				"the goal is genuinely unclear, ask once instead: call AskUserQuestion where it is offered, " +
 				"or ask conversationally in your own reply where it is not, then call set_goal immediately " +
-				"once the answer arrives, before doing anything else.\n\n")
+				"once the answer arrives, before doing anything else.\n\n" +
+				goalOneDoorRule + "\n\n")
 	} else {
 		sys.WriteString(
 			"You compile a user's goal into a restated statement, judgment-typed acceptance criteria, and a\n" +
@@ -550,6 +551,7 @@ func buildGoalRubricNote(forTool bool) string {
 			"If scope, acceptance, or the user's meaning is genuinely ambiguous — including a goal that " +
 			"only makes sense against earlier conversation you were not given enough of — treat it as " +
 			"ambiguous and ask, instead of guessing.\n\n" +
+			goalReferentRule + "\n\n" +
 			"Definition: one clear sentence restating the goal, staying close to the setter's own words. " +
 			"Shape: \"Produce <outcome> for <who/what it serves>, so that <the one observable end-state> " +
 			"— <optional: by when / within a budget or attempt limit>.\" One primary outcome only (extra " +
@@ -587,6 +589,37 @@ func buildGoalRubricNote(forTool bool) string {
 	}
 	return sys.String()
 }
+
+// goalReferentRule is the part of buildGoalRubricNote's shared substance that
+// says WHERE a goal's referent may come from. UAT 2026-09-14 (B-1, five fresh
+// sessions of "/goal improve it" on one agent): every run's context carried
+// an agent-wide "# Current scratchpad" note (loop.go's buildScratchpadNote
+// selects the agent's most recent open set_todos card regardless of which
+// session or workspace wrote it). Runs 3 and 5 resolved "it" from that
+// leftover checklist — run 5's own set_goal assumptions say the record was
+// "reconstructed from the session scratchpad" — registered with clarity
+// "clear", and did unrequested work, where the ambiguity instruction above
+// should have produced a question. The ambiguity sentence alone did not stop
+// this because the model treated the scratchpad as conversation it HAD been
+// given. This rule names those surfaces as non-evidence explicitly.
+const goalReferentRule = "Work out what the goal refers to (\"it\", \"that\", \"the report\") ONLY from what the " +
+	"user has said in this conversation. A scratchpad checklist, board tasks, workspace files, or another " +
+	"goal's record are NOT evidence of what the user means right now — they can belong to unrelated work in " +
+	"another session. If the user's own words in this conversation do not identify the target, the goal is " +
+	"ambiguous: ask before registering a record or doing any work."
+
+// goalOneDoorRule sharpens the tool-calling first-move instruction: the two
+// doors are alternatives, never a pair. UAT 2026-09-14 (W4 B-9 run 4,
+// session_01M2FKG8R1Z2Z2XRDVXZ4RRYFT, 09:22:19Z): on a clear goal the model
+// called set_goal AND AskUserQuestion in the SAME response, the question
+// reading "Placeholder question - not used." with options "Proceed" /
+// "Clarify". set_goal succeeded, but the card parked the turn until a human
+// answered it 18 minutes later. The instruction "Your FIRST action this turn
+// must be a tool call" plus a surface of exactly those two tools read, to
+// that model, as "call the tools you were given".
+const goalOneDoorRule = "Call exactly ONE of the two, never both in the same response. A question card pauses " +
+	"the whole turn until the user answers it, so only send one you genuinely need answered — never a " +
+	"placeholder, a test question, or a request for permission to proceed on a goal that is already clear."
 
 // goalRubricChannelAddendum extends buildGoalRubricNote's text on a
 // non-webchat origin (ADR-081 D3 [G-B2] / D4): AskUserQuestion is
