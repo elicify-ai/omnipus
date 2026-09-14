@@ -287,8 +287,11 @@ func (t *EditTool) Parameters() map[string]any {
 			"value": map[string]any{
 				"description": "set_property: the property's new value — a single value, or a " +
 					"list for a many-valued property. With list_op set, the ONE value to add " +
-					"or remove. Send null to REMOVE the property from the note entirely. " +
-					"Cannot write a relation or person property — use op 'relation'.",
+					"or remove. Send null to REMOVE the property from the note entirely — " +
+					"refused for a relation or person property (use op 'relation'; its " +
+					"'replace' with an empty targets list clears one on purpose) and for a " +
+					"required property (set a different value instead). Cannot write a " +
+					"relation or person property either — use op 'relation'.",
 			},
 			"list_op": map[string]any{
 				"type": "string",
@@ -772,7 +775,13 @@ func (t *EditTool) execSetProperty(ctx context.Context, target mutationTarget, a
 			return t.deps.refuse(AuthorOpEdit, target, []string{rel},
 				"'type' cannot be removed here: it is what makes the note a record. Use knowledge_configure delete_record_type to retire the type, or set_property with a different type")
 		}
-		edit = RemoveProperty(property)
+		// C6 (Claude review round 3): the removal itself is a write like any
+		// other, so it goes through the same schema authority — a relation
+		// property and a required property are refused inside the locked
+		// closure, against the note's bytes; everything else is removed as
+		// before. See knowledgeEditRemovePropertyEdit for the two refusals
+		// and the deliberately-allowed remainder.
+		edit = knowledgeEditRemovePropertyEdit(set, report, property, &gov)
 	case listOp != "":
 		value, ok := jsonScalarToString(raw)
 		if !ok {

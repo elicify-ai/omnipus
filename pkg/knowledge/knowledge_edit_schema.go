@@ -55,6 +55,11 @@ var (
 	// property is written through knowledge_edit's op "relation" and its
 	// three explicit verbs, never by sending a whole value.
 	ErrRelationProperty = errors.New("knowledge: relation properties are written through op \"relation\"")
+	// ErrRequiredProperty is the removal half of Property.Required: a
+	// required property cannot be removed (set_property value:null), because
+	// every record of the type must carry a value and a write door must not
+	// create the check_integrity finding it exists to prevent.
+	ErrRequiredProperty = errors.New("knowledge: required property cannot be removed")
 	// ErrReservedProperty is UAT 2026-09-13 D-51: a write to the record's
 	// identity (`id` / `omni_id`), to a `file.*` virtual property or to a
 	// `formula.*` derived column. All three used to fall through to the
@@ -537,6 +542,75 @@ func knowledgeEditListOpEdit(set *records.SchemaSet, report *records.SchemaLoadR
 			return AddListValue(property, canonical[0])(src)
 		}
 		return RemoveListValue(property, canonical[0])(src)
+	}
+}
+
+// knowledgeEditRemovePropertyEdit composes schema validation with
+// RemoveProperty for set_property's value:null mode (Claude review round 3,
+// finding C6).
+//
+// The write path (knowledgeEditSetPropertyEdit) and the list path
+// (knowledgeEditListOpEdit) each validate against the note's own resolved
+// schema before splicing; the removal path used to be the one mode of
+// set_property that consulted nothing but the reserved-key list, so
+// `value:null` could wipe a whole relation list — the exact read-then-write
+// hazard FR-045 exists to stop — and delete a required property's value,
+// manufacturing the very missing_required_property finding the write door
+// is supposed to prevent. This constructor routes removals through the same
+// knowledgeEditResolveSchema authority, with exactly two refusals, in the
+// write path's own precedence order:
+//
+//   - FR-045, FIRST as everywhere: a relation or person property is not
+//     removable here. Removing IS the whole-list discard the write refusal
+//     names, with none of the intent `relation_op: "replace"` records, so
+//     the caller is directed to op "relation" — whose "remove" verb takes
+//     one edge at a time and whose "replace" with an empty targets list is
+//     the deliberate, on-purpose way to clear the property.
+//   - Required: a required property's absence is a validation failure, and
+//     a write door does not get to create one behind a 200.
+//
+// Everything else is REMOVED exactly as before, and that set is deliberate
+// rather than residual: a property the schema does not declare (D-93's
+// stale pre-rename key — removing it makes the record MORE conformant, and
+// TestUAT_D93 pins the behavior), every property of an ordinary note
+// (FR-005 — no declaration, nothing to violate), and every optional
+// declared property. An undeclared type, a rejected schema file and an
+// unparsable frontmatter block are all misses knowledgeEditResolveSchema
+// reports through gov, and each leaves the removal allowed, exactly as the
+// same misses leave a write allowed.
+func knowledgeEditRemovePropertyEdit(set *records.SchemaSet, report *records.SchemaLoadReport, property string, gov *knowledgeEditGovernance) NoteEdit {
+	return func(src []byte) ([]byte, error) {
+		schema, typeName, reason, detail := knowledgeEditResolveSchema(set, report, src)
+		if reason != knowledgeEditGoverned {
+			if gov != nil {
+				*gov = knowledgeEditGovernance{Reason: reason, TypeName: typeName, RejectionReason: detail}
+			}
+			return RemoveProperty(property)(src)
+		}
+		if gov != nil {
+			*gov = knowledgeEditGovernance{Reason: knowledgeEditGoverned, TypeName: typeName}
+		}
+		if prop, ok := schema.Property(property); ok {
+			// FR-045 before Required, matching the precedence
+			// knowledgeEditValidatePropertyAgainstSchema applies to writes
+			// (FR-046 then FR-045 then shape): a relation property has no
+			// "required-ness to satisfy" this door may weigh, because it has
+			// no business being removed through this door at all.
+			if records.IsRelationProperty(prop) {
+				return nil, fmt.Errorf("%w: %s.%s is a %s property, and set_property cannot remove one — removing it discards the whole list of edges, "+
+					"including any another writer added (ADR-068 FR-045). Use op \"relation\" instead: same collection, path and expect_version as this call, "+
+					"plus property: %q, relation_op: \"remove\" and targets naming the one edge to take out (repeat per edge; the rest of the list is left "+
+					"untouched), or relation_op: \"replace\" with an empty targets list when clearing the property on purpose",
+					ErrRelationProperty, typeName, property, prop.Type, property)
+			}
+			if prop.Required {
+				return nil, fmt.Errorf("%w: %s.%s is required — every %s record must carry a value, so removing it would leave this one carrying a "+
+					"missing-value finding. Set a different value instead, or declare the property optional in %s/%s/%s.yaml",
+					ErrRequiredProperty, typeName, property, typeName,
+					records.VaultMarkerDirName, records.RecordsDirName, typeName)
+			}
+		}
+		return RemoveProperty(property)(src)
 	}
 }
 
