@@ -63,3 +63,17 @@ At 15:54:36.340 UTC the viewer container and video element still measured 1426×
 Subsequent actual window resizing restored correct fit: 1186×708 container → 1236×732 decoded video; 1686×908 → 1308×696; original 1426×718 → 1344×672. Input remained ready throughout the sampled states. The earlier open-existing-tab tests missed this click-created-tab transition.
 
 Evidence: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/.local/browser-input-final-validation/popout-google-youtube-repro`, including `youtube-after-click.png`, raw `youtube-after-click-video.png`, geometry/control events and a trace. Test viewer closed normally. No production fix has yet been applied for this newly reproduced transition.
+
+## New-tab convergence correction
+
+The reproduced server warning confirms the first correction was attempted: requested1426×718, compensated outer bounds1426×861, but final measured CSS viewport still1426×575. The 143-pixel shortfall matches Chrome's documented decoration offset. Merely fitting the existing video element cannot repair pixels captured against this incorrect shape.
+
+For newly active targets only, the viewport path now checks its measured postcondition before requesting capture. If width/height still differ from the requested viewport beyond the existing tolerance, it performs one full reapplication and fresh measurement inside the same admission and deadline. It never substitutes requested dimensions for measured values, and a superseded or canceled target cannot continue. Ordinary manual viewport updates retain their existing handling of legitimate window-size limits. Persistent failure is bounded, not an unbounded resizing loop.
+
+Regression cases derive from the reproduction and lifecycle requirements: initial compensated shortfall then convergence, persistent mismatch with no recapture from this path, cancellation, and target supersession. Initial tests failed on the old implementation for missing reapplication; one initial cancellation fixture leaked a fake Chrome task and was corrected to cancel the caller instead. Focused new-target, existing viewport, tab-change and document tests passed together in15.821seconds. Final review, mutation and deployed reproduction results follow when complete.
+
+A pending-target fence is installed synchronously when viewport reapplication is scheduled. Document completion, explicit capture refresh and encoder preparation all validate fresh measured geometry before publishing it. A later matching measurement can clear the fence; manual resizing retains the pre-existing measured-clamp policy. Review identified and closed refresh/encoder bypasses before deployment.
+
+Final focused new-target, viewport, document and encoder-preparation regression tests passed in 15.878 seconds. The refresh and encoder regressions first failed on their unfenced paths. A document recovery fixture initially omitted the new navigation start event, so its unexpected commit was correctly rejected as stale; the fixture now emits the real start-then-commit sequence. No production stale-event protection was relaxed. Independent final review found no blockers.
+
+Six deliberate fault variants were rejected: bypassing size convergence, allowing extra retries, accepting unconverged capture, omitting the synchronous fence, bypassing document validation and retaining the fence after legitimate manual clamp. Restored-source regression checks passed. Live verification remains pending at this source commit.

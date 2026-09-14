@@ -59,7 +59,30 @@ func sameViewportGeometry(a, b CaptureFrameState) bool {
 	return a.TargetID == b.TargetID && a.Width == b.Width && a.Height == b.Height && a.Scale == b.Scale
 }
 
+// acceptViewportConvergence fences capture publication while a newly selected
+// target's viewport is still pending. An explicit resize may accept Chrome's
+// measured clamp, just as it did before target convergence was introduced.
+func (lv *LiveView) acceptViewportConvergence(target context.Context, measured CaptureFrameState, manualResize bool) error {
+	lv.mu.Lock()
+	defer lv.mu.Unlock()
+	if lv.pendingViewportTarget != target {
+		return nil
+	}
+	if !manualResize && (viewportDeltaPx(lv.lastRequestedW, int64(measured.Width)) > viewportDriftTolerancePx || viewportDeltaPx(lv.lastRequestedH, int64(measured.Height)) > viewportDriftTolerancePx) {
+		return fmt.Errorf("browser live: new tab viewport is still settling")
+	}
+	lv.pendingViewportTarget = nil
+	return nil
+}
+
 func (lv *LiveView) applyViewportContext(caller, tabCtx context.Context, width, height int, scale float64) (bool, error) {
+	return lv.applyViewportContextWithConvergence(caller, tabCtx, width, height, scale, false)
+}
+
+// Newly active targets can briefly report their pre-compensation layout after
+// Chrome acknowledges window bounds. Reapply once before pinning capture to it;
+// ordinary viewer resizes retain their existing measured-clamp behavior.
+func (lv *LiveView) applyViewportContextWithConvergence(caller, tabCtx context.Context, width, height int, scale float64, converge bool) (bool, error) {
 	var cs *CaptureSession
 	var ready CaptureFrameState
 	return lv.withViewportAdmission(caller, tabCtx, func(operation context.Context) (bool, error) {
@@ -74,6 +97,9 @@ func (lv *LiveView) applyViewportContext(caller, tabCtx context.Context, width, 
 					return false, err
 				}
 				if sameViewportGeometry(before, measured) {
+					if err := lv.acceptViewportConvergence(tabCtx, measured, !converge); err != nil {
+						return false, err
+					}
 					lv.mu.Lock()
 					lv.lastRequestedW, lv.lastRequestedH, lv.lastRequestedScale = width, height, scale
 					lv.mu.Unlock()
@@ -81,16 +107,41 @@ func (lv *LiveView) applyViewportContext(caller, tabCtx context.Context, width, 
 				}
 			}
 		}
-		applied, err := lv.applyViewportAdmitted(caller, tabCtx, operation, width, height, scale)
-		if err != nil || cs == nil {
-			return applied, err
+		anyApplied := false
+		for attempt := 0; ; attempt++ {
+			if err := viewportContextError(caller, operation); err != nil {
+				return anyApplied, err
+			}
+			if attempt > 0 {
+				active, _, err := lv.mgr.activeTargetSnapshot(lv.sessionID)
+				if err != nil {
+					return anyApplied, err
+				}
+				if active != tabCtx {
+					return anyApplied, fmt.Errorf("browser live: viewport target changed before convergence")
+				}
+			}
+			applied, err := lv.applyViewportAdmitted(caller, tabCtx, operation, width, height, scale)
+			anyApplied = anyApplied || applied
+			if err != nil || cs == nil {
+				return anyApplied, err
+			}
+			measured, err := lv.measureCaptureFrame(operation, cs)
+			if err != nil {
+				return anyApplied, err
+			}
+			if converge && (viewportDeltaPx(width, int64(measured.Width)) > viewportDriftTolerancePx || viewportDeltaPx(height, int64(measured.Height)) > viewportDriftTolerancePx) {
+				if attempt == 0 {
+					continue
+				}
+				return anyApplied, fmt.Errorf("browser live: new tab viewport did not converge: requested %dx%d, measured %dx%d", width, height, measured.Width, measured.Height)
+			}
+			if err := lv.acceptViewportConvergence(tabCtx, measured, !converge); err != nil {
+				return anyApplied, err
+			}
+			ready, err = cs.BeginFrameTransition(measured.TargetID, measured.Width, measured.Height, measured.Scale)
+			return anyApplied, err
 		}
-		measured, err := lv.measureCaptureFrame(operation, cs)
-		if err != nil {
-			return applied, err
-		}
-		ready, err = cs.BeginFrameTransition(measured.TargetID, measured.Width, measured.Height, measured.Scale)
-		return applied, err
 	}, func(operation context.Context) error {
 		if cs != nil && ready.Generation != 0 && ready.Width > 0 && ready.Height > 0 && !cs.RecaptureFrameContext(operation, ready) {
 			current := cs.FrameState()
@@ -135,6 +186,9 @@ func (r *LiveViewRegistry) RefreshCaptureFrameContext(caller context.Context, se
 		measured, snapshotErr := lv.measureCaptureFrame(operation, expected)
 		if snapshotErr != nil {
 			return false, snapshotErr
+		}
+		if convergenceErr := lv.acceptViewportConvergence(tabCtx, measured, false); convergenceErr != nil {
+			return false, convergenceErr
 		}
 		if sameViewportGeometry(before, measured) {
 			return true, nil

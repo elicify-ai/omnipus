@@ -1457,6 +1457,8 @@ type LiveView struct {
 	viewportReapplyInFlight  bool
 	viewportReapplyPending   bool
 	viewportReapplyTargetCtx context.Context
+	// Blocks capture publication until the newly active target has settled.
+	pendingViewportTarget context.Context
 
 	// scaleDegradedNotified/At throttle the user-facing "the picture may look
 	// soft" notice applyViewport pushes when the deviceScaleFactor override
@@ -1790,6 +1792,7 @@ func (lv *LiveView) reapplyViewportToNewTarget(tabCtx context.Context) bool {
 	// Recorded for BOTH the spawning and the coalescing case: the worker
 	// always applies to the most recently observed target, never to the one
 	// whose switch happened to start the worker.
+	lv.pendingViewportTarget = tabCtx
 	lv.viewportReapplyTargetCtx = tabCtx
 	if lv.viewportReapplyInFlight {
 		lv.viewportReapplyPending = true
@@ -1827,7 +1830,7 @@ func (lv *LiveView) reapplyViewportPass(tabCtx context.Context, w, h int, scale 
 	if tabCtx == nil {
 		return
 	}
-	if _, err := lv.applyViewport(tabCtx, w, h, scale); err != nil {
+	if _, err := lv.applyViewportContextWithConvergence(context.Background(), tabCtx, w, h, scale, true); err != nil {
 		logger.WarnCF("browser", "live view: could not re-apply the panel viewport", map[string]any{"session_id": lv.sessionID, "error": err.Error()})
 	}
 }

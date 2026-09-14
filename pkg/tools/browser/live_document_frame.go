@@ -475,6 +475,9 @@ func (w *liveDocumentWatch) paintAndCaptureDocument(ctx context.Context, work *l
 		if verifyErr := w.lv.runCDP(operation, viewportScaleTimeout, chromedp.ActionFunc(paint.checkDocument)); verifyErr != nil {
 			return false, verifyErr
 		}
+		if convergenceErr := w.lv.acceptViewportConvergence(w.target, geometry, false); convergenceErr != nil {
+			return false, convergenceErr
+		}
 		// Completion retires the token itself. Detach its cancellation hook
 		// first; the capture's atomic token check still rejects supersession.
 		if !stopToken() || ctx.Err() != nil || !w.owns(work) {
