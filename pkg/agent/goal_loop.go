@@ -150,16 +150,47 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 			//
 			// ADR-086: the statement lives on the goal record's own Prompt
 			// field, not the retired session-meta GoalCondition.
+			//
+			// UAT E-1: the patch used to touch Prompt ONLY, leaving the
+			// Definition/Criteria/DoD compiled for the PREVIOUS intent in
+			// place. The record then described two different pieces of work
+			// (new prompt, old ladder), the agent worked the new intent
+			// without re-registering, and the Judge adjudicated its claim
+			// against the stale ladder. goal.Restate supersedes the old
+			// ladder into history and returns the record to ADR-081 D1's
+			// recordless state, so the working agent registers a record for
+			// the NEW intent (the post-turn registration nudge fires if it
+			// does not) and, until it does, the Judge judges the new prompt
+			// itself — never the old criteria.
 			newCondition := strings.TrimSpace(args)
 			now := time.Now().UTC()
-			if _, err := resolveGoalRecordStore().Update(activeGoal.GoalID, func(cur *goal.Goal) error {
-				cur.Prompt = newCondition
-				cur.LastActivityAt = now
-				return nil
-			}); err != nil {
+			var superseded bool
+			restated, err := resolveGoalRecordStore().Update(activeGoal.GoalID, func(cur *goal.Goal) error {
+				changed, rerr := cur.Restate(newCondition, newFloorDoD(), now)
+				superseded = changed
+				return rerr
+			})
+			if err != nil {
 				logger.WarnCF("agent", "goal: could not persist prose-restated condition",
 					map[string]any{"session_id": sessionID, "goal_id": activeGoal.GoalID, "error": err.Error()})
 				return true, true, "Could not update the goal (internal error persisting the goal record)."
+			}
+			if superseded {
+				// A claim against the superseded definition may already be
+				// under adjudication; its verdict judged the old ladder and
+				// must not land on the restated record (runGoalAdjudication
+				// also discards such a verdict if the cancel loses the race).
+				if pe := GetPlanEngine(al); pe != nil {
+					al.cancelGoalVerifierIfAny(pe, sessionID)
+				}
+				// No goal-status frame here: a prose restate emits none (every
+				// frame reads PlanEngine.Admit for its snapshot, and a restate
+				// must not re-Admit — TestGoalActivation_InstantProsePath). The
+				// restate turn's own after-turn hook emits the active frame
+				// carrying the new prompt.
+				logger.InfoCF("agent", "goal: prose restate superseded the compiled record; the agent must register one for the new intent",
+					map[string]any{"component": "goal", "session_id": sessionID, "goal_id": restated.GoalID,
+						"superseded_revisions": len(restated.SupersededCriteria)})
 			}
 			// Rewrite the turn's working prompt exactly like a fresh
 			// activation does — the working agent updates the record itself

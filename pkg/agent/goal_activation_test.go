@@ -233,8 +233,11 @@ func TestGoalActivation_MarkerPathPinned(t *testing.T) {
 // GoalCondition to the new intent (review-round-1 finding #9 — keeper
 // prompts, `/goal status`, and the D7 fallback compile all cite
 // GoalCondition, so leaving it stale would have them cite the SUPERSEDED
-// pre-restate intent forever) without touching the compiled
-// GoalCriteriaJSON record or minting a new GoalID; a marker-only restate
+// pre-restate intent forever) without minting a new GoalID. The first subtest
+// restates a goal that has NO registered record yet, so the compiled record is
+// (and stays) empty; a restate of a goal WITH a registered record supersedes
+// that record instead — see goal_restate_supersede_test.go (UAT E-1). A
+// marker-only restate
 // updates the record deterministically (zero LLM calls); and the
 // feasibility veto still applies on a vetoed marker restate (fail-closed —
 // the record is untouched).

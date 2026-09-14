@@ -725,6 +725,23 @@ func (al *AgentLoop) runGoalAdjudication(
 	// checkGoalLoopAfterTurn's worker/user-turn branches) — and an unmet
 	// verdict's steer re-dispatch IS such a turn (G-2), which is the activity
 	// that legitimately re-arms the next settlement.
+	//
+	// UAT E-1 (restate race): the Judge judged the ladder `rec` carried when
+	// this adjudication started. If the operator restated the goal while the
+	// Judge ran (goal.Restate supersedes that ladder and replaces the prompt),
+	// this verdict is about work the record no longer describes — landing it
+	// would project an old ladder's outcome onto the new record and could
+	// terminate the new goal `met` on the strength of the old one. Discard it:
+	// no round consumed, no verdict recorded, the goal stays active for a claim
+	// against its current definition. A re-read failure falls through to the
+	// existing handling below, which already copes with it.
+	if cur, gerr := gstore.Get(rec.GoalID); gerr == nil && cur != nil && goal.IsActiveState(cur.State) &&
+		strings.TrimSpace(cur.Prompt) != strings.TrimSpace(rec.Prompt) {
+		logger.InfoCF("agent", "goal: verdict discarded — the goal was restated while the Judge was running, so it judged a superseded definition",
+			map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID, "attempt": attempt})
+		al.emitGoalStatusFrame(sessionID, cur.GoalID, cur.Prompt, cur.Round, cur.MaxRounds, cur.LatestReason, goalPillActive)
+		return false
+	}
 	bumpGoalRecordActivity(rec.GoalID, time.Now().UTC())
 
 	verdict := jr.Verdict

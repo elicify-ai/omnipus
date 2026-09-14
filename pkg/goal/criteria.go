@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -156,4 +157,70 @@ func (g *Goal) SupersedeCriteria(newCriteria, newDoD []task.AcceptanceCriterion,
 	g.DoD = normDoD
 	g.LastActivityAt = now
 	return nil
+}
+
+// Restate replaces an ACTIVE goal's prompt with a new operator intent — a
+// prose `/goal <intent>` issued while the goal is still active (ADR-081
+// D1/US-5: "the working prompt is replaced by the restated intent"). The
+// GoalID and every budget counter are deliberately untouched (a restate is
+// the SAME goal generation, work-first-goal-flow-spec round-2 M-7), but the
+// compiled definition is NOT carried across: Definition, Criteria and DoD were
+// authored for the PREVIOUS prompt, so keeping them would leave one record
+// describing two different pieces of work — the new prompt on top, the old
+// acceptance ladder underneath — and the Judge would then adjudicate a claim
+// about the new work against the old criteria (UAT E-1).
+//
+// So when the prompt actually changes, the current Criteria/DoD are moved
+// into SupersededCriteria (history, never erased — D9's spirit), Criteria is
+// emptied, DoD is reset to floorDoD, and the per-definition outcome fields
+// (LatestClaim, LatestVerdict, LatestReason) are cleared because they judged
+// the superseded definition. That is ADR-081 D1's legal transient state
+// ("active, no record registered yet"): the working agent registers a record
+// for the new intent via set_goal, the engine's post-turn registration nudge
+// fires if it does not, and until one exists the Judge is given the new
+// prompt itself as the criterion (compiledGoalCriteriaFor's condition
+// fallback) — never the stale ladder.
+//
+// A restate to the identical prompt (whitespace-trimmed) changes nothing and
+// reports changed=false. floorDoD must be non-empty (D11, the schema's
+// minItems: 1). Only an active goal may be restated; a terminal goal is never
+// re-opened this way (a fresh `/goal` mints a new record instead).
+func (g *Goal) Restate(prompt string, floorDoD []task.AcceptanceCriterion, now time.Time) (changed bool, err error) {
+	if g.State != generated.GoalStateActive {
+		return false, fmt.Errorf("goal: restate %q: not active (state=%q)", g.GoalID, g.State)
+	}
+	newPrompt := strings.TrimSpace(prompt)
+	if newPrompt == "" {
+		return false, fmt.Errorf("goal: restate %q: prompt is required", g.GoalID)
+	}
+	if newPrompt == strings.TrimSpace(g.Prompt) {
+		return false, nil
+	}
+	normFloor, err := task.NormalizeCriteria(floorDoD)
+	if err != nil {
+		return false, fmt.Errorf("goal: restate %q: floor dod: %w", g.GoalID, err)
+	}
+	if len(normFloor) == 0 {
+		return false, fmt.Errorf("goal: restate %q: floor dod must contain at least one item (schema minItems: 1, D11)", g.GoalID)
+	}
+	if err := validateCriteriaList(normFloor, "dod"); err != nil {
+		return false, err
+	}
+
+	if len(g.Criteria) > 0 {
+		g.SupersededCriteria = append(g.SupersededCriteria, SupersededCriteriaEntry{
+			SupersededAt: now,
+			Criteria:     g.Criteria,
+			DoD:          g.DoD,
+		})
+	}
+	g.Prompt = newPrompt
+	g.Definition = ""
+	g.Criteria = nil
+	g.DoD = normFloor
+	g.LatestClaim = nil
+	g.LatestVerdict = nil
+	g.LatestReason = ""
+	g.LastActivityAt = now
+	return true, nil
 }
