@@ -54,16 +54,24 @@ func (a *restAPI) handleCopilotSignInStart(w http.ResponseWriter, _ *http.Reques
 	})
 }
 
-// copilotProbeCacheTTL is how long a COST-BEARING Copilot probe result is
-// reused (C2). Only signed_in / expired are cached: those are the outcomes
-// that spend a premium request, and they are stable — an operator who is
-// signed in stays signed in. not_signed_in and cli_missing are never cached,
-// so the one transition an operator actually waits on (run `copilot login`,
-// click Check sign-in) is always answered by a fresh probe, and that probe
-// costs nothing because there is no session to bill against.
+// copilotProbeCacheTTL is how long a signed_in Copilot probe result is reused
+// (C2). Only signed_in is cached: it is the outcome that spends a premium
+// request, and it is stable — an operator who is signed in stays signed in.
 //
-// The only staleness this introduces is the reverse transition (signed in →
-// signed out), which no UI flow waits on.
+// Every other outcome is answered by a fresh probe, because each one is
+// exactly what the operator is about to fix. not_signed_in and expired both
+// tell them to run `copilot login` and click Check sign-in again, and that
+// click must see the new login. expired used to be cached as well, so an
+// operator who had just signed in again kept seeing "expired" for up to five
+// minutes, with nothing on screen saying the answer was old.
+//
+// Re-probing those outcomes keeps C2's bounds: the single-flight slot below
+// still allows one child process at a time, and a login the vendor rejects has
+// no session to bill against. (That last point is inference: the Copilot CLI's
+// expired-session behaviour is unverified without a live subscription.)
+//
+// The only staleness left is the reverse transition (signed in → signed out),
+// which no UI flow waits on.
 const copilotProbeCacheTTL = 5 * time.Minute
 
 // copilotProbeRetryAfterSeconds is the Retry-After a caller gets when another
@@ -133,12 +141,12 @@ func (g *copilotProbeGuard) release() {
 	g.mu.Unlock()
 }
 
-// store caches a probe result if and only if it is one of the cost-bearing
-// outcomes. Caching not_signed_in would make the operator's post-login Check
-// sign-in click answer stale, and would save nothing: that outcome spends no
-// premium request.
+// store caches a probe result if and only if it is signed_in, the one stable,
+// cost-bearing outcome. Caching not_signed_in or expired would make the
+// operator's post-login Check sign-in click answer stale (see
+// copilotProbeCacheTTL).
 func (g *copilotProbeGuard) store(st gen.SignInStatus) {
-	if st.State != gen.SignInStatusStateSignedIn && st.State != gen.SignInStatusStateExpired {
+	if st.State != gen.SignInStatusStateSignedIn {
 		return
 	}
 	g.mu.Lock()
