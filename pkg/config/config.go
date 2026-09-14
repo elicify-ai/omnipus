@@ -1764,7 +1764,6 @@ type SubTurnConfig struct {
 	// (0) so both consumers take the central-authority branch by design.
 	MaxConcurrent         int `json:"max_concurrent"          env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_MAX_CONCURRENT"`
 	DefaultTimeoutMinutes int `json:"default_timeout_minutes" env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_DEFAULT_TIMEOUT_MINUTES"`
-	DefaultTokenBudget    int `json:"default_token_budget"    env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_DEFAULT_TOKEN_BUDGET"`
 	ConcurrencyTimeoutSec int `json:"concurrency_timeout_sec" env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_CONCURRENCY_TIMEOUT_SEC"`
 }
 

@@ -100,7 +100,6 @@ func (al *AgentLoop) getSubTurnConfig() subTurnRuntimeConfig {
 		maxConcurrent:      maxConcurrent,
 		concurrencyTimeout: concurrencyTimeout,
 		defaultTimeout:     defaultTimeout,
-		defaultTokenBudget: cfg.DefaultTokenBudget,
 	}
 }
 
@@ -110,7 +109,6 @@ type subTurnRuntimeConfig struct {
 	maxConcurrent      int
 	concurrencyTimeout time.Duration
 	defaultTimeout     time.Duration
-	defaultTokenBudget int
 }
 
 // ====================== SubTurn Config ======================
@@ -214,12 +212,6 @@ type SubTurnConfig struct {
 	// InitialMessages preloads the ephemeral session history before the agent loop starts.
 	// Used by evaluator-optimizer patterns to pass the full worker context across multiple iterations.
 	InitialMessages []providers.Message
-
-	// InitialTokenBudget is a shared atomic counter for tracking remaining tokens.
-	// If set, the SubTurn will inherit this budget and deduct tokens after each LLM call.
-	// If nil, the SubTurn will inherit the parent's tokenBudget (if any).
-	// Used by team tool to enforce token limits across all team members.
-	InitialTokenBudget *atomic.Int64
 
 	// TaskLabel is the optional human-readable label for the sub-turn task.
 	// Populated by the spawn tool from its "label" argument (FR-H-004).
@@ -516,7 +508,6 @@ func (s *AgentLoopSpawner) SpawnSubTurn(
 		ActualSystemPrompt: cfg.ActualSystemPrompt,
 		TargetAgentID:      cfg.TargetAgentID,
 		InitialMessages:    cfg.InitialMessages,
-		InitialTokenBudget: cfg.InitialTokenBudget,
 		MaxTokens:          cfg.MaxTokens,
 		Async:              cfg.Async,
 		Critical:           cfg.Critical,
@@ -1504,20 +1495,6 @@ func spawnSubTurn(
 	// FR-H-003: set parentSpawnCallID so all ToolExec* events emitted by this child turn
 	// carry the parent spawn's ToolCall.ID as ParentSpawnCallID.
 	childTS.parentSpawnCallID = parentSpawnCallID
-
-	// Token budget initialization/inheritance
-	// If InitialTokenBudget is explicitly provided (e.g., by team tool), use it.
-	// Otherwise, inherit from parent's tokenBudget (for nested SubTurns).
-	if cfg.InitialTokenBudget != nil {
-		childTS.tokenBudget = cfg.InitialTokenBudget
-	} else if parentTS.tokenBudget != nil {
-		childTS.tokenBudget = parentTS.tokenBudget
-	} else if rtCfg.defaultTokenBudget > 0 {
-		// Apply default token budget from config if no budget is set
-		budget := &atomic.Int64{}
-		budget.Store(int64(rtCfg.defaultTokenBudget))
-		childTS.tokenBudget = budget
-	}
 
 	// IMPORTANT: Put childTS into childCtx so that code inside runTurn can retrieve it
 	childCtx = withTurnState(childCtx, childTS)

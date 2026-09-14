@@ -284,9 +284,7 @@ type turnState struct {
 	closeOnce       sync.Once          // Ensures pendingResults channel is closed once
 	finishedChan    chan struct{}      // Closed when turn finishes
 
-	// Token budget tracking
-	tokenBudget *atomic.Int64        // Shared token budget counter
-	lastUsage   *providers.UsageInfo // Last LLM usage info
+	lastUsage *providers.UsageInfo // Last LLM usage info
 
 	// ADR-087 D6.1: the turn-scoped auto-continue accumulator — the
 	// load-bearing object for a truncated answer that gets one or more

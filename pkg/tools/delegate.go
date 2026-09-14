@@ -71,9 +71,8 @@ type SubTurnConfig struct {
 	// the child turn runs with system=soul + user=task, uniformly across the
 	// native and external-cli executors. Empty means "delegate the parent's
 	// own agent" — the parent's own soul applies.
-	TargetAgentID      string
-	InitialMessages    []providers.Message
-	InitialTokenBudget *atomic.Int64 // Shared token budget for team members; nil if no budget
+	TargetAgentID   string
+	InitialMessages []providers.Message
 	// TaskLabel is the optional human-readable label for the sub-turn task (FR-H-004).
 	// Populated from delegate's "label" argument. Used in the subagent_start WS frame.
 	TaskLabel string
