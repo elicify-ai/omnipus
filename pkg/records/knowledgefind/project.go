@@ -16,6 +16,18 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/records/propindex"
 )
 
+// formulaNoteSeparator joins a formula cell's rendered value to the
+// evaluator's explanation of it (records.FormulaResult.Note, D-61) — e.g.
+// `-79, note: negative because the first date is later than the second …`.
+//
+// IT IS ", " FIRST ON PURPOSE. A rendered cell is re-read as numbers by the
+// gateway's view totals (rest_knowledge_view.go's viewNumberValues), which
+// splits on ", " and skips any segment that does not parse as a decimal. With
+// this separator the number stays its own segment and the note's words never
+// parse, so a note can never silently drop a row out of a sum. A separator
+// glued to the number (`-79 — negative …`) would.
+const formulaNoteSeparator = ", note: "
+
 // renderRow projects one survivor into the wire row.
 func renderRow(q *query, s survivor) generated.VaultFindRow {
 	row := generated.VaultFindRow{
@@ -43,6 +55,13 @@ func renderRow(q *query, s survivor) generated.VaultFindRow {
 		cell := generated.VaultFindCell{
 			Property: prop.Name,
 			Value:    renderValue(pv),
+		}
+		// D-61: a formula result the evaluator explained (a negative date
+		// difference) carries that explanation in the same string, so the
+		// compact row text, the wire cell and the base preview all show it.
+		// An empty rendering has nothing to explain.
+		if note := s.formulaNotes[prop.Name]; note != "" && cell.Value != "" {
+			cell.Value += formulaNoteSeparator + note
 		}
 		applyCellMetadata(&cell, prop)
 		row.Cells = append(row.Cells, cell)
