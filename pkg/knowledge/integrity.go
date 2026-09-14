@@ -875,7 +875,11 @@ func CheckIntegrity(ctx context.Context, opts IntegrityOptions) (*IntegrityRepor
 //
 // A note that cannot be read at all is reported as unreadable rather than
 // skipped silently, under the malformed category: a reader must be able to
-// see that the sweep could not vouch for it.
+// see that the sweep could not vouch for it. A record_type-scoped sweep is
+// the one exception and stays silent about it, for the same reason it stays
+// silent about an unparsable note: a note that cannot be read cannot be
+// attributed to the scoped type, and an unattributable finding would make
+// the scoped report claim more than it checked.
 func checkFrontmatterHealth(ctx context.Context, opts IntegrityOptions, sink *findingSink, files []string, inScope func(string) bool) error {
 	for _, rel := range files {
 		if err := ctx.Err(); err != nil {
@@ -884,12 +888,31 @@ func checkFrontmatterHealth(ctx context.Context, opts IntegrityOptions, sink *fi
 		if !IsMarkdownPath(rel) {
 			continue
 		}
+		// A note this sweep cannot even READ is a finding, not a skip
+		// (Claude review round 3, cut list): the contract two lines up says
+		// the reader must be able to see the sweep could not vouch for the
+		// note, and both of these error paths used to `continue` in silence.
+		// Reported under CategoryMalformedFrontmatter like a note whose
+		// frontmatter cannot be parsed, for the same reason: the sweep has
+		// no vaster claim than "I could not read this one". A record_type
+		// scope stays silent about it, mirroring the ParseError branch
+		// below — a note that cannot be read cannot be attributed to the
+		// scoped type either, and an unattributable finding would make a
+		// scoped report claim more than it checked.
+		unreadable := func(err error) {
+			if opts.RecordType == "" {
+				sink.add(CategoryMalformedFrontmatter, rel, fmt.Sprintf(
+					"%s — the note could not be read (%v); the sweep cannot vouch for its frontmatter", rel, err))
+			}
+		}
 		abs, err := opts.Root.ResolveContainedNoSymlink(opts.FS, rel)
 		if err != nil {
+			unreadable(err)
 			continue
 		}
 		src, err := ReadNoteContent(opts.FS, abs)
 		if err != nil {
+			unreadable(err)
 			continue
 		}
 		rec := records.ParseRecord(rel, src)

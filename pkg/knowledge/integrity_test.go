@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -772,5 +773,58 @@ func TestTypedIntegrity_StoreFailureIsReportedNotSwallowed(t *testing.T) {
 	}
 	if !strings.Contains(c.NotRun, "corrupt") {
 		t.Errorf("the reason must reach the report rather than being replaced: %q", c.NotRun)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// An unreadable note is REPORTED, not skipped (Claude review round 3, cut
+// list): checkFrontmatterHealth's own contract says "a note that cannot be
+// read at all is reported as unreadable rather than skipped silently, under
+// the malformed category: a reader must be able to see that the sweep could
+// not vouch for it" — and both of its error paths did exactly the silent
+// `continue` the sentence forbids.
+// ---------------------------------------------------------------------------
+
+// unreadableNoteFS is the real filesystem except that Open refuses one named
+// path (matched by suffix), which is how a dematerialised cloud file, a
+// permission change or a provider hiccup looks to the sweep. Everything else
+// — the walk, the link graph, the healthy notes — reads through untouched.
+type unreadableNoteFS struct {
+	failOpenSuffix string
+}
+
+func (u unreadableNoteFS) Lstat(name string) (fs.FileInfo, error)     { return os.Lstat(name) }
+func (u unreadableNoteFS) ReadDir(name string) ([]fs.DirEntry, error) { return os.ReadDir(name) }
+func (u unreadableNoteFS) EvalSymlinks(name string) (string, error) {
+	return filepath.EvalSymlinks(name)
+}
+func (u unreadableNoteFS) Open(name string) (fs.File, error) {
+	if strings.HasSuffix(name, u.failOpenSuffix) {
+		return nil, fs.ErrPermission
+	}
+	return os.Open(name)
+}
+
+func TestIntegrity_UnreadableNoteIsReportedNotSkipped(t *testing.T) {
+	root := writeNote(t, "", "Good.md", "---\ntitle: fine\n---\nbody\n")
+	root = writeNote(t, root, "Stuck.md", "---\ntitle: unreadable\n---\nbody\n")
+	schemas := integrityFixtureSchemas(t, root)
+
+	report, err := CheckIntegrity(context.Background(), IntegrityOptions{
+		FS:      unreadableNoteFS{failOpenSuffix: "Stuck.md"},
+		Root:    mustCollectionRoot(t, root),
+		Schemas: schemas,
+	})
+	if err != nil {
+		t.Fatalf("CheckIntegrity: %v", err)
+	}
+	details := findingDetails(report, CategoryMalformedFrontmatter)
+	if len(details) != 1 {
+		t.Fatalf("the unreadable note must be reported under the malformed category, got %v", details)
+	}
+	for _, want := range []string{"Stuck.md", "could not be read"} {
+		if !strings.Contains(details[0], want) {
+			t.Errorf("the finding must name the note and say it could not be read; %q missing from %q", want, details[0])
+		}
 	}
 }
