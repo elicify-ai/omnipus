@@ -22,7 +22,7 @@ import http from 'node:http';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
-import type { BrowserContext, Page } from '@playwright/test';
+import type { BrowserContext, Frame, Page } from '@playwright/test';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -528,6 +528,13 @@ export interface BrowserRequestLog {
  * preview through the frame's own DOM (Playwright reaches a frame over the
  * browser protocol, which is origin-independent), or move the case to
  * top-level, where every engine reports.
+ *
+ * AMENDED 2026-09-14: a top-level preview tab is now refused (UAT D-106), so
+ * "move the case to top-level" means "move it to a BARE frame"
+ * (`embedPreviewBare`). Measured the same day: WebKit DOES report a bare
+ * frame's requests, including the Cookie header — the blindness above is
+ * specific to a frame carrying the `sandbox` ATTRIBUTE, even though the
+ * header's sandbox directive makes the bare frame's origin just as opaque.
  */
 export function recordBrowserRequests(context: BrowserContext): BrowserRequestLog {
   const records: BrowserRequestRecord[] = [];
@@ -625,4 +632,76 @@ export async function embedPreview(page: Page, tokenURL: string): Promise<void> 
     frame.setAttribute('height', '600');
     document.body.appendChild(frame);
   }, tokenURL);
+}
+
+/** DOM id of the frame `embedPreviewBare` creates. */
+export const BARE_FRAME_ID = 'e2e-preview-frame-bare';
+export const BARE_FRAME_SELECTOR = `#${BARE_FRAME_ID}`;
+
+/**
+ * Frame a preview with NO attributes that isolate anything — the form in which
+ * the §10.3 RESPONSE HEADERS are the only containment left.
+ *
+ * WHY THIS EXISTS (founder ruling 2026-09-14; ADR-067 amendment of that date).
+ * A preview is the file rendered INSIDE the Library, framed. The token route
+ * refuses a top-level document request for a file that renders (UAT D-106), so
+ * the old measurement — open the token URL as its own tab, where the header
+ * stood alone — now only ever sees the refusal page. The header still has to be
+ * measured standing alone, and this frame is where that happens.
+ *
+ * WHY IT MUST BE BARE. The product's frame carries `sandbox="allow-scripts"`,
+ * and embedded, the effective sandbox is the INTERSECTION of that attribute and
+ * the header's `sandbox` directive: the attribute alone keeps the origin opaque
+ * and popups blocked even if the header directive were deleted. A test framed
+ * the product's way therefore stays green through exactly the regression the
+ * top-level tab existed to catch. So: no `sandbox`, no `allow`, no
+ * `referrerpolicy`, never `srcdoc`. The request is `Sec-Fetch-Dest: iframe`,
+ * which D-106 serves.
+ *
+ * WHERE IT MUST LIVE. Call this on a page served by the GATEWAY's own origin
+ * (the SPA shell). That keeps the frame same-site with its parent, so a missing
+ * session cookie or an opaque origin can only be the header's doing. Framed
+ * under a foreign origin, the browser's own third-party cookie rules would hide
+ * the cookie by themselves and the cookie assertions would lose their teeth.
+ *
+ * Resolves once the frame has reached `src` (at `waitUntil`). No assertions
+ * live here: the specs check the attribute set with `bareFrameAttributes`.
+ */
+export async function embedPreviewBare(
+  page: Page,
+  src: string,
+  waitUntil: 'commit' | 'load' = 'load',
+): Promise<Frame> {
+  const expected = new URL(src, page.url()).href;
+  await page.evaluate(({ frameSrc, id }) => {
+    document.querySelectorAll(`#${id}`).forEach((n) => n.remove());
+    const frame = document.createElement('iframe');
+    frame.id = id;
+    frame.setAttribute('src', frameSrc);
+    frame.setAttribute('width', '800');
+    frame.setAttribute('height', '600');
+    document.body.appendChild(frame);
+  }, { frameSrc: src, id: BARE_FRAME_ID });
+  const handle = await page.waitForSelector(BARE_FRAME_SELECTOR, { state: 'attached' });
+  const frame = await handle.contentFrame();
+  if (!frame) throw new Error(`${BARE_FRAME_SELECTOR} has no content frame`);
+  await frame.waitForURL((u) => u.href === expected, { waitUntil, timeout: 20_000 });
+  return frame;
+}
+
+/** Which isolating attributes the bare frame carries, read off the live DOM. */
+export async function bareFrameAttributes(page: Page): Promise<{
+  present: boolean; sandbox: boolean; allow: boolean; referrerpolicy: boolean; srcdoc: boolean; csp: boolean;
+}> {
+  return page.evaluate((id) => {
+    const f = document.getElementById(id);
+    return {
+      present: !!f,
+      sandbox: !!f?.hasAttribute('sandbox'),
+      allow: !!f?.hasAttribute('allow'),
+      referrerpolicy: !!f?.hasAttribute('referrerpolicy'),
+      srcdoc: !!f?.hasAttribute('srcdoc'),
+      csp: !!f?.hasAttribute('csp'),
+    };
+  }, BARE_FRAME_ID);
 }

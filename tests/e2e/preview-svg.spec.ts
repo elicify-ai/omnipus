@@ -13,6 +13,14 @@
  *   122  an SVG subresource renders and stays inert — inside a sandboxed bundle
  *   123  TestSvgInSpa_ImageNotDocument        — inside the SPA
  *
+ * AMENDED 2026-09-14 (founder ruling; ADR-067 D15.8). Test 94's document and
+ * the other browser loads of a token URL used to be top-level tabs. The token
+ * route now refuses a top-level tab for any file that renders (UAT D-106): a
+ * preview is framed, inside the Library. Those tests now load the token URL in
+ * a BARE frame (no sandbox attribute — `frameTokenURL`) on the gateway's own
+ * page, so the response headers are still the only containment present, and a
+ * D-106 witness proves the tab itself is refused.
+ *
  * Test 123's server half exists (pkg/gateway/library_svg_contexts_test.go).
  * Tests 94 and 122 did not exist at all: tests/e2e/preview-isolation.spec.ts is
  * a `test.skip(true, …)` placeholder. `.svg` was already on the shipped
@@ -111,10 +119,19 @@
  * not Safari and no macOS runner is planned — Safari proper stays uncovered,
  * deliberately and on the record (SC-012).
  */
-import { expect, request as playwrightRequest, test, type APIRequestContext, type Page } from '@playwright/test';
+import {
+  expect,
+  request as playwrightRequest,
+  test,
+  type APIRequestContext,
+  type Frame,
+  type Page,
+  type Response,
+} from '@playwright/test';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { Socket } from 'node:net';
+import { bareFrameAttributes, embedPreviewBare } from './fixtures/preview-isolation/harness.js';
 import {
   GATEWAY_ORIGIN_PLACEHOLDER,
   expectedIsolationPolicy,
@@ -753,11 +770,41 @@ async function fireDeferredForm(page: Page): Promise<void> {
 }
 
 /** Read the in-page corroborating report. Never the primary oracle. */
-async function readReport(page: Page): Promise<PageReport> {
-  return page.evaluate(() => {
+async function readReport(target: Page | Frame): Promise<PageReport> {
+  return target.evaluate(() => {
     const w = window as unknown as { __REPORT__?: PageReport };
     return w.__REPORT__ ?? {};
   });
+}
+
+/**
+ * Load one token URL the way a preview is actually seen: FRAMED, on a page of
+ * the gateway's own origin — and in a BARE frame, with no sandbox attribute.
+ *
+ * AMENDED 2026-09-14 (founder ruling; ADR-067 amendment of the same date). The
+ * tests that use this used to `page.goto` the token URL as its own tab. The
+ * token route refuses that for every file that renders (UAT D-106), so those
+ * tests now saw only the refusal page. The frame is bare for the reason the
+ * tab was top-level: embedded with the product's `sandbox` attribute, the
+ * attribute would keep the origin opaque by itself and hide a regression in the
+ * header. Bare, the §10.3 response headers are the only containment present.
+ *
+ * Returns the frame and the response the BROWSER received for it — the header
+ * assertions read that, never a separate fetch.
+ */
+async function frameTokenURL(page: Page, name: string): Promise<{ frame: Frame; response: Response }> {
+  await page.goto(`${BASE_URL}/`);
+  const href = tokenHref(name);
+  const [response, frame] = await Promise.all([
+    page.waitForResponse((r) => r.url() === href && r.frame() !== page.mainFrame(), { timeout: 20_000 }),
+    embedPreviewBare(page, href, 'load'),
+  ]);
+  const attrs = await bareFrameAttributes(page);
+  expect(attrs.present, 'the bare frame was never created').toBe(true);
+  expect(attrs.sandbox, 'the bare frame must carry NO sandbox attribute — the header has to stand alone').toBe(false);
+  expect(attrs.allow || attrs.referrerpolicy || attrs.csp, 'no other isolating attribute either').toBe(false);
+  expect(attrs.srcdoc, 'never srcdoc — it has no response to carry the policy').toBe(false);
+  return { frame, response };
 }
 
 /**
@@ -905,20 +952,27 @@ test.describe('ADR-067 §10.4 — .svg on the inline allow-list, and type confus
    *
    * The context §10.4 admits was never measured: an SVG opened as a DOCUMENT at
    * its own token URL, with a script that tries to beacon the cookie out.
+   *
+   * AMENDED 2026-09-14: the document is loaded in a BARE frame on the gateway's
+   * own page (see frameTokenURL), not as its own tab — the token route refuses
+   * that tab for a rendering file (UAT D-106, witnessed below). The SVG is still
+   * a DOCUMENT at its own token URL, and with no sandbox attribute on the frame,
+   * the header is still the only thing containing it. The spec ID keeps its
+   * historical name.
    */
-  test('94 — a scripted SVG opened top-level at its token URL reaches nothing and reads nothing', async ({
+  test('94 — a scripted SVG framed bare at its token URL reaches nothing and reads nothing', async ({
     page,
   }) => {
     const from = mark();
-    const response = await page.goto(tokenHref(FILE_SCRIPTED_SVG));
-    expect(response, 'navigation produced no response').not.toBeNull();
+    const { frame, response } = await frameTokenURL(page, FILE_SCRIPTED_SVG);
     // Assert on the header the BROWSER actually received, not a separate fetch.
-    expect(response!.headers()['content-security-policy']).toBe(ISOLATION_POLICY);
-    expect(response!.headers()['content-type']).toBe(TYPE_SVG);
+    expect(response.status(), 'the frame received the refusal page, not the SVG').toBe(200);
+    expect(response.headers()['content-security-policy']).toBe(ISOLATION_POLICY);
+    expect(response.headers()['content-type']).toBe(TYPE_SVG);
 
     // Report first, form second, settle last — the form submit navigates the
     // document away when it succeeds, and would take the report with it.
-    const report = await readReport(page);
+    const report = await readReport(frame);
     await fireDeferredForm(page);
 
     const got = await settleThenRead('doc', from);
@@ -970,11 +1024,16 @@ test.describe('ADR-067 §10.4 — .svg on the inline allow-list, and type confus
   test('122 — an SVG subresource inside a sandboxed bundle DECODES and stays inert', async ({
     page,
   }) => {
+    // AMENDED 2026-09-14: the bundle page is framed bare on the gateway's own
+    // page rather than opened as its own tab (UAT D-106 refuses that tab). The
+    // property is unchanged — an `<img>` subresource inside the bundle decodes
+    // and stays inert — and it never depended on how the page was loaded.
     const from = mark();
-    await page.goto(tokenHref(FILE_INDEX_HTML));
+    const { frame, response } = await frameTokenURL(page, FILE_INDEX_HTML);
+    expect(response.status(), 'the frame received the refusal page, not the bundle').toBe(200);
 
     // "Decoded", not "200". A broken image also completes, with naturalWidth 0.
-    const decoded = await page.evaluate(async () => {
+    const decoded = await frame.evaluate(async () => {
       const img = document.getElementById('logo') as HTMLImageElement | null;
       if (!img) return { state: 'no-img' };
       let state = 'decoded';
@@ -1038,13 +1097,19 @@ test.describe('ADR-067 §10.4 — .svg on the inline allow-list, and type confus
     expect(h['x-content-type-options']).toBe('nosniff');
     expect(h['content-security-policy']).toBe(ISOLATION_POLICY);
 
-    await page.goto(tokenHref(FILE_CONFUSED_SVG));
+    // AMENDED 2026-09-14: the browser half loads the file in a bare frame on the
+    // gateway's own page rather than as its own tab (UAT D-106 refuses that tab).
+    // What is proved is unchanged: the browser builds the document the
+    // extension names, and the HTML bytes never execute.
+    const { frame, response } = await frameTokenURL(page, FILE_CONFUSED_SVG);
+    expect(response.status(), 'the frame received the refusal page, not the file').toBe(200);
+    expect(response.headers()['content-type'], 'the type the BROWSER received').toBe(TYPE_SVG);
 
-    const contentType = await page.evaluate(() => document.contentType);
+    const contentType = await frame.evaluate(() => document.contentType);
     expect(contentType, 'the document was parsed as the extension says, not as the bytes look')
       .toBe(TYPE_SVG);
-    expect(await page.title(), 'the HTML payload executed').not.toBe('EVIL_EXECUTED');
-    expect(await page.locator('#evil-marker').count(), 'the HTML payload rendered as a document')
+    expect(await frame.title(), 'the HTML payload executed').not.toBe('EVIL_EXECUTED');
+    expect(await frame.locator('#evil-marker').count(), 'the HTML payload rendered as a document')
       .toBe(0);
 
     await fireDeferredForm(page);
@@ -1094,8 +1159,27 @@ test.describe('ADR-067 §10.4 — .svg on the inline allow-list, and type confus
     expect(h['x-content-type-options']).toBe('nosniff');
     expect(h['content-security-policy']).toBe(ISOLATION_POLICY);
 
+    // AMENDED 2026-09-14: framed bare on the gateway's own page rather than
+    // opened as its own tab. This test was the one QUIET casualty of UAT D-106:
+    // its only browser assertion is "nothing arrived", and the refusal page
+    // also sends nothing, so it kept passing while measuring the refusal page
+    // instead of the file. The frame fixes that, and the non-vacuity checks
+    // below make sure a refusal, a dead token or a script that never ran can
+    // never again pass as containment.
     const from = mark();
-    await page.goto(tokenHref(FILE_CONFUSED_HTML));
+    const { frame, response } = await frameTokenURL(page, FILE_CONFUSED_HTML);
+    expect(response.status(), 'the frame received the refusal page, not the file').toBe(200);
+    expect(response.headers()['content-type'], 'the type the BROWSER received').toBe(TYPE_HTML);
+    expect(response.headers()['content-security-policy']).toBe(ISOLATION_POLICY);
+    expect(await frame.evaluate(() => document.contentType), 'parsed as the extension says').toBe('text/html');
+
+    // The payload RAN (its report exists and it fired) and it was contained —
+    // the header alone made the origin opaque, since the frame is bare.
+    const report = await readReport(frame);
+    expect(report.fired ?? [], 'the SVG-in-HTML payload never ran — the negative below would be vacuous')
+      .toContain('img');
+    expect(report.origin, 'window.origin under the sandbox directive').toBe('null');
+
     await fireDeferredForm(page);
     const got = await settleThenRead('confusedhtml', from);
     expect(got, `egress from an SVG parsed as HTML: ${got.join(', ')}`).toEqual([]);
@@ -1192,10 +1276,21 @@ test.describe('ADR-067 §10.4 — .svg on the inline allow-list, and type confus
   test('MUTATION A — with the sandbox directive dropped, the SVG document is no longer contained', async ({
     page,
   }) => {
+    // AMENDED 2026-09-14: loaded exactly as test 94 now loads it — framed BARE on
+    // the gateway's own page, through the same frameTokenURL — so this still
+    // proves that 94's assertions can fail. That is only true because the frame
+    // has no sandbox attribute: with one, the attribute would keep the origin
+    // opaque and this mutation would stop biting.
+    //
+    // It also closes a hole the top-level form had. On Firefox and WebKit, the
+    // intercepted fetch forwarded `Sec-Fetch-Dest: document`, so after D-106
+    // the "mutated" response was the refusal page and the page never ran. A
+    // frame's request is `Sec-Fetch-Dest: iframe`, which is served.
     await withMutatedPolicy(page, tokenHref(FILE_SCRIPTED_SVG), SOURCES_ONLY_POLICY, async () => {
-      const response = await page.goto(tokenHref(FILE_SCRIPTED_SVG));
-      expect(response!.headers()['content-security-policy']).toBe(SOURCES_ONLY_POLICY);
-      const report = await readReport(page);
+      const { frame, response } = await frameTokenURL(page, FILE_SCRIPTED_SVG);
+      expect(response.status(), 'the frame received the refusal page, not the SVG').toBe(200);
+      expect(response.headers()['content-security-policy']).toBe(SOURCES_ONLY_POLICY);
+      const report = await readReport(frame);
       await fireDeferredForm(page);
       await new Promise((r) => setTimeout(r, SETTLE_MS));
 
@@ -1206,6 +1301,44 @@ test.describe('ADR-067 §10.4 — .svg on the inline allow-list, and type confus
       expect(report.cookie ?? '', 'without the sandbox directive document.cookie no longer throws')
         .not.toMatch(/^THREW:/);
     });
+  });
+
+  /**
+   * UAT 2026-09-13 D-106, witnessed for an SVG: the token URL opened as its own
+   * tab is REFUSED, the refusal still carries the §10.3 policy, and the SVG does
+   * not render or run.
+   *
+   * This replaces the top-level half of test 94 (founder ruling 2026-09-14). A
+   * preview token URL feeds the framed view only; opened on its own, a scripted
+   * file would own the tab title and viewport on the product's host. Goes red if
+   * the refusal is dropped or the refusal page sheds the policy.
+   */
+  test('D-106 — a scripted SVG token URL opened as its own tab is refused, carries the policy, and never renders', async ({
+    page,
+  }) => {
+    // POSITIVE CONTROL: the token is live and serves the SVG to a request that
+    // is not a top-level document, so the refusal below is D-106 and not a dead
+    // token.
+    const res = await api.get(tokenURL(FILE_SCRIPTED_SVG));
+    expect(res.status(), 'the token must be live').toBe(200);
+    expect(res.headers()['content-type']).toBe(TYPE_SVG);
+
+    const from = mark();
+    const nav = await page.goto(tokenHref(FILE_SCRIPTED_SVG));
+    expect(nav, 'navigation produced no response').not.toBeNull();
+    expect(nav!.status(), 'D-106: a top-level document request for a file that renders is refused').toBe(403);
+    expect(nav!.headers()['content-security-policy'], 'the refusal page carries the §10.3 policy byte for byte')
+      .toBe(ISOLATION_POLICY);
+    expect(nav!.headers()['content-type'], 'the refusal is an HTML page, not the SVG').toMatch(/^text\/html/);
+    expect(await nav!.text(), 'the refusal page must not contain the file').not.toContain('<svg');
+
+    // Not rendered, not run: the document is the refusal page, the payload's
+    // report never appeared, and nothing reached the second origin.
+    expect(await page.evaluate(() => document.contentType)).toBe('text/html');
+    expect(await readReport(page), 'the SVG payload ran top-level').toEqual({});
+    await fireDeferredForm(page);
+    const got = await settleThenRead('doc', from);
+    expect(got, `the refused SVG reached the second origin: ${got.join(', ')}`).toEqual([]);
   });
 
   /**

@@ -371,17 +371,28 @@ As an operator, when the Library renders a page an agent wrote or downloaded, I 
 certainty it cannot read my login session, call the API as me, or phone home — however
 that page is opened, including in its own browser tab.
 
+> **AMENDED 2026-09-14 (founder ruling; ADR-067 D15.8).** A preview is the file rendered
+> inside the Library panel, framed. The preview-token URL is not a page of its own: opened as a
+> top-level tab, a file that renders is **refused** (UAT D-106), and the Library's full-screen
+> view is the Library pop-out page, not the token URL. "However that page is opened" therefore
+> now means: in the pane, in the full-screen Library tab, or by a client that the route cannot
+> identify (no `Sec-Fetch-Dest`). The containment below still has to hold for that last case,
+> and it is measured in a frame **without** a `sandbox` attribute, where the response headers
+> stand alone exactly as they did at top level. The original wording is kept below, struck
+> through where it no longer applies.
+
 **Why P0:** removing `Content-Disposition: attachment` without a response-borne control
 creates stored cross-site scripting on the gateway origin. This is the only P0 in
 stage 1 and it gates US-1's release.
 
 **Independent test:** open an inline `.html` that tries to read `document.cookie` and
-POST to `/api/v1/agents`, both embedded in the pane **and** as a top-level tab. Both
-attempts fail in both contexts.
+POST to `/api/v1/agents`, both embedded in the pane **and** ~~as a top-level tab~~ **in a frame
+with no `sandbox` attribute (amended 2026-09-14)**. Both attempts fail in both contexts. **And**
+opening the same token URL as a top-level tab is refused and does not render the file.
 
 **Acceptance scenarios**
 
-1. **Given** an `.html` containing `document.cookie` access, **When** it is opened as a top-level browser tab at **its preview-token URL** (the only URL that serves it inline — the authenticated Library path still serves an attachment, FR-003g), **Then** the read **throws `SecurityError`** and `window.origin` is the string `"null"`. Asserting "the value is empty" is forbidden: measured, the read throws — and empty is also what a page reports when it never loaded at all.
+1. ~~**Given** an `.html` containing `document.cookie` access, **When** it is opened as a top-level browser tab at **its preview-token URL** (the only URL that serves it inline — the authenticated Library path still serves an attachment, FR-003g), **Then** the read **throws `SecurityError`** and `window.origin` is the string `"null"`.~~ **Amended 2026-09-14:** **Given** an `.html` containing `document.cookie` access, **When** its preview-token URL is loaded in a frame **with no `sandbox` attribute** on a page of the gateway's own origin, **Then** the read **throws `SecurityError`** and `window.origin` is the string `"null"`. **And When** the same URL is opened as a top-level browser tab, **Then** the response is a 403 page carrying the §10.3 policy and the file does not render (D-106). Asserting "the value is empty" is forbidden: measured, the read throws — and empty is also what a page reports when it never loaded at all.
 2. **Given** the same file, **When** it is rendered inside the preview pane, **Then** both assertions hold again — **and** the same run demonstrates a **positive control**: the identical page served without the sandbox directive reads the session cookie back. Without that control, a page that failed to load produces the same verdict as one correctly contained.
 3. **Given** an `.html` that issues a network request to any host, **When** it renders, **Then** the request is blocked.
 4. **Given** any inline-rendered page, **When** it is displayed, **Then** a persistent "untrusted content" boundary is visible in Omnipus chrome outside the frame.
@@ -1060,6 +1071,14 @@ origin, zero egress. **The earlier justification is withdrawn.** It read: *"excl
 **The middle option, evaluated and rejected.** Serving `.svg` with the correct type **and** as an attachment would close the top-level case outright with no new measurement — but it works *only if* the withdrawn claim is false. If it isn't, every bundle logo silently stops rendering, and a missing image is the kind of failure nobody files a bug about. Inline works whichever way browsers behave, and its remaining uncertainty sits on the security side, where a test settles it, rather than the rendering side, where it shows up as silent breakage.
 
 **Three contexts, and only one was covered.** An `.svg` is reachable three ways: as a document at its token URL (test 94); as a subresource inside a sandboxed bundle, where `<img>` runs SVG in secure static mode so the script never executes (**test 122**); and inside the SPA, classified as an image and drawn in an `<img>`, fetched over the authenticated path which serves attachments (**test 123**). **All three must pass before `.svg` ships inline** — rows two and three are where a future refactor breaks the property *silently*: swapping the embed renderer to inline-SVG injection "so it scales properly" turns the reader into a script host, and nothing else notices.
+
+> **AMENDED 2026-09-14 (ADR-067 D15.8).** The first context — "a document at its token URL" — is
+> no longer reachable as a top-level tab: the token route refuses a top-level document request
+> for an `.svg` (UAT D-106), and a witness test asserts the 403 carries the §10.3 policy and the
+> SVG does not render. Test 94 now loads the SVG as a document at its token URL **in a frame with
+> no `sandbox` attribute**, so the response headers are still its only containment. "The
+> top-level case" in the paragraph above refers to that same context as it stood before this
+> amendment. The decision to keep `.svg` inline is unchanged.
 Inside the SPA it never becomes a document either: it is classified as an image and drawn in an
 `<img>`, which never runs an SVG's scripts, and fetched over the authenticated path, which serves
 attachments. **Both URLs are closed, by different means.**
@@ -1301,12 +1320,29 @@ Scenario Outline: Documents and media render natively
     | archive.zip | the download card    |
 # Traces to: US-1, AS-5, AS-6, AS-7
 
-Scenario: A previewed page cannot read the session cookie in a top-level tab
+# AMENDED 2026-09-14 (ADR-067 D15.8): the top-level scenario below is replaced by the two that
+# follow it. It is kept, commented out, as the record of what it required.
+#
+# Scenario: A previewed page cannot read the session cookie in a top-level tab
+#   Given a workspace contains an HTML file that reads document.cookie and displays it
+#   When the operator opens that file's Library URL as a top-level browser tab
+#   Then reading the cookie THROWS a SecurityError (it does not return an empty string — asserting "empty" also passes when the page failed to load)
+#   And the document's origin is opaque
+
+Scenario: A previewed page cannot read the session cookie when the response headers stand alone
   Given a workspace contains an HTML file that reads document.cookie and displays it
-  When the operator opens that file's Library URL as a top-level browser tab
+  When its preview-token URL is loaded in a frame with NO sandbox attribute, on a page of the gateway's own origin
   Then reading the cookie THROWS a SecurityError (it does not return an empty string — asserting "empty" also passes when the page failed to load)
   And the document's origin is opaque
+  And its same-origin subresource requests carry no session cookie
 # Traces to: US-2, AS-1
+
+Scenario: A preview-token URL opened as its own tab is refused
+  Given the same HTML file, and a live preview token for it
+  When the operator opens the token URL as a top-level browser tab
+  Then the response is a 403 page that carries the isolation policy
+  And the file does not render and its script does not run
+# Traces to: US-2, AS-1; UAT D-106
 
 Scenario: A previewed page cannot read the session cookie when embedded
   Given the same HTML file
@@ -1657,7 +1693,7 @@ come last within their stage because they are slowest and most environment-depen
 | 7 | `TestLibraryDeepLink_RoundTrip` | Integration | US-3 AS-2,3 | Select → URL → reload → same file |
 | 8 | `TestLibraryDeepLink_MissingPath` | Integration | US-3 AS-5 | Graceful not-found |
 | 9 | `E2E_PreviewBundle_AllAssetsLoad` | E2E (browser) | US-1 AS-4 | **Real browser.** css + js + font + audio |
-| 10 | `E2E_PreviewIsolation_TopLevelNavigation` | E2E (browser) | US-2 AS-1 | Asserts the read **throws** and `window.origin === "null"`. **Positive control required in the same run.** Fails if the sandbox directive is dropped, and fails (rather than falsely passing) if the page never loads |
+| 10 | `E2E_PreviewIsolation_TopLevelNavigation` | E2E (browser) | US-2 AS-1 | Asserts the read **throws** and `window.origin === "null"`. **Positive control required in the same run.** Fails if the sandbox directive is dropped, and fails (rather than falsely passing) if the page never loads. *Amended 2026-09-14 (ADR-067 D15.8):* loaded in a frame with **no `sandbox` attribute**, not as a top-level tab; a separate D-106 witness asserts the top-level tab gets a 403 that carries the policy and does not render the file. The ID keeps its historical name |
 | 11 | `E2E_PreviewIsolation_NetworkBlocked` | E2E (browser) | US-2 AS-3 | Egress asserted by **server-observed request arrival**, never by console text — the experiment found console wording differs per engine, so a string match silently stops matching on a new version. All seven vectors, plus a positive control |
 | 11c | `preview-isolation.spec.ts › 11c — a previewed bundle runs its own script and applies its own stylesheet` | E2E (3 engines) | US-1 AS-4, FR-004, FR-005c | **The rendering half, and it must stay separate from 11a/11b.** Asserts `js_ran` and `css_applied` from the frame's own DOM, embedded with FR-005b's `sandbox` attribute. Egress tests pass perfectly on a page that never rendered, so without this the WebKit defect was invisible: 11a and 11b were green on WebKit throughout while every external subresource was blocked. **This is the test that caught the 2026-08-23 `'self'` defect and the one that would catch its return** |
 | 12 | `E2E_PreviewIsolation_BrowserMatrix` | E2E (browser) | MV-13 | Tests 10 and 11 **and their positive controls** on Chromium, Firefox and WebKit at **`retries: 0`**. Not Safari proper — see SC-012 |
@@ -1699,7 +1735,7 @@ come last within their stage because they are slowest and most environment-depen
 | 91 | `TestPreviewToken_TtlBoundary` | Integration | MV-20, FR-003d | Accepted at 14 minutes, refused at 15, against the named constant |
 | 92 | `TestPreviewToken_InvalidatedOnLogout` | Integration | FR-003d | Mint, log out, use — refused. Also mount revoked, and file deleted |
 | 93 | `TestPreviewPath_TokenNeverLogged` | Integration | MV-23, FR-003e | Drives a **real 429** with a capturing log handler; the record contains neither the token nor an unredacted path. Reading the code is not the test |
-| 94 | `E2E_SvgWithScript_TopLevel_IsInert` | E2E (browser) | FR-008a | An `.svg` whose script beacons the cookie, opened top-level at its token URL. **Positive control required** — the same payload with no policy must execute, or the negative proves nothing |
+| 94 | `E2E_SvgWithScript_TopLevel_IsInert` | E2E (browser) | FR-008a | An `.svg` whose script beacons the cookie, ~~opened top-level at its token URL~~ loaded as a document at its token URL in a frame with **no `sandbox` attribute** *(amended 2026-09-14, ADR-067 D15.8 — a top-level tab is refused, D-106, and a witness test asserts that)*. **Positive control required** — the same payload with no policy must execute, or the negative proves nothing. Its mutation (sandbox directive dropped) must use the same bare frame, or the attribute would hide the regression |
 | 95 | `E2E_PreviewFrame_SandboxComposition` | E2E (browser) | FR-005b | Frame carries the three attributes; the bundle renders; with the response header removed the attribute alone still blocks egress |
 | 96 | `E2E_PdfJs_ParsesOnRealWorker` | E2E (browser) | FR-019c | Asserts a real worker was constructed and no fallback warning was emitted. Run **with the SPA policy applied** — that is the point |
 | 110 | `E2E_PreviewSameOrigin_ReachableButUnauthenticated` | E2E (browser) | FR-006, FR-006a | **The column the experiment never measured.** A previewed page loads an image from a gateway path; the server asserts the request **arrived** (documenting the accepted residual) and carried **no session cookie**. Positive control: the same path from the authenticated app does carry it. **Catches** flipping the cookie's same-site mode — which turns an accepted residual into authenticated API calls from untrusted content, with no other symptom |
@@ -2303,6 +2339,12 @@ Place an HTML file that tries to read cookies, call the API, phone out to an
 external host, and draw a convincing Omnipus login form. Open it both in the pane
 and as its own tab. Confirm the first three fail and that the fourth is obviously
 framed as untrusted content.
+
+*Amended 2026-09-14 (ADR-067 D15.8).* "As its own tab" now means two things, and
+both must be checked: the Library's full-screen pop-out tab (the preview is still
+framed there, inside Omnipus chrome), and the raw preview-token URL pasted into a
+tab, which must show Omnipus's refusal page ("This preview only opens inside
+Omnipus") rather than the file (UAT D-106).
 
 ### H-7 (edge) — The awkward collection
 Point Omnipus at a collection containing a note with a colon in its name, a symlink
