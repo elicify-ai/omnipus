@@ -174,50 +174,43 @@ export function directiveSources(policy: string, name: string): string[] | null 
   return null;
 }
 
-/** Trailing-slash-insensitive origin comparison — `http://h:1/` is `http://h:1`. */
-function sameOrigin(a: string, b: string): boolean {
-  return a.replace(/\/+$/, '') === b.replace(/\/+$/, '');
-}
+/** The path §10.3 confines every gateway source to (amended 2026-09-14). */
+export const PREVIEW_PATH_PREFIX = '/library-preview/';
 
 /**
- * Whether `directive` names `origin` EXPLICITLY, as a host source.
+ * Whether `directive` names `origin`'s PREVIEW PREFIX as a host source — the
+ * exact string `<origin>/library-preview/`.
  *
- * ⚠️ `'self'` DOES NOT COUNT HERE, AND THAT IS THE ENTIRE POINT. An earlier
- * version of this helper accepted either form. Under §10.3 as it now stands
- * that made it permanently true and therefore worthless: the policy retains
- * `'self'` on every directive, so "does this permit the browser's origin?"
- * answers yes before the explicit half is even looked at.
+ * ⚠️ NEITHER `'self'` NOR A BARE ORIGIN COUNTS, AND THAT IS THE ENTIRE POINT.
  *
- * The two halves do different jobs and only one of them can be checked this
- * way (§10.3, 2026-08-23):
+ *   `'self'`      No longer appears in the policy when an origin is known. It
+ *                 spans the whole gateway, API included, and WebKit sends the
+ *                 session cookie on a framed preview's subresource requests
+ *                 (ADR-067 D15.8, amended §10.3 2026-09-14). An earlier version
+ *                 of this helper also treated it as sufficient, which made the
+ *                 check permanently true while the policy carried it.
+ *   a bare origin Is the pre-2026-09-14 shape. It would render the preview
+ *                 perfectly and let the preview reach /api/, so accepting it
+ *                 here would hide exactly the regression the confinement
+ *                 exists to prevent.
  *
- *   `'self'`            resolves to the document's own origin, so it matches
- *                       whatever spelling the reader typed. On Chromium and
- *                       Firefox it carries the whole load and no origin string
- *                       can break it.
- *   the explicit origins is what WebKit needs, because WebKit does not resolve
- *                       `'self'` at all inside a frame carrying FR-005b's
- *                       `sandbox` ATTRIBUTE (CSP3 §2.2.2 says self-origin comes
- *                       from the RESPONSE URL; WebKit reads it off the
- *                       document's opaque origin instead — WebKit bug 316847,
- *                       fixed upstream 315247@main but not in any shipping
- *                       Safari). An explicit host source is matched by string,
- *                       so it works where `'self'` does not — and only for the
- *                       exact spellings named.
- *
- * So a policy that names no origin the browser is on still renders correctly on
- * two engines out of three, and silently renders blank on the third. That is
- * the failure this helper exists to make loud, and accepting `'self'` as
- * sufficient would hide it exactly where it hides in production.
+ * The explicit, confined source is also what WebKit needs to RENDER: it does
+ * not resolve `'self'` inside a frame carrying FR-005b's `sandbox` attribute
+ * (CSP3 §2.2.2 takes self-origin from the RESPONSE URL; WebKit reads it off the
+ * document's opaque origin — WebKit bug 316847). A host source is matched by
+ * string, so it covers only the exact spellings named — and since there is no
+ * `'self'` beside it any more, a spelling the policy does not name renders
+ * blank on every engine. This helper is what makes that failure say why.
  */
-export function directiveNamesOriginExplicitly(
+export function directiveNamesPreviewSourceFor(
   policy: string,
   name: string,
   origin: string,
 ): boolean {
   const sources = directiveSources(policy, name);
   if (sources === null) return false;
-  return sources.some((s) => s !== "'self'" && sameOrigin(s, origin));
+  const want = `${origin.replace(/\/+$/, '')}${PREVIEW_PATH_PREFIX}`;
+  return sources.some((s) => s === want);
 }
 
 /**

@@ -837,35 +837,107 @@ because a nickname ("the measured shape") cannot be implemented and cannot be te
 > **The measurement, the mechanism and the decision are the amendment at the end of this section.
 > Read it before editing anything here.**
 
+> **AMENDED 2026-09-14 — every gateway source is confined to `/library-preview/`, and `'self'` is
+> gone whenever an origin is known.** The sources used to admit the whole gateway, the
+> authenticated API included, and WebKit sends the session cookie on a framed preview's
+> subresource requests (ADR-067 D15.8), so an untrusted preview could make logged-in `GET`
+> requests to Omnipus on WebKit. The template's `'self' ${GATEWAY_ORIGIN}` became
+> `${PREVIEW_SOURCES}`, and the placeholder was renamed because it no longer stands for an origin.
+> Nothing else in the string changed. **The finding, the measurement, the redirect condition and
+> the cost are the 2026-09-14 amendment directly below the substitution table. Read it before
+> editing anything here.**
+
 **Every response on the preview-token path MUST carry exactly this `Content-Security-Policy`,
-byte for byte, whatever the file's type, with `${GATEWAY_ORIGIN}` substituted per the table
+byte for byte, whatever the file's type, with `${PREVIEW_SOURCES}` substituted per the table
 below:**
 
 ```
-sandbox allow-scripts; default-src 'none'; script-src 'self' ${GATEWAY_ORIGIN} 'unsafe-inline'; style-src 'self' ${GATEWAY_ORIGIN} 'unsafe-inline'; img-src 'self' ${GATEWAY_ORIGIN} data: blob:; font-src 'self' ${GATEWAY_ORIGIN}; media-src 'self' ${GATEWAY_ORIGIN}; frame-src 'self' ${GATEWAY_ORIGIN}; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'
+sandbox allow-scripts; default-src 'none'; script-src ${PREVIEW_SOURCES} 'unsafe-inline'; style-src ${PREVIEW_SOURCES} 'unsafe-inline'; img-src ${PREVIEW_SOURCES} data: blob:; font-src ${PREVIEW_SOURCES}; media-src ${PREVIEW_SOURCES}; frame-src ${PREVIEW_SOURCES}; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'
 ```
 
-**`${GATEWAY_ORIGIN}` — what it stands for, and the substitution rules.**
+**`${PREVIEW_SOURCES}` — what it stands for, and the substitution rules.** *(Named
+`${GATEWAY_ORIGIN}`, and preceded by `'self'`, until 2026-09-14.)*
 
-It is a **space-separated list of CSP host-sources**, not a single origin. One entry is the common
-case; a loopback bind produces three. A CSP source directive is a list, so this substitutes
-cleanly.
+It is a **space-separated list of CSP host-sources, each one an origin followed by the path
+`/library-preview/`**, not a single origin. One entry is the common case; a loopback bind produces
+two. A CSP source directive is a list, so this substitutes cleanly. The trailing `/` is required:
+CSP3 §6.7.2.10 makes a path ending in `/` a prefix match (every file of every token) and a path
+without one an exact match (one URL).
 
 | Case | Rule |
 |---|---|
-| **Base value** | `middleware.CanonicalGatewayOrigin(cfg)` — the boot-frozen origin **the browser actually reaches**, as `scheme://host[:port]`, no trailing slash and no path. It is the same resolver CORS, the WebSocket `CheckOrigin` check and `web_serve`'s preview URLs already use, so a reverse-proxy deployment that sets `gateway.public_url` is correct here for free |
-| **Non-loopback host** | One entry: the canonical origin, substituted literally into each of the six directives carrying the placeholder, and nowhere else |
-| **Loopback host** (`127.0.0.1`, `localhost`) | **Both spellings**, same scheme and port, **canonical origin first** and then the remaining one, skipping the one already emitted. For a default install (`127.0.0.1:5000`): `http://127.0.0.1:5000 http://localhost:5000` |
+| **Base value** | `middleware.CanonicalGatewayOrigin(cfg)` — the boot-frozen origin **the browser actually reaches**, as `scheme://host[:port]`, no trailing slash and no path. It is the same resolver CORS, the WebSocket `CheckOrigin` check and `web_serve`'s preview URLs already use, so a reverse-proxy deployment that sets `gateway.public_url` is correct here for free. *Amended 2026-09-14:* every source is that origin **followed by `/library-preview/`**, the prefix the token route is served under |
+| **Non-loopback host** | One entry: `<canonical origin>/library-preview/`, substituted literally into each of the six directives carrying the placeholder, and nowhere else |
+| **Loopback host** (`127.0.0.1`, `localhost`) | **Both spellings**, same scheme and port, **canonical origin first** and then the remaining one, skipping the one already emitted, each followed by `/library-preview/`. For a default install (`127.0.0.1:5000`): `http://127.0.0.1:5000/library-preview/ http://localhost:5000/library-preview/` |
 | **IPv6 host** (any, `[::1]` included) | **Never emitted** — CSP has no syntax for one (see the 2026-09-09 amendment below). A non-loopback IPv6 origin therefore yields **no** source and takes the **Empty** row, WARN included. An IPv6 *loopback* origin keeps its two expressible aliases above and does NOT warn; the canonical spelling is simply absent from its own list, which is the one place the "canonical origin first" rule has an exception |
-| **Empty** | The placeholder **and the single space preceding it** are removed, collapsing `'self' ${GATEWAY_ORIGIN}` to `'self'` — which reproduces the pre-amendment string exactly, byte for byte. **No double space, ever.** One WARN MUST be logged, naming `gateway.public_url` as the fix and Safari as the symptom |
+| **Empty** | *Amended 2026-09-14.* The placeholder is replaced by `'self'`, which reproduces the pre-2026-08-23 string exactly, byte for byte. **No double space, ever.** This is the one configuration the path confinement cannot reach — CSP has no path-only source — so `'self'` there still admits every gateway path. One WARN MUST be logged, naming `gateway.public_url` as the fix, and saying both that previews are not confined to `/library-preview/` and that Safari renders them without external CSS and JS. *(Until 2026-09-14 this row removed the placeholder and the space before it from `'self' ${GATEWAY_ORIGIN}`; the resulting string is the same.)* |
 
 **Why the loopback aliases, and why they are not a widening.** `127.0.0.1` and `localhost` are the
 same socket and a user picks between them without thinking; a host-source match is textual, so
 naming one and being reached by the other blocks every subresource — measured, on all three
 engines. The seeded default binds `127.0.0.1`, so without the aliases a user who types
-`localhost:5000` would get an unstyled, inert preview on Safari. They grant nothing new: both
-name the gateway itself, which `'self'` already permits at top level, and neither is
-reachable from outside the machine.
+`localhost:5000` would get an unstyled, inert preview — on Safari until 2026-09-14, and on every
+engine since, because no `'self'` remains to cover the other spelling. They grant nothing new: both
+name the gateway itself, both are confined to the preview prefix, and neither is reachable from
+outside the machine.
+
+> **AMENDED 2026-09-14 — every gateway source is confined to `/library-preview/`, and `'self'` is
+> gone whenever an origin is known (FIX4 preview-cookie-residual).**
+>
+> **The finding.** FR-006a accepts same-origin subresource loads from a preview on one condition:
+> they arrive unauthenticated. Measured in a frame (ADR-067 D15.8), WebKit attaches the
+> `SameSite=Strict` `omnipus-session` cookie to a framed preview's subresource requests, while
+> itself labelling them `Sec-Fetch-Site: cross-site`, in every framed shape including the
+> product's. `SameSite` cannot help: site-for-cookies is computed from the top-level page, and the
+> top-level page is Omnipus. Chromium and Firefox withhold the cookie everywhere. With `'self'` and
+> the bare gateway origin in `img-src`, an `<img src="/api/v1/…">` in untrusted HTML was a
+> logged-in `GET` on WebKit — its response unreadable, but sent as the user. Only Playwright's
+> WebKit build was measured; real Safari was not.
+>
+> **The change.** `'self' ${GATEWAY_ORIGIN}` became `${PREVIEW_SOURCES}`: each gateway origin
+> followed by `/library-preview/`, and no `'self'`. CSP3 §6.7.2.10: a host-source whose path ends in
+> `/` matches only URLs under that path. `connect-src` is unchanged at `'none'`.
+>
+> **Measured 2026-09-14**, a standalone server applying the confined policy, on Chromium, Firefox
+> and WebKit, in a bare frame and in the product's `sandbox="allow-scripts"` frame, with the
+> server's own request log as ground truth:
+>
+> | Request made by the preview | Result on all three engines, both frame shapes |
+> |---|---|
+> | Its own external script, stylesheet and image (relative, so under `/library-preview/`) | Loaded; the script ran and the stylesheet applied |
+> | An image aimed at `/api/v1/state` | **Refused before it left** — it never reached the server — with an `img-src` violation carrying the full URL |
+> | An image under `/library-preview/` that **redirects (302) to `/api/v1/state`** | **Followed** — it reached `/api/v1/state`, with the cookie attached on WebKit |
+> | Control: the SPA's own same-origin `<img>` | `Sec-Fetch-Site: same-origin`, cookie sent |
+>
+> **The condition this rests on: nothing under `/library-preview/` may ever redirect.** CSP3
+> §6.7.2.9 ignores a source's path once a request has been redirected, and the third row shows
+> every engine applies that. Nothing on the prefix redirects today. The production router
+> (`pkg/channels` `dynamicServeMux`) matches on the decoded path and never cleans or redirects; the
+> CSRF and config-snapshot middlewares never redirect; the handler writes only its error pages and
+> `http.ServeContent` output. `pkg/gateway/library_preview_no_redirect_test.go` drives that real
+> chain with hostile paths (dot segments, doubled slashes, encoded separators, directories, unknown
+> tokens, every `Sec-Fetch-Dest` the route distinguishes) and fails on any `3xx` or `Location`
+> header. Its positive control shows the standard library's `http.ServeMux` **would** redirect
+> `/library-preview/x/../../api/v1/state` to `/api/v1/state`, so the router is load-bearing.
+> (Browsers resolve `.` and `..` segments, including their `%2e` spellings, before a request is
+> sent, so that exact path never leaves a browser; the test pins it anyway.)
+>
+> **What it costs.** `'self'` used to carry Chromium and Firefox whenever the reader spelled the
+> gateway's address differently from the configured origin. With it gone, a reader on a spelling
+> the source list does not name — a LAN name or a reverse proxy without `gateway.public_url`, or
+> `http://[::1]:<port>` — gets previews without their external CSS, JavaScript and assets on
+> **every** engine. The loopback aliases cover the default install. Containment is unaffected in
+> every case.
+>
+> **Where it does not reach.** The **Empty** row. With no usable origin there is no host to attach
+> a path to, `'self'` returns, and it admits every gateway path. The WARN says so.
+>
+> **Test 110** now asserts the stronger property on all three engines: the API probe is refused by
+> the browser (observed as an `img-src` violation inside the preview, which also proves the probe
+> was attempted), the gateway answers no probe the preview aims outside `/library-preview/`, and any
+> probe that did reach it would have to carry no session cookie. The preview's own files still
+> reach the gateway; they reach a route that authenticates by the token in its path and never reads
+> the cookie.
 
 > **AMENDED 2026-09-09 — `[::1]` is removed from the alias set, and no IPv6 host is ever emitted.**
 > The rules above previously called for **three** loopback spellings, the third being
@@ -926,6 +998,12 @@ everywhere except inside an attribute-sandboxed frame. It is a *rendering* degra
 must be **visible in the log** rather than silent. (`pkg/tools/web_serve.go`'s SFH-2 fails closed
 on this same empty value; that precedent is right there and wrong here — it is minting a URL that
 has to be reachable, not choosing how precisely to describe one.)
+
+*Amended 2026-09-14:* "containment is identical either way" stopped being true on this date. With
+an origin known, the sources are confined to `/library-preview/` and a preview cannot reach the API.
+The Empty case keeps `'self'`, so a preview there can still request any gateway path (it cannot read
+the answer, and on WebKit the request carries the session cookie). The case still degrades rather
+than refuses, for the reason above, and the WARN now names the lost confinement as well as Safari.
 
 **Provenance.** The `'self'` half was recovered from
 `docs/internal/experiments/preview-isolation/server.py` (`POLICIES["self"]`) and confirmed
@@ -1731,15 +1809,15 @@ come last within their stage because they are slowest and most environment-depen
 | 87 | `TestKbMarkdown_InheritsSharedRenderers` | Unit | FR-013a, FR-013b | The KB composition renders table, fence, mermaid and image identically to chat, differing **only** in the two listed places |
 | 88 | `TestLibraryRow_MediaThumbnailKindsUnchanged` | Unit | SC-016 | The row's thumbnail predicate stays exactly `image` or `video` after the union widens |
 | 89 | `TestLibraryPreviewPane_NoUnhandledKind` | Unit | SC-017 | Every union member mounts a surface. TypeScript cannot catch this — the pane uses `&&` chains, not an exhaustive switch |
-| 90 | `TestPreviewPolicy_LiteralHeader` | Integration | MV-13, FR-005a, FR-005c | Byte-exact policy on every token-path response, built by reading §10.3's **template** out of the spec file and substituting the origin — never a substring or `contains` check, which would pass with `sandbox` missing. Negative half: the authenticated path carries none and still says `attachment`. Both substitutions asserted: a configured origin appears in all six source directives and **not** in `connect-src`; an empty origin collapses to exactly the pre-amendment `'self'`-only string, with no double space |
+| 90 | `TestPreviewPolicy_LiteralHeader` | Integration | MV-13, FR-005a, FR-005c | Byte-exact policy on every token-path response, built by reading §10.3's **template** out of the spec file and substituting the origin — never a substring or `contains` check, which would pass with `sandbox` missing. Negative half: the authenticated path carries none and still says `attachment`. Both substitutions asserted: a configured origin appears in all six source directives and **not** in `connect-src`; an empty origin collapses to exactly the pre-amendment `'self'`-only string, with no double space. *Amended 2026-09-14:* the configured case substitutes path-confined sources (`<origin>/library-preview/`) and asserts `'self'` is absent; the empty case substitutes `'self'`, still byte-identical to the pre-amendment string. The builder's own byte pin and a CSP3 path-matching oracle live in `library_isolation_policy_test.go` |
 | 91 | `TestPreviewToken_TtlBoundary` | Integration | MV-20, FR-003d | Accepted at 14 minutes, refused at 15, against the named constant |
 | 92 | `TestPreviewToken_InvalidatedOnLogout` | Integration | FR-003d | Mint, log out, use — refused. Also mount revoked, and file deleted |
 | 93 | `TestPreviewPath_TokenNeverLogged` | Integration | MV-23, FR-003e | Drives a **real 429** with a capturing log handler; the record contains neither the token nor an unredacted path. Reading the code is not the test |
 | 94 | `E2E_SvgWithScript_TopLevel_IsInert` | E2E (browser) | FR-008a | An `.svg` whose script beacons the cookie, ~~opened top-level at its token URL~~ loaded as a document at its token URL in a frame with **no `sandbox` attribute** *(amended 2026-09-14, ADR-067 D15.8 — a top-level tab is refused, D-106, and a witness test asserts that)*. **Positive control required** — the same payload with no policy must execute, or the negative proves nothing. Its mutation (sandbox directive dropped) must use the same bare frame, or the attribute would hide the regression |
 | 95 | `E2E_PreviewFrame_SandboxComposition` | E2E (browser) | FR-005b | Frame carries the three attributes; the bundle renders; with the response header removed the attribute alone still blocks egress |
 | 96 | `E2E_PdfJs_ParsesOnRealWorker` | E2E (browser) | FR-019c | Asserts a real worker was constructed and no fallback warning was emitted. Run **with the SPA policy applied** — that is the point |
-| 110 | `E2E_PreviewSameOrigin_ReachableButUnauthenticated` | E2E (browser) | FR-006, FR-006a | **The column the experiment never measured.** A previewed page loads an image from a gateway path; the server asserts the request **arrived** (documenting the accepted residual) and carried **no session cookie**. Positive control: the same path from the authenticated app does carry it. **Catches** flipping the cookie's same-site mode — which turns an accepted residual into authenticated API calls from untrusted content, with no other symptom |
-| 111 | `E2E_PreviewCannotFrameTheSpa` | E2E (browser) | FR-006b | A previewed page nests the real app. The shell request arrives server-side; in the browser the nested context never requests the app's entry chunk, because the policy refused to render it. Console text is **not** the oracle — engines word it differently |
+| 110 | `E2E_PreviewSameOrigin_ReachableButUnauthenticated` | E2E (browser) | FR-006, FR-006a | **The column the experiment never measured.** A previewed page loads an image from a gateway path; the server asserts the request **arrived** (documenting the accepted residual) and carried **no session cookie**. Positive control: the same path from the authenticated app does carry it. **Catches** flipping the cookie's same-site mode — which turns an accepted residual into authenticated API calls from untrusted content, with no other symptom. *Amended 2026-09-14:* measured in a frame, WebKit attached the cookie, so the condition failed (ADR-067 D15.8). §10.3 now confines the preview's sources to `/library-preview/`, and the test asserts the **stronger** property on all three engines: the API image probe is **refused by the browser** (an `img-src` violation recorded inside the preview proves it was attempted), the gateway answers **no** probe aimed outside `/library-preview/`, and any probe that did reach it must carry no session cookie. The preview's own asset request still arrives and is answered — the residual, narrowed. Positive control unchanged. **Now also catches** `'self'` or a bare origin returning to the policy, and a redirect under the prefix is caught by `TestLibraryPreview_NothingUnderThePrefixRedirects` |
+| 111 | `E2E_PreviewCannotFrameTheSpa` | E2E (browser) | FR-006b | A previewed page nests the real app. The shell request arrives server-side; in the browser the nested context never requests the app's entry chunk, because the policy refused to render it. Console text is **not** the oracle — engines word it differently. *Amended 2026-09-14:* with `frame-src` confined to `/library-preview/`, the shell request is now refused before it leaves; both of the test's oracles (no frame holds the app, the entry chunk is never requested) still hold, and `frame-ancestors 'none'` stays as the control on the framed resource |
 | 112 | `TestPreviewToken_EntropyAndFailClosed` | Unit | FR-003h | 1,000 mints: each 32 bytes, all distinct. Then the entropy source errors and minting MUST return an error and issue **no** token. **Catches** the one a distinctness check alone misses — ignoring the error and issuing a zero-filled token |
 | 113 | `TestPreviewTokenPath_ContainedAtSyscall` | Integration | FR-003i | Four refusals with a read-recording filesystem proving zero reads outside the scope: traversal, percent-encoded traversal, an absolute path, and **a symlink inside the scope pointing outside**. Positive control required — an ordinary nested file **is** served, or "404 for everything" passes. **Catches** the likely implementation, which refuses the first three and follows the symlink |
 | 114 | `TestPreviewTokenPath_VerbsGetHeadOnly` | Integration | FR-003j | Table over seven methods: GET and HEAD succeed, the rest 405 with `Allow`, no body consumed. **Catches** registering on a bare prefix, which accepts every method and quietly voids the argument that no CSRF exemption is needed |
@@ -1965,7 +2043,7 @@ Required, each a named piece of work:
 - **FR-003n** A request bearing an expired, revoked or unknown token MUST receive a **human-readable HTML body** — the in-frame half of "visible error rather than a blank frame" — with `404`, `text/html`, `nosniff`, and the §10.3 policy byte-identically. Expired, revoked and unknown MUST be **indistinguishable**: a `410`-vs-`404` split is a working oracle for whether a token ever existed.
 - **FR-004** The system MUST execute scripts in a previewed HTML document.
 - **FR-005** The system MUST bind every inline-previewed document to an opaque origin, established by the response and not by the embedder.
-- **FR-005a** The system MUST serve **§10.3's policy template, with `${GATEWAY_ORIGIN}` substituted by that section's rules**, on every preview-token response, and MUST combine **both** mechanisms — the `sandbox` directive and the source directives. Measured on all three engines: `sandbox` alone let five of seven egress vectors out; source directives alone let `window.open` out, because no CSP directive covers popup navigation. *(Amended 2026-08-23: the string was a fixed literal until `'self'` was measured to match nothing inside an attribute-sandboxed WebKit iframe. Both mechanisms and every directive are unchanged — six source directives now name the gateway origin **in addition to** `'self'`.)*
+- **FR-005a** The system MUST serve **§10.3's policy template, with `${GATEWAY_ORIGIN}` substituted by that section's rules**, on every preview-token response, and MUST combine **both** mechanisms — the `sandbox` directive and the source directives. Measured on all three engines: `sandbox` alone let five of seven egress vectors out; source directives alone let `window.open` out, because no CSP directive covers popup navigation. *(Amended 2026-08-23: the string was a fixed literal until `'self'` was measured to match nothing inside an attribute-sandboxed WebKit iframe. Both mechanisms and every directive are unchanged — six source directives now name the gateway origin **in addition to** `'self'`.)* *(Amended 2026-09-14: `'self' ${GATEWAY_ORIGIN}` became `${PREVIEW_SOURCES}` — each gateway origin confined to `/library-preview/`, and no `'self'`. Both mechanisms and every directive are still unchanged. See §10.3's amendment of that date.)*
 - **FR-005c** The host-sources substituted into §10.3 MUST derive from `middleware.CanonicalGatewayOrigin(cfg)` — the boot-frozen origin the browser actually reaches — and MUST NOT be a hostname compiled into the binary or reconstructed from the request. `'self'` MUST be **retained** beside them, never replaced: it is what keeps Chromium and Firefox working whatever spelling of the URL the browser used, and the explicit sources are what WebKit can match at all. When the canonical host is loopback the substitution MUST emit all three loopback spellings per §10.3's table, canonical first. When the resolver yields `""` (a `0.0.0.0`/`::` bind with no `gateway.public_url`) the system MUST serve the collapsed `'self'`-only form, which is byte-identical to the pre-amendment string, and MUST log one WARN naming `gateway.public_url`. It MUST NOT refuse to serve, and MUST NOT emit an unresolved placeholder, an empty source or a doubled space. `connect-src` MUST remain `'none'`. *Rationale in §10.3: containment does not depend on these sources, so a missing or wrong origin is a visible rendering degradation, never a refusal — and never a silent one.*
 - **FR-005b** The system MUST embed previewed documents with `<iframe src="<token URL>">` — **never `srcdoc`**, which resolves relative URLs against the embedder and so cannot load a bundle's subresources at all (FR-003), and which has no response to carry FR-005's policy. The frame MUST also carry `sandbox="allow-scripts"`, `referrerpolicy="no-referrer"` and an empty `allow=""`. The effective sandbox is the **intersection** of attribute and header, so adding a token to only one grants nothing.
 - **FR-006** The system MUST block egress from a previewed document **to any origin other than the gateway's own**, and MUST permit no `fetch`, XHR, `sendBeacon` or WebSocket to **any** origin, the gateway's included. *The earlier wording — "MUST block network egress" — overstated what was measured:* the experiment's ground truth was requests arriving at a **second** origin standing in for the internet, and the policy's `'self'` sources permit subresource loads back to the gateway. *(Since 2026-08-23 those six directives also name the gateway origin explicitly — the same permission written a second way, for the WebKit reason in §10.3. `connect-src` remains `'none'` and MUST NOT gain it: this requirement's "no `fetch`, XHR, `sendBeacon` or WebSocket to **any** origin, the gateway's included" is exactly what that directive carries.)*

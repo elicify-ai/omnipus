@@ -44,16 +44,17 @@
  * not load, while every containment assertion in this file went on passing.
  * Chromium and Firefox were unaffected. Full table in 11c's comment.
  *
- * The fix was §10.3 naming the gateway's origins EXPLICITLY **in addition to**
- * `'self'`, never instead of it — and BOTH isolation mechanisms stayed. Each of
- * those three "boths" is load-bearing and none is a belt-and-braces flourish:
+ * The fix was §10.3 naming the gateway's origins EXPLICITLY, at first beside
+ * `'self'` — and BOTH isolation mechanisms stayed:
  *
- *   `'self'` AND the origins — `'self'` matches whatever spelling the reader
- *     typed, so on Chromium and Firefox no misconfigured origin string can ever
- *     break a preview. The explicit origins are what WebKit matches, because it
- *     does not resolve `'self'` inside an attribute-sandboxed frame at all.
- *     Delete `'self'` and a wrong origin breaks all three engines instead of
- *     one; delete the origins and WebKit is back where it started.
+ *   explicit origins — WebKit does not resolve `'self'` inside an
+ *     attribute-sandboxed frame at all, so an explicit host source is what it
+ *     matches. AMENDED 2026-09-14: `'self'` is now gone, and every origin is
+ *     confined to /library-preview/. `'self'` admitted the whole gateway, and
+ *     WebKit sends the session cookie on a framed preview's subresource
+ *     requests, so a preview could make logged-in API requests (test 110). The
+ *     price is that a wrong origin spelling now breaks all three engines, not
+ *     only WebKit — which is why 11d's precondition names it.
  *   header AND attribute — the header carries twelve rules and the attribute
  *     provides one of them. Measured: the sandbox half alone let five of seven
  *     egress vectors out, the source half alone let `window.open` out.
@@ -172,8 +173,9 @@ import {
   type RecordedHit,
   type RecordingOrigin,
   DEAD_ORIGIN,
+  PREVIEW_PATH_PREFIX,
   directiveHostSources,
-  directiveNamesOriginExplicitly,
+  directiveNamesPreviewSourceFor,
   embedPreview,
   installBundle,
   mintPreviewToken,
@@ -438,7 +440,11 @@ test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', 
     // THE FIX, and why it is the product's and not this test's: §10.3 now names
     // the gateway's origin EXPLICITLY in its source directives instead of
     // leaning on `'self'`, so the match no longer depends on the document
-    // having a usable `self` at all. BOTH isolation mechanisms stayed — the
+    // having a usable `self` at all. (Since 2026-09-14 each named source is
+    // also confined to /library-preview/ and `'self'` is gone entirely, so a
+    // preview cannot reach the API; the bundle's own script and stylesheet
+    // still load, which is exactly what this test keeps proving.) BOTH
+    // isolation mechanisms stayed — the
     // header carries twelve rules and the attribute provides one of them
     // (measured: the sandbox half alone let five of seven vectors out; the
     // source half alone let `window.open` out). Dropping either was never on
@@ -500,28 +506,26 @@ test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', 
     const tokenURL = await tokenURLFor(page, 'index.html');
     const gatewayOrigin = new URL(tokenURL, page.url()).origin;
 
-    // ── PRECONDITION, and it exists to make ONE failure mode loud ────────────
+    // ── PRECONDITION, and it exists to make TWO failure modes loud ───────────
     //
-    // §10.3 names the gateway's origins EXPLICITLY as well as saying `'self'`.
-    // The explicit half is what fixed WebKit (see 11c) and it is matched by
-    // STRING: it covers the exact spellings named and nothing else. So a
-    // deployment reachable by a name the policy does not list renders previews
-    // with no CSS and no JS — measured, on a policy naming
+    // §10.3 names the gateway's origins EXPLICITLY, each confined to
+    // /library-preview/, with no `'self'` beside them (amended 2026-09-14). A
+    // host source is matched by STRING: it covers the exact spellings named and
+    // nothing else. So a deployment reachable by a name the policy does not list
+    // renders previews with no CSS and no JS — measured, on a policy naming
     // `http://127.0.0.1:PORT` while the browser opened the identical socket as
     // `http://localhost:PORT`.
     //
-    // ⚠️ AND IT HIDES ON TWO ENGINES OUT OF THREE. `'self'` is retained, so
-    // Chromium and Firefox keep working through exactly that misconfiguration
-    // and only WebKit goes blank — with no error, nothing in the console that
-    // names a cause, and a rendering symptom indistinguishable from the browser
-    // bug this whole change exists to work around. That is why this is asserted
-    // HERE, directly, rather than left to 11c to catch: 11c would go red on one
-    // engine and read as "WebKit again".
+    // Until 2026-09-14 `'self'` hid that on Chromium and Firefox and only WebKit
+    // went blank. With `'self'` gone, all three engines go blank together —
+    // louder, but still with nothing in the console that names the cause. That
+    // is why it is asserted HERE, directly, rather than left to 11c to catch.
     //
-    // ⚠️ `'self'` DELIBERATELY DOES NOT SATISFY THIS ASSERTION. An earlier
-    // version accepted either form, which — with `'self'` on every directive —
-    // made it permanently true and therefore incapable of reporting anything.
-    // A diagnostic that cannot fail is not a diagnostic.
+    // ⚠️ NEITHER `'self'` NOR A BARE ORIGIN SATISFIES THIS ASSERTION. `'self'`
+    // made an earlier version of it permanently true. A bare origin is the
+    // pre-2026-09-14 shape: the preview renders perfectly AND can reach /api/,
+    // with WebKit attaching the session cookie. Only the confined source for the
+    // origin this browser is actually on counts.
     const headResponse = await page.request.get(tokenURL);
     expect(headResponse.ok(), `token path → ${headResponse.status()}`).toBeTruthy();
     const livePolicy = headResponse.headers()['content-security-policy'];
@@ -529,13 +533,12 @@ test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', 
     for (const directive of ['script-src', 'style-src'] as const) {
       const named = directiveHostSources(livePolicy, directive);
       expect(
-        directiveNamesOriginExplicitly(livePolicy, directive, gatewayOrigin),
-        `${directive} does not name ${gatewayOrigin} — the origin this browser is ` +
-        `actually on (baseURL ${baseURL}). It names: ` +
-        `${named.length ? named.join(', ') : '(no origin at all — only \'self\')'}.\n` +
-        `Consequence: the bundle's own ${directive === 'script-src' ? 'external script' : 'external stylesheet'} ` +
-        'will NOT load in Safari/WebKit, while Chromium and Firefox render it correctly via ' +
-        "`'self'` — so this misconfiguration is invisible on two engines out of three.\n" +
+        directiveNamesPreviewSourceFor(livePolicy, directive, gatewayOrigin),
+        `${directive} does not name ${gatewayOrigin}${PREVIEW_PATH_PREFIX} — the preview prefix on the ` +
+        `origin this browser is actually on (baseURL ${baseURL}). It names: ` +
+        `${named.length ? named.join(', ') : '(no host source at all — only \'self\')'}.\n` +
+        `Consequence: if it names another spelling, the bundle's own ${directive === 'script-src' ? 'external script' : 'external stylesheet'} ` +
+        'will NOT load on any engine; if it names a BARE origin, the preview can reach the API.\n' +
         'Fix, in order of likelihood:\n' +
         '  • same host under a different name (127.0.0.1 vs localhost vs a LAN IP): the ' +
         'gateway derives its origin from gateway.host/gateway.port, so open the SPA at the ' +
@@ -675,7 +678,7 @@ test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', 
   // ───────────────────────────────────────────────────────────────────────────
   // Spec test 110 — FR-006a: the accepted residual, and its stated condition
   // ───────────────────────────────────────────────────────────────────────────
-  test('110 — same-origin subresources reach the gateway and carry NO session cookie', async ({ page }) => {
+  test('110 — a preview reaches only its own path on the gateway: API probes are refused before they leave, and nothing that arrives is authenticated', async ({ page }) => {
     // IN A BARE FRAME, DELIBERATELY — the framed form of what used to be a
     // top-level tab (amended 2026-09-14: the token route now refuses a
     // top-level document request for a rendering file, UAT D-106).
@@ -702,53 +705,117 @@ test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', 
     // Cookie header normally. `headersRead` is still asserted for every probe,
     // and the probe poll fails loudly rather than passing when nothing is seen.
     //
-    // ⚠️ MEASURED 2026-09-14 — THIS TEST IS RED ON WEBKIT, AND THAT IS A FINDING,
-    // NOT A TEST DEFECT. WebKit attaches the SameSite=Strict session cookie to
-    // (b)'s same-origin image request from the opaque-origin framed document,
-    // while labelling it `Sec-Fetch-Site: cross-site`. Confirmed by a server-side
-    // oracle outside this suite: WebKit sends it from EVERY framed shape,
-    // including the product's own (attribute AND header), and withholds it only
-    // top-level; Chromium and Firefox withhold it everywhere. The old top-level
-    // form of this test could not see it, and the sentence that used to stand
-    // here — "whatever holds top-level holds embedded too" — is false on WebKit
-    // for cookies. Do NOT relax (b) to make WebKit green: FR-006a's accepted
-    // residual rests on exactly this condition. Record:
+    // AMENDED 2026-09-14 (FIX4 preview-cookie-residual) — WHAT THIS TEST PROVES
+    // NOW, AND WHY IT IS STRONGER THAN WHAT IT REPLACED.
+    //
+    // It used to prove FR-006a's condition in its original form: an image aimed
+    // at /api/v1/state REACHES the gateway and carries no session cookie. Framed,
+    // that went red on WebKit, and correctly. WebKit attaches the SameSite=Strict
+    // cookie to a framed preview's subresource requests while labelling them
+    // `Sec-Fetch-Site: cross-site` — confirmed by a server-side oracle outside
+    // this suite, in every framed shape including the product's own; Chromium
+    // and Firefox withhold it everywhere. SameSite cannot help: site-for-cookies
+    // comes from the top-level page, which is Omnipus. Record:
     // uat/evidence/2026-09-13/reviews/FIX4-REPORT-preview-isolation-framed.md.
+    //
+    // The fix confines every gateway source in §10.3 to /library-preview/, so
+    // the same probe is now refused by img-src BEFORE a request leaves, on all
+    // three engines. The purpose of this test — no authenticated request from a
+    // preview reaches the gateway — is therefore asserted in its STRONGER form:
+    //
+    //   (b1) IF ANYTHING AIMED OUTSIDE /library-preview/ DID REACH THE GATEWAY,
+    //        IT CARRIED NO SESSION COOKIE. FR-006a's original condition, kept,
+    //        and checked first so a regression on WebKit fails as the security
+    //        finding it is rather than as a bare "reached".
+    //   (b2) AND NOTHING DID. The gateway answered no fixture probe aimed
+    //        outside the preview path.
+    //   (b3) ATTEMPTED AND REFUSED. The fixture attempted the API probe, and the
+    //        preview's own document recorded an img-src violation naming it.
+    //        Without this, "never answered" is equally true of a probe that was
+    //        never fired — the vacuous pass this file exists to prevent.
+    //
+    // (a) still documents the residual FR-006a accepts, now narrowed: the
+    // preview's own files reach the gateway, at a route that authenticates by
+    // the token in its path and never reads the session cookie.
+    //
+    // Do NOT relax (b2) or (b3) back to "reached but unauthenticated": that is
+    // exactly the condition WebKit failed.
     const log = recordBrowserRequests(page.context());
     await page.goto('/');
     const tokenURL = await tokenURLFor(page, 'index.html');
+    const gatewayURL = new URL(tokenURL, page.url());
     await embedPreviewBare(page, tokenURL, 'commit');
     await expectBareFrame(page);
 
+    // The fixture ran to completion and attempted every probe, the API image
+    // included. Read out of the frame, never inferred from the network.
+    const report = await readPreviewReport(page, BARE_FRAME_SELECTOR);
+    expect(report.attempted.split(','), 'the fixture must have attempted the API image probe')
+      .toContain('same-api-img');
+
     await expect.poll(
-      () => log.matching((r) => r.url.includes('probe=same-api-img')).length,
-      { message: 'the preview never issued its same-origin probes', timeout: 20_000 },
+      () => log.matching((r) => r.url.includes('probe=same-img') && r.status !== undefined).length,
+      { message: "the preview's own same-origin probe was never answered", timeout: 20_000 },
     ).toBeGreaterThan(0);
     await page.waitForTimeout(EGRESS_SETTLE_MS);
     await log.settle();
 
-    // (a) The residual, documented rather than denied: an image subresource
-    //     really does reach the gateway and is answered. FR-006a accepts this
-    //     — the point of the requirement is the condition in (b), not a denial
-    //     that the request happens.
+    // (a) The residual, documented rather than denied, and now confined: an
+    //     image under the preview's OWN path really does reach the gateway and
+    //     is answered.
     const bundleProbe = log.matching((r) => r.url.includes('probe=same-img'));
-    expect(bundleProbe.length, 'a same-origin subresource load must still be possible').toBeGreaterThan(0);
+    expect(bundleProbe.length, 'a same-origin subresource load under the preview path must still be possible').toBeGreaterThan(0);
+    expect(
+      new URL(bundleProbe[0].url).pathname.startsWith(PREVIEW_PATH_PREFIX),
+      `the accepted residual is confined to ${PREVIEW_PATH_PREFIX}: ${bundleProbe[0].url}`,
+    ).toBe(true);
     expect(bundleProbe[0].status, 'and must be answered by the gateway').toBe(200);
 
-    // (b) The condition the whole accepted residual rests on. One edit to the
-    //     session cookie's SameSite mode turns untrusted content into an
-    //     authenticated API caller with no other symptom, which is why FR-006a
-    //     says this MUST be asserted rather than assumed.
-    const apiProbes = log.matching((r) => r.url.includes('probe=same-api-img'));
-    expect(apiProbes.length).toBeGreaterThan(0);
-    for (const probe of apiProbes) {
-      // Refuse to conclude from a header set we never read. `cookie` is
+    // (b1) + (b2). Every fixture probe aimed at the gateway OUTSIDE the preview
+    //     path: the API image, and the fetch, beacon and WebSocket probes that
+    //     (c) below also covers. (b1) runs first so that a regression on WebKit
+    //     fails as the security finding it is — a session cookie on a request
+    //     that reached the API — rather than as a bare "reached".
+    const outsidePreview = log.matching((r) => {
+      if (!r.url.includes('probe=same-')) return false;
+      const u = new URL(r.url);
+      return u.host === gatewayURL.host && !u.pathname.startsWith(PREVIEW_PATH_PREFIX);
+    });
+    const answered = outsidePreview.filter((r) => r.status !== undefined);
+    for (const probe of answered) {
+      // (b1) Refuse to conclude from a header set we never read. `cookie` is
       // undefined both when no cookie was attached and when the headers could
       // not be retrieved; only the first of those is evidence.
       expect(probe.headersRead, `headers for ${probe.url} were never read — this proves nothing`).toBe(true);
-      expect(probe.cookie ?? '', `preview request ${probe.url} must carry no session cookie`)
+      expect(probe.cookie ?? '', `preview request ${probe.url} reached the gateway and must carry no session cookie`)
         .not.toContain('omnipus-session');
     }
+    // (b2)
+    expect(
+      answered.map((r) => `${r.url} → ${r.status}`),
+      `the gateway must answer no request a preview aims outside ${PREVIEW_PATH_PREFIX}`,
+    ).toEqual([]);
+
+    // (b3) NON-VACUITY for (b1) and (b2): the API probe was attempted AND
+    //     refused by the policy, observed inside the preview itself. Without
+    //     this, "nothing was answered" is equally true of a probe that never
+    //     fired.
+    type Violation = { directive: string; blocked: string };
+    const readViolations = async (): Promise<Violation[]> => JSON.parse(
+      (await page.frameLocator(BARE_FRAME_SELECTOR).locator('#csp-violations').textContent({ timeout: 10_000 })) ?? '[]',
+    ) as Violation[];
+    const isApiProbeRefusal = (v: Violation) =>
+      v.directive === 'img-src'
+      && v.blocked.startsWith(`${gatewayURL.origin}/api/v1/state`)
+      && v.blocked.includes('probe=same-api-img');
+    await expect.poll(
+      async () => (await readViolations()).filter(isApiProbeRefusal).length,
+      {
+        message: 'the browser never reported refusing the API image probe under img-src — either the probe ' +
+          'was not fired, or the policy admitted it',
+        timeout: 10_000,
+      },
+    ).toBeGreaterThan(0);
 
     // (c) FR-006: no fetch / XHR / sendBeacon / WebSocket to ANY origin, the
     //     gateway's own included. `connect-src 'none'` carries no 'self', so
@@ -862,11 +929,13 @@ test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', 
     await log.settle();
 
     // THE ORACLE, and it is a DOM one: no frame anywhere in this page holds a
-    // rendered SPA. `frame-ancestors 'none'` does not stop the REQUEST — the
-    // preview's own `frame-src 'self'` permits it and the shell is fetched and
-    // answered — it stops the browser rendering the response it received. A
-    // refused document never parses its own <script src>, so the app's entry
-    // chunk is present in no frame's DOM.
+    // rendered SPA. Until 2026-09-14 the preview's own `frame-src` admitted `/`,
+    // the shell was fetched and answered, and `frame-ancestors 'none'` stopped
+    // the browser rendering it. Since §10.3 confined `frame-src` to
+    // /library-preview/, the request for `/` is refused before it leaves.
+    // Either way a refused document never parses its own <script src>, so the
+    // app's entry chunk is present in no frame's DOM, and `frame-ancestors
+    // 'none'` stays as the control on the framed resource.
     //
     // Console text is NOT the oracle: every engine words this refusal
     // differently (experiment §4.4).

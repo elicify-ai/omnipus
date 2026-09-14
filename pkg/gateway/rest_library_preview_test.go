@@ -50,10 +50,16 @@ import (
 // gatewayOriginPlaceholder is the named placeholder §10.3 publishes inside its
 // policy template. It is spelled here exactly once; every substitution in this
 // package goes through specIsolationPolicy.
-const gatewayOriginPlaceholder = "${GATEWAY_ORIGIN}"
+//
+// §10.3 renamed it from ${GATEWAY_ORIGIN} to ${PREVIEW_SOURCES} on 2026-09-14,
+// when the sources it stands for became confined to /library-preview/ and
+// stopped being origins. The Go identifier keeps its old name so the tests that
+// share this oracle across the package need no churn; the VALUE is what the
+// spec is compared against.
+const gatewayOriginPlaceholder = "${PREVIEW_SOURCES}"
 
 // originBearingDirectives is §10.3's substitution table, transcribed: the six
-// source directives that carry the gateway origin beside 'self', and nothing
+// source directives that carry the path-confined gateway sources, and nothing
 // else.
 //
 // connect-src is deliberately ABSENT and its absence is asserted. FR-006
@@ -72,10 +78,10 @@ var originBearingDirectives = []string{
 // alias rule rather than its simplest case.
 const previewFixtureCanonicalOrigin = "http://127.0.0.1:8080"
 
-// previewFixtureSources is what §10.3's ${GATEWAY_ORIGIN} expands to for that
+// previewFixtureSources is what §10.3's ${PREVIEW_SOURCES} expands to for that
 // origin — a space-separated SOURCE LIST, not one origin. The host is loopback,
 // so §10.3's table calls for both loopback spellings, the canonical one first
-// and then the remaining one.
+// and then the remaining one, EACH CONFINED TO /library-preview/ (2026-09-14).
 //
 // TWO, not the three §10.3 listed before 2026-09-09: `http://[::1]:8080` was
 // removed by defect HP-2 because CSP3 §2.3.1's host-char production
@@ -83,12 +89,18 @@ const previewFixtureCanonicalOrigin = "http://127.0.0.1:8080"
 // discarded that source — Chromium and WebKit after logging one console error
 // per directive, six per preview.
 //
+// The path is the 2026-09-14 fix. A bare origin here would admit the whole
+// gateway, /api/ included, and WebKit attaches the session cookie to a framed
+// preview's subresource requests — so an oracle that still expected bare
+// origins would pass against exactly the policy that let untrusted HTML make
+// logged-in GET requests.
+//
 // It is written here as a LITERAL, derived by hand from §10.3's table, and that
 // is the whole point of it. A test that asked the production code which sources
 // it chose would agree with whatever it chose — one origin instead of two, a
-// different order, or "" (the degraded case), which would silently make every
-// comparison in this package pass against the unmodified pre-2026-08-23 string.
-const previewFixtureSources = "http://127.0.0.1:8080 http://localhost:8080"
+// different order, a lost path, or "" (the degraded case), which would silently
+// make every comparison in this package pass against the unconfined string.
+const previewFixtureSources = "http://127.0.0.1:8080/library-preview/ http://localhost:8080/library-preview/"
 
 // freezePreviewPolicyForTest pins previewFixtureCanonicalOrigin as the
 // gateway's canonical origin for one test, restoring the previous value
@@ -147,23 +159,23 @@ func specIsolationPolicyTemplate(t *testing.T) string {
 	require.NotEmpty(t, tmpl)
 
 	// The placeholder must appear in exactly the six source directives §10.3
-	// names, always preceded by a single space after 'self' — the empty-origin
-	// case collapses "'self' ${GATEWAY_ORIGIN}" by deleting the space and the
-	// placeholder together, and that only produces the documented string if
-	// every occurrence has that shape.
+	// names, and the template must carry no 'self' at all. Since 2026-09-14
+	// 'self' may only enter the served policy through §10.3's Empty
+	// substitution: written into the template it would admit every gateway
+	// path, API included — and WebKit attaches the session cookie to a framed
+	// preview's subresource requests.
 	require.Equal(t, len(originBearingDirectives),
 		strings.Count(tmpl, gatewayOriginPlaceholder),
 		"§10.3's template must carry %s in exactly the %d source directives it names: %s",
 		gatewayOriginPlaceholder, len(originBearingDirectives), originBearingDirectives)
-	require.Equal(t,
-		strings.Count(tmpl, gatewayOriginPlaceholder),
-		strings.Count(tmpl, " '"+"self' "+gatewayOriginPlaceholder),
-		"every %s in §10.3 must follow \"'self' \" exactly — the empty-origin collapse in "+
-			"FR-005c deletes the placeholder AND the space before it, and any other shape "+
-			"leaves a doubled space or a hostless source", gatewayOriginPlaceholder)
+	require.NotContains(t, tmpl, "'self'",
+		"§10.3's template must not carry 'self' (amended 2026-09-14): it admits every gateway "+
+			"path, and WebKit sends the session cookie on a framed preview's subresource requests")
 
-	// Directive-level check, so "the origin appears six times" cannot be
-	// satisfied by six occurrences in the wrong places.
+	// Directive-level check, so "the sources appear six times" cannot be
+	// satisfied by six occurrences in the wrong places. The placeholder is each
+	// directive's FIRST source, so nothing written before it can widen what the
+	// directive admits.
 	byName := map[string]string{}
 	for _, d := range strings.Split(tmpl, "; ") {
 		name, value, _ := strings.Cut(d, " ")
@@ -172,8 +184,8 @@ func specIsolationPolicyTemplate(t *testing.T) string {
 	for _, d := range originBearingDirectives {
 		value, ok := byName[d]
 		require.True(t, ok, "§10.3 lost the %s directive entirely", d)
-		require.Contains(t, value, gatewayOriginPlaceholder,
-			"§10.3's %s must carry %s", d, gatewayOriginPlaceholder)
+		require.True(t, strings.HasPrefix(value, gatewayOriginPlaceholder),
+			"§10.3's %s must begin with %s; got %q", d, gatewayOriginPlaceholder, value)
 	}
 	require.Equal(t, "'none'", byName["connect-src"],
 		"FR-006/§10.3: connect-src must stay 'none' and MUST NOT gain the gateway origin — "+
@@ -186,21 +198,22 @@ func specIsolationPolicyTemplate(t *testing.T) string {
 // substituted by §10.3's rules, which is the value MV-13 requires on every
 // preview-token response.
 //
-// sources is the space-separated source LIST §10.3's ${GATEWAY_ORIGIN} stands
-// for — one entry for an ordinary host, three for a loopback bind.
+// sources is the space-separated source LIST §10.3's ${PREVIEW_SOURCES} stands
+// for — one entry for an ordinary host, two for a loopback bind, each an origin
+// followed by /library-preview/.
 //
 // sources == "" is the documented degraded case (FR-005c): a 0.0.0.0 bind with
-// no gateway.public_url. The placeholder and the space before it are removed
-// together, which reproduces the pre-2026-08-23 string exactly — the point
-// being that operators in that configuration are no worse off than before, not
-// that they get a broken header.
+// no gateway.public_url. §10.3 (amended 2026-09-14) substitutes 'self', which
+// reproduces the pre-2026-08-23 string exactly — the point being that operators
+// in that configuration are no worse off than before, not that they get a broken
+// header. It is also the one case the path confinement cannot reach.
 func specIsolationPolicy(t *testing.T, sources string) string {
 	t.Helper()
 	tmpl := specIsolationPolicyTemplate(t)
 
 	var policy string
 	if sources == "" {
-		policy = strings.ReplaceAll(tmpl, " "+gatewayOriginPlaceholder, "")
+		policy = strings.ReplaceAll(tmpl, gatewayOriginPlaceholder, "'self'")
 	} else {
 		policy = strings.ReplaceAll(tmpl, gatewayOriginPlaceholder, sources)
 		require.Equal(t, len(originBearingDirectives), strings.Count(policy, sources),
@@ -446,18 +459,25 @@ func TestLibraryPreview_PolicyIsTheSpecLiteralOnEveryResponse(t *testing.T) {
 	assert.NotContains(t, want, "frame-ancestors",
 		"§10.3: frame-ancestors was never measured here — FR-006b puts the framing control on the SPA shell")
 
-	// (d) BOTH source forms survive, in each of the six origin-bearing
-	// directives, and connect-src gains neither.
+	// (d) The path-confined sources, and nothing wider, in each of the six
+	// origin-bearing directives; connect-src gains none of them. Amended
+	// 2026-09-14: 'self' is GONE when an origin is known. It admits every gateway
+	// path, API included, and WebKit sends the session cookie on a framed
+	// preview's subresource requests, so its return is a one-token edit that
+	// renders perfectly and reopens logged-in API requests from untrusted HTML.
 	for _, directive := range originBearingDirectives {
-		assert.Contains(t, want, directive+" 'self' "+previewFixtureSources,
-			"§10.3/FR-005c: %s must name 'self' AND the gateway sources, in that order. "+
-				"Dropping 'self' breaks every browser when the URL is spelled differently "+
-				"from the configured origin; dropping the sources leaves Safari with an "+
-				"unstyled, inert preview inside the FR-005b sandbox attribute", directive)
+		assert.Contains(t, want, directive+" "+previewFixtureSources,
+			"§10.3/FR-005c: %s must name the gateway sources confined to /library-preview/. "+
+				"Without them Safari loads no external script or stylesheet inside the FR-005b "+
+				"sandbox attribute, and with no 'self' left neither does any other engine", directive)
 	}
+	assert.NotContains(t, want, "'self'",
+		"§10.3 (amended 2026-09-14): with an origin known, 'self' must not appear — it admits the API")
 	assert.NotContains(t, want, "connect-src 'self'",
 		"FR-006: connect-src must stay 'none' — it is the directive that opens a channel, "+
 			"not one that loads a subresource")
+	assert.NotContains(t, want, "connect-src http",
+		"FR-006: connect-src must not gain a host source either")
 
 	// (c) every response shape this route can produce.
 	responses := map[string]*httptest.ResponseRecorder{

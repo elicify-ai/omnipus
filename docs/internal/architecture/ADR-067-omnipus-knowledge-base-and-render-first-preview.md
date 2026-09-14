@@ -542,6 +542,15 @@ proxy (`gateway.public_url`).
 > stand. Substitution rules and the full measurement:
 > `docs/internal/specs/adr-067-knowledge-base-and-preview-spec.md` §10.3.
 
+> **AMENDED 2026-09-14 — `'self'` is removed and every gateway source is confined to
+> `/library-preview/` (D15.8, "FIXED 2026-09-14").** The 2026-08-23 decision to keep `'self'` beside
+> the explicit origins is reversed for every deployment with a known origin. `'self'` admits every
+> gateway path, the authenticated API included, and WebKit sends the session cookie on a framed
+> preview's subresource requests, so keeping it let an untrusted preview make logged-in `GET`
+> requests. The trade that decision made — a wrong spelling degrading only Safari — is given up with
+> it: a reader on a spelling the policy does not name now loses a preview's external assets on every
+> engine. `'self'` survives only where no origin can be named, and the boot WARN says so.
+
 **Both mechanisms are required.** Measured: with source directives but no `sandbox`,
 `window.open` still reached the external origin on every engine — no CSP directive covers
 popup navigation. With `sandbox` but no source directives, five of seven vectors escaped.
@@ -607,7 +616,10 @@ execution question — but the extension→type mapping is still what routes it.
   regardless. Static artifacts only. **A preview needing live data belongs on the existing
   `/preview/` dev-server route** — a different mechanism for a different job.
 - **Cookies are not sent to a sandboxed page's own subresources.** *Amended 2026-09-14 —
-  false on WebKit when the page is framed; see D15.8, "Measured while making this amendment".*
+  false on WebKit when the page is framed; see D15.8, "Measured while making this amendment".
+  Addressed the same day (D15.8, "FIXED 2026-09-14"): the preview's sources are confined to
+  `/library-preview/`, so a framed preview cannot reach the API, and the preview route itself never
+  reads the cookie. It still holds that WebKit sends the cookie to that route.*
 - **`document.cookie` throws** rather than returning empty.
 - **PDF.js is single-threaded in the main context for some work**; very large or complex
   PDFs can be slow. A page-count or size threshold may be needed — unmeasured.
@@ -798,6 +810,59 @@ red on WebKit for this reason and must stay red until it is fixed. The earlier a
 "whatever holds top-level holds embedded too" is false on WebKit for cookies. The fix is
 outside this amendment; a candidate is for the gateway to ignore the session cookie on a
 request marked `Sec-Fetch-Site: cross-site`, which WebKit does send here.
+
+> **FIXED 2026-09-14 (FIX4 preview-cookie-residual) — layer 1: a preview can no longer reach the
+> API at all.** The finding above is kept as the record of what was measured. §10.3's six
+> subresource directives now name each gateway origin **confined to the path `/library-preview/`**
+> — for a default install `http://127.0.0.1:5000/library-preview/ http://localhost:5000/library-preview/`
+> — and `'self'` is gone whenever an origin is known. A CSP host-source whose path ends in `/`
+> matches only URLs under that path, so an untrusted preview can load its own bundle's files and
+> nothing else from Omnipus, whatever the browser does with cookies. Measured the same day on
+> Chromium, Firefox and WebKit, in a bare frame and in the product's frame: the bundle's script,
+> stylesheet and image load, and an image aimed at `/api/v1/state` is refused by the browser before
+> any request leaves, with an `img-src` violation naming it. Full measurement: spec §10.3, amendment
+> of 2026-09-14.
+>
+> - **The one condition it depends on.** CSP ignores a source's path after a redirect — measured: a
+>   302 from the preview path to `/api/v1/state` was followed on all three engines, with the cookie
+>   attached on WebKit. Nothing under `/library-preview/` redirects today (the production router
+>   never cleans or redirects, and the preview handler never writes a `Location`), and
+>   `pkg/gateway/library_preview_no_redirect_test.go` fails if that ever changes.
+> - **What it still allows.** The preview's own files are still requested from the gateway, and on
+>   WebKit those requests still carry the cookie. The preview route authenticates by the token in
+>   its path and never reads the cookie, so those are not authenticated requests.
+> - **Where it does not apply.** With no usable canonical origin (a `0.0.0.0` or `::` bind with no
+>   `gateway.public_url`) there is no host to attach a path to, so the policy falls back to `'self'`
+>   and the finding above still stands for that configuration. The boot WARN says so. *Layer 2
+>   below closes the cookie half of it there: the request still reaches the gateway, but not as the
+>   user.*
+> - **What it costs.** A reader who opens Omnipus under an address the policy does not name — a LAN
+>   name or reverse proxy without `gateway.public_url`, or `http://[::1]:<port>` — now sees previews
+>   without their external CSS and JavaScript on every browser, not only on Safari. Containment is
+>   unaffected.
+> - **Test 110** now asserts the stronger property on all three engines: the API probe is refused
+>   by the browser, observed inside the preview; the gateway answers no probe aimed outside
+>   `/library-preview/`; and any probe that did reach it would have to carry no session cookie.
+>
+> **FIXED 2026-09-14 (FIX4 preview-cookie-residual) — layer 2: the session cookie no longer
+> authenticates a cross-site subresource request.** Defence in depth, chiefly for the `'self'`
+> fallback layer 1 cannot confine. The gateway ignores the `omnipus-session` cookie on any request
+> the browser marks `Sec-Fetch-Site: cross-site` whose `Sec-Fetch-Dest` is `image`, `style`,
+> `script`, `font`, `audio`, `video`, `track`, `object`, `embed`, `iframe` or `frame`
+> (`pkg/gateway/middleware/session_cookie.go`, `ResolveUserFromCookie`, the one function every
+> cookie-auth path uses). Such a request gets the answer it would get with no cookie: 401 on a
+> logged-in route, anonymous on an optional one. Unaffected: top-level navigations, fetch and XHR,
+> WebSocket handshakes, requests with no Fetch Metadata headers, and bearer tokens.
+>
+> - **Why it cannot break a working flow.** The cookie is `SameSite=Strict`, so Chromium and Firefox
+>   never send it on a cross-site request; nothing that works today can depend on one arriving. The
+>   SPA's own subresources are labelled same-origin (measured on all three engines), the Library
+>   preview frame is a same-origin frame, provider sign-in is a device-code flow, and no login flow
+>   uses a frame.
+> - **What it does not cover.** A browser that sends no Fetch Metadata headers. `SameSite=Strict` and
+>   layer 1 are what stand there.
+> - **Refusals are logged** under their own message ("session cookie ignored on a cross-site
+>   subresource request"), not as an invalid cookie, because the cookie may be perfectly valid.
 
 **Unaffected.** The `/preview/<agent>/<token>/` route (ADR-044) serves agent dev servers started
 by the `web_serve` tool. It is a different route for a different job and this amendment does not

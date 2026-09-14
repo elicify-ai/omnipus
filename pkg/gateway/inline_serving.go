@@ -74,18 +74,17 @@ import (
 // from here through libraryIsolationPolicy().
 //
 // It stopped being a compile-time constant because §10.3 became a TEMPLATE
-// (amended 2026-08-23). Under WebKit, adding the FR-005b iframe `sandbox`
-// ATTRIBUTE on top of the §10.3 sandbox DIRECTIVE makes the document's own
-// `self` an opaque origin that matches nothing, so its external `<script src>`
-// and `<link rel=stylesheet>` never load — measured, and not a containment
-// failure: the origin stays opaque, `document.cookie` still throws and zero of
-// seven egress vectors arrive. The six source directives therefore name the
-// gateway's canonical browser-facing origin IN ADDITION TO `'self'`, never
-// instead of it: an explicit host source is matched against the REQUEST URL and
-// so is immune to the opaque-origin problem, while keeping `'self'` is what
-// makes a wrong or absent origin a Safari-only degradation instead of an
-// all-engine outage. The measurement, the substitution rules and the reason
-// both mechanisms stay are documented in library_isolation_policy.go.
+// (amended 2026-08-23, and again 2026-09-14). The six source directives name
+// the gateway's canonical browser-facing origin(s) as explicit host sources —
+// under WebKit `'self'` matches nothing inside an FR-005b attribute-sandboxed
+// frame — and each source is CONFINED TO THE /library-preview/ PREFIX with no
+// `'self'` beside it, because WebKit sends the session cookie on a framed
+// preview's subresource requests and a source that reached the API made
+// untrusted HTML an authenticated caller. The same policy rides on the media
+// and uploads routes' inline responses, so a document rendered from those can
+// load nothing from the gateway outside the preview prefix either. The
+// measurements, the substitution rules and the reason both mechanisms stay are
+// documented in library_isolation_policy.go.
 //
 // A SECOND COPY OF THE STRING ANYWHERE IN THIS PACKAGE IS A DEFECT. Two copies
 // drift, and the copy that drifts is the one nobody re-reads — a dropped

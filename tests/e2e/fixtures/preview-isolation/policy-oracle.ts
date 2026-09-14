@@ -37,6 +37,17 @@
  * pkg/gateway does not.
  *
  * ═══════════════════════════════════════════════════════════════════════════
+ * AMENDED 2026-09-14 — THE SOURCES ARE PATH-CONFINED, AND `'self'` IS GONE
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * §10.3's placeholder is now `${PREVIEW_SOURCES}` (it was `${GATEWAY_ORIGIN}`)
+ * and it stands for each gateway origin FOLLOWED BY `/library-preview/`. The
+ * template no longer carries `'self'`: it spanned the whole gateway, API
+ * included, and WebKit sends the session cookie on a framed preview's
+ * subresource requests (ADR-067 D15.8). `'self'` now appears only as §10.3's
+ * Empty substitution, where no origin can be named.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
  * THE ONE ASYMMETRY THAT WILL LOOK LIKE A BUG — DO NOT "FIX" IT
  * ═══════════════════════════════════════════════════════════════════════════
  *
@@ -49,17 +60,23 @@
  * binds `127.0.0.1` (the seeded default) while the tests browse
  * `http://localhost:PORT`. That divergence is not an oversight to be tidied
  * away — it is the single most common real-world configuration, and it is
- * exactly what §10.3's loopback-alias rule exists to survive. A default install
- * where the operator types `localhost` and the gateway bound `127.0.0.1` is the
- * case that broke Safari previews, and this rig is the only place it is
- * measured. Substituting `baseURL` here would make the oracle agree with the
- * browser by construction and silently stop testing the rule.
+ * exactly what §10.3's loopback-alias rule exists to survive. Since 2026-09-14
+ * there is no `'self'` left to carry any engine through a missing alias, so this
+ * rig is where losing the rule would show as a blank preview on all three.
+ * Substituting `baseURL` here would make the oracle agree with the browser by
+ * construction and silently stop testing the rule.
  */
 import fs from "node:fs";
 import path from "node:path";
 
 /** §10.3's named placeholder, spelled as the specification spells it. */
-export const GATEWAY_ORIGIN_PLACEHOLDER = "${GATEWAY_ORIGIN}";
+export const PREVIEW_SOURCES_PLACEHOLDER = "${PREVIEW_SOURCES}";
+
+/** The path §10.3 confines every gateway source to. */
+export const PREVIEW_PATH_PREFIX = "/library-preview/";
+
+/** §10.3's Empty substitution: what the placeholder becomes when no origin can be named. */
+export const UNCONFINED_SOURCE = "'self'";
 
 /** Where §10.3 lives. Relative to the repo root, which is Playwright's cwd. */
 const SPEC_PATH =
@@ -111,15 +128,22 @@ export function readSpecPolicyTemplate(): string {
   }
 
   const template = blocks[0];
-  const occurrences = template.split(GATEWAY_ORIGIN_PLACEHOLDER).length - 1;
+  const occurrences = template.split(PREVIEW_SOURCES_PLACEHOLDER).length - 1;
   if (occurrences !== PLACEHOLDER_OCCURRENCES) {
     throw new Error(
       `[policy-oracle] §10.3's template carries ${occurrences} ` +
-        `${GATEWAY_ORIGIN_PLACEHOLDER} placeholders, expected ${PLACEHOLDER_OCCURRENCES} ` +
+        `${PREVIEW_SOURCES_PLACEHOLDER} placeholders, expected ${PLACEHOLDER_OCCURRENCES} ` +
         "(script-src, style-src, img-src, font-src, media-src, frame-src). " +
-        "If a directive legitimately gained or lost the origin, update " +
+        "If a directive legitimately gained or lost the sources, update " +
         "PLACEHOLDER_OCCURRENCES in the same commit — and check that connect-src " +
-        "did not gain it, which FR-006 forbids.",
+        "did not gain them, which FR-006 forbids.",
+    );
+  }
+  if (template.includes(UNCONFINED_SOURCE)) {
+    throw new Error(
+      "[policy-oracle] §10.3's template carries 'self'. Since 2026-09-14 'self' may only " +
+        "enter the served policy through the Empty substitution: it spans the whole " +
+        "gateway, API included, which is the WebKit cookie finding in ADR-067 D15.8.",
     );
   }
   return template;
@@ -194,10 +218,11 @@ export function gatewayCanonicalOrigin(): string {
 /**
  * scheme://authority, with any path and trailing slash removed.
  *
- * §10.3 requires this and states the consequence of getting it wrong: a CSP
- * host-source carrying a path is a PATH-MATCH, so `https://host/app` would stop
- * matching `https://host/library-preview/…` and block every subresource, on
- * every engine, for a config value that looks perfectly reasonable.
+ * §10.3 requires this: the preview prefix is served at the root of the host,
+ * so a source built on `https://host/app` would be
+ * `https://host/app/library-preview/` and would match no URL the browser ever
+ * requests — every subresource blocked, on every engine, for a config value
+ * that looks perfectly reasonable.
  */
 function normaliseToOrigin(value: string): string {
   try {
@@ -252,7 +277,8 @@ function isCSPExpressibleHost(hostname: string): boolean {
 }
 
 /**
- * §10.3's `${GATEWAY_ORIGIN}` — a space-separated list of CSP host-sources.
+ * The gateway ORIGINS §10.3's sources are built on — the substitution table
+ * below the path.
  *
  * Non-loopback: one entry. Loopback: both expressible spellings, same scheme
  * and port, CANONICAL FIRST and then the remaining one. The order is part of
@@ -261,11 +287,11 @@ function isCSPExpressibleHost(hostname: string): boolean {
  * page.
  *
  * An IPv6 host is never emitted, in either case (`isCSPExpressibleHost`). A
- * non-loopback IPv6 origin therefore yields NO source and takes §10.3's Empty
+ * non-loopback IPv6 origin therefore yields NO origin and takes §10.3's Empty
  * row; an IPv6 loopback origin is dropped from its own list but keeps its two
  * expressible aliases — the one place "canonical first" has an exception.
  */
-export function gatewayOriginSources(
+export function gatewayOriginsForPolicy(
   canonicalOrigin = gatewayCanonicalOrigin(),
 ): string[] {
   const trimmed = canonicalOrigin.trim();
@@ -279,36 +305,46 @@ export function gatewayOriginSources(
   }
   const canonical = `${url.protocol}//${url.host}`;
 
-  const sources: string[] = [];
-  if (isCSPExpressibleHost(url.hostname)) sources.push(canonical);
-  if (!isLoopbackHost(url.hostname)) return sources;
+  const origins: string[] = [];
+  if (isCSPExpressibleHost(url.hostname)) origins.push(canonical);
+  if (!isLoopbackHost(url.hostname)) return origins;
 
   // "::1" is NOT in this list and must not be re-added — see
   // isCSPExpressibleHost.
   for (const alias of ["127.0.0.1", "localhost"]) {
     const candidate = `${url.protocol}//${alias}${url.port ? `:${url.port}` : ""}`;
-    if (candidate !== canonical) sources.push(candidate);
+    if (candidate !== canonical) origins.push(candidate);
   }
-  return sources;
+  return origins;
+}
+
+/**
+ * §10.3's `${PREVIEW_SOURCES}` — a space-separated list of CSP host-sources,
+ * each a gateway origin followed by `/library-preview/`.
+ */
+export function gatewayPreviewSources(
+  canonicalOrigin = gatewayCanonicalOrigin(),
+): string[] {
+  return gatewayOriginsForPolicy(canonicalOrigin).map(
+    (origin) => `${origin}${PREVIEW_PATH_PREFIX}`,
+  );
 }
 
 /**
  * The policy §10.3 requires this gateway to serve, byte for byte.
  *
- * THE EMPTY CASE IS THE ONE THAT IS EASY TO GET SUBTLY WRONG. §10.3: "the
- * placeholder AND the single space preceding it are removed", collapsing
- * `'self' ${GATEWAY_ORIGIN}` to `'self'` and reproducing the pre-amendment
- * string exactly. Substituting the empty string alone would leave a DOUBLE
- * SPACE — a policy that still works, on every engine, while failing a
- * byte-oracle for a reason nobody can see from either string.
+ * THE EMPTY CASE IS THE ONE THAT IS EASY TO GET SUBTLY WRONG. §10.3: the
+ * placeholder becomes `'self'`, which reproduces the pre-2026-08-23 string
+ * exactly. Substituting an empty string would leave `script-src 'unsafe-inline'`
+ * and a doubled space — a policy that blocks every external asset on every
+ * engine while looking almost right.
  */
 export function expectedIsolationPolicy(
   template = readSpecPolicyTemplate(),
-  sources = gatewayOriginSources(),
+  sources = gatewayPreviewSources(),
 ): string {
   const joined = sources.join(" ");
-  if (joined === "") {
-    return template.split(` ${GATEWAY_ORIGIN_PLACEHOLDER}`).join("");
-  }
-  return template.split(GATEWAY_ORIGIN_PLACEHOLDER).join(joined);
+  return template
+    .split(PREVIEW_SOURCES_PLACEHOLDER)
+    .join(joined === "" ? UNCONFINED_SOURCE : joined);
 }
