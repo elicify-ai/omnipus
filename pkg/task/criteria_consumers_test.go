@@ -74,7 +74,7 @@ func TestTaskCriteriaIsAGoalReference(t *testing.T) {
 
 	dod := []task.AcceptanceCriterion{criterion("definition of done item", "jim")}
 	g, err := goal.New(
-		generated.GoalOwnerKindTask, tk.ID, generated.TaskExplicit,
+		generated.GoalOwnerKindTask, tk.ID, generated.GoalSourceTaskExplicit,
 		tk.Title, "", tk.Criteria, dod, 20, time.Now().UTC(),
 	)
 	require.NoError(t, err)

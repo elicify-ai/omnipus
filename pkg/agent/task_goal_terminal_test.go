@@ -321,7 +321,7 @@ func TestReRunOfTerminatedTaskReactivatesItsGoal(t *testing.T) {
 // not started.
 func seedTaskGoal(t *testing.T, taskID, criterionText, dodText string) *goal.Goal {
 	t.Helper()
-	g, err := goal.New(generated.GoalOwnerKindTask, taskID, generated.TaskExplicit,
+	g, err := goal.New(generated.GoalOwnerKindTask, taskID, generated.GoalSourceTaskExplicit,
 		"make the export endpoint return CSV", "",
 		[]task.AcceptanceCriterion{proseCriterion("", criterionText)},
 		[]task.AcceptanceCriterion{proseCriterion("", dodText)},

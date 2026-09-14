@@ -194,7 +194,7 @@ func failTranscriptReads(t *testing.T, store *session.UnifiedStore, sessionID st
 func newTestGoalRecordForFaultSuite(t *testing.T, store *goal.Store) *goal.Goal {
 	t.Helper()
 	sid := newGoalID()
-	g, err := goal.New(generated.GoalOwnerKindSession, sid, generated.TaskExplicit,
+	g, err := goal.New(generated.GoalOwnerKindSession, sid, generated.GoalSourceTaskExplicit,
 		"a goal for the fault suite", "", recordedGoalCriteria("a goal for the fault suite"),
 		newFloorDoD(), armedGoalMaxRounds, time.Now().UTC())
 	if err != nil {

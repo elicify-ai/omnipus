@@ -35,7 +35,7 @@ func TestDeleteAgent_EndsTheDeletedAgentsActiveGoals(t *testing.T) {
 
 	gs := goal.NewStore(config.OmnipusHomeDir())
 	now := time.Now().UTC()
-	g, err := goal.New(generated.GoalOwnerKindSession, meta.ID, generated.ChatCompiled,
+	g, err := goal.New(generated.GoalOwnerKindSession, meta.ID, generated.GoalSourceChatCompiled,
 		"write e3-marker.txt with three made-up octopus facts", "", nil,
 		[]task.AcceptanceCriterion{{
 			Kind: task.KindProse, Judgment: task.JudgmentBoolean, Provenance: task.ProvenanceFloor,

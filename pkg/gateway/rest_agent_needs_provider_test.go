@@ -148,7 +148,7 @@ func TestGatewayBoot_UnknownProvider_NonFatal(t *testing.T) {
 			"agent A is bound to a catalog provider and must not be degraded")
 		require.NotNil(t, byID["agent-b"].DegradedReason,
 			"agent B is bound to an unknown provider and must carry degraded_reason")
-		assert.Equal(t, gen.NeedsProvider, *byID["agent-b"].DegradedReason)
+		assert.Equal(t, gen.AgentDegradedReasonNeedsProvider, *byID["agent-b"].DegradedReason)
 	})
 
 	t.Run("no hint anywhere (FR-015 / SC-010)", func(t *testing.T) {
@@ -192,7 +192,7 @@ func TestAgentRepair_PUTProvider_NoRestart(t *testing.T) {
 	gotDegraded := getAgentResp(t, api, created.Id).DegradedReason
 	require.NotNil(t, gotDegraded,
 		"an agent bound to an unknown provider must be degraded on the very next GET")
-	assert.Equal(t, gen.NeedsProvider, *gotDegraded)
+	assert.Equal(t, gen.AgentDegradedReasonNeedsProvider, *gotDegraded)
 
 	// The repair: re-point the agent at a real provider.
 	w := httptest.NewRecorder()

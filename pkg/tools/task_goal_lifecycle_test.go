@@ -262,7 +262,7 @@ func TestTerminateGoalForOwnerDeletionTransitionsOnlyActiveRecords(t *testing.T)
 	crit := []task.AcceptanceCriterion{{Text: "the work is done", Status: task.CritPending, Author: author}}
 	dod := []task.AcceptanceCriterion{{Text: "the reviewer signed it off", Status: task.CritPending, Author: author}}
 
-	active, err := goal.New(generated.GoalOwnerKindTask, "task-1", generated.TaskExplicit,
+	active, err := goal.New(generated.GoalOwnerKindTask, "task-1", generated.GoalSourceTaskExplicit,
 		"do it", "", crit, dod, 3, now)
 	require.NoError(t, err)
 	require.NoError(t, active.Activate("session-1", now))
@@ -271,7 +271,7 @@ func TestTerminateGoalForOwnerDeletionTransitionsOnlyActiveRecords(t *testing.T)
 	assert.Equal(t, generated.GoalStateCleared, active.State)
 	assert.Equal(t, goalTerminalReasonOwnerDeleted, active.TerminalReason)
 
-	defining, err := goal.New(generated.GoalOwnerKindTask, "task-2", generated.TaskExplicit,
+	defining, err := goal.New(generated.GoalOwnerKindTask, "task-2", generated.GoalSourceTaskExplicit,
 		"do it", "", crit, dod, 3, now)
 	require.NoError(t, err)
 	require.NoError(t, terminateGoalForOwnerDeletion(defining, now),

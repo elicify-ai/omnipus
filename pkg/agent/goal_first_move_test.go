@@ -86,7 +86,7 @@ func setActiveGoalRecordless(t *testing.T, _ *session.UnifiedStore, sid, goalID,
 	if existing, gerr := gstore.GetActiveByOwner(generated.GoalOwnerKindSession, sid); gerr == nil && existing != nil {
 		return // already paired — a caller that sets this fixture twice for one session
 	}
-	g, nerr := goal.New(generated.GoalOwnerKindSession, sid, generated.ChatCompiled,
+	g, nerr := goal.New(generated.GoalOwnerKindSession, sid, generated.GoalSourceChatCompiled,
 		condition, "", nil, newFloorDoD(), config.DefaultGoalMaxRounds, time.Now().UTC())
 	if nerr != nil {
 		t.Fatalf("setActiveGoalRecordless: goal.New: %v", nerr)

@@ -73,7 +73,7 @@ func newGoalTestSession(t *testing.T, al *AgentLoop, agentID string) (*session.U
 func activateTestGoalRecord(t *testing.T, sid, intent string) string {
 	t.Helper()
 	gid := newGoalID()
-	g, err := goal.New(generated.GoalOwnerKindSession, sid, generated.ChatCompiled,
+	g, err := goal.New(generated.GoalOwnerKindSession, sid, generated.GoalSourceChatCompiled,
 		intent, "", nil, newFloorDoD(), config.DefaultGoalMaxRounds, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("activateTestGoalRecord: goal.New: %v", err)

@@ -1179,7 +1179,7 @@ func TestSetGoalUpdate_CannotLowerPersistedClauseCountWithVerdictOnRecord(t *tes
 	// (via lookupGoalLatestVerdictForClauseCountGuard) reads the LATEST VERDICT
 	// straight off the pkg/goal store, bypassing the narrow GoalRecordAccess
 	// seam (see that function's own doc comment for why).
-	g, gerr := goal.New(generated.GoalOwnerKindSession, sid, generated.ChatCompiled,
+	g, gerr := goal.New(generated.GoalOwnerKindSession, sid, generated.GoalSourceChatCompiled,
 		"do the three things", "", nil,
 		[]task.AcceptanceCriterion{{
 			ID: "dod-floor", Kind: task.KindProse, Judgment: task.JudgmentBoolean,
@@ -1266,7 +1266,7 @@ func TestSetGoalUpdate_ClauseCountLoweredWithoutVerdict_IsAllowed(t *testing.T) 
 	const sid = "session_clause_guard_no_verdict"
 	const oldCriterionID = "crit-shrink-2"
 
-	g, gerr := goal.New(generated.GoalOwnerKindSession, sid, generated.ChatCompiled,
+	g, gerr := goal.New(generated.GoalOwnerKindSession, sid, generated.GoalSourceChatCompiled,
 		"do the three things", "", nil,
 		[]task.AcceptanceCriterion{{
 			ID: "dod-floor", Kind: task.KindProse, Judgment: task.JudgmentBoolean,

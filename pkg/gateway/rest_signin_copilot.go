@@ -48,7 +48,7 @@ const copilotSignInCheckTimeout = 60 * time.Second
 // with the FR-008 `cli_login` variant: the vendor CLI's own login command.
 func (a *restAPI) handleCopilotSignInStart(w http.ResponseWriter, _ *http.Request) {
 	jsonOK(w, gen.SignInStartResponseCliLogin{
-		Method:       gen.CliLogin,
+		Method:       gen.SignInStartResponseCliLoginMethodCliLogin,
 		Command:      copilotSignInCommand,
 		Instructions: copilotSignInInstructions,
 	})

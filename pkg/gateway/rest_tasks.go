@@ -220,7 +220,7 @@ func (a *restAPI) syncTaskGoalRecord(
 			goalPrompt = t.Title
 		}
 		g, nErr := goal.New(
-			gen.GoalOwnerKindTask, t.ID, gen.TaskExplicit,
+			gen.GoalOwnerKindTask, t.ID, gen.GoalSourceTaskExplicit,
 			goalPrompt, "", criteria, dod, maxRounds, now,
 		)
 		if nErr != nil {

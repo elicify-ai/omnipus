@@ -213,9 +213,9 @@ func t3ArmGoalRecord(
 ) *goal.Goal {
 	t.Helper()
 	now := time.Now().UTC()
-	source := generated.ChatCompiled
+	source := generated.GoalSourceChatCompiled
 	if ownerKind == generated.GoalOwnerKindTask {
-		source = generated.TaskExplicit
+		source = generated.GoalSourceTaskExplicit
 	}
 	criteria := []task.AcceptanceCriterion{{
 		ID: recordedGoalCriterionID, Kind: task.KindProse, Judgment: task.JudgmentBoolean,

@@ -92,7 +92,7 @@ func syncWorkspaceTaskGoalRecord(
 			goalPrompt = t.Title
 		}
 		g, nErr := goal.New(
-			generated.GoalOwnerKindTask, t.ID, generated.TaskExplicit,
+			generated.GoalOwnerKindTask, t.ID, generated.GoalSourceTaskExplicit,
 			goalPrompt, "", criteria, dod, maxRounds, now,
 		)
 		if nErr != nil {

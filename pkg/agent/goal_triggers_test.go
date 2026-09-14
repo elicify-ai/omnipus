@@ -78,7 +78,7 @@ func armGoalRecord(
 	if existing := activeGoalForSession(sid); existing != nil {
 		gid = existing.GoalID
 	} else {
-		g, err := goal.New(generated.GoalOwnerKindSession, sid, generated.ChatCompiled,
+		g, err := goal.New(generated.GoalOwnerKindSession, sid, generated.GoalSourceChatCompiled,
 			condition, "", criteria, newFloorDoD(), armedGoalMaxRounds, time.Now().UTC())
 		if err != nil {
 			t.Fatalf("armGoalRecord: goal.New: %v", err)

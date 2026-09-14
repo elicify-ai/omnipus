@@ -88,7 +88,7 @@ func mountToCreateResponse(m workspace.Mount, warning string) gen.WorkspaceMount
 	resp := gen.WorkspaceMountCreateResponse{
 		Name:     m.Name,
 		HostPath: m.HostPath,
-		Status:   gen.Ok,
+		Status:   gen.WorkspaceMountCreateResponseStatusOk,
 	}
 	if warning != "" {
 		resp.Warning = &warning

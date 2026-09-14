@@ -251,7 +251,7 @@ func TestTaskClaimIsNeverTrustedWhenJudgeUnregistered(t *testing.T) {
 func seedActiveTaskGoalForClaimGuard(t *testing.T, taskID, sessionID string) *goal.Goal {
 	t.Helper()
 	now := time.Now().UTC()
-	g, err := goal.New(generated.GoalOwnerKindTask, taskID, generated.TaskExplicit,
+	g, err := goal.New(generated.GoalOwnerKindTask, taskID, generated.GoalSourceTaskExplicit,
 		"make the export endpoint return CSV", "", nil, newFloorDoD(), config.DefaultGoalMaxRounds, now)
 	if err != nil {
 		t.Fatalf("seedActiveTaskGoalForClaimGuard: goal.New: %v", err)

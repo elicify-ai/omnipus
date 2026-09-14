@@ -261,7 +261,7 @@ func childCreateAndReport(home, id string, idx int) int {
 		Author: task.CriterionAuthor{Kind: task.AuthorKindUser, ID: "xproc"}, Status: task.CritPending,
 	}
 	g, err := New(
-		generated.GoalOwnerKindSession, "xproc-owner-session", generated.ChatCompiled,
+		generated.GoalOwnerKindSession, "xproc-owner-session", generated.GoalSourceChatCompiled,
 		fmt.Sprintf("child-%d", idx), "",
 		[]task.AcceptanceCriterion{criterion},
 		[]task.AcceptanceCriterion{dod},

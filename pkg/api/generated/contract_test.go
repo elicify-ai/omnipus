@@ -4249,7 +4249,7 @@ func TestContract_Provider_WithValidation_Valid(t *testing.T) {
 			Message *string                   `json:"message,omitempty"`
 			Outcome ProviderValidationOutcome `json:"outcome"`
 		}{
-			Outcome: NoCredit,
+			Outcome: ProviderValidationOutcomeNoCredit,
 			Message: &msg,
 		},
 	}
@@ -4267,9 +4267,9 @@ func TestContract_Provider_WithValidation_AllOutcomes(t *testing.T) {
 	// Each non-valid ProviderValidation outcome must produce schema-valid JSON.
 	// Traces to: ProviderValidation.yaml (enum constraint).
 	outcomes := []ProviderValidationOutcome{
-		NoCredit,
-		Unreachable,
-		Restricted,
+		ProviderValidationOutcomeNoCredit,
+		ProviderValidationOutcomeUnreachable,
+		ProviderValidationOutcomeRestricted,
 	}
 	for _, outcome := range outcomes {
 		t.Run(string(outcome), func(t *testing.T) {

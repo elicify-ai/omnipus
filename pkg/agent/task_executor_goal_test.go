@@ -39,7 +39,7 @@ func seedDefiningTaskGoal(t *testing.T, al *AgentLoop, taskID, agentID string) (
 		t.Fatalf("create task: %v", err)
 	}
 
-	g, err := goal.New(generated.GoalOwnerKindTask, taskID, generated.TaskExplicit,
+	g, err := goal.New(generated.GoalOwnerKindTask, taskID, generated.GoalSourceTaskExplicit,
 		"finish the thing", "",
 		[]task.AcceptanceCriterion{{
 			ID: "c1", Kind: task.KindProse, Judgment: task.JudgmentBoolean,

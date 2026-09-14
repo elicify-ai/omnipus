@@ -1570,7 +1570,7 @@ func (a *restAPI) testAgentRunner(w http.ResponseWriter, r *http.Request, agentI
 	if executor == nil || executor.EffectiveKind() != config.ExecutorKindExternalCLI {
 		jsonOK(w, gen.RunnerTestResponse{
 			Ok:      false,
-			Reason:  gen.NotExternalCli,
+			Reason:  gen.RunnerTestResponseReasonNotExternalCli,
 			Message: "agent executor is not external-cli; no external runner to test",
 		})
 		return
@@ -1579,7 +1579,7 @@ func (a *restAPI) testAgentRunner(w http.ResponseWriter, r *http.Request, agentI
 	if cli == "" {
 		jsonOK(w, gen.RunnerTestResponse{
 			Ok:      false,
-			Reason:  gen.UnknownCli,
+			Reason:  gen.RunnerTestResponseReasonUnknownCli,
 			Message: "agent executor.cli is empty; set claude-code, codex, or opencode",
 			Cli:     strPtr(""),
 		})
@@ -10615,7 +10615,7 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if workspaceLib != nil {
-				ref, projection, uploadErr := workspaceLib.Upload(fileName, gen.UserUpload, part)
+				ref, projection, uploadErr := workspaceLib.Upload(fileName, gen.MediaLibraryEntrySourceUserUpload, part)
 				part.Close()
 				if uploadErr != nil {
 					slog.Error("rest: upload: workspace library store failed",

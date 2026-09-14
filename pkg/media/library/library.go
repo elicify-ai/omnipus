@@ -292,7 +292,7 @@ func (m manifestEntry) projection() gen.MediaLibraryEntry {
 	uploadedAt := m.uploadedAt
 	refcount := int(m.refcount)
 	lastSeen := m.lastRefcountSeenAt
-	status := gen.Available
+	status := gen.MediaLibraryEntryStatusAvailable
 	return gen.MediaLibraryEntry{
 		Id:                 &id,
 		WorkspaceId:        &workspaceID,
@@ -500,7 +500,7 @@ func (l *Library) List() []gen.MediaLibraryEntry {
 	for _, id := range ids {
 		projection := l.manifest[id].projection()
 		if _, stranded := l.stranded[id]; stranded {
-			status := gen.Stranded
+			status := gen.MediaLibraryEntryStatusStranded
 			projection.Status = &status
 		}
 		entries = append(entries, projection)
@@ -541,7 +541,7 @@ var fixtureSource gen.MediaLibraryEntrySource = "test_fixture"
 
 // uploadInternal is the shared streaming + sha256 + persist core used by
 // both Upload (production) and UploadFixture (test helpers). When
-// requireSourceIsProduction is true, only gen.UserUpload is accepted;
+// requireSourceIsProduction is true, only gen.MediaLibraryEntrySourceUserUpload is accepted;
 // false accepts any source including fixtureSource.
 func (l *Library) uploadInternal(
 	filename string,
@@ -553,7 +553,7 @@ func (l *Library) uploadInternal(
 	if normalizeErr != nil {
 		return "", gen.MediaLibraryEntry{}, normalizeErr
 	}
-	if requireSourceIsProduction && source != gen.UserUpload {
+	if requireSourceIsProduction && source != gen.MediaLibraryEntrySourceUserUpload {
 		return "", gen.MediaLibraryEntry{}, fmt.Errorf("%w: %q", ErrSourceNotAllowed, source)
 	}
 	if reader == nil {
@@ -716,9 +716,9 @@ func (l *Library) uploadInternal(
 }
 
 // Upload is the live entry point for new media. Source must be one of
-// gen.UserUpload (the production path); test fixtures use the
+// gen.MediaLibraryEntrySourceUserUpload (the production path); test fixtures use the
 // package-private UploadFixture helper instead of going through Upload
-// with an internal-only source value (Wave 1 TD-m1). gen.ToolOutput is
+// with an internal-only source value (Wave 1 TD-m1). gen.MediaLibraryEntrySourceToolOutput is
 // reserved for the persistent-storage layer that future work will add
 // (session-scoped tool outputs that never migrate to the library); it
 // is rejected here as ErrSourceNotAllowed so the wire enum's second

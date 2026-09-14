@@ -331,13 +331,13 @@ func (e AgentContextWindowSource) Valid() bool {
 
 // Defines values for AgentDegradedReason.
 const (
-	NeedsProvider AgentDegradedReason = "needs_provider"
+	AgentDegradedReasonNeedsProvider AgentDegradedReason = "needs_provider"
 )
 
 // Valid indicates whether the value is a known member of the AgentDegradedReason enum.
 func (e AgentDegradedReason) Valid() bool {
 	switch e {
-	case NeedsProvider:
+	case AgentDegradedReasonNeedsProvider:
 		return true
 	default:
 		return false
@@ -532,13 +532,13 @@ func (e AgentCreateRequestSubagent3pExecutorKind) Valid() bool {
 
 // Defines values for AgentCreateRequestSubagent3pType.
 const (
-	Subagent3p AgentCreateRequestSubagent3pType = "subagent_3p"
+	AgentCreateRequestSubagent3pTypeSubagent3p AgentCreateRequestSubagent3pType = "subagent_3p"
 )
 
 // Valid indicates whether the value is a known member of the AgentCreateRequestSubagent3pType enum.
 func (e AgentCreateRequestSubagent3pType) Valid() bool {
 	switch e {
-	case Subagent3p:
+	case AgentCreateRequestSubagent3pTypeSubagent3p:
 		return true
 	default:
 		return false
@@ -721,16 +721,16 @@ func (e AgentToolsResponseToolsManifestTier) Valid() bool {
 
 // Defines values for AgentToolsUpdateRequestBuiltinMode.
 const (
-	Explicit AgentToolsUpdateRequestBuiltinMode = "explicit"
-	Inherit  AgentToolsUpdateRequestBuiltinMode = "inherit"
+	AgentToolsUpdateRequestBuiltinModeExplicit AgentToolsUpdateRequestBuiltinMode = "explicit"
+	AgentToolsUpdateRequestBuiltinModeInherit  AgentToolsUpdateRequestBuiltinMode = "inherit"
 )
 
 // Valid indicates whether the value is a known member of the AgentToolsUpdateRequestBuiltinMode enum.
 func (e AgentToolsUpdateRequestBuiltinMode) Valid() bool {
 	switch e {
-	case Explicit:
+	case AgentToolsUpdateRequestBuiltinModeExplicit:
 		return true
-	case Inherit:
+	case AgentToolsUpdateRequestBuiltinModeInherit:
 		return true
 	default:
 		return false
@@ -1528,13 +1528,13 @@ func (e DelegateCancelActionAction) Valid() bool {
 
 // Defines values for DelegateFollowUpActionAction.
 const (
-	FollowUp DelegateFollowUpActionAction = "follow_up"
+	DelegateFollowUpActionActionFollowUp DelegateFollowUpActionAction = "follow_up"
 )
 
 // Valid indicates whether the value is a known member of the DelegateFollowUpActionAction enum.
 func (e DelegateFollowUpActionAction) Valid() bool {
 	switch e {
-	case FollowUp:
+	case DelegateFollowUpActionActionFollowUp:
 		return true
 	default:
 		return false
@@ -1543,13 +1543,13 @@ func (e DelegateFollowUpActionAction) Valid() bool {
 
 // Defines values for DelegateInboxAckActionAction.
 const (
-	InboxAck DelegateInboxAckActionAction = "inbox_ack"
+	DelegateInboxAckActionActionInboxAck DelegateInboxAckActionAction = "inbox_ack"
 )
 
 // Valid indicates whether the value is a known member of the DelegateInboxAckActionAction enum.
 func (e DelegateInboxAckActionAction) Valid() bool {
 	switch e {
-	case InboxAck:
+	case DelegateInboxAckActionActionInboxAck:
 		return true
 	default:
 		return false
@@ -1573,13 +1573,13 @@ func (e DelegateInboxActionAction) Valid() bool {
 
 // Defines values for DelegatePeekActionAction.
 const (
-	Peek DelegatePeekActionAction = "peek"
+	DelegatePeekActionActionPeek DelegatePeekActionAction = "peek"
 )
 
 // Valid indicates whether the value is a known member of the DelegatePeekActionAction enum.
 func (e DelegatePeekActionAction) Valid() bool {
 	switch e {
-	case Peek:
+	case DelegatePeekActionActionPeek:
 		return true
 	default:
 		return false
@@ -1675,13 +1675,13 @@ func (e DelegateRespondResponseCorrectiveSessionState) Valid() bool {
 
 // Defines values for DelegateRunActionAction.
 const (
-	Run DelegateRunActionAction = "run"
+	DelegateRunActionActionRun DelegateRunActionAction = "run"
 )
 
 // Valid indicates whether the value is a known member of the DelegateRunActionAction enum.
 func (e DelegateRunActionAction) Valid() bool {
 	switch e {
-	case Run:
+	case DelegateRunActionActionRun:
 		return true
 	default:
 		return false
@@ -1726,13 +1726,13 @@ func (e DelegateSessionResponseState) Valid() bool {
 
 // Defines values for DelegateStatusActionAction.
 const (
-	Status DelegateStatusActionAction = "status"
+	DelegateStatusActionActionStatus DelegateStatusActionAction = "status"
 )
 
 // Valid indicates whether the value is a known member of the DelegateStatusActionAction enum.
 func (e DelegateStatusActionAction) Valid() bool {
 	switch e {
-	case Status:
+	case DelegateStatusActionActionStatus:
 		return true
 	default:
 		return false
@@ -1909,16 +1909,16 @@ func (e EntitlementModelLimits) Valid() bool {
 
 // Defines values for EntitlementResponseModelsLimits.
 const (
-	Known   EntitlementResponseModelsLimits = "known"
-	Unknown EntitlementResponseModelsLimits = "unknown"
+	EntitlementResponseModelsLimitsKnown   EntitlementResponseModelsLimits = "known"
+	EntitlementResponseModelsLimitsUnknown EntitlementResponseModelsLimits = "unknown"
 )
 
 // Valid indicates whether the value is a known member of the EntitlementResponseModelsLimits enum.
 func (e EntitlementResponseModelsLimits) Valid() bool {
 	switch e {
-	case Known:
+	case EntitlementResponseModelsLimitsKnown:
 		return true
-	case Unknown:
+	case EntitlementResponseModelsLimitsUnknown:
 		return true
 	default:
 		return false
@@ -1927,16 +1927,16 @@ func (e EntitlementResponseModelsLimits) Valid() bool {
 
 // Defines values for ExecutorCommandPreviewResponsePromptDelivery.
 const (
-	PositionalArgumentAfter ExecutorCommandPreviewResponsePromptDelivery = "positional argument after --"
-	Stdin                   ExecutorCommandPreviewResponsePromptDelivery = "stdin"
+	ExecutorCommandPreviewResponsePromptDeliveryPositionalArgumentAfter ExecutorCommandPreviewResponsePromptDelivery = "positional argument after --"
+	ExecutorCommandPreviewResponsePromptDeliveryStdin                   ExecutorCommandPreviewResponsePromptDelivery = "stdin"
 )
 
 // Valid indicates whether the value is a known member of the ExecutorCommandPreviewResponsePromptDelivery enum.
 func (e ExecutorCommandPreviewResponsePromptDelivery) Valid() bool {
 	switch e {
-	case PositionalArgumentAfter:
+	case ExecutorCommandPreviewResponsePromptDeliveryPositionalArgumentAfter:
 		return true
-	case Stdin:
+	case ExecutorCommandPreviewResponsePromptDeliveryStdin:
 		return true
 	default:
 		return false
@@ -1945,19 +1945,19 @@ func (e ExecutorCommandPreviewResponsePromptDelivery) Valid() bool {
 
 // Defines values for ExecutorConfigKind.
 const (
-	ExternalCli ExecutorConfigKind = "external-cli"
-	Native      ExecutorConfigKind = "native"
-	RemoteA2a   ExecutorConfigKind = "remote-a2a"
+	ExecutorConfigKindExternalCli ExecutorConfigKind = "external-cli"
+	ExecutorConfigKindNative      ExecutorConfigKind = "native"
+	ExecutorConfigKindRemoteA2a   ExecutorConfigKind = "remote-a2a"
 )
 
 // Valid indicates whether the value is a known member of the ExecutorConfigKind enum.
 func (e ExecutorConfigKind) Valid() bool {
 	switch e {
-	case ExternalCli:
+	case ExecutorConfigKindExternalCli:
 		return true
-	case Native:
+	case ExecutorConfigKindNative:
 		return true
-	case RemoteA2a:
+	case ExecutorConfigKindRemoteA2a:
 		return true
 	default:
 		return false
@@ -1987,13 +1987,13 @@ func (e ExternalCliTool) Valid() bool {
 
 // Defines values for GatewayRestartResponseStatus.
 const (
-	Restarting GatewayRestartResponseStatus = "restarting"
+	GatewayRestartResponseStatusRestarting GatewayRestartResponseStatus = "restarting"
 )
 
 // Valid indicates whether the value is a known member of the GatewayRestartResponseStatus enum.
 func (e GatewayRestartResponseStatus) Valid() bool {
 	switch e {
-	case Restarting:
+	case GatewayRestartResponseStatusRestarting:
 		return true
 	default:
 		return false
@@ -2386,19 +2386,19 @@ func (e GoalOwnerKind) Valid() bool {
 
 // Defines values for GoalSource.
 const (
-	ChatCompiled GoalSource = "chat_compiled"
-	PlanDod      GoalSource = "plan_dod"
-	TaskExplicit GoalSource = "task_explicit"
+	GoalSourceChatCompiled GoalSource = "chat_compiled"
+	GoalSourcePlanDod      GoalSource = "plan_dod"
+	GoalSourceTaskExplicit GoalSource = "task_explicit"
 )
 
 // Valid indicates whether the value is a known member of the GoalSource enum.
 func (e GoalSource) Valid() bool {
 	switch e {
-	case ChatCompiled:
+	case GoalSourceChatCompiled:
 		return true
-	case PlanDod:
+	case GoalSourcePlanDod:
 		return true
-	case TaskExplicit:
+	case GoalSourceTaskExplicit:
 		return true
 	default:
 		return false
@@ -3025,16 +3025,16 @@ func (e McpServerCreateTransport) Valid() bool {
 
 // Defines values for MediaLibraryEntrySource.
 const (
-	ToolOutput MediaLibraryEntrySource = "tool_output"
-	UserUpload MediaLibraryEntrySource = "user_upload"
+	MediaLibraryEntrySourceToolOutput MediaLibraryEntrySource = "tool_output"
+	MediaLibraryEntrySourceUserUpload MediaLibraryEntrySource = "user_upload"
 )
 
 // Valid indicates whether the value is a known member of the MediaLibraryEntrySource enum.
 func (e MediaLibraryEntrySource) Valid() bool {
 	switch e {
-	case ToolOutput:
+	case MediaLibraryEntrySourceToolOutput:
 		return true
-	case UserUpload:
+	case MediaLibraryEntrySourceUserUpload:
 		return true
 	default:
 		return false
@@ -3043,16 +3043,16 @@ func (e MediaLibraryEntrySource) Valid() bool {
 
 // Defines values for MediaLibraryEntryStatus.
 const (
-	Available MediaLibraryEntryStatus = "available"
-	Stranded  MediaLibraryEntryStatus = "stranded"
+	MediaLibraryEntryStatusAvailable MediaLibraryEntryStatus = "available"
+	MediaLibraryEntryStatusStranded  MediaLibraryEntryStatus = "stranded"
 )
 
 // Valid indicates whether the value is a known member of the MediaLibraryEntryStatus enum.
 func (e MediaLibraryEntryStatus) Valid() bool {
 	switch e {
-	case Available:
+	case MediaLibraryEntryStatusAvailable:
 		return true
-	case Stranded:
+	case MediaLibraryEntryStatusStranded:
 		return true
 	default:
 		return false
@@ -4342,28 +4342,28 @@ func (e PlanRestartResponsePlanFailedReason) Valid() bool {
 
 // Defines values for PlanRestartResponsePlanPlanPhase.
 const (
-	AwaitingSupervision PlanRestartResponsePlanPlanPhase = "awaiting_supervision"
-	Dispatching         PlanRestartResponsePlanPlanPhase = "dispatching"
-	Idle                PlanRestartResponsePlanPlanPhase = "idle"
-	Judging             PlanRestartResponsePlanPlanPhase = "judging"
-	Stalled             PlanRestartResponsePlanPlanPhase = "stalled"
-	Synthesizing        PlanRestartResponsePlanPlanPhase = "synthesizing"
+	PlanRestartResponsePlanPlanPhaseAwaitingSupervision PlanRestartResponsePlanPlanPhase = "awaiting_supervision"
+	PlanRestartResponsePlanPlanPhaseDispatching         PlanRestartResponsePlanPlanPhase = "dispatching"
+	PlanRestartResponsePlanPlanPhaseIdle                PlanRestartResponsePlanPlanPhase = "idle"
+	PlanRestartResponsePlanPlanPhaseJudging             PlanRestartResponsePlanPlanPhase = "judging"
+	PlanRestartResponsePlanPlanPhaseStalled             PlanRestartResponsePlanPlanPhase = "stalled"
+	PlanRestartResponsePlanPlanPhaseSynthesizing        PlanRestartResponsePlanPlanPhase = "synthesizing"
 )
 
 // Valid indicates whether the value is a known member of the PlanRestartResponsePlanPlanPhase enum.
 func (e PlanRestartResponsePlanPlanPhase) Valid() bool {
 	switch e {
-	case AwaitingSupervision:
+	case PlanRestartResponsePlanPlanPhaseAwaitingSupervision:
 		return true
-	case Dispatching:
+	case PlanRestartResponsePlanPlanPhaseDispatching:
 		return true
-	case Idle:
+	case PlanRestartResponsePlanPlanPhaseIdle:
 		return true
-	case Judging:
+	case PlanRestartResponsePlanPlanPhaseJudging:
 		return true
-	case Stalled:
+	case PlanRestartResponsePlanPlanPhaseStalled:
 		return true
-	case Synthesizing:
+	case PlanRestartResponsePlanPlanPhaseSynthesizing:
 		return true
 	default:
 		return false
@@ -4816,25 +4816,25 @@ func (e ProviderStatus) Valid() bool {
 
 // Defines values for ProviderValidationOutcome.
 const (
-	InvalidKey  ProviderValidationOutcome = "invalid_key"
-	NoCredit    ProviderValidationOutcome = "no_credit"
-	Restricted  ProviderValidationOutcome = "restricted"
-	Unreachable ProviderValidationOutcome = "unreachable"
-	Valid       ProviderValidationOutcome = "valid"
+	ProviderValidationOutcomeInvalidKey  ProviderValidationOutcome = "invalid_key"
+	ProviderValidationOutcomeNoCredit    ProviderValidationOutcome = "no_credit"
+	ProviderValidationOutcomeRestricted  ProviderValidationOutcome = "restricted"
+	ProviderValidationOutcomeUnreachable ProviderValidationOutcome = "unreachable"
+	ProviderValidationOutcomeValid       ProviderValidationOutcome = "valid"
 )
 
 // Valid indicates whether the value is a known member of the ProviderValidationOutcome enum.
 func (e ProviderValidationOutcome) Valid() bool {
 	switch e {
-	case InvalidKey:
+	case ProviderValidationOutcomeInvalidKey:
 		return true
-	case NoCredit:
+	case ProviderValidationOutcomeNoCredit:
 		return true
-	case Restricted:
+	case ProviderValidationOutcomeRestricted:
 		return true
-	case Unreachable:
+	case ProviderValidationOutcomeUnreachable:
 		return true
-	case Valid:
+	case ProviderValidationOutcomeValid:
 		return true
 	default:
 		return false
@@ -4948,16 +4948,16 @@ func (e ProviderUpdateRequestProtocol) Valid() bool {
 
 // Defines values for ProvidersCatalogProvidersAuthMethods.
 const (
-	ApiKey ProvidersCatalogProvidersAuthMethods = "api_key"
-	SignIn ProvidersCatalogProvidersAuthMethods = "sign_in"
+	ProvidersCatalogProvidersAuthMethodsApiKey ProvidersCatalogProvidersAuthMethods = "api_key"
+	ProvidersCatalogProvidersAuthMethodsSignIn ProvidersCatalogProvidersAuthMethods = "sign_in"
 )
 
 // Valid indicates whether the value is a known member of the ProvidersCatalogProvidersAuthMethods enum.
 func (e ProvidersCatalogProvidersAuthMethods) Valid() bool {
 	switch e {
-	case ApiKey:
+	case ProvidersCatalogProvidersAuthMethodsApiKey:
 		return true
-	case SignIn:
+	case ProvidersCatalogProvidersAuthMethodsSignIn:
 		return true
 	default:
 		return false
@@ -4984,16 +4984,16 @@ func (e ProvidersCatalogProvidersCliKind) Valid() bool {
 
 // Defines values for ProvidersCatalogProvidersLocality.
 const (
-	Cloud ProvidersCatalogProvidersLocality = "cloud"
-	Local ProvidersCatalogProvidersLocality = "local"
+	ProvidersCatalogProvidersLocalityCloud ProvidersCatalogProvidersLocality = "cloud"
+	ProvidersCatalogProvidersLocalityLocal ProvidersCatalogProvidersLocality = "local"
 )
 
 // Valid indicates whether the value is a known member of the ProvidersCatalogProvidersLocality enum.
 func (e ProvidersCatalogProvidersLocality) Valid() bool {
 	switch e {
-	case Cloud:
+	case ProvidersCatalogProvidersLocalityCloud:
 		return true
-	case Local:
+	case ProvidersCatalogProvidersLocalityLocal:
 		return true
 	default:
 		return false
@@ -5167,13 +5167,13 @@ func (e ProvidersCatalogProvidersUnsupportedReason) Valid() bool {
 
 // Defines values for ProvidersCatalogSchemaVersion.
 const (
-	N200 ProvidersCatalogSchemaVersion = "2.0.0"
+	ProvidersCatalogSchemaVersionN200 ProvidersCatalogSchemaVersion = "2.0.0"
 )
 
 // Valid indicates whether the value is a known member of the ProvidersCatalogSchemaVersion enum.
 func (e ProvidersCatalogSchemaVersion) Valid() bool {
 	switch e {
-	case N200:
+	case ProvidersCatalogSchemaVersionN200:
 		return true
 	default:
 		return false
@@ -5182,16 +5182,16 @@ func (e ProvidersCatalogSchemaVersion) Valid() bool {
 
 // Defines values for ProvidersCatalogServedFrom.
 const (
-	Embedded ProvidersCatalogServedFrom = "embedded"
-	Pulled   ProvidersCatalogServedFrom = "pulled"
+	ProvidersCatalogServedFromEmbedded ProvidersCatalogServedFrom = "embedded"
+	ProvidersCatalogServedFromPulled   ProvidersCatalogServedFrom = "pulled"
 )
 
 // Valid indicates whether the value is a known member of the ProvidersCatalogServedFrom enum.
 func (e ProvidersCatalogServedFrom) Valid() bool {
 	switch e {
-	case Embedded:
+	case ProvidersCatalogServedFromEmbedded:
 		return true
-	case Pulled:
+	case ProvidersCatalogServedFromPulled:
 		return true
 	default:
 		return false
@@ -5224,28 +5224,28 @@ func (e RevisionEntryVerb) Valid() bool {
 
 // Defines values for RunnerTestResponseReason.
 const (
-	Empty           RunnerTestResponseReason = ""
-	HandshakeFailed RunnerTestResponseReason = "handshake-failed"
-	MissingBinary   RunnerTestResponseReason = "missing-binary"
-	NotExternalCli  RunnerTestResponseReason = "not-external-cli"
-	Unauthenticated RunnerTestResponseReason = "unauthenticated"
-	UnknownCli      RunnerTestResponseReason = "unknown-cli"
+	RunnerTestResponseReasonEmpty           RunnerTestResponseReason = ""
+	RunnerTestResponseReasonHandshakeFailed RunnerTestResponseReason = "handshake-failed"
+	RunnerTestResponseReasonMissingBinary   RunnerTestResponseReason = "missing-binary"
+	RunnerTestResponseReasonNotExternalCli  RunnerTestResponseReason = "not-external-cli"
+	RunnerTestResponseReasonUnauthenticated RunnerTestResponseReason = "unauthenticated"
+	RunnerTestResponseReasonUnknownCli      RunnerTestResponseReason = "unknown-cli"
 )
 
 // Valid indicates whether the value is a known member of the RunnerTestResponseReason enum.
 func (e RunnerTestResponseReason) Valid() bool {
 	switch e {
-	case Empty:
+	case RunnerTestResponseReasonEmpty:
 		return true
-	case HandshakeFailed:
+	case RunnerTestResponseReasonHandshakeFailed:
 		return true
-	case MissingBinary:
+	case RunnerTestResponseReasonMissingBinary:
 		return true
-	case NotExternalCli:
+	case RunnerTestResponseReasonNotExternalCli:
 		return true
-	case Unauthenticated:
+	case RunnerTestResponseReasonUnauthenticated:
 		return true
-	case UnknownCli:
+	case RunnerTestResponseReasonUnknownCli:
 		return true
 	default:
 		return false
@@ -5332,16 +5332,16 @@ func (e SandboxConfigUpdateMode) Valid() bool {
 
 // Defines values for SandboxStatusFilesystemModel.
 const (
-	Confined SandboxStatusFilesystemModel = "confined"
-	Open     SandboxStatusFilesystemModel = "open"
+	SandboxStatusFilesystemModelConfined SandboxStatusFilesystemModel = "confined"
+	SandboxStatusFilesystemModelOpen     SandboxStatusFilesystemModel = "open"
 )
 
 // Valid indicates whether the value is a known member of the SandboxStatusFilesystemModel enum.
 func (e SandboxStatusFilesystemModel) Valid() bool {
 	switch e {
-	case Confined:
+	case SandboxStatusFilesystemModelConfined:
 		return true
-	case Open:
+	case SandboxStatusFilesystemModelOpen:
 		return true
 	default:
 		return false
@@ -5689,22 +5689,22 @@ func (e SessionCreateRequestType) Valid() bool {
 
 // Defines values for SessionDetailMessagesAttachmentsType.
 const (
-	Audio SessionDetailMessagesAttachmentsType = "audio"
-	File  SessionDetailMessagesAttachmentsType = "file"
-	Image SessionDetailMessagesAttachmentsType = "image"
-	Video SessionDetailMessagesAttachmentsType = "video"
+	SessionDetailMessagesAttachmentsTypeAudio SessionDetailMessagesAttachmentsType = "audio"
+	SessionDetailMessagesAttachmentsTypeFile  SessionDetailMessagesAttachmentsType = "file"
+	SessionDetailMessagesAttachmentsTypeImage SessionDetailMessagesAttachmentsType = "image"
+	SessionDetailMessagesAttachmentsTypeVideo SessionDetailMessagesAttachmentsType = "video"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailMessagesAttachmentsType enum.
 func (e SessionDetailMessagesAttachmentsType) Valid() bool {
 	switch e {
-	case Audio:
+	case SessionDetailMessagesAttachmentsTypeAudio:
 		return true
-	case File:
+	case SessionDetailMessagesAttachmentsTypeFile:
 		return true
-	case Image:
+	case SessionDetailMessagesAttachmentsTypeImage:
 		return true
-	case Video:
+	case SessionDetailMessagesAttachmentsTypeVideo:
 		return true
 	default:
 		return false
@@ -6169,19 +6169,19 @@ func (e SessionMessageBlockerKind) Valid() bool {
 
 // Defines values for SessionMessageBlockerSeverity.
 const (
-	High   SessionMessageBlockerSeverity = "high"
-	Low    SessionMessageBlockerSeverity = "low"
-	Medium SessionMessageBlockerSeverity = "medium"
+	SessionMessageBlockerSeverityHigh   SessionMessageBlockerSeverity = "high"
+	SessionMessageBlockerSeverityLow    SessionMessageBlockerSeverity = "low"
+	SessionMessageBlockerSeverityMedium SessionMessageBlockerSeverity = "medium"
 )
 
 // Valid indicates whether the value is a known member of the SessionMessageBlockerSeverity enum.
 func (e SessionMessageBlockerSeverity) Valid() bool {
 	switch e {
-	case High:
+	case SessionMessageBlockerSeverityHigh:
 		return true
-	case Low:
+	case SessionMessageBlockerSeverityLow:
 		return true
-	case Medium:
+	case SessionMessageBlockerSeverityMedium:
 		return true
 	default:
 		return false
@@ -6253,13 +6253,13 @@ func (e SessionMessageDecisionRequestDirection) Valid() bool {
 
 // Defines values for SessionMessageDecisionRequestKind.
 const (
-	DecisionRequest SessionMessageDecisionRequestKind = "decision_request"
+	SessionMessageDecisionRequestKindDecisionRequest SessionMessageDecisionRequestKind = "decision_request"
 )
 
 // Valid indicates whether the value is a known member of the SessionMessageDecisionRequestKind enum.
 func (e SessionMessageDecisionRequestKind) Valid() bool {
 	switch e {
-	case DecisionRequest:
+	case SessionMessageDecisionRequestKindDecisionRequest:
 		return true
 	default:
 		return false
@@ -6316,13 +6316,13 @@ func (e SessionMessageGoalStatusCondition) Valid() bool {
 
 // Defines values for SessionMessageGoalStatusDirection.
 const (
-	SessionToUi SessionMessageGoalStatusDirection = "session_to_ui"
+	SessionMessageGoalStatusDirectionSessionToUi SessionMessageGoalStatusDirection = "session_to_ui"
 )
 
 // Valid indicates whether the value is a known member of the SessionMessageGoalStatusDirection enum.
 func (e SessionMessageGoalStatusDirection) Valid() bool {
 	switch e {
-	case SessionToUi:
+	case SessionMessageGoalStatusDirectionSessionToUi:
 		return true
 	default:
 		return false
@@ -6331,13 +6331,13 @@ func (e SessionMessageGoalStatusDirection) Valid() bool {
 
 // Defines values for SessionMessageGoalStatusKind.
 const (
-	GoalStatus SessionMessageGoalStatusKind = "goal_status"
+	SessionMessageGoalStatusKindGoalStatus SessionMessageGoalStatusKind = "goal_status"
 )
 
 // Valid indicates whether the value is a known member of the SessionMessageGoalStatusKind enum.
 func (e SessionMessageGoalStatusKind) Valid() bool {
 	switch e {
-	case GoalStatus:
+	case SessionMessageGoalStatusKindGoalStatus:
 		return true
 	default:
 		return false
@@ -6424,16 +6424,16 @@ func (e SessionMessageProgressKind) Valid() bool {
 
 // Defines values for SessionMessageQuestionAuthority.
 const (
-	OwnerRequired SessionMessageQuestionAuthority = "owner_required"
-	SelfOk        SessionMessageQuestionAuthority = "self_ok"
+	SessionMessageQuestionAuthorityOwnerRequired SessionMessageQuestionAuthority = "owner_required"
+	SessionMessageQuestionAuthoritySelfOk        SessionMessageQuestionAuthority = "self_ok"
 )
 
 // Valid indicates whether the value is a known member of the SessionMessageQuestionAuthority enum.
 func (e SessionMessageQuestionAuthority) Valid() bool {
 	switch e {
-	case OwnerRequired:
+	case SessionMessageQuestionAuthorityOwnerRequired:
 		return true
-	case SelfOk:
+	case SessionMessageQuestionAuthoritySelfOk:
 		return true
 	default:
 		return false
@@ -6502,13 +6502,13 @@ func (e SessionMessageRespondKind) Valid() bool {
 
 // Defines values for SessionMessageRevisionEntryDirection.
 const (
-	Engine SessionMessageRevisionEntryDirection = "engine"
+	SessionMessageRevisionEntryDirectionEngine SessionMessageRevisionEntryDirection = "engine"
 )
 
 // Valid indicates whether the value is a known member of the SessionMessageRevisionEntryDirection enum.
 func (e SessionMessageRevisionEntryDirection) Valid() bool {
 	switch e {
-	case Engine:
+	case SessionMessageRevisionEntryDirectionEngine:
 		return true
 	default:
 		return false
@@ -6658,13 +6658,13 @@ func (e SignInPollResponseState) Valid() bool {
 
 // Defines values for SignInStartResponseCliLoginMethod.
 const (
-	CliLogin SignInStartResponseCliLoginMethod = "cli_login"
+	SignInStartResponseCliLoginMethodCliLogin SignInStartResponseCliLoginMethod = "cli_login"
 )
 
 // Valid indicates whether the value is a known member of the SignInStartResponseCliLoginMethod enum.
 func (e SignInStartResponseCliLoginMethod) Valid() bool {
 	switch e {
-	case CliLogin:
+	case SignInStartResponseCliLoginMethodCliLogin:
 		return true
 	default:
 		return false
@@ -6673,13 +6673,13 @@ func (e SignInStartResponseCliLoginMethod) Valid() bool {
 
 // Defines values for SignInStartResponseDeviceCodeMethod.
 const (
-	DeviceCode SignInStartResponseDeviceCodeMethod = "device_code"
+	SignInStartResponseDeviceCodeMethodDeviceCode SignInStartResponseDeviceCodeMethod = "device_code"
 )
 
 // Valid indicates whether the value is a known member of the SignInStartResponseDeviceCodeMethod enum.
 func (e SignInStartResponseDeviceCodeMethod) Valid() bool {
 	switch e {
-	case DeviceCode:
+	case SignInStartResponseDeviceCodeMethodDeviceCode:
 		return true
 	default:
 		return false
@@ -6799,19 +6799,19 @@ func (e SkillTrustUpdateRequestLevel) Valid() bool {
 
 // Defines values for SkillTrustUpdateResponseAppliedLevel.
 const (
-	AllowAll        SkillTrustUpdateResponseAppliedLevel = "allow_all"
-	BlockUnverified SkillTrustUpdateResponseAppliedLevel = "block_unverified"
-	WarnUnverified  SkillTrustUpdateResponseAppliedLevel = "warn_unverified"
+	SkillTrustUpdateResponseAppliedLevelAllowAll        SkillTrustUpdateResponseAppliedLevel = "allow_all"
+	SkillTrustUpdateResponseAppliedLevelBlockUnverified SkillTrustUpdateResponseAppliedLevel = "block_unverified"
+	SkillTrustUpdateResponseAppliedLevelWarnUnverified  SkillTrustUpdateResponseAppliedLevel = "warn_unverified"
 )
 
 // Valid indicates whether the value is a known member of the SkillTrustUpdateResponseAppliedLevel enum.
 func (e SkillTrustUpdateResponseAppliedLevel) Valid() bool {
 	switch e {
-	case AllowAll:
+	case SkillTrustUpdateResponseAppliedLevelAllowAll:
 		return true
-	case BlockUnverified:
+	case SkillTrustUpdateResponseAppliedLevelBlockUnverified:
 		return true
-	case WarnUnverified:
+	case SkillTrustUpdateResponseAppliedLevelWarnUnverified:
 		return true
 	default:
 		return false
@@ -6853,13 +6853,13 @@ func (e TaskAction) Valid() bool {
 
 // Defines values for TaskCancelReason.
 const (
-	StoppedByUser TaskCancelReason = "stopped_by_user"
+	TaskCancelReasonStoppedByUser TaskCancelReason = "stopped_by_user"
 )
 
 // Valid indicates whether the value is a known member of the TaskCancelReason enum.
 func (e TaskCancelReason) Valid() bool {
 	switch e {
-	case StoppedByUser:
+	case TaskCancelReasonStoppedByUser:
 		return true
 	default:
 		return false
@@ -7768,16 +7768,16 @@ func (e TaskUpdateRequestDodAuthorKind) Valid() bool {
 
 // Defines values for TaskUpdateRequestDodBehaviorScope.
 const (
-	Attempt     TaskUpdateRequestDodBehaviorScope = "attempt"
-	TaskSession TaskUpdateRequestDodBehaviorScope = "task_session"
+	TaskUpdateRequestDodBehaviorScopeAttempt     TaskUpdateRequestDodBehaviorScope = "attempt"
+	TaskUpdateRequestDodBehaviorScopeTaskSession TaskUpdateRequestDodBehaviorScope = "task_session"
 )
 
 // Valid indicates whether the value is a known member of the TaskUpdateRequestDodBehaviorScope enum.
 func (e TaskUpdateRequestDodBehaviorScope) Valid() bool {
 	switch e {
-	case Attempt:
+	case TaskUpdateRequestDodBehaviorScopeAttempt:
 		return true
-	case TaskSession:
+	case TaskUpdateRequestDodBehaviorScopeTaskSession:
 		return true
 	default:
 		return false
@@ -7786,19 +7786,19 @@ func (e TaskUpdateRequestDodBehaviorScope) Valid() bool {
 
 // Defines values for TaskUpdateRequestDodJudgment.
 const (
-	Artifact     TaskUpdateRequestDodJudgment = "artifact"
-	Boolean      TaskUpdateRequestDodJudgment = "boolean"
-	Quantitative TaskUpdateRequestDodJudgment = "quantitative"
+	TaskUpdateRequestDodJudgmentArtifact     TaskUpdateRequestDodJudgment = "artifact"
+	TaskUpdateRequestDodJudgmentBoolean      TaskUpdateRequestDodJudgment = "boolean"
+	TaskUpdateRequestDodJudgmentQuantitative TaskUpdateRequestDodJudgment = "quantitative"
 )
 
 // Valid indicates whether the value is a known member of the TaskUpdateRequestDodJudgment enum.
 func (e TaskUpdateRequestDodJudgment) Valid() bool {
 	switch e {
-	case Artifact:
+	case TaskUpdateRequestDodJudgmentArtifact:
 		return true
-	case Boolean:
+	case TaskUpdateRequestDodJudgmentBoolean:
 		return true
-	case Quantitative:
+	case TaskUpdateRequestDodJudgmentQuantitative:
 		return true
 	default:
 		return false
@@ -7807,19 +7807,19 @@ func (e TaskUpdateRequestDodJudgment) Valid() bool {
 
 // Defines values for TaskUpdateRequestDodKind.
 const (
-	Behavior TaskUpdateRequestDodKind = "behavior"
-	Check    TaskUpdateRequestDodKind = "check"
-	Prose    TaskUpdateRequestDodKind = "prose"
+	TaskUpdateRequestDodKindBehavior TaskUpdateRequestDodKind = "behavior"
+	TaskUpdateRequestDodKindCheck    TaskUpdateRequestDodKind = "check"
+	TaskUpdateRequestDodKindProse    TaskUpdateRequestDodKind = "prose"
 )
 
 // Valid indicates whether the value is a known member of the TaskUpdateRequestDodKind enum.
 func (e TaskUpdateRequestDodKind) Valid() bool {
 	switch e {
-	case Behavior:
+	case TaskUpdateRequestDodKindBehavior:
 		return true
-	case Check:
+	case TaskUpdateRequestDodKindCheck:
 		return true
-	case Prose:
+	case TaskUpdateRequestDodKindProse:
 		return true
 	default:
 		return false
@@ -8050,19 +8050,19 @@ func (e ToolApprovalResponseStatus) Valid() bool {
 
 // Defines values for ToolCallContentState.
 const (
-	Capped  ToolCallContentState = "capped"
-	Emptied ToolCallContentState = "emptied"
-	Full    ToolCallContentState = "full"
+	ToolCallContentStateCapped  ToolCallContentState = "capped"
+	ToolCallContentStateEmptied ToolCallContentState = "emptied"
+	ToolCallContentStateFull    ToolCallContentState = "full"
 )
 
 // Valid indicates whether the value is a known member of the ToolCallContentState enum.
 func (e ToolCallContentState) Valid() bool {
 	switch e {
-	case Capped:
+	case ToolCallContentStateCapped:
 		return true
-	case Emptied:
+	case ToolCallContentStateEmptied:
 		return true
-	case Full:
+	case ToolCallContentStateFull:
 		return true
 	default:
 		return false
@@ -8128,16 +8128,16 @@ func (e ToolPolicy) Valid() bool {
 
 // Defines values for ToolRegistryEntryScope.
 const (
-	Core    ToolRegistryEntryScope = "core"
-	General ToolRegistryEntryScope = "general"
+	ToolRegistryEntryScopeCore    ToolRegistryEntryScope = "core"
+	ToolRegistryEntryScopeGeneral ToolRegistryEntryScope = "general"
 )
 
 // Valid indicates whether the value is a known member of the ToolRegistryEntryScope enum.
 func (e ToolRegistryEntryScope) Valid() bool {
 	switch e {
-	case Core:
+	case ToolRegistryEntryScopeCore:
 		return true
-	case General:
+	case ToolRegistryEntryScopeGeneral:
 		return true
 	default:
 		return false
@@ -8146,16 +8146,16 @@ func (e ToolRegistryEntryScope) Valid() bool {
 
 // Defines values for ToolRegistryEntrySource.
 const (
-	Builtin ToolRegistryEntrySource = "builtin"
-	Mcp     ToolRegistryEntrySource = "mcp"
+	ToolRegistryEntrySourceBuiltin ToolRegistryEntrySource = "builtin"
+	ToolRegistryEntrySourceMcp     ToolRegistryEntrySource = "mcp"
 )
 
 // Valid indicates whether the value is a known member of the ToolRegistryEntrySource enum.
 func (e ToolRegistryEntrySource) Valid() bool {
 	switch e {
-	case Builtin:
+	case ToolRegistryEntrySourceBuiltin:
 		return true
-	case Mcp:
+	case ToolRegistryEntrySourceMcp:
 		return true
 	default:
 		return false
@@ -8254,16 +8254,16 @@ func (e WorkspaceDelegationUpdateRequestEdgesModes) Valid() bool {
 
 // Defines values for WorkspaceMountCreateResponseStatus.
 const (
-	Broken WorkspaceMountCreateResponseStatus = "broken"
-	Ok     WorkspaceMountCreateResponseStatus = "ok"
+	WorkspaceMountCreateResponseStatusBroken WorkspaceMountCreateResponseStatus = "broken"
+	WorkspaceMountCreateResponseStatusOk     WorkspaceMountCreateResponseStatus = "ok"
 )
 
 // Valid indicates whether the value is a known member of the WorkspaceMountCreateResponseStatus enum.
 func (e WorkspaceMountCreateResponseStatus) Valid() bool {
 	switch e {
-	case Broken:
+	case WorkspaceMountCreateResponseStatusBroken:
 		return true
-	case Ok:
+	case WorkspaceMountCreateResponseStatusOk:
 		return true
 	default:
 		return false
@@ -8290,19 +8290,19 @@ func (e WorkspaceUpdateRequestStatus) Valid() bool {
 
 // Defines values for ListCommandsParamsSurface.
 const (
-	Channel ListCommandsParamsSurface = "channel"
-	Cli     ListCommandsParamsSurface = "cli"
-	Web     ListCommandsParamsSurface = "web"
+	ListCommandsParamsSurfaceChannel ListCommandsParamsSurface = "channel"
+	ListCommandsParamsSurfaceCli     ListCommandsParamsSurface = "cli"
+	ListCommandsParamsSurfaceWeb     ListCommandsParamsSurface = "web"
 )
 
 // Valid indicates whether the value is a known member of the ListCommandsParamsSurface enum.
 func (e ListCommandsParamsSurface) Valid() bool {
 	switch e {
-	case Channel:
+	case ListCommandsParamsSurfaceChannel:
 		return true
-	case Cli:
+	case ListCommandsParamsSurfaceCli:
 		return true
-	case Web:
+	case ListCommandsParamsSurfaceWeb:
 		return true
 	default:
 		return false
@@ -8311,13 +8311,13 @@ func (e ListCommandsParamsSurface) Valid() bool {
 
 // Defines values for RotateCredentials200JSONResponseBodyStatus.
 const (
-	Rotated RotateCredentials200JSONResponseBodyStatus = "rotated"
+	RotateCredentials200JSONResponseBodyStatusRotated RotateCredentials200JSONResponseBodyStatus = "rotated"
 )
 
 // Valid indicates whether the value is a known member of the RotateCredentials200JSONResponseBodyStatus enum.
 func (e RotateCredentials200JSONResponseBodyStatus) Valid() bool {
 	switch e {
-	case Rotated:
+	case RotateCredentials200JSONResponseBodyStatusRotated:
 		return true
 	default:
 		return false
@@ -8326,13 +8326,13 @@ func (e RotateCredentials200JSONResponseBodyStatus) Valid() bool {
 
 // Defines values for DeleteCredential200JSONResponseBodyStatus.
 const (
-	Removed DeleteCredential200JSONResponseBodyStatus = "removed"
+	DeleteCredential200JSONResponseBodyStatusRemoved DeleteCredential200JSONResponseBodyStatus = "removed"
 )
 
 // Valid indicates whether the value is a known member of the DeleteCredential200JSONResponseBodyStatus enum.
 func (e DeleteCredential200JSONResponseBodyStatus) Valid() bool {
 	switch e {
-	case Removed:
+	case DeleteCredential200JSONResponseBodyStatusRemoved:
 		return true
 	default:
 		return false
@@ -8341,13 +8341,13 @@ func (e DeleteCredential200JSONResponseBodyStatus) Valid() bool {
 
 // Defines values for RestoreBackup200JSONResponseBodyStatus.
 const (
-	Restored RestoreBackup200JSONResponseBodyStatus = "restored"
+	RestoreBackup200JSONResponseBodyStatusRestored RestoreBackup200JSONResponseBodyStatus = "restored"
 )
 
 // Valid indicates whether the value is a known member of the RestoreBackup200JSONResponseBodyStatus enum.
 func (e RestoreBackup200JSONResponseBodyStatus) Valid() bool {
 	switch e {
-	case Restored:
+	case RestoreBackup200JSONResponseBodyStatusRestored:
 		return true
 	default:
 		return false
@@ -8410,28 +8410,28 @@ func (e GetTokenStatsParamsPeriod) Valid() bool {
 
 // Defines values for ListTasksParamsStatus.
 const (
-	Blocked    ListTasksParamsStatus = "blocked"
-	Done       ListTasksParamsStatus = "done"
-	Failed     ListTasksParamsStatus = "failed"
-	InProgress ListTasksParamsStatus = "in_progress"
-	Inbox      ListTasksParamsStatus = "inbox"
-	Next       ListTasksParamsStatus = "next"
+	ListTasksParamsStatusBlocked    ListTasksParamsStatus = "blocked"
+	ListTasksParamsStatusDone       ListTasksParamsStatus = "done"
+	ListTasksParamsStatusFailed     ListTasksParamsStatus = "failed"
+	ListTasksParamsStatusInProgress ListTasksParamsStatus = "in_progress"
+	ListTasksParamsStatusInbox      ListTasksParamsStatus = "inbox"
+	ListTasksParamsStatusNext       ListTasksParamsStatus = "next"
 )
 
 // Valid indicates whether the value is a known member of the ListTasksParamsStatus enum.
 func (e ListTasksParamsStatus) Valid() bool {
 	switch e {
-	case Blocked:
+	case ListTasksParamsStatusBlocked:
 		return true
-	case Done:
+	case ListTasksParamsStatusDone:
 		return true
-	case Failed:
+	case ListTasksParamsStatusFailed:
 		return true
-	case InProgress:
+	case ListTasksParamsStatusInProgress:
 		return true
-	case Inbox:
+	case ListTasksParamsStatusInbox:
 		return true
-	case Next:
+	case ListTasksParamsStatusNext:
 		return true
 	default:
 		return false

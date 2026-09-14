@@ -47,7 +47,7 @@ func seedActiveGoalRecord(t *testing.T, sid, prompt string, criteria, dod []task
 		}}
 	}
 	gstore := goal.NewStore(config.OmnipusHomeDir())
-	g, err := goal.New(generated.GoalOwnerKindSession, sid, generated.ChatCompiled, prompt, "", criteria, dod, 10, time.Now().UTC())
+	g, err := goal.New(generated.GoalOwnerKindSession, sid, generated.GoalSourceChatCompiled, prompt, "", criteria, dod, 10, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("seedActiveGoalRecord: New: %v", err)
 	}

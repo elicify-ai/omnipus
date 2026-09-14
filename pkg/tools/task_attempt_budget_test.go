@@ -29,7 +29,7 @@ func TestEffectiveTaskMaxAttempts_HonoursOnlyAStartedRunsSnapshot(t *testing.T) 
 	crit := []task.AcceptanceCriterion{{Text: "the report is written", Status: task.CritPending, Author: author}}
 	dod := []task.AcceptanceCriterion{{Text: "nothing else broke", Status: task.CritPending, Author: author}}
 	newRecord := func(maxRounds int) *goal.Goal {
-		g, err := goal.New(generated.GoalOwnerKindTask, "task-1", generated.TaskExplicit,
+		g, err := goal.New(generated.GoalOwnerKindTask, "task-1", generated.GoalSourceTaskExplicit,
 			"write it", "", crit, dod, maxRounds, now)
 		require.NoError(t, err)
 		return g

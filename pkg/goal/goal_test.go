@@ -32,7 +32,7 @@ func newTestGoal(t *testing.T, ownerKind generated.GoalOwnerKind, ownerID string
 	t.Helper()
 	now := time.Now().UTC()
 	g, err := New(
-		ownerKind, ownerID, generated.ChatCompiled,
+		ownerKind, ownerID, generated.GoalSourceChatCompiled,
 		"make the tests pass", "All tests in pkg/goal pass.",
 		[]task.AcceptanceCriterion{newTestCriterion("", "the tests pass")},
 		[]task.AcceptanceCriterion{newTestCriterion("", "no secrets leaked")},
@@ -273,7 +273,7 @@ func TestGoalNewStartsInDefiningPhase(t *testing.T) {
 // the len(dod)==0 check in Validate makes this test observe a nil error.
 func TestGoalNewRejectsEmptyDoD(t *testing.T) {
 	_, err := New(
-		generated.GoalOwnerKindSession, "s1", generated.ChatCompiled,
+		generated.GoalOwnerKindSession, "s1", generated.GoalSourceChatCompiled,
 		"prompt", "definition",
 		[]task.AcceptanceCriterion{newTestCriterion("", "some criterion")},
 		nil, // empty dod

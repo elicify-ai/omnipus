@@ -121,7 +121,7 @@ func mintTaskRunGoal(
 	// The defining-phase record rest_tasks.go's syncTaskGoalRecord authors at
 	// task creation (GOAL-FR-009): criteria and DoD fixed up front (D-C).
 	gs := goal.NewStore(config.OmnipusHomeDir())
-	g, err := goal.New(generated.GoalOwnerKindTask, taskID, generated.TaskExplicit,
+	g, err := goal.New(generated.GoalOwnerKindTask, taskID, generated.GoalSourceTaskExplicit,
 		condition, "", criteria, newFloorDoD(), armedGoalMaxRounds, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("mintTaskRunGoal: goal.New: %v", err)
@@ -186,7 +186,7 @@ func armTaskGoalRecord(
 	past := lastActivity.UTC()
 	gs := goal.NewStore(config.OmnipusHomeDir())
 
-	g, err := goal.New(generated.GoalOwnerKindTask, taskID, generated.TaskExplicit,
+	g, err := goal.New(generated.GoalOwnerKindTask, taskID, generated.GoalSourceTaskExplicit,
 		condition, "", criteria, newFloorDoD(), armedGoalMaxRounds, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("armTaskGoalRecord: goal.New: %v", err)

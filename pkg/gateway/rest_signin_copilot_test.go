@@ -193,7 +193,7 @@ func TestSignInStart_Copilot(t *testing.T) {
 
 	var got gen.SignInStartResponseCliLogin
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.Equal(t, gen.CliLogin, got.Method)
+	assert.Equal(t, gen.SignInStartResponseCliLoginMethodCliLogin, got.Method)
 	assert.True(t, got.Method.Valid())
 	assert.Equal(t, "copilot login", got.Command)
 	assert.Contains(t, got.Instructions, "Check sign-in")
@@ -221,7 +221,7 @@ func TestSignIn_CopilotDispatchDoesNotLeakToOtherProviders(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 	var codexStart gen.SignInStartResponseCliLogin
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &codexStart))
-	assert.Equal(t, gen.CliLogin, codexStart.Method)
+	assert.Equal(t, gen.SignInStartResponseCliLoginMethodCliLogin, codexStart.Method)
 	assert.Equal(t, "codex login", codexStart.Command)
 	assert.NotEqual(t, "copilot login", codexStart.Command,
 		"codex-cli must never get github-copilot's command")

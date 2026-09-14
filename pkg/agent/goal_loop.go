@@ -441,7 +441,7 @@ func (al *AgentLoop) createAndActivateSessionGoalRecord(
 		return fmt.Errorf("goal: activation requires both a goal id and a session id (goal_id=%q session_id=%q)", goalID, sessionID)
 	}
 	now := time.Now().UTC()
-	g, gerr := goal.New(generated.GoalOwnerKindSession, sessionID, generated.ChatCompiled,
+	g, gerr := goal.New(generated.GoalOwnerKindSession, sessionID, generated.GoalSourceChatCompiled,
 		intent, "", criteria, dod, maxRounds, now)
 	if gerr != nil {
 		return fmt.Errorf("goal: could not build the durable goal record at activation: %w", gerr)

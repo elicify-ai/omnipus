@@ -151,7 +151,7 @@ func seedActiveTaskGoalWithDoD(
 ) *goal.Goal {
 	t.Helper()
 	now := time.Now().UTC()
-	g, err := goal.New(generated.GoalOwnerKindTask, taskID, generated.TaskExplicit,
+	g, err := goal.New(generated.GoalOwnerKindTask, taskID, generated.GoalSourceTaskExplicit,
 		prompt, "", criteria, dod, config.DefaultGoalMaxRounds, now)
 	if err != nil {
 		t.Fatalf("seedActiveTaskGoalWithDoD: goal.New: %v", err)

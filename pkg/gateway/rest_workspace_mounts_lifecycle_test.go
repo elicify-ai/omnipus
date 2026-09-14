@@ -83,7 +83,7 @@ func TestPostWorkspaceMount_CreateAppearsInGet(t *testing.T) {
 	var resp gen.WorkspaceMountCreateResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "client-repo", resp.Name)
-	assert.Equal(t, gen.Ok, resp.Status)
+	assert.Equal(t, gen.WorkspaceMountCreateResponseStatusOk, resp.Status)
 	assert.Nil(t, resp.Warning, "an ordinary target must not carry a warning")
 
 	realTarget, err := filepath.EvalSymlinks(target)

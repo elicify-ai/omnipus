@@ -342,7 +342,7 @@ func TestB6_TaskGoal_OverturnedCompletionClaim_NextAttemptCarriesJudgeFeedback(t
 	}
 	// The defining-phase goal record task creation authors (GOAL-FR-012):
 	// ExecuteTask activates it against the session the run mints.
-	g, err := goal.New(generated.GoalOwnerKindTask, taskID, generated.TaskExplicit, tk.Prompt, "",
+	g, err := goal.New(generated.GoalOwnerKindTask, taskID, generated.GoalSourceTaskExplicit, tk.Prompt, "",
 		[]task.AcceptanceCriterion{proseCriterion("", criterionText)}, newFloorDoD(),
 		config.DefaultGoalMaxRounds, time.Now().UTC())
 	if err != nil {

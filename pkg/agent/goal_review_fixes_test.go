@@ -77,7 +77,7 @@ func seedTaskWithJudgeableGoal(
 	if err := GetTaskStore(al).Create(tk); err != nil {
 		t.Fatalf("seedTaskWithJudgeableGoal: create task: %v", err)
 	}
-	g, err := goal.New(generated.GoalOwnerKindTask, taskID, generated.TaskExplicit,
+	g, err := goal.New(generated.GoalOwnerKindTask, taskID, generated.GoalSourceTaskExplicit,
 		condition, "", recordedGoalCriteria(condition), newFloorDoD(), armedGoalMaxRounds, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("seedTaskWithJudgeableGoal: goal.New: %v", err)

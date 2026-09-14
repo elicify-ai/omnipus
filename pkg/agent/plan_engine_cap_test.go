@@ -63,7 +63,7 @@ func capTestDoD() []task.AcceptanceCriterion {
 func mustCreateCapTestGoal(t *testing.T, s *goal.Store, ownerKind generated.GoalOwnerKind, ownerID string, active bool) *goal.Goal {
 	t.Helper()
 	now := time.Now()
-	g, err := goal.New(ownerKind, ownerID, generated.ChatCompiled, "prompt for "+ownerID, "", nil, capTestDoD(), 20, now)
+	g, err := goal.New(ownerKind, ownerID, generated.GoalSourceChatCompiled, "prompt for "+ownerID, "", nil, capTestDoD(), 20, now)
 	if err != nil {
 		t.Fatalf("goal.New(%s/%s): %v", ownerKind, ownerID, err)
 	}
