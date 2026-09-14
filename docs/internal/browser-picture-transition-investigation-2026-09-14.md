@@ -71,3 +71,28 @@ The pending-navigation timer now logs the wait without emitting a persistent fai
 Stop is a navigation command with immediate queue interruption. Its successful Chrome cancellation is followed by a fresh frame-tree read, current-document checks, paint and geometry confirmation, and recapture. Input remains blocked until the refreshed media boundary is confirmed. Both contract schema copies and their generated consumers include the new command; unknown commands remain invalid.
 
 Frontend validation passed 87 focused tests and lint, with three deliberate faults independently caught. URL resolution passed 25 tests and lint; wrong provider, removed escaping and whitespace corruption were caught by mutations. The first backend focused run passed. Final backend mutation/gateway checks, candidate build and live results are recorded below when completed.
+
+
+## Delivered candidate and completed verification
+
+Amsterdam now runs source `92b5f1fd601c64d63530eea13949393b6e3a52d4`, extension 1.0.24, image `registry.fly.io/uat-omnipus:browser-input-92b5f1fd6`, digest `sha256:00147cbf6719d056e1cebb554a9d414f66b13bd9516d02404a42aa2428262741`. Installed and running binary hashes both match `cdd8c38b62aa62d85f5fc5c28ef69944cbebdbb20156b52562031ca8874b5319`. Health returned 200; machine configuration and location are unchanged.
+
+Focused backend document/input tests and gateway queue/command/schema tests passed. Three backend mutations were caught by assertion failures: provisional-phase classification, fresh paint budget, and missing actual Stop command. All mutations were restored and document tests passed again. Production and acceptance TypeScript checks, SPA build and canonical Linux build passed. The contract-generation wrapper was interrupted during its broad TypeScript check; the remaining pinned Go generator and scoped production checks completed separately. Full CI was not run.
+
+Three live tests passed on this exact runtime:
+
+| Scenario | Result |
+| --- | --- |
+| Native built-in landing search | Actual Google results for `omnipus browser`, confirmed picture and input ready; screenshot inspected. Submit to readiness was approximately 1.2 seconds in this sample. |
+| Native request still pending after 16 seconds, then Stop | Original document restored, fresh arrows and exact `@é日本` text accepted; no held keys or page errors. Test duration 49.9 seconds. |
+| Native request responds after 25 seconds | New document and confirmed picture recovered automatically; fresh arrows and exact `@é日本` accepted; no held keys or page errors. Test duration 52.0 seconds. |
+
+The controlled pending fixture replaces an indefinitely unreachable destination with a deterministic delayed response: both Stop and eventual success can be asserted without depending on an external outage. Gesture route assertions passed; no WebSocket gesture fallback was introduced. Test durations include setup and deliberately delayed destination work, and are not input-latency measurements.
+
+Evidence is under `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/validation/browser-input-connection/start-page-search-candidate-92b5f1fd6` and `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/validation/browser-input-connection/loading-recovery-candidate-92b5f1fd6`. Build, deployment and focused-check logs are under `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/.local/browser-input-final-validation`.
+
+Retained setup failures are not counted as passes: a private helper wrote fresh authentication to the wrong working directory; the helper now writes beside itself and the accidental repository-root credential file was moved away. An initial test explicitly navigated to the private start-page address and correctly met the existing network policy; the test now uses Chrome's already-open native landing page. No policy was weakened. The dynamic fixture initially missed its three-second tool startup grace, then registered successfully after independent startup diagnostics. No tool runtime or permissions changed.
+
+The first final slow-page stress attempt stopped at initial viewer readiness before any workload input or peer creation. Its WebSocket handshake occurred about eleven seconds after Open, leaving about four seconds of the test readiness window. The cause of that setup delay is unresolved; this is not evidence of an input-channel failure or a passing stress run. Failed artifacts remain in `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/validation/browser-input-connection/pressure-stress-candidate-92b5f1fd6-connection-setup-timeout`.
+
+The unchanged 120 ms slow-key-handler stress test passed on retry (2.6 minutes overall; workload 12:40:07.041–12:42:18.377 UTC). All twelve rounds matched the independent visible-state oracle: 12 clicks, 132 downs, 48 ups, zero held keys, 3600 scroll units, 12 drags, zero page errors and exact `@é` repeated twelve times. All gesture packets were binary v1; no WebSocket gesture traffic occurred. No product or test timeouts were relaxed. The earlier isolated setup delay remains unexplained; this bounded passing retry does not establish long-session reliability.

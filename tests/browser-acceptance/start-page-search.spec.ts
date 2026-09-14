@@ -21,9 +21,10 @@ test('landing-page native search reaches Google and restores input readiness', a
     await selectAgent(page, 'Browser UAT Test');
     await page.getByRole('button', { name: 'Open browser', exact: true }).click();
     await ready();
-    await address.fill('http://localhost:5000/browser-start');
-    await address.press('Enter');
+    // Chrome opens its built-in start page itself. Explicit navigation to a
+    // private address is intentionally refused by the navigation policy.
     await expect(address).toHaveValue('http://localhost:5000/browser-start');
+    await page.getByRole('button', { name: 'Refresh page', exact: true }).click();
     await ready();
     // The actual landing page autofocuses its native search field. Focus the
     // viewer without sending a click that could move remote document focus.
