@@ -329,7 +329,7 @@ describe('recoverable queue pressure', () => {
     const s = setup(() => { s.machine.beginControl(); return true }); await s.connect()
     s.channels['input-reliable'].onclose?.()
     expect(s.machine.state).toBe('failed')
-    const server = { type: 'browser_input_state' as const, session_id: 'session', input_epoch: 1, offer_id: 1, control_epoch: control, state: 'failed', reason: 'Input channels did not become ready. Retry input.' }
+    const server = { type: 'browser_input_state' as const, session_id: 'session', input_epoch: 1, offer_id: 1, control_epoch: control, state: 'failed' as const, reason: 'Input channels did not become ready. Retry input.' }
     s.machine.applyState({ ...server, input_epoch: 0, offer_id: 0 })
     expect(s.changed).toHaveBeenLastCalledWith('failed', 'Input connection closed. Retry input.')
     s.machine.applyState(server)
