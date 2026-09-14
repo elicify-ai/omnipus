@@ -40,6 +40,15 @@ const CLI_LOGIN_RESPONSE = {
   instructions: 'Run `codex login` in a terminal, then click Check sign-in.',
 }
 
+// Verbatim from pkg/gateway/rest_signin_copilot.go (copilotSignInCommand /
+// copilotSignInInstructions) — what POST /providers/github-copilot/sign-in sends.
+const COPILOT_CLI_LOGIN_RESPONSE = {
+  method: 'cli_login' as const,
+  command: 'copilot login',
+  instructions:
+    'Run `copilot login` in a terminal on this machine and complete the GitHub sign-in. The Copilot CLI keeps the credential — Omnipus never sees or stores it. Then click Check sign-in.',
+}
+
 const DEVICE_CODE_RESPONSE = {
   method: 'device_code' as const,
   verification_url: 'https://auth.openai.com/codex/device',
@@ -115,6 +124,34 @@ describe('SignInDialog — cli_login', () => {
       expect(screen.getByTestId('sign-in-success')).toHaveTextContent('Signed in as octocat')
     })
     expect(onSignedIn).toHaveBeenCalledWith({ state: 'signed_in', account_label: 'octocat' })
+  })
+
+  // Silent-failure review 2026-09-14, finding 7: for a cli_login provider
+  // "expired" means the vendor CLI's EXISTING session was rejected — there is
+  // no code that went unapproved. The device-code sentence is wrong here; the
+  // operator must be told the session is no longer accepted and to run the
+  // CLI login step again (ADR-068 spec: "Run `copilot login` again, then check").
+  it('Check sign-in: a Copilot expired result says the session is no longer accepted and how to sign in again', async () => {
+    vi.mocked(api.startSignIn).mockResolvedValue(COPILOT_CLI_LOGIN_RESPONSE)
+    vi.mocked(api.fetchSignInStatus).mockResolvedValue({ state: 'expired' })
+    renderDialog({ providerId: 'github-copilot', providerLabel: 'GitHub Copilot' })
+
+    await waitFor(() => screen.getByTestId('check-sign-in-btn'))
+    fireEvent.click(screen.getByTestId('check-sign-in-btn'))
+
+    const expected =
+      'Your GitHub Copilot session is no longer accepted. Run `copilot login` again to sign in, then click Check sign-in.'
+    await waitFor(() => {
+      expect(screen.getByTestId('sign-in-status')).toHaveTextContent(expected)
+    })
+    expect(screen.getByTestId('sign-in-status')).toHaveAttribute('aria-live', 'polite')
+    expect(screen.getByRole('alert')).toHaveTextContent(expected)
+    // The way back in is the same CLI login step the dialog already shows.
+    expect(screen.getByTestId('cli-login-command')).toHaveTextContent('copilot login')
+    expect(screen.getByTestId('check-sign-in-btn')).toBeInTheDocument()
+    // Never the device-code wording.
+    expect(screen.queryByText(/before it was approved/i)).not.toBeInTheDocument()
+    expect(api.fetchSignInStatus).toHaveBeenCalledWith('github-copilot')
   })
 })
 
@@ -290,6 +327,27 @@ describe('SignInDialog — device_code', () => {
       fireEvent.click(screen.getByTestId('try-again-btn'))
     })
     expect(api.startSignIn).toHaveBeenCalledTimes(1)
+  })
+
+  it('device-code expired wording is unchanged: "Sign-in expired before it was approved."', async () => {
+    vi.useFakeTimers()
+    vi.mocked(api.startSignIn).mockResolvedValue(DEVICE_CODE_RESPONSE)
+    vi.mocked(api.pollSignIn).mockResolvedValue({ state: 'expired' })
+    renderDialog()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000)
+    })
+
+    const expected = 'Sign-in expired before it was approved.'
+    expect(screen.getByTestId('sign-in-failure')).toHaveTextContent(expected)
+    expect(screen.getByTestId('sign-in-status')).toHaveTextContent(expected)
+    expect(screen.getByTestId('sign-in-status')).toHaveAttribute('aria-live', 'polite')
+    expect(screen.queryByText(/no longer accepted/i)).not.toBeInTheDocument()
+    expect(screen.getByTestId('try-again-btn')).toBeInTheDocument()
   })
 
   it('denied end state is shown distinctly from expired', async () => {
