@@ -10434,7 +10434,15 @@ turnLoop:
 			// persisted) so it is never stale and not double-counted in the cached
 			// system prompt. Injected only when Compressed is active and there are
 			// unloaded lazy tools to list.
-			if cfg.Tools.Manifest.Compressed {
+			//
+			// Not on an ADR-081 D3 narrowed request (goalForce.layer1): that
+			// request offers only {set_goal[, AskUserQuestion]}, and the block's
+			// header tells the model to "call `ToolSearch`" to load a listed
+			// tool — advertising a tool the request does not offer. UAT B-10
+			// run 1 made exactly that un-offered ToolSearch call on the narrowed
+			// request. The dispatch loop also refuses any call to a tool the
+			// request did not offer (toolNotOfferedRefusal, tool_offer_gate.go).
+			if cfg.Tools.Manifest.Compressed && !goalForce.layer1 {
 				callMessages = injectManifestNote(callMessages, al.buildToolManifestNote(ts, policyFilteredTools))
 			}
 		}
@@ -10509,6 +10517,13 @@ turnLoop:
 				return al.abortTurn(ts, "before_llm", decision.Reason)
 			}
 		}
+
+		// The exact tool set this request offers, captured AFTER every step that
+		// shapes providerToolDefs (goal-door narrowing, compressed manifest,
+		// native-search strip, graceful-terminal clearing, BeforeLLM hook). The
+		// tool loop below refuses any call to a tool outside it — see
+		// toolNotOfferedRefusal (tool_offer_gate.go).
+		offeredTools := newOfferedToolSet(providerToolDefs)
 
 		// G1 fix: a cheap, non-blocking tool-call-argument progress callback,
 		// so a `delegate action=status` poll on a running child can tell
@@ -12079,6 +12094,48 @@ turnLoop:
 					)
 					continue
 				}
+			}
+
+			// A call to a tool this request did not offer never runs (ADR-081
+			// D3: the narrowed goal request's "exactly two" is exact; ADR-071
+			// §1.1: a lazy tool is callable only once ToolSearch promotes it).
+			// Checked on the pre-hook name, before the quarantine gate, hooks,
+			// the argument bound and any approval prompt — a call that will not
+			// run must not cost the user an approval. Not a policy denial: the
+			// denial ledger and quarantine are not consulted, and a tool policy
+			// denies at filter time is left to the exec-time deny path below
+			// (see toolNotOfferedRefusal).
+			if refusal, notOffered := al.toolNotOfferedRefusal(
+				ts, offeredTools, tc.Name, toolName, filterTimePolicyMap, goalForce, cfg.Tools.Manifest.Compressed,
+			); notOffered {
+				logger.WarnCF("agent", "Tool call refused: the tool was not offered in this request",
+					map[string]any{
+						"agent_id":  ts.agent.ID,
+						"tool":      toolName,
+						"iteration": iteration,
+						"narrowed":  goalForce.layer1,
+					})
+				refusedMsg := al.admitToolResult(ts, toolResultAdmission{
+					Tool: tc.Name, ToolCallID: tc.ID, Content: refusal, IsError: true, ParallelN: len(normalizedToolCalls),
+				}).Message
+				messages = append(messages, refusedMsg)
+				// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+				// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+				// ends the turn typed with no further provider call (FR-032).
+				if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+					res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+					turnStatus = status
+					return res, exitErr
+				}
+				al.emitEvent(
+					EventKindToolExecSkipped,
+					ts.eventMeta("runTurn", "turn.tool.skipped"),
+					ToolExecSkippedPayload{
+						Tool:   toolName,
+						Reason: "tool_not_offered",
+					},
+				)
+				continue
 			}
 
 			// ADR-058 fix: ledgerToolName is the PRE-HOOK tool name, captured
