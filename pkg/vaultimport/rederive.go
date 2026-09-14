@@ -138,7 +138,7 @@ func RederiveBase(vaultRoot, baseRelPath string) (*RederiveBaseResult, error) {
 		// because the refusal's own contract is to NAME what it deliberately
 		// left on disk — an operator told only "refused" cannot tell a
 		// non-destructive refusal from one that deleted their views.
-		return &RederiveBaseResult{
+		return &RederiveBaseResult{ //nolint:nilerr // a content refusal is a verdict carried in the result, not an error
 			BaseRelPath:   baseRelPath,
 			Status:        OutcomeRefused,
 			RefusedReason: parseErr.Error(),
