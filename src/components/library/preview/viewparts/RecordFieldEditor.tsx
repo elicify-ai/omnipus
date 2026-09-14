@@ -69,6 +69,7 @@ import {
   writeVaultRecord,
   writeVaultRecordRelation,
 } from '@/lib/api'
+import { ApiError, rateLimitedWriteRefusalMessage } from '@/lib/api-error'
 import { isEditableCell, recordPropertyText, type EditableCellType } from './viewResultData'
 
 /** One successful inline field write, reported upward. The ONLY intended
@@ -385,6 +386,20 @@ function EditableValueCell({
   async function commit(raw: string): Promise<void> {
     if (target === undefined) return
     if (commitInFlightRef.current) return
+    // F3 (SILENT-FAILURES-rate-limits-dd25339bf.md finding F3): leaving a
+    // cell with NO CHANGE — open the editor, then blur/Enter without typing
+    // anything different — used to send a write anyway (`commit()` had no
+    // unchanged-value guard), spending both a network round trip and a slot
+    // in the shared per-workspace knowledge rate limiter for a no-op. `raw`
+    // is compared against `value` (the last value this component actually
+    // READ, from a successful write or the row's own prop), not `cell.value`
+    // — the same source commit()'s own token logic already trusts.
+    if (raw === value) {
+      setEditing(false)
+      setDraft(raw)
+      setError(undefined)
+      return
+    }
     if (versionToken === undefined) {
       setError('Could not confirm this record’s current version — reopen it and try again.')
       return
@@ -482,6 +497,11 @@ function EditableValueCell({
             `This changed on the server, and the current value could not be read — reopen the record. (${getErrorMessage(refreshErr, 'the read failed')})`,
           )
         }
+      } else if (err instanceof ApiError && err.isRateLimited()) {
+        // F5a: say PLAINLY that the edit was NOT saved, and name the real
+        // wait — the generic getErrorMessage() text never mentions "saved"
+        // at all (it's shared with read failures too).
+        setError(rateLimitedWriteRefusalMessage(err))
       } else {
         setError(getErrorMessage(err, 'Could not save this field'))
       }

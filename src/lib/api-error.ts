@@ -69,8 +69,18 @@ function parseRetryAfterMs(value: string | null): number | undefined {
  * defaultUserMessage returns a generic, safe-to-display string for a given
  * HTTP status class. Used as the fallback when the server response body is
  * empty, unparseable, or visibly leaks server internals.
+ *
+ * F5a (SILENT-FAILURES-rate-limits-dd25339bf.md): `retryAfterMs`, when
+ * known, is folded into the 429 line — a safe, generic improvement (it
+ * names a NUMBER, not server-internal phrasing) that benefits every 429
+ * caller app-wide, not just the two knowledge queries this fix round
+ * otherwise scopes itself to. Every other status's generic text is
+ * UNCHANGED — see this file's own `rateLimitedWriteRefusalMessage` and
+ * `api-error.rateLimit.test.ts`'s "existing per-status override policy"
+ * block for why the wider "show the server's raw reason instead" idea was
+ * deliberately NOT applied here.
  */
-function defaultUserMessage(status: number): string {
+function defaultUserMessage(status: number, retryAfterMs?: number): string {
   if (status === 0) return 'Network unavailable. Check your connection.'
   if (status === 401) return 'Your session has expired. Please log in again.'
   if (status === 403) return "You don't have permission to perform this action."
@@ -79,10 +89,36 @@ function defaultUserMessage(status: number): string {
   if (status === 409) return 'This conflicts with the current state. Please refresh and try again.'
   if (status === 410) return 'This item is no longer available.'
   if (status === 413) return 'The request is too large.'
-  if (status === 429) return 'Too many requests. Please slow down and try again shortly.'
+  if (status === 429) {
+    if (typeof retryAfterMs === 'number' && retryAfterMs > 0) {
+      return `Too many requests. Please slow down and try again in ${Math.ceil(retryAfterMs / 1000)}s.`
+    }
+    return 'Too many requests. Please slow down and try again shortly.'
+  }
   if (status >= 500 && status < 600) return 'The server is unavailable. Please try again in a moment.'
   if (status >= 400 && status < 500) return 'The request was rejected by the server.'
   return 'An unexpected error occurred.'
+}
+
+/**
+ * F5a: recovers the server's own `error`/`message` field from a raw JSON
+ * response body, if parseable — the SAME extraction
+ * `getLibraryErrorMessage` (src/components/library/libraryErrorMessage.ts)
+ * already performs for Library dialogs. Duplicated locally rather than
+ * imported: this is a foundational `lib/` file with no dependency on
+ * component-tree code, and the extraction itself is a few lines: not
+ * sharing it is cheaper than the layering violation importing it would be.
+ */
+function parseServerErrorField(body: string | undefined): string | undefined {
+  if (!body) return undefined
+  try {
+    const parsed = JSON.parse(body) as { error?: unknown; message?: unknown }
+    if (typeof parsed.error === 'string' && parsed.error.trim().length > 0) return parsed.error
+    if (typeof parsed.message === 'string' && parsed.message.trim().length > 0) return parsed.message
+  } catch {
+    // Not JSON (or unparsable) — nothing recoverable.
+  }
+  return undefined
 }
 
 export class ApiError extends Error {
@@ -113,7 +149,9 @@ export class ApiError extends Error {
 
   constructor(status: number, userMessage?: string, options?: ApiErrorOptions) {
     const message =
-      userMessage && userMessage.trim().length > 0 ? userMessage : defaultUserMessage(status)
+      userMessage && userMessage.trim().length > 0
+        ? userMessage
+        : defaultUserMessage(status, options?.retryAfterMs)
     // Legacy compat: the historical Error.message contract was "${status}: ${body}"
     // for HTTP errors and a plain string for transport failures. Preserve that
     // exactly so any un-migrated caller that still does err.message.includes('409')
@@ -184,7 +222,7 @@ export class ApiError extends Error {
         status: res.status,
         contentLength: declaredLength,
       })
-      return new ApiError(res.status, defaultUserMessage(res.status), { retryAfterMs })
+      return new ApiError(res.status, defaultUserMessage(res.status, retryAfterMs), { retryAfterMs })
     }
 
     // H3-FE: Reject non-text, non-JSON content types before reading.
@@ -198,7 +236,7 @@ export class ApiError extends Error {
         status: res.status,
         contentType,
       })
-      return new ApiError(res.status, defaultUserMessage(res.status), { retryAfterMs })
+      return new ApiError(res.status, defaultUserMessage(res.status, retryAfterMs), { retryAfterMs })
     }
 
     let bodyText: string
@@ -220,7 +258,7 @@ export class ApiError extends Error {
         status: res.status,
         bodyLength: bodyText.length,
       })
-      return new ApiError(res.status, defaultUserMessage(res.status), { retryAfterMs })
+      return new ApiError(res.status, defaultUserMessage(res.status, retryAfterMs), { retryAfterMs })
     }
 
     // H3-FE: Binary content sniff — check the first 256 chars for non-printable
@@ -242,7 +280,7 @@ export class ApiError extends Error {
           status: res.status,
           nonPrintableRatio: (nonPrintable / sample.length).toFixed(2),
         })
-        return new ApiError(res.status, defaultUserMessage(res.status), { retryAfterMs })
+        return new ApiError(res.status, defaultUserMessage(res.status, retryAfterMs), { retryAfterMs })
       }
     }
 
@@ -271,8 +309,8 @@ export class ApiError extends Error {
     const knownStatuses = new Set([0, 401, 403, 404, 408, 409, 410, 413, 429])
     const isKnown = knownStatuses.has(res.status) || (res.status >= 500 && res.status < 600)
     const userMessage = isKnown
-      ? defaultUserMessage(res.status)
-      : (parsedMessage ?? (bodyText.trim().length > 0 ? bodyText : defaultUserMessage(res.status)))
+      ? defaultUserMessage(res.status, retryAfterMs)
+      : (parsedMessage ?? (bodyText.trim().length > 0 ? bodyText : defaultUserMessage(res.status, retryAfterMs)))
     return new ApiError(res.status, userMessage, { code: parsedCode, body: bodyText, retryAfterMs })
   }
 }
@@ -321,4 +359,36 @@ export function getErrorMessage(
   }
   if (err instanceof Error) return err.message
   return fallback
+}
+
+/**
+ * F5a (SILENT-FAILURES-rate-limits-dd25339bf.md finding F5): the on-screen
+ * message for a WRITE refused by a rate limiter (e.g. RecordFieldEditor's
+ * `writeVaultRecord`) must say PLAINLY that nothing was saved and by when a
+ * retry might succeed — `userMessage`/`getErrorMessage` alone never say
+ * "saved" at all, because they are shared with READ callers too (a view
+ * fetch's refusal is not "not saved"). This is therefore a SEPARATE,
+ * write-specific message, not baked into the shared 429 default.
+ *
+ * Prefers the server's own specific reason (recovered from `.body`, the
+ * same extraction `getLibraryErrorMessage` performs for Library dialogs —
+ * e.g. the knowledge limiter's actual text, "too many knowledge requests —
+ * at most 60 per 1m0s. Retry in 45s.") over a synthesized generic one, since
+ * the real reason is more useful when it is safely recoverable. Always
+ * prepends "Not saved" and appends the real wait when known.
+ */
+export function rateLimitedWriteRefusalMessage(err: ApiError): string {
+  const serverReason = parseServerErrorField(err.body)
+  if (serverReason) {
+    // The server's own reason (e.g. the knowledge limiter's "too many
+    // knowledge requests — at most 60 per 1m0s. Retry in 45s.") already
+    // states its own wait — prepend "Not saved" without ALSO appending a
+    // second, possibly-redundant wait clause.
+    return `Not saved — ${serverReason.trim().replace(/\.+$/, '')}.`
+  }
+  const wait =
+    typeof err.retryAfterMs === 'number' && err.retryAfterMs > 0
+      ? ` Try again in ${Math.ceil(err.retryAfterMs / 1000)}s.`
+      : ' Please wait a moment and try again.'
+  return `Not saved — too many requests.${wait}`
 }
