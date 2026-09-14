@@ -49,6 +49,10 @@ type libraryCollectionNote struct {
 	// relInCol is the note's path relative to the knowledge base.
 	relInCol string
 	lock     knowledge.NoteLockConfig
+	// isAttachment is true for a non-markdown regular file (resolved by
+	// libraryManagedFileInCollection). Its destination must stay
+	// non-markdown too — see sameCollectionDestination.
+	isAttachment bool
 }
 
 // relWithinCollection strips the knowledge base's directory off a
@@ -75,6 +79,44 @@ func (a *restAPI) libraryNoteInCollection(root *library.Root, rel string) (note 
 	if !knowledge.IsMarkdownPath(rel) {
 		return nil, false, nil
 	}
+	return a.resolveLibraryCollectionFile(root, rel, false)
+}
+
+// libraryManagedFileInCollection is libraryNoteInCollection widened to every
+// REGULAR FILE the knowledge layer manages: a markdown note, or an attachment
+// (an image, a PDF — anything a note can cite with ![[embed]] or a markdown
+// link). knowledge.Renamer rewrites inbound links to an attachment exactly as
+// it does for a note, and knowledge.Trasher addresses an attachment at its
+// own path, so the Library's rename / move / delete doors must route both
+// (round-4 attachment cascade; fix3/spa-fixes finding 7 reproduced a 200
+// attachment rename that left the embed dangling).
+//
+// A DIRECTORY is deliberately NOT governed: Renamer.Plan refuses a
+// non-regular source (ErrRenameSourceNotAddressable) and the Trasher has no
+// subtree move, so routing a folder there would turn a working rename into a
+// 400. A folder keeps plain filesystem semantics — which means links INTO a
+// renamed folder are not rewritten; that gap needs a directory-aware engine
+// in pkg/knowledge, not a gateway shim. A path that does not exist is not
+// governed either, so the plain door answers its own 404.
+func (a *restAPI) libraryManagedFileInCollection(root *library.Root, rel string) (file *libraryCollectionNote, governed bool, err error) {
+	if knowledge.IsMarkdownPath(rel) {
+		return a.libraryNoteInCollection(root, rel)
+	}
+	fi, statErr := root.StatFile(rel)
+	switch {
+	case errors.Is(statErr, library.ErrIsDir), errors.Is(statErr, library.ErrNotFound):
+		return nil, false, nil
+	case statErr != nil:
+		return nil, false, statErr
+	case !fi.Mode().IsRegular():
+		return nil, false, nil
+	}
+	return a.resolveLibraryCollectionFile(root, rel, true)
+}
+
+// resolveLibraryCollectionFile resolves rel's innermost knowledge base and
+// lock. isAttachment records which kind of managed file the caller vetted.
+func (a *restAPI) resolveLibraryCollectionFile(root *library.Root, rel string, isAttachment bool) (*libraryCollectionNote, bool, error) {
 	collRel, col, lock, relInCol, err := resolveCollectionNoteLock(root, a.homePath, rel)
 	if err != nil {
 		return nil, false, err
@@ -87,18 +129,22 @@ func (a *restAPI) libraryNoteInCollection(root *library.Root, rel string) (note 
 		return nil, false, fmt.Errorf("resolve knowledge base root for %q: %w", collRel, err)
 	}
 	return &libraryCollectionNote{
-		collRel:  collRel,
-		col:      col,
-		root:     croot,
-		relInCol: relInCol,
-		lock:     lock,
+		collRel:      collRel,
+		col:          col,
+		root:         croot,
+		relInCol:     relInCol,
+		lock:         lock,
+		isAttachment: isAttachment,
 	}, true, nil
 }
 
 // sameCollectionDestination reports whether toRel (workspace-relative) lands
-// inside the SAME knowledge base as note, as a markdown note.
+// inside the SAME knowledge base as note, as the same kind of managed file: a
+// markdown note stays a markdown note, an attachment stays a non-markdown
+// file. A rename that changes kind (diagram.png -> diagram.md) is not a
+// rename the link graph models, so it keeps plain filesystem semantics.
 func sameCollectionDestination(root *library.Root, note *libraryCollectionNote, toRel string) bool {
-	if !knowledge.IsMarkdownPath(toRel) {
+	if knowledge.IsMarkdownPath(toRel) == note.isAttachment {
 		return false
 	}
 	toCollRel, found := enclosingCollectionRel(root, toRel)

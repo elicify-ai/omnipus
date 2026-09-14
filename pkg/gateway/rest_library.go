@@ -1815,10 +1815,10 @@ func (a *restAPI) handleLibraryRename(w http.ResponseWriter, r *http.Request, wo
 		return
 	}
 
-	// UAT #701 / D-123: a note renamed within its knowledge base has every
-	// inbound wikilink rewritten, the way the agent door renames — see
-	// rest_library_knowledge_cascade.go.
-	note, governed, noteErr := a.libraryNoteInCollection(root, fromRel)
+	// UAT #701 / D-123: a note or an attachment renamed within its knowledge
+	// base has every inbound link and embed rewritten, the way the agent door
+	// renames — see rest_library_knowledge_cascade.go.
+	note, governed, noteErr := a.libraryManagedFileInCollection(root, fromRel)
 	if noteErr != nil {
 		mapLibraryErr(w, "rename", workspaceID, noteErr)
 		return
@@ -1977,14 +1977,14 @@ func (a *restAPI) handleLibraryTransfer(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// UAT #701 / D-123: a same-workspace MOVE of a note to another folder of
-	// the SAME knowledge base is a rename in the knowledge layer's terms —
-	// every inbound wikilink is rewritten. A copy duplicates bytes and
-	// rewrites nothing; a cross-workspace or cross-knowledge-base move is a
-	// real departure the link graph cannot follow, so both keep the plain
-	// filesystem semantics.
+	// UAT #701 / D-123: a same-workspace MOVE of a note or an attachment to
+	// another folder of the SAME knowledge base is a rename in the knowledge
+	// layer's terms — every inbound link and embed is rewritten. A copy
+	// duplicates bytes and rewrites nothing; a cross-workspace or
+	// cross-knowledge-base move is a real departure the link graph cannot
+	// follow, so both keep the plain filesystem semantics.
 	if mode == transferModeMove && sameWorkspace {
-		note, governed, noteErr := a.libraryNoteInCollection(fromRoot, fromRel)
+		note, governed, noteErr := a.libraryManagedFileInCollection(fromRoot, fromRel)
 		if noteErr != nil {
 			mapLibraryErr(w, string(mode), req.FromWorkspaceId, noteErr)
 			return
