@@ -118,6 +118,15 @@ type apiRateLimiter struct {
 	// of writes never consumes the read budget.
 	readsOnce sync.Once
 	reads     *apiRateLimiter
+
+	// readSized marks a limiter whose declared limit was ALREADY chosen for
+	// reads — every request it counts is a GET/HEAD, so the number at its
+	// declaration is the read ceiling. withRateLimit counts such a limiter
+	// directly and never gives it the companion read budget; otherwise the
+	// declared ceiling would silently become readBudgetMultiplier times
+	// larger (fix4 rate-limit-reads: taskReadLimiter's 240/min had become
+	// 1200/min). Set only via newReadSizedAPIRateLimiter.
+	readSized bool
 }
 
 type slidingWindow struct {
@@ -130,6 +139,17 @@ func newAPIRateLimiter(limit int, window time.Duration) *apiRateLimiter {
 		limit:   limit,
 		window:  window,
 	}
+}
+
+// newReadSizedAPIRateLimiter builds a limiter for routes that only serve
+// reads, whose limit is the exact per-IP ceiling for authenticated GET/HEAD
+// too (see apiRateLimiter.readSized). Use newAPIRateLimiter for limiters
+// sized for writes, pre-auth traffic, or mixed read/write routes — those
+// keep the larger companion read budget (D-109).
+func newReadSizedAPIRateLimiter(limit int, window time.Duration) *apiRateLimiter {
+	l := newAPIRateLimiter(limit, window)
+	l.readSized = true
+	return l
 }
 
 // allow checks whether the given IP is within rate limits. Returns true if
@@ -183,7 +203,9 @@ func (l *apiRateLimiter) retryAfter(ip string) int {
 // Global rate limiters for auth-sensitive endpoints.
 var (
 	// /api/v1/auth/validate — 30 requests/minute per IP.
-	validateLimiter = newAPIRateLimiter(30, 1*time.Minute)
+	// GET-only, so read-sized: the 30/min is the exact ceiling for
+	// authenticated callers too.
+	validateLimiter = newReadSizedAPIRateLimiter(30, 1*time.Minute)
 	// /api/v1/onboarding/complete — 3 requests/minute per IP (highly sensitive).
 	onboardingCompleteLimiter = newAPIRateLimiter(3, 1*time.Minute)
 	// /api/v1/config and /api/v1/workspaces* (incl. read GETs: list, single,
@@ -211,8 +233,10 @@ var (
 	// existing task CRUD routes (/api/v1/tasks, /api/v1/tasks/{id}, …),
 	// which remain plain withAuth with no limiter at all. Matches
 	// configLimiter's post-incident ceiling, which calendar navigation
-	// cadence is known to fit.
-	taskReadLimiter = newAPIRateLimiter(240, 1*time.Minute)
+	// cadence is known to fit. Read-sized: also guards GET /tasks/{id}/runs
+	// (rest_tasks.go), and 240/min is the contract for authenticated reads —
+	// it must never receive the 5x companion read budget.
+	taskReadLimiter = newReadSizedAPIRateLimiter(240, 1*time.Minute)
 	// /api/v1/providers/{id}/sign-in — 10 requests/minute per IP. ADR-068
 	// FR-008: "rate-limited like the auth endpoints" — matches
 	// reauthLimiter's ceiling. Starting a NEW device-code (or reading a
@@ -237,8 +261,10 @@ var (
 	// incomplete) could drive outbound vendor traffic or process spawns at
 	// will. Shares signInPollLimiter's ceiling rather than the tighter
 	// start/auth one because the sign-in dialog legitimately re-reads
-	// status alongside every poll.
-	signInStatusLimiter = newAPIRateLimiter(60, 1*time.Minute)
+	// status alongside every poll. Read-sized: both status routes are GET,
+	// and the ceiling bounds vendor refreshes and CLI spawns, so an
+	// authenticated caller must not get 5x of it.
+	signInStatusLimiter = newReadSizedAPIRateLimiter(60, 1*time.Minute)
 	// /api/v1/providers/openai-chatgpt/sign-in/import — 10 requests/minute
 	// per IP (M2). This route was called BARE while its four FR-050 siblings
 	// were all wrapped. It is the most write-heavy of the five: every call
@@ -565,8 +591,11 @@ const readBudgetMultiplier = 5
 
 // readBudget returns the limiter's companion budget for authenticated reads
 // (readBudgetMultiplier times the strict limit, same window), creating it on
-// first use.
+// first use. A read-sized limiter is its own read budget.
 func (l *apiRateLimiter) readBudget() *apiRateLimiter {
+	if l.readSized {
+		return l
+	}
 	l.readsOnce.Do(func() {
 		l.reads = newAPIRateLimiter(l.limit*readBudgetMultiplier, l.window)
 	})
@@ -599,12 +628,14 @@ func isAuthenticatedRead(r *http.Request) bool {
 // traffic (login attempts, onboarding, provider probes) and must stay that
 // size; ordinary signed-in UI work is dominated by listing refreshes, which
 // arrive in bursts that a write-sized budget refused — invisibly, since the
-// SPA retried them. Both refusals carry Retry-After.
+// SPA retried them. Both refusals carry Retry-After. A read-sized limiter
+// (newReadSizedAPIRateLimiter) has no companion budget: its declared limit
+// already is the read ceiling, so every request counts against it directly.
 func withRateLimit(limiter *apiRateLimiter, handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ip := clientIP(r)
 		budget := limiter
-		if isAuthenticatedRead(r) {
+		if !limiter.readSized && isAuthenticatedRead(r) {
 			budget = limiter.readBudget()
 		}
 		if !budget.allow(ip) {

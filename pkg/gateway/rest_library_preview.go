@@ -140,8 +140,9 @@ var (
 	// libraryPreviewServeLimiter caps the serving prefix. Generous, because
 	// ONE bundle page legitimately fires a request per stylesheet, script,
 	// font, image and media element, and a slow limit here would break the
-	// flagship US-1 AS-4 scenario rather than protect anything.
-	libraryPreviewServeLimiter = newAPIRateLimiter(600, 1*time.Minute)
+	// flagship US-1 AS-4 scenario rather than protect anything. Read-sized:
+	// already generous for asset reads, so it never gets a companion budget.
+	libraryPreviewServeLimiter = newReadSizedAPIRateLimiter(600, 1*time.Minute)
 )
 
 // --- FR-003d revocation: the seam, and the three events that use it -------
