@@ -192,7 +192,10 @@ func (l *ViewFindLoader) ServeRefusal(name string) (ViewServeRefusal, bool) {
 	if l == nil || l.views == nil {
 		return ViewServeRefusal{}, false
 	}
-	v, ok := l.views.Get(name)
+	// Resolve, not Get: `name` reaches here exactly as the caller wrote it,
+	// which UAT 2026-09-13 Q-08 established is routinely a LABEL rather than
+	// a slug. See ViewSet.Resolve's own doc comment for the full rule.
+	v, _, ok := l.views.Resolve(name)
 	if !ok {
 		return ViewServeRefusal{}, false
 	}
@@ -245,7 +248,10 @@ func (l *ViewFindLoader) View(name string) (generated.VaultFindRequest, bool) {
 	if l == nil || l.views == nil {
 		return generated.VaultFindRequest{}, false
 	}
-	v, ok := l.views.Get(name)
+	// Resolve, not Get — see ServeRefusal's comment and ViewSet.Resolve's own
+	// doc comment: `name` may be the view's slug or its DISPLAY LABEL, and
+	// the two are tried in that order.
+	v, _, ok := l.views.Resolve(name)
 	if !ok {
 		return generated.VaultFindRequest{}, false
 	}
@@ -254,6 +260,49 @@ func (l *ViewFindLoader) View(name string) (generated.VaultFindRequest, bool) {
 		return generated.VaultFindRequest{}, false
 	}
 	return req, true
+}
+
+// AmbiguousLabel is the OPTIONAL third half of ViewLoader (beside
+// ViewRefusalReporter): find.go's applyView asks it after a View lookup
+// fails, to distinguish "no view answers to this name at all" from "more
+// than one view answers to it, and this loader will not guess which" —
+// UAT 2026-09-13 Q-08's underlying shape, one layer past the fix itself: a
+// label collision must be REPORTED, with every candidate named, not
+// resolved silently to whichever view happened to load first.
+//
+// It is a separate interface for the reason ViewRefusalReporter's own header
+// gives: widening ViewLoader would silently un-satisfy any other
+// implementation at a wiring site nobody would see.
+func (l *ViewFindLoader) AmbiguousLabel(name string) (ViewAmbiguousLabel, bool) {
+	if l == nil || l.views == nil {
+		return ViewAmbiguousLabel{}, false
+	}
+	_, amb, ok := l.views.Resolve(name)
+	if ok || amb == nil {
+		return ViewAmbiguousLabel{}, false
+	}
+	return *amb, true
+}
+
+// Catalog lists every view this loader can SERVE through knowledge_find as
+// (label, slug) pairs — the same filtering Names() applies (a view
+// translateView refuses, e.g. one stored `disabled`, is excluded), so an
+// "unknown view" refusal can show a caller BOTH spellings it might
+// reasonably have used: the slug knowledge_find has always accepted, and the
+// label the Library shows for it. Sorted by slug, for the same reproducible-
+// report reason Names() sorts.
+func (l *ViewFindLoader) Catalog() []ViewLabelCandidate {
+	if l == nil || l.views == nil {
+		return nil
+	}
+	out := make([]ViewLabelCandidate, 0, l.views.Len())
+	for _, v := range l.views.Views() {
+		if _, refusal := translateView(v); refusal == nil {
+			out = append(out, ViewLabelCandidate{Label: v.DisplayLabel(), Slug: v.Def.Name})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Slug < out[j].Slug })
+	return out
 }
 
 // Formulas returns one view's `formulas:` map as SOURCE TEXT, satisfying
@@ -276,7 +325,11 @@ func (l *ViewFindLoader) Formulas(name string) (map[string]string, bool) {
 	if l == nil || l.views == nil {
 		return nil, false
 	}
-	v, ok := l.views.Get(name)
+	// Resolve, not Get: applyView never rewrites req.View to the resolved
+	// slug, so a caller who named the view by its LABEL reaches this method
+	// with the label still in `name` — Get alone would silently report "no
+	// formulas" for exactly the views this fix makes findable by label.
+	v, _, ok := l.views.Resolve(name)
 	if !ok || v == nil {
 		return nil, false
 	}

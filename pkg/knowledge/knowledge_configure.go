@@ -952,8 +952,25 @@ func (t *ConfigureTool) execDeleteView(target mutationTarget, args map[string]an
 	if lerr != nil {
 		return t.deps.refuse(authorOpConfigure, target, nil, "delete_view: loading existing views: "+lerr.Error())
 	}
-	v, ok := set.Get(viewName)
+	// Resolve, not Get: a caller (agent or person relaying what the Library
+	// shows) may name this view by its display LABEL rather than the slug it
+	// is stored under — UAT 2026-09-13 Q-08's failure, applying identically
+	// to delete_view since it resolves an EXISTING view by name exactly the
+	// way knowledge_find's `view` argument does. records.ViewSet.Resolve is
+	// the one shared implementation of slug-then-label lookup; see its own
+	// doc comment for the full rule and why an ambiguous label is refused
+	// rather than guessed.
+	v, amb, ok := set.Resolve(viewName)
 	if !ok {
+		if amb != nil {
+			pairs := make([]string, 0, len(amb.Candidates))
+			for _, c := range amb.Candidates {
+				pairs = append(pairs, fmt.Sprintf("%s (%s)", c.Label, c.Slug))
+			}
+			return t.deps.refuse(authorOpConfigure, target, nil, fmt.Sprintf(
+				"%q names more than one saved view: %s; delete_view needs the slug — shown in parentheses above — because a label is not unique",
+				viewName, strings.Join(pairs, ", ")))
+		}
 		return t.deps.refuse(authorOpConfigure, target, nil, fmt.Sprintf(
 			"no view %q is declared; declared views: %s", viewName, joinOrNone(set.Names())))
 	}
@@ -978,7 +995,10 @@ func (t *ConfigureTool) execDeleteView(target mutationTarget, args map[string]an
 		Paths: []string{relControlPlanePath(root, v.SourcePath)}, At: t.deps.now(),
 	})
 	return tools.NewToolResult(RenderConfigure(ConfigureData{
-		Op: opDeleteView, Name: viewName, Path: relControlPlanePath(root, v.SourcePath),
+		// v.Def.Name (the resolved slug), not the raw viewName argument: the
+		// caller may have named this view by its LABEL, and Name should
+		// always report the identifier Path actually points at.
+		Op: opDeleteView, Name: v.Def.Name, Path: relControlPlanePath(root, v.SourcePath),
 		Embeds: embeds, RawSource: rawSource, Label: v.DisplayLabel(),
 	}))
 }

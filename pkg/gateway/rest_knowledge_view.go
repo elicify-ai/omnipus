@@ -205,6 +205,30 @@ func viewResultRefusedUnknown(name string) gen.ViewResult {
 		"call knowledge_describe include=views to see the saved views in scope")
 }
 
+// viewResultAmbiguousLabelCode is this endpoint's code for
+// records.ViewAmbiguousLabel, reported through gen.ViewResultRefusal.Code —
+// documented (openapi_types.gen.go) as "NOT a closed enum, deliberately",
+// the same posture "no_drawable_parts" below already relies on.
+const viewResultAmbiguousLabelCode = "ambiguous_view_label"
+
+// viewResultRefusedAmbiguous is UAT 2026-09-13 Q-08's ambiguous-label
+// sibling to viewResultRefusedUnknown: more than one view carries the exact
+// LABEL `name` asks for (the Library shows a view by its label, never its
+// slug), and this endpoint will not guess which one was meant. Every
+// candidate is named by BOTH its label and its slug so the caller can repeat
+// the request with the slug — which records.ViewSet.Resolve always answers
+// unambiguously — and get a result.
+func viewResultRefusedAmbiguous(name string, amb records.ViewAmbiguousLabel) gen.ViewResult {
+	pairs := make([]string, 0, len(amb.Candidates))
+	for _, c := range amb.Candidates {
+		pairs = append(pairs, fmt.Sprintf("%s (%s)", c.Label, c.Slug))
+	}
+	return viewResultRefused(newViewResult(name),
+		viewResultAmbiguousLabelCode,
+		fmt.Sprintf("%q names more than one saved view: %s", name, strings.Join(pairs, ", ")),
+		"call the view by its slug — shown in parentheses above — instead of its label, which is not unique")
+}
+
 // ---------------------------------------------------------------------------
 // The builder
 // ---------------------------------------------------------------------------
@@ -258,8 +282,16 @@ type viewResultBuilder struct {
 func buildViewResult(ctx context.Context, env vaultprops.FindEnv, name, collectionRoot string) gen.ViewResult {
 	out := newViewResult(name)
 
-	v, ok := env.Views.Get(name)
+	// Resolve, not Get: `view=` on this endpoint carries exactly what an SPA
+	// or agent was shown for the view, and UAT 2026-09-13 Q-08 established
+	// that is routinely the Library's LABEL rather than the slug the view is
+	// stored under. records.ViewSet.Resolve is the one shared implementation
+	// of slug-then-label lookup — see its own doc comment for the full rule.
+	v, amb, ok := env.Views.Resolve(name)
 	if !ok {
+		if amb != nil {
+			return viewResultRefusedAmbiguous(name, *amb)
+		}
 		// A view that EXISTS on disk but was refused at load is reported by
 		// its rejection, not as "unknown" — a statement this endpoint could
 		// disprove is a statement it must not make.

@@ -515,6 +515,27 @@ type ViewRefusalReporter interface {
 	ServeRefusal(name string) (records.ViewServeRefusal, bool)
 }
 
+// ViewAmbiguousLabelReporter is the OPTIONAL third half of ViewLoader,
+// beside ViewRefusalReporter: it distinguishes "no view answers to this name
+// at all" from "more than one view answers to it, and this loader will not
+// guess which". UAT 2026-09-13 Q-08 is the failure this pair fixes: the
+// Library shows a saved view by its LABEL ("All Projects"), never by the
+// slug it resolves `view` by, and a caller who names a view that way must
+// either be answered or be told, by name, which views share that label —
+// never handed whichever one happened to load first.
+type ViewAmbiguousLabelReporter interface {
+	AmbiguousLabel(name string) (records.ViewAmbiguousLabel, bool)
+}
+
+// ViewCatalogReporter is the OPTIONAL fourth half: it lists every servable
+// view's LABEL alongside its SLUG, so the "no saved view named" refusal can
+// show both spellings a caller might reasonably have used — the slug this
+// argument has always accepted, and the label knowledge_describe and the
+// Library both render for the same view.
+type ViewCatalogReporter interface {
+	Catalog() []records.ViewLabelCandidate
+}
+
 // applyView expands a saved view UNDER the caller's own arguments, so `filter`
 // refines the view rather than replacing it (spec 4.1.2: "a saved view, applied
 // first; filter refines it").
@@ -543,13 +564,51 @@ func applyView(req *generated.VaultFindRequest, loader ViewLoader) *RefusalError
 				return refuse(p, nil)
 			}
 		}
+		// AMBIGUOUS LABEL: more than one view carries the exact label `name`
+		// asks for. Refusing by NAME ALONE, the way an unknown view is below,
+		// would risk silently serving whichever one happened to load first
+		// the next time this ran — the one outcome ViewSet.Resolve's own doc
+		// comment refuses to permit. Every candidate is named by BOTH its
+		// label and its slug so the caller can repeat the request with the
+		// slug — which is always unambiguous — and get an answer.
+		if reporter, isReporter := loader.(ViewAmbiguousLabelReporter); isReporter {
+			if amb, ambiguous := reporter.AmbiguousLabel(name); ambiguous {
+				pairs := make([]string, 0, len(amb.Candidates))
+				for _, c := range amb.Candidates {
+					pairs = append(pairs, fmt.Sprintf("%s (%s)", c.Label, c.Slug))
+				}
+				p := problem(generated.UnsupportedParameter,
+					fmt.Sprintf("%q names more than one saved view: %s", name, strings.Join(pairs, ", ")),
+					"call the view by its slug — shown in parentheses above — instead of its label, which is not unique")
+				return refuse(p, nil)
+			}
+		}
 		names := loader.Names()
 		sort.Strings(names)
 		p := problem(generated.UnknownView,
 			fmt.Sprintf("no saved view named %q", name),
 			"call knowledge_describe include=views to see the saved views in scope")
 		if len(names) > 0 {
-			p.Reason += "; defined: " + strings.Join(names, ", ")
+			// The listed slugs are always the callable, unambiguous answer
+			// (Permitted), but the READABLE half of the message names each
+			// view's LABEL alongside its slug when the loader can say what it
+			// is — UAT 2026-09-13 Q-08: an agent told "the All Projects view"
+			// could not match that word against a bare slug list at all.
+			defined := names
+			if catalog, isCatalog := loader.(ViewCatalogReporter); isCatalog {
+				if entries := catalog.Catalog(); len(entries) > 0 {
+					labeled := make([]string, 0, len(entries))
+					for _, c := range entries {
+						if c.Label != "" && c.Label != c.Slug {
+							labeled = append(labeled, fmt.Sprintf("%s (%s)", c.Label, c.Slug))
+						} else {
+							labeled = append(labeled, c.Slug)
+						}
+					}
+					defined = labeled
+				}
+			}
+			p.Reason += "; defined: " + strings.Join(defined, ", ")
 			p.Permitted = &names
 		}
 		return refuse(p, nil)

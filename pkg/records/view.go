@@ -419,6 +419,90 @@ func (s *ViewSet) Len() int {
 	return len(s.order)
 }
 
+// ViewLabelCandidate is one view sharing a display label a caller asked
+// Resolve to disambiguate. It is lookup OUTPUT, not part of the persisted
+// view format: a view file has no field named "candidate".
+type ViewLabelCandidate struct {
+	// Label is the candidate's DisplayLabel() — what the Library shows.
+	Label string
+	// Slug is the candidate's Def.Name — the identifier that always resolves
+	// it unambiguously, because a slug is unique by construction
+	// (loadViewPaths rejects every view sharing one).
+	Slug string
+}
+
+// ViewAmbiguousLabel reports that more than one view carries the exact
+// display label a caller asked Resolve to look up, so Resolve could not pick
+// one on its own.
+type ViewAmbiguousLabel struct {
+	// Label is the name Resolve was asked for.
+	Label string
+	// Candidates is every view carrying that label, in load order (stable
+	// across runs — the same order ViewSet.order preserves everywhere else).
+	Candidates []ViewLabelCandidate
+}
+
+// Resolve finds a view by either of the two things an agent has actually
+// been shown for it: its SLUG (Def.Name, the identifier Get already matches
+// exactly) or, failing that, its DISPLAY LABEL (DisplayLabel(), matched with
+// the same exactness).
+//
+// UAT 2026-09-13 Q-08: the Library shows a saved view by its label — "All
+// Projects" — never by the slug it is stored under
+// (projects--all-projects). A person tells an agent "use the All Projects
+// view" and has only ever been given the label; resolving `view` by slug
+// alone made that request fail with "no saved view named", which was false
+// about a view that both existed and had a human-readable name for exactly
+// this purpose. This is the ONE place that failure is fixed — every caller
+// that resolves a saved view by name (knowledge_find, the view-result REST
+// endpoint, delete_view) goes through this method rather than repeating its
+// own slug-then-label logic, so the two ways of naming a view can never
+// silently disagree about which one they mean.
+//
+// The slug is tried FIRST and, when it hits, wins outright without even
+// checking labels. A slug is unique by construction, so a slug hit can never
+// be ambiguous — and trying labels first would risk a view whose slug
+// happens to equal another view's label resolving to the wrong one.
+//
+// A label is NOT unique the way a slug is. knowledge_configure's write path
+// refuses a new view that collides with an existing label (D-21), but that
+// refusal did not exist for every view already on disk when it shipped, and
+// it does not cover a label a `.base` import assigns outside knowledge_configure.
+// So when a label matches more than one view, Resolve does not guess: it
+// returns ok=false with amb naming every candidate by BOTH its label and its
+// slug, so the caller can repeat the request with the slug — which always
+// resolves to exactly one view — and get an unambiguous answer. Picking one
+// silently (e.g. load order) would be the exact failure every other named
+// lookup in this file exists to refuse: a caller who typed a real, valid
+// name for TWO views getting a confident answer about the wrong one.
+func (s *ViewSet) Resolve(name string) (v *SavedView, amb *ViewAmbiguousLabel, ok bool) {
+	if s == nil {
+		return nil, nil, false
+	}
+	if v, ok := s.byName[name]; ok {
+		return v, nil, true
+	}
+	var matches []*SavedView
+	for _, n := range s.order {
+		cand := s.byName[n]
+		if cand.DisplayLabel() == name {
+			matches = append(matches, cand)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return nil, nil, false
+	case 1:
+		return matches[0], nil, true
+	default:
+		candidates := make([]ViewLabelCandidate, 0, len(matches))
+		for _, m := range matches {
+			candidates = append(candidates, ViewLabelCandidate{Label: m.DisplayLabel(), Slug: m.Def.Name})
+		}
+		return nil, &ViewAmbiguousLabel{Label: name, Candidates: candidates}, false
+	}
+}
+
 func (s *ViewSet) add(v *SavedView) {
 	if _, dup := s.byName[v.Def.Name]; !dup {
 		s.order = append(s.order, v.Def.Name)
