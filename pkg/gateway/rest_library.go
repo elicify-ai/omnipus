@@ -701,19 +701,49 @@ func enclosingCollectionRel(root *library.Root, rel string) (collRel string, fou
 	}
 }
 
+// resolveCollectionNoteLock is the ONE derivation, for a workspace-relative
+// note path, of the enclosing knowledge base and the D14 tier-1 lock both
+// Library doors need: the whole-file save door (resolveLibraryLock) and the
+// rename/delete knowledge-cascade door (libraryNoteInCollection,
+// rest_library_knowledge_cascade.go) used to carry two independent copies of
+// these steps, and two copies of one rule are how a split lock happens —
+// change one and not the other, and a Library save races a Library rename
+// over the same note on two different locks while every single-door test
+// stays green (round-3 cut list, 2026-09-14 review).
+//
+// enclosingCollectionRel does the ancestor walk (innermost collection wins);
+// knowledge.OpenCollection is the SAME call the agent write path takes
+// (AuthoringDeps.begin, pkg/knowledge/authoring_tools.go), so the
+// CollectionRoot string produced here is byte-identical to col.Root there,
+// and so is the LockDir knowledge.LockDirFor derives from it (SC-001b).
+//
+// A path with no enclosing knowledge base is reported as col == nil — the
+// caller decides what degraded mode means for its door.
+func resolveCollectionNoteLock(root *library.Root, home, rel string) (collRel string, col *knowledge.Collection, lock knowledge.NoteLockConfig, relInCol string, err error) {
+	collRel, found := enclosingCollectionRel(root, rel)
+	if !found {
+		return "", nil, knowledge.NoteLockConfig{}, "", nil
+	}
+	col, err = knowledge.OpenCollection(root.HostPath(collRel))
+	if err != nil {
+		return "", nil, knowledge.NoteLockConfig{}, "", fmt.Errorf("open enclosing knowledge base %q: %w", collRel, err)
+	}
+	lockDir, err := knowledge.LockDirFor(home, col.Root())
+	if err != nil {
+		return "", nil, knowledge.NoteLockConfig{}, "", fmt.Errorf("resolve write lock directory for %q: %w", collRel, err)
+	}
+	return collRel, col,
+		knowledge.NoteLockConfig{CollectionRoot: col.Root(), LockDir: lockDir},
+		relWithinCollection(collRel, rel), nil
+}
+
 // resolveLibraryLock derives the D14 tier-1 lock a whole-file Library write
 // must take before its compare-and-swap (EMB-006), so a Library save and an
 // agent's EditNote over the SAME note can never believe they hold different
 // locks: same collection root, same lock directory, same collection-relative
-// path (SC-001b). The Library handler is given a workspace-relative path
-// against the workspace root; the lock the agent write path takes is keyed
-// on a collection root and a collection-relative path, and nothing in this
-// package derived that mapping before EMB-006a. enclosingCollectionRel does
-// the ancestor walk; this resolves the result into a knowledge.
-// NoteLockConfig using knowledge.OpenCollection — the SAME call the agent
-// path takes (AuthoringDeps.begin, pkg/knowledge/authoring_tools.go) — so
-// the CollectionRoot string produced here is byte-identical to col.Root
-// there, and so is the LockDir knowledge.LockDirFor derives from it.
+// path (SC-001b). The derivation itself is resolveCollectionNoteLock — the
+// one shared rule, also used by the knowledge-cascade doors, so the save
+// door and the rename/delete door can never drift apart.
 //
 // Where no ancestor is a knowledge base, EMB-006's degraded mode applies:
 // CollectionRoot and LockDir are both empty — in-process serialisation
@@ -722,25 +752,14 @@ func enclosingCollectionRel(root *library.Root, rel string) (collRel string, fou
 // writes never share one striped-mutex key by coincidence; EMB-006a has no
 // equivalent unenclosed-file case on the agent side to match.
 func resolveLibraryLock(root *library.Root, home, workspaceID, rel string) (knowledge.NoteLockConfig, string, error) {
-	collRel, found := enclosingCollectionRel(root, rel)
-	if !found {
+	_, col, lock, relInCol, err := resolveCollectionNoteLock(root, home, rel)
+	if err != nil {
+		return knowledge.NoteLockConfig{}, "", err
+	}
+	if col == nil {
 		return knowledge.NoteLockConfig{}, workspaceID + "/" + rel, nil
 	}
-
-	collection, err := knowledge.OpenCollection(root.HostPath(collRel))
-	if err != nil {
-		return knowledge.NoteLockConfig{}, "", fmt.Errorf("open enclosing knowledge base %q: %w", collRel, err)
-	}
-	lockDir, err := knowledge.LockDirFor(home, collection.Root())
-	if err != nil {
-		return knowledge.NoteLockConfig{}, "", fmt.Errorf("resolve write lock directory for %q: %w", collRel, err)
-	}
-
-	relInCollection := rel
-	if collRel != "" {
-		relInCollection = strings.TrimPrefix(rel, collRel+"/")
-	}
-	return knowledge.NoteLockConfig{CollectionRoot: collection.Root(), LockDir: lockDir}, relInCollection, nil
+	return lock, relInCol, nil
 }
 
 func (a *restAPI) handleLibraryEntryDelete(w http.ResponseWriter, r *http.Request, workspaceID string) {

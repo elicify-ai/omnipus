@@ -194,3 +194,129 @@ func TestUAT_D11_NumbersBooleansAndListsAreAcceptedAsFilterLiterals(t *testing.T
 		t.Errorf("the refusal must explain why an object cannot be a literal:\n%s", out)
 	}
 }
+
+// TestR3_CursorAcceptsTheSameQueryReserializedDifferently — round-3 cut list
+// (2026-09-14 review): restoreCursorQuery compared the follow-up's non-cursor
+// fields against the query sealed in the cursor as RAW JSON BYTES, so the SAME
+// query spelled a second way was refused as StaleCursor. The comparison is now
+// semantic, over the decoded structs, using the engine's own equivalences: a
+// direction's long spelling (`descending` ≡ `desc`, D-10), and a field stated
+// explicitly on one side against the same field left to its default on the
+// other (`kind: note` ≡ omitted, `limit: 50` ≡ omitted, `detail: standard` ≡
+// omitted, `explain: false` ≡ omitted).
+func TestR3_CursorAcceptsTheSameQueryReserializedDifferently(t *testing.T) {
+	f := newFixture(t)
+	f.plant(1, "growing", "10.0")
+	f.plant(2, "growing", "20.0")
+	f.plant(3, "growing", "30.0")
+	f.plant(4, "growing", "40.0")
+	f.plant(5, "growing", "50.0")
+	d := f.deps()
+
+	page1 := mustFind(t, d, req(withType("plant"), withSort("height_cm", "desc"), withLimit(2)))
+	if page1.NextCursor == nil {
+		t.Fatalf("page 1 issued no cursor: %s", Render(page1))
+	}
+	if got := rowPaths(page1); len(got) != 2 || got[0] != "garden/plant-0005.md" || got[1] != "garden/plant-0004.md" {
+		t.Fatalf("page 1 order: %v", got)
+	}
+
+	t.Run("direction spelled the other valid way", func(t *testing.T) {
+		// The identical query, with `descending` where page 1 said `desc`.
+		// Both are valid enum members that parse() executes identically
+		// (D-10), so this is a continuation, not a different query.
+		page2 := mustFind(t, d, req(withType("plant"), withSort("height_cm", "descending"), withLimit(2), withCursor(*page1.NextCursor)))
+		if got := rowPaths(page2); len(got) != 2 || got[0] != "garden/plant-0003.md" || got[1] != "garden/plant-0002.md" {
+			t.Fatalf("the same query re-serialized must continue the page, got %v\n%s", got, Render(page2))
+		}
+	})
+
+	t.Run("defaults stated explicitly", func(t *testing.T) {
+		// The identical query with every default spelled out: `kind: note`,
+		// `detail: standard` and `explain: false` against the omitted forms
+		// page 1 sent, and the same limit the cursor remembers.
+		kind := generated.VaultFindRequestKind(KindNote)
+		detail := generated.VaultFindRequestDetail("standard")
+		explain := false
+		r := req(withType("plant"), withSort("height_cm", "desc"), withLimit(2), withCursor(*page1.NextCursor))
+		r.Kind = &kind
+		r.Detail = &detail
+		r.Explain = &explain
+		page2 := mustFind(t, d, r)
+		if got := rowPaths(page2); len(got) != 2 || got[0] != "garden/plant-0003.md" || got[1] != "garden/plant-0002.md" {
+			t.Fatalf("stating the defaults explicitly must continue the page, got %v\n%s", got, Render(page2))
+		}
+	})
+}
+
+// TestR3_CursorAcceptsASubsetOfTheRememberedQuery — the round-3 cut list's own
+// example: `{cursor, limit}` after `{words, limit}` was refused as StaleCursor.
+// The cursor carries the whole query (D-08), so a follow-up that re-sends only
+// some of it — and contradicts none of it — is a continuation of that query,
+// exactly as the cursor-only form already was.
+func TestR3_CursorAcceptsASubsetOfTheRememberedQuery(t *testing.T) {
+	f := newFixture(t)
+	for i := 1; i <= 5; i++ {
+		f.plant(i, "growing", "10.0")
+	}
+	f.text.only = []string{
+		"garden/plant-0001.md", "garden/plant-0002.md", "garden/plant-0003.md",
+		"garden/plant-0004.md", "garden/plant-0005.md",
+	}
+	d := f.deps()
+
+	page1 := mustFind(t, d, req(withWords("monstera"), withLimit(2)))
+	if page1.NextCursor == nil {
+		t.Fatalf("page 1 issued no cursor: %s", Render(page1))
+	}
+
+	// The finding's example: the cursor plus the page size, `words` left to
+	// the cursor to remember.
+	page2 := mustFind(t, d, req(withLimit(2), withCursor(*page1.NextCursor)))
+	if got := rowPaths(page2); len(got) != 2 {
+		t.Fatalf("a subset follow-up must be answered, got %d rows\n%s", len(got), Render(page2))
+	}
+	for _, p := range rowPaths(page2) {
+		if contains(rowPaths(page1), p) {
+			t.Errorf("page two repeats %s from page one", p)
+		}
+	}
+	if !strings.Contains(page2.QueryEcho, `words="monstera"`) {
+		t.Errorf("the continuation must still document the remembered words query: %q", page2.QueryEcho)
+	}
+}
+
+// TestR3_CursorStillRefusesAGenuinelyDifferentQuery — the guard D-08 added
+// survives the semantic comparison: any field the follow-up sends that asks
+// for something the cursor does not remember is still refused by name.
+func TestR3_CursorStillRefusesAGenuinelyDifferentQuery(t *testing.T) {
+	f := newFixture(t)
+	for i := 1; i <= 5; i++ {
+		f.plant(i, "growing", "10.0")
+	}
+	f.text.only = []string{
+		"garden/plant-0001.md", "garden/plant-0002.md", "garden/plant-0003.md",
+		"garden/plant-0004.md", "garden/plant-0005.md",
+	}
+	d := f.deps()
+
+	page1 := mustFind(t, d, req(withWords("monstera"), withLimit(2)))
+	if page1.NextCursor == nil {
+		t.Fatalf("page 1 issued no cursor: %s", Render(page1))
+	}
+
+	refusals := map[string]generated.VaultFindRequest{
+		"a different page size":                    req(withWords("monstera"), withLimit(5), withCursor(*page1.NextCursor)),
+		"a different words":                        req(withWords("fern"), withLimit(2), withCursor(*page1.NextCursor)),
+		"a narrowing the cursor does not remember": req(withType("plant"), withLimit(2), withCursor(*page1.NextCursor)),
+	}
+	for name, r := range refusals {
+		resp := mustRefuse(t, d, r)
+		if resp.Problems[0].Code != generated.StaleCursor {
+			t.Errorf("%s: code = %s, want stale_cursor", name, resp.Problems[0].Code)
+		}
+		if !strings.Contains(resp.Problems[0].Reason, "different query") {
+			t.Errorf("%s: the refusal must say the cursor belongs to a different query: %q", name, resp.Problems[0].Reason)
+		}
+	}
+}

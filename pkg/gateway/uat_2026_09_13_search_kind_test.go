@@ -44,10 +44,10 @@ func TestUAT_D130_NotesGroupNeverContainsARecordCutByTheRecordsLimit(t *testing.
 func TestUAT_D129_CoverageSentenceCountsNotesNotFiles(t *testing.T) {
 	api, ws, colID := buildVaultSearchVault(t)
 
-	// A limit of 1 makes the answer incomplete (two notes match "aerospace"
-	// through the record and the plain security note does not, but the
-	// records group still reports its cut), so the coverage pair is disclosed
-	// rather than withheld for a complete-and-empty answer.
+	// The fixture's company record matches "aerospace", so the answer carries
+	// a real hit — which is exactly the condition FR-053 discloses the
+	// coverage pair under (it is withheld only for a complete-and-empty
+	// answer, where it would leak a collection's existence).
 	w := vaultFindPost(t, api, ws, map[string]any{
 		"query": "aerospace", "collection_id": colID, "limit": 20,
 	})
@@ -55,9 +55,18 @@ func TestUAT_D129_CoverageSentenceCountsNotesNotFiles(t *testing.T) {
 	resp := decodeJSON[gen.VaultSearchResponse](t, w)
 	require.NotEmpty(t, resp.Records, "the fixture's company record matches")
 
-	if resp.NotesSearched == nil || resp.NotesTotalKnown == nil {
-		t.Skip("coverage pair withheld for a complete answer; the count is exercised by pkg/knowledge's freshness test")
-	}
+	// THE PAIR'S PRESENCE IS THE INVARIANT (round-3, 2026-09-14 review): this
+	// used to t.Skip when the pair was missing, which made deleting the
+	// coverage disclosure entirely keep the suite GREEN — demonstrated live
+	// by mutation before this change. If the product ever legitimately stops
+	// disclosing the pair for an answer with hits, update this test
+	// deliberately; do not restore a skip.
+	require.NotNil(t, resp.NotesSearched,
+		"notes_searched must be present on an answer with real hits — D-129's count cannot be "+
+			"guarded by a test that skips when the number is missing")
+	require.NotNil(t, resp.NotesTotalKnown,
+		"notes_total_known must be present on an answer with real hits — D-129's count cannot be "+
+			"guarded by a test that skips when the number is missing")
 	assert.Equal(t, 2, *resp.NotesTotalKnown,
 		"D-129: two markdown notes exist; the attachment must not be counted as a note")
 	assert.Equal(t, 2, *resp.NotesSearched)

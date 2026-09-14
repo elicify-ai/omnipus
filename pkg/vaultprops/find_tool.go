@@ -668,7 +668,7 @@ func openUsableFindStore(ctx context.Context, path, collectionRoot string, synce
 	if store.NeedsFullIndex() && (synced == nil || synced.Scanned != 0) {
 		return closeUnusable("it holds no files yet")
 	}
-	rowCount, expected, unreadable, coverErr := propertiesStoreCoverage(ctx, store, collectionRoot, synced)
+	rowCount, expected, scanned, unreadable, coverErr := propertiesStoreCoverage(ctx, store, collectionRoot, synced)
 	if coverErr != nil {
 		// "I could not confirm coverage" gets the same treatment as "I know
 		// it is not covered" — a zero-hit answer this layer cannot verify
@@ -686,26 +686,32 @@ func openUsableFindStore(ctx context.Context, path, collectionRoot string, synce
 	// that fact travels WITH the store (finding 6). The caveat names the
 	// files, because "some file somewhere" is not a fact an operator can act
 	// on and a path is.
-	return store, "", recoveryCoverageCaveat(synced, unreadable)
+	return store, "", recoveryCoverageCaveat(scanned, unreadable)
 }
 
-// recoveryCoverageCaveat renders the coverage caveat for a usable store: nil
-// when the recovery evaluated every file, and otherwise a sentence that says
+// recoveryCoverageCaveat renders the coverage caveat for a usable store: ""
+// when every file on disk was evaluated, and otherwise a sentence that says
 // exactly which files are absent from every answer and why. The wording
 // distinguishes the two facts finding 6 conflated — every readable file IS
 // indexed; the collection was NOT fully evaluated — and is what
 // knowledgefind stamps into the response's problems, making the answer
 // complete:false.
-func recoveryCoverageCaveat(synced *SyncStats, unreadable []string) string {
-	if synced == nil || len(unreadable) == 0 {
+//
+// `total` is the number of files the coverage comparison counted on disk (the
+// fresh stat-only scan), so the sentence's arithmetic is the same one the
+// comparison itself used — for the recovery path AND for the pre-sync path,
+// which knows the unreadable files from its own probe rather than from a
+// Sync's report.
+func recoveryCoverageCaveat(total int, unreadable []string) string {
+	if len(unreadable) == 0 {
 		return ""
 	}
 	names := append([]string(nil), unreadable...)
 	sort.Strings(names)
 	return fmt.Sprintf(
-		"this knowledge base was not fully evaluated: every readable file is indexed, but %d of the %d files Sync saw could not be read, "+
+		"this knowledge base was not fully evaluated: every readable file is indexed, but %d of the %d files on disk could not be read, "+
 			"so records in them cannot appear in any answer: %s",
-		len(unreadable), synced.Scanned, strings.Join(names, ", "))
+		len(unreadable), total, strings.Join(names, ", "))
 }
 
 // propertiesStoreCoverage counts the paths the properties store currently
@@ -728,22 +734,38 @@ func recoveryCoverageCaveat(synced *SyncStats, unreadable []string) string {
 // read will never have a row, must not keep the index closed forever, and is
 // returned so the caller can put it in the coverage caveat (finding 6).
 //
+// THE PRE-SYNC CHECK SUBTRACTS UNREADABLE FILES TOO (round-3 cut list,
+// 2026-09-14 review). There is no Sync report to read yet on this path, so
+// the files the store is short by are PROBED directly, under the same
+// readability rule syncReconcileBody applies (resolve through the collection
+// root refusing symlinks, then read the note) — see unreadableMissingNotes.
+// Without this, one permanently unreadable note made every knowledge_find
+// run a full-collection Sync: the store already covered every readable file,
+// but the expectation counted the unreadable one, so the comparison failed
+// and openFindStore repaired it again on every single call. A store short by
+// more than unreadableProbeCap files is not probed — a gap that size is a
+// real gap, and the Sync that repairs it is cheaper than reading that many
+// files just to keep the store open.
+//
 // AllPaths is used rather than a raw COUNT(*), because AllPaths is the
 // store's own documented "every path currently held" walk (store.go); a
 // second, parallel counting query would be a second idea of what "every
 // row" means to drift out of sync with the first.
-func propertiesStoreCoverage(ctx context.Context, store propindex.Store, collectionRoot string, synced *SyncStats) (rowCount, expected int, unreadable []string, err error) {
-	if walkErr := store.AllPaths(ctx, func(propindex.IndexedNote) error {
-		rowCount++
+func propertiesStoreCoverage(ctx context.Context, store propindex.Store, collectionRoot string, synced *SyncStats) (rowCount, expected, scanned int, unreadable []string, err error) {
+	held := make(map[string]struct{})
+	if walkErr := store.AllPaths(ctx, func(n propindex.IndexedNote) error {
+		held[n.Path] = struct{}{}
 		return nil
 	}); walkErr != nil {
-		return 0, 0, nil, fmt.Errorf("walking the properties index: %w", walkErr)
+		return 0, 0, 0, nil, fmt.Errorf("walking the properties index: %w", walkErr)
 	}
+	rowCount = len(held)
 	scan, err := knowledge.Scan(collectionRoot)
 	if err != nil {
-		return 0, 0, nil, fmt.Errorf("scanning the collection: %w", err)
+		return 0, 0, 0, nil, fmt.Errorf("scanning the collection: %w", err)
 	}
-	expected = len(scan.Entries)
+	scanned = len(scan.Entries)
+	expected = scanned
 	if synced != nil {
 		for _, p := range synced.Problems {
 			if p.Reason == "unreadable" {
@@ -751,6 +773,70 @@ func propertiesStoreCoverage(ctx context.Context, store propindex.Store, collect
 				unreadable = append(unreadable, p.RelPath)
 			}
 		}
+		return rowCount, expected, scanned, unreadable, nil
 	}
-	return rowCount, expected, unreadable, nil
+	if rowCount != expected {
+		unreadable = unreadableMissingNotes(collectionRoot, scan.Entries, held)
+		expected -= len(unreadable)
+	}
+	return rowCount, expected, scanned, unreadable, nil
+}
+
+// unreadableProbeCap bounds how many missing files the pre-sync coverage
+// check will open to decide whether the store's shortfall is nothing but
+// permanently unreadable notes. The scenario the probe exists for is a
+// HANDFUL of such files; a store short by more than this is treated as a
+// genuine gap and repaired by the Sync path, which fixes it outright for the
+// same cost the probe would have paid just to look.
+const unreadableProbeCap = 8
+
+// unreadableMissingNames decides, for the disk entries that have no row,
+// which of them are unreadable by the SAME rule Sync itself applies
+// (syncReconcileBody): resolve through the collection root — refusing a path
+// that reaches its target only through a symlink — then read the note. A file
+// that fails either step never gets a row from Sync, so its absence from the
+// store is coverage, not a gap.
+//
+// Attachments are never probed: Sync never opens one (FR-039a), so an
+// attachment with no row is always a genuine gap, never unreadability.
+//
+// A path that IS readable is not reported: it is a real gap, and leaving it
+// out is what keeps the coverage comparison failing so the store gets
+// repaired. Construction failures (root unresolvable) also report nothing —
+// the conservative answer is "gap", which repairs.
+func unreadableMissingNotes(collectionRoot string, entries []knowledge.ScanEntry, held map[string]struct{}) []string {
+	var missing []knowledge.ScanEntry
+	for _, e := range entries {
+		if _, ok := held[e.RelPath]; ok {
+			continue
+		}
+		if e.Kind == knowledge.ScanKindAttachment {
+			continue
+		}
+		missing = append(missing, e)
+	}
+	if len(missing) == 0 || len(missing) > unreadableProbeCap {
+		return nil
+	}
+	realRoot, err := knowledge.ResolveCollectionRoot(collectionRoot)
+	if err != nil {
+		return nil
+	}
+	fsys := knowledge.OSLinkFS()
+	root, err := knowledge.NewCollectionRoot(fsys, realRoot)
+	if err != nil {
+		return nil
+	}
+	var unreadable []string
+	for _, e := range missing {
+		abs, resolveErr := root.ResolveContainedNoSymlink(fsys, e.RelPath)
+		if resolveErr != nil {
+			unreadable = append(unreadable, e.RelPath)
+			continue
+		}
+		if _, readErr := knowledge.ReadNoteContent(fsys, abs); readErr != nil {
+			unreadable = append(unreadable, e.RelPath)
+		}
+	}
+	return unreadable
 }

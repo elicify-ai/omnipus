@@ -11699,20 +11699,20 @@ turnLoop:
 			// UAT fix (fix/uat-defects-2026-08-22, Defect 1): update this
 			// exact call's consecutive-failure streak. A success (or a hook
 			// that turned a failure into one) clears the streak outright; a
-			// real failure bumps it and, once it crosses either threshold,
-			// augments the error content the model is about to see (warn),
-			// or trips the pre-dispatch breaker above for every later call
-			// with this identical signature this turn (hard stop). Keyed on
-			// toolCBSig computed before dispatch/hooks so a hook renaming the
-			// tool does not fragment the streak it is meant to track.
+			// real failure bumps it and, once it crosses the warn threshold,
+			// augments the error content the model is about to see. The
+			// REFUSAL side lives entirely in the pre-dispatch check above
+			// (toolCircuitBreakerTripped): D-81 made it refuse attempt
+			// number toolFailureCircuitBreakThreshold of an identical call
+			// BEFORE dispatch, so a streak recorded here can never reach the
+			// break threshold — a post-dispatch arm that tripped the breaker
+			// at streak >= toolFailureCircuitBreakThreshold was unreachable
+			// and is deleted (round-3 cut list, 2026-09-14 review; see the
+			// reachability note in tool_failure_circuit_breaker.go). Keyed
+			// on toolCBSig computed before dispatch/hooks so a hook renaming
+			// the tool does not fragment the streak it is meant to track.
 			if toolResult.IsError {
-				streak := ts.recordToolFailure(toolCBSig)
-				switch {
-				case streak >= toolFailureCircuitBreakThreshold:
-					reason := toolFailureCircuitBreakerReason(toolName, streak)
-					ts.tripToolCircuitBreaker(toolCBSig, reason)
-					toolResult.ForLLM = toolResult.ContentForLLM() + toolFailureWarnNotice(toolName, streak)
-				case streak >= toolFailureWarnThreshold:
+				if streak := ts.recordToolFailure(toolCBSig); streak >= toolFailureWarnThreshold {
 					toolResult.ForLLM = toolResult.ContentForLLM() + toolFailureWarnNotice(toolName, streak)
 				}
 			} else {

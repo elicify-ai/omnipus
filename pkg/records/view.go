@@ -1054,7 +1054,7 @@ func describeJSONTargetShape(field string, t reflect.Type) string {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		return "a number"
-	case reflect.Struct, reflect.Ptr:
+	case reflect.Struct, reflect.Pointer:
 		return "an object"
 	}
 	return "a different shape"

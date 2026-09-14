@@ -95,3 +95,62 @@ func TestFindTool_UnreadableNoteMarksTheAnswerIncomplete(t *testing.T) {
 		t.Fatalf("the answer must name the file that cannot appear in it; got:\n%s", text)
 	}
 }
+
+// TestOpenFindStore_UnreadableNoteDoesNotForceASyncOnEveryCall — round-3 cut
+// list (2026-09-14 review): one permanently unreadable note made EVERY
+// knowledge_find run a full-collection Sync. The pre-sync coverage expectation
+// counted every file on disk and subtracted nothing, so a store that already
+// covered every READABLE file still looked one file short and openFindStore
+// repaired it again on every call, forever. The pre-sync check now decides
+// unreadability for the missing paths by the same rule Sync itself applies, so
+// the SECOND call over unchanged disk state opens the store without syncing —
+// and still carries the coverage caveat.
+func TestOpenFindStore_UnreadableNoteDoesNotForceASyncOnEveryCall(t *testing.T) {
+	skipWithoutSQLite(t)
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: a 0000-mode file is still readable, so this test cannot make a note unreadable")
+	}
+
+	ctx := context.Background()
+	root := syncVault(t, map[string]string{
+		".omnipus-vault/records/plant.yaml": plantSchema,
+		"Plants/Fern.md":                    fernNote,
+		"Plants/Orchid.md":                  orchidNote,
+	})
+	home := syncHome(t)
+
+	locked := filepath.Join(root, "Plants", "Orchid.md")
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	defer func() { _ = os.Chmod(locked, 0o600) }()
+
+	// Count Sync runs through the same production probe
+	// sync_interleave_test.go uses: it fires once inside every reconcile body.
+	syncs := 0
+	syncAfterScanProbe = func() { syncs++ }
+	defer func() { syncAfterScanProbe = nil }()
+
+	store1, closer1, reason1, _ := openFindStore(ctx, home, root)
+	if store1 == nil {
+		t.Fatalf("the first call over a never-indexed collection must recover with a Sync (reason=%q)", reason1)
+	}
+	if err := closer1(); err != nil {
+		t.Fatalf("closing the first store: %v", err)
+	}
+	if syncs != 1 {
+		t.Fatalf("the first call must Sync exactly once, got %d", syncs)
+	}
+
+	store2, closer2, reason2, caveat2 := openFindStore(ctx, home, root)
+	defer func() { _ = closer2() }()
+	if store2 == nil {
+		t.Fatalf("the second call must open the recovered store (reason=%q)", reason2)
+	}
+	if syncs != 1 {
+		t.Fatalf("a single unreadable note must not force a full-collection Sync on every call: %d syncs after the second call", syncs)
+	}
+	if !strings.Contains(caveat2, "Plants/Orchid.md") {
+		t.Fatalf("the pre-sync path must still carry the coverage caveat naming the unreadable file; got %q", caveat2)
+	}
+}

@@ -66,21 +66,21 @@ func relWithinCollection(collRel, rel string) string {
 // error means the answer could not be established — the caller must not
 // fall back to plain filesystem semantics on it, because "could not tell"
 // is not "not a knowledge base".
+//
+// The lock (and the collection-relative path it keys on) comes from
+// resolveCollectionNoteLock — the ONE derivation the whole-file save door
+// takes too, so the two doors can never hold different locks over the same
+// note (round-3 cut list, 2026-09-14 review).
 func (a *restAPI) libraryNoteInCollection(root *library.Root, rel string) (note *libraryCollectionNote, governed bool, err error) {
 	if !knowledge.IsMarkdownPath(rel) {
 		return nil, false, nil
 	}
-	collRel, found := enclosingCollectionRel(root, rel)
-	if !found {
+	collRel, col, lock, relInCol, err := resolveCollectionNoteLock(root, a.homePath, rel)
+	if err != nil {
+		return nil, false, err
+	}
+	if col == nil {
 		return nil, false, nil
-	}
-	col, err := knowledge.OpenCollection(root.HostPath(collRel))
-	if err != nil {
-		return nil, false, fmt.Errorf("open enclosing knowledge base %q: %w", collRel, err)
-	}
-	lockDir, err := knowledge.LockDirFor(a.homePath, col.Root())
-	if err != nil {
-		return nil, false, fmt.Errorf("resolve write lock directory for %q: %w", collRel, err)
 	}
 	croot, err := knowledge.NewCollectionRoot(knowledge.OSLinkFS(), col.Root())
 	if err != nil {
@@ -90,8 +90,8 @@ func (a *restAPI) libraryNoteInCollection(root *library.Root, rel string) (note 
 		collRel:  collRel,
 		col:      col,
 		root:     croot,
-		relInCol: relWithinCollection(collRel, rel),
-		lock:     knowledge.NoteLockConfig{CollectionRoot: col.Root(), LockDir: lockDir},
+		relInCol: relInCol,
+		lock:     lock,
 	}, true, nil
 }
 

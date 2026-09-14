@@ -149,17 +149,17 @@ func (ts *turnState) recordToolSuccess(sig string) {
 	}
 }
 
-// tripToolCircuitBreaker marks sig as hard-blocked for the remainder of this
-// turn, recording reason for the denial message every subsequent identical
-// call receives.
-func (ts *turnState) tripToolCircuitBreaker(sig, reason string) {
-	ts.mu.Lock()
-	defer ts.mu.Unlock()
-	if ts.toolCircuitBroken == nil {
-		ts.toolCircuitBroken = make(map[string]string)
-	}
-	ts.toolCircuitBroken[sig] = reason
-}
+// REACHABILITY NOTE (round-3 cut list, 2026-09-14 review): the trip used to
+// happen POST-dispatch — loop.go watched the recorded streak and called an
+// explicit marker once it reached toolFailureCircuitBreakThreshold. That arm
+// was unreachable the moment D-81 moved the refusal ahead of dispatch: a
+// streak only grows by one per DISPATCHED call, and the pre-dispatch check
+// below refuses (and permanently marks broken) any attempt whose signature
+// has already failed threshold-1 times — so the attempt that would have
+// recorded streak == threshold never executes, the streak can never exceed
+// threshold-1, and the post-dispatch arm could never fire. The arm and the
+// marker method it alone called (tripToolCircuitBreaker) are deleted; the
+// marking lives in condition 2 below, which is the only trip path.
 
 // toolCircuitBreakerTripped reports whether sig must be refused without
 // dispatch for this turn, and why. Three conditions trip it, checked in
@@ -169,7 +169,8 @@ func (ts *turnState) tripToolCircuitBreaker(sig, reason string) {
 //  2. sig has failed identically toolFailureCircuitBreakThreshold-1 times
 //     in a row, so THIS attempt is number toolFailureCircuitBreakThreshold
 //     (D-81): it is refused and sig is marked broken for the rest of the
-//     turn.
+//     turn — the ONLY place a signature is marked broken (see the
+//     reachability note above).
 //  3. Dispatching sig would extend the turn's call history into
 //     oscillationBreakCycles repetitions of a short cycle (D-23) — where a
 //     repetition means the same calls returning the SAME results (see
