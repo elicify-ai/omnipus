@@ -54,6 +54,7 @@ import { LibraryNewVaultDialog } from './LibraryNewVaultDialog'
 import { LibraryNewFolderDialog } from './LibraryNewFolderDialog'
 import { LibraryTransferDialog } from './LibraryTransferDialog'
 import { LibraryAddMountDialog } from './LibraryAddMountDialog'
+import { LibraryRenameDialog } from './LibraryRenameDialog'
 
 const mockedHostFolders = vi.mocked(fetchHostFolders)
 
@@ -218,6 +219,36 @@ describe('D-127 / D-117 — Add a folder from your Mac', () => {
     await waitFor(() => expect(onConfirm).toHaveBeenCalledWith('/proj'))
     expect(screen.queryByTestId('library-add-mount-broad')).not.toBeInTheDocument()
   })
+
+  // Claude review 2026-09-14, cut-list: the verdict lookup matched the TYPED
+  // string against the listing, so any non-canonical spelling ("/tmp/",
+  // "/tmp/.", "/private/tmp/.." on a Mac aside — here "/tmp/../tmp") dodged
+  // the breadth gate entirely: no banner, no second click, straight to
+  // onConfirm. The dialog canonicalizes lexically before the check now, and
+  // submits the canonical path, so every spelling of the same folder gets
+  // the same verdict. (System dirs stay caught server-side regardless.)
+  it('a non-canonical spelling of a broad path gets the same verdict and the same second click', async () => {
+    mockedHostFolders.mockImplementation(async (path?: string) => ({
+      path: path ?? '/',
+      entries: [{ name: 'tmp', path: '/tmp', mountable: true, broad: true, reason: 'This is a system directory.' }],
+    }))
+    const onConfirm = vi.fn()
+    render(<LibraryAddMountDialog open onOpenChange={vi.fn()} onConfirm={onConfirm} isPending={false} />)
+    const input = screen.getByTestId('library-add-mount-path')
+
+    for (const spelling of ['/tmp/', '/tmp/.', '/tmp/../tmp']) {
+      onConfirm.mockClear()
+      fireEvent.change(input, { target: { value: spelling } })
+      fireEvent.click(screen.getByTestId('library-add-mount-confirm'))
+      await waitFor(() => expect(screen.getByTestId('library-add-mount-broad')).toBeInTheDocument())
+      expect(onConfirm).not.toHaveBeenCalled()
+      expect(screen.getByTestId('library-add-mount-confirm')).toHaveTextContent('Add anyway')
+
+      fireEvent.click(screen.getByTestId('library-add-mount-confirm'))
+      await waitFor(() => expect(onConfirm).toHaveBeenCalledWith('/tmp'))
+      expect(onConfirm).toHaveBeenCalledTimes(1)
+    }
+  })
 })
 
 // D-117, RESPONSE half (2026-09-14 fix round): the pre-submit banners above
@@ -280,6 +311,44 @@ describe('D-117 — Add-mount renders the SERVER response (broad warning / 403 r
     // the path retires it.
     fireEvent.change(screen.getByTestId('library-add-mount-path'), { target: { value: '/tmp' } })
     await waitFor(() => expect(screen.queryByTestId('library-add-mount-dialog-refused')).not.toBeInTheDocument())
+  })
+})
+
+describe('Rename — a dot-prefixed name would hide the entry (Claude review 2026-09-14)', () => {
+  // The listing's visibility rule is library-spec.md D-8, applied once in
+  // pkg/library/entries.go::List: a name beginning with "." is hidden and is
+  // omitted unless "Show hidden" is on. The rename dialog used to accept
+  // ".hidden" — the server renamed onto it, and the entry then simply
+  // vanished from the default listing with no explanation.
+  it('refuses a name starting with a dot, names the reason, and keeps a plain rename working', () => {
+    const onSubmit = vi.fn()
+    render(
+      <LibraryRenameDialog
+        open
+        onOpenChange={vi.fn()}
+        entry={entry({ name: 'notes.md', path: 'notes.md' })}
+        siblingNames={new Set()}
+        onSubmit={onSubmit}
+        isPending={false}
+      />,
+    )
+    const input = screen.getByTestId('library-rename-input')
+
+    fireEvent.change(input, { target: { value: '.hidden' } })
+    expect(screen.getByTestId('library-rename-hidden')).toHaveTextContent(/wouldn't show in the list/i)
+    expect(screen.getByTestId('library-rename-confirm')).toBeDisabled()
+    expect(onSubmit).not.toHaveBeenCalled()
+
+    // "." / ".." are refused as names, same as the New-knowledge-base rule.
+    fireEvent.change(input, { target: { value: '..' } })
+    expect(screen.getByTestId('library-rename-dot')).toBeInTheDocument()
+    expect(screen.getByTestId('library-rename-confirm')).toBeDisabled()
+
+    // Positive control: a plain rename still submits the joined path.
+    fireEvent.change(input, { target: { value: 'notes-2.md' } })
+    expect(screen.queryByTestId('library-rename-hidden')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('library-rename-confirm'))
+    expect(onSubmit).toHaveBeenCalledWith('notes-2.md')
   })
 })
 

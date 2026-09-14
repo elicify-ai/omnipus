@@ -67,3 +67,50 @@ describe('foldedMatchRanges — UAT D-129', () => {
     expect(foldedMatchRanges('Café', [])).toEqual([])
   })
 })
+
+describe('foldForMatch — server-table parity (Claude review 2026-09-14)', () => {
+  // The index side folds with bleve's asciifolding (pkg/knowledge/
+  // analyzer_folded.go): lower-case -> NFC -> ASCII-fold. The letters NFD
+  // cannot decompose are exactly where the old client rule (NFD + strip
+  // marks) disagreed with it — a "Søren" hit for the query "soren" carried a
+  // not-found coverage chip. Expected values are what the SERVER folds to.
+  it('folds ø, Ø, ß, Ł and ł the way the index does', () => {
+    expect(foldForMatch('Søren')).toBe('soren')
+    expect(foldForMatch('Østrøm')).toBe('ostrom')
+    expect(foldForMatch('straße')).toBe('strasse')
+    expect(foldForMatch('Władysława')).toBe('wladyslawa')
+    expect(foldForMatch('Łódź')).toBe('lodz')
+  })
+
+  it('folds ligatures and the other table entries the old rule left alone', () => {
+    expect(foldForMatch('Ærø')).toBe('aero')
+    expect(foldForMatch('þorskur')).toBe('thorskur')
+  })
+
+  it('keeps the D-129 invariant: NFC and NFD spellings fold alike', () => {
+    expect(foldForMatch(`${NFD_CAFE} (1).png`)).toBe(foldForMatch(`${NFC_CAFE} (1).png`))
+    const nfd = 'S' + 'ø' // NFC ø is a single code point with no decomposition
+    expect(foldForMatch(nfd)).toBe('so')
+  })
+})
+
+describe('foldWithMap — Final_Sigma consistency (Claude review 2026-09-14, :34)', () => {
+  it('agrees with foldForMatch on text whose whole-string lower-casing would differ from per-character lower-casing', () => {
+    // 'ΟΔΟΣ' ends in a capital sigma. String.prototype.toLowerCase applies
+    // Unicode's Final_Sigma rule to the WHOLE string ('οδος'); folding one
+    // code point at a time does not ('οδοσ'). foldWithMap used the per-
+    // character form while foldForMatch used the whole-string form, so the
+    // two halves of this module could disagree about the same text and a
+    // matched term highlighted nothing. Both now walk code points through
+    // the SAME rule (the casing Go's analyzer applies is per-rune too).
+    const text = 'ΟΔΟΣ'
+    expect(foldWithMap(text).folded).toBe(foldForMatch(text))
+    expect(foldedMatchRanges(text, [text])).toEqual([[0, text.length]])
+  })
+
+  it('still maps folded characters back to original code points when marks compose', () => {
+    const { folded, map } = foldWithMap(`x${NFD_CAFE}y`)
+    expect(folded).toBe('xcafey')
+    expect(map).toEqual([0, 1, 2, 3, 4, 6, 7])
+  })
+})
