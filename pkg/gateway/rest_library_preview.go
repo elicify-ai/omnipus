@@ -545,6 +545,17 @@ func (p *libraryPreviewRoutes) handleServeLibraryPreview(w http.ResponseWriter, 
 		return
 	}
 
+	rest, hasPrefix := strings.CutPrefix(r.URL.Path, libraryPreviewPathPrefix)
+	if !hasPrefix {
+		writeLibraryPreviewTokenFailure(w, r)
+		return
+	}
+	token, relRaw, _ := strings.Cut(rest, "/")
+	if token == "" {
+		writeLibraryPreviewTokenFailure(w, r)
+		return
+	}
+
 	// UAT 2026-09-13 D-106: a preview URL opened as a TOP-LEVEL document
 	// (pasted into a tab, "Open frame in new tab") keeps every confidentiality
 	// control but loses every presentation one — the untrusted file owns the
@@ -555,23 +566,19 @@ func (p *libraryPreviewRoutes) handleServeLibraryPreview(w http.ResponseWriter, 
 	// document case is refused with an interstitial that says where the
 	// preview does open. A browser that sends no Sec-Fetch-Dest at all is
 	// not distinguishable and is served as before.
-	if strings.EqualFold(r.Header.Get("Sec-Fetch-Dest"), "document") {
+	//
+	// Refused only when the file WOULD RENDER — the §10.4 inline allow-list.
+	// A file this path serves as an attachment (.pdf, an unknown extension)
+	// never becomes a document: the browser downloads it, so there is no
+	// viewport, title or top window for D-106 to protect, and refusing it
+	// only broke the download ADR-067 test 58 measures (FIX4 2026-09-14).
+	// Scope and D-105 still run below for that request, unchanged.
+	if strings.EqualFold(r.Header.Get("Sec-Fetch-Dest"), "document") && libraryPreviewRendersInline(relRaw) {
 		writeLibraryPreviewErrorPage(w, r, http.StatusForbidden,
 			"This preview only opens inside Omnipus",
 			"Preview links show untrusted files inside an isolated frame in the Library. "+
 				"Opened as a page of its own, a file could imitate Omnipus itself. "+
 				"Go back to the Library and open the file there.")
-		return
-	}
-
-	rest, hasPrefix := strings.CutPrefix(r.URL.Path, libraryPreviewPathPrefix)
-	if !hasPrefix {
-		writeLibraryPreviewTokenFailure(w, r)
-		return
-	}
-	token, relRaw, _ := strings.Cut(rest, "/")
-	if token == "" {
-		writeLibraryPreviewTokenFailure(w, r)
 		return
 	}
 
@@ -677,10 +684,31 @@ func libraryPreviewBundleAssetExt(ext string) bool {
 		".css", ".js", ".mjs", ".map",
 		".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif", ".ico", ".bmp",
 		".woff", ".woff2", ".ttf", ".otf", ".eot",
-		".mp3", ".mp4", ".m4a", ".m4v", ".webm", ".ogg", ".ogv", ".oga", ".wav", ".flac", ".vtt":
+		".mp3", ".mp4", ".m4a", ".m4v", ".webm", ".ogg", ".ogv", ".oga", ".wav", ".flac", ".vtt",
+		// ADR-067 names .aac and .opus as in-scope audio and §10.4 serves .mov
+		// inline; omitting them 404'd a bundle page's own <audio>/<video>.
+		".aac", ".opus", ".mov":
 		return true
 	}
 	return false
+}
+
+// libraryPreviewRendersInline reports whether the file a preview URL names
+// would be served INLINE — i.e. would become a rendered document if navigated
+// to — which is the only case D-106's top-level refusal exists for.
+//
+// It cleans the path with the SAME function the serving path uses and asks
+// the SAME disposition predicate applyLibraryPreviewByteHeaders asks, over the
+// same name (path.Base of the cleaned path). A last-segment check on the raw
+// URL would disagree with the served disposition for "page.html/." or
+// "page.html/", which clean to page.html and are served inline. A path that
+// does not clean is not servable at all; the normal path answers it 404.
+func libraryPreviewRendersInline(relRaw string) bool {
+	rel, err := library.CleanRelPath(relRaw)
+	if err != nil || rel == "" {
+		return false
+	}
+	return libraryExtIsInline(libraryExtOf(path.Base(rel)))
 }
 
 // handleRevokePreviewToken implements DELETE /api/v1/library/preview-token/{token}
