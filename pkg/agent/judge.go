@@ -59,15 +59,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// judgeCallTimeout bounds ONE verifier turn (runVerifierAdjudication's
-// al.processTaskDirect dispatch, verifier_adjudication.go) — a full
-// agent-loop turn under the seeded Judge's identity, potentially several LLM
-// calls if the verifier's rubric escalates to its read-only tools
-// (read_file/list_directory/inspect_session), not a single raw provider
-// Chat call. Distinct from config.PlanningConfig.CheckTimeoutSeconds, which
-// bounds a machine-check COMMAND, not the judge/verifier's own turn.
-const judgeCallTimeout = 120 * time.Second
-
 // judgeRetryBackoff is the cron-style transient backoff schedule (ADR D7,
 // mirroring pkg/cron/service.go's defaultRetryBackoffMs: 60/120/300s) applied
 // when the Judge LLM call itself is UNAVAILABLE (SEC-26 throttled or
@@ -972,12 +963,19 @@ func (al *AgentLoop) checkJudgeSEC26(agentType, agentID string) (allowed bool, r
 // table — the "normal cadence" the spec's Judge-unavailability dataset
 // describes for the 4th+ occurrence. Returns a non-nil error (ctx canceled)
 // when the caller should give up.
-func (al *AgentLoop) judgeBackoffWait(ctx context.Context, attemptIdx int, reason string) error {
+// judgeBackoffDuration is the judgeRetryBackoff wait before the retry that
+// follows attempt attemptIdx; retries beyond the schedule repeat its last
+// (longest) entry.
+func judgeBackoffDuration(attemptIdx int) time.Duration {
 	idx := attemptIdx
 	if idx >= len(judgeRetryBackoff) {
 		idx = len(judgeRetryBackoff) - 1
 	}
-	d := judgeRetryBackoff[idx]
+	return judgeRetryBackoff[idx]
+}
+
+func (al *AgentLoop) judgeBackoffWait(ctx context.Context, attemptIdx int, reason string) error {
+	d := judgeBackoffDuration(attemptIdx)
 	logger.WarnCF("agent", "judge: unavailable, backing off before retry",
 		map[string]any{"reason": reason, "backoff_ms": d.Milliseconds()})
 	return judgeSleepFn(ctx, d)

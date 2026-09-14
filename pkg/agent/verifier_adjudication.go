@@ -41,6 +41,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/gitevidence"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -1364,7 +1365,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 	// Fix GX-E-4 (observability): the verifier attempt's wall-clock duration
 	// and how many judge-unavailability retry iterations it consumed, in ONE
 	// structured line — before this, the only way to infer duration was
-	// subtracting the session's created_at from the judgeCallTimeout log
+	// subtracting the session's created_at from the judge turn timeout log
 	// line, and iteration count was not logged at all. Runs as a defer (over
 	// named returns, so it always observes the final `unavailable`/`reason`)
 	// so it fires on EVERY exit path — success, fail-closed, or give-up
@@ -1408,11 +1409,29 @@ func (al *AgentLoop) runVerifierAdjudication(
 		if ctx.Err() != nil {
 			return nil, "", "", true, ctx.Err().Error(), nil
 		}
+		// JUDGE-FR-082/FR-103 (UAT E-14): the registered verifier session is this
+		// adjudication's cancel handle, and every cancel surface (`/goal clear`,
+		// StopPlan/StopTask) releases it. A handle released while this loop sat
+		// between attempts — sleeping on judgeRetryBackoff, when no Judge turn is
+		// registered for a cancel to claim — means the adjudication was stopped.
+		// Discard it whole instead of dispatching another Judge turn whose verdict
+		// would land on a goal the user already cleared.
+		if registered && verifierHandleReleased(registry, unitID, chatID) {
+			registered = false // never evict a successor adjudication's entry for this unit
+			logger.InfoCF("agent",
+				"verifier: adjudication discarded — its verifier session was released by a cancel while it waited to retry (JUDGE-FR-082)",
+				map[string]any{"unit_id": unitID, "scope": in.Scope, "attempt": attempt})
+			return nil, "", "", true, VerifierAdjudicationCancelledReason, nil
+		}
+		if attempt > 0 {
+			al.noteGoalJudgeRetrying(in, attempt)
+		}
 
 		judgeInst, ok := al.GetRegistry().GetAgent(string(coreagent.IDJudge))
 		if !ok || judgeInst == nil || judgeInst.Provider == nil {
 			const notConfiguredReason = "judge_not_configured: Judge System Agent is not registered"
 			logger.WarnCF("agent", "verifier: Judge System Agent not resolvable; pausing (D7 unavailability)", nil)
+			al.noteGoalJudgeRetryWait(in, attempt, "the Judge agent is not available")
 			if waitErr := al.judgeBackoffWait(ctx, attempt, notConfiguredReason); waitErr != nil {
 				return nil, "", "", true, notConfiguredReason, nil
 			}
@@ -1423,6 +1442,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 		if !allowed {
 			logger.WarnCF("agent", "verifier: SEC-26 gate denied verifier LLM call; pausing (D7 unavailability)",
 				map[string]any{"reason": denyReason, "retry_after_s": retryAfter.Seconds()})
+			al.noteGoalJudgeRetryWait(in, attempt, "the Judge reached its rate limit")
 			if waitErr := al.judgeBackoffWait(ctx, attempt, denyReason); waitErr != nil {
 				return nil, "", "", true, denyReason, nil
 			}
@@ -1480,7 +1500,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 			registered = true
 		}
 
-		callCtx, cancel := context.WithTimeout(ctx, judgeCallTimeout)
+		callCtx, cancel := context.WithTimeout(ctx, al.judgeTurnTimeout())
 		// FR-033/R3-10/R3-11 (F2 half): plumb the engine-set inspect_session
 		// target scope onto the verifier's own turn ctx BEFORE dispatch — the
 		// ctx propagates through processTaskDirect's own derivation
@@ -1555,6 +1575,18 @@ func (al *AgentLoop) runVerifierAdjudication(
 		}
 
 		if callErr != nil {
+			// JUDGE-FR-082 (UAT E-14): a cancelled turn is the user or an operator
+			// stopping this adjudication — discarded whole, never retried. Retrying
+			// it on judgeRetryBackoff re-ran the Judge the user had just stopped and
+			// recorded its verdict on the goal they had cleared.
+			if errors.Is(callErr, errVerifierTurnCancelled) {
+				if verifierHandleReleased(registry, unitID, chatID) {
+					registered = false // the cancel surface already released it; never evict a successor's entry
+				}
+				logger.InfoCF("agent", "verifier: adjudication discarded — its turn was cancelled (JUDGE-FR-082)",
+					map[string]any{"unit_id": unitID, "scope": in.Scope, "attempt": attempt})
+				return nil, "", "", true, VerifierAdjudicationCancelledReason, nil
+			}
 			// UAT E-7: a refusal only an operator can clear is withheld at once,
 			// never retried on judgeRetryBackoff — waiting cannot fix it, and the
 			// retry loop only held the goal card on "judging" until the round
@@ -1568,6 +1600,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 			}
 			logger.WarnCF("agent", "verifier: turn failed; pausing (D7 unavailability)",
 				map[string]any{"error": callErr.Error()})
+			al.noteGoalJudgeRetryWait(in, attempt, judgeRetryCause(callErr))
 			if waitErr := al.judgeBackoffWait(ctx, attempt, callErr.Error()); waitErr != nil {
 				return nil, "", "", true, callErr.Error(), nil
 			}
@@ -1640,7 +1673,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 		// verifier_provenance.go's for the reported FR-068 capture-source
 		// scope boundary.
 		emitInvestigationLog(
-			unitID, logID, judgeInst.Model, judgeCallTimeout,
+			unitID, logID, judgeInst.Model, al.judgeTurnTimeout(),
 			al.buildInvestigationLogFromJudgeTranscript(judgeInst.ID, chatID),
 		)
 		return out, judgeInst.Model, judgeInst.ID, false, "", missing
@@ -1896,14 +1929,14 @@ func (al *AgentLoop) dispatchVerifierTurn(
 	// turnState and ends the turn with EMPTY content and, on most paths, NO
 	// error — which the caller would otherwise read as "the verifier ran and
 	// formed no judgment" and turn into a real criterion_unjudgeable verdict
-	// against the work. Reporting it as a turn error instead routes it into
-	// the caller's existing D7 unavailability branch: round not consumed, no
-	// verdict, nothing recorded. ts.cancelFired is the authoritative flag
-	// (turn.go's ClaimCancel sets it), not the end status, because a cancel
-	// can land on several different terminal statuses.
+	// against the work. Reporting it as errVerifierTurnCancelled instead lets
+	// the caller discard the adjudication whole — unavailable, round not
+	// consumed, no verdict, and no retry (a retry re-runs the Judge the user
+	// just stopped). ts.cancelFired is the authoritative flag (turn.go's
+	// ClaimCancel sets it), not the end status, because a cancel can land on
+	// several different terminal statuses.
 	if ts.cancelFired.Load() {
-		return "", flagged, fmt.Errorf(
-			"verifier turn cancelled: the adjudication is discarded whole (JUDGE-FR-082)")
+		return "", flagged, errVerifierTurnCancelled
 	}
 	if runErr != nil {
 		return "", flagged, runErr
@@ -1924,6 +1957,94 @@ func (al *AgentLoop) dispatchVerifierTurn(
 		return "", flagged, &verifierTruncatedTurnError{partial: result.finalContent}
 	}
 	return result.finalContent, flagged, nil
+}
+
+// judgeTurnTimeout bounds ONE verifier turn — a full agent-loop turn under the
+// Judge's identity, potentially several LLM calls and read-only tool calls —
+// at the operator's JudgeConfig.TimeoutSec, resolved through
+// EffectiveTimeoutSec (JUDGE-FR-049: default 420 s, hard ceiling 900 s;
+// FR-050's applyJudgeTimeoutRoundClamp lowers it to the round timeout at
+// config load; ADR-084 D9 prerequisite 1). Distinct from
+// config.PlanningConfig.CheckTimeoutSeconds, which bounds a machine-check
+// COMMAND. UAT E-14: the fixed 120 s this replaced cut the Judge's turn off
+// twice while its stream was still producing output.
+func (al *AgentLoop) judgeTurnTimeout() time.Duration {
+	return time.Duration(al.judgeBudgetConfig().EffectiveTimeoutSec()) * time.Second
+}
+
+// VerifierAdjudicationCancelledReason is the Reason of an adjudication
+// discarded because a cancel surface stopped it (JUDGE-FR-082) — distinct from
+// a transient outage, a misconfiguration and a god-mode refusal.
+const VerifierAdjudicationCancelledReason = "verifier_cancelled: the adjudication was stopped before it produced a verdict"
+
+// errVerifierTurnCancelled is dispatchVerifierTurn's report that a cancel
+// claimed the verifier turn (JUDGE-FR-082).
+var errVerifierTurnCancelled = errors.New("verifier turn cancelled: the adjudication is discarded whole (JUDGE-FR-082)")
+
+// verifierHandleReleased reports whether unitID's verifier-registry entry no
+// longer names chatID — the adjudication's cancel handle was released by a
+// cancel surface (`/goal clear`, StopPlan/StopTask). A registry that cannot be
+// queried (a minimal test spy) reports false: the caller keeps its existing
+// behaviour rather than guessing.
+func verifierHandleReleased(registry VerifierSessionPublisher, unitID, chatID string) bool {
+	richer, ok := registry.(VerifierSessionRegistry)
+	if !ok || chatID == "" {
+		return false
+	}
+	current, held := richer.Lookup(unitID)
+	return !held || current != chatID
+}
+
+// --- Judge retry visibility (UAT E-14) --------------------------------------
+//
+// A chat goal's pill used to sit on `judging` for a whole D7 retry cycle — E-14
+// run 2 held it 8 min 10 s across two timed-out Judge turns and 180 s of
+// backoff, with nothing on screen telling a slow Judge from a hung one. Each
+// transient retry now repaints the pill: `judge_unavailable` with a
+// plain-language reason naming the cause, the wait and the next try (the
+// pill's expanded panel renders latest_reason), then `judging` again when that
+// try starts. Existing wire states and fields only — no contract change. Task
+// and plan adjudications have no goal pill and are untouched.
+
+// noteGoalJudgeRetryWait paints the wait before a Judge retry.
+func (al *AgentLoop) noteGoalJudgeRetryWait(in JudgeCriteriaInput, attempt int, cause string) {
+	rec := goalForJudgeRetryNotice(in)
+	if rec == nil {
+		return
+	}
+	wait := judgeBackoffDuration(attempt)
+	reason := fmt.Sprintf("The Judge could not finish checking this goal: %s. Trying again in %d s (try %d).",
+		cause, int(wait.Round(time.Second)/time.Second), attempt+2)
+	al.emitGoalStatusFrame(in.GoalSessionID, rec.GoalID, rec.Prompt, rec.Round, rec.MaxRounds, reason, goalPillJudgeUnavailable)
+}
+
+// noteGoalJudgeRetrying paints the Judge retry itself starting.
+func (al *AgentLoop) noteGoalJudgeRetrying(in JudgeCriteriaInput, attempt int) {
+	rec := goalForJudgeRetryNotice(in)
+	if rec == nil {
+		return
+	}
+	al.emitGoalStatusFrame(in.GoalSessionID, rec.GoalID, rec.Prompt, rec.Round, rec.MaxRounds,
+		fmt.Sprintf("Checking this goal again (try %d).", attempt+1), goalPillJudging)
+}
+
+// goalForJudgeRetryNotice returns the ACTIVE chat goal a retry notice belongs
+// to, or nil. A goal that has already ended (cleared, expired, met) is never
+// repainted.
+func goalForJudgeRetryNotice(in JudgeCriteriaInput) *goal.Goal {
+	if in.Scope != task.VerdictScopeGoal || in.GoalSessionID == "" {
+		return nil
+	}
+	return activeGoalForSession(in.GoalSessionID)
+}
+
+// judgeRetryCause renders a transient Judge turn failure in plain language —
+// never the raw provider error (ADR-051 §RD5 CRIT-001).
+func judgeRetryCause(callErr error) string {
+	if TranslateTurnError(callErr).Code == CodeTurnTimedOut {
+		return "its model did not answer in time"
+	}
+	return "its model returned an error"
 }
 
 // judgeBudgetConfig resolves the operator's JudgeConfig, falling back to a

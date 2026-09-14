@@ -100,10 +100,11 @@ func allowReadFilePolicy(agentInst *AgentInstance) {
 }
 
 // alwaysReadFileToolCall builds the ONE scripted tool-call response every
-// verifier LLM turn in this file's tests returns — every attempt (including
-// any same-process retry that might slip in before an outer-ctx cancel
-// lands) asks to read_file again, so the tool double blocks on ITS OWN
-// fresh ctx every time and no attempt can ever manufacture a real verdict.
+// verifier LLM turn in this file's tests returns — every attempt asks to
+// read_file again, so the tool double blocks on ITS OWN fresh ctx every time
+// and no attempt can ever manufacture a real verdict (a cancelled adjudication
+// dispatches no further attempt, JUDGE-FR-082; this keeps a regression to
+// retrying from producing a verdict either).
 func alwaysReadFileToolCall(int) (*providers.LLMResponse, error) {
 	return &providers.LLMResponse{
 		ToolCalls: []providers.ToolCall{{
@@ -118,9 +119,9 @@ func alwaysReadFileToolCall(int) (*providers.LLMResponse, error) {
 // genuinely blocked mid-`read_file`, and returns the running
 // JudgeCriteria call's result channel, the blocking tool double, the
 // outer-ctx cancel func (call it AFTER confirming cancellation reached the
-// tool, to make the retry loop converge deterministically without ever
-// producing a real verdict), and the verifier-session registry's real
-// handle for looking up what got registered.
+// tool; it tears down anything still waiting on the outer ctx, and is also
+// registered as a cleanup), and the verifier-session registry's real handle
+// for looking up what got registered.
 func setUpBlockedVerifierTurn(t *testing.T, taskID string) (
 	al *AgentLoop,
 	resultCh chan JudgeCriteriaResult,
@@ -202,10 +203,10 @@ func TestVerifierTurn_CancelDuringToolCallProducesNoVerdict(t *testing.T) {
 		t.Fatal("FR-082: RequestCancelForSession fired, but the in-flight read_file tool call's ctx was never interrupted")
 	}
 
-	// Deterministic convergence: tear down the outer ctx too, so the
-	// same-process retry loop's backoff wait (judgeSleepFn, stubbed above
-	// to return ctx.Err() with no real sleep) gives up on its NEXT
-	// iteration rather than dispatching another blocked read_file forever.
+	// The cancelled adjudication ends on its own (JUDGE-FR-082 dispatches no
+	// further attempt — TestVerifierTurnCancel_EndsAdjudicationWithoutRetry
+	// pins that with the outer ctx left alive). Tearing the outer ctx down as
+	// well keeps this test's own oracle independent of that behaviour.
 	cancelOuter()
 
 	select {

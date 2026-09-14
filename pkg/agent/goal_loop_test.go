@@ -463,17 +463,15 @@ func TestGoalClear_CancelsInFlightGoalVerifierSession(t *testing.T) {
 	proceed := make(chan struct{})
 	// Only the FIRST dispatch takes part in the handshake. Under ADR-084 the
 	// adjudication is a real tool-using turn dispatched inside
-	// runVerifierAdjudication's attempt loop, and JUDGE-FR-082 reports a
-	// cancelled turn as a turn ERROR ("the adjudication is discarded whole"),
-	// which that loop handles as D7 unavailability: it backs off and dispatches
-	// a SECOND attempt. That re-dispatch is the delivered design — its
-	// convergence is what verifier_cancel_adr084_test.go's
-	// TestVerifierTurn_CancelDuringToolCallProducesNoVerdict manages explicitly —
-	// so this double must survive being called more than once instead of
-	// close()ing an already-closed channel. The gate still holds attempt 1
-	// inside Chat until the test has finished asserting on the cancel, which is
-	// the ordering this handshake exists to pin; attempt 2 can only run after
-	// close(proceed) at the end.
+	// runVerifierAdjudication's attempt loop. JUDGE-FR-082 discards a cancelled
+	// adjudication whole: the loop ends on the cancelled turn and dispatches no
+	// second attempt (UAT E-14 — an earlier revision retried it on the D7
+	// backoff, re-running the Judge the user had just stopped). The double
+	// still tolerates a second call rather than close()ing an already-closed
+	// channel, so a regression to retrying fails on this test's own assertions
+	// instead of a panic. The gate holds attempt 1 inside Chat until the test
+	// has finished asserting on the cancel, which is the ordering this
+	// handshake exists to pin.
 	fake := &fakeJudgeProvider{chatFn: func(callNum int) (*providers.LLMResponse, error) {
 		if callNum == 1 {
 			close(registered)
