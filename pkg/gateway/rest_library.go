@@ -784,10 +784,10 @@ func (a *restAPI) handleLibraryEntryDelete(w http.ResponseWriter, r *http.Reques
 	}
 	defer root.Close()
 
-	// UAT #701 / D-123: a note inside a knowledge base goes to that
-	// knowledge base's trash (restorable), the way the agent door deletes —
-	// see rest_library_knowledge_cascade.go.
-	note, governed, noteErr := a.libraryNoteInCollection(root, rel)
+	// UAT #701 / D-123: a note or an attachment inside a knowledge base goes
+	// to that knowledge base's trash (restorable), the way the agent door
+	// deletes — see rest_library_knowledge_cascade.go.
+	note, governed, noteErr := a.libraryManagedFileInCollection(root, rel)
 	if noteErr != nil {
 		mapLibraryErr(w, "delete entry", workspaceID, noteErr)
 		return

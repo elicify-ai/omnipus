@@ -177,10 +177,29 @@ func TestLibraryMove_AttachmentWithinVaultRewritesEmbed(t *testing.T) {
 	require.NotContains(t, string(roadmap), "![[assets/diagram.png]]")
 }
 
-// The Library delete door routes through trashNoteInCollection once its
-// call site asks the managed-file resolver; this pins that the cascade half
-// trashes an attachment recoverably (the Trasher itself is pinned for
-// restore in pkg/knowledge).
+// The door itself: a Library DELETE of an attachment inside a knowledge base
+// must land in that knowledge base's trash with its bytes intact, not be
+// unlinked for good. Driven through HandleLibrary so it fails if the delete
+// handler keeps asking the markdown-only resolver.
+func TestLibraryDelete_AttachmentInVaultGoesToTrash(t *testing.T) {
+	api, ws, vault := buildAttachmentVault(t)
+
+	w := libDelete(t, api, "/api/v1/library/"+ws+"/entries?path=vault/assets/diagram.png")
+	require.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
+
+	_, err := os.Stat(filepath.Join(vault, "assets", "diagram.png"))
+	require.True(t, os.IsNotExist(err), "the live attachment must be gone")
+	trashed, err := filepath.Glob(filepath.Join(vault, ".omnipus-vault", "trash", "*", "assets", "diagram.png"))
+	require.NoError(t, err)
+	require.Len(t, trashed, 1, "a Library delete of an attachment must be recoverable from the knowledge base's trash")
+	got, err := os.ReadFile(trashed[0])
+	require.NoError(t, err)
+	require.Equal(t, "\x89PNG\r\n\x1a\nbinary", string(got), "the trashed attachment's bytes are untouched")
+}
+
+// The cascade half on its own: trashNoteInCollection trashes an attachment
+// recoverably when handed what the managed-file resolver returns (the
+// Trasher itself is pinned for restore in pkg/knowledge).
 func TestLibraryCascade_AttachmentTrashIsRecoverable(t *testing.T) {
 	api, ws, vault := buildAttachmentVault(t)
 	root, err := library.OpenRoot(api.homePath, ws)
