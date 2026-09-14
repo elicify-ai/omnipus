@@ -283,7 +283,9 @@ export function LibraryExplorer({
   const [renameTarget, setRenameTarget] = useState<LibraryEntry | null>(null)
   const [renameError, setRenameError] = useState<string>()
   const [deleteTarget, setDeleteTarget] = useState<LibraryEntry | null>(null)
+  const [deleteError, setDeleteError] = useState<string>()
   const [unmountTarget, setUnmountTarget] = useState<LibraryEntry | null>(null)
+  const [unmountError, setUnmountError] = useState<string>()
   const [addMountOpen, setAddMountOpen] = useState(false)
   const [mountsOpen, setMountsOpen] = useState(false)
   const [addMountError, setAddMountError] = useState<string>()
@@ -570,13 +572,20 @@ export function LibraryExplorer({
       // D-117 response half: the server's policy refusal (403) carries the
       // reason it refused; branch on the status rather than making the
       // operator guess whether "rejected" means policy or transport.
+      //
+      // UAT re-test (2026-09-13), U-21: this used to read `err.userMessage`
+      // directly, but 403 is a "known" status for `ApiError.fromResponse`
+      // (src/lib/api-error.ts), which deliberately OVERRIDES `userMessage`
+      // with the generic "You don't have permission to perform this
+      // action." for known statuses — the server's actual, specific reason
+      // (e.g. naming the refused path) survives only on `.body`. The same
+      // field-name mismatch libraryErrorMessage.ts already exists to fix for
+      // Rename/Move/etc — reuse it here instead of reading userMessage.
       if (isApiError(err) && err.status === 403) {
-        setAddMountRefusal(err.userMessage)
+        setAddMountRefusal(getLibraryErrorMessage(err, err.userMessage))
         return
       }
-      setAddMountError(
-        err instanceof Error ? err.message : 'Could not mount that folder.',
-      )
+      setAddMountError(getLibraryErrorMessage(err, 'Could not mount that folder.'))
     },
   })
 
@@ -599,18 +608,24 @@ export function LibraryExplorer({
       if (!workspaceId) throw new Error('No workspace selected.')
       return deleteWorkspaceMount(workspaceId, name)
     },
+    onMutate: () => {
+      setUnmountError(undefined)
+    },
     onSuccess: (_data, name) => {
       if (workspaceId) invalidateEntries(workspaceId)
       invalidateWorkspaces()
       setUnmountTarget(null)
+      setUnmountError(undefined)
       addToast({ message: `Unmounted "${name}". Your files were not touched.`, variant: 'success' })
     },
     onError: (err) => {
-      setUnmountTarget(null)
-      addToast({
-        message: err instanceof Error ? err.message : 'Could not unmount that folder.',
-        variant: 'error',
-      })
+      // This used to close the dialog AND rely on a toast that auto-dismisses
+      // — a failed unmount looked identical to a successful one the moment
+      // the toast scrolled away. The dialog now stays open (unmountTarget is
+      // untouched here) with a persistent, actionable banner naming the
+      // server's own reason, the same single-channel pattern Delete/Rename/
+      // Move/New folder already use.
+      setUnmountError(getLibraryErrorMessage(err, 'Could not unmount that folder.'))
     },
   })
 
@@ -631,15 +646,26 @@ export function LibraryExplorer({
 
   const deleteMutation = useMutation({
     mutationFn: ({ wsId, entryPath }: { wsId: string; entryPath: string }) => deleteLibraryEntry(wsId, entryPath),
+    onMutate: () => {
+      setDeleteError(undefined)
+    },
     onSuccess: (_data, vars) => {
       invalidateEntries(vars.wsId)
       invalidateWorkspaces()
       addToast({ message: isVaultNote(deleteTarget) ? 'Moved to the knowledge base’s trash.' : 'Deleted.', variant: 'success' })
       setDeleteTarget(null)
+      setDeleteError(undefined)
       if (selectedPath === vars.entryPath) goTo(workspaceId, null)
     },
     onError: (err) => {
-      addToast({ message: getLibraryErrorMessage(err, 'Delete failed'), variant: 'error' })
+      // UAT re-test (2026-09-13), U-58: a refused delete (e.g. the server's
+      // reserved-location guard on a knowledge base's .omnipus-vault marker)
+      // used to show NOTHING — no banner, no toast — so a failed, destructive
+      // action looked exactly like a click that did nothing. The dialog stays
+      // open (deleteTarget is untouched here) with a persistent, actionable
+      // banner naming the server's own reason, the same single-channel
+      // pattern Rename/Move/New folder already use — no duplicate toast.
+      setDeleteError(getLibraryErrorMessage(err, 'Delete failed'))
     },
   })
 
@@ -797,6 +823,14 @@ export function LibraryExplorer({
   function openRenameDialog(entry: LibraryEntry) {
     setRenameError(undefined)
     setRenameTarget(entry)
+  }
+  function openDeleteDialog(entry: LibraryEntry) {
+    setDeleteError(undefined)
+    setDeleteTarget(entry)
+  }
+  function openUnmountDialog(entry: LibraryEntry) {
+    setUnmountError(undefined)
+    setUnmountTarget(entry)
   }
   function openTransferDialog(entry: LibraryEntry, mode: 'move' | 'copy') {
     setTransferError(undefined)
@@ -1224,8 +1258,8 @@ export function LibraryExplorer({
                   onDownload={handleDownload}
                   onRename={openRenameDialog}
                   onTransfer={openTransferDialog}
-                  onDelete={setDeleteTarget}
-                  onUnmount={setUnmountTarget}
+                  onDelete={openDeleteDialog}
+                  onUnmount={openUnmountDialog}
                 />
               ))}
           </LibrarySearchBar>
@@ -1340,7 +1374,7 @@ export function LibraryExplorer({
         }
         onUnmount={(entry) => {
           setMountsOpen(false)
-          setUnmountTarget(entry)
+          openUnmountDialog(entry)
         }}
         isPending={unmountMutation.isPending}
       />
@@ -1406,7 +1440,12 @@ export function LibraryExplorer({
           survives, in the affirmative, before the confirm button. */}
       <AlertDialog
         open={unmountTarget !== null}
-        onOpenChange={(open) => !open && setUnmountTarget(null)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setUnmountTarget(null)
+            setUnmountError(undefined)
+          }
+        }}
       >
         <AlertDialogContent data-testid="library-unmount-dialog">
           <AlertDialogHeader>
@@ -1418,6 +1457,9 @@ export function LibraryExplorer({
               deleted from your disk. You can mount it again at any time.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {unmountError && (
+            <LibraryErrorBanner message={unmountError} testId="library-unmount-dialog-error" />
+          )}
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
@@ -1434,7 +1476,15 @@ export function LibraryExplorer({
         </AlertDialogContent>
       </AlertDialog>
 
-      <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+      <AlertDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDeleteTarget(null)
+            setDeleteError(undefined)
+          }
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
@@ -1460,6 +1510,9 @@ export function LibraryExplorer({
                 : ''}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {deleteError && (
+            <LibraryErrorBanner message={deleteError} testId="library-delete-dialog-error" />
+          )}
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction

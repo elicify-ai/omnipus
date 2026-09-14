@@ -47,6 +47,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     // renders hit the real fetch the moment a test opens that dialog.
     fetchHostFolders: vi.fn(),
     createWorkspaceMount: vi.fn(),
+    deleteWorkspaceMount: vi.fn(),
     libraryDownloadUrl: vi.fn((wsId: string, path: string) => `/api/v1/library/${wsId}/download?path=${path}`),
     // HP-1 fix (defect-list-html-preview-2026-09-08.md): LibraryPreviewPane's
     // PREVIEW_TOKEN_MINTER now resolves to the real mintLibraryPreviewToken
@@ -74,6 +75,7 @@ import {
   searchFiles,
   fetchHostFolders,
   createWorkspaceMount,
+  deleteWorkspaceMount,
   ApiError,
 } from '@/lib/api'
 
@@ -92,6 +94,7 @@ const mockedSearchVault = vi.mocked(searchVault)
 const mockedSearchFiles = vi.mocked(searchFiles)
 const mockedHostFolders = vi.mocked(fetchHostFolders)
 const mockedCreateMount = vi.mocked(createWorkspaceMount)
+const mockedDeleteMount = vi.mocked(deleteWorkspaceMount)
 
 import { LibraryExplorer } from './LibraryExplorer'
 
@@ -443,6 +446,57 @@ describe('LibraryExplorer — destructive-action confirm (delete)', () => {
     await waitFor(() => expect(screen.getByTestId('library-delete-confirm')).toBeInTheDocument())
     expect(screen.getByRole('alertdialog')).toHaveTextContent(/"Assets" and everything inside it will be permanently deleted/i)
     expect(screen.getByRole('alertdialog')).not.toHaveTextContent(/knowledge base/i)
+  })
+
+  // UAT re-test (2026-09-13), U-58, S2 silent failure. Deleting a knowledge
+  // base's .omnipus-vault folder is refused server-side (reserved location),
+  // but the dialog showed NOTHING at all — no error text, no toast. It just
+  // sat there looking exactly like a click that did nothing, so a user has
+  // no way to tell the delete failed. This reproduces the server's EXACT
+  // repro shape (400 + `{"error":"knowledge: reserved location: ..."}`) and
+  // asserts the reason is shown, the dialog stays open (not silently
+  // reverted to look like success), and the user can still cancel out.
+  it('a failed delete shows the server\'s reason, keeps the dialog open, and lets the user cancel or retry', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    mockedFetchEntries.mockResolvedValue([
+      makeEntry({ name: '.omnipus-vault', path: 'UAT Vault/.omnipus-vault', is_dir: true }),
+    ])
+    mockedDelete.mockRejectedValue(
+      new ApiError(400, 'Bad request.', {
+        body: JSON.stringify({
+          error: 'knowledge: reserved location: UAT Vault/.omnipus-vault is the knowledge base marker folder',
+        }),
+      }),
+    )
+
+    renderExplorer('ws-1')
+
+    await waitFor(() => expect(screen.getByTestId('library-row-UAT Vault/.omnipus-vault')).toBeInTheDocument())
+    await openRowMenuAndClick('UAT Vault/.omnipus-vault', /delete/i)
+    await waitFor(() => expect(screen.getByTestId('library-delete-confirm')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('library-delete-confirm'))
+    await waitFor(() => expect(mockedDelete).toHaveBeenCalled())
+
+    // The server's own reason must be visible in the dialog itself — not
+    // swallowed, not replaced by a generic message.
+    await waitFor(() => {
+      expect(screen.getByTestId('library-delete-dialog-error')).toHaveTextContent(
+        'knowledge: reserved location: UAT Vault/.omnipus-vault is the knowledge base marker folder',
+      )
+    })
+    // A failed destructive action must never look like it succeeded: the
+    // confirm dialog stays open and the row is still there.
+    expect(screen.getByTestId('library-delete-confirm')).toBeInTheDocument()
+    expect(screen.getByTestId('library-row-UAT Vault/.omnipus-vault')).toBeInTheDocument()
+    // The confirm button re-enabled (not stuck disabled/"Deleting…") so the
+    // user can retry.
+    expect(screen.getByTestId('library-delete-confirm')).not.toBeDisabled()
+    expect(screen.getByTestId('library-delete-confirm')).not.toHaveTextContent('Deleting…')
+
+    // And cancelling still works after a failure.
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
+    await waitFor(() => expect(screen.queryByTestId('library-delete-confirm')).not.toBeInTheDocument())
   })
 
   // UAT #701 / D-123 (2026-09-13): inside a knowledge base a note goes to the
@@ -1579,5 +1633,89 @@ describe('LibraryExplorer — D-117 add-mount renders the server response in the
       'installation’s own data directory',
     )
     expect(screen.queryByTestId('library-add-mount-error')).not.toBeInTheDocument()
+  })
+
+  // UAT re-test (2026-09-13), U-21. The test above constructs its ApiError
+  // by hand with the specific reason already sitting in `userMessage` — that
+  // is NOT how a real 403 arrives. `ApiError.fromResponse` (src/lib/api-error.ts)
+  // treats 403 as a "known" status and OVERRIDES userMessage with the generic
+  // "You don't have permission to perform this action.", keeping the
+  // server's real reason only on `.body` (the raw JSON text). Reading
+  // `err.userMessage` directly (as the mount-refusal handler did) is exactly
+  // the field-name mismatch that made U-21's dialog show the generic
+  // fallback instead of the server's specific reason (e.g. naming /etc).
+  // This reproduces the REAL shape `fromResponse` produces.
+  it('a 403 refusal built the way the real server round-trip produces it still shows the SPECIFIC reason, not the generic fallback', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([makeWorkspaceNode()])
+    entriesByDir({ '': [] })
+    mockedCreateMount.mockRejectedValue(
+      new ApiError(403, "You don't have permission to perform this action.", {
+        body: JSON.stringify({ error: 'mounting "/etc" is refused: it is a system directory' }),
+      }),
+    )
+
+    renderExplorer('ws-1')
+    await openAddMount()
+    fireEvent.click(screen.getByTestId('library-add-mount-confirm'))
+
+    await waitFor(() => expect(mockedCreateMount).toHaveBeenCalledTimes(1))
+    const banner = await screen.findByTestId('library-add-mount-dialog-refused')
+    expect(banner).toHaveTextContent('mounting "/etc" is refused: it is a system directory')
+    expect(banner.textContent).not.toBe("You don't have permission to perform this action.")
+    expect(screen.queryByTestId('library-add-mount-error')).not.toBeInTheDocument()
+
+    // D-127: the refusal is about the path that was SUBMITTED — editing the
+    // field must retire it rather than leaving stale server text next to a
+    // path the server never saw.
+    fireEvent.change(screen.getByTestId('library-add-mount-path'), {
+      target: { value: '/etc/changed' },
+    })
+    expect(screen.queryByTestId('library-add-mount-dialog-refused')).not.toBeInTheDocument()
+  })
+})
+
+describe('LibraryExplorer — Unmount confirm error handling', () => {
+  // The unmount confirm's onError used to CLOSE the dialog (setUnmountTarget
+  // to null) and rely solely on a toast that auto-dismisses — a failed
+  // unmount looked exactly like a successful one the moment the toast
+  // scrolled away. This reproduces a server refusal and asserts the dialog
+  // stays open with the reason visible, and the confirm button re-enables so
+  // the user can retry or cancel.
+  it('a failed unmount shows the server\'s reason, keeps the dialog open, and lets the user cancel or retry', async () => {
+    mockedFetchWorkspaces.mockResolvedValue([])
+    mockedFetchEntries.mockResolvedValue([
+      makeEntry({
+        name: 'api',
+        path: 'api',
+        is_dir: true,
+        mount: { name: 'api', host_path: '/Users/dana/projects/api', broad: false },
+      }),
+    ])
+    mockedDeleteMount.mockRejectedValue(
+      new ApiError(404, 'Not found.', {
+        body: JSON.stringify({ error: 'mount "api" was already removed' }),
+      }),
+    )
+
+    renderExplorer('ws-1')
+
+    await waitFor(() => expect(screen.getByTestId('library-row-api')).toBeInTheDocument())
+    await openRowMenuAndClick('api', /unmount/i)
+    await waitFor(() => expect(screen.getByTestId('library-unmount-dialog')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('library-unmount-confirm'))
+    await waitFor(() => expect(mockedDeleteMount).toHaveBeenCalledWith('ws-1', 'api'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('library-unmount-dialog-error')).toHaveTextContent(
+        'mount "api" was already removed',
+      )
+    })
+    // Never looks like success: the dialog is still open, the confirm
+    // button re-enabled, and cancelling still works.
+    expect(screen.getByTestId('library-unmount-dialog')).toBeInTheDocument()
+    expect(screen.getByTestId('library-unmount-confirm')).not.toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
+    await waitFor(() => expect(screen.queryByTestId('library-unmount-dialog')).not.toBeInTheDocument())
   })
 })
