@@ -146,10 +146,12 @@ func taskGoalDoD(taskID string) ([]task.AcceptanceCriterion, error) {
 // persistTaskGoalDoDProjection writes the DoD half of a verdict projection
 // back onto the goal record paired with taskID (GOAL-FR-036/FR-040/FR-041).
 //
-// The task half of the same projection stays where it already was, on
-// t.Criteria — the two lists are written to two DIFFERENT stores because they
-// LIVE in two different stores, and each side's ids came from the list it is
-// written back to, so neither projection can mismatch.
+// The task half of the same projection is written onto t.Criteria by the
+// caller. The goal record's OWN criteria[] mirror — which this function never
+// wrote — is projected by recordTaskGoalVerdict, in the same store write that
+// records the verdict (UAT defect 3). The DoD statuses that function writes are
+// the ones written here, so this write is now redundant but harmless; removing
+// it needs a call-site change in task_executor.go::adjudicateClaim.
 //
 // Called on BOTH met and unmet outcomes (FR-040 is not conditioned on the
 // overall verdict) and only when the projection actually changed something, so
@@ -190,6 +192,17 @@ func persistTaskGoalDoDProjection(taskID string, projectedDoD []task.AcceptanceC
 // run would otherwise archive {Verdict: nil, Round: 0}, i.e. no history at all
 // for the only outcome anyone wants a history of.
 //
+// It also projects the verdict onto the record's OWN Criteria and DoD lists
+// (ADR-086 D8, GOAL-FR-036/FR-040/FR-041), inside the same store write that
+// records the verdict — UAT defect 3. Nothing on the task path ever wrote the
+// goal record's criteria[] mirror: adjudicateClaim projected the criteria half
+// onto the task record and persistTaskGoalDoDProjection wrote the DoD half
+// alone, so record eed50f19 read `criteria: [pending]` beside a latest_verdict
+// that judged that very criterion met. Projecting here, against the record's
+// current lists, keeps the verdict and the ticks in one atomic write — they can
+// never disagree — and uses the same de-union (projectGoalVerdict) the chat
+// path's runGoalAdjudication applies.
+//
 // Best-effort by design: the task's own verdict has already been applied by the
 // caller, so a goal-store fault must not retroactively change the task outcome.
 func recordTaskGoalVerdict(taskID string, verdict *task.JudgeVerdict, reason string) {
@@ -212,6 +225,10 @@ func recordTaskGoalVerdict(taskID string, verdict *task.JudgeVerdict, reason str
 		return
 	}
 	if _, uerr := gstore.Update(g.GoalID, func(cur *goal.Goal) error {
+		if uc, ud, stats := projectGoalVerdict(cur.Criteria, cur.DoD, verdict); stats.Applied > 0 {
+			cur.Criteria = uc
+			cur.DoD = ud
+		}
 		return cur.RecordVerdict(verdict, reason, time.Now().UTC())
 	}); uerr != nil {
 		logger.WarnCF("task_executor",
