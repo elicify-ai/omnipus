@@ -693,6 +693,25 @@ func (al *AgentLoop) runGoalAdjudication(
 		WorkspaceID:     workspaceID,
 	})
 
+	// UAT E-14 (JUDGE-FR-082, spec edge case E-34): the goal can end while the
+	// Judge runs — `/goal clear`, an idle expiry, its agent being deleted.
+	// Whatever the Judge produced is then about a goal that no longer exists:
+	// recording a verdict would write it onto a terminal record and into the
+	// user's transcript, and a judge_unavailable pill would repaint a goal the
+	// user stopped. Discard it; the terminal transition already emitted its own
+	// pill. A re-read failure falls through to the existing handling below.
+	//
+	// Composes with the restate guard further down: this one covers a record
+	// that is no longer ACTIVE at all, that one an ACTIVE record whose prompt
+	// changed while the Judge ran. The two conditions are disjoint.
+	if cur, gerr := gstore.Get(rec.GoalID); gerr == nil && cur != nil && !goal.IsActiveState(cur.State) {
+		al.goalMarkIdleSettling(rec.GoalID, false)
+		logger.InfoCF("agent", "goal: adjudication outcome discarded — the goal ended while the Judge was running",
+			map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID,
+				"state": string(cur.State), "unavailable": jr.Unavailable})
+		return false
+	}
+
 	if jr.Unavailable {
 		// D7 / D14: judge rate-limited/down → judge_unavailable pill, NO round
 		// consumed, no verdict recorded.
