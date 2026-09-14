@@ -568,6 +568,17 @@ func authorRefuseReserved(rel string) error {
 	return nil
 }
 
+// IsReservedLocation reports whether a collection-relative, slash-separated
+// path is, or lies inside, a tool-state directory (`.omnipus-vault`,
+// `.obsidian`, `.git`, `.trash`) — exactly the paths every Renamer, Trasher
+// and authoring write refuses with ErrReservedLocation. It exists so a door
+// outside this package can decide NOT to route such a path here, instead of
+// keeping its own copy of the name set (UAT re-test U-58: the Library's delete
+// door sent a knowledge base's own `.omnipus-vault` here and got a 400).
+func IsReservedLocation(rel string) bool {
+	return authorRefuseReserved(rel) != nil
+}
+
 // authorWriteTarget turns a caller-supplied collection-relative path into the
 // absolute path a write may touch, or refuses.
 //
