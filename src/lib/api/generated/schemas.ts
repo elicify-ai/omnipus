@@ -701,6 +701,7 @@ type Task = {
   stream?: string | undefined;
   is_join?: boolean | undefined;
   judge_rounds?: number | undefined;
+  goal_max_rounds?: number | undefined;
   criteria?: Array<AcceptanceCriterion> | undefined;
   dod?: Array<AcceptanceCriterion> | undefined;
   attempt_count?: number | undefined;
@@ -3233,6 +3234,7 @@ export const Task: z.ZodType<Task> = z
     stream: z.string().optional(),
     is_join: z.boolean().optional(),
     judge_rounds: z.number().int().gte(0).optional(),
+    goal_max_rounds: z.number().int().gte(1).optional(),
     criteria: z.array(AcceptanceCriterion).optional(),
     dod: z.array(AcceptanceCriterion).optional(),
     attempt_count: z.number().int().gte(0).optional(),

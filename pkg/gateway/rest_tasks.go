@@ -721,14 +721,17 @@ func (a *restAPI) toWireTask(t task.Task, idx rollupIndex, gidx taskGoalIndex) (
 		tags := append([]string{}, t.Tags...)
 		out.Tags = &tags
 	}
-	if len(t.Criteria) > 0 {
-		out.Criteria = toWireCriteria(t.Criteria)
-	}
-	// GOAL-FR-003/FR-029/FR-048 (ADR-086 D5): dod lives on the task's paired
-	// goal record, never on the task record itself. gidx (batch caller) or a
-	// direct GetByOwner (single-task caller) resolves it; a task with no
-	// goal record at all (a legacy, pre-D-C task — GOAL-FR-023/FR-048) has
-	// no dod, which is the normal, non-error state.
+	// GOAL-FR-003/FR-029/FR-048 (ADR-086 D5): BOTH judged lists — criteria
+	// and Definition of Done — live on the task's paired goal record and the
+	// wire reads them from there, one source of truth. The task record's own
+	// Criteria dual-write is write-only for the not-yet-repointed writers;
+	// reading it here is what made a retried task's card show the previous
+	// run's criterion ticks beside a freshly-reset DoD (the goal record is
+	// the side Reactivate resets). gidx (batch caller) or a direct GetByOwner
+	// (single-task caller) resolves the record; a task with no goal record at
+	// all (a legacy, pre-D-C task — GOAL-FR-023/FR-048) has neither list,
+	// which is the normal, non-error state, and falls back to the task
+	// record's criteria for continuity.
 	var g *goal.Goal
 	if gidx != nil {
 		g = gidx[t.ID]
@@ -738,16 +741,34 @@ func (a *restAPI) toWireTask(t task.Task, idx rollupIndex, gidx taskGoalIndex) (
 		case gErr == nil:
 			g = found
 		case errors.Is(gErr, goal.ErrOwnerNotFound):
-			// Genuinely no Definition of Done. Normal state, not an error.
+			// Genuinely no paired record. Normal state, not an error.
 		default:
-			// A real read failure. Do NOT fall through and emit a task with no
-			// `dod` — that is indistinguishable from a task that has none (SF-6).
+			// A real read failure. Do NOT fall through and emit a task with
+			// judged lists read from a possibly-stale second copy — that is
+			// indistinguishable from a task that has none (SF-6).
 			return gen.Task{}, fmt.Errorf(
 				"read paired goal record for task %q: %w", t.ID, gErr)
 		}
 	}
+	if g != nil && len(g.Criteria) > 0 {
+		out.Criteria = toWireCriteria(g.Criteria)
+	} else if len(t.Criteria) > 0 {
+		out.Criteria = toWireCriteria(t.Criteria)
+	}
 	if g != nil && len(g.DoD) > 0 {
 		out.Dod = toWireDod(g.DoD)
+	}
+	// The goal's tries (issue #710): the tries its current (or last) run has
+	// used and the try limit that run started with, both read off the goal
+	// record — the card shows them beside the task attempt counter, never
+	// mixed with it.
+	if g != nil {
+		if g.Round > 0 {
+			out.JudgeRounds = ptr(g.Round)
+		}
+		if g.MaxRounds >= 1 {
+			out.GoalMaxRounds = ptr(g.MaxRounds)
+		}
 	}
 	if t.AttemptCount > 0 {
 		out.AttemptCount = ptr(t.AttemptCount)
@@ -1918,7 +1939,10 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 	// Checked BEFORE taskStore.Create, so a refused pair leaves no task and no
 	// goal record behind.
 	if err := task.ValidateDoDDistinct(criteria, dod); err != nil {
-		jsonErr(w, http.StatusBadRequest, err.Error())
+		// jsonTaskValidationErr routes the refusal to `field: "dod"` via
+		// errors.Is(err, task.ErrDoDNotDistinct), exactly as the update path
+		// does, so a client never has to parse the plain-language message.
+		jsonTaskValidationErr(w, err)
 		return
 	}
 	if req.MaxAttempts != nil {

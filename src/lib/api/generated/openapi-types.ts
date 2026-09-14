@@ -6043,7 +6043,7 @@ export interface components {
              */
             tools_on_demand?: boolean;
             /**
-             * @description GOAL-FR-024/FR-045, MV-1, D-D/D-E (2026-09-11, operator-ratified) — the SINGLE, GLOBAL adjudication-round ceiling for EVERY goal, task and chat identically. Default 20. THERE IS NO PER-GOAL OVERRIDE anywhere in this delivery — GOAL-FR-046 ("a human-editable budget control for a goal's per-goal override") and GOAL-US-8 ("an operator can give a goal more room") are RETIRED in full. This is the ONE control: `Goal.max_rounds` on every goal record resolves from this value alone (`pkg/config/planning.go::EffectiveGoalMaxRounds`, unmodified signature — NQ-2), and so does every task's attempt ceiling (`Task.effective_max_attempts`) unless that task carries its own `max_attempts` (founder decision 2026-09-14): a task fails after this many unmet attempts, exactly as a chat goal ends after this many unmet rounds. A goal keeps the value in force when it started. Lives under Settings → Performance (`src/components/settings/PerformanceSection.tsx`, GOAL-FR-045) — no new settings tab. Always present in responses.
+             * @description GOAL-FR-024/FR-045, MV-1, D-D/D-E (2026-09-11, operator-ratified) — the SINGLE, GLOBAL adjudication-round ceiling for EVERY goal, task and chat identically. Default 20. THERE IS NO PER-GOAL OVERRIDE anywhere in this delivery — GOAL-FR-046 ("a human-editable budget control for a goal's per-goal override") and GOAL-US-8 ("an operator can give a goal more room") are RETIRED in full. This is the ONE control: `Goal.max_rounds` on every goal record resolves from this value alone (`pkg/config/planning.go::EffectiveGoalMaxRounds`, unmodified signature — NQ-2). It bounds the tries a goal gets in chat and within one run of a task alike; it does NOT bound how many fresh runs a task gets (`Task.effective_max_attempts`, a separate limit — founder decision 2026-09-14, issue #710). A goal keeps the value in force when it started. Lives under Settings → Performance (`src/components/settings/PerformanceSection.tsx`, GOAL-FR-045) — no new settings tab. Always present in responses.
              * @example 20
              */
             goal_max_rounds?: number;
@@ -7063,27 +7063,32 @@ export interface components {
              */
             is_join?: boolean;
             /**
-             * @description ADR-053 §Contract Surface — "Budget / bounds". Per-task adjudication rounds consumed so far, mirroring `Plan.judge_rounds` at task/goal scope (R§8.9 — one round = one adjudication, claim-triggered or idle-settled). Distinct from `attempt_count`, which tracks retry attempts, not adjudications.
+             * @description Goal tries used by the task's current run (or by its last run, once the task has ended), read from the task's goal record: one try is one judged claim, or one turn that ended without a usable claim (founder decision 2026-09-14, issue #710). It starts again from zero when the task restarts in a fresh run. The UI renders "try N of M" against `goal_max_rounds`. Distinct from `attempt_count`, which counts failed runs. Absent when the task has no goal record or no try has been used.
              * @example 0
              */
             readonly judge_rounds?: number;
+            /**
+             * @description Server-derived, read-only: the tries-per-goal limit the task's current (or last) run works under — the Settings → Performance goal try limit as it was snapshotted onto the task's goal record when that run started. Absent when the task has no goal record. Not the task attempt limit, which is `effective_max_attempts`.
+             * @example 20
+             */
+            readonly goal_max_rounds?: number;
             /** @description Acceptance criteria for this task (ADR-049 D2/D5/FR-3). GOAL-FR-021/ D-C (2026-09-11, operator-ratified): creating OR editing a task through the API or the interface now requires at least one criterion AND at least one `dod` item (see `dod` below) — the prior "UI/human creation is soft, falls back to judging title+description" behaviour is RETIRED for every NEW creation/edit going forward (GOAL-FR-047, enforced at the API with a 400, not schema-only). GOAL-FR-023: a task created before this rule with no criteria continues to run and continues to be judged by the ephemeral soft-tier criterion — the rule binds at creation and at edit only, never retroactively. Immutable once a recurring Trigger run has started (per-run snapshot). ADR-086 D5: this list itself now REFERENCES the task's goal record rather than being a second persisted list (GOAL-FR-029) — an implementation detail this wire shape is unaffected by. */
             criteria?: components["schemas"]["AcceptanceCriterion"][];
             /** @description GOAL-FR-003/FR-048 — this task's Definition of Done, DISTINCT from `criteria` (mirrors `Goal.dod`/`Plan.dod`): generic standing quality gates vs. outcome-specific checks, judged identically but never mixed into `criteria`. NEW field (ADR-086): `pkg/task/task.go` had no DoD field before this delivery — the list lives on the task's goal record. GOAL-FR-021/D-C: mandatory (>= 1 item) at creation and at edit, enforced with a 400 at the API, same as `criteria`. GOAL-FR-048: opening a pre-existing task with no `dod` MUST NOT block reading it; saving an edit enforces the rule. */
             dod?: components["schemas"]["AcceptanceCriterion"][];
             /**
-             * @description Current run's attempt index within its goal loop (ADR-049 D7). Read-only, server-set; the UI renders "attempt N/M" against `effective_max_attempts`.
+             * @description Task attempts already used: how many runs of this task have failed as a whole and been started over (ADR-049 D7). A run fails as a whole when its goal ends not met after all its tries, when the run breaks, or after two reasoning-only tries in a row. Read-only, server-set; the UI renders "attempt N of M" against `effective_max_attempts`. Separate from the goal's tries within a run (`judge_rounds`/`goal_max_rounds`).
              * @example 1
              */
             readonly attempt_count?: number;
             /**
-             * @description Per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9, R-03). Null/absent inherits the single global goal try limit (`PerformanceSettings.goal_max_rounds`, Settings → Performance, default 20) — the same setting that bounds a chat goal (founder decision 2026-09-14, D-D/D-E). There is no separate global task-attempts setting.
+             * @description Per-task override of the task attempt limit — how many fresh runs this task gets before it ends Failed (ADR-049 D7/FR-9, R-03). Null/absent inherits the global `planning.task_max_attempts` config value (default 3). This is not the goal try limit (`PerformanceSettings.goal_max_rounds`): goal tries and task attempts are separate limits (founder decision 2026-09-14, issue #710).
              * @example 5
              */
             max_attempts?: number | null;
             /**
-             * @description Server-derived, read-only: the attempt ceiling this task actually runs under — the task fails once this many attempts end unmet, and it is the "M" in the UI's "attempt N/M". Resolved by the same function the task executor enforces (`pkg/tools/task_attempt_budget.go:: EffectiveTaskMaxAttempts`): the per-task `max_attempts` override when set; otherwise the goal try limit snapshotted onto the task's goal record when its current or most recent run started; otherwise the live global goal try limit (`PerformanceSettings.goal_max_rounds`). Clients render this value rather than a hardcoded default. Not writable — change `max_attempts` or the global setting instead. Always present in responses.
-             * @example 20
+             * @description Server-derived, read-only: the task attempt limit this task runs under — the task ends Failed once this many runs have failed as a whole, and it is the "M" in the UI's "attempt N of M". Resolved by the same function the task executor enforces (`pkg/tools/task_attempt_budget.go:: EffectiveTaskMaxAttempts`): the per-task `max_attempts` when set, otherwise the global `planning.task_max_attempts` config value (default 3). Not writable. Always present in responses.
+             * @example 3
              */
             readonly effective_max_attempts?: number;
             trigger?: components["schemas"]["TaskTrigger"];
@@ -8376,7 +8381,7 @@ export interface components {
             /** @description GOAL-FR-003/FR-021/FR-048/D-C — this task's Definition of Done, DISTINCT from `criteria`. NEW field (ADR-086). Required (>= 1 item, enforced with a 400, not schema-only — see `criteria` above) at creation. Items use the authoring-time `AcceptanceCriterionInput` shape, same as `criteria`. */
             dod?: components["schemas"]["AcceptanceCriterionInput"][];
             /**
-             * @description Per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9, R-03). Null/absent inherits the single global goal try limit (`PerformanceSettings.goal_max_rounds`, Settings → Performance, default 20) — the same setting that bounds a chat goal (founder decision 2026-09-14, D-D/D-E).
+             * @description Per-task override of the task attempt limit — how many fresh runs this task gets before it ends Failed (ADR-049 D7/FR-9, R-03). Null/absent inherits the global `planning.task_max_attempts` config value (default 3). Separate from the goal try limit (`PerformanceSettings.goal_max_rounds`).
              * @example 5
              */
             max_attempts?: number | null;
@@ -8494,7 +8499,7 @@ export interface components {
             /** @description GOAL-FR-003/FR-021/FR-048/D-C — replacement Definition-of-Done set, DISTINCT from `criteria`, replacing the current `dod` atomically. NEW field (ADR-086). Same edit-time mandatory-count rule as `criteria` above (>= 1 item, enforced with a 400 on every surface). */
             dod?: components["schemas"]["AcceptanceCriterionInput"][];
             /**
-             * @description New per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9, R-03). Null clears the override (inherit the single global goal try limit, `PerformanceSettings.goal_max_rounds`).
+             * @description New per-task override of the task attempt limit — how many fresh runs this task gets before it ends Failed (ADR-049 D7/FR-9, R-03). Null clears the override (inherit the global `planning.task_max_attempts` config value, default 3).
              * @example 5
              */
             max_attempts?: number | null;

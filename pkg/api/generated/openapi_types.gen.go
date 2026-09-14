@@ -13130,7 +13130,7 @@ type PerformanceSettings struct {
 	// EffectiveMaxParallelAgents The resolved value actually in use. When max_parallel_agents_configured is true this is the operator's own value (from config or the OMNIPUS_MAX_PARALLEL_AGENTS env var). When it is false, this is the physical OS-thread-safety backstop and NOT a capacity recommendation — a client must not present it as one; render the automatic, memory-bounded state instead. Always present in responses; absent in requests.
 	EffectiveMaxParallelAgents *int `json:"effective_max_parallel_agents,omitempty"`
 
-	// GoalMaxRounds GOAL-FR-024/FR-045, MV-1, D-D/D-E (2026-09-11, operator-ratified) — the SINGLE, GLOBAL adjudication-round ceiling for EVERY goal, task and chat identically. Default 20. THERE IS NO PER-GOAL OVERRIDE anywhere in this delivery — GOAL-FR-046 ("a human-editable budget control for a goal's per-goal override") and GOAL-US-8 ("an operator can give a goal more room") are RETIRED in full. This is the ONE control: `Goal.max_rounds` on every goal record resolves from this value alone (`pkg/config/planning.go::EffectiveGoalMaxRounds`, unmodified signature — NQ-2), and so does every task's attempt ceiling (`Task.effective_max_attempts`) unless that task carries its own `max_attempts` (founder decision 2026-09-14): a task fails after this many unmet attempts, exactly as a chat goal ends after this many unmet rounds. A goal keeps the value in force when it started. Lives under Settings → Performance (`src/components/settings/PerformanceSection.tsx`, GOAL-FR-045) — no new settings tab. Always present in responses.
+	// GoalMaxRounds GOAL-FR-024/FR-045, MV-1, D-D/D-E (2026-09-11, operator-ratified) — the SINGLE, GLOBAL adjudication-round ceiling for EVERY goal, task and chat identically. Default 20. THERE IS NO PER-GOAL OVERRIDE anywhere in this delivery — GOAL-FR-046 ("a human-editable budget control for a goal's per-goal override") and GOAL-US-8 ("an operator can give a goal more room") are RETIRED in full. This is the ONE control: `Goal.max_rounds` on every goal record resolves from this value alone (`pkg/config/planning.go::EffectiveGoalMaxRounds`, unmodified signature — NQ-2). It bounds the tries a goal gets in chat and within one run of a task alike; it does NOT bound how many fresh runs a task gets (`Task.effective_max_attempts`, a separate limit — founder decision 2026-09-14, issue #710). A goal keeps the value in force when it started. Lives under Settings → Performance (`src/components/settings/PerformanceSection.tsx`, GOAL-FR-045) — no new settings tab. Always present in responses.
 	GoalMaxRounds *int `json:"goal_max_rounds,omitempty"`
 
 	// MaxParallelAgents Maximum number of tasks/subagents that may run concurrently on the dispatch path. There is no longer a computed default: 0 on disk means "not configured", and is surfaced here as the resolved effective value (see effective_max_parallel_agents and max_parallel_agents_configured) because 0 is an internal sentinel that is never a real concurrency value. When nothing is configured, concurrency is bounded by live available memory at the moment each agent turn is admitted, and the number reported here is a PHYSICAL OS-thread-safety backstop rather than an estimate of what this machine can run. There is NO policy ceiling: an explicitly configured value is always honored as given (never silently clamped — only a floor of 1 applies), including a value above the physical backstop, which is honored in full with a server-side warning logged rather than being lowered. Overridden by the OMNIPUS_MAX_PARALLEL_AGENTS env var.
@@ -16349,7 +16349,7 @@ type Task struct {
 	// Artifacts Paths to output files / artifact references produced by the task.
 	Artifacts *[]string `json:"artifacts,omitempty"`
 
-	// AttemptCount Current run's attempt index within its goal loop (ADR-049 D7). Read-only, server-set; the UI renders "attempt N/M" against `effective_max_attempts`.
+	// AttemptCount Task attempts already used: how many runs of this task have failed as a whole and been started over (ADR-049 D7). A run fails as a whole when its goal ends not met after all its tries, when the run breaks, or after two reasoning-only tries in a row. Read-only, server-set; the UI renders "attempt N of M" against `effective_max_attempts`. Separate from the goal's tries within a run (`judge_rounds`/`goal_max_rounds`).
 	AttemptCount *int `json:"attempt_count,omitempty"`
 
 	// BlockedBy Ordered list of task IDs that must reach `done` before this task is eligible to advance (DAG ordering only — an AND-join, no conditional semantics in Tier 2). A write-time cycle validator (carried over from the legacy boardtask store) rejects self-edges, 2-node, and N-node cycles; orphan edges (target deleted) are dropped on load; max depth 50. Empty when the task has no dependencies.
@@ -16487,8 +16487,11 @@ type Task struct {
 	// Due Optional deadline (RFC 3339 UTC) for task completion. Separate from `trigger` — `due` is a target date, `trigger` is what fires the run.
 	Due *time.Time `json:"due,omitempty"`
 
-	// EffectiveMaxAttempts Server-derived, read-only: the attempt ceiling this task actually runs under — the task fails once this many attempts end unmet, and it is the "M" in the UI's "attempt N/M". Resolved by the same function the task executor enforces (`pkg/tools/task_attempt_budget.go:: EffectiveTaskMaxAttempts`): the per-task `max_attempts` override when set; otherwise the goal try limit snapshotted onto the task's goal record when its current or most recent run started; otherwise the live global goal try limit (`PerformanceSettings.goal_max_rounds`). Clients render this value rather than a hardcoded default. Not writable — change `max_attempts` or the global setting instead. Always present in responses.
+	// EffectiveMaxAttempts Server-derived, read-only: the task attempt limit this task runs under — the task ends Failed once this many runs have failed as a whole, and it is the "M" in the UI's "attempt N of M". Resolved by the same function the task executor enforces (`pkg/tools/task_attempt_budget.go:: EffectiveTaskMaxAttempts`): the per-task `max_attempts` when set, otherwise the global `planning.task_max_attempts` config value (default 3). Not writable. Always present in responses.
 	EffectiveMaxAttempts *int `json:"effective_max_attempts,omitempty"`
+
+	// GoalMaxRounds Server-derived, read-only: the tries-per-goal limit the task's current (or last) run works under — the Settings → Performance goal try limit as it was snapshotted onto the task's goal record when that run started. Absent when the task has no goal record. Not the task attempt limit, which is `effective_max_attempts`.
+	GoalMaxRounds *int `json:"goal_max_rounds,omitempty"`
 
 	// Id Unique task identifier (UUID).
 	Id string `json:"id"`
@@ -16496,13 +16499,13 @@ type Task struct {
 	// IsJoin ADR-053 §Contract Surface — true marks this plan member as an authored join/assemble member with its own criteria, converging one or more parallel `stream`s into a single artifact (g5 shard+assemble topology). Plan-lint rejects a convergence point with no authored join member (join-less plan, US-11 AS-2). Absent/false is the common case (not a join member) — deliberately no schema `default:` alongside this optional field (see the `priority`/`surface` convention note in this file's `required` comment: combining `default:` with an absent-from-`required` field makes openapi-typescript emit it as NON-optional in the plain TS type regardless of the `required` list, which would make `is_join` falsely mandatory on every existing `Task` literal across the SPA test suite).
 	IsJoin *bool `json:"is_join,omitempty"`
 
-	// JudgeRounds ADR-053 §Contract Surface — "Budget / bounds". Per-task adjudication rounds consumed so far, mirroring `Plan.judge_rounds` at task/goal scope (R§8.9 — one round = one adjudication, claim-triggered or idle-settled). Distinct from `attempt_count`, which tracks retry attempts, not adjudications.
+	// JudgeRounds Goal tries used by the task's current run (or by its last run, once the task has ended), read from the task's goal record: one try is one judged claim, or one turn that ended without a usable claim (founder decision 2026-09-14, issue #710). It starts again from zero when the task restarts in a fresh run. The UI renders "try N of M" against `goal_max_rounds`. Distinct from `attempt_count`, which counts failed runs. Absent when the task has no goal record or no try has been used.
 	JudgeRounds *int `json:"judge_rounds,omitempty"`
 
 	// LastActivityAt Read-time only, never stored: the most recent moment this task's run showed any sign of work, so a long run can be told apart from a stuck one without a fixed time limit (founder decision 2026-09-14). The later of (a) the live progress stamp of the task's running turn or any turn it delegated to — which moves on every streamed reasoning or tool-call argument delta — and (b) the last write to the task session's transcript (a tool result, an assistant message). Present only while `status` is `in_progress` and the run has produced such evidence; absent otherwise. Nothing is written to produce it (it is not a heartbeat). Unrelated to `Plan.last_activity_at`, which is a plan's idle-expiry clock.
 	LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
 
-	// MaxAttempts Per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9, R-03). Null/absent inherits the single global goal try limit (`PerformanceSettings.goal_max_rounds`, Settings → Performance, default 20) — the same setting that bounds a chat goal (founder decision 2026-09-14, D-D/D-E). There is no separate global task-attempts setting.
+	// MaxAttempts Per-task override of the task attempt limit — how many fresh runs this task gets before it ends Failed (ADR-049 D7/FR-9, R-03). Null/absent inherits the global `planning.task_max_attempts` config value (default 3). This is not the goal try limit (`PerformanceSettings.goal_max_rounds`): goal tries and task attempts are separate limits (founder decision 2026-09-14, issue #710).
 	MaxAttempts *int `json:"max_attempts,omitempty"`
 
 	// Owner Username of the user who owns this task. Set server-side at creation; read-only.
@@ -16823,7 +16826,7 @@ type TaskCreateRequest struct {
 	// IsJoin ADR-053 §Contract Surface — true marks this member as an authored join/assemble member with its own criteria. Absent/false is the common case — no schema `default:` (see `Task.yaml`'s `is_join` for why: combining `default:` with an absent-from-`required` field makes openapi-typescript emit it as non-optional regardless).
 	IsJoin *bool `json:"is_join,omitempty"`
 
-	// MaxAttempts Per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9, R-03). Null/absent inherits the single global goal try limit (`PerformanceSettings.goal_max_rounds`, Settings → Performance, default 20) — the same setting that bounds a chat goal (founder decision 2026-09-14, D-D/D-E).
+	// MaxAttempts Per-task override of the task attempt limit — how many fresh runs this task gets before it ends Failed (ADR-049 D7/FR-9, R-03). Null/absent inherits the global `planning.task_max_attempts` config value (default 3). Separate from the goal try limit (`PerformanceSettings.goal_max_rounds`).
 	MaxAttempts *int `json:"max_attempts,omitempty"`
 
 	// ParentTaskId Optional parent task ID — set when creating a subtask (delegation / decomposition child).
@@ -17259,7 +17262,7 @@ type TaskUpdateRequest struct {
 	// IsJoin ADR-053 §Contract Surface — true marks this member as an authored join/assemble member with its own criteria. Absent/false is the common case — no schema `default:` (see `Task.yaml`'s `is_join` for why: combining `default:` with an absent-from-`required` field makes openapi-typescript emit it as non-optional regardless).
 	IsJoin *bool `json:"is_join,omitempty"`
 
-	// MaxAttempts New per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9, R-03). Null clears the override (inherit the single global goal try limit, `PerformanceSettings.goal_max_rounds`).
+	// MaxAttempts New per-task override of the task attempt limit — how many fresh runs this task gets before it ends Failed (ADR-049 D7/FR-9, R-03). Null clears the override (inherit the global `planning.task_max_attempts` config value, default 3).
 	MaxAttempts *int `json:"max_attempts,omitempty"`
 
 	// PlanId New Plan grouping (ADR-049 D1/D4). Same-workspace FK — rejected 400 if the plan is in a different workspace.

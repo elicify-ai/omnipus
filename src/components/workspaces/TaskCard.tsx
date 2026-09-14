@@ -10,49 +10,68 @@ import { taskDisplayColor, taskDisplayLabel } from '@/lib/statusColors'
 import type { BoardAltitude } from '@/store/workspacesStore'
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core'
 
-// ── Goal-loop status affordance (ADR-049 FR-090, SD-C12) ────────────────────
+// ── Task-attempt status affordance (ADR-049 FR-090, SD-C12; two-level model)
+// ─────────
 //
-// "attempt N/M" is sourced from the real, server-set `Task.attempt_count`
-// wire field (contract C17) against `Task.effective_max_attempts` — the
-// ceiling the server actually enforces for this task (the Settings goal try
-// limit, the limit snapshotted when its run started, or the task's own
-// max_attempts; founder decision 2026-09-14) — never fabricated. The
-// "paused" suffix is likewise grounded in real data: a task's owning Plan
+// "attempt N of M" is sourced from the real, server-set `Task.attempt_count`
+// wire field (contract C17) against `Task.effective_max_attempts` — the TASK
+// ATTEMPT limit the server actually enforces for this task (the task's own
+// max_attempts, else the global task-attempt default; founder decision
+// 2026-09-14) — never fabricated. Task attempts are the OUTER limit: how many
+// fresh runs a task gets. The INNER limit — goal tries within one run — is a
+// separate budget, rendered beside it as "try N of M" from `Task.judge_rounds`
+// against `Task.goal_max_rounds`, both read by the server off the task's goal
+// record (issue #710). The two are never mixed: "attempt 1 of 3 · try 5 of 20".
+//
+// The "paused" suffix is likewise grounded in real data: a task's owning Plan
 // (looked up via `Task.plan_id` in the `plans` prop) reporting
 // `state === 'running' && paused_reason` — NOT a fake/always-false flag.
-// Standalone (non-plan) task-loop judge-unavailable pauses are only knowable
-// live via the `task_status_changed`/`goal_status` WS frames (out of this
-// wave's scope — frame consumption lands with US-12); this card renders the
+// Standalone (non-plan) judge-unavailable pauses are only knowable live via
+// the `task_status_changed`/`goal_status` WS frames; this card renders the
 // plan-derived pause honestly and simply omits the "paused" suffix when no
 // such data is available, rather than inventing a state.
+//
 // Fallback denominator ONLY for a response that omits
 // `effective_max_attempts` (and has no `max_attempts`). MUST track
-// pkg/config/planning.go's `DefaultGoalMaxRounds` — the shipped value of the
-// single goal try limit that bounds tasks and chat goals alike (the separate
-// DefaultTaskMaxAttempts was retired). A stale value here renders a healthy
-// task as already past a ceiling it has not reached.
-export const DEFAULT_TASK_MAX_ATTEMPTS = 20
+// pkg/config/planning.go's `DefaultTaskMaxAttempts` (3) — the shipped task
+// attempt limit. A stale value here renders a healthy task as already past a
+// ceiling it has not reached.
+export const DEFAULT_TASK_MAX_ATTEMPTS = 3
 
-// `Task.attempt_count` counts attempts already CONSUMED — the sole writer,
-// `consumeAttemptOrExhaust` (pkg/agent/task_executor.go), increments and
-// persists it only once an attempt's outcome is known, AFTER that attempt
-// finished. While `status === 'in_progress'`, a new attempt is already
-// running that this count doesn't reflect yet — the same function hands the
-// judge `AttemptCount + 1` as the live attempt's own number
-// (task_executor.go's `Attempt: t.AttemptCount + 1`). Displaying the raw,
-// not-yet-caught-up count for the whole duration of that attempt reads as a
-// stuck counter (live UAT: "attempt 1/20" for the entirety of attempt 2).
-// `status` omitted/anything else terminal (done/failed) or otherwise not
-// actively running renders the plain used-up count, which is the correct
-// reading once no attempt is in flight.
+// `Task.attempt_count` counts runs already failed and consumed — the sole
+// writer, `consumeTaskAttempt` (pkg/agent/task_run_loop.go), increments and
+// persists it only once a run's outcome is known, AFTER that run finished.
+// While `status === 'in_progress'`, a new run is already executing that this
+// count doesn't reflect yet. Displaying the raw, not-yet-caught-up count for
+// the whole duration of that run reads as a stuck counter (live UAT:
+// "attempt 1/3" for the entirety of run 2). `status` omitted/anything else
+// terminal (done/failed) or otherwise not actively running renders the plain
+// used-up count, which is the correct reading once no run is in flight.
 export function goalLoopStatusLabel(
-  task: Pick<Task, 'attempt_count' | 'effective_max_attempts' | 'max_attempts' | 'status'>,
+  task: Pick<Task, 'attempt_count' | 'effective_max_attempts' | 'max_attempts' | 'status'> &
+    Partial<Pick<Task, 'judge_rounds' | 'goal_max_rounds'>>,
   paused: boolean,
 ): string | null {
-  if (task.attempt_count == null || task.attempt_count <= 0) return null
-  const max = task.effective_max_attempts ?? task.max_attempts ?? DEFAULT_TASK_MAX_ATTEMPTS
-  const current = task.status === 'in_progress' ? task.attempt_count + 1 : task.attempt_count
-  return `attempt ${current}/${max}${paused ? ' · paused' : ''}`
+  const running = task.status === 'in_progress'
+  const attemptsUsed = task.attempt_count ?? 0
+  const triesLimit = task.goal_max_rounds ?? 0
+  const triesUsed = task.judge_rounds ?? 0
+  const showTries = triesLimit > 0 && triesUsed > 0
+  const parts: string[] = []
+  // A running task is always on some attempt, so once its tries are shown its
+  // attempt is shown too ("attempt 1 of 3 · try 5 of 20").
+  if (attemptsUsed > 0 || (running && showTries)) {
+    const max = task.effective_max_attempts ?? task.max_attempts ?? DEFAULT_TASK_MAX_ATTEMPTS
+    parts.push(`attempt ${running ? attemptsUsed + 1 : attemptsUsed} of ${max}`)
+  }
+  if (showTries) {
+    // Same in-flight rule as attempts: a running goal is on the try after the
+    // ones already used, never past its own limit.
+    const current = running ? Math.min(triesUsed + 1, triesLimit) : triesUsed
+    parts.push(`try ${current} of ${triesLimit}`)
+  }
+  if (parts.length === 0) return null
+  return `${parts.join(' · ')}${paused ? ' · paused' : ''}`
 }
 
 // Priority badge config: P1 red, P2 orange, P3 yellow, P4 blue, P5 muted
@@ -324,8 +343,8 @@ export function TaskCard({
         </div>
       )}
 
-      {/* Goal-loop status affordance (FR-090) — "attempt N/M" (+"· paused"
-          when the owning plan reports paused_reason while running). */}
+      {/* Goal-loop status affordance (FR-090) — "attempt N of M · try T of L"
+          (+"· paused" when the owning plan reports paused_reason while running). */}
       {goalLoopLabel && (
         <div className="mt-2 flex items-center gap-1.5">
           <span

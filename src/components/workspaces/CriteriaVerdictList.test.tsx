@@ -63,7 +63,7 @@ function makeEvidence(overrides: Partial<EvidenceRecord> = {}): EvidenceRecord {
 }
 
 describe('CriteriaVerdictList — attempt counter', () => {
-  it('renders "attempt N/M" from attemptCount + maxAttempts', () => {
+  it('renders "attempt N of M" from attemptCount + maxAttempts', () => {
     render(
       <CriteriaVerdictList
         criteria={[makeCriterion()]}
@@ -71,24 +71,25 @@ describe('CriteriaVerdictList — attempt counter', () => {
         maxAttempts={3}
       />,
     )
-    expect(screen.getByTestId('attempt-counter')).toHaveTextContent('attempt 2/3')
+    expect(screen.getByTestId('attempt-counter')).toHaveTextContent('attempt 2 of 3')
   })
 
   it('falls back to the default max attempts when maxAttempts is absent', () => {
     render(<CriteriaVerdictList criteria={[makeCriterion()]} attemptCount={1} />)
-    expect(screen.getByTestId('attempt-counter')).toHaveTextContent(`attempt 1/${DEFAULT_TASK_MAX_ATTEMPTS}`)
+    expect(screen.getByTestId('attempt-counter')).toHaveTextContent(`attempt 1 of ${DEFAULT_TASK_MAX_ATTEMPTS}`)
   })
 
   // Anti-drift oracle — see the twin assertion in
   // TaskCard.goalLoopStatus.test.tsx for the full reasoning. The two SPA
   // constants are independent declarations, so each needs its own check
   // against the single backend source of truth.
-  // The single goal try limit (founder decision 2026-09-14) retired the
-  // separate DefaultTaskMaxAttempts; the fallback tracks DefaultGoalMaxRounds.
-  it('DEFAULT_TASK_MAX_ATTEMPTS equals pkg/config/planning.go\'s DefaultGoalMaxRounds', () => {
+  // Task attempts and goal tries are separate limits (founder decision
+  // 2026-09-14, issue #710): this fallback is the TASK ATTEMPT default, so it
+  // must track DefaultTaskMaxAttempts — never DefaultGoalMaxRounds.
+  it('DEFAULT_TASK_MAX_ATTEMPTS equals pkg/config/planning.go\'s DefaultTaskMaxAttempts', () => {
     const go = readFileSync(PLANNING_GO, 'utf-8')
-    const m = go.match(/DefaultGoalMaxRounds\s*=\s*(\d+)/)
-    expect(m, 'DefaultGoalMaxRounds not found in pkg/config/planning.go').not.toBeNull()
+    const m = go.match(/DefaultTaskMaxAttempts\s*=\s*(\d+)/)
+    expect(m, 'DefaultTaskMaxAttempts not found in pkg/config/planning.go').not.toBeNull()
     expect(DEFAULT_TASK_MAX_ATTEMPTS).toBe(Number(m![1]))
   })
 
@@ -99,7 +100,7 @@ describe('CriteriaVerdictList — attempt counter', () => {
 
   // Live UAT (E-10's sibling defect, TaskDetailPanel side): `attemptCount`
   // counts attempts already CONSUMED — the backend's sole writer
-  // (consumeAttemptOrExhaust, pkg/agent/task_executor.go) persists it only
+  // (consumeTaskAttempt, pkg/agent/task_run_loop.go) persists it only
   // once an attempt's outcome is known, AFTER that attempt finished, while
   // handing the judge `AttemptCount + 1` as the LIVE attempt's own number.
   // Without `isRunning`, the panel showed the stale, not-yet-caught-up count
@@ -113,7 +114,7 @@ describe('CriteriaVerdictList — attempt counter', () => {
         isRunning
       />,
     )
-    expect(screen.getByTestId('attempt-counter')).toHaveTextContent('attempt 2/20')
+    expect(screen.getByTestId('attempt-counter')).toHaveTextContent('attempt 2 of 20')
   })
 
   it('shows the plain used-up count once the task is terminal (isRunning false/omitted)', () => {
@@ -125,7 +126,7 @@ describe('CriteriaVerdictList — attempt counter', () => {
         isRunning={false}
       />,
     )
-    expect(screen.getByTestId('attempt-counter')).toHaveTextContent('attempt 1/20')
+    expect(screen.getByTestId('attempt-counter')).toHaveTextContent('attempt 1 of 20')
   })
 
   it('renders nothing at all when there are zero criteria', () => {
