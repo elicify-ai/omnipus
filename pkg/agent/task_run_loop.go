@@ -239,7 +239,7 @@ func (te *TaskExecutor) finishRunTurn(
 		if errors.Is(turnErr, ErrTaskRunNotDispatched) {
 			te.appendRunErrorTranscript(t, taskSessionID, sessStore, fmt.Sprintf("Task execution failed: %v", turnErr))
 			te.transitionTaskLifecycle(taskSessionID, session.LifecycleFailed, "not_dispatched")
-			te.endTaskWithoutAttempt(t, taskSessionID, fmt.Sprintf("The task could not be started: %v", turnErr), run, nil)
+			te.endTaskWithoutAttempt(t, taskSessionID, fmt.Sprintf("The task could not be started: %v", turnErr), run)
 			return runStepEnded, "", ""
 		}
 
@@ -254,7 +254,7 @@ func (te *TaskExecutor) finishRunTurn(
 				map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "code": string(code)})
 			te.appendRunErrorTranscript(t, taskSessionID, sessStore, reason)
 			te.transitionTaskLifecycle(taskSessionID, session.LifecycleFailed, "operator_action_required")
-			te.endTaskWithoutAttempt(t, taskSessionID, reason, run, nil)
+			te.endTaskWithoutAttempt(t, taskSessionID, reason, run)
 			return runStepEnded, "", ""
 		}
 
@@ -341,13 +341,15 @@ func (te *TaskExecutor) finishRunTurn(
 
 	switch claim.status {
 	case tools.GoalClaimStatusBlocked:
+		te.recordRunClaim(current, taskSessionID, generated.GoalLatestClaimStatusBlocked, claim.evidence)
 		reason := "Blocked" + reasonSuffix(claim.evidence, "the worker reported it cannot proceed")
-		te.endTaskWithoutAttempt(current, taskSessionID, reason, run, &blockedClaim)
+		te.endTaskWithoutAttempt(current, taskSessionID, reason, run)
 		return runStepEnded, "", ""
 
 	case tools.GoalClaimStatusWaitingOnUser:
+		te.recordRunClaim(current, taskSessionID, generated.GoalLatestClaimStatusWaitingOnUser, claim.evidence)
 		reason := "Needs the operator" + reasonSuffix(claim.evidence, "the worker is waiting on an answer")
-		te.endTaskWithoutAttempt(current, taskSessionID, reason, run, &waitingClaim)
+		te.endTaskWithoutAttempt(current, taskSessionID, reason, run)
 		return runStepEnded, "", ""
 
 	case tools.GoalClaimStatusMet:
@@ -394,11 +396,6 @@ const reasoningOnlyFailureReason = "The model kept reasoning without producing a
 const reasoningOnlySteering = "Your last turn ended at the output-token limit with no answer at all: the whole budget went to " +
 	"reasoning. Produce the answer itself this turn — do the work, keep each tool call small — and claim with " +
 	"goal_claim (status \"met\") once it is verified."
-
-var (
-	blockedClaim = generated.GoalLatestClaimStatusBlocked
-	waitingClaim = generated.GoalLatestClaimStatusWaitingOnUser
-)
 
 // adjudicateRunClaim is the ONE Judge dispatch for a task goal's met claim.
 // Met: the task is done. Not met: the goal spent a try (RecordVerdict advances
@@ -465,7 +462,7 @@ func (te *TaskExecutor) adjudicateRunClaim(
 	if needsJudgeAgent(judged) {
 		if _, ok := te.agentLoop.GetRegistry().GetAgent(string(coreagent.IDJudge)); !ok {
 			te.endTaskWithoutAttempt(t, taskSessionID,
-				"The Judge could not run: the Judge agent is not registered, so this claim cannot be checked.", run, nil)
+				"The Judge could not run: the Judge agent is not registered, so this claim cannot be checked.", run)
 			return runStepEnded, "", ""
 		}
 	}
@@ -474,14 +471,7 @@ func (te *TaskExecutor) adjudicateRunClaim(
 	if rec != nil && rec.Round+1 > tryNo {
 		tryNo = rec.Round + 1
 	}
-	if rec != nil {
-		if _, uerr := resolveGoalRecordStore().Update(rec.GoalID, func(cur *goal.Goal) error {
-			return cur.RecordClaim(generated.GoalLatestClaimStatusMet, evidence, time.Now().UTC())
-		}); uerr != nil {
-			logger.WarnCF("task_executor", "goal: could not record the met claim onto the goal record",
-				map[string]any{"task_id": t.ID, "goal_id": rec.GoalID, "error": uerr.Error()})
-		}
-	}
+	te.recordRunClaim(t, taskSessionID, generated.GoalLatestClaimStatusMet, evidence)
 
 	var result JudgeCriteriaResult
 	for judgeTry := 1; ; judgeTry++ {
@@ -505,7 +495,7 @@ func (te *TaskExecutor) adjudicateRunClaim(
 		if judgeUnavailableNeedsOperator(result.Reason) {
 			logger.ErrorCF("task_executor", "goal: the Judge cannot run until an operator fixes it — failing the task, no attempt used",
 				map[string]any{"task_id": t.ID, "reason": result.Reason})
-			te.endTaskWithoutAttempt(t, taskSessionID, "The Judge could not run: "+judgeOperatorFix(result.Reason), run, nil)
+			te.endTaskWithoutAttempt(t, taskSessionID, "The Judge could not run: "+judgeOperatorFix(result.Reason), run)
 			return runStepEnded, "", ""
 		}
 		logger.WarnCF("task_executor", "goal: the Judge is unavailable — retrying the same claim, no try used",
@@ -513,7 +503,7 @@ func (te *TaskExecutor) adjudicateRunClaim(
 		if judgeTry >= judgeUnavailableRetryBound {
 			te.endTaskWithoutAttempt(t, taskSessionID, fmt.Sprintf(
 				"The Judge could not check this task's work after %d tries (%s). Re-run the task once the Judge is available.",
-				judgeTry, result.Reason), run, nil)
+				judgeTry, result.Reason), run)
 			return runStepEnded, "", ""
 		}
 		te.writeTaskReason(t, fmt.Sprintf(
@@ -720,33 +710,31 @@ func buildTaskAttemptHandover(t *task.Task, reason string, maxAttempts int) stri
 		t.AttemptCount, maxAttempts, reason)
 }
 
-// endTaskWithoutAttempt ends a running task Failed with reason, consuming no
-// attempt and never restarting it. claimStatus, when set, is recorded on the
-// goal record as the worker's claim; either way the goal then ends the way any
-// failed task's does, through completeTaskWithResult, which writes its one
-// outcome line.
-func (te *TaskExecutor) endTaskWithoutAttempt(
-	t *task.Task, taskSessionID, reason string, run *activeRun, claimStatus *generated.GoalLatestClaimStatus,
+// recordRunClaim records a task run worker's claim on the goal bound to the
+// run's session, through recordGoalClaim — the one claim writer the chat path
+// uses too (GOAL-FR-013). evidence is the worker's own one-line statement, the
+// same text a chat claim records, never the task's composed result.
+func (te *TaskExecutor) recordRunClaim(
+	t *task.Task, taskSessionID string, status generated.GoalLatestClaimStatus, evidence string,
 ) {
-	// Only the claim is recorded here. The goal itself ends in
-	// completeTaskWithResult, through tools.TerminateTaskGoalRecord — the one
-	// shared task-to-goal ending writer, whose after-transition hook writes the
-	// goal's outcome line into the run's session exactly once. Ending the goal
-	// here instead would bypass that hook and leave no outcome line.
-	if claimStatus != nil {
-		gstore := resolveGoalRecordStore()
-		if g, err := gstore.GetByOwner(generated.GoalOwnerKindTask, t.ID); err == nil && g.IsActive() {
-			if _, uerr := gstore.Update(g.GoalID, func(cur *goal.Goal) error {
-				if !cur.IsActive() {
-					return nil
-				}
-				return cur.RecordClaim(*claimStatus, reason, time.Now().UTC())
-			}); uerr != nil {
-				logger.WarnCF("task_executor", "goal: could not record the claim for a task stopped without an attempt",
-					map[string]any{"task_id": t.ID, "goal_id": g.GoalID, "error": uerr.Error()})
-			}
-		}
+	rec := activeGoalForSession(taskSessionID)
+	if rec == nil {
+		return // a task with no active goal record has no claim to keep
 	}
+	if cerr := recordGoalClaim(rec.GoalID, status, evidence); cerr != nil {
+		logger.WarnCF("task_executor", "goal: could not record the worker's claim onto the goal record",
+			map[string]any{"task_id": t.ID, "goal_id": rec.GoalID, "status": string(status), "error": cerr.Error()})
+	}
+}
+
+// endTaskWithoutAttempt ends a running task Failed with reason, consuming no
+// attempt and never restarting it. A claim that led here is recorded by the
+// caller first (recordRunClaim). The goal itself ends in
+// completeTaskWithResult, through tools.TerminateTaskGoalRecord — the one
+// shared task-to-goal ending writer, whose after-transition hook writes the
+// goal's outcome line into the run's session exactly once. Ending the goal
+// here instead would bypass that hook and leave no outcome line.
+func (te *TaskExecutor) endTaskWithoutAttempt(t *task.Task, taskSessionID, reason string, run *activeRun) {
 	logger.InfoCF("task_executor", "goal: task ended Failed with no attempt used",
 		map[string]any{"task_id": t.ID, "reason": reason})
 	te.completeTaskWithResult(t, taskSessionID, task.StatusInProgress, false, reason, run)

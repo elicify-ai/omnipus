@@ -330,8 +330,9 @@ func TestTaskRun_BlockedEndsFailedWithoutAttemptJudgeOrRestart(t *testing.T) {
 		t.Errorf("attempts=%d Judge calls=%d turns=%d, want 0/0/1", final.AttemptCount, judge.callCount(), worker.turnsStarted())
 	}
 	rec := waitForGoalState(t, tk.ID, generated.GoalStateExhausted)
-	if rec.LatestClaim == nil || rec.LatestClaim.Status != generated.GoalLatestClaimStatusBlocked {
-		t.Errorf("latest claim = %+v, want blocked", rec.LatestClaim)
+	if rec.LatestClaim == nil || rec.LatestClaim.Status != generated.GoalLatestClaimStatusBlocked ||
+		rec.LatestClaim.Evidence != reason {
+		t.Errorf("latest claim = %+v, want blocked with the worker's own reason %q as evidence", rec.LatestClaim, reason)
 	}
 	store := al.GetAgentStore(tk.AgentID)
 	waitForGoalOutcomeEntry(t, store, final.SessionID)
@@ -368,8 +369,9 @@ func TestTaskRun_WaitingOnUserEndsFailedWithOneOutcomeLine(t *testing.T) {
 		t.Errorf("attempts=%d Judge calls=%d turns=%d, want 0/0/1", final.AttemptCount, judge.callCount(), worker.turnsStarted())
 	}
 	rec := waitForGoalState(t, tk.ID, generated.GoalStateExhausted)
-	if rec.LatestClaim == nil || rec.LatestClaim.Status != generated.GoalLatestClaimStatusWaitingOnUser {
-		t.Errorf("latest claim = %+v, want waiting_on_user", rec.LatestClaim)
+	if rec.LatestClaim == nil || rec.LatestClaim.Status != generated.GoalLatestClaimStatusWaitingOnUser ||
+		rec.LatestClaim.Evidence != reason {
+		t.Errorf("latest claim = %+v, want waiting_on_user with the worker's own question %q as evidence", rec.LatestClaim, reason)
 	}
 	store := al.GetAgentStore(tk.AgentID)
 	waitForGoalOutcomeEntry(t, store, final.SessionID)

@@ -1334,6 +1334,13 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 		// checked in maybeSettleGoalIdle). Explicit Non-Behavior: only this
 		// typed marker counts — never a prose classifier.
 		al.goalSetWaitingOnUser(rec.GoalID, true)
+		// The claim — its status and the worker's one-line question, when it
+		// gave one — is recorded on the goal record through the one claim
+		// writer a task run uses too (GOAL-FR-013/FR-014).
+		if cerr := recordGoalClaim(rec.GoalID, generated.GoalLatestClaimStatusWaitingOnUser, toolEvidence); cerr != nil {
+			logger.WarnCF("agent", "goal: could not persist the waiting_on_user claim onto the goal record",
+				map[string]any{"session_id": sessionID, "goal_id": rec.GoalID, "error": cerr.Error()})
+		}
 		al.emitGoalStatusFrame(sessionID, rec.GoalID, rec.Prompt, rec.Round,
 			rec.MaxRounds, "waiting on user", goalPillWaitingOnUser)
 		return
@@ -1347,15 +1354,12 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 		// asks of the operator: "I cannot proceed and it is not something
 		// you can answer directly" rather than "I need an answer".
 		al.goalSetBlocked(rec.GoalID, true)
-		if rec.GoalID != "" {
-			if _, uerr := resolveGoalRecordStore().Update(rec.GoalID, func(cur *goal.Goal) error {
-				// The one-line reason the worker gave (goal_claim carries it as
-				// evidence for blocked) is kept so the operator can see why.
-				return cur.RecordClaim(generated.GoalLatestClaimStatusBlocked, toolEvidence, time.Now().UTC())
-			}); uerr != nil {
-				logger.WarnCF("agent", "goal: could not persist the blocked claim onto the goal record",
-					map[string]any{"session_id": sessionID, "goal_id": rec.GoalID, "error": uerr.Error()})
-			}
+		// The one-line reason the worker gave (goal_claim carries it as
+		// evidence for blocked) is kept so the operator can see why — through
+		// the one claim writer a task run uses too (GOAL-FR-013).
+		if cerr := recordGoalClaim(rec.GoalID, generated.GoalLatestClaimStatusBlocked, toolEvidence); cerr != nil {
+			logger.WarnCF("agent", "goal: could not persist the blocked claim onto the goal record",
+				map[string]any{"session_id": sessionID, "goal_id": rec.GoalID, "error": cerr.Error()})
 		}
 		al.emitGoalStatusFrame(sessionID, rec.GoalID, rec.Prompt, rec.Round,
 			rec.MaxRounds, "blocked", goalPillBlocked)
@@ -1403,8 +1407,18 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 		// occupying the SAME position the marker path's whole
 		// result.finalContent occupies — a narrower, less injectable input.
 		claimText := result.finalContent
+		evidence := marker.EvidenceText
 		if toolFound {
 			claimText = toolEvidence
+			evidence = toolEvidence
+		}
+		// GOAL-FR-013/FR-014: the met claim is recorded on the goal record
+		// before the Judge is dispatched, through the one claim writer a task
+		// run uses (task_run_loop.go::adjudicateRunClaim) — so a chat goal's
+		// record carries its latest claim whether or not the Judge then runs.
+		if cerr := recordGoalClaim(rec.GoalID, generated.GoalLatestClaimStatusMet, evidence); cerr != nil {
+			logger.WarnCF("agent", "goal: could not persist the met claim onto the goal record",
+				map[string]any{"session_id": sessionID, "goal_id": rec.GoalID, "error": cerr.Error()})
 		}
 		result.goalDeferredAdjudication = &goalDeferredAdjudicationWork{
 			agentInst: agentInst, workspaceID: opts.WorkspaceID,

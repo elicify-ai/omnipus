@@ -78,6 +78,14 @@ type goalBehaviourObservation struct {
 	RoundsAfterVerdict    int
 	CriteriaCountOnRecord int
 
+	// The claim as the goal record keeps it (GOAL-FR-013's one code path for
+	// the claim): its status, the worker's own evidence, and whether it was
+	// stamped with a time. The time itself differs run to run and is not
+	// compared.
+	ClaimStatusOnRecord   string
+	ClaimEvidenceOnRecord string
+	ClaimTimeOnRecord     bool
+
 	// Chat-driver facts (JUDGE-FR-098's deferral), checked on the chat run's
 	// baseline and never compared: a task run's claim is resolved after its turn
 	// has already ended, so it has no in-turn window to defer out of.
@@ -86,6 +94,10 @@ type goalBehaviourObservation struct {
 }
 
 const parityTaskID = "task-parity"
+
+// parityClaimEvidence is the worker's one-line evidence in the scripted met
+// claim — what both goal records must keep as that claim's evidence.
+const parityClaimEvidence = "importer migrated, backfill verified"
 
 // observeGoalBehaviour runs the fixed script against one owner kind and
 // returns what was observed. Each call builds its OWN AgentLoop and its own
@@ -157,7 +169,7 @@ func observeGoalBehaviour(t *testing.T, ownerKind generated.GoalOwnerKind) goalB
 		t.Fatal("goal_claim is not registered on the working agent")
 	}
 	claimedFrom := time.Now().UTC().Add(-time.Second)
-	b6ClaimMetAndPersist(t, claimTool, store, sid, "parity-claim", "importer migrated, backfill verified")
+	b6ClaimMetAndPersist(t, claimTool, store, sid, "parity-claim", parityClaimEvidence)
 	const reply = "The importer is migrated and the backfill is verified."
 	switch ownerKind {
 	case generated.GoalOwnerKindSession:
@@ -189,6 +201,11 @@ func observeGoalBehaviour(t *testing.T, ownerKind generated.GoalOwnerKind) goalB
 	obs.TerminalState = string(final.State)
 	obs.RoundsAfterVerdict = final.Round
 	obs.CriteriaCountOnRecord = len(final.Criteria)
+	if final.LatestClaim != nil {
+		obs.ClaimStatusOnRecord = string(final.LatestClaim.Status)
+		obs.ClaimEvidenceOnRecord = final.LatestClaim.Evidence
+		obs.ClaimTimeOnRecord = !final.LatestClaim.ClaimedAt.IsZero()
+	}
 
 	return obs
 }
@@ -283,6 +300,12 @@ func TestChatAndTaskGoalsBehaveIdentically(t *testing.T) {
 			"one adjudication consumes exactly one round, for either kind"},
 		{"CriteriaCountOnRecord", chat.CriteriaCountOnRecord, task.CriteriaCountOnRecord,
 			"GOAL-FR-027: the terminal record keeps its criteria for both kinds"},
+		{"ClaimStatusOnRecord", chat.ClaimStatusOnRecord, task.ClaimStatusOnRecord,
+			"GOAL-FR-013: one code path for the claim — a goal_claim(met) is recorded on the goal record for either kind"},
+		{"ClaimEvidenceOnRecord", chat.ClaimEvidenceOnRecord, task.ClaimEvidenceOnRecord,
+			"GOAL-FR-013: the record keeps the worker's own evidence, identically for both kinds"},
+		{"ClaimTimeOnRecord", chat.ClaimTimeOnRecord, task.ClaimTimeOnRecord,
+			"GOAL-FR-013: the recorded claim is stamped with when it was made, for either kind"},
 	}
 	for _, f := range fields {
 		if f.chat != f.tsk {
@@ -290,6 +313,80 @@ func TestChatAndTaskGoalsBehaveIdentically(t *testing.T) {
 				"  observation : %s\n  chat-owned  : %v\n  task-owned  : %v\n  why it matters: %s",
 				f.name, f.chat, f.tsk, f.why)
 		}
+	}
+
+	// Checked AFTER the comparison, so a claim recorded by only one kind is
+	// reported above as the parity difference it is. This catches the shared
+	// breakage the comparison cannot see: neither kind recording the claim.
+	if chat.ClaimStatusOnRecord != string(generated.GoalLatestClaimStatusMet) ||
+		chat.ClaimEvidenceOnRecord != parityClaimEvidence || !chat.ClaimTimeOnRecord {
+		t.Errorf("baseline (GOAL-FR-013): the chat goal's record must carry the met claim with the worker's evidence %q; "+
+			"got status=%q evidence=%q stamped=%v", parityClaimEvidence,
+			chat.ClaimStatusOnRecord, chat.ClaimEvidenceOnRecord, chat.ClaimTimeOnRecord)
+	}
+}
+
+// TestChatGoalWaitingOnUserClaimIsRecordedLikeATaskRun: a chat goal's
+// goal_claim(waiting_on_user) is recorded on its goal record — the status, the
+// worker's own question and when — exactly as a task run records the same
+// claim (task_run_loop_test.go::TestTaskRun_WaitingOnUserEndsFailedWithOneOutcomeLine),
+// and the chat goal still parks with no adjudication and no round used. The
+// two kinds diverge after the claim by design (a task run has no reply channel
+// and ends), which is why this is asserted here and not in the shared script.
+//
+// Traces to: goal-entity-spec.md FR-013/FR-014; ADR-084's task-run amendment
+// ("the chat path records that reason on the goal record too").
+func TestChatGoalWaitingOnUserClaimIsRecordedLikeATaskRun(t *testing.T) {
+	resetGoalTriggerStateForTest()
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	agentInst, ok := al.GetRegistry().GetAgent("native-agent")
+	if !ok {
+		t.Fatal("native-agent not registered")
+	}
+	store, sid := newGoalTestSession(t, al, agentInst.ID)
+	gid := armGoalRecord(t, sid, parityGoalText, recordedGoalCriteria(parityGoalText), 0, time.Now())
+	al.recordGoalRouting(sid, gid, "webchat", "c1", "sk1", agentInst.ID)
+	judge := &b6ScriptedJudge{metFromCall: 1, reason: "unused"}
+	judgeInst.Provider = judge
+
+	claimTool, ok := agentInst.Tools.Get(tools.GoalClaimToolName)
+	if !ok {
+		t.Fatal("goal_claim is not registered on the working agent")
+	}
+	const question = "which of the two supplier price lists is current?"
+	res := claimTool.Execute(tools.WithTranscriptSessionID(context.Background(), sid),
+		map[string]any{"status": tools.GoalClaimStatusWaitingOnUser, "evidence": question})
+	if res == nil || res.IsError {
+		t.Fatalf("goal_claim(waiting_on_user) was refused on a session with an active goal: %+v", res)
+	}
+	if err := store.AppendTranscriptStrict(sid, session.TranscriptEntry{
+		ID: "parity-waiting-claim", Type: session.EntryTypeToolCall, Role: "assistant", Timestamp: time.Now().UTC(),
+		ToolCalls: []session.ToolCall{{
+			ID: session.ToolCallID("parity-waiting-claim"), Tool: tools.GoalClaimToolName, Status: "success",
+			Result: map[string]any{"text": res.ForLLM},
+		}},
+	}); err != nil {
+		t.Fatalf("persist the goal_claim call: %v", err)
+	}
+
+	result := &turnResult{finalContent: "I need an answer before I can go on."}
+	al.checkGoalLoopAfterTurn(context.Background(), agentInst, processOptions{
+		TranscriptStore: store, TranscriptSessionID: sid,
+		Channel: "webchat", ChatID: "c1", SessionKey: "sk1", UserInitiated: true,
+	}, result)
+
+	rec := mustGoalRecord(t, gid)
+	if rec.LatestClaim == nil || rec.LatestClaim.Status != generated.GoalLatestClaimStatusWaitingOnUser ||
+		rec.LatestClaim.Evidence != question || rec.LatestClaim.ClaimedAt.IsZero() {
+		t.Errorf("GOAL-FR-013: latest claim on the chat goal's record = %+v, want waiting_on_user carrying the worker's "+
+			"question %q, stamped with a time", rec.LatestClaim, question)
+	}
+	if !al.goalIsWaitingOnUser(gid) {
+		t.Error("the chat goal must park on waiting_on_user")
+	}
+	if rec.State != generated.GoalStateActive || rec.Round != 0 || judge.callCount() != 0 || result.goalDeferredAdjudication != nil {
+		t.Errorf("a waiting_on_user claim must not adjudicate or use a round: state=%q round=%d Judge calls=%d deferred=%v",
+			rec.State, rec.Round, judge.callCount(), result.goalDeferredAdjudication != nil)
 	}
 }
 
