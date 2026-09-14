@@ -11986,6 +11986,15 @@ turnLoop:
 		}
 
 		ts.setPhase(TurnPhaseTools)
+		// setGoalSucceededThisRound tracks whether a set_goal call in THIS
+		// model response already registered (or updated) the goal record — the
+		// gate a few branches down uses to refuse a trailing AskUserQuestion
+		// from the same response (UAT B-9 run 4: set_goal plus an invented
+		// "Placeholder question - not used" ask in one response both ran; the
+		// ask parked a turn whose goal record was already registered, freezing
+		// the session for 18 minutes). A successful set_goal only ever happens
+		// on a goal turn, so no separate goal-turn predicate is needed.
+		setGoalSucceededThisRound := false
 		for i, tc := range normalizedToolCalls {
 			if ts.hardAbortRequested() {
 				turnStatus = TurnEndStatusAborted
@@ -12133,6 +12142,53 @@ turnLoop:
 					ToolExecSkippedPayload{
 						Tool:   toolName,
 						Reason: "tool_not_offered",
+					},
+				)
+				continue
+			}
+
+			// UAT B-9 run 4: an AskUserQuestion trailing a SUCCESSFUL set_goal
+			// from the SAME model response never runs. The rubric note already
+			// says the two narrowed doors are alternatives ("Call exactly ONE
+			// of the two, never both in the same response"); the live case had
+			// the model register the record and then emit an invented
+			// "Placeholder question - not used" ask, whose park froze a session
+			// for 18 minutes even though the goal record was registered. The
+			// ask is refused with a result telling the model to work now, or to
+			// ask a REAL question on its next turn. Refused here, before
+			// dispatch, so no park happens, no question card is created, and
+			// the FR-010 question-round budget is not spent (that bump fires
+			// only on a genuine ParksTurn success below).
+			if toolName == tools.AskUserQuestionToolName && setGoalSucceededThisRound {
+				const askAfterSetGoalRefusal = "AskUserQuestion was not called: this same response already " +
+					"registered the goal record with set_goal. Registering the record and asking are alternatives — " +
+					"you chose to register. Start working on the goal now (your full tool set returns on the next " +
+					"request), or, if you are genuinely blocked on a real question, ask that real question on your " +
+					"next turn — never a placeholder."
+				logger.WarnCF("agent", "goal: refusing an AskUserQuestion trailing a successful set_goal in the same response",
+					map[string]any{
+						"agent_id":  ts.agent.ID,
+						"turn_id":   ts.turnID,
+						"iteration": iteration,
+					})
+				refusedMsg := al.admitToolResult(ts, toolResultAdmission{
+					Tool: tc.Name, ToolCallID: tc.ID, Content: askAfterSetGoalRefusal, IsError: true, ParallelN: len(normalizedToolCalls),
+				}).Message
+				messages = append(messages, refusedMsg)
+				// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+				// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+				// ends the turn typed with no further provider call (FR-032).
+				if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+					res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+					turnStatus = status
+					return res, exitErr
+				}
+				al.emitEvent(
+					EventKindToolExecSkipped,
+					ts.eventMeta("runTurn", "turn.tool.skipped"),
+					ToolExecSkippedPayload{
+						Tool:   toolName,
+						Reason: "goal_turn_ask_after_set_goal",
 					},
 				)
 				continue
@@ -13025,6 +13081,12 @@ turnLoop:
 				}
 			} else {
 				ts.recordToolSuccess(toolCBSig)
+				// Feeds the same-response ask refusal above: a set_goal that
+				// succeeded in this response makes any trailing AskUserQuestion
+				// in the same batch a refusal, not a park.
+				if ledgerToolName == tools.SetGoalToolName {
+					setGoalSucceededThisRound = true
+				}
 				// Identical SUCCESSFUL repetition (tool_failure_circuit_breaker.go):
 				// warn the model, and at the stop threshold end the turn after
 				// this round (the takeToolRepeatStop check after the tool loop).

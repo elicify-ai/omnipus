@@ -465,6 +465,9 @@ type narrowedDoorCaptureProvider struct {
 	// captured[n] is call n+1's (tools, options) — call 1 in captured[0],
 	// call 2 in captured[1], etc.
 	captured []capturedRequest
+	// msgs[n] is call n+1's request messages (a copy), for callers that need
+	// to assert on tool results carried into a later request.
+	msgs     [][]providers.Message
 	finalMsg string
 }
 
@@ -474,12 +477,13 @@ type capturedRequest struct {
 }
 
 func (p *narrowedDoorCaptureProvider) Chat(
-	_ context.Context, _ []providers.Message, toolDefs []providers.ToolDefinition, _ string, options map[string]any,
+	_ context.Context, messages []providers.Message, toolDefs []providers.ToolDefinition, _ string, options map[string]any,
 ) (*providers.LLMResponse, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.calls++
 	p.captured = append(p.captured, capturedRequest{tools: toolDefs, options: options})
+	p.msgs = append(p.msgs, append([]providers.Message(nil), messages...))
 	if p.calls == 1 && len(p.firstCallToolCalls) > 0 {
 		return &providers.LLMResponse{ToolCalls: p.firstCallToolCalls}, nil
 	}
@@ -503,6 +507,17 @@ func (p *narrowedDoorCaptureProvider) requestAt(n int) (capturedRequest, bool) {
 		return capturedRequest{}, false
 	}
 	return p.captured[n], true
+}
+
+// msgsAt returns a copy of call n+1's request messages (0-indexed like
+// requestAt). Returns false when n is out of range.
+func (p *narrowedDoorCaptureProvider) msgsAt(n int) ([]providers.Message, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if n < 0 || n >= len(p.msgs) {
+		return nil, false
+	}
+	return append([]providers.Message(nil), p.msgs[n]...), true
 }
 
 func toolNamesOf(defs []providers.ToolDefinition) []string {
