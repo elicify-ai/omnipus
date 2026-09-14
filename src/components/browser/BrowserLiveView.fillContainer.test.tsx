@@ -42,7 +42,7 @@ const { mockSendControl, mockSendInput, mockSendViewport, callbacksRef } = vi.ho
 
 vi.mock('@/lib/browserInputWebRTC', async () => {
   const { dedicatedInputSessionStub } = await import('./dedicatedInputTestUtils')
-  return { BrowserInputWebRTCSession: dedicatedInputSessionStub(mockSendInput) }
+  return { BrowserInputWebRTCSession: class extends dedicatedInputSessionStub(mockSendInput) { cancelAutomaticRecovery() {} } }
 })
 
 vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
@@ -639,4 +639,67 @@ it('applies a desktop resize while the address bar remains focused', async () =>
   } finally {
     vi.useRealTimers()
   }
+})
+
+// Resize must not rebuild capture halfway through an admitted held gesture.
+describe('BrowserLiveView — resize preserves active input', () => {
+  it.each([0, 450])('sends all eight held-key presses and release before committing the latest viewport (start %ims)', async (startDelay) => {
+    vi.useFakeTimers()
+    try {
+      render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+      connectFrameAndDrive()
+      const frame = screen.getByTestId('browser-live-frame')
+      let width = 1000
+      frame.getBoundingClientRect = () => ({ width, height: 720, top: 0, left: 0, right: width, bottom: 720, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+      await act(async () => { await vi.advanceTimersByTimeAsync(800) })
+      mockSendViewport.mockClear(); mockSendInput.mockClear()
+      width = 1200; fireEvent(window, new Event('resize'))
+      await act(async () => { await vi.advanceTimersByTimeAsync(startDelay) })
+      for (let i = 0; i < 8; i++) {
+        fireEvent.keyDown(frame, { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37, repeat: i > 0 })
+        await act(async () => { await vi.advanceTimersByTimeAsync(180) })
+      }
+      expect(mockSendViewport).not.toHaveBeenCalled()
+      width = 1400 // Final geometry must be remeasured even without another resize event.
+      fireEvent.keyUp(frame, { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 })
+      expect(mockSendInput.mock.calls.map(([input]) => input.kind)).toEqual([...Array(8).fill('key_down'), 'key_up'])
+      const releaseOrder = mockSendInput.mock.invocationCallOrder.at(-1)!
+      await act(async () => { await vi.advanceTimersByTimeAsync(800) })
+      expect(mockSendViewport).toHaveBeenCalledTimes(1)
+      expect(mockSendViewport).toHaveBeenLastCalledWith(1400, 720, window.devicePixelRatio || 1)
+      expect(mockSendViewport.mock.invocationCallOrder[0]).toBeGreaterThan(releaseOrder)
+    } finally { vi.useRealTimers() }
+  })
+  it.each(['composition', 'blur', 'drag'])('commits a deferred resize after %s ends without another resize event', async (mode) => {
+    vi.useFakeTimers()
+    try {
+      render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+      connectFrameAndDrive()
+      const frame = screen.getByTestId('browser-live-frame')
+      let width = 1000
+      frame.getBoundingClientRect = () => ({ width, height: 720, top: 0, left: 0, right: width, bottom: 720, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+      await act(async () => { await vi.advanceTimersByTimeAsync(800) })
+      const text = screen.getByRole('textbox', { name: 'Remote browser text input' })
+      if (mode === 'composition') {
+        act(() => { text.focus() })
+        fireEvent.compositionStart(text)
+      } else if (mode === 'drag') {
+        fireEvent.pointerDown(frame, { button: 0, clientX: 500, clientY: 360, pointerId: 1 })
+      } else fireEvent.keyDown(frame, { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 })
+      mockSendViewport.mockClear(); mockSendInput.mockClear()
+      width = 1200; fireEvent(window, new Event('resize'))
+      await act(async () => { await vi.advanceTimersByTimeAsync(800) })
+      expect(mockSendViewport).not.toHaveBeenCalled()
+      if (mode === 'composition') fireEvent.compositionEnd(text, { data: '日本' })
+      else if (mode === 'drag') fireEvent.pointerUp(frame, { button: 0, clientX: 500, clientY: 360, pointerId: 1 })
+      else fireEvent(window, new Event('blur'))
+      await act(async () => { await vi.advanceTimersByTimeAsync(800) })
+      expect(mockSendViewport).toHaveBeenCalledTimes(1)
+      expect(mockSendViewport).toHaveBeenLastCalledWith(1200, 720, window.devicePixelRatio || 1)
+      const expectedKind = mode === 'composition' ? 'text' : mode === 'drag' ? 'mouse_up' : 'key_up'
+      expect(mockSendInput.mock.calls.map(([input]) => input.kind)).toEqual([expectedKind])
+      expect(mockSendInput.mock.invocationCallOrder[0]).toBeLessThan(mockSendViewport.mock.invocationCallOrder[0])
+    } finally { vi.useRealTimers() }
+  })
+
 })

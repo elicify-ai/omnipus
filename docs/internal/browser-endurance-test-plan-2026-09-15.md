@@ -1,0 +1,15 @@
+# Browser endurance acceptance — 2026-09-15
+
+User requirement: continuous mixed mouse movement, scrolling, clicks and keyboard input for at least20minutes, with failures investigated, corrected and retested. Work remains on browser-improvements targeting release/v0.1.1; no main, Mac installed runtime, location/resource or tool-policy changes.
+
+The principal oracle is an authored interactive website whose trusted DOM events update exact counters and text, encoded visibly in its canvas. The viewer reads those counters from the received video. Expected values derive from the authored gestures, not transport acknowledgements. Mouse hover may coalesce, but clicks, key actions, scroll deltas and final released state must remain exact. No automatic retries, reconnects, Resume clicks, skipped failed rounds or shorter-duration pass are allowed in the acceptance run.
+
+Run one20minute workload with a mix of mouse sweeps, wheel bursts in both directions, clicks, repeated arrow key down/up, native keyboard typing and committed Unicode, plus drags. Keep text bounded by explicitly deleting the previous known text. Assert exact state after every round, monitor all viewer alerts/paused states and page errors during the run, and retain timestamps, counts, route encoding, peer states and screenshots. Require all four user-requested event categories throughout all20one-minute intervals. Periodically change viewer size and revalidate geometry. Setup time is excluded from the20minute interval; a failed run must remain failed even if retried later.
+
+Complement the endurance run with targeted regressions: slow new-tab attach must not block an existing tab, cancellation/session replacement must fence publication, compatible slow scroll continuation must preserve exact deltas within the active dispatch deadline, and meaningful action/held-state boundaries must preserve safe ordering. Fault variants must demonstrate that the assertions can fail. The tests do not certify arbitrary websites or guarantee zero future faults.
+
+Use the existing Amsterdam test agent and authorized static preview fixture. New runtime candidates must be built from committed source and installed/running binary hashes verified before final acceptance. Focused relevant suites only, per user instruction; no repeated full CI.
+
+## Baseline and candidate evidence
+
+The baseline on3f978959c failed after104 active seconds at the first resize: four repeated arrow-key presses were suppressed before transport. This remains a regression case. Candidate changes defer resizing during held input/composition, move first popup attachment outside the existing-tab command gate, and preserve one compatible scroll continuation within the existing active dispatch budget. Focused frontend21tests, popup admission4tests, queue/wheel tests and gateway dedicated-input tests pass. Three deliberate fault variants for each fix were caught, with restored source passing. Independent frontend and backend review found no blockers. Full1200second live acceptance remains required.

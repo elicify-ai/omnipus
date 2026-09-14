@@ -1409,6 +1409,8 @@ export function BrowserLiveView({
   // Gestures use only the dedicated input peer; navigation stays on the socket. A successful send is local
   // admission, not execution proof; never replay uncertain actions elsewhere.
   const pressedInputsRef = useRef(new Map<string, Omit<BrowserInputFrame, 'type'>>())
+  const resizeInputBusyRef = useRef<() => boolean>(() => false)
+  const resumeViewportRef = useRef<() => void>(() => {})
   const releaseInputsRef = useRef<() => void>(() => {})
   const inputFailureAtRef = useRef(-Infinity)
   const dispatchInput = useCallback(
@@ -1445,6 +1447,7 @@ export function BrowserLiveView({
           if (release.kind === 'mouse_up') held.set(key, { ...release, x: input.x, y: input.y })
         }
       }
+      if ((input.kind === 'key_up' || input.kind === 'mouse_up') && held.size === 0) resumeViewportRef.current()
       return true
     }, [dedicatedFrameReady],
   )
@@ -1454,6 +1457,7 @@ export function BrowserLiveView({
     const releases = [...pressedInputsRef.current.values()]
     pressedInputsRef.current.clear()
     for (const release of releases) dispatchInput(release, true)
+    resumeViewportRef.current()
   }, [dispatchInput])
   const textComposition = useBrowserTextComposition({
     identity: () => {
@@ -1468,6 +1472,7 @@ export function BrowserLiveView({
   })
   cancelTextRef.current = textComposition.cancel
   const textInputRef = textComposition.inputRef
+  resizeInputBusyRef.current = () => pressedInputsRef.current.size > 0 || textComposition.composing()
   const releasePressedInputs = useCallback(() => {
     inputRef.current?.cancelAutomaticRecovery()
     cancelTextRef.current()
@@ -1510,6 +1515,12 @@ export function BrowserLiveView({
     const el = containerRef.current
     if (!el) return undefined
     let timer: ReturnType<typeof setTimeout> | null = null
+    let deferredForInput = false
+    const inputDefersResize = () => {
+      if (!resizeInputBusyRef.current()) return false
+      deferredForInput = true
+      return true
+    }
 
     // Cold-start race (live UAT 2026-07-31, fresh machine): the attach-time
     // viewport frame can reach the gateway BEFORE the live view exists —
@@ -1550,7 +1561,7 @@ export function BrowserLiveView({
       // resize follows to replay it. The focusout listener registered below is
       // what closes that hole: it re-runs this same path once focus leaves, at
       // which point the size is real and either commits or dedups.
-      if (textFieldHasFocus(el)) return
+      if (inputDefersResize() || textFieldHasFocus(el)) return
 
       const box = el.getBoundingClientRect()
       const w = Math.round(box.width)
@@ -1609,7 +1620,7 @@ export function BrowserLiveView({
           // through a 250ms window. Bailing without re-arming is safe ONLY
           // because the focusout listener below re-runs push() on blur; that
           // is what makes this a DEFERRAL rather than a drop.
-          if (textFieldHasFocus(el)) return
+          if (inputDefersResize() || textFieldHasFocus(el)) return
 
           // Re-read the DPR instead of reusing push()'s: the chase can span a
           // window being dragged between displays with different pixel ratios.
@@ -1648,6 +1659,15 @@ export function BrowserLiveView({
       }, 400)
     }
 
+    // Keep one deferred resize and remeasure after the final release. Never
+    // rebuild capture halfway through a held gesture or native composition.
+    const resumeAfterInput = () => {
+      if (!deferredForInput || resizeInputBusyRef.current()) return
+      deferredForInput = false
+      schedule()
+    }
+    resumeViewportRef.current = resumeAfterInput
+
     // Initial push once connected — the WS may not be open on first mount, so
     // `connected` is a dependency and this re-runs when it flips true.
     if (connected) schedule()
@@ -1682,6 +1702,7 @@ export function BrowserLiveView({
     if (typeof ResizeObserver === 'undefined') {
       window.addEventListener('resize', schedule)
       return () => {
+        if (resumeViewportRef.current === resumeAfterInput) resumeViewportRef.current = () => {}
         if (timer !== null) clearTimeout(timer)
         if (settleRef.current !== null) clearTimeout(settleRef.current)
         window.removeEventListener('resize', schedule)
@@ -1693,6 +1714,7 @@ export function BrowserLiveView({
     const ro = new ResizeObserver(schedule)
     ro.observe(el)
     return () => {
+      if (resumeViewportRef.current === resumeAfterInput) resumeViewportRef.current = () => {}
       if (timer !== null) clearTimeout(timer)
       if (settleRef.current !== null) clearTimeout(settleRef.current)
       document.removeEventListener('focusout', schedule)
@@ -2742,8 +2764,8 @@ export function BrowserLiveView({
               style={{ pointerEvents: 'none' }}
               onFocus={textComposition.onFocus}
               onCompositionStart={textComposition.onCompositionStart}
-              onCompositionEnd={textComposition.onCompositionEnd}
-              onInput={textComposition.onInput}
+              onCompositionEnd={(event) => { textComposition.onCompositionEnd(event); resumeViewportRef.current() }}
+              onInput={(event) => { textComposition.onInput(event); resumeViewportRef.current() }}
               onPaste={textComposition.onPaste}
             />
             {/* The ONLY video sink — mounted the instant a WebRTC stream is

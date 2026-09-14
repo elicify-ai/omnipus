@@ -12,6 +12,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/tools/browser"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser/webrtc"
 )
 
@@ -238,6 +239,7 @@ func (h *BrowserWSHandler) dispatchDedicatedInputOffer(wc *browserWSConn, state 
 			cancel()
 			return
 		}
+		peer.SetActiveDispatchBudget(browser.InteractiveInputDispatchBudget)
 		peer.SetControlFailureHandler(func(control int, reason string) {
 			d.mu.Lock()
 			currentControl := !d.closed && d.epoch == f.InputEpoch && d.offer == f.OfferId && d.control == control

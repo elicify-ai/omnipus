@@ -20,6 +20,7 @@ type queuedDedicatedInput struct {
 	frame                                         generated.BrowserInputFrame
 	enqueued                                      time.Time
 	firstReliableSeq, lastReliableSeq, inputCount int
+	continuation                                  bool
 }
 
 // InputQueueTiming describes admitted inputs represented by one serial dispatch.
@@ -50,6 +51,9 @@ type dedicatedInputQueue struct {
 	sink                             func(context.Context, generated.BrowserInputFrame)
 	fail                             func(string)
 	controlFailure                   func(int, string)
+	activeDispatchBudget             time.Duration
+	active                           *queuedDedicatedInput
+	activeDeadline                   time.Time
 	expiry                           *time.Timer
 	observeQueue                     func(generated.BrowserInputFrame, InputQueueTiming)
 }
@@ -59,6 +63,12 @@ func newDedicatedInputQueue(parent context.Context, peer, control int, sink func
 	q.startLocked()
 	return q
 }
+func (q *dedicatedInputQueue) setActiveDispatchBudget(budget time.Duration) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.activeDispatchBudget = budget
+}
+
 func (q *dedicatedInputQueue) startLocked() {
 	q.ctx, q.cancel = context.WithCancel(q.parent)
 	q.done = make(chan struct{})
@@ -75,7 +85,7 @@ func (q *dedicatedInputQueue) run(ctx context.Context, done chan struct{}, wake 
 		}
 		var queued queuedDedicatedInput
 		found := false
-		if len(q.frames) > 0 && time.Since(q.frames[0].enqueued) >= reliableInputMaxWait {
+		if deadline := q.expiryDeadlineLocked(); !deadline.IsZero() && !time.Now().Before(deadline) {
 			control, handler := q.control, q.controlFailure
 			q.expireLocked()
 			q.mu.Unlock()
@@ -86,12 +96,19 @@ func (q *dedicatedInputQueue) run(ctx context.Context, done chan struct{}, wake 
 			queued = q.frames[0]
 			q.frames[0] = queuedDedicatedInput{}
 			q.frames = q.frames[1:]
-			q.armExpiryLocked()
 			found = true
 		} else if q.hover != nil {
 			queued = *q.hover
 			q.hover = nil
 			found = true
+		}
+		if found {
+			q.active = &queued
+			q.activeDeadline = time.Time{}
+			if queued.frame.Kind == "wheel" && q.activeDispatchBudget > 0 {
+				q.activeDeadline = time.Now().Add(q.activeDispatchBudget)
+			}
+			q.armExpiryLocked()
 		}
 		observer := q.observeQueue
 		q.mu.Unlock()
@@ -104,6 +121,24 @@ func (q *dedicatedInputQueue) run(ctx context.Context, done chan struct{}, wake 
 					q.sink(ctx, queued.frame)
 				}
 			}
+			q.mu.Lock()
+			if q.ctx != ctx || ctx.Err() != nil {
+				q.mu.Unlock()
+				return
+			}
+			if !q.activeDeadline.IsZero() && !time.Now().Before(q.activeDeadline) {
+				control, handler := q.control, q.controlFailure
+				q.expireLocked()
+				q.mu.Unlock()
+				q.reportExpiry(control, handler)
+				return
+			}
+			if q.compatibleContinuationLocked() {
+				q.frames[0].continuation = true
+			}
+			q.active, q.activeDeadline = nil, time.Time{}
+			q.armExpiryLocked()
+			q.mu.Unlock()
 			continue
 		}
 		select {
@@ -114,17 +149,43 @@ func (q *dedicatedInputQueue) run(ctx context.Context, done chan struct{}, wake 
 	}
 }
 
-// The timer can fail a backlog even while the serial sink is blocked. Its
-// source/oldest-entry checks fence callbacks already racing Stop or retirement.
+// A single losslessly merged wheel continuation may wait for its active
+// wheel's original deadline. Mixed actions retain the oldest-entry deadline.
+func (q *dedicatedInputQueue) compatibleContinuationLocked() bool {
+	if q.active == nil || q.activeDeadline.IsZero() || len(q.frames) != 1 || len(q.held) != 0 {
+		return false
+	}
+	active := *q.active
+	return mergePendingWheel(&active, q.frames[0].frame)
+}
+
+func (q *dedicatedInputQueue) expiryDeadlineLocked() time.Time {
+	deadline := q.activeDeadline
+	if len(q.frames) == 0 || q.compatibleContinuationLocked() {
+		return deadline
+	}
+	if len(q.frames) == 1 && q.frames[0].continuation {
+		return deadline
+	}
+	waiting := q.frames[0].enqueued.Add(reliableInputMaxWait)
+	if deadline.IsZero() || waiting.Before(deadline) {
+		return waiting
+	}
+	return deadline
+}
+
+// This timer also bounds a hung active wheel sink, independently of whether
+// its implementation cooperates with its own browser-operation timeout.
 func (q *dedicatedInputQueue) armExpiryLocked() {
 	q.stopExpiryLocked()
-	if len(q.frames) == 0 {
+	deadline := q.expiryDeadlineLocked()
+	if deadline.IsZero() {
 		return
 	}
-	source, oldest := q.ctx, q.frames[0].enqueued
-	q.expiry = time.AfterFunc(time.Until(oldest.Add(reliableInputMaxWait)), func() {
+	source := q.ctx
+	q.expiry = time.AfterFunc(time.Until(deadline), func() {
 		q.mu.Lock()
-		if q.closed || q.paused || q.ctx != source || source.Err() != nil || len(q.frames) == 0 || q.frames[0].enqueued != oldest {
+		if q.closed || q.paused || q.ctx != source || source.Err() != nil || q.expiryDeadlineLocked() != deadline {
 			q.mu.Unlock()
 			return
 		}
@@ -151,6 +212,7 @@ func (q *dedicatedInputQueue) expireLocked() {
 	q.paused, q.expired = true, true
 	q.cancel()
 	q.frames = nil
+	q.active, q.activeDeadline = nil, time.Time{}
 	q.hover = nil
 	q.stopExpiryLocked()
 }
@@ -201,6 +263,7 @@ func (q *dedicatedInputQueue) submit(hover bool, f generated.BrowserInputFrame) 
 		q.closed = true
 		q.cancel()
 		q.frames = nil
+		q.active, q.activeDeadline = nil, time.Time{}
 		q.stopExpiryLocked()
 		q.hover = nil
 	}
@@ -254,6 +317,7 @@ func (q *dedicatedInputQueue) enqueueLocked(hover bool, f generated.BrowserInput
 		// Validate sequence/barrier first and retain the oldest queue deadline.
 		if len(q.frames) > 0 && len(q.held) == 0 && mergePendingWheel(&q.frames[len(q.frames)-1], f) {
 			q.reliable = *f.ReliableSeq
+			q.armExpiryLocked()
 			return ""
 		}
 		if len(q.frames) >= inputQueueCapacity {
@@ -282,9 +346,7 @@ func (q *dedicatedInputQueue) enqueueLocked(hover bool, f generated.BrowserInput
 			}
 		}
 		q.frames = append(q.frames, queuedDedicatedInput{frame: f, enqueued: time.Now(), firstReliableSeq: *f.ReliableSeq, lastReliableSeq: *f.ReliableSeq, inputCount: 1})
-		if len(q.frames) == 1 {
-			q.armExpiryLocked()
-		}
+		q.armExpiryLocked()
 	}
 	select {
 	case q.wake <- struct{}{}:
@@ -297,6 +359,7 @@ func (q *dedicatedInputQueue) close() {
 	q.closed = true
 	q.cancel()
 	q.frames = nil
+	q.active, q.activeDeadline = nil, time.Time{}
 	q.stopExpiryLocked()
 	q.hover = nil
 	q.mu.Unlock()
@@ -315,6 +378,7 @@ func (q *dedicatedInputQueue) pause(next int) (context.Context, <-chan struct{},
 	q.paused = true
 	q.cancel()
 	q.frames = nil
+	q.active, q.activeDeadline = nil, time.Time{}
 	q.stopExpiryLocked()
 	q.hover = nil
 	q.held = make(map[string]bool)

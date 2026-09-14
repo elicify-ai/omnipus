@@ -2831,31 +2831,26 @@ func (m *BrowserManager) adoptTargetForSession(sessionID string, targetID target
 	browserCtx := se.browserCtx
 	m.mu.Unlock()
 
-	// Register the shared adoption outcome before waiting for target admission,
-	// so concurrent callers still observe this attempt's result.
-	release, admissionErr := m.acquireLegacyTabCommand(sessionID)
-	if admissionErr != nil {
-		m.mu.Lock()
-		delete(m.pendingAdopt, targetID)
-		entry.result = tabAdoptResult{Unadopted: true, Reason: tabAdoptReasonAttachFailed}
-		entry.err = admissionErr
-		close(entry.done)
-		m.mu.Unlock()
-		return entry.result, admissionErr
-	}
-	defer release()
-	m.mu.Lock()
-	if m.sessions[sessionID] != se || !m.adoptionSessionCurrentLocked(sessionID, owner) {
-		delete(m.pendingAdopt, targetID)
-		entry.result = tabAdoptResult{Unadopted: true, Reason: tabAdoptReasonAttachFailed}
-		entry.err = errBrowserSessionChanged
-		close(entry.done)
-		m.mu.Unlock()
-		return entry.result, entry.err
-	}
-	m.mu.Unlock()
-
+	// Attaching the new target may take the entire first-attach budget. It
+	// does not mutate the existing tab set, so leave its command gate usable.
+	// pendingAdopt retains the single shared outcome throughout preparation.
 	newTab, err := m.createTab(browserCtx, targetID)
+	if err == nil {
+		// Publication, activation, and observer callbacks still serialize with
+		// existing-tab commands. Revalidate the captured session below.
+		release, admissionErr := m.acquireLegacyTabCommand(sessionID)
+		if admissionErr != nil {
+			m.mu.Lock()
+			delete(m.pendingAdopt, targetID)
+			entry.result = tabAdoptResult{Unadopted: true, Reason: tabAdoptReasonAttachFailed}
+			entry.err = admissionErr
+			close(entry.done)
+			m.mu.Unlock()
+			m.discardLifecycleTarget(sessionID, newTab)
+			return entry.result, admissionErr
+		}
+		defer release()
+	}
 
 	m.mu.Lock()
 	if m.sessions[sessionID] != se || !m.adoptionSessionCurrentLocked(sessionID, owner) {

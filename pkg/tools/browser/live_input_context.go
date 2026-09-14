@@ -13,6 +13,9 @@ import (
 )
 
 const interactiveInputTimeout = 2 * time.Second
+
+// InteractiveInputDispatchBudget is the existing bound shared with input transport admission.
+const InteractiveInputDispatchBudget = interactiveInputTimeout
 const maxHeldInputsPerViewer = 256
 
 // liveInputState uses LiveView.mu for bookkeeping. gate separately serializes

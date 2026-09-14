@@ -130,6 +130,11 @@ func (p *DedicatedInputPeer) reportControlFailure(control int, reason string) {
 	handler(control, reason)
 }
 
+// SetActiveDispatchBudget supplies the browser's existing per-input bound.
+func (p *DedicatedInputPeer) SetActiveDispatchBudget(budget time.Duration) {
+	p.queue.setActiveDispatchBudget(budget)
+}
+
 // SetQueueTimingObserver observes admission time immediately before serial
 // dispatch without changing the input source context or the wire frame.
 func (p *DedicatedInputPeer) SetQueueTimingObserver(observer func(generated.BrowserInputFrame, InputQueueTiming)) {
