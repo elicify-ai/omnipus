@@ -35,6 +35,7 @@ import { registerSyncChatForeground } from '@/store/session'
 import { logDiagnostic } from '@/lib/telemetry'
 import { normalizeTruncationReason } from '@/lib/truncation'
 import { buildGoalOutcomeInsertion } from '@/lib/goalOutcome'
+import { buildJudgeVerdictInsertion } from '@/lib/judgeVerdictThread'
 import {
   getLLMErrorDisplay,
   readEntryIdFromFrame,
@@ -1188,15 +1189,19 @@ interface ChatStore {
    * transcript (src/lib/api.ts's `rawToMessage`) into `sessionId`'s bucket,
    * WITHOUT touching anything else the WS live/replay path already
    * populated. ADR-049 D2/D4/SD-C10 — see the doc comment on this action's
-   * implementation for the full rationale: the live/replayed
-   * `judge_verdict` WS frame (chat.ts's `case 'judge_verdict'`) never
-   * inserts a thread message (it is a deliberately GLOBAL frame with no
-   * `session_id`, routed to `useJudgeActivityStore` only), so without this
-   * backfill a verdict card can never appear even after a reload — WS
-   * replay races ahead of and gates off the ordinary REST cold-load
-   * overwrite (see ChatScreen.tsx's `historyData` effect). Idempotent
+   * implementation for the full rationale.
+   *
+   * Live-thread-card fix (2026-09-14): the live/replayed `judge_verdict` WS
+   * frame now ALSO inserts a thread message directly, for scope=task/
+   * scope=goal (which now carry `session_id` — `case 'judge_verdict'`,
+   * `src/lib/judgeVerdictThread.ts`), keyed by the SAME id this REST path
+   * produces (the persisted entry's own id) — so this backfill is now only
+   * reached for: a scope this module doesn't cover (scope=plan has no
+   * session_id and stays panel-only), or a session whose WS replay never
+   * ran (e.g. a cold REST-only load with no live connection). Idempotent
    * (skips any id already present) so calling it on every `historyData`
-   * resolution is safe.
+   * resolution, and after the live/replay path already inserted the same
+   * card, is always safe.
    */
   mergeJudgeVerdictHistory: (sessionId: string, historyMessages: Message[]) => void
   appendMessage: (message: ChatMessage) => void
@@ -1631,11 +1636,20 @@ const SESSION_SCOPED_FRAME_TYPES = new Set([
   'tool_approval_required', 'rate_limit', 'media', 'session_started',
   'system_overload', 'session_close_ack', 'cancel_stage',
   // ADR-049 R3: goal_status/loop_status always carry `session_id` (schema
-  // `min(1)`, required) — session-scoped like rate_limit. plan_status and
-  // judge_verdict deliberately do NOT carry session_id (correlated by
-  // plan_id/task_id instead, not any specific chat thread) and so are
-  // handled as GLOBAL frames below (like notification/whatsapp_pairing) —
-  // do not add them here.
+  // `min(1)`, required) — session-scoped like rate_limit. plan_status
+  // deliberately does NOT carry session_id (correlated by plan_id instead,
+  // not any specific chat thread) and is handled as a GLOBAL frame below
+  // (like notification/whatsapp_pairing) — do not add it here.
+  //
+  // judge_verdict deliberately is ALSO not added here even though it now
+  // OPTIONALLY carries session_id (task/goal scope, JudgeVerdictFrame.yaml):
+  // this set means "session_id is REQUIRED; drop the frame in production
+  // when it's missing" (see the targetSid resolver below), which is the
+  // wrong semantic for an OPTIONAL field — a plan-scope verdict (and any
+  // legacy path) legitimately has none, and must keep routing to the
+  // GLOBAL ActivityPanel, not get dropped with a connection-error toast.
+  // `case 'judge_verdict'` below reads `frame.session_id` directly and
+  // handles both cases itself.
   'goal_status', 'loop_status',
   // askuserquestion-tool-spec v3 §3: session-scoped — the session id rides
   // on card.session_id (required, min(1)); the routing resolver below
@@ -2272,21 +2286,31 @@ export const useChatStore = create<ChatStore>((set, get) => {
       }))
     },
 
-    // ADR-049 D2/D4/SD-C10 (verdict-card fix): the WS live/replayed
-    // `judge_verdict` frame (see `case 'judge_verdict'` below) never
-    // inserts a thread message — it is a deliberately GLOBAL frame (no
-    // `session_id` on the wire, JudgeVerdictFrame.yaml), so it is routed to
-    // `useJudgeActivityStore` (the ActivityPanel) only. The ONLY carrier
-    // that CAN place a verdict in a specific chat thread is the persisted
-    // REST transcript (`type: judge_verdict`, forwarded by rawToMessage).
-    // But ChatScreen.tsx's ordinary `historyData` effect only calls
-    // `setMessages` (a full bucket OVERWRITE) when the bucket is still
+    // ADR-049 D2/D4/SD-C10 (verdict-card fix): originally, the WS
+    // live/replayed `judge_verdict` frame (see `case 'judge_verdict'` below)
+    // never inserted a thread message — it was a deliberately GLOBAL frame
+    // (no `session_id` on the wire, JudgeVerdictFrame.yaml), so it was
+    // routed to `useJudgeActivityStore` (the ActivityPanel) only. The ONLY
+    // carrier that could place a verdict in a specific chat thread was the
+    // persisted REST transcript (`type: judge_verdict`, forwarded by
+    // rawToMessage). But ChatScreen.tsx's ordinary `historyData` effect only
+    // calls `setMessages` (a full bucket OVERWRITE) when the bucket is still
     // empty and WS replay hasn't already populated it — in the normal
     // (WS-connected) case, WS replay wins that race almost every time, so
     // the REST fetch resolves into a no-op and any judge_verdict entry it
-    // carried is silently lost, reload or not (reproduced live: two real
+    // carried was silently lost, reload or not (reproduced live: two real
     // judge rounds recorded in the transcript, ActivityPanel showed them,
     // the thread never did, even after a hard reload).
+    //
+    // Live-thread-card fix (2026-09-14): the frame now OPTIONALLY carries
+    // `session_id` (scope=task/scope=goal), and `case 'judge_verdict'`
+    // inserts the SAME thread card directly (src/lib/judgeVerdictThread.ts),
+    // keyed by this same entry id — so in the normal WS-connected case this
+    // action is now a no-op (its `if (draft.messagesById[verdictMsg.id])
+    // continue` guard below skips a card already inserted live/on replay).
+    // It remains the ONLY path for a scope this frame doesn't cover
+    // (scope=plan — no session_id) and for a session whose WS replay never
+    // ran (a cold REST-only load with no live connection).
     //
     // This action is the fix: called whenever `historyData` resolves AND the
     // active bucket is populated with replay not in flight (ChatScreen.tsx's
@@ -6226,12 +6250,25 @@ export const useChatStore = create<ChatStore>((set, get) => {
         }
 
         case 'judge_verdict': {
-          // ADR-049 D2/D4/US-13: GLOBAL frame (no session_id — correlated by
-          // task_id/plan_id) — feeds the ActivityPanel's judge row via a
-          // dedicated global store (mirrors the #283/#264
+          // ADR-049 D2/D4/US-13: ALWAYS feeds the ActivityPanel's judge row
+          // via a dedicated global store (mirrors the #283/#264
           // whatsapp_pairing/notification pattern: accessed via getState()
-          // at frame time, never routed through a session bucket).
-          useJudgeActivityStore.getState().apply(frame as JudgeVerdictFrame)
+          // at frame time, never routed through a session bucket) —
+          // unconditional, regardless of session_id.
+          //
+          // Live-thread-card fix (2026-09-14): the frame now OPTIONALLY
+          // carries `session_id` for scope=task/scope=goal
+          // (JudgeVerdictFrame.yaml). When present, ALSO insert the verdict
+          // as a thread message in that session — see
+          // buildJudgeVerdictInsertion's own doc comment
+          // (src/lib/judgeVerdictThread.ts) for the anchoring/de-dup
+          // contract. A frame without session_id (scope=plan, or any legacy
+          // emission) keeps exactly today's panel-only behaviour.
+          const verdictFrame = frame as JudgeVerdictFrame
+          useJudgeActivityStore.getState().apply(verdictFrame)
+          if (verdictFrame.session_id) {
+            withBucket(verdictFrame.session_id, (b) => buildJudgeVerdictInsertion(b, verdictFrame) ?? {})
+          }
           break
         }
 

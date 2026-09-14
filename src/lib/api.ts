@@ -1541,14 +1541,14 @@ function rawToMessage(raw: RawMessage): Message {
       // `msg.type === 'judge_verdict'` branch can render
       // JudgeVerdictThreadCard. Before this fix `raw.type`/`raw.verdict`
       // were silently dropped here, so the card never appeared even when
-      // Verbose chat was on. NOTE: this is currently the ONLY carrier that
-      // can populate the thread card — the live/replayed `judge_verdict` WS
-      // frame (store/chat.ts's `case 'judge_verdict'`) is a deliberately
-      // GLOBAL frame with no `session_id` (JudgeVerdictFrame.yaml), so it
-      // is routed to `useJudgeActivityStore` (the ActivityPanel) only and
-      // cannot be attributed to a specific chat thread without a contract
-      // change. See the investigation notes on this change for the
-      // recommended follow-up.
+      // Verbose chat was on. Live-thread-card fix (2026-09-14): the
+      // live/replayed `judge_verdict` WS frame (store/chat.ts's `case
+      // 'judge_verdict'`) now ALSO carries `session_id` for scope=task/
+      // scope=goal (JudgeVerdictFrame.yaml) and inserts the same card
+      // directly (src/lib/judgeVerdictThread.ts), keyed by this entry's own
+      // id — so this REST path is no longer the only carrier; it remains
+      // the fallback for scope=plan (no session_id) and for a cold-only
+      // load with no live WS connection.
       ...(raw.type === 'judge_verdict' && raw.verdict ? { type: 'judge_verdict' as const, verdict: raw.verdict } : {}),
     } satisfies SystemMessage
   }

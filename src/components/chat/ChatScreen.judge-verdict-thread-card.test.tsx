@@ -15,22 +15,24 @@
  *   Given an ordinary system banner (no verdict)
  *   Then  no card renders
  *
+ *   Given a LIVE `judge_verdict` WS frame carrying `session_id` (scope=task
+ *     or scope=goal, live-thread-card fix, 2026-09-14)
+ *   When  handleFrame processes it with Verbose chat ON
+ *   Then  exactly one JudgeVerdictThreadCard renders, with no reload needed
+ *
  * Harness mirrors ChatScreen.goal-outcome.test.tsx: jsdom has no
  * ResizeObserver, so ChatScreen uses the PlainMessageList path and every
  * system message renders through VirtualSystemMessageRow or, for a
  * judge_verdict entry, JudgeVerdictThreadCard.
  *
- * NOTE on scope (see the investigation report accompanying this change):
- * unlike goal_outcome, the live/replay `JudgeVerdictFrame` WS push carries
- * NO `session_id` (contracts/components/schemas/JudgeVerdictFrame.yaml) —
- * it is a deliberately GLOBAL frame (chat.ts's `SESSION_SCOPED_FRAME_TYPES`
- * comment, and the dedicated `chat.judge-verdict-frame.test.ts` coverage),
- * fed only into `useJudgeActivityStore` for the ActivityPanel. There is no
- * safe (non-guessing) way for the SPA to route it into a specific chat
- * thread's message list without a contract change adding a session
- * correlator — so this file covers only the REST cold-load carrier, the
- * one path that genuinely can (and, after this fix, does) populate the
- * thread card.
+ * Scope note: the original version of this file covered only the REST
+ * cold-load carrier, because the live/replay `JudgeVerdictFrame` WS push
+ * used to carry NO `session_id` at all (a deliberately GLOBAL frame, fed
+ * only into `useJudgeActivityStore`). The frame now OPTIONALLY carries
+ * `session_id` for scope=task/scope=goal
+ * (contracts/components/schemas/JudgeVerdictFrame.yaml) — this file now
+ * also covers the live path; `chat.judge-verdict-frame.test.ts` covers the
+ * store-level frame→card/panel routing and live-vs-replay de-dup in detail.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -298,6 +300,38 @@ describe('ChatScreen — judge verdict thread card (ADR-049 D2/D4/SD-C10)', () =
     const container = await renderScreen()
 
     expect(container.querySelector('[data-testid="judge-verdict-thread-card"]')).toBeNull()
+  })
+
+  it('renders exactly one JudgeVerdictThreadCard from a LIVE session-scoped frame, no reload needed', async () => {
+    useChatPreferencesStore.setState({ verboseChatEnabled: true })
+    // Reset the bucket to a known state (no leftover judge_verdict entries
+    // from an earlier test in this file) before dispatching the live frame
+    // — handleFrame PATCHES the bucket (withBucket merges onto whatever is
+    // already there), unlike seedBucket's full messagesById/messageOrder
+    // overwrite.
+    seedBucket([userMessage('u1', `/goal ${GOAL_TEXT}`)])
+
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'judge_verdict',
+        id: 'verdict-live-goal-1',
+        scope: 'goal',
+        session_id: SID,
+        round: 1,
+        met: true,
+        per_criterion: [{ criterion_id: 'crit-1', met: true, reason: 'confirmed by evidence' }],
+        model: 'z-ai/glm-5.3',
+        judged_at: '2026-09-14T06:29:31Z',
+        judge_agent_id: 'judge',
+      })
+    })
+
+    const container = await renderScreen()
+
+    const cards = container.querySelectorAll('[data-testid="judge-verdict-thread-card"]')
+    expect(cards).toHaveLength(1)
+    expect(cards[0].textContent).toContain('Judge verdict — goal round 1')
+    expect(cards[0].textContent).toContain('met')
   })
 
   it('does not render a card for an ordinary system banner (no verdict)', async () => {
