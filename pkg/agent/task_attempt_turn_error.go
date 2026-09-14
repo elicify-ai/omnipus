@@ -62,9 +62,11 @@ import (
 // question here. A new attempt is not the identical request — it is a fresh
 // turn carrying a note about what went wrong (malformedToolOutputSteering).
 //
-// Known gap: the orphan-tool-markup repair ladder's exhaustion exit in
-// runTurn (loop.go) returns an UNTYPED error today, so that path does not
-// reach this rule until runTurn wraps a *common.ToolArgumentsError into it.
+// The orphan-tool-markup repair ladder's exhaustion exit in runTurn (loop.go)
+// also reaches this rule: it wraps a *common.ToolArgumentsError into the error
+// it returns (commit f363f564, UAT A-12), so an attempt that runs out of
+// markup repairs is consumed and re-dispatched rather than failing the task.
+// pkg/agent/orphan_markup_task_attempt_test.go pins that path.
 func attemptRecoverableTurnErrorCode(err error) (LLMErrorCode, bool) {
 	if err == nil {
 		return "", false

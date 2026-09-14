@@ -3400,15 +3400,19 @@ func (pe *PlanEngine) wakeOwner(p *plan.Plan, content, sourceKind string) {
 	// G3 fix wave, finding 7: resolve the owner BEFORE choosing a delivery leg.
 	// The direct-dispatch leg already refuses to run a turn for an unresolvable
 	// agent (dispatchPlanTurn pre-resolves precisely so a wake is never
-	// silently run by whichever agent happens to be default), but the notifier
-	// leg had no such guard: processSystemMessage falls back to
-	// GetDefaultAgent() when the named AsyncOriginAgentID does not resolve
-	// (loop.go), so a plan whose owner agent was deleted got its closing
-	// synthesis authored by an unrelated roster member, in that member's own
-	// persona, and delivered to the requester as the plan's answer. Agent
-	// deletion is guarded for the owners of RUNNING plans, but failPlanLocked
-	// and StopPlan both move the plan to `failed` before waking, so that guard
-	// does not cover this call.
+	// silently run by whichever agent happens to be default), and the notifier
+	// leg originally had no such guard: processSystemMessage used to fall back
+	// to GetDefaultAgent() when the named AsyncOriginAgentID did not resolve,
+	// so a plan whose owner agent was deleted got its closing synthesis
+	// authored by an unrelated roster member, in that member's own persona.
+	// Since commit e830a4d2 (UAT E-3) processSystemMessage (loop.go) no longer
+	// re-homes such a message: it discards it with a WARN and a system note in
+	// the originating session. This pre-check still earns its place — it
+	// refuses before a notify is queued at all and says so at ERROR with the
+	// plan id, instead of the wake surviving only as a generic "background
+	// update discarded" note. Agent deletion is guarded for the owners of
+	// RUNNING plans, but failPlanLocked and StopPlan both move the plan to
+	// `failed` before waking, so that guard does not cover this call.
 	//
 	// Losing the wake entirely is the better failure: it is loud (ERROR), it is
 	// what the direct leg would do anyway, and a synthesis in the wrong voice is
