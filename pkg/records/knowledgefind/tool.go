@@ -610,6 +610,27 @@ func checkFilterNodeKeys(root json.RawMessage) *RefusalError {
 // descended.
 const filterLiteralMaxDepth = 64
 
+// NormalizeFilterLiterals is D-11's literal normalization, exported for the
+// OTHER door that accepts an agent's filter: knowledge_configure's
+// create_view, which composes the filter into a saved-view definition parsed
+// by records.ParseView — a parser that, exactly like this tool's generated
+// type, reads `value` only as a string (Claude review round 3, cut list:
+// "create_view refuses numeric/boolean filter literals knowledge_find
+// accepts").
+//
+// SHARED, not mirrored: one function decides what a filter literal may look
+// like, so the two doors cannot drift apart on the question the way they
+// already did once. The caller hands over the filter as JSON bytes (however
+// it happens to hold them) and writes back what it gets — unchanged bytes
+// mean "nothing needed rewriting".
+//
+// The refusal, when one comes back, carries its own reason and remedy in
+// Error(); the calling door is expected to surface both rather than
+// paraphrase them.
+func NormalizeFilterLiterals(raw json.RawMessage, where string) (json.RawMessage, *RefusalError) {
+	return normalizeFilterLiterals(raw, where, 0)
+}
+
 // normalizeFilterLiterals rewrites one filter node — and, through `all`,
 // `any` and `not`, its children — so that every literal reaches the
 // generated type in the ONE shape it declares: `value` a string, `values` a

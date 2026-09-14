@@ -67,6 +67,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/records"
+	"github.com/elicify-ai/omnipus/pkg/records/knowledgefind"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -198,6 +199,20 @@ func parseCreateViewBindings(args map[string]any) (createViewBindings, string) {
 	b.columns = columns
 
 	b.filter = args["filter"]
+	if b.filter != nil {
+		// Claude review round 3 (cut list): D-11 taught knowledge_find's
+		// decoder to accept a number, a boolean and an IN list in `value`
+		// anywhere an agent sends JSON — and nothing here did the same, so
+		// the very shapes an agent was told knowledge_find accepts were
+		// refused at this door with ParseView's "field `value` must be text".
+		// The SAME normalizer now runs here, so both doors answer one
+		// question with one function. See normalizeCreateViewFilter.
+		normalized, ferr := normalizeCreateViewFilter(b.filter)
+		if ferr != "" {
+			return b, ferr
+		}
+		b.filter = normalized
+	}
 	b.sort = args["sort"]
 	if raw, has := args["limit"]; has {
 		b.limit = raw
@@ -213,6 +228,37 @@ func parseCreateViewBindings(args map[string]any) (createViewBindings, string) {
 // blank list element is refused rather than silently dropped: an author who
 // wrote something meant it, per the same posture mergeDeclaredType takes for
 // a declared-vs-implied conflict.
+// normalizeCreateViewFilter rewrites create_view's `filter` argument so every
+// literal in it is in the lexical string shape the saved-view parser reads —
+// through knowledgefind.NormalizeFilterLiterals, the SAME function
+// knowledge_find's decoder runs (D-11), so the two doors accept the same
+// shapes by construction rather than by coincidence.
+//
+// The round trip through JSON bytes is the adapter, not a copy: the
+// normalizer speaks json.RawMessage (it preserves a number's exact digits off
+// the wire), while this tool's arguments arrive already decoded. Re-encoding
+// a decoded float is exact for every value an agent can send through a
+// tool-call argument; the normalized RESULT is a plain string again, which is
+// what marshalDefinition writes and records.ParseView reads.
+func normalizeCreateViewFilter(raw any) (any, string) {
+	enc, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Sprintf("'filter' could not be read as a filter tree (%v) — send {property, op, value} leaves under all/any/not", err)
+	}
+	normalized, r := knowledgefind.NormalizeFilterLiterals(enc, "filter")
+	if r != nil {
+		return nil, "filter: " + r.Error()
+	}
+	if string(normalized) == string(enc) {
+		return raw, "" // every literal was already lexical; keep the caller's own value
+	}
+	var back any
+	if err := json.Unmarshal(normalized, &back); err != nil {
+		return nil, fmt.Sprintf("'filter' could not be re-read after its literals were normalized (%v)", err)
+	}
+	return back, ""
+}
+
 func stringListArg(raw any, argName string) ([]string, string) {
 	switch v := raw.(type) {
 	case nil:

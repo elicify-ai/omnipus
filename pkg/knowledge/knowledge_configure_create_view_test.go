@@ -674,3 +674,94 @@ func TestKnowledgeConfigure_CreateView_NameEscapingTheViewsDir_Refused(t *testin
 	_, err = os.Stat(cvViewPath(root, "plain-invoices"))
 	require.NoError(t, err)
 }
+
+// ---------------------------------------------------------------------------
+// Filter-literal parity with knowledge_find (Claude review round 3, cut
+// list): D-11 widened the FIND decoder so a numeric or boolean literal and
+// an IN list sent in `value` are accepted anywhere an agent sends JSON —
+// but create_view composed the same filter into a view definition whose
+// parser (records.ParseView, like the find door's generated type) accepts
+// `value` only as a string. The same shapes an agent was TOLD knowledge_find
+// accepts were refused here. Both doors now share one literal normalizer.
+// ---------------------------------------------------------------------------
+
+// cvLiteralFixture builds a "ledger" record type with one property per
+// literal shape under test: a decimal (numbers), a checkbox (booleans) and
+// an enum (IN lists).
+func cvLiteralFixture(t *testing.T) (tool *ConfigureTool, ws, root string) {
+	t.Helper()
+	home, ws, root := a4Fixture(t, "kb")
+	deps, _ := a4Deps(home)
+	tool = kcTool(deps)
+
+	res := tool.Execute(a4Ctx("mia", ws), map[string]any{
+		"collection": "kb", "op": "create_record_type", "type": "ledger",
+		"definition": map[string]any{
+			"schema_version": float64(1),
+			"properties": map[string]any{
+				"amount": map[string]any{"type": "decimal"},
+				"paid":   map[string]any{"type": "checkbox"},
+				"status": map[string]any{"type": "enum", "values": []any{"draft", "sent"}},
+			},
+		},
+	})
+	require.False(t, res.IsError, "fixture record type must be created: %s", res.ForLLM)
+	return tool, ws, root
+}
+
+func TestKnowledgeConfigure_CreateView_FilterLiteralsMatchKnowledgeFind(t *testing.T) {
+	t.Run("numeric literal is accepted and written lexically", func(t *testing.T) {
+		tool, ws, root := cvLiteralFixture(t)
+		res := tool.Execute(a4Ctx("mia", ws), map[string]any{
+			"collection": "kb", "op": "create_view", "view": "big-ledgers",
+			"kind": "table", "type": "ledger",
+			"filter": map[string]any{"property": "amount", "op": ">", "value": float64(100000)},
+		})
+		require.False(t, res.IsError,
+			"knowledge_find accepts an unquoted number (D-11); create_view must accept the same shape: %s", res.ForLLM)
+		raw, err := os.ReadFile(cvViewPath(root, "big-ledgers"))
+		require.NoError(t, err)
+		require.Contains(t, string(raw), `value: "100000"`,
+			"the literal must land as the lexical string the saved-view parser reads:\n%s", raw)
+	})
+
+	t.Run("boolean literal is accepted and written lexically", func(t *testing.T) {
+		tool, ws, root := cvLiteralFixture(t)
+		res := tool.Execute(a4Ctx("mia", ws), map[string]any{
+			"collection": "kb", "op": "create_view", "view": "unpaid-ledgers",
+			"kind": "table", "type": "ledger",
+			"filter": map[string]any{"property": "paid", "op": "=", "value": false},
+		})
+		require.False(t, res.IsError, "a boolean literal must be accepted exactly as knowledge_find accepts it: %s", res.ForLLM)
+		raw, err := os.ReadFile(cvViewPath(root, "unpaid-ledgers"))
+		require.NoError(t, err)
+		require.Contains(t, string(raw), `value: "false"`, "\n%s", raw)
+	})
+
+	t.Run("IN list in value is accepted and moved to values", func(t *testing.T) {
+		tool, ws, root := cvLiteralFixture(t)
+		res := tool.Execute(a4Ctx("mia", ws), map[string]any{
+			"collection": "kb", "op": "create_view", "view": "open-ledgers",
+			"kind": "table", "type": "ledger",
+			"filter": map[string]any{"property": "status", "op": "IN", "value": []any{"draft", "sent"}},
+		})
+		require.False(t, res.IsError,
+			"the IN operand is the array D-11's own refusal tells the caller to send: %s", res.ForLLM)
+		raw, err := os.ReadFile(cvViewPath(root, "open-ledgers"))
+		require.NoError(t, err)
+		require.Contains(t, string(raw), "values:", "the array must land in `values`:\n%s", raw)
+		require.Contains(t, string(raw), "draft", raw)
+		require.Contains(t, string(raw), "sent", raw)
+	})
+
+	t.Run("an object literal is still refused, nothing written", func(t *testing.T) {
+		tool, ws, root := cvLiteralFixture(t)
+		res := tool.Execute(a4Ctx("mia", ws), map[string]any{
+			"collection": "kb", "op": "create_view", "view": "broken-ledgers",
+			"kind": "table", "type": "ledger",
+			"filter": map[string]any{"property": "amount", "op": ">", "value": map[string]any{"bad": true}},
+		})
+		require.True(t, res.IsError, "an object has no lexical form a property can hold (FR-022e): %s", res.ForLLM)
+		cvAssertFileAbsent(t, root, "broken-ledgers")
+	})
+}
