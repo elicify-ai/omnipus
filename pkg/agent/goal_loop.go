@@ -1512,14 +1512,30 @@ func (al *AgentLoop) maybeNudgeUnregisteredGoal(
 // malfunction. Deduplication is order-preserving: the first occurrence of each
 // distinct reason stays where the Judge put it, so genuinely different
 // per-criterion reasons are all still reported, in order, exactly as before.
+//
+// UAT (worker polled a verification task 174 times): a per-criterion reason
+// from a NON-judgment path — "could not verify" (unable_to_verify, the check
+// mechanism itself could not run) or criterion_unjudgeable (the Judge ran but
+// formed no judgment) — is NOT work to redo. Feeding it to the worker as an
+// unmet reason made the worker re-verify and poll the thing the JUDGE failed
+// to run. Those reasons are therefore partitioned out of the unmet list and
+// reported as one separate clause (goalJudgeCouldNotVerifyMarker), which
+// goalSteeringPrompt turns into an explicit do-not-re-verify instruction.
+// The markers are the engine's own stable reason strings
+// (judgeCouldNotVerifyReason), never a sniff of arbitrary model prose.
 func goalVerdictReasonText(v *task.JudgeVerdict) string {
 	if v == nil || len(v.PerCriterion) == 0 {
 		return "(no reason recorded)"
 	}
 	var sb strings.Builder
 	seen := make(map[string]struct{}, len(v.PerCriterion))
+	couldNotVerify := 0
 	for _, cv := range v.PerCriterion {
 		if cv.Met || cv.Reason == "" {
+			continue
+		}
+		if judgeCouldNotVerifyReason(cv.Reason) {
+			couldNotVerify++
 			continue
 		}
 		if _, dup := seen[cv.Reason]; dup {
@@ -1531,19 +1547,56 @@ func goalVerdictReasonText(v *task.JudgeVerdict) string {
 		}
 		sb.WriteString(cv.Reason)
 	}
+	if couldNotVerify > 0 {
+		if sb.Len() > 0 {
+			sb.WriteString(" ")
+		}
+		fmt.Fprintf(&sb, "(the Judge could not verify %d criterion/criteria — its own check could not run; this is not work to redo)", couldNotVerify)
+	}
 	if sb.Len() == 0 {
 		return "(no reason recorded)"
 	}
 	return sb.String()
 }
 
-// goalSteeringPrompt builds the next round's user-turn content.
+// goalJudgeCouldNotVerifyMarker is the clause goalVerdictReasonText appends
+// when unmet criteria came back via a non-judgment path. goalSteeringPrompt
+// keys its do-not-re-verify instruction on it.
+const goalJudgeCouldNotVerifyMarker = "the Judge could not verify"
+
+// judgeCouldNotVerifyReason reports whether an unmet criterion's Reason was
+// produced by a NON-judgment path rather than the Judge looking and saying no:
+// a verification mechanism that could not run (unable_to_verify — the
+// engine-stable marker appears as a prefix on prose fail-closed reasons and as
+// a parenthesised suffix on deterministic-rung reasons, so this matches it
+// anywhere), or a criterion the verifier ran on but formed no judgment for
+// (criterion_unjudgeable, always a prefix). These are the two shapes
+// summarizeVerdict partitions as "could not verify"
+// (pkg/agent/judge.go, JUDGE-FR-022); this is the per-criterion Reason
+// counterpart of that engine-tracked split, matching on the engine's own
+// reason strings — never on model prose.
+func judgeCouldNotVerifyReason(reason string) bool {
+	r := strings.TrimSpace(reason)
+	return strings.Contains(r, "unable_to_verify") || strings.HasPrefix(r, "criterion_unjudgeable")
+}
+
+// goalSteeringPrompt builds the next round's user-turn content. When the
+// reason carries the could-not-verify clause, the steer explicitly tells the
+// worker NOT to re-verify or poll — the Judge's own check failed to run, which
+// is not something the worker can fix by redoing or watching it (UAT: a
+// worker polled a verification task 174 times). Normal unmet reasons keep the
+// exact original wording.
 func goalSteeringPrompt(condition, reason string) string {
-	return fmt.Sprintf(
+	steer := fmt.Sprintf(
 		"Continue working toward the goal: %s\n\n"+
 			"The judge reviewed your last attempt and found it UNMET:\n%s\n\nKeep going.",
 		condition, reason,
 	)
+	if strings.Contains(reason, goalJudgeCouldNotVerifyMarker) {
+		steer += "\n\nThe Judge itself could not run its check for some criteria — that is not feedback about your work. " +
+			"Do not re-run, re-verify or poll any verification. Continue the goal's actual work, or state what is blocking you."
+	}
+	return steer
 }
 
 // writeGoalVerdictTranscript writes verdict as a dedicated judge_verdict
