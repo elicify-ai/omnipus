@@ -3097,11 +3097,18 @@ type ModelConfig struct {
 	Home       string `json:"workspace,omitempty"` // Home path (working directory) for CLI-based providers
 
 	// Optional optimizations
-	RPM            int            `json:"rpm,omitempty"`              // Requests per minute limit
-	MaxTokensField string         `json:"max_tokens_field,omitempty"` // Field name for max tokens (e.g., "max_completion_tokens")
-	RequestTimeout int            `json:"request_timeout,omitempty"`
-	ThinkingLevel  string         `json:"thinking_level,omitempty"` // Extended thinking: off|low|medium|high|xhigh|adaptive
-	ExtraBody      map[string]any `json:"extra_body,omitempty"`     // Additional fields to inject into request body
+	RPM            int    `json:"rpm,omitempty"`              // Requests per minute limit
+	MaxTokensField string `json:"max_tokens_field,omitempty"` // Field name for max tokens (e.g., "max_completion_tokens")
+	RequestTimeout int    `json:"request_timeout,omitempty"`
+	// StreamStallTimeout bounds how long a STREAMING call for this model may
+	// receive no bytes of any kind before it is aborted as a provider stall,
+	// in seconds (founder decision 2026-09-14). 0/negative = the shipped
+	// default (DefaultStreamStallTimeoutSeconds). NOT a wall-clock limit: a
+	// call that keeps streaming, however slowly, is never cut. Applies to the
+	// streaming providers only; non-streaming calls stay under RequestTimeout.
+	StreamStallTimeout int            `json:"stream_stall_timeout,omitempty"`
+	ThinkingLevel      string         `json:"thinking_level,omitempty"` // Extended thinking: off|low|medium|high|xhigh|adaptive
+	ExtraBody          map[string]any `json:"extra_body,omitempty"`     // Additional fields to inject into request body
 
 	// APIKeyRef references a named credential in credentials.json (e.g. "ANTHROPIC_API_KEY").
 	// At runtime the system resolves the reference, decrypts the value, and injects it
@@ -3140,6 +3147,22 @@ func (c *ModelConfig) APIKey() string {
 		return ""
 	}
 	return os.Getenv(c.APIKeyRef)
+}
+
+// DefaultStreamStallTimeoutSeconds is the shipped per-model default for
+// ModelConfig.StreamStallTimeout: five minutes of total streaming silence
+// before a provider call is aborted as a stall.
+const DefaultStreamStallTimeoutSeconds = 300
+
+// EffectiveStreamStallTimeout resolves the streaming silence limit for this
+// model row: the row's own StreamStallTimeout when >= 1 second, otherwise the
+// shipped default. Follows the Effective* resolver convention (see
+// planning.go); safe on a zero-value ModelConfig.
+func (c *ModelConfig) EffectiveStreamStallTimeout() time.Duration {
+	if c != nil && c.StreamStallTimeout >= 1 {
+		return time.Duration(c.StreamStallTimeout) * time.Second
+	}
+	return time.Duration(DefaultStreamStallTimeoutSeconds) * time.Second
 }
 
 // ModelConfig.AuthMethod closed set (ADR-068 FR-003, X-25). These mirror the

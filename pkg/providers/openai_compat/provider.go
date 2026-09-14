@@ -31,11 +31,12 @@ type (
 )
 
 type Provider struct {
-	apiKey         string
-	apiBase        string
-	maxTokensField string // Field name for max tokens (e.g., "max_completion_tokens" for o1/glm models)
-	httpClient     *http.Client
-	extraBody      map[string]any // Additional fields to inject into request body
+	apiKey             string
+	apiBase            string
+	maxTokensField     string // Field name for max tokens (e.g., "max_completion_tokens" for o1/glm models)
+	httpClient         *http.Client
+	extraBody          map[string]any // Additional fields to inject into request body
+	streamStallTimeout time.Duration  // streaming silence limit; 0 = common.DefaultStreamStallTimeout
 }
 
 type Option func(*Provider)
@@ -60,6 +61,27 @@ func WithExtraBody(extraBody map[string]any) Option {
 	return func(p *Provider) {
 		p.extraBody = extraBody
 	}
+}
+
+// WithStreamStallTimeout sets the streaming silence limit (founder decision
+// 2026-09-14): a ChatStream call receiving no bytes of any kind for this long
+// is aborted with common.ErrStreamStalled. Non-positive falls back to
+// common.DefaultStreamStallTimeout. NOT a wall-clock limit — a stream that
+// keeps delivering, however slowly, is never cut.
+func WithStreamStallTimeout(d time.Duration) Option {
+	return func(p *Provider) {
+		if d > 0 {
+			p.streamStallTimeout = d
+		}
+	}
+}
+
+// effectiveStreamStallTimeout resolves the silence limit for this provider.
+func (p *Provider) effectiveStreamStallTimeout() time.Duration {
+	if p.streamStallTimeout > 0 {
+		return p.streamStallTimeout
+	}
+	return common.DefaultStreamStallTimeout
 }
 
 func NewProvider(apiKey, apiBase, proxy string, opts ...Option) (*Provider, error) {
@@ -255,15 +277,30 @@ func (p *Provider) ChatStream(
 		resp.Body.Close()
 	}()
 
-	return parseStreamResponse(ctx, resp.Body, onChunk, onProgress)
+	// Silence check (founder decision 2026-09-14): abort this call when
+	// NOTHING has arrived for the configured limit. The monitor's clock is
+	// re-armed by the parser on every consumed SSE event (parseStreamResponse
+	// holds the arm fn), so any byte of any kind — content, tool-call delta,
+	// reasoning, keep-alive — keeps a slow stream alive. This is not a
+	// wall-clock limit.
+	stall := p.effectiveStreamStallTimeout()
+	watch := common.WatchStreamStall(ctx, func() { _ = resp.Body.Close() }, stall)
+	defer watch.Stop()
+
+	return parseStreamResponse(ctx, resp.Body, onChunk, onProgress, watch)
 }
 
-// parseStreamResponse parses an OpenAI-compatible SSE stream.
+// parseStreamResponse parses an OpenAI-compatible SSE stream. watch, when
+// non-nil, is re-armed after EVERY consumed event (data line, comment,
+// [DONE], even a malformed one) so the caller's stall monitor restarts its
+// silence clock — any byte of any kind counts as the provider still
+// responding.
 func parseStreamResponse(
 	ctx context.Context,
 	reader io.Reader,
 	onChunk func(accumulated string),
 	onProgress protocoltypes.OnToolCallProgress,
+	watch *common.StreamStallWatch,
 ) (*LLMResponse, error) {
 	var textContent strings.Builder
 	var finishReason string
@@ -287,6 +324,11 @@ func parseStreamResponse(
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+
+		// Every line the scanner delivers is a byte from the provider: even a
+		// comment, a keep-alive, or a malformed chunk proves the connection is
+		// alive. Re-arm the stall clock before looking at the content.
+		watch.Arm()
 
 		line := scanner.Text()
 
@@ -413,6 +455,17 @@ func parseStreamResponse(
 		// transient stream reset and retrying a request the caller already abandoned.
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
+		}
+		// A body-closed read error while the context is still alive is EITHER
+		// our stall monitor aborting a fully silent stream (founder decision
+		// 2026-09-14) or a genuine server-side reset — the same bytes carry
+		// both. Fired() is the only honest discriminator: it is set by our own
+		// monitor just before it closes the body. Only then report the typed
+		// stall error so callers classify it as a retryable provider fault
+		// rather than a transient reset; a server drop keeps its historical
+		// streaming-read-error classification.
+		if watch.Fired() && common.IsBodyClosedStreamError(err) {
+			return nil, common.NewStallError(watch.SilentFor())
 		}
 		return nil, fmt.Errorf("streaming read error: %w", err)
 	}

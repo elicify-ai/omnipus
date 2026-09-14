@@ -194,6 +194,21 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 		return nil
 	}
 
+	// A stall-aborted stream (founder decision 2026-09-14) is a transient
+	// transport-class fault: the provider had a live connection and went
+	// mute. Classified as FailoverTimeout so the agent loop's existing
+	// inline retry (the only reason it retries inline) applies, exactly like
+	// a connection drop. Checked before substring matching because the
+	// sentinel's wording need not contain any classifier keyword.
+	if errors.Is(err, common.ErrStreamStalled) {
+		return &FailoverError{
+			Reason:   FailoverTimeout,
+			Provider: provider,
+			Model:    model,
+			Wrapped:  err,
+		}
+	}
+
 	msg := strings.ToLower(err.Error())
 
 	// Image dimension/size errors: non-retriable, non-fallback.

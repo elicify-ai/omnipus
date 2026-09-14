@@ -1757,6 +1757,10 @@ components:
         network:
           message: "We couldn’t reach the model provider. Check your internet connection and retry."
           attribution: ambiguous
+        provider_stalled:
+          # Kept in lockstep with contracts/components/schemas/LLMError.yaml.
+          message: "The model provider stopped responding: nothing arrived for 5 minutes (or the silence limit set for this provider), so the call was ended. Retry — if it keeps happening, open Verbose chat for details."
+          attribution: provider
         content_policy:
           message: "The model provider blocked this request under its content policy. Try rephrasing to remove the flagged content."
           attribution: provider
@@ -1814,6 +1818,7 @@ components:
             - provider_auth_failed
             - rate_limited
             - network
+            - provider_stalled
             - content_policy
             - context_too_long
             - tool_args
@@ -1910,6 +1915,10 @@ components:
         network:
           message: "We couldn’t reach the model provider. Check your internet connection and retry."
           attribution: ambiguous
+        provider_stalled:
+          # Kept in lockstep with contracts/components/schemas/LLMError.yaml.
+          message: "The model provider stopped responding: nothing arrived for 5 minutes (or the silence limit set for this provider), so the call was ended. Retry — if it keeps happening, open Verbose chat for details."
+          attribution: provider
         content_policy:
           message: "The model provider blocked this request under its content policy. Try rephrasing to remove the flagged content."
           attribution: provider
@@ -1967,6 +1976,7 @@ components:
             - provider_auth_failed
             - rate_limited
             - network
+            - provider_stalled
             - content_policy
             - context_too_long
             - tool_args

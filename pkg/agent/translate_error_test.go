@@ -332,6 +332,7 @@ func allClassifierCodes() []LLMErrorCode {
 		CodeProviderAuthFailed,
 		CodeRateLimited,
 		CodeNetwork,
+		CodeProviderStalled,
 		CodeContentPolicy,
 		CodeContextTooLong,
 		CodeToolArgs,

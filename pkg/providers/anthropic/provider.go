@@ -4,7 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -30,9 +34,10 @@ const (
 )
 
 type Provider struct {
-	client      *anthropic.Client
-	tokenSource func() (string, error)
-	baseURL     string
+	client             *anthropic.Client
+	tokenSource        func() (string, error)
+	baseURL            string
+	streamStallTimeout time.Duration // streaming silence limit; 0 = common.DefaultStreamStallTimeout
 }
 
 // SupportsThinking implements providers.ThinkingCapable.
@@ -52,6 +57,26 @@ func NewProviderWithBaseURL(token, apiBase string) *Provider {
 		client:  &client,
 		baseURL: baseURL,
 	}
+}
+
+// WithStreamStallTimeout sets the streaming silence limit on this provider
+// (founder decision 2026-09-14): a ChatStream call receiving no events of any
+// kind for this long is aborted with common.ErrStreamStalled. Non-positive
+// falls back to common.DefaultStreamStallTimeout. NOT a wall-clock limit — a
+// stream that keeps delivering, however slowly, is never cut.
+func (p *Provider) WithStreamStallTimeout(d time.Duration) *Provider {
+	if d > 0 {
+		p.streamStallTimeout = d
+	}
+	return p
+}
+
+// effectiveStreamStallTimeout resolves the silence limit for this provider.
+func (p *Provider) effectiveStreamStallTimeout() time.Duration {
+	if p.streamStallTimeout > 0 {
+		return p.streamStallTimeout
+	}
+	return common.DefaultStreamStallTimeout
 }
 
 func NewProviderWithClient(client *anthropic.Client) *Provider {
@@ -160,6 +185,13 @@ func (p *Provider) chatStreaming(
 // than by decoding delta union types. That keeps this robust across SDK
 // revisions: whatever shape the deltas take, the accumulated content blocks
 // are the same ones parseResponse already reads.
+//
+// Silence check (founder decision 2026-09-14): a stream that delivers no
+// BYTE for p's silence limit is aborted with common.ErrStreamStalled. The
+// clock re-arms on every byte read off the response body (middleware below),
+// not on parsed events — the SDK swallows Anthropic's keep-alive pings
+// internally (Stream.Next's "ping" case), so event-level arming would
+// misread a ping-only stream as silent.
 func (p *Provider) streamWithCallbacks(
 	ctx context.Context,
 	params anthropic.MessageNewParams,
@@ -167,8 +199,38 @@ func (p *Provider) streamWithCallbacks(
 	onChunk func(accumulated string),
 	onProgress protocoltypes.OnToolCallProgress,
 ) (*LLMResponse, error) {
-	stream := p.client.Messages.NewStreaming(ctx, params, opts...)
+	stall := p.effectiveStreamStallTimeout()
+
+	// stallArmer hands the monitor's arm fn to the body-wrapping middleware
+	// without an ordering dependency: the middleware runs inside
+	// NewStreaming, before the monitor exists, so the cell is filled
+	// immediately after the stream is created and every subsequent Read
+	// re-arms the clock. Reads that race the fill simply skip one arm.
+	var armer stallBodyArmer
+	streamOpts := opts
+	if stall > 0 {
+		streamOpts = append(append([]option.RequestOption{}, opts...),
+			option.WithMiddleware(func(req *http.Request, next func(*http.Request) (*http.Response, error)) (*http.Response, error) {
+				resp, err := next(req)
+				if err != nil || resp == nil || resp.Body == nil {
+					return resp, err
+				}
+				// Method value, bound to &armer: reads made before the monitor
+				// exists find armer.arm nil and skip; every later read re-arms.
+				resp.Body = &armReader{ReadCloser: resp.Body, onByte: armer.onByte}
+				return resp, nil
+			}))
+	}
+
+	stream := p.client.Messages.NewStreaming(ctx, params, streamOpts...)
 	defer stream.Close()
+
+	var watch *common.StreamStallWatch
+	if stall > 0 {
+		watch = common.WatchStreamStall(ctx, func() { _ = stream.Close() }, stall)
+		defer watch.Stop()
+		armer.set(watch.Arm)
+	}
 
 	var msg anthropic.Message
 	var lastTextLen int
@@ -262,10 +324,58 @@ func (p *Provider) streamWithCallbacks(
 		}
 	}
 	if err := stream.Err(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		// Fired() (set by our own monitor just before it closes the stream)
+		// is what distinguishes our abort of a fully silent stream from a
+		// genuine server-side drop, which surfaces as the same read error.
+		if watch.Fired() {
+			return nil, common.NewStallError(stall)
+		}
 		return nil, fmt.Errorf("claude API call: %w", err)
 	}
 
 	return parseResponse(&msg)
+}
+
+// stallBodyArmer is the late-bound cell connecting the stall monitor's re-arm
+// function to the response-body middleware (see streamWithCallbacks).
+type stallBodyArmer struct {
+	mu  sync.Mutex
+	arm func()
+}
+
+func (a *stallBodyArmer) set(arm func()) {
+	a.mu.Lock()
+	a.arm = arm
+	a.mu.Unlock()
+}
+
+// onByte re-arms the silence clock. Called after every successful Read of the
+// response body; safe concurrently with set.
+func (a *stallBodyArmer) onByte() {
+	a.mu.Lock()
+	arm := a.arm
+	a.mu.Unlock()
+	if arm != nil {
+		arm()
+	}
+}
+
+// armReader wraps the response body so every byte delivered re-arms the stall
+// monitor — pings, comments, and events alike.
+type armReader struct {
+	io.ReadCloser
+	onByte func()
+}
+
+func (r *armReader) Read(p []byte) (int, error) {
+	n, err := r.ReadCloser.Read(p)
+	if n > 0 && r.onByte != nil {
+		r.onByte()
+	}
+	return n, err
 }
 
 func (p *Provider) GetDefaultModel() string {

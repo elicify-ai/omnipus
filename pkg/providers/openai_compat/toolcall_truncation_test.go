@@ -64,8 +64,7 @@ func TestParseStreamResponse_RefusesTruncatedToolCallArguments(t *testing.T) {
 			stream := toolArgsOnlyStream("write_file", tc.argChunks)
 
 			resp, err := parseStreamResponse(
-				t.Context(), strings.NewReader(stream), nil, nil,
-			)
+				t.Context(), strings.NewReader(stream), nil, nil, nil)
 
 			if err == nil {
 				t.Fatalf("stream with truncated tool-call arguments was accepted; "+
@@ -87,7 +86,7 @@ func TestParseStreamResponse_RefusesTruncatedToolCallArguments(t *testing.T) {
 func TestParseStreamResponse_NoStandInKeyReachesDispatch(t *testing.T) {
 	stream := toolArgsOnlyStream("write_file", []string{`{"query`})
 
-	resp, _ := parseStreamResponse(t.Context(), strings.NewReader(stream), nil, nil)
+	resp, _ := parseStreamResponse(t.Context(), strings.NewReader(stream), nil, nil, nil)
 	if resp == nil {
 		return // refused outright, which is the intended outcome
 	}
@@ -117,7 +116,7 @@ func TestToolArgumentsError_CarriesUsage(t *testing.T) {
 	b.WriteString(`data: {"choices":[{"delta":{},"finish_reason":"length"}],"usage":{"prompt_tokens":100,"completion_tokens":50,"total_tokens":150}}` + "\n\n")
 	b.WriteString("data: [DONE]\n\n")
 
-	resp, err := parseStreamResponse(t.Context(), strings.NewReader(b.String()), nil, nil)
+	resp, err := parseStreamResponse(t.Context(), strings.NewReader(b.String()), nil, nil, nil)
 	if err == nil {
 		t.Fatalf("expected the truncated call to be refused, got response: %+v", resp)
 	}
@@ -168,8 +167,7 @@ func TestParseStreamResponse_AcceptsZeroParameterToolCall(t *testing.T) {
 			stream := toolArgsOnlyStream("list_mounts", tc.argChunks)
 
 			resp, err := parseStreamResponse(
-				t.Context(), strings.NewReader(stream), nil, nil,
-			)
+				t.Context(), strings.NewReader(stream), nil, nil, nil)
 			if err != nil {
 				t.Fatalf("zero-parameter tool call must still stream cleanly, got: %v", err)
 			}

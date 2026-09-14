@@ -10,6 +10,7 @@ package common
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,10 +18,13 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/http2"
 
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
@@ -39,6 +43,155 @@ type (
 )
 
 const DefaultRequestTimeout = 120 * time.Second
+
+// DefaultStreamStallTimeout is how long a STREAMING provider call may receive
+// no bytes of any kind — no content, no tool-call delta, no reasoning, no
+// provider keep-alive — before it is aborted as a provider stall (founder
+// decision 2026-09-14, UAT E-15c). Deliberately NOT a wall-clock limit: a call
+// that keeps streaming, however slowly, is never cut. Configurable per model
+// row via `model_list[].stream_stall_timeout` (seconds).
+const DefaultStreamStallTimeout = 5 * time.Minute
+
+// ErrStreamStalled is the sentinel for a streaming call the stall monitor
+// ended because nothing at all arrived for the configured silence limit. It
+// flows through the normal provider-error classification as a retryable,
+// provider-attributed fault (network-class), never as a turn timeout.
+var ErrStreamStalled = errors.New("provider stream stalled: no data received for the silence limit")
+
+// StallError carries the sentinel together with how long the stream had been
+// silent when the monitor fired, so the operator-facing message can state the
+// real number. Implements error; match with errors.Is(err, ErrStreamStalled).
+type StallError struct {
+	// SilentFor is the configured silence limit that fired.
+	SilentFor time.Duration
+	// FirstByteAt is when the stream last delivered data before going silent
+	// (zero when it never delivered anything).
+	LastData time.Time
+}
+
+// Error implements error. The wording is operator-facing and deliberately
+// plain: "the model provider stopped responding for 5m0s".
+func (e *StallError) Error() string {
+	return fmt.Sprintf("%s (%s)", ErrStreamStalled.Error(), e.SilentFor)
+}
+
+// Unwrap makes errors.Is(err, ErrStreamStalled) work through every wrap.
+func (e *StallError) Unwrap() error { return ErrStreamStalled }
+
+// NewStallError builds the typed stall error stamped with the limit that fired.
+func NewStallError(silentFor time.Duration) *StallError {
+	return &StallError{SilentFor: silentFor}
+}
+
+// IsBodyClosedStreamError reports whether an error returned by a streaming
+// body read is the shape "the read was aborted by closing the body/connection
+// under it" — which is what our own context watchdog or stall monitor
+// produces, on both HTTP/1.1 and HTTP/2. A REMOTE close does not look like
+// this (it surfaces as io.EOF or "connection reset by peer"), so when the
+// caller's context is still alive a match here means WE closed it — i.e. the
+// stall monitor fired.
+func IsBodyClosedStreamError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "response body closed") ||
+		strings.Contains(lower, "read on closed response body") ||
+		strings.Contains(lower, "use of closed network connection")
+}
+
+// StreamStallWatch is one provider call's silence monitor, as returned by
+// WatchStreamStall. Arm (re)starts the silence clock and must be invoked by
+// the consumer whenever it observes activity — a parsed SSE event, a raw byte
+// read, whatever it already consumes; Stop disarms the monitor and must be
+// called on every exit path; Fired reports whether the monitor itself aborted
+// the call, which is how the reader distinguishes ITS OWN abort from a
+// genuine server-side drop (both surface as a body-closed read error).
+type StreamStallWatch struct {
+	arm       func()
+	stop      func()
+	fired     func() bool
+	silentFor time.Duration
+}
+
+// Arm (re)starts the silence clock. Cheap; called per consumed event.
+func (w *StreamStallWatch) Arm() {
+	if w != nil && w.arm != nil {
+		w.arm()
+	}
+}
+
+// Stop disarms the monitor and releases its goroutine. Idempotent.
+func (w *StreamStallWatch) Stop() {
+	if w != nil && w.stop != nil {
+		w.stop()
+	}
+}
+
+// Fired reports whether this monitor aborted the call (true from just before
+// it closes the body onward). A nil watch never fired.
+func (w *StreamStallWatch) Fired() bool {
+	return w != nil && w.fired != nil && w.fired()
+}
+
+// SilentFor is the configured silence limit.
+func (w *StreamStallWatch) SilentFor() time.Duration {
+	if w == nil {
+		return 0
+	}
+	return w.silentFor
+}
+
+// WatchStreamStall arms the streaming stall monitor for one provider call: a
+// goroutine that invokes closeBody if Arm has not been invoked for silentFor,
+// unblocked early by the returned watch's Stop (call it on every exit path —
+// normal end of stream, error, and caller cancellation).
+//
+// It fires ONLY on total silence. The monitor does not read or parse
+// anything: the CALLER re-arms the clock whenever it observes activity. That
+// split keeps the monitor byte-agnostic: SSE comments, provider keep-alive
+// pings, and every delta shape reset it equally.
+//
+// Concurrency: closeBody must be safe to call concurrently with the blocked
+// read it is meant to unblock (net/http response bodies and the Anthropic SDK
+// stream both document/exhibit this — Close unblocks a pending Read).
+func WatchStreamStall(ctx context.Context, closeBody func(), silentFor time.Duration) *StreamStallWatch {
+	if closeBody == nil || silentFor <= 0 {
+		return &StreamStallWatch{}
+	}
+	timer := time.NewTimer(silentFor)
+	done := make(chan struct{})
+	var fired atomic.Bool
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-timer.C:
+			logger.WarnCF("providers", "stream stall monitor fired: no data for the silence limit; aborting provider call",
+				map[string]any{"silent_for": silentFor.String()})
+			fired.Store(true)
+			closeBody()
+		case <-done:
+		}
+	}()
+	var once sync.Once
+	return &StreamStallWatch{
+		arm: func() {
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(silentFor)
+		},
+		stop: func() {
+			timer.Stop()
+			once.Do(func() { close(done) })
+		},
+		fired:     fired.Load,
+		silentFor: silentFor,
+	}
+}
 
 // NewHTTPClient creates an *http.Client with an optional proxy and the default timeout.
 // Returns an error if proxy is non-empty and cannot be parsed as a URL.

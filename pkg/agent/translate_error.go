@@ -79,6 +79,16 @@ const (
 	// CodeNetwork: 408 / 5xx / timeout / connection drop. Retryable.
 	CodeNetwork LLMErrorCode = "network"
 
+	// CodeProviderStalled (founder decision 2026-09-14, UAT E-15c): a
+	// STREAMING provider call was aborted because nothing at all — no
+	// content, tool-call, reasoning, or keep-alive bytes — arrived for the
+	// silence limit (`model_list[].stream_stall_timeout`, default 300 s).
+	// Distinct from CodeNetwork (we HAD a connection; it just went mute) and
+	// from CodeTurnTimedOut (no wall clock is involved — a stream that keeps
+	// delivering, however slowly, is never cut). Carried by
+	// common.ErrStreamStalled. Attribution `provider`, retryable.
+	CodeProviderStalled LLMErrorCode = "provider_stalled"
+
 	// CodeContentPolicy: provider flagged content moderation / safety.
 	CodeContentPolicy LLMErrorCode = "content_policy"
 
@@ -755,6 +765,27 @@ func TranslateTurnError(err error) LLMError {
 	if code, ok := typedExitCode(err); ok {
 		return typedExitError(code, err)
 	}
+	// Founder decision 2026-09-14: a streaming call aborted for total
+	// silence (common.ErrStreamStalled) is its own typed code, before any
+	// substring classifier can misread the sentinel's wording. Checked early
+	// for the same reason as the ToolArgumentsError branch below: the typed
+	// value carries information a string match cannot.
+	if errors.Is(err, common.ErrStreamStalled) {
+		code := CodeProviderStalled
+		var se *common.StallError
+		if errors.As(err, &se) && se.SilentFor > 0 {
+			// The curated copy names the shipped default; the Detail carries
+			// the operator's actual limit for Verbose chat.
+			return LLMError{
+				Code:      code,
+				Message:   defaultUserMessage(code),
+				Retryable: isRetryable(code),
+				Detail: buildDetail(nil, fmt.Sprintf(
+					"the model provider stopped responding for %s", se.SilentFor)),
+			}
+		}
+		return typedExitError(code, err)
+	}
 	if errors.Is(err, ErrAgentNotWorkspaceMember) {
 		return LLMError{
 			Code:      CodeAgentNotConfigured,
@@ -906,7 +937,7 @@ func typedExitError(code LLMErrorCode, cause error) LLMError {
 // it); an unrecoverable context is not (retrying re-runs the same overflow).
 func isRetryable(code LLMErrorCode) bool {
 	switch code {
-	case CodeRateLimited, CodeNetwork, CodeTurnTimedOut:
+	case CodeRateLimited, CodeNetwork, CodeProviderStalled, CodeTurnTimedOut:
 		return true
 	}
 	// CodeToolCallTruncated falls through to false with everything else:

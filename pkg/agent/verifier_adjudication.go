@@ -2041,8 +2041,11 @@ func goalForJudgeRetryNotice(in JudgeCriteriaInput) *goal.Goal {
 // judgeRetryCause renders a transient Judge turn failure in plain language —
 // never the raw provider error (ADR-051 §RD5 CRIT-001).
 func judgeRetryCause(callErr error) string {
-	if TranslateTurnError(callErr).Code == CodeTurnTimedOut {
+	switch TranslateTurnError(callErr).Code {
+	case CodeTurnTimedOut:
 		return "its model did not answer in time"
+	case CodeProviderStalled:
+		return "its model stopped responding mid-call"
 	}
 	return "its model returned an error"
 }
