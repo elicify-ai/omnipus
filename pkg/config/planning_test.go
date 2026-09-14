@@ -18,7 +18,6 @@ func TestPlanningConfig_DefaultsAndValidation(t *testing.T) {
 			t.Fatalf("expected nil for all-zero Planning config, got %v", err)
 		}
 		want := PlanningConfig{
-			TaskMaxAttempts:         DefaultTaskMaxAttempts,
 			GoalMaxRounds:           DefaultGoalMaxRounds,
 			PlanJudgeMaxRounds:      DefaultPlanJudgeMaxRounds,
 			LoopMaxRuns:             DefaultLoopMaxRuns,
@@ -38,7 +37,6 @@ func TestPlanningConfig_DefaultsAndValidation(t *testing.T) {
 			name   string
 			mutate func(*PlanningConfig)
 		}{
-			{"TaskMaxAttempts", func(p *PlanningConfig) { p.TaskMaxAttempts = -1 }},
 			{"GoalMaxRounds", func(p *PlanningConfig) { p.GoalMaxRounds = -1 }},
 			{"PlanJudgeMaxRounds", func(p *PlanningConfig) { p.PlanJudgeMaxRounds = -1 }},
 			{"LoopMaxRuns", func(p *PlanningConfig) { p.LoopMaxRuns = -1 }},
@@ -49,7 +47,6 @@ func TestPlanningConfig_DefaultsAndValidation(t *testing.T) {
 			t.Run(c.name, func(t *testing.T) {
 				cfg := minimalValidConfig()
 				cfg.Planning = PlanningConfig{
-					TaskMaxAttempts:      DefaultTaskMaxAttempts,
 					GoalMaxRounds:        DefaultGoalMaxRounds,
 					PlanJudgeMaxRounds:   DefaultPlanJudgeMaxRounds,
 					LoopMaxRuns:          DefaultLoopMaxRuns,
@@ -109,7 +106,6 @@ func TestPlanningConfig_DefaultsAndValidation(t *testing.T) {
 	t.Run("VerifierWindowTokens negative rejected", func(t *testing.T) {
 		cfg := minimalValidConfig()
 		cfg.Planning = PlanningConfig{
-			TaskMaxAttempts:      DefaultTaskMaxAttempts,
 			GoalMaxRounds:        DefaultGoalMaxRounds,
 			PlanJudgeMaxRounds:   DefaultPlanJudgeMaxRounds,
 			LoopMaxRuns:          DefaultLoopMaxRuns,
@@ -139,7 +135,6 @@ func TestPlanningConfig_DefaultsAndValidation(t *testing.T) {
 	t.Run("GoalCompileWindowTokens negative rejected", func(t *testing.T) {
 		cfg := minimalValidConfig()
 		cfg.Planning = PlanningConfig{
-			TaskMaxAttempts:         DefaultTaskMaxAttempts,
 			GoalMaxRounds:           DefaultGoalMaxRounds,
 			PlanJudgeMaxRounds:      DefaultPlanJudgeMaxRounds,
 			LoopMaxRuns:             DefaultLoopMaxRuns,
@@ -160,7 +155,6 @@ func TestPlanningConfig_DefaultsAndValidation(t *testing.T) {
 			t.Fatalf("DefaultConfig() must pass validateBootConfig, got %v", err)
 		}
 		want := PlanningConfig{
-			TaskMaxAttempts:         DefaultTaskMaxAttempts,
 			GoalMaxRounds:           DefaultGoalMaxRounds,
 			PlanJudgeMaxRounds:      DefaultPlanJudgeMaxRounds,
 			LoopMaxRuns:             DefaultLoopMaxRuns,
@@ -183,26 +177,26 @@ func TestPlanningConfig_DefaultsAndValidation(t *testing.T) {
 // config itself is zero-valued).
 func TestBounds_PerEntityOverridesGlobal(t *testing.T) {
 	global := PlanningConfig{
-		TaskMaxAttempts:    3,
+		GoalMaxRounds:      3,
 		PlanJudgeMaxRounds: 20,
 		IdleExpiryDays:     7,
 	}
 
-	t.Run("TaskMaxAttempts override wins", func(t *testing.T) {
+	t.Run("task max_attempts override wins", func(t *testing.T) {
 		override := 10
-		if got := global.EffectiveTaskMaxAttempts(&override); got != 10 {
+		if got := global.EffectiveTaskMaxAttempts(&override, 0); got != 10 {
 			t.Fatalf("EffectiveTaskMaxAttempts(override=10) = %d, want 10", got)
 		}
 	})
-	t.Run("TaskMaxAttempts nil falls back to global", func(t *testing.T) {
-		if got := global.EffectiveTaskMaxAttempts(nil); got != 3 {
-			t.Fatalf("EffectiveTaskMaxAttempts(nil) = %d, want global 3", got)
+	t.Run("task max_attempts nil falls back to the global goal try limit", func(t *testing.T) {
+		if got := global.EffectiveTaskMaxAttempts(nil, 0); got != 3 {
+			t.Fatalf("EffectiveTaskMaxAttempts(nil) = %d, want global goal try limit 3", got)
 		}
 	})
-	t.Run("TaskMaxAttempts invalid (<1) override falls back to global", func(t *testing.T) {
+	t.Run("task max_attempts invalid (<1) override falls back to the global goal try limit", func(t *testing.T) {
 		override := 0
-		if got := global.EffectiveTaskMaxAttempts(&override); got != 3 {
-			t.Fatalf("EffectiveTaskMaxAttempts(override=0) = %d, want global 3", got)
+		if got := global.EffectiveTaskMaxAttempts(&override, 0); got != 3 {
+			t.Fatalf("EffectiveTaskMaxAttempts(override=0) = %d, want global goal try limit 3", got)
 		}
 	})
 
@@ -232,8 +226,8 @@ func TestBounds_PerEntityOverridesGlobal(t *testing.T) {
 
 	t.Run("zero-value global config falls back to package defaults", func(t *testing.T) {
 		var zero PlanningConfig
-		if got := zero.EffectiveTaskMaxAttempts(nil); got != DefaultTaskMaxAttempts {
-			t.Fatalf("EffectiveTaskMaxAttempts on zero config = %d, want default %d", got, DefaultTaskMaxAttempts)
+		if got := zero.EffectiveTaskMaxAttempts(nil, 0); got != DefaultGoalMaxRounds {
+			t.Fatalf("EffectiveTaskMaxAttempts on zero config = %d, want default %d", got, DefaultGoalMaxRounds)
 		}
 		if got := zero.EffectivePlanJudgeMaxRounds(nil); got != DefaultPlanJudgeMaxRounds {
 			t.Fatalf("EffectivePlanJudgeMaxRounds on zero config = %d, want default %d", got, DefaultPlanJudgeMaxRounds)
@@ -328,7 +322,6 @@ func TestGoalDefaultBudgetIsTwentyForBothOwners(t *testing.T) {
 		// field both owner kinds resolve through.
 		cfg := minimalValidConfig()
 		cfg.Planning = PlanningConfig{
-			TaskMaxAttempts:      DefaultTaskMaxAttempts,
 			GoalMaxRounds:        -1,
 			PlanJudgeMaxRounds:   DefaultPlanJudgeMaxRounds,
 			LoopMaxRuns:          DefaultLoopMaxRuns,

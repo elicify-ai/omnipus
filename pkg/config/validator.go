@@ -350,15 +350,8 @@ func validateBootConfig(cfg *Config) error {
 	// Every field, when non-zero, must be >=1; zero applies the documented
 	// default (mirrors PortRange.IsZero's default-apply pattern above).
 	// CheckTimeoutSeconds additionally has an upper bound [1, 3600].
-	if cfg.Planning.TaskMaxAttempts == 0 {
-		cfg.Planning.TaskMaxAttempts = DefaultTaskMaxAttempts
-	}
-	if cfg.Planning.TaskMaxAttempts < 1 {
-		return fmt.Errorf(
-			"config error: cfg.Planning.TaskMaxAttempts=%d must be at least 1",
-			cfg.Planning.TaskMaxAttempts,
-		)
-	}
+	// GoalMaxRounds is the ONE goal try limit for chat goals AND tasks
+	// (D-D/D-E); there is no separate task-attempts key to backfill.
 	if cfg.Planning.GoalMaxRounds == 0 {
 		cfg.Planning.GoalMaxRounds = DefaultGoalMaxRounds
 	}

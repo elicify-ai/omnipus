@@ -3,9 +3,10 @@ import { Check, X, CircleDashed, CaretDown, CaretRight } from '@phosphor-icons/r
 import type { AcceptanceCriterion, JudgeVerdict, EvidenceRecord } from '@/lib/api'
 import { EvidenceViewer } from './EvidenceViewer'
 
-// MUST track pkg/config/planning.go's `DefaultTaskMaxAttempts` (see the
-// same constant's comment in TaskCard.tsx) — it is the denominator of the
-// "attempt N/M" counter whenever `Task.max_attempts` is absent.
+// Fallback denominator of the "attempt N/M" counter, used ONLY when the
+// caller has no server-resolved maximum (`Task.effective_max_attempts`). MUST
+// track pkg/config/planning.go's `DefaultGoalMaxRounds` — the single goal try
+// limit default (see the same constant's comment in TaskCard.tsx).
 export const DEFAULT_TASK_MAX_ATTEMPTS = 20
 
 interface CriteriaVerdictListProps {
@@ -26,7 +27,7 @@ interface CriteriaVerdictListProps {
   evidence?: EvidenceRecord[]
   /** `Task.attempt_count` (contract C17) — the count of CONSUMED attempts (see `isRunning`). */
   attemptCount?: number
-  /** `Task.max_attempts`, or the inherited PlanningConfig default (20) when absent. */
+  /** `Task.effective_max_attempts` — the ceiling the server enforces for this task; the default (20) only when absent. */
   maxAttempts?: number | null
   /**
    * `task.status === 'in_progress'` — a new attempt is currently running

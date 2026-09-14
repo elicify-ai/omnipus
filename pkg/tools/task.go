@@ -680,10 +680,9 @@ type TaskCreateTool struct {
 	// goalMaxRoundsFn, when set, resolves the live single global goal-round
 	// ceiling (Settings -> Performance, D-D/D-E — one setting governs task
 	// goals and chat goals identically; there is no per-goal override) for
-	// the paired goal record this tool creates. Unwired (nil) falls back to
-	// config.DefaultGoalMaxRounds — see SetGoalMaxRoundsFn's doc comment for
-	// why an unwired accessor is a documented wiring gap, not a silent
-	// default meant to be relied on.
+	// the paired goal record this tool creates. Wired in production by
+	// pkg/agent/loop.go (registerSharedTools); unwired (nil, e.g. a bare unit
+	// test) falls back to config.DefaultGoalMaxRounds.
 	goalMaxRoundsFn func() int
 }
 
@@ -748,17 +747,13 @@ func (t *TaskCreateTool) SetPlanStore(store *plan.Store) {
 // nil), create_task falls back to config.DefaultGoalMaxRounds — the SAME
 // shipped default the config system itself falls back to
 // (PlanningConfig.EffectiveGoalMaxRounds) — rather than failing the create
-// outright, because the alternative (refusing every task creation on an
-// unwired accessor) would be a much larger regression than a task-owned
-// goal temporarily riding the shipped default until this setter is wired.
-// KNOWN GAP, reported rather than silently worked around: this wave's
-// write-set does not include pkg/agent/loop.go, which is where every other
-// Set* method on this tool (SetHome, SetPlanStore, SetBashPolicyChecker...)
-// is actually called in production — so as of this wave, nothing calls this
-// setter yet, and every task-owned goal is created with the shipped default
-// until a future wave wires `SetGoalMaxRoundsFn(func() int { return
-// al.GetConfig().Planning.EffectiveGoalMaxRounds() })` alongside the
-// existing SetHome call.
+// outright, because refusing every task creation on an unwired accessor would
+// be a much larger regression. Production wiring: pkg/agent/loop.go's
+// registerSharedTools calls this with the live goal try limit
+// (goalTryLimit), next to SetPlanStore — pinned by
+// pkg/agent/task_attempt_budget_test.go. The value written here is the
+// creation-time snapshot only; the task executor re-stamps the live value
+// when the task's run starts (TaskExecutor.activateTaskGoal).
 func (t *TaskCreateTool) SetGoalMaxRoundsFn(fn func() int) {
 	t.goalMaxRoundsFn = fn
 }
@@ -1401,9 +1396,8 @@ type TaskUpdateTool struct {
 	// SAME gate task_create uses.
 	delegationDeny func(ctx context.Context, targetAgentID string) *DelegationDenial
 	onComplete     func(*task.Task)
-	// goalMaxRoundsFn mirrors TaskCreateTool.goalMaxRoundsFn — see
-	// TaskCreateTool.SetGoalMaxRoundsFn's doc comment for the same known
-	// wiring gap. It is consulted only when update_task must CREATE a goal
+	// goalMaxRoundsFn mirrors TaskCreateTool.goalMaxRoundsFn (wired by
+	// pkg/agent/loop.go alongside it). It is consulted only when update_task must CREATE a goal
 	// record that did not exist before (a legacy task getting criteria/dod
 	// for the first time via an edit); updating an existing record never
 	// touches the budget.

@@ -83,10 +83,12 @@ describe('CriteriaVerdictList — attempt counter', () => {
   // TaskCard.goalLoopStatus.test.tsx for the full reasoning. The two SPA
   // constants are independent declarations, so each needs its own check
   // against the single backend source of truth.
-  it('DEFAULT_TASK_MAX_ATTEMPTS equals pkg/config/planning.go\'s DefaultTaskMaxAttempts', () => {
+  // The single goal try limit (founder decision 2026-09-14) retired the
+  // separate DefaultTaskMaxAttempts; the fallback tracks DefaultGoalMaxRounds.
+  it('DEFAULT_TASK_MAX_ATTEMPTS equals pkg/config/planning.go\'s DefaultGoalMaxRounds', () => {
     const go = readFileSync(PLANNING_GO, 'utf-8')
-    const m = go.match(/DefaultTaskMaxAttempts\s*=\s*(\d+)/)
-    expect(m, 'DefaultTaskMaxAttempts not found in pkg/config/planning.go').not.toBeNull()
+    const m = go.match(/DefaultGoalMaxRounds\s*=\s*(\d+)/)
+    expect(m, 'DefaultGoalMaxRounds not found in pkg/config/planning.go').not.toBeNull()
     expect(DEFAULT_TASK_MAX_ATTEMPTS).toBe(Number(m![1]))
   })
 

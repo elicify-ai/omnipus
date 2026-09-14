@@ -2823,6 +2823,10 @@ func registerSharedTools(
 			// it exists, exactly like wirePlanToolsForAgent's own create_plan/
 			// execute_plan late-binding discipline.
 			taskCreate.SetPlanStore(al.GetPlanStore())
+			// Founder decision 2026-09-14 (D-D/D-E): the paired goal record an
+			// agent-created task gets carries the LIVE Settings -> Performance
+			// goal try limit, read at create time — not the shipped default.
+			taskCreate.SetGoalMaxRoundsFn(func() int { return goalTryLimit(al) })
 			// ADR-037: the legacy boolean delegateCheck (SetDelegateChecker,
 			// backed by config.ResolveDelegationTo) is retired — the field it
 			// read no longer exists. The graph-based deny checker below is the
@@ -2877,6 +2881,9 @@ func registerSharedTools(
 			agent.Tools.RegisterReplacing(taskCreate)
 
 			taskUpdate := tools.NewTaskUpdateTool(al.taskStore)
+			// Same live goal try limit as taskCreate above, for the goal record
+			// update_task creates when a legacy task gets criteria/dod.
+			taskUpdate.SetGoalMaxRoundsFn(func() int { return goalTryLimit(al) })
 			taskUpdate.SetOnComplete(func(t *task.Task) {
 				if al.taskExecutor != nil {
 					al.taskExecutor.onTaskComplete(t)

@@ -705,6 +705,7 @@ type Task = {
   dod?: Array<AcceptanceCriterion> | undefined;
   attempt_count?: number | undefined;
   max_attempts?: (number | null) | undefined;
+  effective_max_attempts?: number | undefined;
   trigger?: TaskTrigger | undefined;
   due?: string | undefined;
   surface?: ("user" | "heartbeat") | undefined;
@@ -3235,6 +3236,7 @@ export const Task: z.ZodType<Task> = z
     dod: z.array(AcceptanceCriterion).optional(),
     attempt_count: z.number().int().gte(0).optional(),
     max_attempts: z.number().int().gte(1).nullish(),
+    effective_max_attempts: z.number().int().gte(1).optional(),
     trigger: TaskTrigger.optional(),
     due: z.string().datetime({ offset: true }).optional(),
     surface: z.enum(["user", "heartbeat"]).optional().default("user"),

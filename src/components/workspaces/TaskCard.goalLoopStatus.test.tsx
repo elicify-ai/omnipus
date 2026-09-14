@@ -82,11 +82,24 @@ describe('goalLoopStatusLabel — pure fn', () => {
   // real ceiling a perfectly healthy task renders as "attempt 7/3" — already
   // past a limit it has not reached. The only check that can fail on drift
   // reads the Go constant itself.
-  it('DEFAULT_TASK_MAX_ATTEMPTS equals pkg/config/planning.go\'s DefaultTaskMaxAttempts', () => {
+  // The single goal try limit (founder decision 2026-09-14) retired the
+  // separate DefaultTaskMaxAttempts; the fallback tracks DefaultGoalMaxRounds.
+  it('DEFAULT_TASK_MAX_ATTEMPTS equals pkg/config/planning.go\'s DefaultGoalMaxRounds', () => {
     const go = readFileSync(PLANNING_GO, 'utf-8')
-    const m = go.match(/DefaultTaskMaxAttempts\s*=\s*(\d+)/)
-    expect(m, 'DefaultTaskMaxAttempts not found in pkg/config/planning.go').not.toBeNull()
+    const m = go.match(/DefaultGoalMaxRounds\s*=\s*(\d+)/)
+    expect(m, 'DefaultGoalMaxRounds not found in pkg/config/planning.go').not.toBeNull()
     expect(DEFAULT_TASK_MAX_ATTEMPTS).toBe(Number(m![1]))
+  })
+
+  // Founder decision 2026-09-14: "Tries per goal" bounds tasks too, so the
+  // denominator is the server-resolved `effective_max_attempts` (the enforced
+  // ceiling), not `max_attempts` and not the hardcoded fallback. With the
+  // setting at 5 and no per-task override the server sends 5 and no
+  // max_attempts; the card must say 5, not 20.
+  it('renders the server-resolved effective_max_attempts, not the fallback', () => {
+    expect(
+      goalLoopStatusLabel({ attempt_count: 2, effective_max_attempts: 5, max_attempts: null, status: 'failed' }, false),
+    ).toBe('attempt 2/5')
   })
 
   it('appends "· paused" when paused is true, without incrementing the attempt (task not in_progress)', () => {
@@ -137,6 +150,17 @@ describe('TaskCard — goal-loop status affordance (FR-090)', () => {
   it('shows the IN-FLIGHT attempt (AttemptCount + 1) while the task is actively running', () => {
     render(<TaskCard task={makeTask({ attempt_count: 2, max_attempts: 3 })} onClick={() => {}} showActions={false} />)
     expect(screen.getByText('attempt 3/3')).toBeInTheDocument()
+  })
+
+  it('shows the server-resolved effective_max_attempts as the denominator', () => {
+    render(
+      <TaskCard
+        task={makeTask({ attempt_count: 2, effective_max_attempts: 5, status: 'failed' })}
+        onClick={() => {}}
+        showActions={false}
+      />,
+    )
+    expect(screen.getByText('attempt 2/5')).toBeInTheDocument()
   })
 
   it('shows nothing when attempt_count is absent (task not running a goal loop)', () => {

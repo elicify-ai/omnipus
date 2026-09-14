@@ -642,17 +642,14 @@ func DefaultConfig() *Config {
 		// config.json is self-documenting; validateBootConfig still applies
 		// the same defaults for any field an operator zeroes out later.
 		Planning: PlanningConfig{
-			TaskMaxAttempts: DefaultTaskMaxAttempts,
-			// GOAL-FR-024 (ADR-086, D-E): ONE budget for BOTH owner kinds
-			// (a task goal and a chat goal), defaulting to 20 —
-			// DefaultGoalMaxRounds already IS that one shared default
-			// (pkg/config/planning.go) and EffectiveGoalMaxRounds() already
-			// takes no override argument (GOAL-FR-025's per-goal override
-			// is RETIRED — D-E/D-K; the operator's single global
-			// Settings -> Performance value is the only budget control).
-			// This entry pre-dates this delivery; wave E6 is the one that
-			// redirects pkg/agent/task_executor.go's task-owner-kind ceiling
-			// onto this same default (GOAL-FR-026), not this wave.
+			// GOAL-FR-024 (ADR-086, D-D/D-E): ONE budget for BOTH owner kinds
+			// (a task goal and a chat goal), defaulting to 20. This is the
+			// operator's single global Settings -> Performance "goal try
+			// limit" — it bounds chat goal rounds AND task attempts
+			// (PlanningConfig.EffectiveTaskMaxAttempts falls back to it).
+			// No `task_max_attempts` is seeded: that separate key is retired
+			// (founder decision 2026-09-14) because a seeded, UI-less task
+			// ceiling silently overrode this setting for every task.
 			GoalMaxRounds:           DefaultGoalMaxRounds,
 			PlanJudgeMaxRounds:      DefaultPlanJudgeMaxRounds,
 			LoopMaxRuns:             DefaultLoopMaxRuns,

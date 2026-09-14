@@ -72,7 +72,12 @@ properties:
       can give a goal more room") are RETIRED in full. This is the ONE
       control: `Goal.max_rounds` on every goal record resolves from this
       value alone (`pkg/config/planning.go::EffectiveGoalMaxRounds`,
-      unmodified signature — NQ-2). Lives under Settings → Performance
+      unmodified signature — NQ-2), and so does every task's attempt
+      ceiling (`Task.effective_max_attempts`) unless that task carries its
+      own `max_attempts` (founder decision 2026-09-14): a task fails after
+      this many unmet attempts, exactly as a chat goal ends after this many
+      unmet rounds. A goal keeps the value in force when it started. Lives
+      under Settings → Performance
       (`src/components/settings/PerformanceSection.tsx`, GOAL-FR-045) — no
       new settings tab. Always present in responses.
     example: 20

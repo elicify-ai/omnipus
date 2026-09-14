@@ -6043,7 +6043,7 @@ export interface components {
              */
             tools_on_demand?: boolean;
             /**
-             * @description GOAL-FR-024/FR-045, MV-1, D-D/D-E (2026-09-11, operator-ratified) — the SINGLE, GLOBAL adjudication-round ceiling for EVERY goal, task and chat identically. Default 20. THERE IS NO PER-GOAL OVERRIDE anywhere in this delivery — GOAL-FR-046 ("a human-editable budget control for a goal's per-goal override") and GOAL-US-8 ("an operator can give a goal more room") are RETIRED in full. This is the ONE control: `Goal.max_rounds` on every goal record resolves from this value alone (`pkg/config/planning.go::EffectiveGoalMaxRounds`, unmodified signature — NQ-2). Lives under Settings → Performance (`src/components/settings/PerformanceSection.tsx`, GOAL-FR-045) — no new settings tab. Always present in responses.
+             * @description GOAL-FR-024/FR-045, MV-1, D-D/D-E (2026-09-11, operator-ratified) — the SINGLE, GLOBAL adjudication-round ceiling for EVERY goal, task and chat identically. Default 20. THERE IS NO PER-GOAL OVERRIDE anywhere in this delivery — GOAL-FR-046 ("a human-editable budget control for a goal's per-goal override") and GOAL-US-8 ("an operator can give a goal more room") are RETIRED in full. This is the ONE control: `Goal.max_rounds` on every goal record resolves from this value alone (`pkg/config/planning.go::EffectiveGoalMaxRounds`, unmodified signature — NQ-2), and so does every task's attempt ceiling (`Task.effective_max_attempts`) unless that task carries its own `max_attempts` (founder decision 2026-09-14): a task fails after this many unmet attempts, exactly as a chat goal ends after this many unmet rounds. A goal keeps the value in force when it started. Lives under Settings → Performance (`src/components/settings/PerformanceSection.tsx`, GOAL-FR-045) — no new settings tab. Always present in responses.
              * @example 20
              */
             goal_max_rounds?: number;
@@ -7072,15 +7072,20 @@ export interface components {
             /** @description GOAL-FR-003/FR-048 — this task's Definition of Done, DISTINCT from `criteria` (mirrors `Goal.dod`/`Plan.dod`): generic standing quality gates vs. outcome-specific checks, judged identically but never mixed into `criteria`. NEW field (ADR-086): `pkg/task/task.go` had no DoD field before this delivery — the list lives on the task's goal record. GOAL-FR-021/D-C: mandatory (>= 1 item) at creation and at edit, enforced with a 400 at the API, same as `criteria`. GOAL-FR-048: opening a pre-existing task with no `dod` MUST NOT block reading it; saving an edit enforces the rule. */
             dod?: components["schemas"]["AcceptanceCriterion"][];
             /**
-             * @description Current run's attempt index within its goal loop (ADR-049 D7). Read-only, server-set; the UI renders "attempt N/M" against `max_attempts` (or the inherited `PlanningConfig.task_max_attempts` default).
+             * @description Current run's attempt index within its goal loop (ADR-049 D7). Read-only, server-set; the UI renders "attempt N/M" against `effective_max_attempts`.
              * @example 1
              */
             readonly attempt_count?: number;
             /**
-             * @description Per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9). Null/absent inherits the global `PlanningConfig.task_max_attempts` default (20).
+             * @description Per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9, R-03). Null/absent inherits the single global goal try limit (`PerformanceSettings.goal_max_rounds`, Settings → Performance, default 20) — the same setting that bounds a chat goal (founder decision 2026-09-14, D-D/D-E). There is no separate global task-attempts setting.
              * @example 5
              */
             max_attempts?: number | null;
+            /**
+             * @description Server-derived, read-only: the attempt ceiling this task actually runs under — the task fails once this many attempts end unmet, and it is the "M" in the UI's "attempt N/M". Resolved by the same function the task executor enforces (`pkg/tools/task_attempt_budget.go:: EffectiveTaskMaxAttempts`): the per-task `max_attempts` override when set; otherwise the goal try limit snapshotted onto the task's goal record when its current or most recent run started; otherwise the live global goal try limit (`PerformanceSettings.goal_max_rounds`). Clients render this value rather than a hardcoded default. Not writable — change `max_attempts` or the global setting instead. Always present in responses.
+             * @example 20
+             */
+            readonly effective_max_attempts?: number;
             trigger?: components["schemas"]["TaskTrigger"];
             /**
              * Format: date-time
@@ -8365,7 +8370,7 @@ export interface components {
             /** @description GOAL-FR-003/FR-021/FR-048/D-C — this task's Definition of Done, DISTINCT from `criteria`. NEW field (ADR-086). Required (>= 1 item, enforced with a 400, not schema-only — see `criteria` above) at creation. Items use the authoring-time `AcceptanceCriterionInput` shape, same as `criteria`. */
             dod?: components["schemas"]["AcceptanceCriterionInput"][];
             /**
-             * @description Per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9). Null/absent inherits the global `PlanningConfig.task_max_attempts` default (20).
+             * @description Per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9, R-03). Null/absent inherits the single global goal try limit (`PerformanceSettings.goal_max_rounds`, Settings → Performance, default 20) — the same setting that bounds a chat goal (founder decision 2026-09-14, D-D/D-E).
              * @example 5
              */
             max_attempts?: number | null;
@@ -8483,7 +8488,7 @@ export interface components {
             /** @description GOAL-FR-003/FR-021/FR-048/D-C — replacement Definition-of-Done set, DISTINCT from `criteria`, replacing the current `dod` atomically. NEW field (ADR-086). Same edit-time mandatory-count rule as `criteria` above (>= 1 item, enforced with a 400 on every surface). */
             dod?: components["schemas"]["AcceptanceCriterionInput"][];
             /**
-             * @description New per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9). Null clears the override (inherit the global default).
+             * @description New per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9, R-03). Null clears the override (inherit the single global goal try limit, `PerformanceSettings.goal_max_rounds`).
              * @example 5
              */
             max_attempts?: number | null;

@@ -17,16 +17,22 @@ import (
 //
 // GET returns the current max_parallel_agents config, the effective
 // (auto-detected or explicit) value actually in use, and goal_max_rounds —
-// the SINGLE, GLOBAL adjudication-round ceiling governing every goal, task
-// and chat identically (GOAL-FR-024/FR-045, D-D/D-E). There is no per-goal
-// override anywhere: this is the one control.
+// the SINGLE, GLOBAL goal try limit governing every goal, task and chat
+// identically (GOAL-FR-024/FR-045, D-D/D-E, founder decision 2026-09-14): it
+// bounds a chat goal's rounds AND a task's attempts
+// (config.PlanningConfig.EffectiveTaskMaxAttempts falls back to it). There is
+// no per-goal override anywhere: this is the one control. A task may still
+// carry its own per-task max_attempts (R-03).
 //
 // PUT accepts a partial update of {max_parallel_agents, tools_on_demand,
 // goal_max_rounds} and updates config.json atomically. The dispatch
 // semaphore is resized in-memory immediately so a changed max_parallel_agents
-// takes effect without a restart; goal_max_rounds takes effect the moment
-// the config reload below completes, since every reader resolves it live via
-// cfg.Planning.EffectiveGoalMaxRounds() rather than snapshotting it at boot.
+// takes effect without a restart; goal_max_rounds takes effect for every goal
+// that STARTS after the config reload below completes — a chat goal set after
+// it, and a task run started after it — since every reader resolves it live
+// via cfg.Planning.EffectiveGoalMaxRounds() rather than snapshotting it at
+// boot. A goal already running keeps the limit it started with (it is
+// snapshotted onto the goal record when the goal starts).
 //
 // Admin-only: enforced by the adminWrap registration in rest.go.
 func (a *restAPI) HandlePerformance(w http.ResponseWriter, r *http.Request) {

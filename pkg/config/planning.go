@@ -9,13 +9,18 @@ package config
 // whenever the corresponding field is zero, and used directly by DefaultConfig
 // (defaults.go) to populate a fresh install's config.json.
 const (
-	// ADR-086 GOAL-FR-024/FR-026, plan row R-03 (operator-ratified via D10): ONE
-	// budget number for both owner kinds. This was 3 while a task's attempts and a
-	// goal's rounds were separate concepts; D10 records that "a task's 3 attempts
-	// was never a considered choice against the goal loop's 20 rounds". The two
-	// COUNTERS stay distinct (attempts and rounds are different brakes); only the
-	// NUMBER unifies. The 2x divergence ceiling therefore becomes 40.
-	DefaultTaskMaxAttempts     = 20
+	// DefaultGoalMaxRounds is the shipped value of the ONE global goal try
+	// limit (Settings -> Performance "goal_max_rounds"). ADR-086 GOAL-FR-024
+	// ("one budget for both owner kinds, defaulting to 20
+	// (config.DefaultGoalMaxRounds)"), D10 and D-D/D-E: it governs a chat goal's
+	// rounds AND a task's attempts identically. There is deliberately no second
+	// "task attempts" default any more — the former DefaultTaskMaxAttempts and
+	// its `planning.task_max_attempts` config key are retired (founder decision
+	// 2026-09-14): a separate, UI-less key that silently bounded tasks while the
+	// Settings value claimed to was exactly the ADR-037 "says saved, changes
+	// nothing" defect. The two COUNTERS stay distinct (task attempts and goal
+	// rounds are different brakes, R-03); only the NUMBER is shared, so the
+	// task path's 2x divergence ceiling is 2x this value.
 	DefaultGoalMaxRounds       = 20
 	DefaultPlanJudgeMaxRounds  = 20
 	DefaultLoopMaxRuns         = 100
@@ -53,11 +58,11 @@ const (
 // take precedence over these global values — see the Effective* resolver
 // methods below (FR-9). Deliberately has NO token/money fields (NFR-1).
 type PlanningConfig struct {
-	// TaskMaxAttempts is the default attempt ceiling before a standalone
-	// task's goal loop wakes its owner. Overridden per-task by
-	// task.Task.MaxAttempts (nil ⇒ inherit this default).
-	TaskMaxAttempts int `json:"task_max_attempts,omitempty"`
-	// GoalMaxRounds bounds a /goal session loop's round count.
+	// GoalMaxRounds is the ONE global goal try limit (Settings -> Performance,
+	// D-D/D-E): it bounds a chat goal's adjudication rounds AND a task's
+	// attempts. Resolved by EffectiveGoalMaxRounds (chat goals, and every
+	// paired task goal record) and EffectiveTaskMaxAttempts (the task attempt
+	// ceiling), which falls back to it — never to a separate task key.
 	GoalMaxRounds int `json:"goal_max_rounds,omitempty"`
 	// PlanJudgeMaxRounds is the default plan-judge round ceiling before a
 	// running Plan fails with failed_reason=judge_rounds_exhausted.
@@ -151,18 +156,31 @@ func (c PlanningConfig) EffectiveSnapshotMaxBytes() int64 {
 	return 0
 }
 
-// EffectiveTaskMaxAttempts resolves the attempt ceiling (FR-9): a non-nil,
-// >=1 per-task override wins; otherwise falls back to this config's
-// TaskMaxAttempts (itself defaulting to DefaultTaskMaxAttempts when <1, so
-// this resolver is safe to call even against a zero-value PlanningConfig).
-func (c PlanningConfig) EffectiveTaskMaxAttempts(override *int) int {
+// EffectiveTaskMaxAttempts resolves a task's attempt ceiling from the SAME
+// global goal try limit a chat goal uses (founder decision 2026-09-14,
+// ADR-086 GOAL-FR-024/D10, D-D/D-E). Resolution order:
+//
+//  1. override — the task's own per-task `max_attempts` (R-03: "Task.MaxAttempts
+//     stays as the per-task override"), when non-nil and >=1;
+//  2. runningGoalMaxRounds — the limit snapshotted onto the task's paired goal
+//     record when its run started, when >=1. Callers pass 0 when the task has
+//     no paired record, or its record is still in the defining phase (not yet
+//     started). This is what gives a task the same snapshot semantics a chat
+//     goal has: a Settings change never retroactively moves the bound of a run
+//     that has already started;
+//  3. EffectiveGoalMaxRounds() — the live Settings -> Performance value.
+//
+// There is no step that reads a task-specific global: tasks and chat goals can
+// never resolve different numbers from the same Settings value. Safe to call
+// against a zero-value PlanningConfig (step 3 returns DefaultGoalMaxRounds).
+func (c PlanningConfig) EffectiveTaskMaxAttempts(override *int, runningGoalMaxRounds int) int {
 	if override != nil && *override >= 1 {
 		return *override
 	}
-	if c.TaskMaxAttempts >= 1 {
-		return c.TaskMaxAttempts
+	if runningGoalMaxRounds >= 1 {
+		return runningGoalMaxRounds
 	}
-	return DefaultTaskMaxAttempts
+	return c.EffectiveGoalMaxRounds()
 }
 
 // EffectivePlanJudgeMaxRounds resolves the plan-judge round ceiling (FR-9): a
@@ -191,13 +209,15 @@ func (c PlanningConfig) EffectiveIdleExpiryDays(override *int) int {
 	return DefaultIdleExpiryDays
 }
 
-// EffectiveGoalMaxRounds resolves the /goal round ceiling (FR-9, FR-067):
-// this config's GoalMaxRounds when >=1, else DefaultGoalMaxRounds. No
-// per-entity override source exists for /goal (a session-scoped chat
-// command, not a stored entity with its own Bounds) — the resolved value is
-// snapshotted onto the session's UnifiedMeta.GoalMaxRounds at `/goal` set
-// time so a later config change never retroactively changes an
-// already-running goal's bound.
+// EffectiveGoalMaxRounds resolves the ONE global goal try limit (FR-9,
+// FR-067, GOAL-FR-024, D-D/D-E): this config's GoalMaxRounds when >=1, else
+// DefaultGoalMaxRounds. There is no per-goal override (D-E/NQ-2). The
+// resolved value is snapshotted onto the goal record's MaxRounds when the goal
+// starts running — at `/goal` set time for a chat goal, and at run activation
+// for a task's paired goal (TaskExecutor.activateTaskGoal) — so a later config
+// change never retroactively changes an already-running goal's bound. The
+// task attempt ceiling resolves through EffectiveTaskMaxAttempts, which falls
+// back to this same method.
 func (c PlanningConfig) EffectiveGoalMaxRounds() int {
 	if c.GoalMaxRounds >= 1 {
 		return c.GoalMaxRounds

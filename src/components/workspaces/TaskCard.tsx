@@ -12,8 +12,10 @@ import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/
 // ── Goal-loop status affordance (ADR-049 FR-090, SD-C12) ────────────────────
 //
 // "attempt N/M" is sourced from the real, server-set `Task.attempt_count`
-// wire field (contract C17) against `Task.max_attempts` (or the inherited
-// PlanningConfig.task_max_attempts default) — never fabricated. The
+// wire field (contract C17) against `Task.effective_max_attempts` — the
+// ceiling the server actually enforces for this task (the Settings goal try
+// limit, the limit snapshotted when its run started, or the task's own
+// max_attempts; founder decision 2026-09-14) — never fabricated. The
 // "paused" suffix is likewise grounded in real data: a task's owning Plan
 // (looked up via `Task.plan_id` in the `plans` prop) reporting
 // `state === 'running' && paused_reason` — NOT a fake/always-false flag.
@@ -22,11 +24,12 @@ import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/
 // wave's scope — frame consumption lands with US-12); this card renders the
 // plan-derived pause honestly and simply omits the "paused" suffix when no
 // such data is available, rather than inventing a state.
-// MUST track pkg/config/planning.go's `DefaultTaskMaxAttempts`. It is the
-// DENOMINATOR whenever `Task.max_attempts` is absent, which is the normal
-// "inherit the global" case — so a stale value here renders a task that is
-// running perfectly normally as "attempt 7/3", i.e. already past a ceiling
-// it has not reached. Raised 3 → 20 alongside the backend constant.
+// Fallback denominator ONLY for a response that omits
+// `effective_max_attempts` (and has no `max_attempts`). MUST track
+// pkg/config/planning.go's `DefaultGoalMaxRounds` — the shipped value of the
+// single goal try limit that bounds tasks and chat goals alike (the separate
+// DefaultTaskMaxAttempts was retired). A stale value here renders a healthy
+// task as already past a ceiling it has not reached.
 export const DEFAULT_TASK_MAX_ATTEMPTS = 20
 
 // `Task.attempt_count` counts attempts already CONSUMED — the sole writer,
@@ -42,11 +45,11 @@ export const DEFAULT_TASK_MAX_ATTEMPTS = 20
 // actively running renders the plain used-up count, which is the correct
 // reading once no attempt is in flight.
 export function goalLoopStatusLabel(
-  task: Pick<Task, 'attempt_count' | 'max_attempts' | 'status'>,
+  task: Pick<Task, 'attempt_count' | 'effective_max_attempts' | 'max_attempts' | 'status'>,
   paused: boolean,
 ): string | null {
   if (task.attempt_count == null || task.attempt_count <= 0) return null
-  const max = task.max_attempts ?? DEFAULT_TASK_MAX_ATTEMPTS
+  const max = task.effective_max_attempts ?? task.max_attempts ?? DEFAULT_TASK_MAX_ATTEMPTS
   const current = task.status === 'in_progress' ? task.attempt_count + 1 : task.attempt_count
   return `attempt ${current}/${max}${paused ? ' · paused' : ''}`
 }

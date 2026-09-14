@@ -874,12 +874,30 @@ func (te *TaskExecutor) activateTaskGoal(t *task.Task, taskSessionID string) err
 	}
 
 	now := time.Now().UTC()
+	// Founder decision 2026-09-14 (D-D/D-E): a task's goal takes the goal try
+	// limit in force when its RUN starts — the same snapshot semantics a chat
+	// goal has at `/goal` set time (activateInstantGoal). The record's
+	// MaxRounds was written at task creation, possibly days and several
+	// Settings changes ago, so it is re-stamped from the live value here, AFTER
+	// the transition (Reactivate archives the previous run's record into
+	// TerminalHistory and must archive that run's own limit, not this one's).
+	// consumeAttemptOrExhaust then enforces this snapshot, so a later Settings
+	// change never moves the bound of a run already in progress.
+	tryLimit := goalTryLimit(te.agentLoop)
 	if _, uerr := gstore.Update(g.GoalID, func(cur *goal.Goal) error {
 		switch {
 		case cur.IsDefining():
-			return cur.Activate(taskSessionID, now)
+			if err := cur.Activate(taskSessionID, now); err != nil {
+				return err
+			}
+			cur.MaxRounds = tryLimit
+			return nil
 		case cur.IsTerminal():
-			return cur.Reactivate(taskSessionID, now)
+			if err := cur.Reactivate(taskSessionID, now); err != nil {
+				return err
+			}
+			cur.MaxRounds = tryLimit
+			return nil
 		default:
 			// Already active. This is where UAT defect D-2 did its real
 			// damage and it must never be silent again: Goal.Reactivate is
@@ -1630,7 +1648,8 @@ func (te *TaskExecutor) taskVerdictStillApplicable(taskID string) bool {
 // (FR-044). verdict is nil for a no-signal unmet outcome (nothing to judge)
 // and non-nil for a judge-adjudicated unmet outcome.
 //
-// FR-047: the hard ceiling (2x the configured attempt bound) is enforced
+// FR-047: the hard ceiling (2x the resolved attempt bound,
+// taskAttemptHardCeiling — the goal try limit or a per-task override) is enforced
 // independently of the normal maxAttempts gate — belt-and-suspenders so a
 // pending re-dispatch can never loop past it "regardless of pending
 // re-dispatch or interrupt state", even though under this function's own
@@ -1659,12 +1678,11 @@ func (te *TaskExecutor) consumeAttemptOrExhaust(
 	verdict *task.JudgeVerdict,
 	run *activeRun,
 ) (redispatchTaskID string) {
-	var planningCfg config.PlanningConfig
-	if cfg := te.agentLoop.GetConfig(); cfg != nil {
-		planningCfg = cfg.Planning
-	}
-	maxAttempts := planningCfg.EffectiveTaskMaxAttempts(t.MaxAttempts)
-	hardCeiling := 2 * maxAttempts
+	// Founder decision 2026-09-14 (D-D/D-E): the task attempt ceiling resolves
+	// from the SAME global goal try limit a chat goal uses, through the one
+	// shared resolver the task wire also reports — see resolveTaskMaxAttempts.
+	maxAttempts := te.resolveTaskMaxAttempts(t)
+	hardCeiling := taskAttemptHardCeiling(maxAttempts)
 
 	// FR-178: AttemptCount (per member/task scope) and the plan's JudgeRounds
 	// (per goal/plan scope) are TWO DISTINCT brakes, never conflated. This

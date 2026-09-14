@@ -904,7 +904,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
             verdicts={taskVerdicts}
             evidence={taskEvidence}
             attemptCount={task.attempt_count}
-            maxAttempts={task.max_attempts}
+            maxAttempts={task.effective_max_attempts ?? task.max_attempts}
             isRunning={isRunning}
           />
         </div>

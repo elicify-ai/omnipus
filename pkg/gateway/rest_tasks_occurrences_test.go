@@ -176,8 +176,9 @@ func createRecurringTaskViaAPI(
 // the ceiling is spent (task_executor.go's consumeAttemptOrExhaust). With the
 // ceiling left at the global default that loop now runs TWENTY times: the
 // operator decision that unified task goals and chat goals under ONE global
-// attempt budget raised PlanningConfig.task_max_attempts from 3 to 20
-// (DECISIONS.md D-D/D-E, pkg/config/planning.go's DefaultTaskMaxAttempts).
+// goal try limit (DECISIONS.md D-D/D-E) makes a task's ceiling the
+// Settings -> Performance goal_max_rounds value, default 20
+// (pkg/config/planning.go's DefaultGoalMaxRounds).
 // That is ~20s of real redispatching per fixture, and it is not what any of
 // these tests are about — they are about occurrence rendering and repeating-
 // task transitions. Pinning the ceiling to 1 keeps the terminal state
