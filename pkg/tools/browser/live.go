@@ -2721,6 +2721,11 @@ func buildInputAction(in LiveInput) (chromedp.Action, error) {
 			return nil, fmt.Errorf("browser live: navigate_back input must not carry x/y or url")
 		}
 		return historyBackInputAction{}, nil
+	case "stop_loading":
+		if in.HasXY || in.URL != "" {
+			return nil, fmt.Errorf("browser live: stop_loading input must not carry x/y or url")
+		}
+		return page.StopLoading(), nil
 	case "reload":
 		// Reload the current URL (already SSRF-cleared). Discrete, like navigate.
 		if in.HasXY || in.URL != "" {

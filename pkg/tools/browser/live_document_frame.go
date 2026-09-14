@@ -55,6 +55,8 @@ type liveDocumentWork struct {
 	committed       bool
 	reconciled      bool
 	failureReported bool
+	phase           uint64
+	phaseCancel     context.CancelFunc
 }
 
 // Called under lv.mu. Listener registration does no browser I/O; initial
@@ -192,20 +194,46 @@ func (w *liveDocumentWatch) beginLocked(loader cdp.LoaderID) (*liveDocumentWork,
 	if err != nil {
 		return nil, err
 	}
-	work := &liveDocumentWork{cs: cs, token: token, loaderID: loader, deadline: time.Now().Add(documentPaintTimeout)}
+	work := &liveDocumentWork{cs: cs, token: token, loaderID: loader}
 	w.work = work
-	go w.watchDeadline(work)
+	w.startPhaseLocked(work, false)
 	return work, nil
 }
 
-func (w *liveDocumentWatch) watchDeadline(work *liveDocumentWork) {
-	timer := time.NewTimer(time.Until(work.deadline))
+// Navigation can wait on the network indefinitely. Paint gets its own bounded
+// budget only after a committed document (or Stop recovery) can be inspected.
+// Caller holds w.mu. Canceling the old phase also bounds live timer goroutines.
+func (w *liveDocumentWatch) startPhaseLocked(work *liveDocumentWork, painting bool) {
+	if work.phaseCancel != nil {
+		work.phaseCancel()
+	}
+	work.phase++
+	work.committed = painting
+	work.deadline = time.Now().Add(documentPaintTimeout)
+	ctx, cancel := context.WithCancel(work.token.ctx)
+	work.phaseCancel = cancel
+	go w.watchDeadline(work, work.phase, work.deadline, ctx)
+}
+
+func (w *liveDocumentWatch) watchDeadline(work *liveDocumentWork, phase uint64, deadline time.Time, phaseCtx context.Context) {
+	timer := time.NewTimer(time.Until(deadline))
 	defer timer.Stop()
 	select {
 	case <-w.ctx.Done():
-	case <-work.token.ctx.Done():
+	case <-phaseCtx.Done():
 	case <-timer.C:
-		w.reportFailure(work, fmt.Errorf("new document did not provide a confirmed picture in time"))
+		w.mu.Lock()
+		if w.work != work || work.phase != phase || !w.owns(work) {
+			w.mu.Unlock()
+			return
+		}
+		painting := work.committed
+		w.mu.Unlock()
+		if painting {
+			w.reportFailure(work, fmt.Errorf("new document did not provide a confirmed picture in time"), phase)
+		} else {
+			logger.InfoCF("browser", "live view navigation is still pending", map[string]any{"session_id": w.lv.sessionID})
+		}
 	}
 }
 
@@ -246,6 +274,8 @@ func (w *liveDocumentWatch) onEvent(event any) {
 			// reopen the page underneath a newer navigation.
 			if !work.settling && w.frameID != "" {
 				work.settling = true
+				work.loaderID = w.loaderID
+				w.startPhaseLocked(work, true)
 				go w.settle(work, w.frameID, w.loaderID)
 			}
 		}
@@ -276,8 +306,8 @@ func (w *liveDocumentWatch) onEvent(event any) {
 	}
 	frame := w.frameID
 	if paint && !work.settling {
-		work.committed = true
 		work.settling = true
+		w.startPhaseLocked(work, true)
 		go w.settle(work, frame, work.loaderID)
 	}
 	w.mu.Unlock()
@@ -333,11 +363,28 @@ func (w *liveDocumentWatch) resumeUnchanged(work *liveDocumentWork) {
 	w.mu.Lock()
 	if w.work == work && work.cs.documentTransitionCurrent(work.token) && !work.settling {
 		work.settling = true
+		work.loaderID = w.loaderID
+		w.startPhaseLocked(work, true)
 		if w.frameID == "" {
 			go w.resumeUnchangedWithoutFrame(work)
 		} else {
 			go w.settle(work, w.frameID, w.loaderID)
 		}
+	}
+	w.mu.Unlock()
+}
+
+// A successful Stop acknowledges cancellation, not which document is current.
+// Read Chrome's current tree before the same paint and media proof used elsewhere.
+func (w *liveDocumentWatch) resumeStopped(work *liveDocumentWork) {
+	if w == nil || work == nil {
+		return
+	}
+	w.mu.Lock()
+	if w.work == work && w.owns(work) && !work.settling {
+		work.settling = true
+		w.startPhaseLocked(work, true)
+		go w.resumeUnchangedWithoutFrame(work)
 	}
 	w.mu.Unlock()
 }
@@ -357,7 +404,14 @@ func (w *liveDocumentWatch) resumeUnchangedWithoutFrame(work *liveDocumentWork) 
 		w.reportFailure(work, err)
 		return
 	}
-	if tree != nil && tree.Frame != nil && w.owns(work) {
+	w.mu.Lock()
+	current := tree != nil && tree.Frame != nil && w.work == work && w.owns(work)
+	if current {
+		w.frameID, w.loaderID = tree.Frame.ID, tree.Frame.LoaderID
+		work.loaderID = tree.Frame.LoaderID
+	}
+	w.mu.Unlock()
+	if current {
 		w.settle(work, tree.Frame.ID, tree.Frame.LoaderID)
 	}
 }
@@ -475,13 +529,13 @@ func (w *liveDocumentWatch) reconcileDocument(ctx context.Context, work *liveDoc
 	return documentPaintAction{frameID: tree.Frame.ID, loaderID: tree.Frame.LoaderID}, true, nil
 }
 
-func (w *liveDocumentWatch) reportFailure(work *liveDocumentWork, err error) {
+func (w *liveDocumentWatch) reportFailure(work *liveDocumentWork, err error, phase ...uint64) {
 	if !w.active() || work != nil && !w.owns(work) {
 		return
 	}
 	if work != nil {
 		w.mu.Lock()
-		if work.failureReported || w.work != work || !w.owns(work) {
+		if work.failureReported || w.work != work || !w.owns(work) || len(phase) > 0 && work.phase != phase[0] {
 			w.mu.Unlock()
 			return
 		}

@@ -1602,15 +1602,11 @@ func browserInputFrameToLiveInput(frame generated.BrowserInputFrame) browser.Liv
 	return in
 }
 
-// inputKindIsDiscrete reports whether an input kind is a one-shot action
-// (navigate / navigate_back / reload) rather than high-frequency pointer input
-// (mouse_move/wheel/key). Discrete kinds are exempt from the repeated-error
-// cooldown (minInputErrorInterval) so a refused navigate/back/reload always
-// surfaces its reason immediately, exactly as "navigate" did before
-// navigate_back/reload were added.
+// inputKindIsDiscrete identifies navigation commands that interrupt pending
+// navigation and surface refusals without the repeated-input error cooldown.
 func inputKindIsDiscrete(kind string) bool {
 	switch kind {
-	case "navigate", "navigate_back", "reload":
+	case "navigate", "navigate_back", "reload", "stop_loading":
 		return true
 	}
 	return false

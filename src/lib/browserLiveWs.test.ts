@@ -721,3 +721,13 @@ describe('dedicated input attachment', () => {
     conn.close()
   })
 })
+
+it.each([true, false])('sends Stop loading only after control admission (allowed=%s)', allowed => {
+  const beforeControl = vi.fn(() => allowed ? { input_epoch: 7, control_epoch: 12 } : null)
+  const conn = new BrowserLiveWsConnection('s', 'a', makeCallbacks(), { beforeControl })
+  conn.connect(); openSocket(); lastWsInstance.send.mockClear()
+  expect(conn.sendInput({ kind: 'stop_loading' })).toBe(allowed)
+  expect(beforeControl).toHaveBeenCalledTimes(1)
+  expect(sentFrames()).toEqual(allowed ? [{ type: 'browser_input', kind: 'stop_loading', input_epoch: 7, control_epoch: 12 }] : [])
+  conn.close()
+})

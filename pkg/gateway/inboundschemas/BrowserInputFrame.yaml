@@ -29,6 +29,7 @@ properties:
       - navigate
       - navigate_back
       - reload
+      - stop_loading
   x:
     type: number
     description: Device (CSS) x for mouse/wheel events.

@@ -1,6 +1,6 @@
 // Shared browser panel for the docked view and fullscreen pop-out.
-// Video uses WebRTC; all human input, navigation and control use one ordered
-// WebSocket. Human input remains available during agent activity. Only the
+// Video and gestures use separate WebRTC connections; navigation and control
+// use the ordered WebSocket. Human input remains available during agent activity. Only the
 // explicit Take over button stops the chat response. Control status is a
 // presentation hint, not a prerequisite for input; annotation stays local.
 
@@ -1413,7 +1413,7 @@ export function BrowserLiveView({
   const inputFailureAtRef = useRef(-Infinity)
   const dispatchInput = useCallback(
     (input: Omit<BrowserInputFrame, 'type'>, cleanup = false): boolean => {
-      const initiating = ['navigate', 'navigate_back', 'reload'].includes(input.kind)
+      const initiating = ['navigate', 'navigate_back', 'reload', 'stop_loading'].includes(input.kind)
       const current = captureRef.current
       const proof = current.gate.read(performance.now())
       if (!initiating && !cleanup && (proof.status !== 'ready' || !dedicatedFrameReady())) return false
@@ -1987,7 +1987,7 @@ export function BrowserLiveView({
   )
 
   const handleToolbarNav = useCallback(
-    (kind: 'navigate_back' | 'reload') => {
+    (kind: 'navigate_back' | 'reload' | 'stop_loading') => {
       if (!canIssueCommands()) return
       setStatusMessage(null)
       setStatusIsError(false)
@@ -2538,6 +2538,16 @@ export function BrowserLiveView({
         >
           <ArrowsClockwise size={15} />
         </button>
+        <button
+          type="button"
+          onClick={() => handleToolbarNav('stop_loading')}
+          disabled={!connected || annotateMode}
+          aria-label="Stop loading"
+          title="Stop loading"
+          className={TOOLBAR_ICON_BTN}
+        >
+          <X size={15} />
+        </button>
         {/* min-w floor is load-bearing, not cosmetic: with `min-w-0 flex-1`
             alone the field collapsed to 23px on a 575px row (measured on UAT
             v59) once the chips and toggles were added beside it — flex happily
@@ -2951,7 +2961,7 @@ export function BrowserLiveView({
               ? 'Pointer input is unavailable until the page size is confirmed.'
             : frameGateState.status === 'needs-fresh-viewer'
               ? 'Reconnecting video to restore browser input…'
-              : 'Waiting for the current page to appear before enabling browser input…'}
+              : 'Waiting for the current page to appear before enabling input. Use Stop loading to cancel a pending page load.'}
         </div>
       )}
       {attached && videoReady && displayError && (

@@ -302,6 +302,9 @@ func (lv *LiveView) dispatchTrackedInput(ctx, targetCtx context.Context, viewerI
 	if errors.As(err, &rejection) || err == nil && in.Kind == "navigate_back" && !historyMoved {
 		documentWatch.resumeUnchanged(documentWork)
 	}
+	if err == nil && in.Kind == "stop_loading" {
+		documentWatch.resumeStopped(documentWork)
+	}
 	if err == nil || !errors.As(err, &rejection) || in.Kind == "key_up" || in.Kind == "mouse_up" {
 		lv.recordHeldInput(targetCtx, viewerID, in, err == nil)
 	}

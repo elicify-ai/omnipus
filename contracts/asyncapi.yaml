@@ -3821,6 +3821,7 @@ components:
           - navigate
           - navigate_back
           - reload
+          - stop_loading
         x:
           type: number
         y:

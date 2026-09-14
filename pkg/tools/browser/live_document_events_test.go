@@ -26,6 +26,7 @@ type documentEventFixture struct {
 	paint        chan struct{}
 	paintEntered chan struct{}
 	paintOnce    sync.Once
+	stopCalls    atomic.Int32
 }
 
 func newDocumentEventFixture(t *testing.T) *documentEventFixture {
@@ -54,6 +55,8 @@ func newDocumentEventFixture(t *testing.T) *documentEventFixture {
 			}
 		case "Page.getNavigationHistory":
 			fixtureValue[*page.GetNavigationHistoryReturns](result).CurrentIndex = 0
+		case "Page.stopLoading":
+			f.stopCalls.Add(1)
 		default:
 			return fmt.Errorf("unexpected document protocol command %s", method)
 		}
@@ -62,7 +65,7 @@ func newDocumentEventFixture(t *testing.T) *documentEventFixture {
 	f.lv.runCDP = func(ctx context.Context, timeout time.Duration, actions ...chromedp.Action) error {
 		for _, action := range actions {
 			switch action.(type) {
-			case documentPaintAction, chromedp.ActionFunc, historyBackInputAction:
+			case documentPaintAction, chromedp.ActionFunc, historyBackInputAction, *page.StopLoadingParams:
 				if err := action.Do(cdp.WithExecutor(ctx, executor)); err != nil {
 					return err
 				}

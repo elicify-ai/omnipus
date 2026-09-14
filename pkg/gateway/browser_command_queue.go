@@ -135,7 +135,7 @@ func (h *BrowserWSHandler) dispatchBrowserCommand(wc *browserWSConn, state *brow
 	}
 	job := browserCommand{
 		move:       in.Kind == "mouse_move",
-		navigation: in.Kind == "navigate" || in.Kind == "navigate_back" || in.Kind == "reload",
+		navigation: inputKindIsDiscrete(in.Kind),
 		run: func(ctx context.Context) {
 			if probe != nil {
 				probe.mark("queue_started")

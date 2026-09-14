@@ -447,7 +447,7 @@ export class BrowserLiveWsConnection {
       this.ws.close(4008, 'input_backpressure')
       return false
     }
-    const intent = ['navigate', 'navigate_back', 'reload'].includes(input.kind)
+    const intent = ['navigate', 'navigate_back', 'reload', 'stop_loading'].includes(input.kind)
     if (!intent) return false
     const control = intent ? this.prepareControl() : {}
     if (control === null) return false
