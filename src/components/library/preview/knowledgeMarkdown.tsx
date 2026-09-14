@@ -84,7 +84,7 @@ import { KbMarkdownImage } from './KbMarkdownImage'
 // button — which is two places for one visual contract to drift, with
 // nothing but a human diffing both files to catch it.
 import { EmbedMountPlaceholder, EmbedMountError } from './embedMountStates'
-import { matchBaseView } from './baseViewMatch'
+import { matchBaseView, matchUnloadableBaseView } from './baseViewMatch'
 import { sliceTranscludedContent } from './noteTransclusion'
 import { BasePreview, type BasePreviewEmbedOptions } from './BasePreview'
 // The SAME image renderer the Library pane uses (EMB-027) — reused for a
@@ -1727,6 +1727,25 @@ function KbBaseEmbedContent({
         </div>
       )
     }
+    // UAT U-32 (S3, retest validation): "No view named X" is only true of
+    // the views that DID load — a fragment naming a view that exists but
+    // failed to load (e.g. a property rename left it unloadable) is a
+    // DIFFERENT fact, and the reader deserves the real reason, not "does
+    // not exist". See matchUnloadableBaseView's own doc for the exact
+    // (name-only) matching this can and cannot resolve.
+    const unloadableMatch = matchUnloadableBaseView(viewsQuery.data.unloadable, viewFragment)
+    if (unloadableMatch) {
+      return (
+        <div
+          data-testid="kb-base-embed-view-load-failed"
+          className="rounded-md border border-dashed border-[var(--color-warning)]/50 px-3 py-3 text-xs text-[var(--color-warning)]"
+        >
+          "{unloadableMatch.name ?? viewFragment}" is declared in {entry.name} but could not be loaded:{' '}
+          {unloadableMatch.reason}
+        </div>
+      )
+    }
+
     const labels = viewsQuery.data.views.map((v) => v.label)
     return (
       <div

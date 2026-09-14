@@ -7,8 +7,8 @@
 // phase (test 44: "a derived machine name that happens to be right").
 
 import { describe, it, expect } from 'vitest'
-import { matchBaseView } from './baseViewMatch'
-import type { KnowledgeBaseView } from '@/lib/api/generated/openapi-types'
+import { matchBaseView, matchUnloadableBaseView } from './baseViewMatch'
+import type { KnowledgeBaseUnloadableView, KnowledgeBaseView } from '@/lib/api/generated/openapi-types'
 
 function view(over: Partial<KnowledgeBaseView> = {}): KnowledgeBaseView {
   return { name: 'tasks--needs-daniel', label: 'Needs Daniel', ...over }
@@ -125,5 +125,60 @@ describe('matchBaseView — never constructs a machine name it was not given', (
     // false match here; matchBaseView must not, because it never derives one.
     const m = matchBaseView(VIEWS, 'needs-daniel')
     expect(m.kind).toBe('not_found')
+  })
+})
+
+// UAT U-32 (S3, retest validation): matchUnloadableBaseView is the second
+// half of the not_found answer — it names a view that exists but failed to
+// load, distinctly from one that was never declared at all.
+function unloadable(over: Partial<KnowledgeBaseUnloadableView> = {}): KnowledgeBaseUnloadableView {
+  return {
+    name: 'projects--active-projects',
+    paths: ['.omnipus-vault/views/projects--active-projects.yaml'],
+    code: 'view_unknown_property',
+    reason: 'view "projects--active-projects" names property "priority" ...',
+    ...over,
+  }
+}
+
+describe('matchUnloadableBaseView (UAT U-32, S3)', () => {
+  it('matches a fragment against an unloadable view\'s machine name, exactly', () => {
+    const found = matchUnloadableBaseView([unloadable()], 'projects--active-projects')
+    expect(found?.name).toBe('projects--active-projects')
+  })
+
+  it('matches case-insensitively, the same tolerance the loaded-view label ladder gives', () => {
+    const found = matchUnloadableBaseView([unloadable()], 'PROJECTS--ACTIVE-PROJECTS')
+    expect(found?.name).toBe('projects--active-projects')
+  })
+
+  it('returns undefined for a fragment matching neither name nor anything close', () => {
+    expect(matchUnloadableBaseView([unloadable()], 'Something Else')).toBeUndefined()
+  })
+
+  it('returns undefined when the fragment is undefined or empty (EMB-043\'s "no view named" case never applies here)', () => {
+    expect(matchUnloadableBaseView([unloadable()], undefined)).toBeUndefined()
+    expect(matchUnloadableBaseView([unloadable()], '')).toBeUndefined()
+  })
+
+  it('returns undefined when there is nothing unloadable at all', () => {
+    expect(matchUnloadableBaseView([], 'projects--active-projects')).toBeUndefined()
+    expect(matchUnloadableBaseView(undefined, 'projects--active-projects')).toBeUndefined()
+  })
+
+  it('skips an unloadable entry with no readable name (a file so broken even its `name:` key could not be parsed)', () => {
+    const nameless = unloadable({ name: undefined })
+    expect(matchUnloadableBaseView([nameless], 'projects--active-projects')).toBeUndefined()
+  })
+
+  it('a fragment written as the view\'s LABEL (not its machine name) is NOT matched — the server does not carry a label for a rejected view', () => {
+    // This is the exact UAT U-32 repro shape: the note wrote
+    // "![[Projects.base#Active Projects]]" (the DISPLAY LABEL), but
+    // KnowledgeBaseUnloadableView only ever carries the machine `name`.
+    // Documented, not silently worked around — see this function's own doc
+    // comment and the report for the backend/contract change that would
+    // close this gap.
+    const found = matchUnloadableBaseView([unloadable()], 'Active Projects')
+    expect(found).toBeUndefined()
   })
 })

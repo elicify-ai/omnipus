@@ -238,6 +238,73 @@ describe('a broken .base file says so, distinctly from "no view is named that" (
   })
 })
 
+// UAT U-32 (retest validation, S3 — "wrong error message"): a note embedding
+// `![[Projects.base#Active Projects]]` said "No view named 'Active
+// Projects'" even though the base-views oracle showed a view BY THAT NAME
+// existed and had merely failed to load (a property rename, `priority`
+// dropped from the `project` schema) — the same base-preview screen's own
+// banner named the same broken view correctly. `matchBaseView` only ever
+// sees the LOADED `views` list (EMB-028's own doc, above), so a fragment
+// matching a view that exists ONLY in `unloadable` fell all the way through
+// to the generic "does not exist" answer — true of the loaded views, false
+// of the file as a whole.
+//
+// This distinguishes the two cases by the view's declared machine NAME —
+// the one identifier `KnowledgeBaseUnloadableView` (contracts/components/
+// schemas/KnowledgeBaseUnloadableView.yaml) actually carries for a rejected
+// view (`pkg/records/view.go`'s `ViewRejection.Name`, always the `name:`
+// key, never the `label:` one — confirmed by reading that struct and its
+// two construction sites, neither of which captures `v.Def.Label`/
+// `v.DisplayLabel()` even though it is already in hand at rejection time).
+// A fragment that names a broken view by its LABEL only (the exact U-32
+// repro) cannot be resolved from the wire data this endpoint sends today —
+// that gap needs a `label` field added to the wire type and to
+// `ViewRejection`, which is a contract + backend change outside this
+// branch's scope; recorded, not silently worked around here.
+describe('a view that failed to load is distinguished from one that was never declared (UAT U-32, S3)', () => {
+  const unloadableActiveProjects = {
+    name: 'tasks--active-projects',
+    paths: ['.omnipus-vault/views/tasks--active-projects.yaml'],
+    code: 'view_unknown_property',
+    reason:
+      'view "tasks--active-projects" names property "priority" in properties, which record type "project" does not declare; declared: budget, owner, start, status',
+  }
+
+  it('names the load-failure reason when the fragment matches a declared-but-unloadable view by its machine name', async () => {
+    vi.mocked(fetchKnowledgeBaseViews).mockResolvedValue(
+      views({ unloadable_count: 1, unloadable: [unloadableActiveProjects] }),
+    )
+    renderNote('![[Tasks.base#tasks--active-projects]]')
+    // DIES ON the old code: falls through to `kb-base-embed-missing-view`
+    // with "No view named" — the view exists, it just could not be loaded.
+    await waitFor(() => expect(screen.getByTestId('kb-base-embed-view-load-failed')).toBeInTheDocument())
+    const text = screen.getByTestId('kb-base-embed-view-load-failed').textContent ?? ''
+    expect(text).toContain('tasks--active-projects')
+    expect(text).toMatch(/priority/)
+    expect(text).not.toContain('No view named')
+    expect(screen.queryByTestId('kb-base-embed-missing-view')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('base-preview')).not.toBeInTheDocument()
+  })
+
+  it('matches case-insensitively, the same tolerance the loaded-view ladder already gives labels', async () => {
+    vi.mocked(fetchKnowledgeBaseViews).mockResolvedValue(
+      views({ unloadable_count: 1, unloadable: [unloadableActiveProjects] }),
+    )
+    renderNote('![[Tasks.base#TASKS--ACTIVE-PROJECTS]]')
+    await waitFor(() => expect(screen.getByTestId('kb-base-embed-view-load-failed')).toBeInTheDocument())
+  })
+
+  it('a fragment matching NEITHER a loaded view NOR an unloadable one keeps the ORIGINAL "No view named" answer', async () => {
+    vi.mocked(fetchKnowledgeBaseViews).mockResolvedValue(
+      views({ unloadable_count: 1, unloadable: [unloadableActiveProjects] }),
+    )
+    renderNote('![[Tasks.base#Totally Different View]]')
+    await waitFor(() => expect(screen.getByTestId('kb-base-embed-missing-view')).toBeInTheDocument())
+    expect(screen.getByTestId('kb-base-embed-missing-view').textContent).toContain('No view named')
+    expect(screen.queryByTestId('kb-base-embed-view-load-failed')).not.toBeInTheDocument()
+  })
+})
+
 describe('an embed mixed inline with other text is NOT promoted to a live view (block-promotion gate)', () => {
   // The critical regression test for this phase: delete the standalone check
   // in remarkKbPromoteBlockEmbeds and EVERY resolved `.base` embed — inline
