@@ -227,11 +227,20 @@ func u19FindRoutingSessionIDReads(t *testing.T, fset *token.FileSet, filePath st
 // or addressing identity, classified into its own bucket (u19BucketBrowserGate)
 // below rather than folded into an existing one, per FR-022's explicit
 // four-part amendment requirement.
+// subturn_result.go was ADDED to this list by the 2026-09-15 subturn.go
+// split (identity/result sibling files): subTurnTimedOutResult moved there
+// and its doc comment mentions routingSessionID in prose (asserting it is
+// NOT read there), so the grep that seeds this list picks the file up —
+// and scanning it contributes zero reads, which is itself the closure proof
+// this list exists to make. A read that ever DOES appear there classifies
+// into no bucket and fails closed below. subturn_identity.go references
+// the identifier nowhere (not even prose) and so is not on the list.
 var u19RoutingSessionIDScanFiles = []string{
 	"steering.go",
 	"turn.go",
 	"cancel_prearm.go",
 	"subturn.go",
+	"subturn_result.go",
 	"loop.go",
 	"cancel.go",
 	"events.go",
