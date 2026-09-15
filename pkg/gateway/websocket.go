@@ -4016,8 +4016,41 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 		}
 	}
 
+	// orphanFires carries a watchdog goroutine's "this span looks orphaned"
+	// verdict to THIS goroutine, which alone decides whether to synthesize the
+	// interrupted end.
+	//
+	// Root cause this closes (a delegation that completed normally reported as
+	// interrupted, before or just after its real success frame): the watchdog
+	// used to send the synthetic frame itself the moment
+	// agent.AgentLoop.IsSubTurnActiveForSpawnCall reported "not active". A
+	// sub-turn stops counting as active only after its EventKindSubTurnEnd is
+	// queued on sub.C (markSubTurnSpanOpen, pkg/agent/steering.go) — but this
+	// goroutine may not have consumed that event yet, so the watchdog's frame
+	// could still win. Deciding here, only once every event that was already
+	// queued when the verdict arrived has been handled, means a real end always
+	// closes its span first; a span still open after that is genuinely
+	// orphaned (or its end event was dropped, which EventBus counts and logs).
+	type orphanFire struct {
+		entry  *openSpanEntry
+		reason string
+		// forced: the reschedule ceiling was exceeded (already logged at Error
+		// level by the watchdog).
+		forced bool
+		// eventsAhead: events that were queued on sub.C when the verdict
+		// arrived and have not been handled yet.
+		eventsAhead int
+	}
+	orphanFires := make(chan orphanFire)
+	// forwarderExited releases a watchdog blocked handing over its verdict
+	// once this goroutine has stopped reading orphanFires.
+	forwarderExited := make(chan struct{})
+	defer close(forwarderExited)
+	var pendingOrphanFires []orphanFire
+
 	// startOrphanWatchdog launches a goroutine that fires after orphanWatchdogTimeout
-	// if the span is not closed first. On timeout it synthesizes subagent_end and logs.
+	// if the span is not closed first. On timeout it hands its verdict to this
+	// goroutine (orphanFires), which synthesizes subagent_end and logs.
 	// W1-9: the goroutine also exits cleanly when wc.doneCh is closed (connection torn down).
 	startOrphanWatchdog := func(entry *openSpanEntry, reason string) {
 		// Snapshot BOTH test-shrinkable knobs ONCE, synchronously, before
@@ -4134,50 +4167,107 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 					// Span is still open after timeout AND either the real
 					// sub-turn is confirmed no longer active, or the
 					// reschedule ceiling was exceeded (forceCeiling, already
-					// logged at Error level above). Emit interrupted.
-					switch {
-					case forceCeiling:
-						// Already logged above; avoid a second, redundant log line.
-					case reason == "unknown":
-						slog.Error("ws: subagent span orphaned with unknown reason — synthesizing interrupted end",
-							"event", "span_orphan_interrupted",
-							"span_id", entry.spanID,
-							"parent_call_id", entry.parentCallID,
-							"reason", reason,
-						)
-					default:
-						slog.Warn("ws: subagent span orphaned — synthesizing interrupted end",
-							"event", "span_orphan_interrupted",
-							"span_id", entry.spanID,
-							"parent_call_id", entry.parentCallID,
-							"reason", reason,
-						)
+					// logged at Error level above). Hand the verdict to the
+					// forwarder goroutine, which synthesizes the interrupted
+					// end only if the span is STILL open once it has handled
+					// every event already queued — see orphanFires.
+					select {
+					case orphanFires <- orphanFire{entry: entry, reason: reason, forced: forceCeiling}:
+					case <-entry.closeCh:
+					case <-wc.doneCh:
+					case <-forwarderExited:
 					}
-					// Use generated.SubagentEndFrame (contract-first migration).
-					reason_ := reason // capture for pointer
-					agentID_ := entry.agentID
-					endFrame := generated.SubagentEndFrame{
-						Type:      string(generated.WsFrameTypeSubagentEnd),
-						SessionId: entry.sessionID,
-						SpanId:    entry.spanID,
-						Status:    "interrupted",
-						Message:   &reason_,
-					}
-					if agentID_ != "" {
-						endFrame.AgentId = &agentID_
-					}
-					if entry.parentCallID != "" {
-						pc := entry.parentCallID
-						endFrame.ParentCallId = &pc
-					}
-					sendConnGenFrame(wc, string(generated.WsFrameTypeSubagentEnd), endFrame)
 					return
 				}
 			}
 		}()
 	}
 
-	for evt := range sub.C {
+	// synthesizeOrphanEnd emits the synthetic interrupted subagent_end for a
+	// span a watchdog found orphaned — unless the span's real end closed it
+	// while the verdict waited (see orphanFires). Runs only on this goroutine.
+	synthesizeOrphanEnd := func(fire orphanFire) {
+		entry := fire.entry
+		if openSpans[entry.parentCallID] != entry {
+			// Closed by its real EventKindSubTurnEnd (or replaced by a newer
+			// span under the same call ID) while the verdict waited.
+			return
+		}
+		reason := fire.reason
+		switch {
+		case fire.forced:
+			// Already logged by the watchdog; avoid a second, redundant log line.
+		case reason == "unknown":
+			slog.Error("ws: subagent span orphaned with unknown reason — synthesizing interrupted end",
+				"event", "span_orphan_interrupted",
+				"span_id", entry.spanID,
+				"parent_call_id", entry.parentCallID,
+				"reason", reason,
+			)
+		default:
+			slog.Warn("ws: subagent span orphaned — synthesizing interrupted end",
+				"event", "span_orphan_interrupted",
+				"span_id", entry.spanID,
+				"parent_call_id", entry.parentCallID,
+				"reason", reason,
+			)
+		}
+		// Use generated.SubagentEndFrame (contract-first migration).
+		endFrame := generated.SubagentEndFrame{
+			Type:      string(generated.WsFrameTypeSubagentEnd),
+			SessionId: entry.sessionID,
+			SpanId:    entry.spanID,
+			Status:    "interrupted",
+			Message:   &reason,
+		}
+		if entry.agentID != "" {
+			agentID := entry.agentID
+			endFrame.AgentId = &agentID
+		}
+		if entry.parentCallID != "" {
+			pc := entry.parentCallID
+			endFrame.ParentCallId = &pc
+		}
+		sendConnGenFrame(wc, string(generated.WsFrameTypeSubagentEnd), endFrame)
+		// The span is resolved: a later real end still sends its own frame
+		// (the EventKindSubTurnEnd case never needs the entry), and a
+		// resolved span is never re-armed or synthesized twice.
+		closeSpan(entry.parentCallID)
+	}
+
+	for {
+		// Settle every watchdog verdict whose already-queued events have all
+		// been handled (see orphanFires).
+		if len(pendingOrphanFires) > 0 {
+			waiting := pendingOrphanFires[:0]
+			for _, fire := range pendingOrphanFires {
+				if fire.eventsAhead > 0 {
+					waiting = append(waiting, fire)
+					continue
+				}
+				synthesizeOrphanEnd(fire)
+			}
+			pendingOrphanFires = waiting
+		}
+
+		var evt agent.Event
+		select {
+		case received, ok := <-sub.C:
+			if !ok {
+				return
+			}
+			evt = received
+			for i := range pendingOrphanFires {
+				if pendingOrphanFires[i].eventsAhead > 0 {
+					pendingOrphanFires[i].eventsAhead--
+				}
+			}
+		case fire := <-orphanFires:
+			fire.eventsAhead = len(sub.C)
+			pendingOrphanFires = append(pendingOrphanFires, fire)
+			continue
+		}
+
 		switch evt.Kind {
 		case agent.EventKindTurnStart:
 			// #605: a NEW root turn began on this chat — reset the
