@@ -20,8 +20,8 @@ test('one six-second native renderer resize stall recovers without Retry', async
   page.on('pageerror', error => errors.push(error.message));
   await instrumentRoutes(page);
   const viewer = page.locator('[data-input-mode="dedicated"]');
-  const ready = async () => {
-    await expect(viewer).toHaveAttribute('data-input-state', 'ready');
+  const ready = async (timeout = 15000) => {
+    await expect(viewer).toHaveAttribute('data-input-state', 'ready', { timeout });
     await expect(viewer.getByRole('alert')).toHaveCount(0);
     await expect(viewer.getByRole('status').filter({ hasText: /Waiting for the current page|Pointer input is unavailable|Browser input is unavailable|Reconnecting video to restore browser input/ })).toHaveCount(0);
   };
@@ -36,7 +36,12 @@ test('one six-second native renderer resize stall recovers without Retry', async
     const served = await page.request.get(target.href, { maxRedirects: 0 });
     expect(served.status()).toBe(200); expect(await served.text()).toBe(fixture);
     await page.goto('/workspaces/01M01TTSDZBFGM28NPHGTFZ17T/chat'); await selectAgent(page, 'Browser UAT Test');
-    await page.getByRole('button', { name: 'Open browser', exact: true }).click(); await ready();
+    const startupAt = Date.now();
+    await page.getByRole('button', { name: 'Open browser', exact: true }).click();
+    // Initial media negotiation has its own existing 45-second product budget.
+    // Keep subsequent input/resize recovery checks at their tighter deadlines.
+    await ready(45000);
+    observations.push({ checkpoint: 'initial-ready', at: new Date().toISOString(), startupMs: Date.now() - startupAt });
     const url = new URL(target); url.searchParams.set('nonce', String(nonce));
     const address = page.getByRole('textbox', { name: 'Address bar' }); await address.fill(url.href); await address.press('Enter');
     await expect.poll(() => page.evaluate(() => {

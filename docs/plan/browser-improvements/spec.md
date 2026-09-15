@@ -66,7 +66,7 @@ Local acceptance targets on a documented reference machine: warm first picture w
 
 ## Implementation decisions and integration boundaries
 
-Human input uses one ordered WebSocket path; video/audio retain WebRTC. This eliminates cross-transport input ordering and fallback replay. The server reader must only validate/enqueue slow work, not wait for browser page loads. Bounded command execution, coalescing and cancellation must preserve clicks, text and release semantics. A successful transport send is not a Chrome execution acknowledgement; operational evidence must distinguish receipt, execution and visible effect.
+The original ordered-WebSocket human-input decision is superseded by [ADR-081](../../internal/architecture/ADR-081-dedicated-browser-input-connection.md): human input uses the dedicated binary WebRTC channels without WebSocket fallback; navigation, viewport, and ownership commands retain the authenticated WebSocket control path. Video/audio retain their media WebRTC connection. The server reader must only validate/enqueue slow work, not wait for browser page loads. Bounded command execution, coalescing and cancellation must preserve clicks, text and release semantics. A successful transport send is not a Chrome execution acknowledgement; operational evidence must distinguish receipt, execution and visible effect.
 
 Media replacement needs generation-aware forwarding and timestamp continuity before removing the deliberate sequence gap. Prefer preserving the ingest peer during ordinary recapture if verified supported by Chrome. Dimension alignment must work at all adaptation levels and on small inputs; validate native adaptation rather than assuming a fixed scale grid controls it.
 

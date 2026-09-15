@@ -27,7 +27,7 @@ All viewers use dedicated input. Historical URL selectors cannot enable WebSocke
 
 ## Consequences and alternatives
 
-Input transport and media recovery can operate independently, but input still pauses when the current picture is unsafe. Separating transport does not remove server queue delay, network propagation or media buffering. An additional connection requires separate signaling, authentication binding, timeout and cleanup tests. Two channels still share their input connection's congestion budget.
+Input transport and media recovery can operate independently, but input still pauses when the current picture is unsafe. Reconnecting input alone cannot repair an unfinished viewport: Retry must repair geometry and preserve the acknowledgement and fresh-picture checks described in the [input connection specification](../../plan/browser-input-connection/spec.md). Separating transport does not remove server queue delay, network propagation or media buffering. An additional connection requires separate signaling, authentication binding, timeout and cleanup tests. Two channels still share their input connection's congestion budget.
 
 Do not split audio and video connections now: synchronization and independent congestion controllers add complexity without evidence of benefit. Do not introduce WebTransport, rewrite the encoder, relax the memory guard, or change tool-policy/discovery code.
 
