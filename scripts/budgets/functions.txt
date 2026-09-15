@@ -67,8 +67,6 @@ pkg/sandbox/seatbelt_profile.go	renderSeatbeltProfile	310
 pkg/sysagent/tools/agent.go	AgentCreateTool.Execute	277
 pkg/sysagent/tools/agent.go	AgentDeleteTool.Execute	257
 pkg/sysagent/tools/mcp.go	MCPAddTool.Execute	241
-pkg/sysagent/tools/task.go	TaskCreateTool.Execute	301
-pkg/sysagent/tools/task.go	TaskUpdateTool.Execute	392
 pkg/task/store.go	Store.updateLocked	310
 pkg/tools/browser/exec_resolver.go	execPathCaches.resolve	277
 pkg/tools/browser/live_viewport_frame.go	LiveView.applyViewportAdmitted	337
